@@ -47,6 +47,8 @@ export type FooterState = {
   firewall?: FirewallView;
   /** True while a request is running (stale transient chips stay visible then). */
   running?: boolean;
+  /** The cat for the idle footer: a coloured, fixed-width face and, after an event, its status text. */
+  cat?: { text: string; label?: string };
   statuses: StatusEntry[];
   todos: TodoItem[];
   now: number;
@@ -333,11 +335,12 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   const effortFull = effortSegment(ctx, true);
   const work = workSegments(ctx);
   const chips = chipSegments(ctx);
+  const catSeg: Seg[] = state.cat ? [{ id: "cat", prio: 5, text: state.cat.label ? `${state.cat.text} ${theme.fg("dim", state.cat.label)}` : state.cat.text, alts: [state.cat.text] }] : [];
   const modelSeg: Seg | null = state.model ? { id: "model", prio: 1, text: theme.fg("accent", state.model), alts: [truncateDisplay(theme.fg("accent", state.model), 18)] } : null;
 
   if (mode === "light") {
     const left: Seg[] = [projectSeg, ...warnings, ...(effortShort ? [effortShort] : []), contextSegment(ctx), ...work, ...(branchSegment(ctx) ? [branchSegment(ctx)!] : []), ...chips];
-    const right: Seg[] = modelSeg ? [{ ...modelSeg, prio: 5 }] : [];
+    const right: Seg[] = [...catSeg, ...(modelSeg ? [{ ...modelSeg, prio: 5 }] : [])];
     return [truncateDisplay(fitLine(left, right, width, sep), width)];
   }
 
@@ -351,7 +354,7 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
 
   // Line 2: state of the work
   const line2Left: Seg[] = [...warnings, contextSegment(ctx), ...work];
-  const line2Right: Seg[] = mode === "heavy" ? [] : chips;
+  const line2Right: Seg[] = [...catSeg, ...(mode === "heavy" ? [] : chips)];
   lines.push(fitLine(line2Left, line2Right, width, sep));
 
   if (mode === "heavy") {

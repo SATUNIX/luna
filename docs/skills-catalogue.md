@@ -4,7 +4,7 @@
 > Do not hand-edit; run `npm run catalog` after adding or recategorising a skill.
 
 Skills are on-demand runbooks. The 4 skills without `disable-model-invocation: true` keep
-their one-line description in context; the other 31 are surfaced on demand by
+their one-line description in context; the other 33 are surfaced on demand by
 `skill_search` and trigger hints, and any `SKILL.md` body loads when the task matches
 (or via `/skill:<name>`). See
 [Writing skills](WRITING_EXTENSIONS.md#writing-skills) for the format and rationale.
@@ -51,7 +51,9 @@ their one-line description in context; the other 31 are surfaced on demand by
 - **methodology-mapper** — Map observations and hypotheses to methodology coverage (OWASP/WSTG/PTES).
 
 ## Evidence & reporting
+- **daily-debrief** — Run a conversational end-of-day assessment debrief — assess your own notes, interview the tester to fill the gaps, then reconcile findings and organise notes into the house report format.
 - **evidence-review** — Review evidence quality, hashes, and finding readiness.
+- **finding-report** — Render a validated finding into the house report format — data block, risk statement, background, overview, remediation, evidence.
 - **finding-writing** — Write evidence-backed, professional pentest findings.
 - **independent-finding-validation** — Validate specialist findings or claimed-done results through Conductor's causally independent validator path.
 - **report-export-review** — Check finding and report readiness before export.
@@ -66,5 +68,5 @@ their one-line description in context; the other 31 are surfaced on demand by
 
 ## Lite profile subset
 
-The lite profile enables 12 of 35 skills, for small local models:
+The lite profile enables 12 of 37 skills, for small local models:
 `agent-orchestration`, `codebase-navigation`, `coding-agent-workflow`, `context-management`, `mcp-tool-use`, `memory`, `patch-hygiene`, `recovery-debugging`, `self-reflection-and-recovery`, `small-model-execution`, `task-decomposition`, `verification-loop`.

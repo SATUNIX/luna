@@ -49,6 +49,8 @@ In short:
   container test used Docker, not the default rootless Podman. Run the boundary probe on your own
   engine and start with a small budget before an unattended run ([Autonomous runs](autonomy.md)).
 - **The web console has not been run in a browser**, so the Content-Security-Policy is untested.
+- **pi remote, the Android app for [remote control](remote-control.md), has been run on an
+  emulator only**, not on a physical phone.
 - **Windows, macOS and Node 24** are not covered beyond what is stated above.
 
 ## Known limitations

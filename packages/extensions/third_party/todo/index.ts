@@ -102,7 +102,7 @@ export default function (pi: ExtensionAPI) {
     description: "Show this session's todo list and its file path",
     handler: async (_args, ctx) => {
       const file = currentFile(ctx);
-      if (ctx.hasUI) ctx.ui.notify(`${renderTodos(readTodos(file).todos)}\nFile: ${file}`, "info");
+      if (ctx.hasUI) ctx.ui.notify(`${renderTodos(readTodos(file).todos)}\nFile: ${file}\nThe checklist above the editor can be hidden with /footer todos off (and shown again with /footer todos on).`, "info");
     },
   });
 }

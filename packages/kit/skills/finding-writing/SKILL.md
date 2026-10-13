@@ -45,3 +45,5 @@ unsupported remains. Check readiness with `report-export-review` before export.
 ## References
 - `references/severity-and-template.md` — severity rubric (impact × exploitability), CVSS
   note, a copy-fill finding template, and the pre-export writing checklist.
+- `finding-report` — render the validated finding into the house deliverable format (data block,
+  risk statement, background, overview, remediation, evidence).

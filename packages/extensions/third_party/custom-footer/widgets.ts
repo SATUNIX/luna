@@ -14,10 +14,12 @@ export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8): stri
   const glyphs = footerGlyphs(theme);
   const header = `${theme.bold(theme.fg("accent", "Todos"))} ${theme.fg(done === items.length ? "success" : "text", `${done}/${items.length}`)} ${theme.fg("success", glyphs.filled.repeat(filled))}${theme.fg("dim", glyphs.empty.repeat(cells - filled))}`;
   if (done === items.length) return [`${header} ${theme.fg("success", "all done")}`];
+  // The hint rides on the header line, so it costs no row; hiding the list is otherwise easy to miss.
+  const hint = theme.fg("dim", "  /footer todos off hides this");
   // Show active first, then open, then the most recent done items, capped.
   const order = [...items.filter((i) => i.state === "active"), ...items.filter((i) => i.state === "open"), ...items.filter((i) => i.state === "done")];
   const shown = order.slice(0, max).sort((a, b) => a.id - b.id);
-  const lines = [header];
+  const lines = [`${header}${hint}`];
   for (const item of shown) {
     if (item.state === "done") lines.push(`  ${theme.fg("success", glyphs.done)} ${theme.fg("dim", `#${item.id} ${item.text}`)}`);
     else if (item.state === "active") lines.push(`  ${theme.fg("accent", glyphs.active)} ${theme.bold(theme.fg("text", `#${item.id} ${item.text}`))}`);

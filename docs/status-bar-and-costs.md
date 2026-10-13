@@ -76,6 +76,54 @@ Reading server.ts… (1m 04s · ↑12k ↓~850)
 The activity follows the running tool, the stream type (thinking, writing, a tool call), or a
 rotating phrase. Output tokens marked `~` are an estimate until the turn records real usage.
 
+## The cat
+
+A small ASCII cat shows what the agent is doing, in a fixed width so the text beside it never
+moves. It uses only printable US-ASCII, so it works over SSH, in a multiplexer and on a basic
+terminal. While a request runs the cat replaces pi's spinner in front of the working line; between
+requests it sits in the status bar.
+
+```text
+=^o.^=  Thinking… (12s · ↑3.1k ↓~220)        a request is running
+=^>>^=  Running `npm test`… (31s · ↑3.1k)
+=^?^=   Waiting for input                    an approval or question is open
+=^.^=   Complete                             in the bar after a request ends
+```
+
+The face is chosen from the states that are active at once, by a fixed priority rather than by
+whichever event came last: error, alert, denied, waiting for user, warning, tool, crunching,
+thinking, working, streaming, then idle. What drives each state:
+
+| State | When |
+|---|---|
+| thinking | a request is running and no output has arrived yet, or the model is streaming thinking |
+| streaming | the model is writing its answer |
+| working | the model is preparing a tool call |
+| tool | a tool is executing |
+| waiting for user | a blocking prompt (an approval, a question) is open |
+| crunching | the session is being compacted |
+| success, cancelled, error | a request ended normally, was aborted, or stopped on an error |
+| denied, warning | a tool returned an error; the text is read, and a refusal by a guard is *denied* |
+
+A result plays once in the bar and then goes back to the resting face. The resting face does not
+blink or look around: nothing ticks while the agent is idle, and the only timer the cat ever
+starts is a short one that clears itself when a result has finished playing.
+
+```text
+/footer cat on|off     the cat (off restores pi's own spinner)
+```
+
+`PI_KIT_CAT=0` turns it off regardless of the saved setting. The cat's animations are a table in
+`packages/extensions/third_party/custom-footer/cat.ts`; a new state is a new row and a place in the
+priority list, with no change to the rendering.
+
+Not covered: the two-line "head" cat, a blinking or wandering idle cat, a sleeping state and
+a retrying state (the faces exist, but nothing in pi reports them to the extension), and a spinner
+glyph after the text (pi's indicator sits before it). Tool errors are classified by their text
+because no structured denial signal exists, so an unusual refusal message is shown as a warning.
+`tests/cat-status-smoke.mjs` (`npm run smoke:cat-status`) pins the animation table, the priority,
+the wiring to pi's events and the command.
+
 ## Tips and the todo checklist
 
 A one-line usage tip appears under the working line during a run. It rotates and lists only

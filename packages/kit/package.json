@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-kit",
-  "version": "0.2.4-beta.1",
+  "version": "0.2.4-beta.3",
   "private": true,
   "description": "Kit resources: skills, prompts, profiles, themes, agent definitions, and workflows.",
   "type": "module",

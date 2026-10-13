@@ -7,6 +7,8 @@ import { fmtDuration, fmtTokens, footerGlyphs, renderDetail, renderFooter, TRANS
 import type { FooterMode, FooterState, StatusEntry, Theme, TodoItem } from "./render.ts";
 import { PHRASES, TIPS, pick, renderTodoWidget, toolPhrase } from "./widgets.ts";
 import type { Tip } from "./widgets.ts";
+import { ANIMATIONS, TRANSIENT, classifyToolError, finished, indicatorFor, renderCat, resolveCatState, transientHoldMs } from "./cat.ts";
+import type { CatState } from "./cat.ts";
 
 // Status bar (custom-footer). This is the ONE owner of the footer: no other extension installs one.
 //
@@ -20,6 +22,10 @@ import type { Tip } from "./widgets.ts";
 //     "<activity>… 1m 04s · ↑12.3k ↓~850". The ticker exists only while a request runs, and is
 //     cleared on agent end, on session start (reload) and on shutdown.
 //  3. Tips and todos widgets (/tips, /footer todos).
+//  4. The cat (./cat.ts): a fixed-width ASCII face for the agent's semantic state. While a request
+//     runs it replaces pi's spinner (setWorkingIndicator), re-set only when the resolved state
+//     changes; between requests the footer shows it, and a result (done, warning, denied, error,
+//     cancelled) plays through once on a short timer that clears itself. /footer cat on|off.
 //
 // Settings persist in <agent dir>/pi-kit/ui.json. Invalid arguments never change them.
 
@@ -31,7 +37,7 @@ export { PHRASES, TIPS, toolPhrase, renderTodoWidget } from "./widgets.ts";
 export type { Tip } from "./widgets.ts";
 
 type FooterCtx = ExtensionContext;
-type UiSettings = { footer: boolean; mode: FooterMode; tips: boolean; todos: boolean; ascii?: boolean };
+type UiSettings = { footer: boolean; mode: FooterMode; tips: boolean; todos: boolean; cat: boolean; ascii?: boolean };
 
 const TIP_WIDGET = "pi-kit-tips";
 const TODO_WIDGET = "pi-kit-todos";
@@ -54,7 +60,7 @@ function settingsFile(): string {
 
 /** Read <agent dir>/pi-kit/ui.json; anything malformed falls back to the defaults, key by key. */
 export function loadSettings(): UiSettings {
-  const defaults: UiSettings = { footer: true, mode: "default", tips: process.env.PI_KIT_TIPS !== "0", todos: process.env.PI_KIT_TODO_WIDGET !== "0" };
+  const defaults: UiSettings = { footer: true, mode: "default", tips: process.env.PI_KIT_TIPS !== "0", todos: process.env.PI_KIT_TODO_WIDGET !== "0", cat: process.env.PI_KIT_CAT !== "0" };
   try {
     const raw = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
     const out: UiSettings = {
@@ -62,6 +68,7 @@ export function loadSettings(): UiSettings {
       mode: MODES.includes(raw.mode) ? raw.mode : defaults.mode,
       tips: process.env.PI_KIT_TIPS === "0" ? false : typeof raw.tips === "boolean" ? raw.tips : defaults.tips,
       todos: process.env.PI_KIT_TODO_WIDGET === "0" ? false : typeof raw.todos === "boolean" ? raw.todos : defaults.todos,
+      cat: process.env.PI_KIT_CAT === "0" ? false : typeof raw.cat === "boolean" ? raw.cat : defaults.cat,
     };
     if (raw.ascii === true) out.ascii = true;
     return out;
@@ -95,7 +102,7 @@ export function parseOnOff(value: string | undefined, current: boolean): boolean
   return null;
 }
 
-const USAGE = "Usage: /footer default|light|heavy | on | off | status | reload | todos [on|off] | ascii [on|off] | config";
+const USAGE = "Usage: /footer default|light|heavy | on | off | status | reload | todos [on|off] | ascii [on|off] | cat [on|off] | config";
 
 export default function (pi: ExtensionAPI) {
   let settings = loadSettings();
@@ -105,7 +112,7 @@ export default function (pi: ExtensionAPI) {
   let footerInstalled = false;
   let disposed = false;
   const totalsCache = createTotalsCache();
-  let cache: Omit<FooterState, "now" | "statuses" | "running" | "agents" | "effort" | "unattended" | "compaction"> & { statusProvider?: () => Array<[string, string]> } = {
+  let cache: Omit<FooterState, "now" | "statuses" | "running" | "agents" | "effort" | "unattended" | "compaction" | "cat"> & { statusProvider?: () => Array<[string, string]> } = {
     cwd: process.cwd(),
     totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
     partial: false,
@@ -128,6 +135,16 @@ export default function (pi: ExtensionAPI) {
   let tipAt = 0;
   let ticker: ReturnType<typeof setInterval> | undefined;
   let unsubscribeEffort: (() => void) | undefined;
+
+  // The cat. `live` holds what the current request is doing; `result` is a finished event still on
+  // show; `applied` is the state last given to pi's working indicator.
+  let live: { kind?: "thinking" | "streaming" | "working"; until: number } = { until: 0 };
+  let toolsRunning = 0;
+  let promptOpen = false;
+  let compacting = false;
+  let result: { state: CatState; at: number } | undefined;
+  let applied: { state: CatState; at: number } | undefined;
+  let catTimer: ReturnType<typeof setTimeout> | undefined;
 
   const hasTui = (ctx?: FooterCtx) => !!ctx && ctx.hasUI !== false && !!ctx.ui;
   const isRunning = () => Boolean(run && run.endedAt === undefined);
@@ -198,7 +215,7 @@ export default function (pi: ExtensionAPI) {
       if (!prior || prior.text !== text) seen.set(key, { text, at: now });
       return { key, text, ageMs: now - (seen.get(key)?.at ?? now) };
     });
-    return { ...cache, running: isRunning(), agents: readAgents(failedBase), effort: readEffort(), unattended: readUnattended(), compaction: readCompaction(), statuses, now };
+    return { ...cache, cat: catView(now), running: isRunning(), agents: readAgents(failedBase), effort: readEffort(), unattended: readUnattended(), compaction: readCompaction(), statuses, now };
   }
 
   function installFooter(ctx: FooterCtx): void {
@@ -267,6 +284,7 @@ export default function (pi: ExtensionAPI) {
     if (disposed || !hasTui(ctx) || !isRunning()) return;
     const now = Date.now();
     try { (ctx!.ui as any).setWorkingMessage?.(workingText(now)); } catch { /* ignore */ }
+    syncCat();
     if (settings.tips) {
       if (!tip || now - tipAt > TIP_ROTATE_MS) {
         const tips = availableTips();
@@ -290,6 +308,76 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const paint = (colour: string, text: string): string => {
+    const theme = (ctxRef?.ui as any)?.theme as Theme | undefined;
+    return theme ? theme.fg(colour, text) : text;
+  };
+
+  /** The cat's state right now, by the explicit priority in cat.ts. */
+  function catState(now: number): CatState {
+    const active: CatState[] = [];
+    if (promptOpen) active.push("waiting_for_user");
+    if (compacting) active.push("crunching");
+    if (isRunning()) {
+      if (toolsRunning > 0) active.push("tool");
+      // Until the first token arrives the model is thinking; a delta then says what it is producing.
+      active.push(live.kind && live.until > now ? live.kind : "thinking");
+    }
+    if (result && now - result.at < transientHoldMs(result.state)) active.push(result.state);
+    return resolveCatState(active);
+  }
+
+  function setResult(state: CatState): void {
+    if (!settings.cat) return;
+    result = { state, at: Date.now() };
+    syncCat();
+  }
+
+  /** Follow the resolved state: re-set pi's indicator on a change, and arm the footer timer. */
+  function syncCat(): void {
+    if (disposed || !settings.cat) return;
+    const ctx = ctxRef;
+    const now = Date.now();
+    const next = catState(now);
+    if (!applied || applied.state !== next) {
+      applied = { state: next, at: now };
+      if (isRunning() && hasTui(ctx) && typeof (ctx!.ui as any).setWorkingIndicator === "function") {
+        try { (ctx!.ui as any).setWorkingIndicator(indicatorFor(next, paint)); } catch { /* ignore */ }
+      }
+    }
+    armCatTimer(next, now);
+    requestRender?.();
+  }
+
+  /** While idle, only a result still playing (or on show) needs a redraw; nothing else ticks. */
+  function armCatTimer(state: CatState, now: number): void {
+    if (catTimer) clearTimeout(catTimer);
+    catTimer = undefined;
+    if (isRunning() || !result) return;
+    const age = now - result.at;
+    if (age >= transientHoldMs(result.state)) { result = undefined; return; }
+    const interval = finished(state, age) ? Math.max(50, transientHoldMs(result.state) - age) : ANIMATIONS[state].intervalMs;
+    catTimer = setTimeout(() => { catTimer = undefined; syncCat(); }, interval);
+    (catTimer as any).unref?.();
+  }
+
+  function stopCat(ctx?: FooterCtx): void {
+    if (catTimer) clearTimeout(catTimer);
+    catTimer = undefined;
+    const c = ctx ?? ctxRef;
+    if (applied && hasTui(c)) {
+      try { (c!.ui as any).setWorkingIndicator?.(); } catch { /* ignore */ }
+    }
+    applied = undefined;
+  }
+
+  function catView(now: number): FooterState["cat"] {
+    if (!settings.cat || isRunning()) return undefined;
+    const state = catState(now);
+    const since = result && TRANSIENT.has(state) ? result.at : now;
+    return { text: renderCat(state, now - since, paint), label: state === "idle" ? undefined : ANIMATIONS[state].label };
+  }
+
   function reloadPricing(ctx: FooterCtx): void {
     const result = loadPricing(ctx.cwd ?? process.cwd(), pricing);
     pricing = result.pricing;
@@ -301,6 +389,8 @@ export default function (pi: ExtensionAPI) {
     settings = loadSettings();
     run = undefined;
     stopTicker(ctx as FooterCtx);
+    stopCat(ctx as FooterCtx);
+    live = { until: 0 }; toolsRunning = 0; promptOpen = false; compacting = false; result = undefined;
     unsubscribeEffort?.();
     unsubscribeEffort = undefined;
     seen.clear();
@@ -326,6 +416,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     disposed = true;
     stopTicker(ctx as FooterCtx);
+    stopCat(ctx as FooterCtx);
+    result = undefined;
     unsubscribeEffort?.();
     unsubscribeEffort = undefined;
     requestRender = undefined;
@@ -346,12 +438,17 @@ export default function (pi: ExtensionAPI) {
     phrase = pick(PHRASES);
     phraseAt = Date.now();
     tip = undefined;
+    result = undefined;
+    live = { until: 0 };
+    toolsRunning = 0;
+    applied = undefined;
     if (ticker) clearInterval(ticker);
     if (hasTui(ctx as FooterCtx)) {
       ticker = setInterval(tick, TICK_MS);
       (ticker as any).unref?.();
       tick();
     }
+    syncCat();
   });
 
   pi.on("message_update", async (event: any) => {
@@ -363,6 +460,7 @@ export default function (pi: ExtensionAPI) {
       if (!activity || activity.until < now || !activity.label.startsWith("Running")) {
         activity = { label: e.type === "thinking_delta" ? "Thinking" : e.type === "text_delta" ? "Writing the response" : "Preparing a tool call", until: now + 1500 };
       }
+      live = { kind: e.type === "thinking_delta" ? "thinking" : e.type === "text_delta" ? "streaming" : "working", until: now + 1500 };
     }
   });
 
@@ -377,11 +475,16 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", async (event: any) => {
+    toolsRunning++;
+    syncCat();
     activity = { label: toolPhrase(event?.toolName ?? "tool", event?.args), until: Number.MAX_SAFE_INTEGER };
   });
 
   pi.on("tool_execution_end", async (event: any, ctx) => {
     activity = undefined;
+    toolsRunning = Math.max(0, toolsRunning - 1);
+    if (event?.isError) setResult(classifyToolError(event.result));
+    else syncCat();
     if (["todo", "write", "edit"].includes(event?.toolName)) refresh(ctx as FooterCtx);
   });
 
@@ -389,12 +492,25 @@ export default function (pi: ExtensionAPI) {
     refresh(ctx as FooterCtx);
   });
 
-  pi.on("agent_end", async (_event, ctx) => {
+  pi.on("agent_end", async (event: any, ctx) => {
     if (run) run.endedAt = Date.now();
     activity = undefined;
+    toolsRunning = 0;
     stopTicker(ctx as FooterCtx);
+    stopCat(ctx as FooterCtx);
+    if (settings.cat && run) {
+      const last = [...(Array.isArray(event?.messages) ? event.messages : [])].reverse().find((m: any) => m?.role === "assistant");
+      setResult(last?.stopReason === "error" ? "error" : last?.stopReason === "aborted" ? "cancelled" : "success");
+    }
     refresh(ctx as FooterCtx);
   });
+
+  // A blocking prompt (an approval, a question) means the agent cannot go on without the user.
+  pi.on("ui_prompt_start", async () => { promptOpen = true; syncCat(); });
+  pi.on("ui_prompt_end", async () => { promptOpen = false; syncCat(); });
+  pi.on("session_before_compact", async () => { compacting = true; syncCat(); });
+  pi.on("session_compact", async () => { compacting = false; syncCat(); });
+  pi.on("session_compact_failed", async () => { compacting = false; setResult("warning"); });
 
   pi.on("model_select", async (_event, ctx) => refresh(ctx as FooterCtx));
   pi.on("thinking_level_select", async (_event, ctx) => refresh(ctx as FooterCtx));
@@ -402,8 +518,8 @@ export default function (pi: ExtensionAPI) {
   const modeLabel = () => (settings.footer ? settings.mode : "off");
 
   pi.registerCommand("footer", {
-    description: "Status bar: /footer default|light|heavy, /footer on|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on|off, /footer ascii on|off, /footer config",
-    getArgumentCompletions: (prefix: string) => ["default", "light", "heavy", "on", "off", "status", "reload", "todos on", "todos off", "ascii on", "ascii off", "config"].filter((v) => v.startsWith(prefix.trim().toLowerCase())).map((v) => ({ value: v, label: v })),
+    description: "Status bar: /footer default|light|heavy, /footer on|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on|off, /footer ascii on|off, /footer cat on|off, /footer config",
+    getArgumentCompletions: (prefix: string) => ["default", "light", "heavy", "on", "off", "status", "reload", "todos on", "todos off", "ascii on", "ascii off", "cat on", "cat off", "config"].filter((v) => v.startsWith(prefix.trim().toLowerCase())).map((v) => ({ value: v, label: v })),
     handler: async (args, ctx) => {
       const footerCtx = ctx as FooterCtx;
       const [arg, value, ...extra] = commandArgs(args);
@@ -420,7 +536,7 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "status") {
         refresh(footerCtx);
-        return say(footerCtx, renderDetail(state(), modeLabel()).concat([`  settings    tips ${settings.tips ? "on" : "off"}, todos ${settings.todos ? "on" : "off"}, ascii ${settings.ascii ? "on" : "auto"} (${settingsFile()})` ]).join("\n"));
+        return say(footerCtx, renderDetail(state(), modeLabel()).concat([`  settings    tips ${settings.tips ? "on" : "off"}, todos ${settings.todos ? "on" : "off"}, cat ${settings.cat ? "on" : "off"}, ascii ${settings.ascii ? "on" : "auto"} (${settingsFile()})` ]).join("\n"));
       }
       if (arg === "reload") {
         reloadPricing(footerCtx);
@@ -441,6 +557,15 @@ export default function (pi: ExtensionAPI) {
         else delete settings.ascii;
         refresh(footerCtx);
         return persist(`ASCII status bar ${settings.ascii ? "on" : "off (chosen from the theme)"}`);
+      }
+      if (arg === "cat") {
+        const next = parseOnOff(value, settings.cat);
+        if (next === null || extra.length) return invalid(`"${value}" is not on or off`);
+        settings.cat = next;
+        if (!next) { stopCat(footerCtx); result = undefined; }
+        else if (isRunning()) { applied = undefined; syncCat(); }
+        refresh(footerCtx);
+        return persist(`cat ${settings.cat ? "on" : "off (pi's own spinner is used)"}`);
       }
       if (arg === "config" || arg === "settings") {
         if (!hasTui(footerCtx) || typeof footerCtx.ui.select !== "function") return say(footerCtx, `footer: /footer config needs an interactive session. ${USAGE}`, "warning");
@@ -488,5 +613,5 @@ export default function (pi: ExtensionAPI) {
   });
 
   // exposed for tests
-  (pi as any).__footerDebug = { state, workingText, isInstalled: () => footerInstalled, tickerActive: () => ticker !== undefined, seen };
+  (pi as any).__footerDebug = { state, workingText, isInstalled: () => footerInstalled, tickerActive: () => ticker !== undefined, catTimerActive: () => catTimer !== undefined, catState: () => catState(Date.now()), seen };
 }

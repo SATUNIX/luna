@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-extensions",
-  "version": "0.2.4-beta.1",
+  "version": "0.2.4-beta.2",
   "private": true,
   "description": "First-party pi extensions plus vendored third-party extensions with attribution.",
   "type": "module",

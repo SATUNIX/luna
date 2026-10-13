@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-system",
-  "version": "0.2.4-beta.1",
+  "version": "0.2.4-beta.2",
   "description": "Safety-first kit for the pi coding agent: tool firewall, secret guard, checkpoints, verification, memory, orchestration, skills and themes. One package; pick a profile with /profile.",
   "type": "module",
   "keywords": [
@@ -88,7 +88,7 @@
   "scripts": {
     "verify": "node packages/core/verify.mjs",
     "check:all": "node packages/core/check-all.mjs",
-    "test:security": "node tests/tool-firewall-smoke.mjs && node tests/firewall-shell-smoke.mjs && node tests/firewall-gate-smoke.mjs && node tests/secret-guard-smoke.mjs && node tests/firewall-preauth-smoke.mjs && node tests/firewall-noeffect-smoke.mjs && node tests/firewall-approvals-smoke.mjs && node tests/firewall-outcomes-smoke.mjs && node tests/firewall-unattended-smoke.mjs && node tests/protections-registry-smoke.mjs && node tests/delegation-guard-smoke.mjs && node tests/web-ui-security-smoke.mjs && node tests/web-ui-bind-policy-smoke.mjs && node tests/web-ui-rpc-smoke.mjs",
+    "test:security": "node tests/tool-firewall-smoke.mjs && node tests/firewall-shell-smoke.mjs && node tests/firewall-gate-smoke.mjs && node tests/secret-guard-smoke.mjs && node tests/firewall-preauth-smoke.mjs && node tests/firewall-noeffect-smoke.mjs && node tests/firewall-approvals-smoke.mjs && node tests/firewall-outcomes-smoke.mjs && node tests/firewall-unattended-smoke.mjs && node tests/protections-registry-smoke.mjs && node tests/delegation-guard-smoke.mjs && node tests/web-ui-security-smoke.mjs && node tests/web-ui-bind-policy-smoke.mjs && node tests/web-ui-rpc-smoke.mjs && node tests/remote-host-smoke.mjs && node tests/remote-control-extension-smoke.mjs",
     "smoke:firewall-shell": "node tests/firewall-shell-smoke.mjs",
     "smoke:firewall-gate": "node tests/firewall-gate-smoke.mjs",
     "smoke:protections-registry": "node tests/protections-registry-smoke.mjs",
@@ -109,6 +109,7 @@
     "smoke:registry-parse": "node tests/registry-parse-smoke.mjs",
     "smoke:check-all-npm": "node tests/check-all-npm-smoke.mjs",
     "smoke:extract-extension": "node tests/extract-extension-smoke.mjs",
+    "smoke:cat-status": "node tests/cat-status-smoke.mjs",
     "smoke:caveman": "node tests/caveman-smoke.mjs",
     "smoke:autonomy": "node tests/autonomy-smoke.mjs",
     "smoke:autonomy-contract": "node tests/autonomy-contract-smoke.mjs",
@@ -178,6 +179,7 @@
     "smoke:sources": "node tests/sources-smoke.mjs",
     "smoke:spec-plan": "node tests/spec-plan-smoke.mjs",
     "smoke:status-bar": "node tests/status-bar-smoke.mjs",
+    "smoke:tool-firewall": "node tests/tool-firewall-smoke.mjs",
     "smoke:subagent-containment": "node tests/subagent-containment-smoke.mjs",
     "smoke:subagent-nesting": "node tests/subagent-nesting-smoke.mjs",
     "smoke:subagent-observability": "node tests/subagent-observability-smoke.mjs",
@@ -210,6 +212,8 @@
     "smoke:web-ui-spawn": "node tests/web-ui-spawn-smoke.mjs",
     "smoke:web-ui-spawn-late-meta": "node tests/web-ui-spawn-late-meta-smoke.mjs",
     "smoke:web-ui-security": "node tests/web-ui-security-smoke.mjs",
+    "smoke:remote-host": "node tests/remote-host-smoke.mjs",
+    "smoke:remote-control": "node tests/remote-control-extension-smoke.mjs",
     "smoke:web-ui-bind-policy": "node tests/web-ui-bind-policy-smoke.mjs",
     "smoke:web-ui-rpc": "node tests/web-ui-rpc-smoke.mjs",
     "smoke:web-ui-client": "node packages/web-ui/scripts/ui-smoke.mjs",

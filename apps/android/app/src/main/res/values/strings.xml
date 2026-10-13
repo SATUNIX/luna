@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pi remote</string>
+    <string name="scan_prompt">Scan the QR code that /remote shows on the computer</string>
+    <string name="locked_title">pi remote is locked</string>
+    <string name="unlock">Unlock</string>
+    <string name="unlock_title">Unlock pi remote</string>
+    <string name="unlock_subtitle">Confirm it is you to open your computers\' pi sessions</string>
+    <string name="webview_missing">pi remote needs Android System WebView with WebMessageListener support. Update Android System WebView (or Chrome) from the Play Store and open the app again.</string>
+</resources>

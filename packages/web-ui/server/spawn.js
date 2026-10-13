@@ -219,6 +219,23 @@ export class PiRpcProcess {
 		});
 	}
 
+	/**
+	 * Answer a dialog pi opened with `extension_ui_request` (select / confirm / input / editor).
+	 * This is not an RPC command: pi sends no response record, and it ignores an id it did not
+	 * issue. Only the three answer shapes the protocol defines are ever written. pi-console does
+	 * not call this; the remote host does, for dialogs it saw this child open.
+	 */
+	respondUi(id, answer) {
+		if (this.exited) throw new HttpError(409, "pi child has exited");
+		if (typeof id !== "string" || !/^[A-Za-z0-9._:-]{1,100}$/.test(id)) throw new HttpError(400, "invalid dialog id");
+		const record = { type: "extension_ui_response", id };
+		if (answer && answer.cancelled === true) record.cancelled = true;
+		else if (answer && typeof answer.confirmed === "boolean") record.confirmed = answer.confirmed;
+		else if (answer && typeof answer.value === "string" && answer.value.length <= 100_000) record.value = answer.value;
+		else throw new HttpError(400, "an answer needs value, confirmed or cancelled");
+		this.child.stdin.write(`${JSON.stringify(record)}\n`);
+	}
+
 	subscribe(fn) {
 		this.subscribers.add(fn);
 		return () => this.subscribers.delete(fn);

@@ -117,6 +117,14 @@ SOFTWARE.
     fall-through toggled the bar); non-interactive sessions get text on stderr; `/footer status` is
     the accessible detail view of everything the bar drops; `/footer ascii on|off`.
   - The working line keeps run tokens and time; the footer no longer repeats them.
+- 2026-10-01 cat status indicator:
+  - `cat.ts`: a data-driven ASCII cat (animation table, state priority, frame arithmetic, tool-error
+    classification); pure, printable US-ASCII, padded to a fixed width.
+  - While a request runs the cat is pi's working indicator (`setWorkingIndicator`), re-set only when
+    the resolved state changes; between requests the bar shows it, and a result plays once on a
+    self-clearing timer. New hooks: `ui_prompt_start/end` (waiting for user) and
+    `session_before_compact`, `session_compact`, `session_compact_failed` (crunching).
+  - `/footer cat on|off`, saved in `ui.json`; `PI_KIT_CAT=0` forces it off.
 
 ### `dirty-repo-guard`
 

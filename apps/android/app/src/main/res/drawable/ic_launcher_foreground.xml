@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A square-cut pi in the console's lime, inside the adaptive icon's 66 dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#C2FE0C"
+        android:pathData="M32,35h44v9h-44z M40,44h9v29h-9z M59,44h9v20c0,0 0,0 0,0h8v9h-17z" />
+</vector>

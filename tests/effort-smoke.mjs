@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv } from "../packages/core/eval/harness.mjs";
 import { clampTier, loadEffortPolicy, normalizeTier, tierLimits, renderEffortPrompt, validateEffortPolicy } from "../packages/core/lib/effort.mjs";
 
@@ -23,6 +24,57 @@ const { default: effort, REGISTRY_KEY, readConfig, resolveEffective, saveDefault
 const corePolicy = loadEffortPolicy();
 const rtPolicy = policyMod.loadPolicy();
 const CACHE = path.resolve("node_modules/.cache/pi-kit-eval");
+
+/**
+ * Race `count` real processes, each making 12 reservations against one ledger file, and return what
+ * every process was told. Each process reports ready, waits for one go signal, and keeps its slots (its
+ * pid stays alive) until all of them have finished reserving. That guarantees they overlap and contend
+ * at once however slowly each one starts. A fixed time barrier did not: on a throttled CI container the
+ * children started apart, early ones exited and freed their slots, and more reservations succeeded than
+ * the concurrency limit allows.
+ */
+async function raceReserves(file, limits, count) {
+  const ledgerPath = path.join(CACHE, "packages_extensions_src_effort_ledger.mjs");
+  const script = `
+    import(${JSON.stringify("file://" + ledgerPath)}).then(async (m) => {
+      const file = ${JSON.stringify(file)};
+      const limits = ${JSON.stringify(limits)};
+      const input = (await import("node:readline")).createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+      console.log("ready");
+      await input.next(); // go
+      const out = [];
+      for (let i = 0; i < 12; i++) {
+        const r = m.reserve(file, { kind: "discretionary", role: "worker", requesterTier: "thorough", requesterLimits: limits, requesterLabel: "E4 Thorough" });
+        out.push(r.ok ? "ok" : r.code);
+        if (r.ok) m.attach(file, r.id, process.pid);
+      }
+      console.log(JSON.stringify(out));
+      await input.next(); // hold the slots until the parent closes stdin
+      process.exit(0);
+    });`;
+  const kids = Array.from({ length: count }, () => {
+    const p = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["pipe", "pipe", "inherit"] });
+    const lines = createInterface({ input: p.stdout })[Symbol.asyncIterator]();
+    const closed = new Promise((resolve, reject) => p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`race child exited ${code}`)))));
+    closed.catch(() => {});
+    return { p, lines, closed };
+  });
+  const next = async (k) => {
+    const r = await Promise.race([k.lines.next(), k.closed.then(() => ({ done: true }))]);
+    if (r.done) throw new Error("race child ended before reporting");
+    return r.value;
+  };
+  try {
+    for (const k of kids) assert.equal(await next(k), "ready");
+    for (const k of kids) k.p.stdin.write("go\n");
+    const runs = await Promise.all(kids.map(async (k) => JSON.parse(await next(k))));
+    for (const k of kids) k.p.stdin.end();
+    await Promise.all(kids.map((k) => k.closed));
+    return runs;
+  } finally {
+    for (const k of kids) k.p.kill();
+  }
+}
 
 function world(env = {}) {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-"));
@@ -418,30 +470,7 @@ const tests = {
       const file = path.join(w.agent, "race.json");
       const limits = { maxConcurrent: 4, maxTotal: 8, maxScouts: 2 };
       ledgerMod.createLedger(file, { scope: "race", tier: "thorough", limits, recovery: { maxInvocations: 2, maxConcurrent: 1, roles: ["scout"] }, sessionTotalBefore: 0, sessionCeiling: 64, mandatoryMax: 6 });
-      const ledgerPath = path.join(CACHE, "packages_extensions_src_effort_ledger.mjs");
-      // A start barrier makes every process hit the ledger in the same instant, so an unlocked
-      // read-modify-write loses updates (the mutation check in the PR proved this fails without the lock).
-      const startAt = Date.now() + 1500;
-      const script = `
-        import(${JSON.stringify("file://" + ledgerPath)}).then((m) => {
-          const file = ${JSON.stringify(file)};
-          const limits = ${JSON.stringify(limits)};
-          const out = [];
-          while (Date.now() < ${startAt}) { /* spin until the barrier */ }
-          for (let i = 0; i < 12; i++) {
-            const r = m.reserve(file, { kind: "discretionary", role: "worker", requesterTier: "thorough", requesterLimits: limits, requesterLabel: "E4 Thorough" });
-            out.push(r.ok ? "ok" : r.code);
-            if (r.ok) { m.attach(file, r.id, process.pid); }
-          }
-          // hold the slots so every process overlaps
-          setTimeout(() => { console.log(JSON.stringify(out)); }, 300);
-        });`;
-      const runs = await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
-        const p = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] });
-        let out = "";
-        p.stdout.on("data", (c) => (out += c));
-        p.on("close", (code) => (code === 0 ? resolve(JSON.parse(out.trim().split("\n").at(-1))) : reject(new Error(`race child exited ${code}`))));
-      })));
+      const runs = await raceReserves(file, limits, 8);
       const all = runs.flat();
       assert.equal(all.filter((x) => x === "ok").length, 4, `only maxConcurrent (4) slots can be live at once: ${all.join(",")}`);
       const data = ledgerMod.readLedger(file);
@@ -475,27 +504,7 @@ const tests = {
       const limits = { maxConcurrent: 4, maxTotal: 8, maxScouts: 2 };
       ledgerMod.createLedger(file, { scope: "stale-race", tier: "thorough", limits, recovery: { maxInvocations: 2, maxConcurrent: 1, roles: ["scout"] }, sessionTotalBefore: 0, sessionCeiling: 64, mandatoryMax: 6 });
       fs.writeFileSync(`${file}.lock`, "999999\n"); old(`${file}.lock`);
-      const ledgerPath = path.join(CACHE, "packages_extensions_src_effort_ledger.mjs");
-      const startAt = Date.now() + 1500;
-      const script = `
-        import(${JSON.stringify("file://" + ledgerPath)}).then((m) => {
-          const file = ${JSON.stringify(file)};
-          const limits = ${JSON.stringify(limits)};
-          const out = [];
-          while (Date.now() < ${startAt}) { /* spin until the barrier */ }
-          for (let i = 0; i < 12; i++) {
-            const r = m.reserve(file, { kind: "discretionary", role: "worker", requesterTier: "thorough", requesterLimits: limits, requesterLabel: "E4 Thorough" });
-            out.push(r.ok ? "ok" : r.code);
-            if (r.ok) m.attach(file, r.id, process.pid);
-          }
-          setTimeout(() => { console.log(JSON.stringify(out)); }, 300);
-        });`;
-      const runs = await Promise.all(Array.from({ length: 12 }, () => new Promise((resolve, reject) => {
-        const p = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] });
-        let out = "";
-        p.stdout.on("data", (c) => (out += c));
-        p.on("close", (code) => (code === 0 ? resolve(JSON.parse(out.trim().split("\n").at(-1))) : reject(new Error(`stale-race child exited ${code}`))));
-      })));
+      const runs = await raceReserves(file, limits, 12);
       const all = runs.flat();
       assert.equal(all.filter((x) => x === "ok").length, 4, `a stale lock must not let two waiters both in: ${all.filter((x) => x === "ok").length} granted`);
       assert.equal(ledgerMod.readLedger(file).total, 4);

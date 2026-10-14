@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+		<!-- The page talks to nothing but the app (see js/native.js): no network, no inline code. -->
+		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+		<meta name="color-scheme" content="dark" />
+		<meta name="referrer" content="no-referrer" />
+		<title>pi remote</title>
+		<link rel="stylesheet" href="mobile.css" />
+		<script type="module" src="js/main.js"></script>
+	</head>
+	<body>
+		<div id="app" class="app"></div>
+		<div id="sheet-root" class="sheet-root"></div>
+		<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+	</body>
+</html>

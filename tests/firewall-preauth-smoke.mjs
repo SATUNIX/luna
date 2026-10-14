@@ -308,7 +308,10 @@ try {
       assert.deepEqual(early, [], `${f}: tool_call handlers load before tool-firewall: ${early}`);
     }
     // (b) Listeners that run before any tool_call handler: observation only, reviewed.
-    const EARLY_OK = new Set(["tool-capture", "custom-footer"]);
+    // remote-control: while a session is shared, it queues each event and sends a slimmed copy
+    // to linked phones after the handler has returned; it never changes an event, blocks or runs
+    // anything.
+    const EARLY_OK = new Set(["tool-capture", "custom-footer", "remote-control"]);
     const early = [...manifests].filter(([, m]) => (m.hooks ?? []).some((h) => h === "tool_execution_start" || h === "message_update")).map(([n]) => n);
     assert.deepEqual(early.filter((n) => !EARLY_OK.has(n)), [], `new pre-gate listeners need review: ${early}`);
     // (c) Subagent children load the gate first: delegation-guard orders every child's extensions

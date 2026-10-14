@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "custom-footer",
-  "summary": "Status bar: three densities (light, default, heavy) built from prioritised segments that survive narrow terminals, showing identity, model and thinking, profile and effort tier, context headroom, live agents, and the boundary, compaction and failure warnings first. Costs are labelled measured, estimated or unknown. Also live activity, tips and a todo checklist. /footer status is the accessible detail view; /footer light|default|heavy|off|config.",
+  "summary": "Status bar: three densities (light, default, heavy) built from prioritised segments that survive narrow terminals, showing identity, model and thinking, profile and effort tier, context headroom, live agents, and the boundary, compaction and failure warnings first. Costs are labelled measured, estimated or unknown. Also live activity, tips and a todo checklist, and an ASCII cat whose face shows the agent's state (/footer cat on|off). /footer status is the accessible detail view; /footer light|default|heavy|off|config.",
   "category": "ui",
   "tier": "T1",
   "layer": 3,
@@ -16,6 +16,11 @@
     "tool_execution_end",
     "turn_end",
     "agent_end",
+    "ui_prompt_start",
+    "ui_prompt_end",
+    "session_before_compact",
+    "session_compact",
+    "session_compact_failed",
     "model_select",
     "thinking_level_select"
   ],
@@ -58,6 +63,7 @@
     "PI_KIT_TODO_WIDGET",
     "PI_KIT_TODO_FILE",
     "PI_KIT_ASCII",
+    "PI_KIT_CAT",
     "PI_KIT_FIREWALL_CONFIG"
   ],
   "provenance": {

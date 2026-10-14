@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No cleartext anywhere, and no CA is trusted for the computers: each one is pinned to the
+     certificate fingerprint it showed when the phone was linked (see PinnedTls.kt). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

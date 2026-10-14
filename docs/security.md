@@ -15,6 +15,7 @@ This page states what the pi-system safety boundary **guarantees** and, just as 
 | Tool I/O capture | `tool-capture` | every profile | Lossless, rotating JSONL of every tool call and output, joined to the firewall audit by action hash; secrets flagged. See [Tool I/O capture](tool-capture.md). |
 | Domain governance | `pentest-governance-domain` | `pentest` | Scope and rules-of-engagement enforcement, MCP-only mode, action-card approval, hash-chained audit for authorised engagements. |
 | Web console | `web-console` and `packages/web-ui` | most profiles | Token authentication, host and origin checks, an RPC allow-list. See [Web console](web-console.md). |
+| Remote control | `remote-control` and `packages/web-ui/server/remote-host.js` | most profiles | Phones linked by a one-time code plus approval at the terminal, keystore keys, a pinned TLS certificate, short-lived tokens. See [Remote control](remote-control.md). |
 
 `tool-firewall` loads **before** `pentest-governance-domain` in the pentest profile (enforced by
 `tests/epic1-smoke.mjs`), so the general gate runs first. Coding profiles carry no pentest gate;
@@ -160,7 +161,7 @@ from MCP-only mode: they do not touch a pentest target and are already gated by 
 ## Tests that pin this
 
 `npm run test:security` runs the firewall, shell parser, approvals, outcomes, no-side-effect,
-pre-authorisation, unattended-mode, protections-registry, delegation-guard and web-console suites,
-plus `secret-guard`. `verify.mjs` fails the build if the shipped policy stops being default-deny or
+pre-authorisation, unattended-mode, protections-registry, delegation-guard, web-console and
+remote-control suites, plus `secret-guard`. `verify.mjs` fails the build if the shipped policy stops being default-deny or
 its destructive patterns stop being a superset of `pentest-governance-domain`'s. As with any
 pattern-based boundary, this is the current state of an ongoing effort, not a permanent guarantee.

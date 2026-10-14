@@ -9,10 +9,10 @@
 |---|---|---|---|
 | `lite` | Low-context / small local models | T0–T1 | 21 |
 | `quick` | Quick fix | T0–T1 | 24 |
-| `balanced` | Daily coding | T0–T2 | 33 |
-| `long-horizon` | Multi-hour / multi-day | T0–T3 | 39 |
-| `autonomous` | Set-and-walk-away | T0–T3 | 40 |
-| `self-improving` | Full / self-improving (experimental) | T0–T4 | 46 |
+| `balanced` | Daily coding | T0–T2 | 34 |
+| `long-horizon` | Multi-hour / multi-day | T0–T3 | 40 |
+| `autonomous` | Set-and-walk-away | T0–T3 | 41 |
+| `self-improving` | Full / self-improving (experimental) | T0–T4 | 47 |
 | `pentest` | Security engagement (strict) | T0–T3+ | 41 |
 
 ## Extension × profile
@@ -53,6 +53,7 @@
 | `human-console` | ui | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `kit-update` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `notify` | ui | stable | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `remote-control` | ui | beta | · | · | ✓ | ✓ | ✓ | ✓ | · |
 | `session-helpers` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `web-console` | ui | beta | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `autonomous-loop` | workflow | beta | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |

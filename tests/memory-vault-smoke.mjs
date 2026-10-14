@@ -16,12 +16,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ROOT, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv } from "../packages/core/eval/harness.mjs";
+import { ROOT, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.mjs";
 
 const run = promisify(execFile);
 const ws = tmpWorkspace("pi-kit-memory-vault-");
 const vaultRoot = path.join(ws, "vault");
-const restores = [setEnv("PI_KIT_VAULT", vaultRoot), setEnv("PI_CODING_AGENT_DIR", path.join(ws, "agent")), setEnv("PI_KIT_INTERNAL_CHILD", undefined), setEnv("PI_KIT_MEMORY_DIR", undefined)];
+const restores = [isolateKitEnv(), setEnv("PI_KIT_VAULT", vaultRoot), setEnv("PI_CODING_AGENT_DIR", path.join(ws, "agent")), setEnv("PI_KIT_INTERNAL_CHILD", undefined), setEnv("PI_KIT_MEMORY_DIR", undefined)];
 let checks = 0;
 const ok = (label) => {
   checks++;

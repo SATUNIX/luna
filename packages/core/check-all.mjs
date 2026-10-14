@@ -79,8 +79,35 @@ function checkNames() {
   const scripts = pkg.scripts ?? {};
   const names = Object.keys(scripts)
     .filter((name) => INCLUDE_PREFIX.some((prefix) => name.startsWith(prefix)))
-    .concat(INCLUDE_EXACT);
-  return names.filter((name) => name in scripts).sort();
+    .concat(INCLUDE_EXACT)
+    .filter((name) => name in scripts);
+  const covered = coveredAggregates(scripts, names);
+  for (const [name, via] of covered) console.log(`check-all: skipping ${name}: every file it runs is already its own check (${via.join(", ")})`);
+  return names.filter((name) => !covered.has(name)).sort();
+}
+
+/**
+ * Aggregate scripts whose work check-all already does. `test:security` is a chain of
+ * `node tests/x.mjs && node tests/y.mjs ...`; when every file in such a chain is also the whole
+ * command of another included script, running the chain repeats those checks (about a quarter of a
+ * full run). A chain with even one file no other script runs is kept, so adding a file to it without
+ * giving it a script of its own never drops that file from the gate. Returns name -> covering scripts.
+ */
+export function coveredAggregates(scripts, included) {
+  const singles = new Map();
+  for (const name of included) {
+    const single = /^node (\S+)$/.exec(scripts[name] ?? "");
+    if (single && !singles.has(single[1])) singles.set(single[1], name);
+  }
+  const covered = new Map();
+  for (const name of included) {
+    const parts = (scripts[name] ?? "").split(" && ");
+    const files = parts.map((part) => /^node (\S+)$/.exec(part)?.[1]);
+    if (parts.length < 2 || files.some((file) => !file)) continue;
+    const via = files.map((file) => singles.get(file));
+    if (via.every((owner) => owner && owner !== name)) covered.set(name, via);
+  }
+  return covered;
 }
 
 function listJsonNames(dir) {

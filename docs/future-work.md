@@ -37,6 +37,11 @@ it.
 
 ## Approvals and the firewall
 
+The [Agentic security, alignment and autonomy proposal](proposals/agentic-security-and-alignment.md)
+sets out coordinated security levels, trusted content admission, intent review, OpenAPPA integration
+and verified container autonomy. It includes a staged pi 0.99.2 compatibility workstream and
+acceptance gates; these are proposed changes, not current guarantees.
+
 - **It is a guard rail, not a sandbox.** Containing what an allowed tool can reach needs an
   operating-system or container boundary (the autonomous runner provides one).
 - **Low-tier actions run unasked in every mode**, including reads by tools whose name says they only

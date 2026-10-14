@@ -8,7 +8,50 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
-_Nothing yet._
+## [0.2.4-beta.3]
+
+### Security
+
+- **Pin `katex` to 0.18.2.** The docs toolchain pulled `katex@0.16.47` transitively through
+  `mermaid`, which the OSV scanner flagged for CVE-2026-103923 (GHSA-238p-pmpm-9mq7), a
+  low-severity prototype-pollution gadget. An `overrides` entry moves it to the patched 0.18.2;
+  `npm audit` is clean and all 52 Mermaid diagrams still parse.
+
+### Fixed
+
+- **The remote host log tail no longer stats a path it then reopens.** `tailLog()` takes the size
+  from the open descriptor (`fstatSync`) instead of `statSync` on the path, removing a
+  time-of-check/time-of-use window (CodeQL `js/file-system-race`).
+- **Model labels on the phone replace every separator.** The session detail sheet used
+  `String.replace`, which rewrites only the first `|`; it now uses `replaceAll` (CodeQL
+  `js/incomplete-sanitization`).
+
+## [0.2.4-beta.2]
+
+### Added
+
+- **Reporting skills.** Two `evidence-reporting` skills for the pentest reporting workflow:
+  `finding-report` renders a finding-ready observation into the house deliverable format (finding
+  data block with CVSS 4.0 vector and MITRE ATT&CK, a "threat actor" risk statement running
+  Due to → There is a risk that → Resulting in, a general technology Background, a specific
+  Overview, single-sentence Remediation, and evidence by ID plus screenshot captions), and
+  `daily-debrief` runs a conversational end-of-day debrief that assesses the agent's own notes,
+  interviews the tester for the gaps, reconciles findings through the existing discipline skills,
+  and organises everything into that format. Both ship in the `pentest` profile only. See
+  `docs/skills-catalogue.md`.
+- **Status cat.** The status bar shows a small fixed-width ASCII cat for the agent's state
+  (thinking, streaming, running a tool, waiting for you, compacting, and the result of a request).
+  It replaces pi's spinner while a request runs, never ticks while idle, and is switched with
+  `/footer cat on|off` or `PI_KIT_CAT=0`. See `docs/status-bar-and-costs.md`.
+- **Remote control from an Android phone.** `/remote` (the `remote-control` extension, in the
+  `balanced`, `long-horizon`, `autonomous` and `self-improving` profiles) starts a pi remote host
+  on the computer and shares the terminal's session with **pi remote**, a new Android app in
+  `apps/android` that is a phone-sized pi-console. The phone connects directly over the LAN or a
+  VPN such as Tailscale. Phones are linked with a one-time code plus approval at the terminal
+  after comparing a device ID, keep their key in the Android Keystore, pin the host's
+  certificate and use short-lived tokens. From the phone you can prompt, steer and abort the
+  terminal session, answer its dialogs, change model and thinking, and start, open and end other
+  sessions. See `docs/remote-control.md`.
 
 ## [0.2.4-beta.1]
 

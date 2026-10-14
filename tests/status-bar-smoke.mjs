@@ -295,7 +295,7 @@ const tests = {
       const h = pi.commands.get("footer").handler;
       // valid: mode config persists exactly the previous contract
       await h(["config"], ctx);
-      assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { footer: true, mode: "heavy", tips: true, todos: true });
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { footer: true, mode: "heavy", tips: true, todos: true, cat: true });
       const before = fs.readFileSync(file, "utf8");
       // invalid: nothing changes, an error explains, and it says so
       for (const bad of ["nonsense", "lite", "todos maybe", "ascii perhaps", "heavy extra", "on now", "--mode heavy"]) {

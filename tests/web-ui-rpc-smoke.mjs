@@ -187,8 +187,16 @@ try {
       "spawn.js": ["mkdirSync", "unlinkSync", "writeFileSync"], // the temp --append-system-prompt file in RUNTIME_DIR
       "server.js": ["rmSync", "writeFileSync"], // the generated token file in RUNTIME_DIR
       "config.js": ["mkdirSync"], // RUNTIME_DIR itself
+      "remote-host.js": ["rmSync"], // its own control.json, at shutdown
+      // The remote host's state directory (identity, TLS key, devices, control.json, audit log),
+      // written only through store.js's owner-only helpers.
+      "remote/store.js": ["appendFileSync", "chmodSync", "mkdirSync", "renameSync", "rmSync", "writeFileSync"],
     };
-    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".js"))) {
+    const files = [
+      ...fs.readdirSync(dir).filter((f) => f.endsWith(".js")),
+      ...fs.readdirSync(path.join(dir, "remote")).filter((f) => f.endsWith(".js")).map((f) => `remote/${f}`),
+    ];
+    for (const file of files) {
       const code = fs.readFileSync(path.join(dir, file), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
       const used = new Set([...code.matchAll(writer)].map((m) => m[1]));
       const extra = [...used].filter((name) => !(allowed[file] || []).includes(name));

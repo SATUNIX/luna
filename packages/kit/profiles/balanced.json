@@ -13,7 +13,7 @@
     "protected-paths", "tool-firewall", "human-console", "git-checkpoint", "auto-commit-on-exit",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
-    "autonomous-loop", "custom-compaction", "session-helpers", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console",
+    "autonomous-loop", "custom-compaction", "session-helpers", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control",
     "handoff", "trace-ledger", "tool-capture", "progress-guard",
     "caveman", "pi-lens",
     "subagent", "orchestrator", "goal-core"

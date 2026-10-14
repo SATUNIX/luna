@@ -19,6 +19,7 @@ nav:
       - Autonomy Gate: autonomy-gate.md
       - Tool I/O Capture: tool-capture.md
       - Web Console: web-console.md
+      - Remote Control: remote-control.md
       - Autonomous Runs: autonomy.md
       - Status Bar and Costs: status-bar-and-costs.md
       - Efficiency and Loops: efficiency-and-loops.md
@@ -39,6 +40,7 @@ nav:
       - Beta Status: beta.md
       - Roadmap: roadmap.md
       - Future Work: future-work.md
+      - Agentic Security and Alignment (proposal): proposals/agentic-security-and-alignment.md
       - Lessons from the Private System: private-system-lessons.md
       - Recovery Orchestration Mode (design): recovery-orchestration-mode.md
       - Releasing: releasing.md

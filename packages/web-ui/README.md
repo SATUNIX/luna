@@ -162,6 +162,12 @@ Browser (public/)  ──HTTP──▶  server/server.js  ──JSONL stdin/stdo
 | `server/routes.js` | REST endpoints + SSE stream |
 | `server/server.js` | HTTP server, static files, shutdown |
 
+The same modules also serve phones. `server/remote-host.js` (started by `/remote`) offers this API
+over HTTPS to phones linked with the pi remote Android app, and `server/remote/*` adds linking,
+signed-challenge sign-in, terminal-session sharing and answers to dialogs; `server/remote-cli.js`
+manages it without a pi terminal. `mobile/` holds the app's screens, which reuse
+`public/js/render.js` and `public/js/panels.js`. See `docs/remote-control.md`.
+
 The disk readers tolerate malformed persisted entries: non-object JSONL lines in a session file, non-object provider values, and non-object `models` elements in `models.json` are skipped rather than failing the request.
 
 ### API

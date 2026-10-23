@@ -12,7 +12,9 @@ npm run new -- my-extension
 npm run new -- my-extension
 ```
 
-This creates `packages/extensions/src/my-extension/`.
+This creates `packages/extensions/src/my-extension/` from `_template`, regenerates the
+catalogue (`npm run catalog`) and prints the checklist below. The untouched scaffold passes
+`npm run verify` (`tests/new-extension-smoke.ts`).
 
 ## Implement
 
@@ -23,17 +25,27 @@ Edit:
 
 Keep the extension self-contained. Runtime code may import Node built-ins and declared package peers, but it must not import from sibling extensions or `packages/core/lib`.
 
-## Verify
+## Add to a Profile
 
-```powershell
-npm run verify
-```
+The template declares `"profiles": []`, so a new extension ships in no profile. To include it in
+a profile (for example `lite`), add its stable extension name to the profile's `include` list in
+`packages/kit/profiles/<profile>.json` and to the `profiles` field of its `extension.json`; the
+two must match or `npm run verify` fails. Then check:
 
 ```sh
-npm run verify
+npm run profile:check -- --profile lite
+npm run smoke:package
 ```
 
+## Classify the New Files
+
+A checkout that contains `internal/public-release/manifest.json` classifies every file: add each
+new file to its sorted `public` list (the scaffolder prints the paths when the manifest exists).
+The public repository has no manifest, so there is nothing to classify there.
+
 ## Update the Catalogue
+
+After editing `extension.json`, regenerate the catalogue:
 
 ```powershell
 npm run catalog
@@ -45,16 +57,14 @@ npm run catalog
 
 The generated catalogue appears in [Extension Catalogue](EXTENSIONS.md).
 
-## Add to a Profile
+## Verify
 
-To include an extension in a profile (for example `lite`), add its stable extension name to the
-profile's `include` list in `packages/kit/profiles/<profile>.json` and to the `profiles` field
-of its `extension.json`, then check:
+```powershell
+npm run verify
+```
 
 ```sh
 npm run verify
-npm run profile:check -- --profile lite
-npm run smoke:package
 ```
 
 For the full extension-writing reference, see [Writing Extensions](WRITING_EXTENSIONS.md).

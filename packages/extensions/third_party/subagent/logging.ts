@@ -7,12 +7,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_MAX_RUN_LOGS, MAX_LOG_BYTES, MAX_REGISTRY_RUNS, SUBAGENT_STATE_DIRNAME } from "./config.ts";
+import { DEFAULT_MAX_RUN_LOGS, isRecord, MAX_LOG_BYTES, MAX_REGISTRY_RUNS, SUBAGENT_STATE_DIRNAME, toText } from "./config.ts";
 import type { RunLog } from "./types.ts";
 
 export function subagentStateDir(cwd: string): string {
   const override = process.env.PI_KIT_SUBAGENT_STATE_DIR;
-  return override && override.trim() ? path.resolve(cwd, override.trim()) : path.join(cwd, SUBAGENT_STATE_DIRNAME);
+  return override?.trim() ? path.resolve(cwd, override.trim()) : path.join(cwd, SUBAGENT_STATE_DIRNAME);
 }
 
 function nowIso(): string {
@@ -57,7 +57,8 @@ export function compactRegistry(dir: string, keepRuns: number = MAX_REGISTRY_RUN
     const seen = new Set<string>();
     const ids = lines.map((line) => {
       try {
-        const id = String((JSON.parse(line) as { id?: unknown }).id ?? "");
+        const parsed: unknown = JSON.parse(line);
+        const id = toText((isRecord(parsed) ? parsed.id : undefined) ?? "");
         if (id && !seen.has(id)) {
           seen.add(id);
           order.push(id);
@@ -69,7 +70,7 @@ export function compactRegistry(dir: string, keepRuns: number = MAX_REGISTRY_RUN
     });
     if (order.length <= keepRuns) return;
     const keep = new Set(order.slice(-keepRuns));
-    const kept = lines.filter((_line, i) => keep.has(ids[i]));
+    const kept = lines.filter((_line, i) => keep.has(ids[i] ?? ""));
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${kept.join("\n")}\n`);
     fs.renameSync(tmp, file);
@@ -152,11 +153,12 @@ export function readRunRegistry(dir: string): Array<Record<string, unknown>> {
   try {
     return fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).map((line) => {
       try {
-        return JSON.parse(line) as Record<string, unknown>;
+        const entry: unknown = JSON.parse(line);
+        return isRecord(entry) ? entry : null;
       } catch {
         return null;
       }
-    }).filter((entry): entry is Record<string, unknown> => entry !== null);
+    }).filter((entry) => entry !== null);
   } catch {
     return [];
   }

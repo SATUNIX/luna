@@ -16,7 +16,9 @@ export type ValidatorRunResult = { ok: true; output: string } | { ok: false; rea
 export type ValidatorRunner = (cwd: string, task: string, signal?: AbortSignal, onUpdate?: (text: string) => void) => Promise<ValidatorRunResult>;
 
 interface TraceEntry { ts: string; turn: number; kind: "call" | "result"; tool: string; target?: string; argsHash: string; status?: "ok" | "error"; }
-interface Board { verdicts: Record<string, { pass: boolean; summary: string; at: string }>; generation?: number; }
+// verdicts.json is shared with verifier-board and read from disk, so its entries are untrusted:
+// each reader checks the fields it relies on (see validatorVerdictGate) instead of trusting a type.
+interface Board { verdicts: Record<string, unknown>; generation?: unknown; }
 const FINDING_ID = /^[a-z0-9][a-z0-9-]*$/;
 const VERDICT_MAX_AGE_MS = Number(process.env.PI_KIT_VERDICT_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
 // Validator child bounds: a wedged child must not hang dispatch_validator and permanently
@@ -33,10 +35,12 @@ function findingDirectory(cwd: string, id: string): string { return path.join(cw
 function verdictFile(cwd: string, id: string): string { return path.join(findingDirectory(cwd, id), "verdict.json"); }
 function pendingFile(cwd: string, id: string): string { return path.join(findingDirectory(cwd, id), "pending-validation.json"); }
 function isStale(at: unknown): boolean { if (typeof at !== "string") return true; const parsed = Date.parse(at); return Number.isNaN(parsed) || parsed > Date.now() || Date.now() - parsed > VERDICT_MAX_AGE_MS; }
-function validQuestion(value: unknown): value is ValidatorQuestion { const q = value as Partial<ValidatorQuestion> | null; return !!q && typeof q.pass === "boolean" && typeof q.note === "string" && q.note.trim().length > 0; }
-function validVerdict(value: unknown): value is ValidatorVerdict { const v = value as Partial<ValidatorVerdict> | null; return !!v && typeof v.evidence === "string" && v.evidence.trim().length > 0 && typeof v.requirement === "string" && v.requirement.trim().length > 0 && typeof v.pass === "boolean" && typeof v.at === "string" && validQuestion(v.real) && validQuestion(v.matters) && validQuestion(v.inScope); }
-function loadBoard(cwd: string): Board | null { const file = path.join(cwd, ".pi", "verdicts.json"); if (!fs.existsSync(file)) return { verdicts: {} }; try { const board = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Board>; return board.verdicts && typeof board.verdicts === "object" && !Array.isArray(board.verdicts) ? board as Board : null; } catch { return null; } }
-function saveBoard(cwd: string, board: Board): void { board.generation = (board.generation ?? 0) + 1; writeAtomically(path.join(cwd, ".pi", "verdicts.json"), JSON.stringify(board, null, 2)); }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function validQuestion(value: unknown): value is ValidatorQuestion { return isRecord(value) && typeof value.pass === "boolean" && typeof value.note === "string" && value.note.trim().length > 0; }
+function validVerdict(value: unknown): value is ValidatorVerdict { const v = value; return isRecord(v) && typeof v.evidence === "string" && v.evidence.trim().length > 0 && typeof v.requirement === "string" && v.requirement.trim().length > 0 && typeof v.pass === "boolean" && typeof v.at === "string" && validQuestion(v.real) && validQuestion(v.matters) && validQuestion(v.inScope); }
+function loadBoard(cwd: string): Board | null { const file = path.join(cwd, ".pi", "verdicts.json"); if (!fs.existsSync(file)) return { verdicts: {} }; try { const board: unknown = JSON.parse(fs.readFileSync(file, "utf8")); return isRecord(board) && isRecord(board.verdicts) ? { ...board, verdicts: board.verdicts } : null; } catch { return null; } }
+// A non-numeric generation (a hand-edited board) restarts the count: `"7" + 1` would concatenate to "71".
+function saveBoard(cwd: string, board: Board): void { board.generation = (typeof board.generation === "number" ? board.generation : 0) + 1; writeAtomically(path.join(cwd, ".pi", "verdicts.json"), JSON.stringify(board, null, 2)); }
 // Cross-process advisory lock for board mutations (same O_EXCL + stale-takeover pattern as
 // task-graph and verifier-board): a read-modify-write under a lock cannot lose a concurrent
 // verdict. Lock name is shared with verifier-board so both writers serialize on one file.
@@ -73,11 +77,11 @@ export function pendingValidatorFindings(cwd: string): string[] {
   } catch { return ["(validator pending ledger unreadable)"]; }
 }
 
-function parseQuestion(value: string): ValidatorQuestion | null { const match = value.trim().match(/^(PASS|FAIL)\s*\n\s*Reason:\s*([\s\S]+)$/); return !match || !match[2].trim() ? null : { pass: match[1] === "PASS", note: match[2].trim() }; }
+function parseQuestion(value: string): ValidatorQuestion | null { const match = value.trim().match(/^(PASS|FAIL)\s*\n\s*Reason:\s*([\s\S]+)$/); const note = match?.[2]?.trim(); return !match || !note ? null : { pass: match[1] === "PASS", note }; }
 function outputSections(output: string): Map<string, string> {
   const found = [...output.matchAll(/^## (Real|Matters|In Scope|Verdict|Summary)\s*$/gm)];
   const sections = new Map<string, string>();
-  for (let i = 0; i < found.length; i++) sections.set(found[i][1], output.slice((found[i].index ?? 0) + found[i][0].length, found[i + 1]?.index).trim());
+  for (const [i, entry] of found.entries()) sections.set(entry[1] ?? "", output.slice((entry.index ?? 0) + entry[0].length, found[i + 1]?.index).trim());
   return sections;
 }
 export function parseValidatorOutput(output: unknown): Pick<ValidatorVerdictInput, "real" | "matters" | "inScope"> | { reason: string } {
@@ -89,17 +93,34 @@ export function parseValidatorOutput(output: unknown): Pick<ValidatorVerdictInpu
   return { real, matters, inScope };
 }
 
-function finalAssistantOutput(messages: Array<{ role?: unknown; content?: unknown }>): string { for (let i = messages.length - 1; i >= 0; i--) { const msg = messages[i] as { role?: string; content?: Array<{ type?: string; text?: string }> }; const text = msg.role === "assistant" ? msg.content?.find((part) => part.type === "text" && typeof part.text === "string")?.text : undefined; if (text) return text; } return ""; }
+/**
+ * The text of the newest assistant message's first text part. Child stream messages are unknown:
+ * a non-array content or a non-object part is skipped, never dereferenced (shared with conductor).
+ */
+export function finalAssistantOutput(messages: readonly unknown[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!isRecord(msg) || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    const content: unknown[] = msg.content;
+    const part = content.find((p): p is { type: "text"; text: string } => isRecord(p) && p.type === "text" && typeof p.text === "string");
+    if (part?.text) return part.text;
+  }
+  return "";
+}
 function writePromptTempFile(prompt: string): { dir: string; file: string } { const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-conductor-validator-")); const file = path.join(dir, "validator-system-prompt.md"); fs.writeFileSync(file, prompt, { encoding: "utf8", mode: 0o600 }); return { dir, file }; }
 
 // pi (checked through 0.87) exposes no first-class registered-tool invocation from ExtensionAPI or ctx.
+// The validator's prompt is the extension's own shipped role, never a project file: a repository (or
+// the model under test) that writes .pi/agents/validator.md must not decide what the independent
+// check is told (ORC-1, ORC-4; tests/conductor-validator-smoke.ts).
+export const VALIDATOR_ROLE_FILE = fileURLToPath(new URL("../agents/validator.md", import.meta.url));
 export const runValidatorProcess: ValidatorRunner = async (cwd, task, signal, onUpdate) => {
-  const roleFile = path.join(cwd, ".pi", "agents", "validator.md"); let role: string;
-  try { role = fs.readFileSync(roleFile, "utf8"); } catch { return { ok: false, reason: "validator role is not materialized in .pi/agents" }; }
+  let role: string;
+  try { role = fs.readFileSync(VALIDATOR_ROLE_FILE, "utf8"); } catch { return { ok: false, reason: "the conductor extension's own validator role (agents/validator.md) is missing or unreadable" }; }
   let temp: { dir: string; file: string } | undefined;
   try {
     temp = writePromptTempFile(role.replace(/^---\n[\s\S]*?\n---\s*/, ""));
-    const args = ["--mode", "json", "-p", "--no-session", "--tools", "read,grep,find,ls", "--append-system-prompt", temp.file, `Task: ${task}`];
+    const args = ["--mode", "json", "-p", "--no-session", "--tools", "read,grep,find,ls", "--append-system-prompt", temp.file];
     const result = await new Promise<{ code: number; stderr: string; messages: Array<{ role?: unknown; content?: unknown }> }>((resolve) => {
       // Launch through the running pi's own entry point with no shell (a task string containing shell
       // metacharacters must never reach a command interpreter), and through delegation-guard: the
@@ -112,7 +133,11 @@ export const runValidatorProcess: ValidatorRunner = async (cwd, task, signal, on
       const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
       const runtime = process.execPath.replace(/\\/g, "/").split("/").pop()?.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "") ?? "";
       const argv = ["node", "nodejs", "bun", "deno"].includes(runtime) ? [cli, ...args] : [...args];
-      const proc = spawn(process.execPath, argv, { cwd, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...prepared.env, PI_KIT_INTERNAL_CHILD: "1" } }); let buffer = ""; let stderr = "";
+      const proc = spawn(process.execPath, argv, { cwd, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...prepared.env, PI_KIT_INTERNAL_CHILD: "1" } }); let buffer = ""; let stderr = "";
+      // The task (raw evidence, possibly over 128 KiB) goes over stdin, which print mode merges into
+      // the prompt, never argv: one argument is capped at MAX_ARG_STRLEN (spawn E2BIG) and argv is
+      // readable by any local user through ps. An EPIPE from an early exit surfaces as the exit code.
+      proc.stdin.on("error", () => {}); proc.stdin.end(`Task: ${task}`);
       prepared.slot.attach(proc.pid); proc.once("close", () => prepared.slot.settle("closed")); proc.once("error", () => prepared.slot.settle("error")); const messages: Array<{ role?: unknown; content?: unknown }> = [];
       let exited = false;
       let escalation: ReturnType<typeof setTimeout> | undefined;
@@ -120,7 +145,7 @@ export const runValidatorProcess: ValidatorRunner = async (cwd, task, signal, on
       const stop = () => { if (exited) return; try { proc.kill("SIGTERM"); } catch { /* already gone */ } escalation = setTimeout(() => { if (!exited) { try { proc.kill("SIGKILL"); } catch { /* already gone */ } } }, VALIDATOR_TERMINATE_GRACE_MS); escalation.unref(); };
       const bumpIdle = () => { if (exited || VALIDATOR_IDLE_TIMEOUT_MS <= 0) return; if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(() => stop(), VALIDATOR_IDLE_TIMEOUT_MS); idleTimer.unref(); };
       const cleanup = () => { exited = true; if (escalation) clearTimeout(escalation); if (idleTimer) clearTimeout(idleTimer); signal?.removeEventListener("abort", stop); };
-      const line = (raw: string) => { if (!raw.trim()) return; try { const event = JSON.parse(raw) as { type?: string; message?: { role?: unknown; content?: unknown } }; if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) { messages.push(event.message); onUpdate?.("[validator] received child progress"); } } catch { /* only JSON-stream assistant output is trusted */ } };
+      const line = (raw: string) => { if (!raw.trim()) return; try { const event: unknown = JSON.parse(raw); if (isRecord(event) && (event.type === "message_end" || event.type === "tool_result_end") && isRecord(event.message)) { messages.push(event.message); onUpdate?.("[validator] received child progress"); } } catch { /* only JSON-stream assistant output is trusted */ } };
       proc.stdout.on("data", (data: Buffer) => { bumpIdle(); buffer += data.toString(); const lines = buffer.split("\n"); buffer = lines.pop() || ""; lines.forEach(line); }); proc.stderr.on("data", (data: Buffer) => { bumpIdle(); stderr += data.toString(); });
       proc.once("close", cleanup); proc.once("error", cleanup);
       proc.on("close", (code) => { if (buffer.trim()) line(buffer); resolve({ code: code ?? 1, stderr, messages }); }); proc.on("error", (error) => resolve({ code: 1, stderr: String(error), messages }));
@@ -130,7 +155,7 @@ export const runValidatorProcess: ValidatorRunner = async (cwd, task, signal, on
     if (signal?.aborted) return { ok: false, reason: "validator cancelled" };
     if (result.code !== 0) return { ok: false, reason: result.stderr.trim() || `validator child exited ${result.code}` };
     const output = finalAssistantOutput(result.messages); return output ? { ok: true, output } : { ok: false, reason: "validator child returned no assistant output" };
-  } catch (error) { return { ok: false, reason: `validator child failed: ${String((error as Error)?.message ?? error)}` }; }
+  } catch (error) { return { ok: false, reason: `validator child failed: ${error instanceof Error ? error.message : String(error)}` }; }
   finally { if (temp) { try { fs.unlinkSync(temp.file); } catch { /* ignore */ } try { fs.rmdirSync(temp.dir); } catch { /* ignore */ } } }
 };
 
@@ -147,7 +172,7 @@ export function recordValidatorVerdict(cwd: string, id: string, input: Validator
       const board = loadBoard(cwd); if (!board) return { ok: false as const, reason: "verifier board unreadable or malformed" };
       writeAtomically(verdictFile(cwd, id), JSON.stringify(verdict, null, 2)); board.verdicts[`validator:${id}`] = { pass: verdict.pass, summary: `real=${verdict.real.pass}; matters=${verdict.matters.pass}; inScope=${verdict.inScope.pass}`, at }; saveBoard(cwd, board); clearPending(cwd, id);
       return { ok: true as const };
-    } catch (error) { return { ok: false as const, reason: `failed to record validator verdict: ${String((error as Error)?.message ?? error)}` }; }
+    } catch (error) { return { ok: false as const, reason: `failed to record validator verdict: ${error instanceof Error ? error.message : String(error)}` }; }
   });
   if (!locked.ok) { audit(cwd, "conductor:record_validator_verdict", id, input, "error"); return { ok: false as const, reason: locked.reason }; }
   if (!locked.value.ok) { audit(cwd, "conductor:record_validator_verdict", id, input, "error"); return { ok: false as const, reason: locked.value.reason }; }
@@ -158,7 +183,7 @@ export async function dispatchValidator(cwd: string, id: string, input: Validato
   const bundle = buildValidatorBundle(input);
   if (!FINDING_ID.test(id)) { const result = { ok: false as const, reason: `invalid finding id: ${id}` }; audit(cwd, "conductor:dispatch_validator", "invalid-finding-id", input, "error"); return result; }
   if (!bundle.ok) { audit(cwd, "conductor:dispatch_validator", id, input, "error"); return bundle; }
-  try { markPending(cwd, id); } catch (error) { const result = { ok: false as const, reason: `failed to mark validation pending: ${String((error as Error)?.message ?? error)}` }; audit(cwd, "conductor:dispatch_validator", id, input, "error"); return result; }
+  try { markPending(cwd, id); } catch (error) { const result = { ok: false as const, reason: `failed to mark validation pending: ${error instanceof Error ? error.message : String(error)}` }; audit(cwd, "conductor:dispatch_validator", id, input, "error"); return result; }
   const run = await runner(cwd, bundle.task, signal, onUpdate); if (!run.ok) { audit(cwd, "conductor:dispatch_validator", id, input, "error"); return run; }
   const parsed = parseValidatorOutput(run.output); if (!("real" in parsed)) { audit(cwd, "conductor:dispatch_validator", id, input, "error"); return { ok: false, reason: parsed.reason }; }
   const recorded = recordValidatorVerdict(cwd, id, { evidence: input.evidence, requirement: input.requirement, ...parsed }); audit(cwd, "conductor:dispatch_validator", id, input, recorded.ok ? "ok" : "error"); return recorded;
@@ -168,13 +193,13 @@ export function findingValidated(cwd: string, id: string): { validated: boolean;
   if (!FINDING_ID.test(id)) return { validated: false, reason: "invalid finding id" }; if (fs.existsSync(pendingFile(cwd, id))) return { validated: false, reason: "validator verdict pending" };
   let verdict: unknown; try { verdict = JSON.parse(fs.readFileSync(verdictFile(cwd, id), "utf8")); } catch { return { validated: false, reason: "validator verdict missing or unreadable" }; }
   if (!validVerdict(verdict)) return { validated: false, reason: "validator verdict malformed" }; if (isStale(verdict.at)) return { validated: false, reason: "validator verdict stale" }; if (!verdict.real.pass) return { validated: false, reason: "validator found the claim not real" }; if (!verdict.inScope.pass) return { validated: false, reason: "validator found the claim out of scope" }; if (!verdict.matters.pass || !verdict.pass) return { validated: false, reason: "validator verdict failed" };
-  const rollup = loadBoard(cwd)?.verdicts[`validator:${id}`]; if (!rollup || rollup.pass !== true || typeof rollup.summary !== "string" || !rollup.summary.trim() || typeof rollup.at !== "string" || isStale(rollup.at)) return { validated: false, reason: "validator board roll-up missing, failing, malformed, or stale" }; return { validated: true };
+  const entry = loadBoard(cwd)?.verdicts[`validator:${id}`]; const rollup = isRecord(entry) ? entry : undefined; if (rollup?.pass !== true || typeof rollup.summary !== "string" || !rollup.summary.trim() || typeof rollup.at !== "string" || isStale(rollup.at)) return { validated: false, reason: "validator board roll-up missing, failing, malformed, or stale" }; return { validated: true };
 }
 
 function text(value: string) { return { content: [{ type: "text" as const, text: value }], details: undefined }; }
-export function registerValidatorTools(pi: ExtensionAPI, options: { runner?: ValidatorRunner; prepare?: (cwd: string) => void } = {}): void {
+export function registerValidatorTools(pi: ExtensionAPI, options: { runner?: ValidatorRunner } = {}): void {
   const runner = options.runner ?? runValidatorProcess;
   pi.registerTool({ name: "dispatch_validator", label: "Validator: independent dispatch", description: "Run an isolated read-only validator with only raw evidence and requirement, then parse and record its verdict atomically.", parameters: Type.Object({ findingId: Type.String({ description: "Stable kebab-case finding identifier" }), evidence: Type.String({ description: "Raw evidence only: request/response, PoC, diff, or test output" }), requirement: Type.String({ description: "Requirement or scope stanza the evidence must satisfy" }) }),
-    async execute(_id, params, signal, onUpdate, ctx) { try { options.prepare?.(ctx.cwd); } catch { /* fail closed in runner */ } const result = await dispatchValidator(ctx.cwd, params.findingId, { evidence: params.evidence, requirement: params.requirement }, runner, signal, (message) => onUpdate?.(text(message))); return text(result.ok ? `Validator:${params.findingId} ${result.verdict.pass ? "PASS" : "FAIL"} recorded.` : `Validator dispatch refused: ${result.reason}`); },
+    async execute(_id, params, signal, onUpdate, ctx) { const result = await dispatchValidator(ctx.cwd, params.findingId, { evidence: params.evidence, requirement: params.requirement }, runner, signal, (message) => onUpdate?.(text(message))); return text(result.ok ? `Validator:${params.findingId} ${result.verdict.pass ? "PASS" : "FAIL"} recorded.` : `Validator dispatch refused: ${result.reason}`); },
   });
 }

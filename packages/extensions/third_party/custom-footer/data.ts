@@ -11,6 +11,13 @@ import path from "node:path";
 
 // --- numbers ----------------------------------------------------------------------------------
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** `String(value)` for a value of any type (registry fields are whatever the publisher stored). */
+const toText = (value: unknown): string => String(value);
+
 export function numberFrom(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -40,14 +47,17 @@ export const DEFAULT_PRICING: Pricing = { source: "unconfigured (cost unknown)" 
 
 function readPricingFile(filePath: string): Partial<Pricing> | undefined {
   if (!fs.existsSync(filePath)) return undefined;
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  // A file that is not an object is unreadable config: the caller keeps the prior pricing.
+  if (!isRecord(parsed)) throw new Error(`${filePath} is not a JSON object`);
+  const raw = parsed;
   const values = {
     inputPerMTok: numberFrom(raw.inputPerMTok ?? raw.input_per_mtok ?? raw.input),
     outputPerMTok: numberFrom(raw.outputPerMTok ?? raw.output_per_mtok ?? raw.output),
     cacheReadPerMTok: numberFrom(raw.cacheReadPerMTok ?? raw.cache_read_per_mtok ?? raw.cacheRead),
     cacheWritePerMTok: numberFrom(raw.cacheWritePerMTok ?? raw.cache_write_per_mtok ?? raw.cacheWrite),
   };
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<Pricing>;
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
 }
 
 export function pricingPaths(cwd: string): string[] {
@@ -66,7 +76,7 @@ export function loadPricing(cwd: string, previous: Pricing): { pricing: Pricing;
   } catch (error) {
     return { pricing: previous, warning: `status bar kept its prior pricing because the cost config could not be read: ${(error as Error).message}` };
   }
-  const envOverrides: Partial<Pricing> = {
+  const envOverrides = {
     inputPerMTok: numberFrom(process.env.PI_KIT_COST_INPUT_PER_MTOK),
     outputPerMTok: numberFrom(process.env.PI_KIT_COST_OUTPUT_PER_MTOK),
     cacheReadPerMTok: numberFrom(process.env.PI_KIT_COST_CACHE_READ_PER_MTOK),
@@ -108,7 +118,7 @@ export function estimateCost(totals: UsageTotals, pricing: Pricing): number | un
 // --- incremental session totals ---------------------------------------------------------------
 
 function addEntry(totals: UsageTotals, entry: unknown): boolean {
-  const msg = (entry as { type?: string; message?: { role?: string; usage?: Record<string, any> } })?.message;
+  const msg = (entry as { type?: string; message?: { role?: string; usage?: Record<string, unknown> } })?.message;
   if ((entry as { type?: string })?.type !== "message" || msg?.role !== "assistant") return true;
   const u = msg.usage;
   if (!u) return false;
@@ -117,7 +127,7 @@ function addEntry(totals: UsageTotals, entry: unknown): boolean {
   totals.cacheRead += numberFrom(u.cacheRead) ?? 0;
   totals.cacheWrite += numberFrom(u.cacheWrite) ?? 0;
   totals.total += numberFrom(u.totalTokens) ?? ((numberFrom(u.input) ?? 0) + (numberFrom(u.output) ?? 0) + (numberFrom(u.cacheRead) ?? 0) + (numberFrom(u.cacheWrite) ?? 0));
-  totals.cost += numberFrom(u.cost?.total) ?? 0;
+  totals.cost += numberFrom((u.cost as { total?: unknown } | null | undefined)?.total) ?? 0;
   return true;
 }
 
@@ -205,7 +215,8 @@ export function readBranch(cwd: string): string | undefined {
 export function readProfile(cwd: string): string | undefined {
   for (const file of [path.join(cwd, ".pi", ".pi-kit.json"), path.join(agentDir(), ".pi-kit.json")]) {
     try {
-      const profile = JSON.parse(fs.readFileSync(file, "utf8"))?.profile;
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+      const profile = isRecord(parsed) ? parsed.profile : undefined;
       if (typeof profile === "string" && profile) return profile;
     } catch {
       /* try the next marker */
@@ -214,13 +225,14 @@ export function readProfile(cwd: string): string | undefined {
   return undefined;
 }
 
-export type FirewallView = { mode?: string; policy?: string };
+export type FirewallView = { mode?: string | undefined; policy?: string | undefined };
 
 /** The firewall mode/policy the installer or /auto recorded, for the diagnostics line. */
 export function readFirewall(): FirewallView | undefined {
   const file = process.env.PI_KIT_FIREWALL_CONFIG?.trim() || path.join(agentDir(), "pi-kit", "firewall.json");
   try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    const raw = isRecord(parsed) ? parsed : undefined;
     return { mode: typeof raw?.mode === "string" ? raw.mode : undefined, policy: typeof raw?.policy === "string" ? raw.policy : undefined };
   } catch {
     return undefined;
@@ -229,26 +241,38 @@ export function readFirewall(): FirewallView | undefined {
 
 // --- registries other extensions publish ------------------------------------------------------
 
-const registry = <T>(name: string): T | undefined => (globalThis as Record<symbol, unknown>)[Symbol.for(name)] as T | undefined;
+// Each registry is read through the shape its publisher documents; anything the footer cannot
+// rely on is `unknown` and checked where it is used.
+const registry = (name: string): unknown => (globalThis as Record<symbol, unknown>)[Symbol.for(name)];
 
 export type EffortView = {
   code: string;
   label: string;
   pinned: boolean;
-  pendingCode?: string;
-  usage?: { live: number; total: number; maxTotal: number; scouts: number; maxScouts: number };
+  pendingCode?: string | undefined;
+  usage?: { live: number; total: number; maxTotal: number; scouts: number; maxScouts: number } | undefined;
+};
+
+type EffortSnapshotLike = {
+  code?: unknown;
+  label?: unknown;
+  pinned?: unknown;
+  pendingTier?: unknown;
+  ledger?: unknown;
+  usage?: { live?: number; total?: number; scouts?: number } | null;
+  limits?: { maxTotal?: number; maxScouts?: number } | null;
 };
 
 export function readEffort(): EffortView | undefined {
-  const reg = registry<{ snapshot(): any }>("pi-kit.effort");
+  const reg = registry("pi-kit.effort") as { snapshot(): EffortSnapshotLike | null | undefined } | undefined;
   if (!reg) return undefined;
   try {
     const s = reg.snapshot();
     if (!s || typeof s.code !== "string") return undefined;
-    const pending = typeof s.pendingTier === "string" ? String(s.pendingTier) : undefined;
+    const pending = typeof s.pendingTier === "string" ? s.pendingTier : undefined;
     return {
       code: s.code,
-      label: String(s.label ?? ""),
+      label: toText(s.label ?? ""),
       pinned: Boolean(s.pinned),
       pendingCode: pending ? `E${["minimal", "focused", "standard", "thorough", "exhaustive"].indexOf(pending) + 1}` : undefined,
       usage: s.ledger && s.usage ? { live: s.usage.live ?? 0, total: s.usage.total ?? 0, maxTotal: s.limits?.maxTotal ?? 0, scouts: s.usage.scouts ?? 0, maxScouts: s.limits?.maxScouts ?? 0 } : undefined,
@@ -258,23 +282,37 @@ export function readEffort(): EffortView | undefined {
   }
 }
 
-export type UnattendedView = { active: boolean; label: string; boundary?: string; autoApprove?: boolean; misconfigured?: boolean };
+export type SecurityView = { requested: string; effective: string; warning: boolean };
+function isSecurityRegistry(value: unknown): value is { snapshot: () => unknown } {
+  return isRecord(value) && typeof value.snapshot === "function";
+}
+export function readSecurity(): SecurityView | undefined {
+  const reg = registry("pi-kit.security");
+  if (!isSecurityRegistry(reg)) return undefined;
+  try {
+    const s: unknown = reg.snapshot();
+    if (!isRecord(s) || typeof s.requested !== "string" || typeof s.effective !== "string") return undefined;
+    return { requested: s.requested, effective: s.effective, warning: Array.isArray(s.warnings) && s.warnings.length > 0 };
+  } catch { return undefined; }
+}
+
+export type UnattendedView = { active: boolean; label: string; boundary?: string | undefined; autoApprove?: boolean | undefined; misconfigured?: boolean };
 
 /**
  * Unattended state is what the firewall ENFORCES (its registry), never what the environment claims.
  * The variable set without an enforcing registry is shown as a misconfiguration, not as protection.
  */
 export function readUnattended(env: NodeJS.ProcessEnv = process.env): UnattendedView | undefined {
-  const reg = registry<{ active?: boolean; boundary?: string | null; autoApprove?: boolean; label?: string }>("pi-kit.unattended");
-  if (reg && reg.active === true) return { active: true, label: String(reg.label ?? "unattended"), boundary: reg.boundary ?? undefined, autoApprove: reg.autoApprove };
+  const reg = registry("pi-kit.unattended") as { active?: unknown; boundary?: string | null; autoApprove?: boolean; label?: unknown } | undefined;
+  if (reg?.active === true) return { active: true, label: toText(reg.label ?? "unattended"), boundary: reg.boundary ?? undefined, autoApprove: reg.autoApprove };
   if (env.PI_KIT_UNATTENDED === "1") return { active: false, label: "unattended requested, not enforced", misconfigured: true };
   return undefined;
 }
 
-export type CompactionView = { enabled: boolean | null; reason?: string; thresholdTokens?: number | null };
+export type CompactionView = { enabled: boolean | null; reason?: string | undefined; thresholdTokens?: number | null | undefined };
 
 export function readCompaction(): CompactionView | undefined {
-  const reg = registry<{ enabled?: boolean | null; reason?: string | null; thresholdTokens?: number | null }>("pi-kit.compaction");
+  const reg = registry("pi-kit.compaction") as { enabled?: boolean | null; reason?: string | null; thresholdTokens?: number | null } | undefined;
   if (!reg || (reg.enabled !== true && reg.enabled !== false)) return undefined;
   return { enabled: reg.enabled, reason: reg.reason ?? undefined, thresholdTokens: reg.thresholdTokens ?? undefined };
 }
@@ -283,7 +321,7 @@ export type AgentsView = { live: number; failed: number };
 
 /** Live children and the failures since `failedBase` (the count when this request started). */
 export function readAgents(failedBase = 0): AgentsView | undefined {
-  const reg = registry<{ snapshot(): { live: number; failures: number } }>("pi-kit.subagents");
+  const reg = registry("pi-kit.subagents") as { snapshot(): { live?: number; failures?: number } } | undefined;
   if (!reg) return undefined;
   try {
     const s = reg.snapshot();
@@ -294,7 +332,7 @@ export function readAgents(failedBase = 0): AgentsView | undefined {
 }
 
 export function agentFailureCount(): number {
-  const reg = registry<{ snapshot(): { failures: number } }>("pi-kit.subagents");
+  const reg = registry("pi-kit.subagents") as { snapshot(): { failures?: number } } | undefined;
   try {
     return reg?.snapshot().failures ?? 0;
   } catch {

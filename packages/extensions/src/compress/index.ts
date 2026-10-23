@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -27,6 +27,8 @@ const TURN_FILES_LISTED = 6;
 const TURN_COMMANDS_LISTED = 3;
 const COMMAND_MAX_CHARS = 80;
 
+// The fields of pi's messages (AgentMessage) this summary reads. pi's messages are assigned to
+// these structural views, so a shape change in pi is a type error here rather than a silent miss.
 type Block = { type?: string; text?: string; name?: string; arguments?: Record<string, unknown> };
 type Msg = {
   role?: string;
@@ -34,10 +36,11 @@ type Msg = {
   toolName?: string;
   isError?: boolean;
   command?: string;
-  exitCode?: number;
+  exitCode?: number | undefined;
   customType?: string;
   summary?: string;
 };
+type Preparation = SessionBeforeCompactEvent["preparation"];
 
 type Turn = {
   user: string[];
@@ -75,6 +78,10 @@ function limits(): Limits {
     note: Math.min(1_000, Math.floor(budget * 0.1)),
     files: Math.floor(budget * 0.15),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function oneLine(text: string): string {
@@ -122,7 +129,7 @@ function addTextBlock(turn: Turn, text: string): void {
   if (line) turn.assistant.push(line);
 }
 
-function addToolCall(turn: Turn, name: string, args: Record<string, any>): void {
+function addToolCall(turn: Turn, name: string, args: Record<string, unknown>): void {
   turn.toolCounts.set(name, (turn.toolCounts.get(name) ?? 0) + 1);
   if (typeof args.path === "string") turn.files.add(args.path);
   if (typeof args.command === "string") turn.commands.push(clip(oneLine(args.command), COMMAND_MAX_CHARS));
@@ -131,7 +138,13 @@ function addToolCall(turn: Turn, name: string, args: Record<string, any>): void 
 function groupTurns(messages: Msg[], lim: Limits): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | undefined;
-  const turn = () => (current ??= (turns.push(newTurn()), turns[turns.length - 1]));
+  const turn = (): Turn => {
+    if (!current) {
+      current = newTurn();
+      turns.push(current);
+    }
+    return current;
+  };
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") continue;
@@ -224,8 +237,8 @@ function previousCompressFiles(branchEntries: unknown): { read: string[]; modifi
   return { read: [], modified: [] };
 }
 
-function fileLists(preparation: any, branchEntries: unknown): { readFiles: string[]; modifiedFiles: string[] } {
-  const ops = preparation?.fileOps ?? {};
+function fileLists(preparation: Partial<Preparation>, branchEntries: unknown): { readFiles: string[]; modifiedFiles: string[] } {
+  const ops: Partial<Preparation["fileOps"]> = preparation?.fileOps ?? {};
   const set = (v: unknown) => (v instanceof Set ? [...v] : Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string");
   const prev = previousCompressFiles(branchEntries);
   const modified = new Set([...prev.modified, ...set(ops.written), ...set(ops.edited)]);
@@ -234,16 +247,17 @@ function fileLists(preparation: any, branchEntries: unknown): { readFiles: strin
 }
 
 /** Build the deterministic summary. Pure: no I/O, no model call. */
-export function buildCompressedSummary(event: any, note = "", objective = ""): CompressResult {
-  const preparation = event?.preparation ?? {};
+export function buildCompressedSummary(event: SessionBeforeCompactEvent, note = "", objective = ""): CompressResult {
+  const preparation: Partial<Preparation> = event?.preparation ?? {};
   const history: Msg[] = Array.isArray(preparation.messagesToSummarize) ? preparation.messagesToSummarize : [];
   const prefix: Msg[] = preparation.isSplitTurn && Array.isArray(preparation.turnPrefixMessages) ? preparation.turnPrefixMessages : [];
   const lim = limits();
 
   const turns = groupTurns(history, lim).map((t, i) => renderTurn(t, i + 1, lim));
   const prefixTurns = groupTurns(prefix, lim);
-  if (prefixTurns.length) {
-    turns.push(renderTurn(prefixTurns[0], turns.length + 1, lim, " (continues in the kept messages below)"));
+  const [firstPrefixTurn] = prefixTurns;
+  if (firstPrefixTurn) {
+    turns.push(renderTurn(firstPrefixTurn, turns.length + 1, lim, " (continues in the kept messages below)"));
     for (const extra of prefixTurns.slice(1)) turns.push(renderTurn(extra, turns.length + 1, lim));
   }
 
@@ -269,7 +283,13 @@ export function buildCompressedSummary(event: any, note = "", objective = ""): C
   // Priority: first turn (the original ask), newest turn, earlier summary
   // (capped at 30% of what is left), then older turns from newest backwards.
   const kept = new Set<number>();
-  const cost = (i: number) => turns[i].length + 2;
+  // Every index used below is in range; a miss would be a bug here, so it throws as it always did.
+  const turnAt = (i: number): string => {
+    const text = turns[i];
+    if (text === undefined) throw new Error(`turn ${i} is out of range`);
+    return text;
+  };
+  const cost = (i: number) => turnAt(i).length + 2;
   for (const i of [0, turns.length - 1]) {
     if (i < 0 || kept.has(i)) continue;
     kept.add(i);
@@ -294,7 +314,7 @@ export function buildCompressedSummary(event: any, note = "", objective = ""): C
   const body: string[] = [];
   let markerPlaced = false;
   for (let i = 0; i < turns.length; i++) {
-    if (kept.has(i)) body.push(turns[i]);
+    if (kept.has(i)) body.push(turnAt(i));
     else if (!markerPlaced) {
       body.push(`[… ${omittedTurns} older turns omitted to fit the budget …]`);
       markerPlaced = true;
@@ -338,7 +358,7 @@ export default function (pi: ExtensionAPI) {
   // cancel as the generic "Compaction cancelled".
   let lastRefusal: string | undefined;
 
-  pi.on("session_before_compact", async (event: any, ctx?: ExtensionContext) => {
+  pi.on("session_before_compact", async (event, ctx) => {
     const instructions = event?.customInstructions;
     if (typeof instructions !== "string" || !instructions.startsWith(COMPRESS_MARKER)) return undefined;
     lastRefusal = undefined;
@@ -375,12 +395,16 @@ export default function (pi: ExtensionAPI) {
       const started = Date.now();
       ctx.compact({
         customInstructions: `${COMPRESS_MARKER}${note}`,
-        onComplete: (result: any) => {
-          const d = result?.details ?? {};
-          const omitted = d.omittedTurns ? `, ${d.omittedTurns} oldest turns omitted` : "";
+        onComplete: (result) => {
+          // `details` is what the session_before_compact hook returned; pi passes it through untyped.
+          const d: Record<string, unknown> = isRecord(result?.details) ? result.details : {};
+          const turns: unknown = d.turns ?? "?";
+          const omittedTurns: unknown = d.omittedTurns;
+          const omittedText = String(omittedTurns);
+          const omitted = omittedTurns ? `, ${omittedText} oldest turns omitted` : "";
           notify(
             ctx,
-            `compress: ${d.turns ?? "?"} turns -> ${String(result?.summary ?? "").length} chars${omitted} ` +
+            `compress: ${String(turns)} turns -> ${(result?.summary ?? "").length} chars${omitted} ` +
               `(was ~${result?.tokensBefore ?? "?"} tokens, ${Date.now() - started} ms)`,
           );
         },

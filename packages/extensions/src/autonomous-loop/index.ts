@@ -1,6 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentEndEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { Type } from "typebox";
 
 export function iterationLimit(value: string | undefined): number {
   const parsed = Number(value ?? 20);
@@ -10,7 +11,7 @@ export function iterationLimit(value: string | undefined): number {
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
@@ -56,7 +57,7 @@ function writeArmMarker(goal: string, cwd: string, sessionId: string): void {
 }
 
 function deleteArmMarker(cwd: string): void {
-  try { fs.unlinkSync(armMarkerPath(cwd)); } catch {}
+  try { fs.unlinkSync(armMarkerPath(cwd)); } catch { /* already gone */ }
 }
 
 function writeContrib(goal: string, cwd: string): void {
@@ -68,14 +69,27 @@ function writeContrib(goal: string, cwd: string): void {
       id: "autonomous-loop",
       priority: 100,
       budgetTokens: 500,
-      content: `## Autonomous Loop Active\nGoal: ${goal}\nContinue working toward this goal. Use /loop stop when done.`,
+      content: `## Autonomous Loop Active\nGoal: ${goal}\nContinue working toward this goal. When the goal is met, call the loop_complete tool with a short reason to end the loop.`,
     }),
     "utf8",
   );
 }
 
 function deleteContrib(cwd: string): void {
-  try { fs.unlinkSync(contribPath(cwd)); } catch {}
+  try { fs.unlinkSync(contribPath(cwd)); } catch { /* already gone */ }
+}
+
+/**
+ * REL-1: the stop reason of the run's last assistant message, or undefined when the run has no
+ * assistant message. "aborted" is an operator abort (Esc); "error" is a provider error.
+ */
+export function lastStopReason(event: Partial<AgentEndEvent> | undefined): { stopReason: string; errorMessage: string | undefined } | undefined {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role === "assistant") return { stopReason: message.stopReason, errorMessage: message.errorMessage };
+  }
+  return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -103,8 +117,9 @@ export default function (pi: ExtensionAPI) {
     // Do not remove another session's workspace markers on child startup.
     unsubscribe?.();
     unsubscribe = pi.events?.on("pi-kit:recovery-blocked", (data: unknown) => {
-      const event = data as { cwd?: string; sessionId?: string };
-      if (event?.cwd === loopCwd && event.sessionId === sessionId) stop();
+      // Event-bus data is unknown: only an object naming this loop's cwd and session stops it.
+      if (typeof data !== "object" || data === null) return;
+      if (Reflect.get(data, "cwd") === loopCwd && Reflect.get(data, "sessionId") === sessionId) stop();
     });
   });
 
@@ -130,8 +145,33 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("agent_end", async (_event, _ctx) => {
+  // REL-2: the model cannot run slash commands, so it ends the loop with this tool.
+  pi.registerTool({
+    name: "loop_complete",
+    label: "Loop: complete",
+    description: "End the autonomous loop (/loop) because its goal is met. Call once the work is done and verified.",
+    parameters: Type.Object({
+      reason: Type.String({ description: "Why the goal is met (for example, the check that now passes)" }),
+    }),
+    async execute(_toolCallId, params) {
+      const text = loopActive
+        ? `Autonomous loop ended: ${params.reason}`
+        : "No autonomous loop is armed; nothing to end.";
+      if (loopActive) stop();
+      return { content: [{ type: "text" as const, text }], details: undefined };
+    },
+  });
+
+  pi.on("agent_end", async (event, ctx) => {
     if (!loopActive || !loopGoal) return;
+    // REL-1: an operator abort or a provider error ends the loop instead of re-queueing Continue.
+    const last = lastStopReason(event);
+    if (last?.stopReason === "aborted" || last?.stopReason === "error") {
+      stop();
+      const detail = last.stopReason === "aborted" ? "the turn was aborted" : `the provider returned an error${last.errorMessage ? `: ${last.errorMessage}` : ""}`;
+      ctx?.ui?.notify?.(`Autonomous loop stopped: ${detail}. Run /loop <goal> to start it again.`, "warning");
+      return;
+    }
     if (loopIterationsLeft <= 0) {
       stop();
       return;
@@ -139,6 +179,6 @@ export default function (pi: ExtensionAPI) {
     // Heartbeat: refresh the marker's timestamp so a live loop stays fresh to progress-guard.
     writeArmMarker(loopGoal, loopCwd, sessionId);
     loopIterationsLeft--;
-    await pi.sendUserMessage(`Continue: ${loopGoal}`, { deliverAs: "followUp" });
+    pi.sendUserMessage(`Continue: ${loopGoal}`, { deliverAs: "followUp" });
   });
 }

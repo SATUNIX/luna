@@ -29,7 +29,7 @@
     - Observability + recovery: every run writes `.pi/subagent/<id>.log` (child events + stderr +
       lifecycle) and start/end records to `.pi/subagent/runs.jsonl`; `runSingleAgent` returns
       `logPath` and tool output cites it on failures. A `subagent_status` tool lists recent runs and
-      tails a log, and `packages/core/subagent-status.mjs` (npm run subagent:status) does the same
+      tails a log, and `packages/core/subagent-status.ts` (npm run subagent:status) does the same
       from a terminal, including `--follow`. Override the location with `PI_KIT_SUBAGENT_STATE_DIR`;
       children inherit the resolved top-level state dir so nested runs aggregate in one place.
       Per-token delta events are omitted from the log (the matching `message_end` carries the full
@@ -58,7 +58,7 @@
       stops are never auto-retried because they may already have produced work.
     - A detached child (one still running after the parent stopped waiting) raises a UI notification
       when it finally finishes, via the `onSettled` hook, so a detached delegation is not forgotten.
-    - Status surfaces (`subagent_status`, `/subagents`, `subagent-status.mjs`) report turns, cost
+    - Status surfaces (`subagent_status`, `/subagents`, `subagent-status.ts`) report turns, cost
       and attempt count per run; the stored message list is capped (400) so a very long child
       cannot grow parent memory without bound.
     - **Modularised** into `types.ts` / `config.ts` / `logging.ts` / `result.ts` / `child-process.ts` /
@@ -102,6 +102,9 @@
     - Chain `{previous}` substitution is literal; chain returns the unbounded final output.
     - Workflows (`workflow.ts`, `workflow-tools.ts`): declarative step chains with a run
       directory, parallel groups, gates, resume.
+    - Project-workflow trust is a No-first select ("No, don't run it" / "Run once" / "Trust this
+      digest"); trusted digests are stored in `<agent dir>/pi-kit/trusted-workflows.json`, and
+      headless runs are refused without a digest grant.
   - **Single governed launch contract (0.2.4-beta.0):** `isolation.ts` is gone and `launch.ts` is new.
     Every child, at any depth, is started through the `delegation-guard` extension
     (`packages/extensions/src/delegation-guard`), which decides the child's extensions (the parent's
@@ -110,3 +113,37 @@
     it; `result.ts` treats a denied or misconfigured launch (exit 78) as fatal, not retryable; role
     frontmatter gains `effort` and `scout`; `/workflow` launches are kind "user". The
     `PI_KIT_SUBAGENT_ISOLATE` switch no longer disables isolation. See `docs/agent-orchestration.md`.
+  - **Read-only means read tools only:** `isReadOnlyRole` (`launch.ts`) counts only `read`, `grep`,
+    `find` and `ls` as read-only, so a role with `bash` is not. `readOnlyTools` gives such a role's
+    read tools to delegation-guard; when the guard charges the launch to the recovery budget it hands
+    them back as `tools`, and `runner.ts` replaces the child's `--tools` with them. See
+    `docs/effort.md`.
+  - `loadInheritParentModel` checks the native settings file's `warnings.subagentInheritModel`
+    field instead of casting the file; anything but `true` means false (nothing pins this).
+  - **Workflow telemetry:** `run-model.ts` is new: an in-process run registry (`RunModel`, phases,
+    per-agent records and events) that `workflow.ts` feeds. `runner.ts` gains an `onUsage` callback
+    (running usage after each assistant message), and `live.ts` adds `workflows` (active runs) to
+    the `pi-kit.subagents` snapshot. See `docs/workflows.md` ("Live telemetry").
+  - **Workflow run control (E5 G4):** `control.ts` is new: one control per live run (an
+    AbortController, a scheduler gate the executor awaits before each launch, and a child
+    AbortController per running agent) behind `controlRun`. `workflow-tools.ts` adds the
+    `workflow_control {runId, action}` tool, `/workflow pause|skip`, routes `/workflow stop` and a
+    live `/workflow resume` through it, and asks a No-first select before a resume re-runs an
+    interrupted writer step. See `docs/workflows.md` ("Pausing, stopping and skipping").
+  - **Run-scoped approvals (E5 S7):** `control.ts` also publishes `controlRun` as
+    `globalThis[Symbol.for("pi-kit.workflow-control")]`, so the human console can pause a run; its
+    safety pause (origin `safety`) is held, and the `workflow_control` tool's resume (origin
+    `agent`) is refused until the operator resumes the run. For a
+    workflow launch `runner.ts` sets `PI_KIT_WORKFLOW_RUN_ID` (and drops it otherwise) and, when it
+    is unset, points `PI_KIT_HUMAN_CONSOLE_DIR` at the starting session's console. See
+    `docs/script-workflows.md` ("Approvals from workflow agents").
+  - **Workflow-script sandbox (Luna, kit-original):** `wf-sandbox.ts` and `wf-runner.mjs` run one
+    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.2` dependency) under
+    `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. Nothing in
+    the extension calls it yet. See `docs/workflow-sandbox.md`; pinned by
+    `tests/workflow-sandbox-smoke.ts`.
+  - **Structured results (E5 S3):** `runAgent` takes `schema`. `structured-output/check.ts` checks it
+    before launch; `structured-output/index.ts` is the child-only `StructuredOutput` tool that
+    `runner.ts` loads with `-e`; `schema.ts` is a byte-identical copy of
+    `packages/role-runner/src/schema.ts`. The host re-validates the child's submitted arguments,
+    retries once, then returns `null`. See `docs/structured-output.md`.

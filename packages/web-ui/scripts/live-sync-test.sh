@@ -46,7 +46,7 @@ mkdir -p "${TMP}/${ENC}"
 
 echo "pi-console live-sync test (port ${PORT})"
 
-(cd "${ROOT}" && PI_CONSOLE_TOKEN="${TOKEN}" PI_CONSOLE_PORT="${PORT}" PI_CODING_AGENT_SESSION_DIR="${TMP}" node server/server.js) >/tmp/pi-console-sync.log 2>&1 &
+(cd "${ROOT}" && PI_CONSOLE_TOKEN="${TOKEN}" PI_CONSOLE_PORT="${PORT}" PI_CODING_AGENT_SESSION_DIR="${TMP}" node server/server.ts) >/tmp/pi-console-sync.log 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 40); do
 	curl -s "${AUTH[@]}" --max-time 2 "${BASE}/api/health" >/dev/null 2>&1 && break

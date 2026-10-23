@@ -23,7 +23,7 @@ rail, not a sandbox. The full model, including the specific things it does not g
 - The **web console** is token-authenticated and loopback-bound by default
   ([`docs/web-console.md`](docs/web-console.md)).
 
-`packages/core/verify.mjs` fails if the shipped firewall policy stops being default-deny.
+`packages/core/verify.ts` fails if the shipped firewall policy stops being default-deny.
 `npm run test:security` exercises the firewall, delegation, approvals, unattended-mode and web
 console suites offline, and CI runs it on every change.
 
@@ -33,7 +33,7 @@ Please report a suspected boundary bypass **privately**: use GitHub's *Report a 
 the repository's **Security** tab. If that option is not available, open an issue that says only
 that you have a security report, with no technical detail, and a maintainer will arrange a private
 channel. Include a reproducing tool-call fixture where you can (see
-`tests/tool-firewall-smoke.mjs` and `tests/secret-guard-smoke.mjs` for the shape).
+`tests/tool-firewall-smoke.ts` and `tests/secret-guard-smoke.ts` for the shape).
 **Never include a live secret** in a report.
 
 This is a beta (`0.2.4-beta.0`). Only the latest release receives fixes.

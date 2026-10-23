@@ -41,7 +41,7 @@ check to pass in a trusted evaluation **and** the independent review to approve.
 
 Every container the supervisor starts has these properties, and they cannot be configured away.
 The supervisor also re-checks the finished `run` argument list against them before it executes
-(`packages/autonomy/lib/containment.mjs`), so a bug in an argument builder cannot start a
+(`packages/autonomy/lib/containment.ts`), so a bug in an argument builder cannot start a
 privileged container or one holding the engine socket:
 
 - non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, and pids,
@@ -98,13 +98,13 @@ supervisor's own code.
 From a shell, or from inside pi with `/autonomy` in the `autonomous` profile (below):
 
 ```sh
-node packages/autonomy/cli.mjs templates                       # what kinds of run exist
-node packages/autonomy/cli.mjs init --template implement --out run.json \
+node packages/autonomy/cli.ts templates                       # what kinds of run exist
+node packages/autonomy/cli.ts init --template implement --out run.json \
     --spec "A small HTTP API for todos" --check unit="node --test tests/"
-node packages/autonomy/cli.mjs plan --config run.json          # the boundary, its digest, problems
-node packages/autonomy/cli.mjs start --config run.json         # confirm the boundary; then it runs
-node packages/autonomy/cli.mjs status --run <run>              # or `status` for every run
-node packages/autonomy/cli.mjs export --run <run>              # results, evidence, usage, the work
+node packages/autonomy/cli.ts plan --config run.json          # the boundary, its digest, problems
+node packages/autonomy/cli.ts start --config run.json         # confirm the boundary; then it runs
+node packages/autonomy/cli.ts status --run <run>              # or `status` for every run
+node packages/autonomy/cli.ts export --run <run>              # results, evidence, usage, the work
 ```
 
 Every command accepts `--json` and then prints exactly one JSON object (`{ ok: true, ... }` or
@@ -137,7 +137,7 @@ with `plan --authorise`. `cancel`, `promote`, `reconfigure` and `resume --approv
 One JSON document, `schemaVersion: 1` (`packages/autonomy/schema/run-contract.schema.json`). It is
 validated by dependency-free code so the supervisor runs on plain Node, and the suite checks the
 two agree. The rules are **fail closed**: unknown top-level keys, and unknown or malformed keys
-under `permissions`, `promotion` and `authorisation`, are errors; anything absent defaults to the
+under `permissions`, `generations`, `promotion` and `authorisation`, are errors; anything absent defaults to the
 closed choice (no egress, no services, no unattended approval, no promotion), never a wider one.
 
 | Field | What it says |
@@ -151,6 +151,7 @@ closed choice (no egress, no services, no unattended approval, no promotion), ne
 | `effort` | An [effort](effort.md) tier and cap for the run (default E3). It is fixed at start. |
 | `budget` | `totalUsd`, `perStepUsd`, `maxSteps`, `maxMinutes` (active time). Every run is bounded by money, steps and time; none may be omitted. |
 | `recovery` | `softNudges` (default 2), `hardRestarts` (default 1), `maxAttemptsPerStep` (default 8). |
+| `generations` | Memento mode, off by default; see [Generations](#generations). |
 | `promotion` | `policy` (`none`, `local-branch`, `push`), `destinations`, `requiresOperatorApproval` (default true). |
 | `runtime` | Engine (`podman` or `docker`), image, memory, CPUs, pids and the git identity for commits. |
 | `authorisation` | Written by `plan --authorise` or an interactive `start`: the boundary digest, who and when. |
@@ -198,7 +199,11 @@ needs a person, and `resume --answer` (or `--approve`, `--deny`) continues it.
 
 Exactly one supervisor owns a run at a time. A lock file holds its pid, process start time, host and
 a heartbeat; a duplicate `start` refuses, and after a crash the next supervisor takes the stale lock
-over, removes the orphaned containers and continues. A silent but live owner is never taken over
+over, removes the orphaned containers and continues. When several supervisors find the same stale
+lock at once, exactly one takes it over and the others refuse: a taker must first create an
+exclusive claim file for that lock, and moves the lock aside only if it is still the one it judged
+stale; a claim left by a crashed taker is cleared once it is older than the stale threshold
+(`tests/autonomy-lifecycle-smoke.ts`). A silent but live owner is never taken over
 automatically, because two supervisors on one run would repeat side effects.
 
 ## Recovery and budgets
@@ -285,13 +290,161 @@ The charter, backlog and handoff a repository is seeded with are in `packages/au
 
    ```sh
    git fetch --tags origin
-   packages/autonomy/build-image.sh --kit-ref v0.2.4-beta.0 --base-ref origin/main
+   packages/autonomy/build-image.sh --kit-ref v<version> --base-ref origin/main
    ```
 
    `--kit-ref` is the kit release the worker runs (before the release tag exists, pass a branch such as
    `origin/main`). `--base-ref` optionally prebakes that repository's dependencies for offline
    installs. Add toolchains your tasks need in a derived image and name it in `runtime.image`.
 4. Run the supervisor from a checkout of `main`, not from the branch a worker is changing.
+
+## Generations
+
+With `generations.enabled`, a finite run (`implement` or `deploy`) works in time-boxed
+**generations** ("Memento mode"): when a generation's box runs out, its worker writes a short
+notebook, is stopped, and a fresh worker continues in the same workspace from that notebook. It is
+off by default, and `self-improve` refuses it. The engine side is pinned by
+`tests/autonomy-generations-smoke.ts` (`npm run smoke:autonomy-generations`, on the fake runtime) and
+the contract side by `tests/autonomy-contract-smoke.ts`.
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Turns generations on. |
+| `iterationMinutes` | 30 | A generation ends after this many active minutes (5 to 240). |
+| `iterationUsd` | none | ...or once it has spent this much. |
+| `maxGenerations` | 4 | Generations in all (1 to 8), capped by the Memento allowance (below). The last one has no box: the run's own limits and recovery end it. |
+| `graceMinutes` | 3 | How long the worker has to write its notebook (less than `iterationMinutes`). |
+| `resetOnNoProgress` | `false` | After a generation without progress, the next one starts from the accepted head instead of the workspace the last one left. |
+| `notebookMaxChars` | 6000 | The notebook's size cap (1000 to 6000). |
+
+**Capped by the Memento opt-in.** A contract cannot give a model more generations than the operator
+allowed. At the first step, the engine reads the per-model opt-in in
+`<agent dir>/pi-kit/autonomy.json` and the tier's `memento.maxGenerations`, the same rule
+`/effort memento` shows ([Memento mode](effort.md#memento-mode)). It reads them for the worker
+model at the run's effort tier. The run then uses the lower of `maxGenerations` and that allowance.
+With the defaults, E1-E3 allow none, E4 allows 2 and E5 allows 4, and only for an opted-in model in
+the `long-horizon` or `autonomous` profile. An allowance of 0 runs the task as a single generation
+with no box, and no worker is asked for a notebook. The decision is recorded once in
+`state.memento` (`requested`, `allowance`, `maxGenerations`, `reason`, `model`, `profile`, `tier`),
+so a resume or a later change to the opt-in does not change it. It is also logged
+(`generations: the contract asks for 4, the Memento allowance is 2 (...): capped at 2`) and written
+to the step's event log as a `memento` event (`tests/autonomy-generations-smoke.ts`, the four
+"Memento" checks).
+
+**It cannot raise the budget.** Unknown keys are errors. With generations on, `iterationMinutes` may
+not exceed `budget.maxMinutes` and `iterationUsd` may not exceed `budget.totalUsd`. The run's budget,
+steps, minutes, per-step limit, control commands and lock apply throughout, the grace period
+included, and generations never change `state.limits`.
+
+**Rotation at the box.** The box is measured from `usage.minutes` and `usage.usd` when the generation
+started (recorded in `state.generations`). When it runs out during a turn, the supervisor steers the
+worker to commit, write its notebook as JSON to `.pi/generation-notebook.json` in the workspace
+(never committed) and stop, then waits until the worker settles or the grace period passes. It stops
+the worker **before** reading the file, so the file cannot be swapped during the read, then opens it
+without following links. A symlink, a `.pi` that is not a plain directory, anything but a regular
+file (a FIFO included, without blocking) or a file over 64 KiB is refused unread. The file is then
+removed from the workspace. The step is judged like any other (snapshot, ingest, trusted checks,
+review). The notebook is parsed and appended to `notebook.json` in the run directory (see below),
+with the supervisor's own measurements: the check results at the accepted head, the head, the files
+changed since the generation began, and its minutes and dollars. A missing or malformed notebook is
+recorded in the generation's history with its problems, and an empty notebook carrying the
+measurements is appended in its place. A per-step budget that runs out during the grace period aborts
+the worker's turn and ends the grace period early.
+
+**Box spent with no live worker.** When a pause, a supervisor restart or a limit lands during the
+grace period, the next step starts no worker for that generation: it takes whatever notebook is in
+the workspace, judges the step and rotates, and the fresh worker belongs to the next generation.
+When a worker crashes or exits after its box ran out, its step has already been judged (a crash
+spends a hard restart), so the next step takes the notebook and rotates with that step's recovery
+action without judging the same head again, then starts the next generation's worker
+(`tests/autonomy-generations-smoke.ts`, "a worker that crashes after its box ran out").
+
+**The fresh worker.** It is started with the briefing every fresh session gets (verified state
+first), followed by the latest notebook rendered inside its `untrusted` fence: the measurements as
+plain lines, the worker's text as data, and its own claims marked `[hypothesis]`.
+
+**No progress counts toward recovery.** A generation whose last step has no verified progress and
+did not move the accepted head is a stall. It skips the soft nudges, since its session is gone, and
+spends a hard restart: the fresh generation is that restart. Once the hard restarts are used up, the
+run fails as `recovery_exhausted`. The per-turn `maxAttemptsPerStep` count applies as before. With
+`resetOnNoProgress`, the worker's branch is set to the accepted head and the next worker starts with
+its workspace reset to it (uncommitted leftovers discarded, ignored files kept).
+
+**Status.** For a run whose contract enables generations, `pi-autonomy status --run <run>` adds
+the current generation of the generations the run may use (`generation 2/4`, or "not started" before the first
+step), the box length, `capped from <n> by the Memento allowance (<reason>)` when the allowance
+lowered the contract's number (or, when it left one, `a single generation, not <n>; the Memento
+allowance is 0 (<reason>)` in place of the generation line), the last rotation (which generation ended, whether its time or dollar box
+ran out, the recovery decision, whether a notebook was appended or the first three problems if not,
+and whether the next generation was reset to the accepted head) and the latest notebook, rendered
+as the next worker's briefing shows it. That rendered text is passed through the notebook's
+redaction patterns again before it is printed. A rotation's problems can quote worker text (a
+notebook that is not JSON is reported with the parser's message, which quotes it), so the supervisor
+removes Unicode control and format characters from them before saving them to `state.json` or the
+log, and the status removes them again from every last-rotation field it prints. A `notebook.json` that does not parse is
+reported as unreadable instead of failing the command. `--json` carries the same under
+`generations` (`current`, `max` after the cap, `memento` with the contract's `requested`
+number, the `allowance` and its `reason` once the first step has decided it, `lastRotation`, `notebook.text`), which is `null` for a run
+without generations, and the text then has no generations lines (`tests/autonomy-generations-smoke.ts`).
+In pi, `/autonomy status <run>` shows that text and, for a run with generations, sets the footer
+status line to `memento <run>: gen n/N, <status>; last rotation: time box` (or `dollar box`, with
+`, no notebook` when none was appended). The line is cleared by `/autonomy status` of a run without
+generations, and is not changed by `/autonomy status` with no run or without a screen. It is updated
+only when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
+
+**Not covered:** a question the worker asks during the grace period is not answered: the worker is
+stopped as soon as it asks. The box is checked once per supervisor tick, so a generation can overrun
+it by up to one tick plus the grace period, inside the run's limits. No test drives generations
+through the real container runtime, and whether generations help a given model is not measured. The offline harness that scores recorded
+results is described in [Measuring Memento mode](efficiency-and-loops.md#measuring-memento-mode).
+
+## Generations: notebook
+
+`packages/autonomy/lib/notebook.ts` holds the notebook one generation hands the next. Everything in
+this section is pinned by `tests/autonomy-notebook-smoke.ts` (`npm run smoke:autonomy-notebook`).
+
+**What a worker writes.** A JSON object, schema 1: `state` (a string, required) and the string lists
+`tried`, `failures`, `do_not_retry`, `next` and `self_reported` (each optional, empty when absent).
+The parser uses type guards only. A value that is not JSON, not an object, a `schema` other than 1,
+a non-string `state` or a list holding anything but strings is refused with one problem per field,
+and nothing is appended. Unknown keys are dropped and listed in the report.
+
+**`measured` belongs to the supervisor.** A worker-supplied `measured` key is always discarded, and
+the report says so. The supervisor passes its own measurements (check results, head commit, files
+changed, minutes, dollars) when it appends a generation; they are stored beside the worker's text,
+and numbers that are not finite and non-negative are refused.
+
+**Cleaning and the size cap.** Each string has every Unicode control and format character
+(general categories Cc and Cf) and every default-ignorable code point other than tab and newline removed before the tag check: C0, DEL
+and C1 (which includes the single-byte CSI), the bidi embedding, override, isolate and mark
+characters, the zero-width and invisible format characters (U+200B, U+2060, U+FEFF, the soft hyphen
+U+00AD, U+180E and the tag characters U+E0000-U+E007F among them), and the default-ignorable
+characters such as the combining grapheme joiner U+034F, the variation selectors and the Hangul filler
+U+3164 (tests/autonomy-notebook-smoke.ts). The match is by Unicode property, not by a list. Then `<untrusted` (also with spaces after `<`) is defused and secret-shaped values are
+replaced with `[REDACTED]`. The redaction
+patterns are a copy of memory-vault's, and the test fails if the two lists differ. `state` is
+clipped to 1500 characters and list items to 400. Each list keeps its newest entries up to a limit
+(`tried` 40, `failures` 20, `do_not_retry` 20, `next` 10, `self_reported` 10). The whole notebook is
+then capped at 6000 characters of JSON: the oldest `tried` entries go first, then `failures`, `next`,
+`self_reported` and `do_not_retry`, and `state` is cut only when every list is empty. The report
+records the sizes before and after, every clipped field, the entries dropped per list, the number of
+redactions and whether `measured` was dropped. Unknown keys are listed after the same cleaning
+(their redactions are counted), each clipped to 80 characters, at most 20 of them, with a count of
+the rest.
+
+**The file.** Each generation is appended as one entry (generation number, time, the cleaned
+notebook, `measured` and the report) to a JSON file written atomically (temp file, fsync, rename)
+with mode 0600, in a directory created with mode 0700. Earlier entries are never rewritten. A file
+that does not parse, or whose entries are malformed or out of order, makes the append throw instead
+of being replaced.
+
+**Rendering.** `renderNotebook()` shows the supervisor's measurements as plain lines, then puts the
+worker-written notebook inside `untrusted()` (`lib/templates/common.ts`), with each `self_reported`
+claim prefixed `[hypothesis]`. Triple backticks in worker text become `'''`, so the text cannot
+close the fence, and it cannot open or close the `untrusted` tag.
+
+**Not covered:** redaction is pattern-based and best-effort, so a secret in a shape the patterns do
+not know is stored as written; the cap counts characters, not model tokens.
 
 ## The run directory
 
@@ -306,6 +459,7 @@ is written to `~/.pi`.
 | `public/` | The sanitised contract, mounted read-only at `/run`. |
 | `mirror.git`, `steps/`, `results/` | The host's copy of the work, each step's evidence, and exports. |
 | `egress/`, `meter/`, `boundary.json` | Proxy audit, spend records, the last boundary probe. |
+| `notebook.json` | The generations notebook (0600), when generations are on. |
 | `remote.git`, `work/`, `agent-state/` | The worker's side, written by the container. |
 
 ## What has been verified
@@ -325,10 +479,12 @@ is written to `~/.pi`.
   clean network-less containers with the held-out overlay applied; a run service serves a staged,
   read-only copy; cleanup removes everything it made. Without an engine, the test prints a `SKIPPED`
   line and exits 0, so it adds evidence where an engine exists; `check:all` still runs its offline
-  counterpart.
+  counterpart. On a host whose firewall drops all container-to-host traffic (ufw's default input
+  policy), the "none to the host" check cannot fail, and the test labels its control for that check
+  `INCONCLUSIVE` instead of passing it.
 
-**Not verified:** a full run against a real model provider (the relay talks to a local fake upstream
-in the tests); rootless Podman (the container test used Docker); long runs (hours to days); macOS
+**Not verified:** a full run against a real model provider (in the container test the relay talks to
+a fake provider container on the run's outward network); rootless Podman (the container test used Docker); long runs (hours to days); macOS
 and Windows; and the effect of the boundary on an adversarial worker beyond what the probe and the
 container checks assert. Run `pi-autonomy boundary --config run.json --probe` on your own engine, and
 start with a small budget, before trusting a long run.
@@ -339,7 +495,7 @@ start with a small budget, before trusting a long run.
   `start`, `promote` and `reconfigure` accept `--yes` without a screen, and the authorisation record
   is a consent and integrity record, not a signature. A model with a shell tool could therefore run
   them. The tool firewall classifies those commands as high and never learns an approval for them,
-  so each one asks you, and an unattended worker is refused (`tests/firewall-unattended-smoke.mjs`);
+  so each one asks you, and an unattended worker is refused (`tests/firewall-unattended-smoke.ts`);
   this is a guard rail, not proof. `/autonomy start` binds its authorisation to the digest you were
   shown (`--digest`), and refuses if the file changed while you read it. A run id is a name
   (3–41 lowercase characters), never a path.
@@ -361,6 +517,6 @@ start with a small budget, before trusting a long run.
   offline install; propose dependency changes rather than making them in a run.
 - **Model specifications.** pi's catalogue may not know a new model id; the supervisor fetches limits
   and prices from the provider at start so compaction and cost match the model.
-- **The v0 configuration format** (`supervisor.mjs`, no `schemaVersion`) is mapped onto the
+- **The v0 configuration format** (`supervisor.ts`, no `schemaVersion`) is mapped onto the
   `self-improve` template with a deprecation warning, and now needs an explicit remote and promotion
   policy. Its old defaults, which pushed to a fixed private host, are gone.

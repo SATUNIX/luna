@@ -4,8 +4,10 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 // trace-ledger: append-only action records in .pi/trace.jsonl; memory windows are bounded.
-// Retention is operator-managed until all writers share a collector. Never truncate
-// this shared file: conductor and other processes also append outside this extension.
+// EFF-6: before an append, a ledger over ROTATE_BYTES is renamed to trace.jsonl.1 (one old copy,
+// replacing the previous one) and a fresh file is started. Never truncate this shared file:
+// conductor and other processes also append outside this extension, and each opens the path per
+// append, so after a rename they write to the fresh file.
 // It is the FACTS layer for efficiency + anti-loop work: it records every tool call and
 // result so later tooling (the Phase-3 progress-guard, or `/trace`) can ask "have we read
 // this file already?" / "are we repeating the same command?". It is behaviour-only:
@@ -15,6 +17,7 @@ import crypto from "node:crypto";
 const RECENT_WINDOW = 48; // in-memory window used for repeat detection
 const REPEAT_WARN = 3; // same read target this many times -> one gentle notice
 const READ_HINT = /^(read|grep|glob|ls|find|cat|search|rg)/i; // read/search tool families
+const ROTATE_BYTES = 4 * 1024 * 1024; // same bound as tool-firewall's judgements file
 
 interface Entry {
   ts: string;
@@ -28,13 +31,13 @@ interface Entry {
   toolCallId: string | null;
   sequence: number;
   lostEntries: number;
-  retention: "append-only/operator-managed";
+  retention: "append-only/rotated-at-4MiB";
   targetRedacted: boolean;
   targetTruncated: boolean;
   targetOriginalLength: number;
   redactionPolicy: "common-secrets-v1-best-effort";
   tool: string;
-  target?: string;
+  target?: string | undefined;
   argsHash: string;
   status?: "ok" | "error";
 }
@@ -56,19 +59,26 @@ function argsHashOf(tool: string, input: unknown): string {
   catch { return "unhashable"; }
 }
 
-function targetOf(input: unknown): Pick<Entry, "target" | "targetRedacted" | "targetTruncated" | "targetOriginalLength" | "redactionPolicy"> {
+const TARGET_SCAN_CHARS = 1024;
+
+export function targetOf(input: unknown): Pick<Entry, "target" | "targetRedacted" | "targetTruncated" | "targetOriginalLength" | "redactionPolicy"> {
   const o = input && typeof input === "object" ? input as Record<string, unknown> : {};
   const value = o.path ?? o.file_path ?? o.filePath ?? o.filepath ?? o.file ?? o.pattern ?? o.command ?? o.query;
   const original = typeof value === "string" ? value : "";
-  // Best-effort display redaction, not a secret-detection or isolation boundary.
-  const redacted = original
+  // Only 200 characters are stored, so only the first TARGET_SCAN_CHARS are redacted: the work per
+  // call is bounded however long the command is. A secret cut at that point is still redacted,
+  // because each value pattern runs to the end of the slice.
+  const bounded = original.length > TARGET_SCAN_CHARS ? original.slice(0, TARGET_SCAN_CHARS) : original;
+  // Best-effort display redaction, not a secret-detection or isolation boundary. The key pattern
+  // starts only at a token start and bounds its runs, so it does not backtrack.
+  const redacted = bounded
     .replace(/(authorization\s*[:=]\s*["']?(?:bearer|basic)\s+)[^\s"']+/gi, "$1[REDACTED]")
-    .replace(/((?:--)?(?:[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*)\s*(?:=|:|\s)\s*)("[^"]*"|'[^']*'|[^\s;&|]+)/gi, "$1[REDACTED]")
+    .replace(/((?<![\w-])(?=[\w-]{0,64}(?:password|passwd|secret|token|api[_-]?key))[\w-]{1,128}(?:\s*[=:]\s*|\s+))("[^"]*"|'[^']*'|[^\s;&|]+)/gi, "$1[REDACTED]")
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,})\b/g, "[REDACTED]");
-  const targetTruncated = redacted.length > 200;
+  const targetTruncated = redacted.length > 200 || bounded.length < original.length;
   return { target: typeof value === "string" ? redacted.slice(0, 200) + (targetTruncated ? "...[truncated]" : "") : undefined,
-    targetRedacted: redacted !== original, targetTruncated, targetOriginalLength: original.length,
+    targetRedacted: redacted !== bounded, targetTruncated, targetOriginalLength: original.length,
     redactionPolicy: "common-secrets-v1-best-effort" };
 }
 
@@ -83,12 +93,34 @@ function shortTarget(t: string): string {
 function appendEntry(cwd: string, entry: Entry): void {
   const p = ledgerPath(cwd);
   fs.mkdirSync(path.dirname(p), { recursive: true });
+  try {
+    if (fs.statSync(p).size > ROTATE_BYTES) fs.renameSync(p, `${p}.1`);
+  } catch {
+    /* absent, or another process rotated it first */
+  }
   fs.appendFileSync(p, JSON.stringify(entry) + "\n");
 }
 
-function readEntries(cwd: string, tail: number): { entries: Entry[]; corrupt: number } {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** The fields /trace summarises, as read back from a ledger other writers share. */
+type LedgerRecord = Pick<Entry, "kind" | "tool" | "target" | "status">;
+
+/** EFF-8: a record whose summarised fields have the wrong type is corrupt, not an Entry. */
+function toLedgerRecord(value: unknown): LedgerRecord | null {
+  if (!isRecord(value)) return null;
+  const { kind, tool, target, status } = value;
+  if ((kind !== "call" && kind !== "result") || typeof tool !== "string") return null;
+  if (target !== undefined && typeof target !== "string") return null;
+  if (status !== undefined && status !== "ok" && status !== "error") return null;
+  return { kind, tool, target, ...(status === undefined ? {} : { status }) };
+}
+
+function readEntries(cwd: string, tail: number): { entries: LedgerRecord[]; corrupt: number } {
   const p = ledgerPath(cwd);
-  // Read a bounded byte tail rather than the whole operator-retained file.
+  // Read a bounded byte tail rather than the whole shared file.
   let fd: number;
   try {
     fd = fs.openSync(p, "r");
@@ -103,15 +135,15 @@ function readEntries(cwd: string, tail: number): { entries: Entry[]; corrupt: nu
     let text = buffer.subarray(0, bytes).toString("utf8");
     if (start > 0) text = text.slice(text.indexOf("\n") + 1);
     // Parse per line: one corrupt record must not abort the whole /trace summary.
-    const entries: Entry[] = [];
+    const entries: LedgerRecord[] = [];
     let corrupt = 0;
     for (const line of text.split("\n")) {
       if (!line) continue;
       try {
-        const parsed: unknown = JSON.parse(line);
-        // A syntactically valid non-object (null, false, 0) is corrupt: only plain
-        // objects are entries, same skip/count path as a parse failure.
-        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) entries.push(parsed as Entry);
+        // A syntactically valid non-object (null, false, 0), or an object whose fields have the
+        // wrong type, is corrupt: same skip/count path as a parse failure.
+        const record = toLedgerRecord(JSON.parse(line));
+        if (record) entries.push(record);
         else corrupt++;
       } catch { corrupt++; }
     }
@@ -127,7 +159,7 @@ export default function (pi: ExtensionAPI) {
   let failureNotified = false;
 
   function health(ctx: ExtensionContext, failed: boolean): void {
-    const message = `trace-ledger: ${failed ? "collection failed; " : ""}lost=${lostEntries}; append-only retention (operator managed)`;
+    const message = `trace-ledger: ${failed ? "collection failed; " : ""}lost=${lostEntries}; append-only, rotated to .1 at 4 MiB`;
     if (ctx.hasUI) {
       ctx.ui.setStatus?.("trace-ledger", message);
       if (failed && !failureNotified) ctx.ui.notify(message, "error");
@@ -138,7 +170,7 @@ export default function (pi: ExtensionAPI) {
   function metadata(ctx: ExtensionContext, toolCallId?: string) {
     return { eventId: crypto.randomUUID(), runId, sessionId: ctx.sessionManager?.getSessionId?.() ?? null,
       processId: process.pid, cwd: ctx.cwd, toolCallId: toolCallId ?? null, sequence: ++sequence, lostEntries,
-      retention: "append-only/operator-managed" as const };
+      retention: "append-only/rotated-at-4MiB" as const };
   }
 
   function persist(ctx: ExtensionContext, entry: Entry): void {
@@ -161,7 +193,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    const c = ctx as ExtensionContext;
+    const c = ctx;
     const ev = event as { toolName?: string; input?: unknown; toolCallId?: string };
     const tool = ev.toolName ?? "unknown";
     const details = targetOf(ev.input);
@@ -176,14 +208,15 @@ export default function (pi: ExtensionAPI) {
       if (count >= REPEAT_WARN && !warned.has(target) && c.hasUI) {
         c.ui.notify(`trace-ledger: '${shortTarget(target)}' read ${count}x — you likely have enough. Act, or delegate the lookup. (/trace)`, "warning");
         warned.add(target);
-        if (warned.size > RECENT_WINDOW) warned.delete(warned.values().next().value!);
+        const oldest = warned.values().next().value;
+        if (warned.size > RECENT_WINDOW && oldest !== undefined) warned.delete(oldest);
       }
     }
     return undefined; // never block
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    const c = ctx as ExtensionContext;
+    const c = ctx;
     const ev = event as { toolName?: string; input?: unknown; isError?: boolean; toolCallId?: string };
     const tool = ev.toolName ?? "unknown";
     const entry: Entry = {
@@ -208,8 +241,8 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const c = ctx as ExtensionContext;
       if (!c.hasUI) return;
-      let entries: Entry[];
-      let corrupt = 0;
+      let entries: LedgerRecord[];
+      let corrupt: number;
       try { ({ entries, corrupt } = readEntries(c.cwd ?? process.cwd(), 200)); }
       catch { health(c, true); c.ui.notify("trace-ledger: cannot summarize unreadable/corrupt records; evidence retained", "error"); return; }
       if (entries.length === 0) {
@@ -228,7 +261,7 @@ export default function (pi: ExtensionAPI) {
         .slice(0, 3)
         .map(([t, n]) => `${shortTarget(t)} ×${n}`);
       const lines = [
-        `trace-ledger (last ${entries.length} entries${corrupt ? `; ${corrupt} corrupt line(s) skipped` : ""}; lost=${lostEntries}; append-only/operator-managed retention):`,
+        `trace-ledger (last ${entries.length} entries${corrupt ? `; ${corrupt} corrupt line(s) skipped` : ""}; lost=${lostEntries}; append-only, rotated to .1 at 4 MiB):`,
         `  tool calls: ${calls.length} | errors: ${errors} | distinct files read: ${distinctFiles}`,
         topRepeats.length ? `  repeated reads: ${topRepeats.join(", ")}` : "  repeated reads: none",
       ];

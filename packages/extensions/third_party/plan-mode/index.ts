@@ -9,7 +9,7 @@ const PLAN_NOTICE = `[PLAN MODE ACTIVE] Read-only exploration. Only use: read, b
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
@@ -33,7 +33,6 @@ function contribDir(cwd: string, sessionId: string | undefined = currentSessionI
 
 export default function (pi: ExtensionAPI) {
   let planModeEnabled = false;
-  let sessionCwd = "";
 
   function contribPath(cwd: string): string {
     return path.join(contribDir(cwd), "plan-mode.json");
@@ -50,7 +49,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function deleteContrib(cwd: string): void {
-    try { fs.unlinkSync(contribPath(cwd)); } catch {}
+    try { fs.unlinkSync(contribPath(cwd)); } catch { /* best effort */ }
   }
 
   pi.registerFlag("plan", {
@@ -60,7 +59,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    sessionCwd = ctx.cwd;
     currentSessionId = resolveSessionId(ctx.sessionManager);
     // Clear any stale plan-mode contribution
     deleteContrib(ctx.cwd);

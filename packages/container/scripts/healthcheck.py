@@ -3,11 +3,10 @@ import argparse
 import json
 import os
 import sys
-import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
-HOST = os.environ.get("PI_AGENT_HEALTH_HOST", os.environ.get("PENTEST_HEALTH_HOST", "0.0.0.0"))
+HOST = os.environ.get("PI_AGENT_HEALTH_HOST", os.environ.get("PENTEST_HEALTH_HOST", "127.0.0.1"))
 PORT = int(os.environ.get("PI_AGENT_HEALTH_PORT", os.environ.get("PENTEST_HEALTH_PORT", "8080")))
 DATA_ROOT = os.environ.get(
     "PI_AGENT_DATA_ROOT", os.environ.get("PENTEST_DATA_ROOT", "/srv/data/pi-system")
@@ -48,10 +47,11 @@ def serve():
 
 
 def check():
-    url = f"http://127.0.0.1:{PORT}/health"
-    with urllib.request.urlopen(url, timeout=3) as response:
-        if response.status != 200:
-            raise SystemExit(1)
+    # Local probe: nothing in the image starts --serve, so --check must not need the server.
+    # It applies the same test /health reports: the data root is writable.
+    if not os.access(DATA_ROOT, os.W_OK):
+        print(f"healthcheck failed: data root {DATA_ROOT} is not writable", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def main():

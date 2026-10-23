@@ -33,7 +33,7 @@ flowchart LR
     root["Root pi session"]
     orch["orchestrator extension"]
     contrib[".pi/ctx-contributions/sessions/ID/orchestrator.json"]
-    cls[".pi/task-classification.json"]
+    cls[".pi/task-classification/sessions/ID.json"]
     sieve["context-sieve"]
     tg[".pi/task-graph.json"]
     vb[".pi/verdicts.json"]
@@ -86,9 +86,9 @@ The file contracts, and who touches them:
 | `<agent dir>/pi-kit/effort/ledgers/<scope>.json` | `effort` (root opens it, every descendant reserves in it) | `effort`, `/effort status` |
 | `.pi/task-graph.json` | `task-graph` tools | `task-graph` tools, `verify-gate` (definition of done) |
 | `.pi/verdicts.json` | `verifier-board`, `verify-gate`, `conductor` validator | `orchestrator`, `verifier-board` |
-| `.pi/verify-pending.json`, `.pi/verify-report.md` | `verify-gate` | `orchestrator` (pending marker) |
+| `.pi/verify-pending/<run>.json` (legacy `.pi/verify-pending.json` still read), `.pi/verify-report.md` | `verify-gate` | `orchestrator`, `conductor` (pending marker) |
 | `.pi/ctx-contributions/` | `orchestrator` | `context-sieve` |
-| `.pi/task-classification.json` | `orchestrator` | `provider-router` |
+| `.pi/task-classification/sessions/<session id>.json` (`.pi/task-classification.json` for a session without an id) | `orchestrator` | `provider-router`, same session only (`tests/model-routing-smoke.ts`) |
 | `.pi/human-console/pending` and `resolved` | `tool-firewall` (pending), `human-console` (resolved) | both |
 
 ## Role resolution and trust gate
@@ -124,6 +124,33 @@ flowchart TD
     confirm -->|yes| role
     role["AgentConfig: name, systemPrompt, tools, model, thinking, skills, extensions, effort, scout, maxRuntimeMs"] --> spawn["runAgent launches the child through delegation-guard"]
 ```
+
+### Conductor roles
+
+`conductor` applies the same rule to its own launches:
+
+- **Specialists.** Every `dispatch_specialist` role is a project file in `.pi/agents`, so it must clear
+  the same trust gate: an exact digest in `PI_KIT_TRUSTED_PROJECT_ROLES` (computed the same way as
+  subagent's, so one grant covers a role for both tools), or the operator's choice in an interactive
+  session. The question starts on "No, do not run this project role". Without a grant, a headless
+  session is blocked.
+  The gate runs before a dispatch slot is reserved, so a refusal costs no budget. The launcher reads
+  the role file again and refuses to start it if its content no longer matches what was approved
+  (`tests/conductor-recursion-smoke.ts`).
+- **Validator.** `dispatch_validator` reads its prompt only from the extension's own
+  `agents/validator.md`. It never reads `.pi/agents/validator.md`, and conductor no longer writes that
+  file into the project (`tests/conductor-validator-smoke.ts`).
+- **Task on stdin.** The validator's evidence bundle and a specialist's task are written to the
+  child's stdin, which print mode merges into the prompt, never put on argv, so a task over Linux's
+  128 KiB single-argument limit still launches and the task is not visible through `ps`
+  (`tests/conductor-validator-smoke.ts`, `tests/conductor-recursion-smoke.ts`). `dual-review` sends
+  its reviewer prompt and diff the same way (`tests/dual-review-smoke.ts`).
+- **Other delegation tools.** While `.pi/engagement/engagement.json` holds an engagement record whose
+  phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run` and
+  `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
+  child. Advancing the engagement to `close-out` with `/engagement phase close-out` lifts the block. In
+  a headless session the only delegation path while the block holds is a specialist whose digest is in
+  `PI_KIT_TRUSTED_PROJECT_ROLES` (`tests/conductor-recursion-smoke.ts`).
 
 ## The launch contract
 
@@ -212,7 +239,7 @@ readable ledger, it runs unbudgeted rather than not at all. It never skips the p
 | `workflow_run` tool | `discretionary` | isolated | Hidden together with `subagent` at E1. |
 | `/workflow run` and `/workflow resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
 | Completion reviewer (`/verify`, `verify_completion`) | `mandatory` | isolated | Role `reviewer`, read-only, tools `read,grep,find,ls`. |
-| `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tools include none of `write`, `edit` and `bash`. |
+| `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tool list is non-empty and names only `read`, `grep`, `find` and `ls`, the same rule as `subagent` (`tests/conductor-specialist-bounds-smoke.ts`). |
 | `dispatch_validator` (`conductor`) | `mandatory` | ambient | Role `validator`, read-only. |
 | `recovery-orchestrator` | starts no child | none | Opens the recovery budget on the effort registry when `progress-guard` escalates a stuck loop. |
 
@@ -417,7 +444,12 @@ part of the launch contract, and a child only has them when a role's or workflow
   every mutating call holds an exclusive lock file (`.pi/task-graph.lock`). `task_create` validates
   `depends_on`, `task_next` claims the next unblocked pending task by marking it `in_progress` in the
   same locked step (two implementers cannot receive the same task), and `task_update` and
-  `task_complete` refuse `done` while a dependency is unfinished.
+  `task_complete` refuse `done` while a dependency is unfinished. A claim records `claimedAt`, any
+  `task_update` of an `in_progress` task renews it, and `task_next` returns a claim older than
+  `PI_KIT_TASK_GRAPH_LEASE_MS` (default one hour, `0` disables expiry) to `pending` before it picks,
+  so a crashed implementer's task is handed out again. A claim without `claimedAt`, written by an
+  older build, is left alone. `task_clear` removes every task, for a new plan in the same project
+  (`tests/task-graph-invariants-smoke.ts`).
 - **`verifier-board`** keeps the latest verdict per source in `.pi/verdicts.json`, through
   `record_verdict`, `verdict_status` and `/verdicts`. The sources `verify`, `review` and
   `validator:<id>` are reserved for independent writers (`verify-gate` and the `conductor` validator),
@@ -425,6 +457,16 @@ part of the launch contract, and a child only has them when a role's or workflow
 - **The completion gate** in `orchestrator` fails closed. It blocks when the board is missing,
   unreadable or empty, while a verify run is still pending, when any verdict has failed or is older
   than 24 hours (`PI_KIT_VERDICT_MAX_AGE_MS`), and when no trusted source has passed.
+
+The verdict freshness contract is shared by `verifier-board`, `orchestrator` and `conductor`:
+every passing verdict needs a string timestamp that parses to a date no later than the current
+time and within the configured maximum age. Missing, non-string, empty, malformed and future
+timestamps block completion until verification records fresh evidence. All independent writers
+emit ISO timestamps. The extensions retain local readers to preserve self-containment;
+`tests/verifier-board-trust-smoke.ts` is their conformance suite, checking both trusted and
+untrusted records against board status and both completion gates. `tests/verify-failclosed-smoke.ts`
+covers the verification lifecycle. Timestamp freshness does not bind a verdict to a particular
+goal or repository revision.
 
 ## Source files
 
@@ -445,7 +487,7 @@ part of the launch contract, and a child only has them when a role's or workflow
 - `packages/extensions/src/conductor/index.ts`, `packages/extensions/src/conductor/validate/validator.ts`: specialist and validator launches.
 - `packages/extensions/src/recovery-orchestrator/index.ts`: opens the recovery budget.
 - `packages/extensions/src/orchestrator/index.ts`: classification, context contribution and verification steering.
-- `packages/extensions/src/task-graph/index.ts`: `task_create`, `task_update`, `task_list`, `task_next` and `task_complete` over `.pi/task-graph.json`.
+- `packages/extensions/src/task-graph/index.ts`: `task_create`, `task_update`, `task_list`, `task_next`, `task_complete` and `task_clear` over `.pi/task-graph.json`.
 - `packages/extensions/src/verifier-board/index.ts`: `record_verdict`, `verdict_status` and `.pi/verdicts.json`.
 - `packages/extensions/src/human-console/index.ts`: pending and resolved polling and the `.pi/human-console` file contract.
 - `packages/extensions/src/tool-firewall/index.ts`: `brokerApproval` for headless children.

@@ -45,7 +45,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Everything the phone says to a computer (packages/web-ui/server/remote/api.js):
+ * Everything the phone says to a computer (packages/web-ui/server/remote/api.ts):
  *
  *   GET  /v1/hello                       who answers at an address (checked against the pin)
  *   POST /v1/pair, GET /v1/pair/:id      linking: code + proof of the new key, then the

@@ -4,7 +4,7 @@ import path from "node:path";
 
 // Transactional profile switching for /profile (and the first-run auto-profile).
 //
-// The installer (packages/core/install.mjs) writes each file atomically, but a switch touches
+// The installer (packages/core/install.ts) writes each file atomically, but a switch touches
 // several files (settings.json, the install marker, firewall.json, overrides.json, the .env
 // scaffold) in sequence, so a failure part-way used to leave a mixed configuration behind: a new
 // extension list with the old marker, a new firewall policy with the old profile, and so on.
@@ -96,7 +96,7 @@ export function restoreSnapshots(snaps: FileSnapshot[], transientBefore: Set<str
     try {
       if (s.existed && s.bytes) {
         const current = fs.existsSync(s.path) ? fs.readFileSync(s.path) : null;
-        if (current === null || !current.equals(s.bytes)) writeAtomic(s.path, s.bytes, s.mode);
+        if (!current?.equals(s.bytes)) writeAtomic(s.path, s.bytes, s.mode);
         else if (s.mode !== null) fs.chmodSync(s.path, s.mode);
         // Never trust the write: read it back.
         if (!fs.readFileSync(s.path).equals(s.bytes)) throw new Error("content differs after restore");
@@ -142,6 +142,7 @@ export interface Expectation {
   markerFile: string;
   settingsFile: string;
   firewallFile: string;
+  security?: { file: string; level: string };
   /**
    * In-package extension names the settings entry must list, in order (profile include + overrides).
    * A function, because overrides.json may be (re)written by the installer during the switch.
@@ -157,7 +158,16 @@ export interface Expectation {
   extensionExists: (name: string) => boolean;
 }
 
-function readJson(file: string): { value: any; error: string | null } {
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+// A parsed JSON value as message text: what `${v}` printed for a scalar, JSON for anything else.
+function shown(v: unknown): string {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || v === undefined ? String(v) : JSON.stringify(v);
+}
+
+function readJson(file: string): { value: unknown; error: string | null } {
   try {
     return { value: JSON.parse(fs.readFileSync(file, "utf8")), error: null };
   } catch (error) {
@@ -176,15 +186,17 @@ export function verifySwitch(exp: Expectation): string[] {
   const expected = typeof exp.extensions === "function" ? exp.extensions() : exp.extensions;
 
   const marker = readJson(exp.markerFile);
-  if (marker.error || marker.value === null || typeof marker.value !== "object" || Array.isArray(marker.value)) {
+  const m = marker.value;
+  if (marker.error || !isRecord(m)) {
     problems.push(`install marker ${exp.markerFile} ${marker.error ?? "is not an object"}`);
   } else {
-    if (marker.value.profile !== exp.profile) problems.push(`marker records profile "${marker.value.profile}", expected "${exp.profile}"`);
-    const stamp = Date.parse(String(marker.value.installedAt ?? ""));
+    if (m.profile !== exp.profile) problems.push(`marker records profile "${shown(m.profile)}", expected "${exp.profile}"`);
+    const stamp = Date.parse(shown(m.installedAt ?? ""));
     if (!Number.isFinite(stamp) || stamp < exp.startedAt - 2000) problems.push("marker was not rewritten by this switch (the installer did not reach its final step)");
-    if (marker.value.scope !== undefined && marker.value.scope !== exp.scope) problems.push(`marker scope is "${marker.value.scope}", expected "${exp.scope}"`);
-    if (Array.isArray(marker.value.extensions)) {
-      const missing = expected.filter((n) => !marker.value.extensions.includes(n));
+    if (m.scope !== undefined && m.scope !== exp.scope) problems.push(`marker scope is "${shown(m.scope)}", expected "${exp.scope}"`);
+    const markerExtensions = m.extensions;
+    if (Array.isArray(markerExtensions)) {
+      const missing = expected.filter((n) => !markerExtensions.includes(n));
       if (missing.length) problems.push(`marker extension list lacks: ${missing.join(", ")}`);
     } else {
       problems.push("marker has no extension list");
@@ -203,7 +215,7 @@ export function verifySwitch(exp: Expectation): string[] {
         problems.push(
           `settings extension list differs from profile "${exp.profile}"` +
             `${extra.length ? `; unexpected: ${extra.join(", ")}` : ""}${missing.length ? `; missing: ${missing.join(", ")}` : ""}` +
-            `${!extra.length && !missing.length ? "; same names in a different order" : ""}`,
+            (!extra.length && !missing.length ? "; same names in a different order" : ""),
         );
       }
       const dangling = loaded.filter((n) => !exp.extensionExists(n));
@@ -211,15 +223,37 @@ export function verifySwitch(exp: Expectation): string[] {
     }
   }
 
+  // firewall.json and security.json are machine-global: a project-scope install never writes them
+  // (it warns when the profile wants another gate), so only a global switch is held to them.
+  if (exp.scope === "project") return problems;
   const firewall = readJson(exp.firewallFile);
-  if (firewall.error || firewall.value === null || typeof firewall.value !== "object" || Array.isArray(firewall.value)) {
+  const fwValue = firewall.value;
+  if (firewall.error || !isRecord(fwValue)) {
     problems.push(`firewall config ${exp.firewallFile} ${firewall.error ?? "is not an object"}`);
   } else {
-    const { policy, mode, source } = firewall.value;
-    if (policy !== "coding" && policy !== "pentest") problems.push(`firewall policy "${policy}" is not a known policy (coding|pentest)`);
+    const { policy, mode, source } = fwValue;
+    if (policy !== "coding" && policy !== "pentest") problems.push(`firewall policy "${shown(policy)}" is not a known policy (coding|pentest)`);
     else if (policy !== exp.firewall.policy) problems.push(`firewall policy is "${policy}", profile "${exp.profile}" requires "${exp.firewall.policy}"`);
-    if (mode !== "auto" && mode !== "manual") problems.push(`firewall mode "${mode}" is not a known mode (auto|manual)`);
+    if (mode !== "auto" && mode !== "manual") problems.push(`firewall mode "${shown(mode)}" is not a known mode (auto|manual)`);
     else if (source !== "user" && mode !== exp.firewall.mode) problems.push(`firewall mode is "${mode}", profile "${exp.profile}" requires "${exp.firewall.mode}"`);
+  }
+  if (exp.security) {
+    const result = readJson(exp.security.file);
+    const v = result.value;
+    const levels = ["relaxed", "balanced", "guarded", "strict"];
+    if (result.error || !isRecord(v) || v.schemaVersion !== 1 || typeof v.level !== "string" || !levels.includes(v.level)
+      || (v.source !== "operator" && v.source !== "profile") || typeof v.revision !== "number" || !Number.isSafeInteger(v.revision) || v.revision < 0
+      || typeof v.changedAt !== "string" || !Number.isFinite(Date.parse(v.changedAt))) {
+      problems.push(`security config ${exp.security.file} ${result.error ?? "is invalid"}`);
+    } else {
+      // Verify the effective result including the engagement and strengthening-only env
+      // floors. An operator's request survives a profile switch, even beneath a floor.
+      const floor = exp.firewall.policy === "pentest" ? levels.indexOf("guarded") : 0;
+      const pin = levels.indexOf(process.env.PI_KIT_SECURITY_LEVEL ?? "");
+      const effective = Math.max(levels.indexOf(v.level), floor, pin);
+      const expected = Math.max(levels.indexOf(v.source === "operator" ? v.level : exp.security.level), floor, pin);
+      if ((v.source === "profile" && v.level !== exp.security.level) || effective !== expected) problems.push(`security level is ${v.level} (effective ${levels[effective]}), profile requires ${exp.security.level} (effective ${levels[expected]})`);
+    }
   }
   return problems;
 }
@@ -243,9 +277,9 @@ export interface SwitchInput {
    */
   announce?: (warnings: string[]) => void;
   /** Called after a verified install; a throw is a failed reload. Omit for "apply, then ask the user to /reload". */
-  reload?: () => Promise<void>;
+  reload?: (() => Promise<void>) | undefined;
   /** Called to reload the OLD configuration after a rolled-back reload failure (best effort). */
-  reloadOld?: () => Promise<void>;
+  reloadOld?: (() => Promise<void>) | undefined;
   /** Test hook: fires between stages. */
   onStage?: (stage: "snapshot" | "install" | "verify" | "reload") => void;
 }
@@ -276,12 +310,25 @@ function warningLines(...streams: string[]): string[] {
 
 const tail = (text: string, n = 1200): string => text.trim().slice(-n);
 
+/** The `pi install` / `pi remove` commands the installer reports having run; restoring files cannot undo them. */
+export function packageChangeLines(...streams: string[]): string[] {
+  const changes: string[] = [];
+  for (const stream of streams) {
+    for (const match of stream.matchAll(/^\[install\] Package change \(a rollback cannot undo it\): (.+)$/gm)) {
+      const change = match[1]?.trim();
+      if (change && !changes.includes(change)) changes.push(change);
+    }
+  }
+  return changes;
+}
+
 export async function transactionalSwitch(input: SwitchInput): Promise<SwitchOutcome> {
   const snaps = snapshotFiles(input.files);
   const transientBefore = transientPaths(snaps);
   input.onStage?.("snapshot");
   const startedAt = Date.now();
   let warnings: string[] = [];
+  let packageChanges: string[] = [];
 
   const rollback = (stage: SwitchStage, detail: string): SwitchOutcome => {
     const result = restoreSnapshots(snaps, transientBefore);
@@ -290,7 +337,10 @@ export async function transactionalSwitch(input: SwitchInput): Promise<SwitchOut
     const message = result.errors.length
       ? `profile: switch to "${input.expectation.profile}" FAILED at ${stage} (${detail}) and the rollback was INCOMPLETE - ${result.errors.join("; ")}.` +
         `${backupDir ? ` The original bytes were saved in ${backupDir}.` : ""} Restore those files by hand before continuing.`
-      : `profile: switch to "${input.expectation.profile}" FAILED at ${stage}: ${detail}. Nothing was changed: ${changed} configuration file(s) were restored byte-for-byte and the previous profile stays in force.`;
+      : packageChanges.length
+        ? `profile: switch to "${input.expectation.profile}" FAILED at ${stage}: ${detail}. ${changed} configuration file(s) were restored byte-for-byte, so the previous profile's settings are back, ` +
+          `but these package operations had already run and were NOT rolled back: ${packageChanges.join("; ")}. pi may have changed those packages' files on disk; \`pi list\` shows what is registered.`
+        : `profile: switch to "${input.expectation.profile}" FAILED at ${stage}: ${detail}. Nothing was changed: ${changed} configuration file(s) were restored byte-for-byte and the previous profile stays in force.`;
     return { ok: false, stage, message, warnings, rolledBack: result.errors.length === 0, rollbackErrors: result.errors, backupDir };
   };
 
@@ -303,6 +353,7 @@ export async function transactionalSwitch(input: SwitchInput): Promise<SwitchOut
     return rollback("install", `could not run the installer: ${error instanceof Error ? error.message : String(error)}`);
   }
   warnings = warningLines(exec.stderr ?? "", exec.stdout ?? "");
+  packageChanges = packageChangeLines(exec.stdout ?? "", exec.stderr ?? "");
   if (exec.killed) return rollback("install", `the installer was killed after ${Math.round(input.timeoutMs / 1000)}s${tail(exec.stderr ?? "") ? `\n${tail(exec.stderr ?? "")}` : ""}`);
   if (exec.code !== 0) return rollback("install", `installer exited ${exec.code}\n${tail(exec.stderr || exec.stdout || "") || "(no output)"}`);
   // A signal-killed installer reads as exit 0 in pi.exec; a finished one always says so.

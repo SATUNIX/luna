@@ -1,6 +1,12 @@
+---
+argument-hint: "[task]"
+---
+
 # Coding Task Plan
 
 Prepare a concise implementation plan.
+
+Task: ${@:-the current task}
 
 Return:
 

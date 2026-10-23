@@ -1,6 +1,6 @@
 # Beta status
 
-Pi System `0.2.4-beta.0` is the first public beta. It is complete enough to install and use every
+Pi System is in public beta (the `0.2.4-beta` releases). It is complete enough to install and use every
 day, and tested enough that we can say what has and has not been shown to work. It is not a stable
 release: interfaces such as the run contract and the approvals file are versioned but may still
 change in a later beta, and there are gaps in what has been verified. This page lists them
@@ -20,9 +20,9 @@ plainly.
 | | Supported | Notes |
 |---|---|---|
 | Node.js | 22.19 or newer | pi's own minimum; CI uses Node 22 |
-| pi | 0.85.1 to 0.87.1 | The suite is pinned to 0.87.1; 0.85.1 is the floor and runs the whole suite in CI. 0.99.1 is run in CI as advisory only |
+| pi | 0.85.1 to 1.3.0 | The suite is pinned to 1.3.0; 0.85.1 (the floor) and 0.99.2 (the last 0.x release) run the whole suite in CI |
 | Operating system | Linux | Every profile is also install-checked on Windows in CI; the full suite and interactive use are not. macOS has not been tested |
-| Delivery | `git` | `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0`. The npm package is not published |
+| Delivery | `git` | `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.5`. The npm package is not published |
 
 ## What has been verified, and how
 
@@ -35,7 +35,7 @@ plainly.
 | Real-terminal spot checks | The status bar in a real terminal, and each candidate companion package loading in a real pi | Long sessions |
 | Hosted CI | The same suite on GitHub's runners, at the pi floor, and (advisory) the newest pi | |
 
-The counts and results for the release commit are in the release notes for `v0.2.4-beta.0`.
+The counts and results for each release commit are in that release's notes on GitHub.
 
 ## What has not been verified
 

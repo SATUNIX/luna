@@ -3,18 +3,31 @@ import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 // skill-forge (Epic 6 Sprint 6.1): mine the trace-ledger and DETERMINISTICALLY synthesise a
 // candidate SKILL.md, score a skill against the eval harness, and archive superseded skills.
 // It never calls a model — synthesis is a heuristic distillation of recorded action patterns,
 // written to .pi/skill-proposals/ for human review (never auto-installed into skills/).
-// Self-contained: node builtins only; scoring shells out to packages/core/eval/run.mjs at runtime.
+// Self-contained: node builtins only; scoring shells out to packages/core/eval/run.ts at runtime.
 
 interface TraceEntry {
   kind?: "call" | "result";
   tool?: string;
   target?: string;
   status?: "ok" | "error";
+}
+
+/** A trace line's well-typed fields; null for a non-object. Fields of the wrong type are dropped. */
+function toTraceEntry(value: unknown): TraceEntry | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const { kind, tool, target, status }: { kind?: unknown; tool?: unknown; target?: unknown; status?: unknown } = value;
+  const entry: TraceEntry = {};
+  if (kind === "call" || kind === "result") entry.kind = kind;
+  if (typeof tool === "string") entry.tool = tool;
+  if (typeof target === "string") entry.target = target;
+  if (status === "ok" || status === "error") entry.status = status;
+  return entry;
 }
 
 interface Mined {
@@ -58,7 +71,7 @@ export function readTrace(cwd: string, tracePathOverride?: string): TraceEntry[]
     .filter(Boolean)
     .map((l) => {
       try {
-        return JSON.parse(l) as TraceEntry;
+        return toTraceEntry(JSON.parse(l));
       } catch {
         return null;
       }
@@ -69,21 +82,25 @@ export function readTrace(cwd: string, tracePathOverride?: string): TraceEntry[]
 const READ_HINT = /^(read|grep|glob|ls|find|cat|search|rg)/i;
 
 export function mineTrace(entries: TraceEntry[]): Mined {
-  const calls = entries.filter((e) => e.kind === "call" && e.tool);
+  const calls = entries.filter((e): e is TraceEntry & { tool: string } => e.kind === "call" && Boolean(e.tool));
   const results = entries.filter((e) => e.kind === "result");
   const toolCounts = new Map<string, number>();
-  for (const e of calls) toolCounts.set(e.tool!, (toolCounts.get(e.tool!) ?? 0) + 1);
+  for (const e of calls) toolCounts.set(e.tool, (toolCounts.get(e.tool) ?? 0) + 1);
 
   // Adjacent tool bigrams (the recurring micro-workflow).
   const seqCounts = new Map<string, number>();
-  for (let i = 1; i < calls.length; i++) {
-    const seq = `${calls[i - 1].tool} → ${calls[i].tool}`;
-    seqCounts.set(seq, (seqCounts.get(seq) ?? 0) + 1);
+  let previous: string | undefined;
+  for (const e of calls) {
+    if (previous !== undefined) {
+      const seq = `${previous} → ${e.tool}`;
+      seqCounts.set(seq, (seqCounts.get(seq) ?? 0) + 1);
+    }
+    previous = e.tool;
   }
 
   const readCounts = new Map<string, number>();
   for (const e of calls) {
-    if (e.target && READ_HINT.test(e.tool!)) readCounts.set(e.target, (readCounts.get(e.target) ?? 0) + 1);
+    if (e.target && READ_HINT.test(e.tool)) readCounts.set(e.target, (readCounts.get(e.target) ?? 0) + 1);
   }
 
   const errors = results.filter((e) => e.status === "error").length;
@@ -168,12 +185,20 @@ function text(t: string) {
   return { content: [{ type: "text" as const, text: t }], details: undefined };
 }
 
-// Runs the eval harness and returns its pass rate — a real, eval-tied number.
-function evalPassRate(cwd: string): { rate: number; passed: number; total: number } | null {
+// The kit's own eval harness and checkout root, resolved from this file
+// (<root>/packages/extensions/src/skill-forge/index.ts), never from the session's working directory:
+// running <cwd>/packages/core/eval/run.ts would let any opened repository supply the code that this
+// auto-allowed tool executes (CRT-1).
+const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+const EVAL_HARNESS = path.join(KIT_ROOT, "packages", "core", "eval", "run.ts");
+
+// Runs the kit's eval harness and returns its pass rate — a real, eval-tied number.
+function evalPassRate(): { rate: number; passed: number; total: number } | null {
+  if (!fs.existsSync(EVAL_HARNESS)) return null;
   try {
-    const out = execFileSync("node", ["packages/core/eval/run.mjs", "--json"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    const parsed = JSON.parse(out);
-    if (typeof parsed.passed === "number" && typeof parsed.total === "number" && parsed.total > 0) {
+    const out = execFileSync("node", [EVAL_HARNESS, "--json"], { cwd: KIT_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const parsed: unknown = JSON.parse(out);
+    if (typeof parsed === "object" && parsed !== null && "passed" in parsed && "total" in parsed && typeof parsed.passed === "number" && typeof parsed.total === "number" && parsed.total > 0) {
       return { rate: Number((parsed.passed / parsed.total).toFixed(3)), passed: parsed.passed, total: parsed.total };
     }
   } catch {
@@ -194,7 +219,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const cwd = (ctx as { cwd?: string })?.cwd ?? process.cwd();
-      const name = String(params.skill_name).replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+      const name = params.skill_name.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
       const category = params.category || "efficiency";
       const entries = readTrace(cwd, params.trace_path);
       if (entries.length === 0) {
@@ -216,15 +241,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "skill_score",
     label: "Skill Forge: score",
-    description: "Score the kit against the eval harness (real, eval-tied number) as the skill's regression baseline.",
+    description: "Score the kit against its own eval harness (real, eval-tied number) as the skill's regression baseline.",
     parameters: Type.Object({
       skill_name: Type.String({ description: "Skill name being evaluated (recorded in the score record)" }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const cwd = (ctx as { cwd?: string })?.cwd ?? process.cwd();
-      const result = evalPassRate(cwd);
+      const result = evalPassRate();
       if (!result) {
-        return text(`skill-forge: could not run the eval harness (packages/core/eval not present here). Score unavailable for ${params.skill_name}.`);
+        return text(`skill-forge: could not run the eval harness (packages/core/eval is not present in this kit install). Score unavailable for ${params.skill_name}.`);
       }
       // Persist a score record so scores are auditable over time.
       try {
@@ -241,14 +266,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "skill_archive",
     label: "Skill Forge: archive",
-    description: "Archive a superseded skill proposal or skill into .pi/skill-archive/ (non-destructive move).",
+    description: "Archive a superseded skill proposal or skill into .pi/skill-archive/ (non-destructive move; an existing archive of the same name is kept and the new one gets a <name>-<timestamp> directory).",
     parameters: Type.Object({
       skill_name: Type.String({ description: "Skill name to archive" }),
       reason: Type.Optional(Type.String({ description: "Reason for archiving" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const cwd = (ctx as { cwd?: string })?.cwd ?? process.cwd();
-      const name = sanitizeSkillName(String(params.skill_name));
+      const name = sanitizeSkillName(params.skill_name);
       if (!name || name.replace(/-/g, "") === "") {
         return text(`skill-forge: '${params.skill_name}' is not a valid skill name (kebab-case, alphanumeric).`);
       }
@@ -265,12 +290,18 @@ export default function (pi: ExtensionAPI) {
       if (!isContained(src, proposalsBase) && !isContained(src, skillsBase)) {
         return text(`skill-forge: refusing to archive '${name}' — resolved source escapes its base directory.`);
       }
-      const dest = path.join(archiveBase, name);
+      // Non-destructive (PRO-12): an existing archive of the same name is never removed; the new
+      // one goes to <name>-<epoch ms>, with a counter if that is taken too.
+      let dest = path.join(archiveBase, name);
+      if (fs.existsSync(dest)) {
+        const stamped = `${dest}-${Date.now()}`;
+        dest = stamped;
+        for (let n = 2; fs.existsSync(dest); n++) dest = `${stamped}-${n}`;
+      }
       if (!isContained(dest, archiveBase)) {
         return text(`skill-forge: refusing to archive '${name}' — resolved destination escapes .pi/skill-archive/.`);
       }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.rmSync(dest, { recursive: true, force: true });
       fs.renameSync(src, dest);
       try {
         fs.writeFileSync(path.join(dest, "ARCHIVE_REASON.txt"), `${params.reason || "superseded"} (${new Date().toISOString()})\n`);

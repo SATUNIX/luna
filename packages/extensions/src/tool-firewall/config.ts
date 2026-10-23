@@ -3,8 +3,8 @@
 // ~/.pi/agent/pi-kit/firewall.json is written by the profile installer and by `/auto`:
 //   { "mode": "auto" | "manual", "policy": "coding" | "pentest", "judgeModel": "provider/id",
 //     "learn": true, "knownHosts": ["ms01"], "untrustedHosts": ["old-box"], "source": "profile" | "user" }
-// Precedence for the mode: PI_KIT_AUTO_MODE env > a project .pi/auto-mode.json (legacy) >
-// firewall.json > manual. For the policy: PI_KIT_FIREWALL_PROFILE env > firewall.json > coding.
+// Precedence for the mode: PI_KIT_AUTO_MODE env > a project .pi/auto-mode.json (legacy, which can
+// only downgrade to manual: a repo-carried file never turns auto mode on) > firewall.json > manual. For the policy: PI_KIT_FIREWALL_PROFILE env > firewall.json > coding.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,17 +49,29 @@ export function sessionsDir(): string {
   return process.env.PI_KIT_FIREWALL_SESSIONS_DIR?.trim() || path.join(kitStateDir(), "firewall-sessions");
 }
 
+// A parsed JSON object (not null, not an array). Shared by the firewall's own state readers.
+export function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// The string members of a JSON array (anything else yields an empty list).
+export function stringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((h): h is string => typeof h === "string") : [];
+}
+
 export function readConfig(): FirewallConfig {
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    const raw: Record<string, unknown> = isRecord(parsed) ? parsed : {};
+    const judgeModel = typeof raw.judgeModel === "string" && raw.judgeModel.trim() ? raw.judgeModel.trim() : undefined;
     return {
-      mode: raw?.mode === "auto" ? "auto" : "manual",
-      policy: raw?.policy === "pentest" ? "pentest" : "coding",
-      judgeModel: typeof raw?.judgeModel === "string" && raw.judgeModel.trim() ? raw.judgeModel.trim() : undefined,
-      learn: raw?.learn !== false,
-      knownHosts: Array.isArray(raw?.knownHosts) ? raw.knownHosts.filter((h: unknown) => typeof h === "string") : [],
-      untrustedHosts: Array.isArray(raw?.untrustedHosts) ? raw.untrustedHosts.filter((h: unknown) => typeof h === "string") : [],
-      source: raw?.source === "user" || raw?.source === "profile" ? raw.source : "default",
+      mode: raw.mode === "auto" ? "auto" : "manual",
+      policy: raw.policy === "pentest" ? "pentest" : "coding",
+      ...(judgeModel !== undefined ? { judgeModel } : {}),
+      learn: raw.learn !== false,
+      knownHosts: stringList(raw.knownHosts),
+      untrustedHosts: stringList(raw.untrustedHosts),
+      source: raw.source === "user" || raw.source === "profile" ? raw.source : "default",
     };
   } catch {
     return { ...DEFAULTS };
@@ -70,12 +82,13 @@ export function writeConfig(patch: Partial<FirewallConfig>): FirewallConfig {
   const file = configPath();
   let current: Record<string, unknown> = {};
   try {
-    current = JSON.parse(fs.readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (isRecord(parsed)) current = parsed;
   } catch {
     /* new file */
   }
   const next = { ...current, ...patch };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
   fs.renameSync(tmp, file);
@@ -93,8 +106,10 @@ export function resolveMode(cwd: string, cfg: FirewallConfig = readConfig()): { 
   if (env === "0") return { mode: "manual", source: "env PI_KIT_AUTO_MODE=0" };
   try {
     const legacy = legacyAutoModePath(cwd);
-    const raw = JSON.parse(fs.readFileSync(legacy, "utf8"));
-    if (typeof raw?.enabled === "boolean") return { mode: raw.enabled ? "auto" : "manual", source: legacy };
+    const raw: unknown = JSON.parse(fs.readFileSync(legacy, "utf8"));
+    // Downgrade only: the file lives in the (possibly untrusted) repo, while raising the mode needs
+    // the terminal-gated /auto on, which records it in the global firewall.json.
+    if (isRecord(raw) && raw.enabled === false) return { mode: "manual", source: legacy };
   } catch {
     /* no project override */
   }
@@ -129,7 +144,7 @@ export function knownHostsMeta(cfg: FirewallConfig = readConfig(), home = homeDi
   const readSsh = (file: string, depth: number) => {
     if (depth > 3 || seen.has(file)) return;
     seen.add(file);
-    let text = "";
+    let text: string;
     try {
       text = fs.readFileSync(file, "utf8");
       sshMtime = Math.max(sshMtime, fs.statSync(file).mtimeMs);
@@ -139,9 +154,10 @@ export function knownHostsMeta(cfg: FirewallConfig = readConfig(), home = homeDi
     for (const line of text.split("\n")) {
       const m = /^\s*(Host|HostName|Include)\s+(.+?)\s*$/i.exec(line);
       if (!m) continue;
-      const kind = m[1].toLowerCase();
+      const [, word = "", rest = ""] = m;
+      const kind = word.toLowerCase();
       if (kind === "include") {
-        for (const pat of m[2].split(/\s+/)) {
+        for (const pat of rest.split(/\s+/)) {
           const abs = pat.startsWith("~") ? path.join(home, pat.slice(1)) : path.isAbsolute(pat) ? pat : path.join(home, ".ssh", pat);
           const dir = path.dirname(abs);
           const base = path.basename(abs);
@@ -156,7 +172,7 @@ export function knownHostsMeta(cfg: FirewallConfig = readConfig(), home = homeDi
         }
         continue;
       }
-      for (const h of m[2].split(/\s+/)) if (h && !/[*?!]/.test(h)) fromSsh.add(h.toLowerCase());
+      for (const h of rest.split(/\s+/)) if (h && !/[*?!]/.test(h)) fromSsh.add(h.toLowerCase());
     }
   };
   readSsh(sshConfig, 0);
@@ -183,8 +199,10 @@ export function workspaceRoot(cwd: string): string {
     if (parent === dir) break;
     dir = parent;
   }
-  // Never treat the home directory (dotfile repos) or / as the workspace.
-  if (found === homeDir() || found === "/") found = path.resolve(cwd);
+  // Never treat the home directory (dotfile repos), / or a shared temp root as the workspace. A
+  // stray .git in a temp root (some sandboxes create an empty /tmp/.git) would otherwise make every
+  // file below it part of the workspace and scope approvals to all of it.
+  if (found === homeDir() || found === "/" || tmpRoots().includes(found)) found = path.resolve(cwd);
   return found;
 }
 

@@ -1,6 +1,12 @@
+---
+argument-hint: "[server or tool]"
+---
+
 # Tool Policy Onboarding
 
 Classify MCP tools before use.
+
+Tools: ${@:-the MCP tools not yet classified}
 
 Return:
 

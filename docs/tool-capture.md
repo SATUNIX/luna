@@ -5,6 +5,9 @@ gets back, for audit, incident review and SIEM ingestion. It ships in every prof
 
 The firewall audit (`.pi/tool-firewall-audit.jsonl`) records *decisions*, and trace-ledger
 (`.pi/trace.jsonl`) records *facts* (tool, target, hashes). Both are redacted and short.
+trace-ledger redacts only the first 1 KiB of a target and stores 200 characters of it, so a
+200 KB command is logged in well under 200 ms and still reports its full length in
+`targetOriginalLength` (`tests/trace-ledger-bound-smoke.ts`).
 Capture records the *content*: the exact arguments and the exact result, including output
 the firewall blocked or the tool truncated.
 
@@ -92,6 +95,15 @@ review, and it makes the log itself sensitive:
 `PI_KIT_CAPTURE_REDACT=1` stores redacted values instead (`[REDACTED:<kind>]`, and
 `redacted: true` on the record). In that mode, full-output attachments are skipped, because
 they cannot be scanned in place.
+
+The scan reads at most 4 MiB of string data per record, and every pattern runs in linear time:
+200 KB of adversarial text such as a repeated `x_token` scans in well under 200 ms
+(`tests/tool-capture-smoke.ts`). A `password_assignment` key may carry a prefix or suffix
+(`DB_PASSWORD=`, `MY_SECRET_KEY =`), and an unclosed quoted value is redacted to the end of
+the line (`tests/tool-capture-smoke.ts`). A record with string data past the 4 MiB budget
+carries `unscanned: true`, so a SIEM knows its `secrets` list covers only the first 4 MiB. In
+redact mode the text past the budget is not stored: it is replaced with `[REDACTED:unscanned]`
+and the record is marked `redacted: true` (`tests/tool-capture-smoke.ts`).
 
 ## Failure behaviour
 

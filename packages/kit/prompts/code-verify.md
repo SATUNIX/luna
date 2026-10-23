@@ -1,6 +1,12 @@
+---
+argument-hint: "[check or change]"
+---
+
 # Code Verify
 
 Verify the current coding change.
+
+Focus: ${@:-the current change}
 
 Return:
 

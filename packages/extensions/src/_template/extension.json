@@ -6,7 +6,7 @@
   "entry": "index.ts",
   "hooks": ["tool_call"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["balanced"],
+  "profiles": [],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

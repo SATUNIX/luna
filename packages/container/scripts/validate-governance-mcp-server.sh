@@ -13,7 +13,7 @@ SERVER_DIR="mcp-servers/governance"
   exit 1
 }
 
-[ -f "$SERVER_DIR/index.js" ] || {
+[ -f "$SERVER_DIR/index.ts" ] || {
   echo "Missing governance MCP server entrypoint" >&2
   exit 1
 }
@@ -31,13 +31,13 @@ grep -Fq '"zod": "4.4.3"' "$SERVER_DIR/package.json" || {
   exit 1
 }
 
-grep -Fq 'new StdioServerTransport()' "$SERVER_DIR/index.js" || {
+grep -Fq 'new StdioServerTransport()' "$SERVER_DIR/index.ts" || {
   echo "Governance MCP server must use stdio transport" >&2
   exit 1
 }
 
 for tool in evidence_append note_append checkpoint_append task_state_read task_state_update memory_append verification_append state_summary; do
-  grep -Fq "\"$tool\"" "$SERVER_DIR/index.js" || {
+  grep -Fq "\"$tool\"" "$SERVER_DIR/index.ts" || {
     echo "Governance MCP server missing tool: $tool" >&2
     exit 1
   }
@@ -47,12 +47,12 @@ for tool in evidence_append note_append checkpoint_append task_state_read task_s
   }
 done
 
-grep -Fq 'withFileLock' "$SERVER_DIR/index.js" || {
+grep -Fq 'withFileLock' "$SERVER_DIR/index.ts" || {
   echo "Governance MCP server must lock append paths" >&2
   exit 1
 }
 
-grep -Fq 'FIELD_LIMITS' "$SERVER_DIR/index.js" || {
+grep -Fq 'FIELD_LIMITS' "$SERVER_DIR/index.ts" || {
   echo "Governance MCP server must bound text fields for lightweight-model safety" >&2
   exit 1
 }

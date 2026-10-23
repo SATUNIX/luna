@@ -123,10 +123,10 @@ export function mountHolding(file: string, mountinfo: string): { point: string; 
     const parts = line.split(" ");
     const dash = parts.indexOf("-");
     if (dash < 6 || parts.length < dash + 4) continue;
-    const point = unescapeMount(parts[4]);
+    const point = unescapeMount(parts[4] ?? ""); // present: dash >= 6
     if (!within(file, point)) continue;
     if (best && point.length < best.point.length) continue;
-    best = { point, ro: parts[5].split(",").includes("ro") || parts[dash + 3].split(",").includes("ro") };
+    best = { point, ro: (parts[5] ?? "").split(",").includes("ro") || (parts[dash + 3] ?? "").split(",").includes("ro") };
   }
   return best;
 }
@@ -190,7 +190,7 @@ export function evaluateUnattended(o: LoadOptions): UnattendedState {
       fs.closeSync(fd);
     }
   } catch (error) {
-    return fail(`the contract ${file} cannot be read (${(error as NodeJS.ErrnoException)?.code ?? String((error as Error)?.message ?? error)})`);
+    return fail(`the contract ${file} cannot be read (${(error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error))})`);
   }
   // Where the agent writes, the file could have been forged by the agent itself.
   for (const [what, dir] of [["the workspace", o.workspace], ["the working directory", o.cwd], ["the agent directory", o.agentDir]] as const) {
@@ -258,7 +258,7 @@ export function createUnattended(o: LoadOptions): Unattended {
   let state = evaluateUnattended(o);
   const publish = () => {
     const pub: UnattendedPublic = { active: state.active, boundary: state.boundary, autoApprove: state.active && state.autoApprove, label: state.label };
-    (globalThis as unknown as Record<symbol, unknown>)[UNATTENDED_KEY] = Object.freeze(pub);
+    Object.assign(globalThis, { [UNATTENDED_KEY]: Object.freeze(pub) });
   };
   const latchOff = (why: string) => {
     state = inactive({ requested: true, warnings: [why], label: "UNATTENDED requested but NOT active (fail closed: normal rules apply)" });
@@ -309,7 +309,7 @@ const BOUNDARY_CODES = /^(?:sudo_)?(?:container_escape|docker_socket_mount|host_
 const CHAIN_CODES = /^(?:sudo_)?(?:secret_egress|secret_upload|shell_over_network|safety_env_override|unguarded_agent)$/;
 const OUTSIDE_CODES = /^(?:sudo_)?(?:cloud_change|cloud_delete|cloud_read|cloud_secret_read|cluster_change|cluster_delete|cluster_read|cluster_ui|cluster_secret_read|kubeconfig_raw|remote_session|container_push|container_compose_push|container_login|container_logout|container_trust|package_credentials|gh_read|gh_write|gh_delete|gh_destructive|gh_secret|gh_key|git_send|package_publish)$/;
 
-const NEEDS_OPERATOR_CODES = /^(?:sudo_)?(?:policy_ask|policy_ask_rule|unknown_tool)$/;
+const NEEDS_OPERATOR_CODES = /^(?:sudo_)?(?:policy_ask|policy_ask_rule|unknown_tool|incomplete_adapter|codemode_exec)$/;
 
 const LOOPBACK = /^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|::1|[\w.-]+\.localhost)$/i;
 
@@ -323,8 +323,9 @@ export function hostAllowed(host: string, egress: string[]): boolean {
 // The host of a remote given as a URL or scp-style address, or null for a name or a local path.
 export function remoteHost(remote: string): string | null {
   const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^:/?#]+)/i.exec(remote) ?? /^(?:[^@/\s]+@)?([A-Za-z0-9.-]+):(?!\/\/)(?!\d+(?:\/|$))/.exec(remote);
-  if (!m) return null;
-  return m[1].toLowerCase();
+  const host = m?.[1];
+  if (host === undefined) return null;
+  return host.toLowerCase();
 }
 
 const isLocalPath = (r: string) => /^(?:\/|\.{1,2}\/|~\/|file:\/\/)/.test(r);
@@ -340,11 +341,12 @@ export function configuredRemoteUrls(workspace: string, name: string): string[] 
     for (const line of text.split("\n")) {
       const sec = /^\s*\[([^\]]+)\]/.exec(line);
       if (sec) {
-        inRemote = new RegExp(`^remote\\s+"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"$`).test(sec[1].trim());
+        inRemote = new RegExp(`^remote\\s+"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"$`).test((sec[1] ?? "").trim());
         continue;
       }
       const kv = /^\s*(url|pushurl)\s*=\s*(.+?)\s*$/i.exec(line);
-      if (inRemote && kv) out.push(kv[2]);
+      const url = kv?.[2];
+      if (inRemote && url !== undefined) out.push(url);
     }
     return out;
   } catch {

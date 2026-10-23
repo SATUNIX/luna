@@ -1,0 +1,12 @@
+{
+  // Node-run code (internal/docs/adr/0001): the MCP servers, run by Node in node:22-alpine.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["**/node_modules"]
+}

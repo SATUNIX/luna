@@ -34,12 +34,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: javascript-typescript, actions
           queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           category: /language:javascript-typescript
 
@@ -63,8 +63,14 @@ jobs:
           --config p/javascript --config p/typescript --config p/nodejs
           --config p/secrets --config p/owasp-top-ten
           --sarif --output semgrep.sarif
+      # Semgrep keeps `nosemgrep`-suppressed findings in SARIF (marked `suppressions`), and code
+      # scanning raises them as alerts anyway; drop them so a reviewed suppression stays quiet.
+      - run: >-
+          python3 -c "import json; p = 'semgrep.sarif'; d = json.load(open(p));
+          [run.update(results=[r for r in run.get('results', []) if not r.get('suppressions')]) for run in d['runs']];
+          json.dump(d, open(p, 'w'))"
       - if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: semgrep.sarif
           category: semgrep

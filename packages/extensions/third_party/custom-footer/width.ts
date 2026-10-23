@@ -8,12 +8,16 @@
  * measured as one unit, so it is never cut in half.
  */
 
-// CSI sequences (colours, cursor) and OSC 8 hyperlinks, both BEL- and ST-terminated.
-const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// CSI sequences (colours, cursor) and OSC 8 hyperlinks, both BEL- and ST-terminated. Built from
+// named control characters: matching them is the point.
+const ESC = "\u001b";
+const BEL = "\u0007";
+const ANSI = new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]|${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g");
 
 const segmenter: { segment(input: string): Iterable<{ segment: string }> } | null = (() => {
   try {
-    const Segmenter = (Intl as unknown as { Segmenter?: new (locale?: string, options?: { granularity: string }) => { segment(input: string): Iterable<{ segment: string }> } }).Segmenter;
+    // Absent on runtimes built without full ICU, so it is read as possibly undefined.
+    const Segmenter: typeof Intl.Segmenter | undefined = Intl.Segmenter;
     return Segmenter ? new Segmenter(undefined, { granularity: "grapheme" }) : null;
   } catch {
     return null;
@@ -41,7 +45,7 @@ function codePointWidth(cp: number, ch: string): number {
 function clusterWidth(cluster: string): number {
   let width = 0;
   for (const ch of cluster) {
-    const w = codePointWidth(ch.codePointAt(0)!, ch);
+    const w = codePointWidth(ch.codePointAt(0) ?? 0, ch);
     if (w > width) width = w;
   }
   // A cluster made only of zero-width code points still occupies nothing.
@@ -50,7 +54,7 @@ function clusterWidth(cluster: string): number {
 
 function clusters(text: string): string[] {
   if (segmenter) return [...segmenter.segment(text)].map((s) => s.segment);
-  return [...text];
+  return Array.from(text);
 }
 
 export function stripAnsi(text: string): string {

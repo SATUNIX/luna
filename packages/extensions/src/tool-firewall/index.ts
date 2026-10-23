@@ -5,7 +5,7 @@
 // (trajectory.ts), and decided by the matrix below. Human decisions become calibrated
 // precedents (feedback.ts); in auto mode a small model judges medium actions (judge.ts).
 //
-//   tier      manual      auto (coding)                           strict (pentest policy)
+//   tier      manual      auto (coding)                           once-only (pentest / strict security)
 //   low       allow       allow                                   allow
 //   medium    ask         judge: allow, or block + tell the agent ask
 //   high      ask         exact repeat of a grant / learned exact       ask, no grants (deny headless)
@@ -15,23 +15,49 @@
 //   critical  deny        deny                                    deny
 //
 // Headless (subagents, print mode) asks go to the human-console broker and fail closed.
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIDialogOptions, ToolCallEvent } from "@earendil-works/pi-coding-agent";
+import { completeSimple, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
+import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
 import { appendJudgement, computeStats, distillInBackground, profileFor, readProfile, resetProfile, statsLine, distill } from "./profile.ts";
 import { isUncertainBlock, runJudge, type Completer, type Verdict } from "./judge.ts";
 import { loadSession, recordAction, rootSessionId, saveSession, trajectoryFindings, type SessionGrant, type SessionState } from "./trajectory.ts";
-import { addApproval, approvalsPath, describeScope, findExact, floorFor, readApprovals, reportProblems, revokeApprovals, sessionApprovals, similarApprovals, LEARNED_APPROVAL_TTL_MS, SESSION_APPROVAL_TTL_MS, type Approval, type ApprovalsView } from "./approvals.ts";
+import { addApproval, describeScope, findExact, floorFor, readApprovals, reportProblems, revokeApprovals, sessionApprovals, similarApprovals, SESSION_APPROVAL_TTL_MS, type Approval, type ApprovalsView } from "./approvals.ts";
 import { createUnattended, unattendedDenial, type ProvenanceIo, type UnattendedState } from "./unattended.ts";
-import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isSessionChoice } from "./card.ts";
+import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isSessionChoice, type CardExtras } from "./card.ts";
+
+import { profileDefault, REGISTRY_KEY, resolveSecurity, securityPath, type SecuritySnapshot } from "./security-level.ts";
+import { atRootTerminal, chooseAtTerminal, registerSecurityCommand } from "./security-command.ts";
+import { disableCompanionInstalls } from "./companion-installs.ts";
 
 type Decision = "allow" | "ask" | "deny";
+/** Tools a kit child process (PI_KIT_INTERNAL_CHILD=1) is always denied. */
+export const ROOT_ONLY_TOOLS: ReadonlySet<string> = new Set(["workflow"]);
+
+const EFFORT_KEY = Symbol.for("pi-kit.effort");
+
+/**
+ * True when the effort extension reports ultracode standing mode with workflow runs pre-authorised
+ * (the operator answered Yes to its No-first select this session; docs/effort.md, "Ultracode").
+ * Read through the registry with type guards only; anything else is false.
+ */
+export function workflowPreauthorised(): boolean {
+  try {
+    const registry: unknown = Reflect.get(globalThis, EFFORT_KEY);
+    if (typeof registry !== "object" || registry === null) return false;
+    const read: unknown = Reflect.get(registry, "standing");
+    if (typeof read !== "function") return false;
+    const state: unknown = Reflect.apply(read, registry, []);
+    return typeof state === "object" && state !== null && Reflect.get(state, "on") === true && Reflect.get(state, "preauthorised") === true;
+  } catch {
+    return false;
+  }
+}
 
 type ToolRule = { decision?: Decision; risk_class?: string };
 
@@ -53,24 +79,18 @@ export type FirewallDeps = {
   complete?: Completer | null;
 };
 
-// Fail-closed fallback used ONLY if the shipped policy file cannot be read: unknown tools are
-// denied rather than waved through.
+// An invalid policy has no safe subset: a lost deny may cover any call. Deny everything
+// until the operator repairs the file, including normally trusted pi identities.
 const BUILTIN_FALLBACK: FirewallPolicy = {
   defaults: { unknown: "deny" },
-  tools: {
-    read: { decision: "allow", risk_class: "read_only" },
-    grep: { decision: "allow", risk_class: "read_only" },
-    glob: { decision: "allow", risk_class: "read_only" },
-    ls: { decision: "allow", risk_class: "read_only" },
-    find: { decision: "allow", risk_class: "read_only" },
-  },
+  tools: {},
   command_rules: { deny: [], ask: [] },
   pentest: { deny: [], ask: [] },
 };
 
 let cachedPolicy: FirewallPolicy = BUILTIN_FALLBACK;
 let cachedPolicyPath: string | null = null;
-let cachedPolicyMtime = 0;
+let cachedPolicyDigest = "";
 let cachedPolicyLabel = "builtin-fallback";
 let lastPolicyWarnings: string[] = [];
 // Rules we changed but still enforce (e.g. stateful flags dropped) — NOT skips.
@@ -78,6 +98,37 @@ let lastPolicyAdjustments: string[] = [];
 
 function workspacePath(...parts: string[]): string {
   return path.join(process.cwd(), ...parts);
+}
+
+// Anything that is an object (arrays included): the shape every loose read below starts from.
+// True when the project auto-mode.json exists and does not already read {enabled: true}, so
+// /auto on rewriting it would change that file's own value (whatever PI_KIT_AUTO_MODE says).
+function legacyPinnedOff(file: string): boolean {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  try {
+    const raw: unknown = JSON.parse(text);
+    return !(isRecord(raw) && raw.enabled === true);
+  } catch {
+    return true;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+// `value.key` for a value of unknown shape: undefined unless it is an object.
+function field(value: unknown, key: string): unknown {
+  return isRecord(value) ? value[key] : undefined;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // The shipped starter policy lives inside the extension so it travels into every generated
@@ -109,92 +160,136 @@ function normalizeDecision(value: unknown): Decision | null {
   return value === "allow" || value === "ask" || value === "deny" ? value : null;
 }
 
-// An invalid custom rule is reported loudly instead of silently never compiling (a false sense
-// of security).
+// Invalid rules invalidate the whole policy; diagnostics explain what must be repaired.
 function compileCommandRules(rules: unknown, listLabel: string): CommandRule[] {
   if (rules === undefined) return [];
   if (!Array.isArray(rules)) {
-    lastPolicyWarnings.push(`${listLabel} is not an array — ignored`);
+    lastPolicyWarnings.push(`${listLabel} is not an array — policy invalid`);
     return [];
   }
   const out: CommandRule[] = [];
-  rules.forEach((raw, index) => {
-    if (!raw || typeof raw !== "object") {
-      lastPolicyWarnings.push(`${listLabel}[${index}] is not an object — skipped`);
+  rules.forEach((rule: unknown, index) => {
+    if (!isRecord(rule)) {
+      lastPolicyWarnings.push(`${listLabel}[${index}] is not an object — policy invalid`);
       return;
     }
-    const rule = raw as CommandRule;
-    if (typeof rule.pattern !== "string") {
-      lastPolicyWarnings.push(`${listLabel}[${index}] has no string "pattern" — skipped`);
+    const pattern = rule.pattern;
+    if (typeof pattern !== "string") {
+      lastPolicyWarnings.push(`${listLabel}[${index}] has no string "pattern" — policy invalid`);
       return;
     }
     // Stateful flags (g/y) make RegExp.test carry lastIndex across calls, so a rule that
     // should deny can be skipped on a later text (fail open). Strip them before compiling.
+    for (const [key, value] of Object.entries(rule)) {
+      if (!["pattern", "flags", "risk_class", "reason"].includes(key) || typeof value !== "string") lastPolicyWarnings.push(`${listLabel}[${index}].${key} is invalid`);
+    }
     const rawFlags = typeof rule.flags === "string" ? rule.flags : "";
     const flags = rawFlags.replace(/[gy]/g, "");
     let re: RegExp;
     try {
-      re = new RegExp(rule.pattern, flags);
+      re = new RegExp(pattern, flags);
     } catch (error) {
-      lastPolicyWarnings.push(`${listLabel}[${index}] pattern is invalid regex (${String((error as Error)?.message ?? error)}) — skipped: ${rule.pattern}`);
+      lastPolicyWarnings.push(`${listLabel}[${index}] pattern is invalid regex (${errorText(error)}) — policy invalid: ${pattern}`);
       return;
     }
     if (flags !== rawFlags) {
       lastPolicyAdjustments.push(`${listLabel}[${index}] dropped stateful regex flag(s) from "${rawFlags}" — they make matching order-dependent, but the rule is still enforced`);
     }
-    out.push({ pattern: rule.pattern, flags, risk_class: typeof rule.risk_class === "string" ? rule.risk_class : "unknown", reason: typeof rule.reason === "string" ? rule.reason : rule.pattern, re });
+    out.push({ pattern, flags, risk_class: typeof rule.risk_class === "string" ? rule.risk_class : "unknown", reason: typeof rule.reason === "string" ? rule.reason : pattern, re });
   });
   return out;
 }
 
+function checkPolicyObject(value: unknown, label: string, keys?: string[]): value is Record<string, unknown> {
+  if (!isRecord(value) || Array.isArray(value)) {
+    lastPolicyWarnings.push(`${label} is not an object`);
+    return false;
+  }
+  if (keys) for (const key of Object.keys(value)) if (!keys.includes(key)) lastPolicyWarnings.push(`${label}.${key} is unrecognised`);
+  return true;
+}
+
 function normalizePolicy(value: unknown): FirewallPolicy {
-  if (!value || typeof value !== "object") return BUILTIN_FALLBACK;
-  const raw = value as any;
+  if (!checkPolicyObject(value, "policy", ["version", "_comment", "defaults", "tools", "command_rules", "policies"])) return BUILTIN_FALLBACK;
+  const raw = value;
+  if (raw.version !== undefined && raw.version !== 1 && raw.version !== 2) lastPolicyWarnings.push("unsupported policy version");
+  if (raw._comment !== undefined && typeof raw._comment !== "string") lastPolicyWarnings.push("policy._comment is not a string");
+  if (raw.defaults !== undefined && checkPolicyObject(raw.defaults, "defaults", ["unknown"]) && !normalizeDecision(raw.defaults.unknown)) lastPolicyWarnings.push("defaults.unknown is invalid");
   const tools: Record<string, ToolRule> = {};
-  for (const [name, rule] of Object.entries<any>(raw.tools || {})) {
-    const decision = normalizeDecision(rule?.decision);
-    if (!decision) continue;
-    tools[name] = { decision, risk_class: typeof rule.risk_class === "string" ? rule.risk_class : "unknown" };
+  if (raw.tools !== undefined && checkPolicyObject(raw.tools, "tools")) for (const [name, rule] of Object.entries(raw.tools)) {
+    if (!checkPolicyObject(rule, `tools.${name}`, ["decision", "risk_class"])) continue;
+    const decision = normalizeDecision(rule.decision);
+    if (!decision || (rule.risk_class !== undefined && typeof rule.risk_class !== "string")) {
+      lastPolicyWarnings.push(`tools.${name} has an invalid decision or risk_class`);
+      continue;
+    }
+    // Define own properties even for names such as __proto__.
+    Object.defineProperty(tools, name, { value: { decision, risk_class: typeof rule.risk_class === "string" ? rule.risk_class : "unknown" }, enumerable: true });
   }
-  return {
-    defaults: { unknown: normalizeDecision(raw.defaults?.unknown) || "ask" },
+  const commandRules = raw.command_rules;
+  if (commandRules !== undefined) checkPolicyObject(commandRules, "command_rules", ["deny", "ask"]);
+  if (raw.policies !== undefined) checkPolicyObject(raw.policies, "policies", ["pentest"]);
+  const pentest = field(raw.policies, "pentest");
+  if (pentest !== undefined) checkPolicyObject(pentest, "policies.pentest", ["command_rules"]);
+  const pentestRules = field(pentest, "command_rules");
+  if (pentestRules !== undefined) checkPolicyObject(pentestRules, "policies.pentest.command_rules", ["deny", "ask"]);
+  const policy: FirewallPolicy = {
+    defaults: { unknown: normalizeDecision(field(raw.defaults, "unknown")) || "ask" },
     tools,
-    command_rules: { deny: compileCommandRules(raw.command_rules?.deny, "command_rules.deny"), ask: compileCommandRules(raw.command_rules?.ask, "command_rules.ask") },
-    pentest: { deny: compileCommandRules(raw.policies?.pentest?.command_rules?.deny, "policies.pentest.command_rules.deny"), ask: compileCommandRules(raw.policies?.pentest?.command_rules?.ask, "policies.pentest.command_rules.ask") },
+    command_rules: { deny: compileCommandRules(field(commandRules, "deny"), "command_rules.deny"), ask: compileCommandRules(field(commandRules, "ask"), "command_rules.ask") },
+    pentest: { deny: compileCommandRules(field(pentestRules, "deny"), "policies.pentest.command_rules.deny"), ask: compileCommandRules(field(pentestRules, "ask"), "policies.pentest.command_rules.ask") },
   };
+  return lastPolicyWarnings.length ? BUILTIN_FALLBACK : policy;
 }
 
-function statMtime(filePath: string | null): number {
-  if (!filePath) return 0;
+type PolicySource = { file: string | null; text?: string; digest: string; error?: string };
+
+function policySource(): PolicySource {
+  const file = policyPath();
   try {
-    return fs.statSync(filePath).mtimeMs;
-  } catch {
-    return 0;
+    if (!file) throw new Error("no policy file found");
+    const text = fs.readFileSync(file, "utf8");
+    return { file, text, digest: crypto.createHash("sha256").update(text).digest("hex") };
+  } catch (error) {
+    return { file, digest: "unreadable", error: errorText(error) };
   }
 }
 
-function reloadPolicy(): void {
+function reloadPolicy(source = policySource()): void {
   lastPolicyWarnings = [];
   lastPolicyAdjustments = [];
-  const nextPath = policyPath();
-  cachedPolicyPath = nextPath;
+  cachedPolicyPath = source.file;
+  cachedPolicyDigest = source.digest;
   let policy = BUILTIN_FALLBACK;
-  if (nextPath && fs.existsSync(nextPath)) {
-    try {
-      policy = normalizePolicy(JSON.parse(fs.readFileSync(nextPath, "utf8")));
-    } catch {
-      policy = BUILTIN_FALLBACK;
-    }
+  try {
+    if (source.text === undefined) throw new Error(source.error);
+    const parsed: unknown = JSON.parse(source.text);
+    policy = normalizePolicy(parsed);
+  } catch (error) {
+    lastPolicyWarnings.push(`policy cannot be loaded: ${errorText(error)}`);
   }
   cachedPolicy = policy;
-  cachedPolicyMtime = statMtime(nextPath);
-  cachedPolicyLabel = cachedPolicy === BUILTIN_FALLBACK ? "builtin-fallback (deny unknown)" : nextPath || "builtin-fallback";
+  if (lastPolicyWarnings.length) {
+    try { process.stderr.write(`tool-firewall: invalid policy; fail-closed (deny all): ${lastPolicyWarnings.join("; ")}\n`); } catch { /* diagnostics cannot weaken enforcement */ }
+  }
+  cachedPolicyLabel = cachedPolicy === BUILTIN_FALLBACK ? "fail-closed (deny all)" : source.file || "fail-closed";
 }
 
-function getPolicy(): FirewallPolicy {
-  const nextPath = policyPath();
-  if (nextPath !== cachedPolicyPath || statMtime(nextPath) !== cachedPolicyMtime) reloadPolicy();
+function getPolicy(ctx?: ExtensionContext): FirewallPolicy {
+  const source = policySource();
+  if (source.file !== cachedPolicyPath || source.digest !== cachedPolicyDigest) {
+    reloadPolicy(source);
+    if (lastPolicyWarnings.length) {
+      audit({ event: "policy_load_error", warnings: lastPolicyWarnings });
+      const warning = `tool-firewall: WARNING — invalid policy; fail-closed (deny all): ${lastPolicyWarnings.join("; ")}`;
+      try { ctx?.ui?.notify?.(warning, "warning"); } catch { /* stderr already reported it; enforcement continues */ }
+    }
+  }
   return cachedPolicy;
+}
+
+function policyRevision(): string {
+  return `${cachedPolicyPath ?? ""}:${cachedPolicyDigest}`;
 }
 
 function ruleCount(policy: FirewallPolicy): number {
@@ -208,7 +303,8 @@ function stableJson(value: unknown): string {
 function sortJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortJson);
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([l], [r]) => l.localeCompare(r)).map(([k, v]) => [k, sortJson(v)]));
+  const entries: [string, unknown][] = Object.entries(value);
+  return Object.fromEntries(entries.sort(([l], [r]) => l.localeCompare(r)).map(([k, v]) => [k, sortJson(v)]));
 }
 
 // Deep-freezes approved tool arguments. A later mutation then throws (extensions are ES
@@ -219,7 +315,7 @@ function seal(value: unknown, seen = new WeakSet<object>()): void {
   seen.add(value);
   for (const k of Object.keys(value)) {
     try {
-      seal((value as Record<string, unknown>)[k], seen);
+      seal(Reflect.get(value, k), seen);
     } catch {
       /* getter threw */
     }
@@ -231,26 +327,49 @@ function seal(value: unknown, seen = new WeakSet<object>()): void {
   }
 }
 
+// The test hook's OS facts: each one present must be a function, or the real OS facts are used.
+function isProvenanceIo(v: unknown): v is ProvenanceIo {
+  return isRecord(v) && ["getuid", "mountinfo", "writable"].every((k) => v[k] === undefined || typeof v[k] === "function");
+}
+
 function actionHash(toolName: string, input: unknown): string {
   return crypto.createHash("sha256").update(stableJson({ toolName, input })).digest("hex");
 }
+
+// The hash a workflow run's console broker groups requests and keeps run grants and denials by.
+// A relative path or a shell command means a different action in another checkout, so it also
+// binds the resolved cwd and workspace root: a run grant in one worktree never approves the same
+// input in another. (actionHash stays input-only: the audit log and tool-capture join on it.)
+function runActionHash(toolName: string, input: unknown, cwd: string, workspace: string): string {
+  return crypto.createHash("sha256").update(stableJson({ toolName, input, cwd: path.resolve(cwd), workspace: path.resolve(workspace) })).digest("hex");
+}
+
+// EFF-6: like the judgements file, the audit log is renamed to <file>.1 (one old copy, replacing the
+// previous one) before an append once it passes 4 MiB.
+const AUDIT_ROTATE_BYTES = 4 * 1024 * 1024;
 
 function audit(record: Record<string, unknown>): void {
   try {
     const filePath = auditPath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...record })}\n`);
+    try {
+      if (fs.statSync(filePath).size > AUDIT_ROTATE_BYTES) fs.renameSync(filePath, `${filePath}.1`);
+    } catch {
+      /* absent, or another process rotated it first */
+    }
+    fs.appendFileSync(filePath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...record })}\n`, { mode: 0o600 });
   } catch {
     /* the audit log must never break a tool call */
   }
 }
 
-function toolNameFrom(event: any): string {
-  return String(event?.toolName || event?.name || "unknown");
+function toolNameFrom(event: unknown): string {
+  const name: unknown = field(event, "toolName") || field(event, "name") || "unknown";
+  return String(name);
 }
 
-function commandTextFrom(input: any): string | null {
-  const command = input?.command ?? input?.cmd ?? input?.script;
+function commandTextFrom(input: unknown): string | null {
+  const command = field(input, "command") ?? field(input, "cmd") ?? field(input, "script");
   return typeof command === "string" ? command : null;
 }
 
@@ -279,33 +398,46 @@ function humanConsoleRoot(): string {
 
 // `unavailable` is set when the request could not even be filed (the console directory cannot be
 // created or written): the outcome is UNCERTAIN, never "the operator declined".
-type BrokerResult = { approved: boolean; timedOut: boolean; aborted?: boolean; unavailable?: string; timeoutMs?: number; choice?: string; note?: string };
+type BrokerResult = { approved: boolean; timedOut: boolean; aborted?: boolean | undefined; unavailable?: string; timeoutMs?: number; choice?: string | undefined; note?: string | undefined };
 
 // Headless requests go to the human console. `choices` lets a console that supports them offer
 // the same menu as the interactive card (allow once / allow for the session / deny / deny and
 // tell); an older console answers yes/no, which is treated as allow once / deny. The wait is always
 // bounded: by PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS (default 15 minutes; subagents get a shorter one from
 // their launcher) and by the turn's abort signal, so nothing waits on a console that is not there.
-function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: string, body: string, note: string | null, ctx: any, signal?: AbortSignal, choices?: string[]): Promise<BrokerResult> {
+// A workflow agent (a kit child the subagent runner started for a script-workflow run) carries
+// its run id in PI_KIT_WORKFLOW_RUN_ID. Its requests name the run and the exact action hash (tool,
+// input, cwd and workspace root: runActionHash), so the console's run-scoped broker can group them, keep denials and count distinct approvals per run.
+const WORKFLOW_RUN_ID = /^wf-[a-z0-9-]{1,60}$/;
+function workflowRunOf(): string | undefined {
+  const runId = process.env.PI_KIT_WORKFLOW_RUN_ID;
+  return process.env.PI_KIT_INTERNAL_CHILD === "1" && typeof runId === "string" && WORKFLOW_RUN_ID.test(runId) ? runId : undefined;
+}
+
+function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: string, body: string, note: string | null, ctx: ExtensionContext, signal?: AbortSignal, choices?: string[], hash?: string): Promise<BrokerResult> {
   const root = humanConsoleRoot();
   const pending = path.join(root, "pending");
   const resolved = path.join(root, "resolved");
   const id = crypto.randomUUID();
   const timeoutMs = Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || 900000);
+  // Subagent launchers name the agent on the context (not part of pi's declared shape).
+  const agentName = field(field(ctx, "agent"), "name") || field(ctx, "agentName");
+  const titleAgent: unknown = agentName || (process.env.PI_KIT_INTERNAL_CHILD ? "subagent" : "headless session");
+  const workflowRun = workflowRunOf();
   try {
     fs.mkdirSync(pending, { recursive: true });
     fs.mkdirSync(resolved, { recursive: true });
     fs.writeFileSync(
       path.join(pending, `${id}.json`),
-      JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: ctx?.agent?.name || ctx?.agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${ctx?.agent?.name || ctx?.agentName || (process.env.PI_KIT_INTERNAL_CHILD ? "subagent" : "headless session")})`, body, choices, autoModeRationale: note, timeoutMs }),
+      JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${String(titleAgent)})`, body, choices, autoModeRationale: note, timeoutMs, ...(workflowRun !== undefined && hash !== undefined ? { workflowRun, actionHash: hash } : {}) }),
     );
   } catch (error) {
-    return Promise.resolve({ approved: false, timedOut: false, unavailable: `could not file the request in the human console at ${root} (${String((error as Error)?.message ?? error)})`, timeoutMs });
+    return Promise.resolve({ approved: false, timedOut: false, unavailable: `could not file the request in the human console at ${root} (${errorText(error)})`, timeoutMs });
   }
   audit({ event: "human_console_pending", toolName, id });
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
-    let timer: ReturnType<typeof setInterval>;
+    // finish() only runs from the interval callback, so `timer` (declared below) is always set by then.
     const finish = (result: BrokerResult) => {
       clearInterval(timer);
       try {
@@ -320,15 +452,17 @@ function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: st
       }
       resolve({ timeoutMs, ...result });
     };
-    timer = setInterval(() => {
+    const timer = setInterval(() => {
       try {
-        const value = JSON.parse(fs.readFileSync(path.join(resolved, `${id}.json`), "utf8"));
-        const choice = typeof value?.answer === "string" && choices?.includes(value.answer) ? value.answer : undefined;
-        const note = typeof value?.note === "string" && value.note.trim() ? value.note.trim().slice(0, 500) : undefined;
+        const value: unknown = JSON.parse(fs.readFileSync(path.join(resolved, `${id}.json`), "utf8"));
+        const answer = field(value, "answer");
+        const choice = typeof answer === "string" && choices?.includes(answer) ? answer : undefined;
+        const rawNote = field(value, "note");
+        const note = typeof rawNote === "string" && rawNote.trim() ? rawNote.trim().slice(0, 500) : undefined;
         // Audit is best-effort (it swallows its own errors) and MUST never throw; finish()
         // is called regardless and MUST stay unconditional so the promise always settles.
-        audit({ event: "human_console_resolved", toolName, id, approved: value?.approved === true, choice });
-        finish({ approved: value?.approved === true, timedOut: false, choice, note });
+        audit({ event: "human_console_resolved", toolName, id, approved: field(value, "approved") === true, choice });
+        finish({ approved: field(value, "approved") === true, timedOut: false, choice, note });
         return;
       } catch {
         /* waiting */
@@ -356,12 +490,12 @@ export function promptTimeoutMs(): number {
 
 type Prompted<T> = { kind: "answered"; value: T } | { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; message: string };
 
-function boundedPrompt<T>(ctx: any, run: (opts: { signal?: AbortSignal; timeout: number }) => Promise<T> | T): Promise<Prompted<T>> {
+function boundedPrompt<T>(ctx: ExtensionContext, run: (opts: ExtensionUIDialogOptions & { timeout: number }) => Promise<T> | T): Promise<Prompted<T>> {
   const timeout = promptTimeoutMs();
   const signal: AbortSignal | undefined = ctx?.signal;
   return new Promise((resolve) => {
     let done = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
     const finish = (r: Prompted<T>) => {
       if (done) return;
       done = true;
@@ -370,13 +504,16 @@ function boundedPrompt<T>(ctx: any, run: (opts: { signal?: AbortSignal; timeout:
       resolve(r);
     };
     const onAbort = () => finish({ kind: "aborted" });
-    if (signal?.aborted) return finish({ kind: "aborted" });
+    if (signal?.aborted) {
+      finish({ kind: "aborted" });
+      return;
+    }
     timer = setTimeout(() => finish({ kind: "timeout" }), timeout);
     timer.unref?.();
     signal?.addEventListener?.("abort", onAbort, { once: true });
     Promise.resolve()
-      .then(() => run({ signal, timeout }))
-      .then((value) => finish({ kind: "answered", value }), (error) => finish({ kind: "error", message: String((error as Error)?.message ?? error) }));
+      .then(() => run(signal ? { signal, timeout } : { timeout }))
+      .then((value) => finish({ kind: "answered", value }), (error: unknown) => finish({ kind: "error", message: errorText(error) }));
   });
 }
 
@@ -391,20 +528,22 @@ function boundedPrompt<T>(ctx: any, run: (opts: { signal?: AbortSignal; timeout:
 export type Outcome = "hard_deny" | "uncertain" | "operator_decision" | "judge_block";
 const TAG: Record<Outcome, string> = { hard_deny: "HARD DENY", uncertain: "UNCERTAIN", operator_decision: "OPERATOR DECISION", judge_block: "AUTO-MODE BLOCK" };
 
-function sessionIdOf(ctx: any): string {
+function sessionIdOf(ctx: ExtensionContext | undefined): string {
   try {
     const id = ctx?.sessionManager?.getSessionId?.();
     if (typeof id === "string" && id) return id;
   } catch {
     /* optional */
   }
-  return ctx?.sessionId || `pid-${process.pid}`;
+  // Older runtimes and test harnesses put the id on the context itself.
+  const legacy = field(ctx, "sessionId");
+  return typeof legacy === "string" && legacy ? legacy : `pid-${process.pid}`;
 }
 
-function textOf(value: any): string {
+function textOf(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(textOf).join("\n");
-  if (value && typeof value === "object") return textOf(value.text ?? value.content ?? "");
+  if (isRecord(value)) return textOf(value.text ?? value.content ?? "");
   return "";
 }
 
@@ -422,13 +561,14 @@ function readGoal(cwd: string, workspace: string): string | undefined {
   return undefined;
 }
 
-function latestRequest(ctx: any, fallback: string): string {
+function latestRequest(ctx: ExtensionContext, fallback: string): string {
   if (fallback) return fallback;
   try {
-    const entries: any[] = ctx?.sessionManager?.getEntries?.() || [];
+    const entries: unknown[] = ctx?.sessionManager?.getEntries?.() ?? [];
     for (let i = entries.length - 1; i >= 0; i--) {
-      const m = entries[i]?.message ?? entries[i];
-      if (m?.role === "user") return textOf(m.content ?? m);
+      const entry = entries[i];
+      const m = field(entry, "message") ?? entry;
+      if (field(m, "role") === "user") return textOf(field(m, "content") ?? m);
     }
   } catch {
     /* optional */
@@ -436,15 +576,15 @@ function latestRequest(ctx: any, fallback: string): string {
   return "";
 }
 
-function judgeModelName(ctx: any, cfg: FirewallConfig): string | undefined {
+function judgeModelName(ctx: ExtensionContext, cfg: FirewallConfig): string | undefined {
   return process.env.PI_KIT_AUTO_MODE_MODEL?.trim() || cfg.judgeModel || (ctx?.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 }
 
 // Default judge completer: the configured judge model, else the session model.
-function modelCompleter(ctx: any, cfg: FirewallConfig): Completer | null {
+function modelCompleter(ctx: ExtensionContext, cfg: FirewallConfig): Completer | null {
   const registry = ctx?.modelRegistry;
   if (!registry) return null;
-  let model = ctx.model;
+  let model: Model<Api> | undefined = ctx.model;
   const wanted = process.env.PI_KIT_AUTO_MODE_MODEL?.trim() || cfg.judgeModel;
   if (wanted) {
     const slash = wanted.indexOf("/");
@@ -457,8 +597,8 @@ function modelCompleter(ctx: any, cfg: FirewallConfig): Completer | null {
     const auth = await registry.getApiKeyAndHeaders(chosen);
     if (!auth?.ok) throw new Error(`no request auth for ${chosen.provider}`);
     const headers = auth.headers ? Object.fromEntries(Object.entries(auth.headers).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
-    const reply = await completeSimple(chosen, { systemPrompt: system, messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] }, { apiKey: auth.apiKey, headers, signal, maxTokens: 300 });
-    return reply.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n");
+    const reply = await completeSimple(chosen, { systemPrompt: system, messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] }, { ...(auth.apiKey !== undefined ? { apiKey: auth.apiKey } : {}), ...(headers ? { headers } : {}), ...(signal ? { signal } : {}), maxTokens: 300 });
+    return reply.content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
   };
 }
 
@@ -471,11 +611,28 @@ const JUDGE_SAFE_STRICT = new Set(["read", "network_read"]);
 // self-contained, so each carries this same small helper; whichever loads first creates the
 // registry. It is a consistency check, not a boundary against code running in the same process.
 const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
+
+/** What another protection may already have stored under the key (every copy of this helper stores a Set). */
+interface RegistryLike extends Iterable<unknown> {
+  add(name: string): unknown;
+  has(name: string): unknown;
+  list?: unknown;
+}
+
+function isRegistryLike(value: unknown): value is RegistryLike {
+  return (typeof value === "object" || typeof value === "function") && value !== null
+    && "add" in value && typeof value.add === "function"
+    && "has" in value && typeof value.has === "function"
+    && Symbol.iterator in value && typeof value[Symbol.iterator] === "function";
+}
+
 function registerProtection(name: string): void {
   try {
-    const g = globalThis as unknown as Record<symbol, any>;
-    let reg = g[PROTECTIONS_KEY];
-    if (!reg || typeof reg.add !== "function" || typeof reg.has !== "function") {
+    const g = globalThis as Record<symbol, unknown>;
+    const existing = g[PROTECTIONS_KEY];
+    let reg: RegistryLike;
+    if (isRegistryLike(existing)) reg = existing;
+    else {
       reg = new (class ProtectionRegistry extends Set<string> {})();
       g[PROTECTIONS_KEY] = reg;
     }
@@ -486,8 +643,9 @@ function registerProtection(name: string): void {
   }
 }
 
-export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((...args: any[]) => any) = {}) {
+export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((...args: never[]) => unknown) = {}) {
   const d: FirewallDeps = typeof deps === "function" ? {} : deps;
+  disableCompanionInstalls();
   let session: SessionState | null = null;
   let lastRequest = "";
   let lastDetail = "";
@@ -497,8 +655,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
   // can switch it on, and a changed contract switches it off (unattended.ts).
   // The provenance facts (mount table, owner) come from the OS; tests present their own through a global
   // that only code inside this process can set (a variable in the environment could be set by an agent).
-  const provenanceIo = (globalThis as unknown as Record<symbol, ProvenanceIo | undefined>)[Symbol.for("pi-kit.test.unattended-provenance")];
-  const unattended = createUnattended({ workspace: workspaceRoot(process.cwd()), cwd: process.cwd(), agentDir: agentDir(), policy: resolvePolicy(readConfig()).policy, io: provenanceIo });
+  const provenanceSlot: unknown = Reflect.get(globalThis, Symbol.for("pi-kit.test.unattended-provenance"));
+  const provenanceIo = isProvenanceIo(provenanceSlot) ? provenanceSlot : undefined;
+  const unattended = createUnattended({ workspace: workspaceRoot(process.cwd()), cwd: process.cwd(), agentDir: agentDir(), policy: resolvePolicy(readConfig()).policy, ...(provenanceIo !== undefined ? { io: provenanceIo } : {}) });
   {
     const st = unattended.state();
     try {
@@ -509,9 +668,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     }
   }
 
-  const sessionFor = (ctx: any): SessionState => {
+  const sessionFor = (ctx: ExtensionContext): SessionState => {
     const id = sessionIdOf(ctx);
-    if (!session || session.id !== id) session = loadSession(id);
+    if (session?.id !== id) session = loadSession(id);
     return session;
   };
 
@@ -524,7 +683,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
 
   // Output is never silent: an interactive UI shows a notice; a headless session (print mode, a
   // subagent) has a no-op UI, so the text goes to stderr instead.
-  const say = (ctx: any, text: string, level: "info" | "warning" | "error" = "info"): void => {
+  const say = (ctx: ExtensionContext | undefined, text: string, level: "info" | "warning" | "error" = "info"): void => {
     try {
       if (ctx?.hasUI !== false && typeof ctx?.ui?.notify === "function") {
         ctx.ui.notify(text, level);
@@ -540,9 +699,41 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     }
   };
 
+  let securityCwd = process.cwd();
+  const securityDefault = (ctx?: ExtensionContext, policy = resolvePolicy(readConfig()).policy) => profileDefault(ctx?.cwd || securityCwd, policy);
+  const securitySnapshot = (ctx?: ExtensionContext, policy = resolvePolicy(readConfig()).policy): SecuritySnapshot => {
+    if (ctx?.cwd) securityCwd = ctx.cwd;
+    return resolveSecurity(securityDefault(ctx, policy), policy);
+  };
+  const securityRegistry = Object.freeze({ snapshot: () => securitySnapshot() });
+  (globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = securityRegistry;
+  pi.on("session_shutdown", async () => {
+    if ((globalThis as Record<symbol, unknown>)[REGISTRY_KEY] === securityRegistry) Reflect.deleteProperty(globalThis, REGISTRY_KEY);
+  });
+  let securityRevocationPending = false;
+  const syncSecurity = (ctx: ExtensionContext, security: SecuritySnapshot, force = false): void => {
+    const s = sessionFor(ctx);
+    const binding = JSON.stringify(security);
+    // Legacy sessions predate the level binding. Preserve balanced migration behaviour,
+    // but never carry an unbound legacy grant into another level.
+    const unboundChange = s.securityBinding === undefined && security.effective !== "balanced";
+    if (force || securityRevocationPending || unboundChange || (s.securityBinding !== undefined && s.securityBinding !== binding)) {
+      securityRevocationPending = true;
+      const result = revokeApprovals(["session"], { root: rootSessionId(s.id), workspace: workspaceRoot(ctx.cwd || process.cwd()) });
+      // If withdrawal fails, do not proceed to a stale grant. The tool-call hook fails closed,
+      // and the next decision retries withdrawal before consulting approvals or the judge.
+      if (result.error) throw new Error(`security level changed but session approvals could not be revoked: ${result.error}`);
+      s.judgeCache = {};
+      securityRevocationPending = false;
+    }
+    s.securityBinding = binding;
+    saveSession(s);
+  };
+  registerSecurityCommand(pi, securitySnapshot, (ctx) => securityDefault(ctx), (ctx) => syncSecurity(ctx, securitySnapshot(ctx), true), say, promptTimeoutMs);
+
   // Malformed approval entries are ignored (never an allow); this makes sure someone is told: stderr
   // once per distinct set, the audit log, and a warning in an interactive session.
-  const noteApprovalProblems = (view: ApprovalsView, ctx?: any): string[] => {
+  const noteApprovalProblems = (view: ApprovalsView, ctx?: ExtensionContext): string[] => {
     const problems = reportProblems(view);
     const key = problems.join("|");
     if (key !== lastProblemKey) {
@@ -559,9 +750,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     return problems;
   };
 
-  const trustedHosts = (cfg: FirewallConfig, ctx?: any): Set<string> => {
+  const trustedHosts = (cfg: FirewallConfig, ctx?: ExtensionContext): Set<string> => {
     const kh = knownHostsMeta(cfg);
-    if (sshBaseline === null) sshBaseline = kh.sshMtime;
+    sshBaseline ??= kh.sshMtime;
     if (kh.sshMtime <= sshBaseline) return kh.hosts;
     if (!sshWarned) {
       sshWarned = true;
@@ -574,8 +765,12 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
   // The judge's view of a stored session approval.
   const toGrant = (a: Approval): SessionGrant => ({ at: Date.parse(a.createdAt), session: a.grantedBy.session, tool: a.tool, hash: a.hash, tier: a.tier, command: a.action.command, steps: a.action.steps, reasons: a.action.reasons, chain: a.action.chain, families: a.families, scopes: a.scopes });
 
-  pi.on("session_start", async (_event: unknown, ctx: any) => {
+  pi.on("session_start", async (_event, ctx) => {
     try {
+      securityCwd = ctx?.cwd || process.cwd();
+      (globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = securityRegistry;
+      const security = securitySnapshot(ctx);
+      if (security.warnings.length) say(ctx, security.warnings.join("\n"), "warning");
       reloadPolicy();
       const policy = getPolicy();
       const cfg = readConfig();
@@ -591,7 +786,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       ctx.ui?.notify?.(`tool-firewall: loaded (${cachedPolicyLabel}, default unknown=${policy.defaults.unknown}, rules=${ruleCount(policy)}, mode=${mode}, policy=${pol})`, "info");
       if (lastPolicyWarnings.length > 0 || lastPolicyAdjustments.length > 0) {
         audit({ event: "policy_rule_warnings", warnings: lastPolicyWarnings, adjustments: lastPolicyAdjustments });
-        if (lastPolicyWarnings.length > 0) ctx.ui?.notify?.(`tool-firewall: WARNING — ${lastPolicyWarnings.length} custom rule(s) in the policy were skipped (not enforced): ${lastPolicyWarnings.join("; ")}`, "warning");
+        if (lastPolicyWarnings.length > 0) ctx.ui?.notify?.(`tool-firewall: WARNING — ${lastPolicyWarnings.length} invalid policy item(s); fail-closed (deny all) active: ${lastPolicyWarnings.join("; ")}`, "warning");
       }
       noteApprovalProblems(readApprovals(), ctx);
       unattended.current(pol, { cwd: ctx?.cwd || process.cwd(), workspace: workspaceRoot(ctx?.cwd || process.cwd()) }); // a contract inside this workspace turns it off
@@ -603,55 +798,71 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     } catch (error) {
       cachedPolicy = BUILTIN_FALLBACK;
       audit({ event: "policy_load_error", error: String(error) });
-      ctx.ui?.notify?.("tool-firewall: policy load failed; fail-closed (deny unknown) active", "warning");
+      ctx.ui?.notify?.("tool-firewall: policy load failed; fail-closed (deny all) active", "warning");
     }
   });
 
-  pi.on("before_agent_start", async (event: any) => {
-    if (typeof event?.prompt === "string") lastRequest = event.prompt;
+  pi.on("before_agent_start", async (event) => {
+    // Only a user prompt is the operator's request. A run that an extension starts with a custom
+    // message (pi 1.2+) carries no prompt and must not stand in for what the operator asked.
+    if ("prompt" in event && typeof event.prompt === "string") lastRequest = event.prompt;
     return undefined;
   });
 
   // Decisions are serialised so parallel tool calls see each other's effects and only one
   // approval card is open at a time.
-  pi.on("tool_call", (event: any, ctx: any) => {
+  pi.on("tool_call", (event, ctx) => {
     const run = queue.then(() => decide(event, ctx));
     queue = run.catch(() => undefined);
     return run;
   });
 
-  async function decide(event: any, ctx: any): Promise<{ block: true; reason: string } | undefined> {
+  async function decide(event: ToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
     const started = Date.now();
     const toolName = toolNameFrom(event);
-    const input = event?.input || {};
+    const rawInput: unknown = event?.input;
+    const input = rawInput || {};
     const hash = actionHash(toolName, input);
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
     const cfg = readConfig();
     const { mode } = resolveMode(cwd, cfg);
     const { policy: policyName } = resolvePolicy(cfg);
-    const policy = getPolicy();
-    const auto = mode === "auto";
+    const policy = getPolicy(ctx);
+    const security = securitySnapshot(ctx, policyName);
+    syncSecurity(ctx, security);
+    const securityBinding = JSON.stringify(security);
+    const revision = `${policyRevision()}|${securityBinding}`;
+    const operatorOnly = security.effective === "strict";
+    const guarded = operatorOnly || security.effective === "guarded";
+    const auto = mode === "auto" && !operatorOnly;
     const s = sessionFor(ctx);
     const workspace = workspaceRoot(cwd);
     // Unattended: the state to decide by (null unless the supervisor's env + contract entered it and it still holds).
     const u: UnattendedState | null = unattended.current(policyName, { cwd, workspace });
     const contractEnv = process.env.PI_KIT_UNATTENDED_CONTRACT?.trim();
-    const boundaryPaths = [...new Set([contractEnv, u?.contractPath].filter((x): x is string => !!x))];
+    const boundaryPaths = [...new Set([path.resolve(securityPath()), contractEnv, u?.contractPath].filter((x): x is string => !!x))];
     const env: ClassifyEnv = { cwd, workspace, home: homeDir(), tmpRoots: tmpRoots(), knownHosts: trustedHosts(cfg, ctx), policy: policyName, ...(boundaryPaths.length ? { boundaryPaths } : {}) };
 
+    const toolRule = Object.hasOwn(policy.tools, toolName) ? policy.tools[toolName] : undefined;
     let a: Assessment;
     try {
-      a = classifyToolCall(toolName, input, env, policy.tools[toolName], policy.defaults.unknown);
+      a = classifyToolCall(toolName, input, env, toolRule, operatorOnly ? "deny" : policy.defaults.unknown);
     } catch (error) {
-      a = classifyToolCall(toolName, {}, env, undefined, "ask");
-      a.findings.push({ tier: "high", effect: "opaque", code: "classifier_error", detail: `could not analyse this call (${String((error as Error)?.message ?? error)})`, key: `error ${toolName}` });
+      // A classifier failure cannot discard an explicit deny or a fail-closed policy.
+      a = classifyToolCall(toolName, {}, env, toolRule, operatorOnly ? "deny" : policy.defaults.unknown);
+      a.findings.push({ tier: "high", effect: "opaque", code: "classifier_error", detail: `could not analyse this call (${errorText(error)})`, key: `error ${toolName}` });
     }
+    // A fail-closed policy says why the call is denied, instead of calling a pi tool unknown.
+    if (policy === BUILTIN_FALLBACK) a.findings.unshift({ tier: "critical", effect: "security_control", code: "policy_invalid", detail: "the firewall policy is invalid; every call is denied until it is repaired (see /firewall status)", key: "policy invalid" });
     a.findings.push(...regexFindings(policy, policyName, a));
+    // Tools only a root session may call: a kit child (a subagent or workflow agent) never starts a workflow run.
+    if (process.env.PI_KIT_INTERNAL_CHILD === "1" && ROOT_ONLY_TOOLS.has(toolName)) a.findings.push({ tier: "critical", effect: "security_control", code: "child_denied", detail: `${toolName} is not available to child sessions`, key: `tool ${toolName} child` });
     const traj = trajectoryFindings(a, s);
     a.findings.push(...traj);
     a.effects = [...new Set(a.findings.map((f) => f.effect))];
     // The pentest policy never trusts auto-low shortcuts.
-    const trustAuto = auto && policyName === "coding";
+    const classifierUnsure = a.findings.some((f) => f.effect === "opaque" || f.code === "classifier_error");
+    const trustAuto = auto && policyName === "coding" && !(guarded && classifierUnsure);
     const tier = effectiveTier(a, trustAuto);
     a.tier = a.findings.reduce<Tier>((t, f) => maxTier(t, f.tier), "low");
     const summary = summarize(a, trustAuto) || a.summary;
@@ -660,7 +871,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const command = commandTextFrom(input);
     const uDenial = u ? unattendedDenial(a, u, workspace) : null;
     const uOutcome: "allow" | "deny" | null = !u ? null : tier === "critical" || uDenial ? "deny" : tier === "low" || u.autoApprove ? "allow" : "deny";
-    const base = { toolName, toolCallId: typeof event?.toolCallId === "string" ? event.toolCallId : undefined, actionHash: hash, tier, mode: u ? "unattended" : mode, ...(u ? { unattended: { boundary: u.boundary, contract: u.digest?.slice(0, 12), autoApprove: u.autoApprove } } : {}), policy: policyName, workspace, effects: a.effects, reasons: a.findings.filter((f) => f.tier !== "low").map((f) => f.code), signature: sig, command: command !== null ? redact(command).slice(0, 2000) : undefined };
+    const base = { securityLevel: security.effective, securityRevision: security.revision, toolName, toolCallId: typeof event?.toolCallId === "string" ? event.toolCallId : undefined, parentToolCallId: "parentToolCallId" in event && typeof event.parentToolCallId === "string" ? event.parentToolCallId : undefined, actionHash: hash, tier, mode: u ? "unattended" : mode, ...(u ? { unattended: { boundary: u.boundary, contract: u.digest?.slice(0, 12), autoApprove: u.autoApprove } } : {}), policy: policyName, workspace, effects: a.effects, reasons: a.findings.filter((f) => f.tier !== "low").map((f) => f.code), signature: sig, command: command !== null ? redact(command).slice(0, 2000) : undefined };
     // Immediate decisions (low → allow, critical → deny) are one tool_seen record carrying the
     // decider; anything that waits on a grant, precedent, judge or human gets tool_seen (ask)
     // followed by tool_approved / tool_blocked. Routine calls stay one line.
@@ -686,9 +897,18 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       return { block: true as const, reason };
     };
 
+    const policyChanged = (): boolean => {
+      getPolicy(ctx);
+      return `${policyRevision()}|${JSON.stringify(securitySnapshot(ctx))}` !== revision;
+    };
+    const reconsider = () => {
+      blocked("tool-firewall: policy or security level changed while approval was pending; re-evaluating this call", "policy", "uncertain");
+      return decide(event, ctx);
+    };
+
     if (tier === "critical") {
       const reason = `tool-firewall: denied ${toolName} [${TAG.hard_deny}] — ${summary}. This action is never allowed automatically, whatever an approval or the auto-mode judge says; if it is truly needed, ask the user to run it themselves.`;
-      if (ctx?.hasUI) ctx.ui?.notify?.(`tool-firewall: denied ${toolName} (${summary}) — ${TAG.hard_deny}`, "warning");
+      if (ctx?.hasUI) say(ctx, `tool-firewall: denied ${toolName} (${summary}) — ${TAG.hard_deny}`, "warning");
       return blocked(reason, "policy", "hard_deny");
     }
     if (u) {
@@ -720,15 +940,26 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       finish("allow", "analyser");
       return undefined;
     }
+    // Ultracode standing mode: the operator pre-authorised workflow runs for this session. It answers
+    // only the policy's own "ask" for the workflow tool: any other finding (a trajectory chain, a
+    // secret path), strict security, the pentest policy, a child and a session without a screen
+    // are decided as before.
+    if (toolName === "workflow" && !operatorOnly && policyName !== "pentest" && ctx?.hasUI && process.env.PI_KIT_INTERNAL_CHILD !== "1"
+      && a.findings.every((f) => f.tier === "low" || f.code === "policy_ask") && workflowPreauthorised()) {
+      finish("allow", "standing");
+      return undefined;
+    }
     // Pentest approvals are per action: no session approvals (the card does not offer one).
-    const strict = policyName === "pentest";
+    const strict = operatorOnly || policyName === "pentest";
     const families = familiesFromSignature(sig);
-    const scopes = [...new Set(a.findings.filter((f) => f.tier !== "low" && f.scope).map((f) => f.scope as string))];
+    const scopes = [...new Set(a.findings.flatMap((f) => (f.tier !== "low" && f.scope ? [f.scope] : [])))];
     const root = rootSessionId(s.id);
     const steps = a.segments.filter((x) => x.tier !== "low").slice(0, 6).map((x) => redact(`${x.text.replace(/\s+/g, " ").slice(0, 140)} [${x.where}; ${x.effects.join(", ")}]`));
     const chain = traj.map((f) => redact(f.detail).slice(0, 400));
     const reasonsList = [...new Set(a.findings.filter((f) => f.tier !== "low").map((f) => redact(`[${f.tier}] ${f.detail}`).slice(0, 400)))].slice(0, 6);
-    const canLearn = trustAuto && cfg.learn && learnable(a, tier);
+    // Opaque API identity and explicit ask rules cannot acquire broader authority through
+    // model similarity or learning. An operator's exact scoped session grant still applies.
+    const canLearn = !guarded && trustAuto && cfg.learn && learnable(a, tier) && !needsOperator(a);
     const match = { root, workspace, cwd, policy: policyName, tool: toolName, hash };
     const actionRecord = { command: command !== null ? redact(command).slice(0, 1500) : redact(summary).slice(0, 1500), summary: redact(summary).slice(0, 1500), steps, reasons: reasonsList, chain };
 
@@ -746,15 +977,15 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       if (st.status !== "learned") return undefined;
       if (existing) return existing;
       try {
-        return addApproval({ context: "persistent", session: null, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier: tier as "medium" | "high", grantedBy: { actor: "learned", via: "precedent", session: s.id, mode, policy: policyName, detail: `${st.approvals} approvals in ${st.sessions} sessions, within 30 days` }, action: actionRecord });
+        return addApproval({ context: "persistent", session: null, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier, grantedBy: { actor: "learned", via: "precedent", session: s.id, mode, policy: policyName, detail: `${st.approvals} approvals in ${st.sessions} sessions, within 30 days` }, action: actionRecord });
       } catch (error) {
-        audit({ event: "approval_store_error", error: String((error as Error)?.message ?? error) });
+        audit({ event: "approval_store_error", error: errorText(error) });
         return undefined; // cannot store it, so it is not silently remembered: the operator is asked
       }
     };
     let approvalHit = view ? findExact(view, match) : undefined;
     if (approvalHit?.grantedBy.actor === "learned") approvalHit = learnedApproval(approvalHit); // a later denial, or learning switched off, suspends it
-    else if (!approvalHit) approvalHit = learnedApproval();
+    else approvalHit ??= learnedApproval();
     if (approvalHit) {
       if (approvalHit.context === "session") s.stats.grantHits++;
       else s.stats.learnedHits++;
@@ -771,29 +1002,34 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     let judgeView: { verdict: "allow" | "block"; reason: string } | undefined;
     let uncertainWhy: string | undefined; // set when the automatic layers could not settle it
     const highJudge = tier === "high" && canLearn && (similar.length > 0 || operatorApproved(sig, Date.now(), feedbackHere));
-    const judgeAllowed = highJudge || (tier === "medium" && auto && (policyName === "coding" || a.effects.every((e) => JUDGE_SAFE_STRICT.has(e))));
+    const judgeAllowed = !operatorOnly && !(guarded && classifierUnsure) && (highJudge || (tier === "medium" && auto && (policyName === "coding" || a.effects.every((e) => JUDGE_SAFE_STRICT.has(e)))));
     if (tier === "high" && similar.length && !highJudge) judgeNote = trustAuto ? "similar to a session allow, but this kind always needs you" : undefined;
     if (judgeAllowed) {
       const request = latestRequest(ctx, lastRequest);
-      const turn = crypto.createHash("sha1").update(`${request}|${sessionList.map((g) => g.id).sort().join(",")}`).digest("hex").slice(0, 12);
+      const turn = crypto.createHash("sha1").update(`${revision}|${request}|${sessionList.map((g) => g.id).sort().join(",")}`).digest("hex").slice(0, 12);
       const cached = s.judgeCache[hash];
-      let verdict: Verdict | null = cached && cached.turn === turn ? { verdict: cached.verdict, reason: cached.reason, ...(cached.confidence ? { confidence: cached.confidence } : {}), ...(cached.differs ? { differs: cached.differs } : {}) } : null;
+      let verdict: Verdict | null = cached?.turn === turn ? { verdict: cached.verdict, reason: cached.reason, ...(cached.confidence ? { confidence: cached.confidence } : {}), ...(cached.differs ? { differs: cached.differs } : {}) } : null;
       if (!verdict) {
         const complete = d.complete === undefined ? modelCompleter(ctx, cfg) : d.complete;
         audit({ event: "auto_mode_check_start", toolName, actionHash: hash, model: judgeModelName(ctx, cfg), grants: similar.length || undefined });
         s.stats.judged++;
-        verdict = complete
-          ? await runJudge(complete, { request, goal: readGoal(cwd, env.workspace), recent: s.recent, assessment: a, workspace: env.workspace, untrusted: s.untrusted, precedents: precedentsFor(sig), high: highJudge, grants: similar.map(toGrant), profile: strict ? undefined : profileFor(toolName, families) }, undefined, ctx?.signal)
-          : null;
+        if (complete) {
+          const goal = readGoal(cwd, env.workspace);
+          const precedents = precedentsFor(sig, feedbackHere);
+          const grants = similar.map(toGrant);
+          const profile = strict ? undefined : profileFor(toolName, families);
+          verdict = await runJudge(complete, { request, ...(goal !== undefined ? { goal } : {}), recent: s.recent, assessment: a, workspace: env.workspace, untrusted: s.untrusted, precedents, high: highJudge, grants, ...(profile !== undefined ? { profile } : {}) }, undefined, ctx?.signal);
+        } else verdict = null;
         if (verdict) {
           s.judgeCache[hash] = { ...verdict, turn };
           const keys = Object.keys(s.judgeCache);
-          if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete s.judgeCache[k];
-          appendJudgement({ tool: toolName, sig, tier, verdict: verdict.verdict, confidence: verdict.confidence, reason: verdict.differs ? `${verdict.reason} (differs: ${verdict.differs})` : verdict.reason, high: highJudge || undefined, grants: similar.length || undefined, session: s.id });
+          if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) Reflect.deleteProperty(s.judgeCache, k);
+          appendJudgement({ tool: toolName, sig, tier, verdict: verdict.verdict, ...(verdict.confidence !== undefined ? { confidence: verdict.confidence } : {}), reason: verdict.differs ? `${verdict.reason} (differs: ${verdict.differs})` : verdict.reason, ...(highJudge ? { high: true } : {}), ...(similar.length ? { grants: similar.length } : {}), session: s.id });
         }
       }
       if (verdict) judgeView = { verdict: verdict.verdict, reason: verdict.differs ?? verdict.reason };
       if (verdict?.verdict === "allow") {
+        if (policyChanged()) return reconsider();
         audit({ event: "auto_mode_approved", toolName, actionHash: hash, rationale: verdict.reason, high: highJudge || undefined, grants: similar.length || undefined });
         finish("allow", highJudge ? (similar.length ? "judge+grant" : "judge+precedent") : "judge", { rationale: verdict.reason });
         return undefined;
@@ -830,27 +1066,27 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // Ask a human.
     const precedent = statusFor(sig, Date.now(), feedbackHere);
     const allowSession = !strict;
-    const judged = trustAuto && cfg.learn;
+    const judged = !guarded && trustAuto && cfg.learn;
     const scopeText = describeFamilies(families);
     const covers = allowSession ? (judged ? `exact repeats run; similar steps${scopeText ? ` (${scopeText})` : ""} are judged against this` : "exact repeats run") : undefined;
     const sessionScope = allowSession ? `this session + workspace, ${Math.round(SESSION_APPROVAL_TTL_MS / 3_600_000)}h` : undefined;
     const uncertain = !!uncertainWhy;
-    const extras = { tier, trajectory: traj, judgeNote, precedent, hash, signature: sig, mode, policy: policyName, covers, scope: sessionScope, uncertain };
+    const extras: CardExtras = { tier, trajectory: traj, ...(judgeNote !== undefined ? { judgeNote } : {}), precedent, hash, signature: sig, mode, policy: policyName, ...(covers !== undefined ? { covers } : {}), ...(sessionScope !== undefined ? { scope: sessionScope } : {}), uncertain };
     const card = buildCard(a, extras);
     lastDetail = buildDetail(a, extras);
     const choices = choicesFor(allowSession, judged);
     const grant = (via: "card" | "console", choice?: string) => {
       try {
-        addApproval({ context: "session", session: root, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier: tier as "medium" | "high", grantedBy: { actor: "operator", via, session: s.id, mode, policy: policyName, ...(choice ? { choice: choice.slice(0, 280) } : {}) }, action: actionRecord });
+        addApproval({ context: "session", session: root, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier, grantedBy: { actor: "operator", via, session: s.id, mode, policy: policyName, ...(choice ? { choice: choice.slice(0, 280) } : {}) }, action: actionRecord });
       } catch (error) {
-        audit({ event: "approval_store_error", error: String((error as Error)?.message ?? error) });
-        say(ctx, `tool-firewall: could not store the session allow (${String((error as Error)?.message ?? error)}); you will be asked again`, "warning");
+        audit({ event: "approval_store_error", error: errorText(error) });
+        say(ctx, `tool-firewall: could not store the session allow (${errorText(error)}); you will be asked again`, "warning");
       }
     };
     const record = (decision: "allow" | "deny", source: FeedbackRecord["source"], note?: string, choice?: string) => {
       s.stats.human++;
       try {
-        appendFeedback({ sig, decision, tier, tool: toolName, summary: command ?? summary, project: env.workspace, session: s.id, source, note, hash, choice, steps, chain, judge: judgeView });
+        appendFeedback({ sig, decision, tier, tool: toolName, summary: command ?? summary, project: env.workspace, session: s.id, source, ...(note !== undefined ? { note } : {}), hash, ...(choice !== undefined ? { choice } : {}), steps, chain, ...(judgeView !== undefined ? { judge: judgeView } : {}) });
       } catch {
         /* learning is best effort */
       }
@@ -887,7 +1123,8 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);
       const choice = res.value;
       if (choice === CHOICE_ALLOW_ONCE || isSessionChoice(choice)) {
-        if (isSessionChoice(choice)) grant("card", choice);
+        if (policyChanged()) return reconsider();
+        if (allowSession && isSessionChoice(choice)) grant("card", choice);
         record("allow", isSessionChoice(choice) ? "grant" : "card", undefined, choice);
         finish("allow", "human", { outcome: "operator_decision", choice });
         return undefined;
@@ -905,7 +1142,8 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     let note: string | undefined;
     let picked: string | undefined;
     if (ctx?.hasUI && typeof ctx.ui?.confirm === "function") {
-      const res = await boundedPrompt(ctx, (o) => ctx.ui.confirm("Approve tool call?", card, o));
+      // The answer comes from a UI implementation: only a literal `true` approves.
+      const res = await boundedPrompt<unknown>(ctx, (o) => ctx.ui.confirm("Approve tool call?", card, o));
       if (res.kind === "aborted") return noAnswer("aborted", "prompt", 0);
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);
@@ -913,13 +1151,14 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     } else {
       source = "broker";
       // The console adds a title line; keep the whole request within the line budget.
-      const res = await brokerApproval(toolName, input, tier, summary, buildCard(a, { ...extras, maxLines: CARD_MAX_LINES - 1 }), judgeNote ?? null, ctx, ctx?.signal, choices);
+      const res = await brokerApproval(toolName, input, tier, summary, buildCard(a, { ...extras, maxLines: CARD_MAX_LINES - 1 }), judgeNote ?? null, ctx, ctx?.signal, choices, runActionHash(toolName, input, cwd, workspace));
       if (res.unavailable) return noAnswer("unavailable", "console", 0, `${res.unavailable}. No operator could be asked`);
       if (res.timedOut) return noAnswer(res.aborted ? "aborted" : "timeout", "console", Math.round((res.timeoutMs ?? 0) / 1000));
       approved = res.approved;
       note = res.note;
       picked = res.choice;
-      if (approved && isSessionChoice(res.choice)) {
+      if (approved && policyChanged()) return reconsider();
+      if (approved && allowSession && isSessionChoice(res.choice)) {
         grant("console", res.choice);
         source = "grant";
       }
@@ -928,6 +1167,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       record("deny", source === "grant" ? "broker" : source, note, picked);
       return blocked(denyReason(note), "human", "operator_decision", { choice: picked });
     }
+    if (policyChanged()) return reconsider();
     record("allow", source, undefined, picked);
     finish("allow", "human", { outcome: "operator_decision", choice: picked });
     return undefined;
@@ -949,7 +1189,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     return out;
   };
 
-  const firewallList = (ctx: any): string => {
+  const firewallList = (ctx: ExtensionContext): string => {
     const cwd = ctx?.cwd || process.cwd();
     const s = sessionFor(ctx);
     const root = rootSessionId(s.id);
@@ -966,7 +1206,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     if (view.expired) lines.push(`  (${view.expired} expired approval(s) are ignored and dropped on the next write)`);
     if (problems.length) lines.push(`  IGNORED (malformed, never treated as an allow): ${problems.slice(0, 6).join("; ")}${problems.length > 6 ? "; …" : ""}`);
     lines.push(`  kinds you approved in this workspace that may reach the judge in auto mode: ${approvedKinds} (see /auto learned; /firewall revoke workspace clears them)`);
-    const hostLines = [...new Set([...kh.fromConfig, ...kh.fromSsh])].sort().map((h) => `${h} [${kh.untrusted.has(h) ? "REVOKED" : `${kh.fromConfig.has(h) ? "firewall.json" : "~/.ssh/config"}`}]`);
+    const hostLines = [...new Set([...kh.fromConfig, ...kh.fromSsh])].sort().map((h) => `${h} [${kh.untrusted.has(h) ? "REVOKED" : kh.fromConfig.has(h) ? "firewall.json" : "~/.ssh/config"}]`);
     lines.push(`  known hosts (only lower READ-ONLY ssh and sudo -n reads in auto mode, coding policy): ${hostLines.join(", ") || "none"}`);
     lines.push("  revoke: /firewall revoke <id> | session | workspace | all | host:<name>  (takes effect on the next tool call)");
     return lines.join("\n");
@@ -979,7 +1219,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     return "  unattended: off (only the supervisor can turn it on, with PI_KIT_UNATTENDED=1 and a read-only contract; nothing inside a session can)";
   };
 
-  const firewallStatus = (ctx: any): string => {
+  const firewallStatus = (ctx: ExtensionContext): string => {
     const policy = getPolicy();
     const cfg = readConfig();
     const cwd = ctx?.cwd || process.cwd();
@@ -992,7 +1232,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const here = scopeRecords(readFeedback(), { workspace, since: floorFor(view, workspace) });
     const learned = listLearned(Date.now(), here).filter((l) => l.status === "learned").length;
     const kh = knownHostsMeta(cfg);
-    const warningSuffix = `${lastPolicyWarnings.length > 0 ? ` skipped-rules=${lastPolicyWarnings.length}(!)` : ""}${lastPolicyAdjustments.length > 0 ? ` adjusted-rules=${lastPolicyAdjustments.length}` : ""}`;
+    const warningSuffix = `${lastPolicyWarnings.length > 0 ? ` invalid-items=${lastPolicyWarnings.length}(!)` : ""}${lastPolicyAdjustments.length > 0 ? ` adjusted-rules=${lastPolicyAdjustments.length}` : ""}`;
     const zone = unattended.state();
     const decides =
       zone.active && p.policy === "coding"
@@ -1004,8 +1244,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
           : "manual: low runs; medium and high ask you; critical is denied; only an exact approval runs without asking";
     return [
       `tool-firewall: policy=${p.policy} (${p.source}) mode=${m.mode} (${m.source})`,
-      `  decides: ${decides}`,
-      `  runs without asking: low-tier actions in every mode (reads of non-credential paths, git reads, network GETs, workspace writes, dev tooling, tools read-named by convention)${m.mode === "auto" && p.policy === "coding" ? "; in auto mode also read-only ssh and sudo -n reads on known hosts" : "; read-only ssh/sudo -n on known hosts is NOT trusted in this mode and asks"}`,
+      `  security: ${securitySnapshot(ctx).effective} (requested ${securitySnapshot(ctx).requested}); /security status explains the active restrictions and unavailable checks`,
+      `  configured strategy (security restrictions apply on top): ${decides}`,
+      `  runs without asking: low-tier actions in every mode (reads of non-credential paths, git reads, network GETs, workspace writes, dev tooling, explicitly allowed external tools); unknown tool names need operator authority${m.mode === "auto" && p.policy === "coding" ? "; in auto mode also read-only ssh and sudo -n reads on known hosts" : "; read-only ssh/sudo -n on known hosts is NOT trusted in this mode and asks"}`,
       `  outcomes: HARD DENY (policy says never; no approval or judge overrides) · UNCERTAIN (judge/classifier unsure, unavailable or timed out: asks you, or fails closed when nobody can be asked) · OPERATOR DECISION (you allowed or denied; remembered only within the scope the card names)`,
       `  rules: ${cachedPolicyLabel} default-unknown=${policy.defaults.unknown} tool-rules=${Object.keys(policy.tools).length} operator-rules=${policy.command_rules.deny.length}/${policy.command_rules.ask.length} pentest-rules=${policy.pentest.deny.length}/${policy.pentest.ask.length}${warningSuffix}`,
       `  judge model: ${judgeModelName(ctx, cfg) ?? "unset"} · learning ${cfg.learn ? "on" : "off"} (${learned} learned here) · known hosts: ${[...kh.hosts].join(", ") || "none"}`,
@@ -1018,14 +1259,21 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
 
   const FIREWALL_USAGE = "usage: /firewall [status | list | revoke <id>… | revoke session | revoke workspace | revoke all | revoke host:<name> | reload | help]";
 
-  const firewallCommand = async (args: string, ctx: any) => {
+  const firewallCommand = async (args: string, ctx: ExtensionContext) => {
     const [subRaw = "status", ...rest] = (args || "").trim().split(/\s+/).filter(Boolean);
     const sub = subRaw.toLowerCase();
     try {
-      if (sub === "status" || sub === "st") return say(ctx, firewallStatus(ctx), "info");
+      if (sub === "status" || sub === "st") {
+        say(ctx, firewallStatus(ctx), "info");
+        return;
+      }
       if (sub === "list" || sub === "ls" || sub === "approvals") {
-        if (rest.length) return say(ctx, `tool-firewall: /firewall list takes no arguments. ${FIREWALL_USAGE}`, "error");
-        return say(ctx, firewallList(ctx), "info");
+        if (rest.length) {
+          say(ctx, `tool-firewall: /firewall list takes no arguments. ${FIREWALL_USAGE}`, "error");
+          return;
+        }
+        say(ctx, firewallList(ctx), "info");
+        return;
       }
       if (sub === "reload") {
         reloadPolicy();
@@ -1033,50 +1281,93 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
         sshWarned = false;
         say(ctx, `tool-firewall: reloaded policy (${cachedPolicyLabel})`, "info");
         if (lastPolicyAdjustments.length > 0) say(ctx, `tool-firewall: WARNING — ${lastPolicyAdjustments.length} rule(s) adjusted but still enforced: ${lastPolicyAdjustments.join("; ")}`, "warning");
-        if (lastPolicyWarnings.length > 0) say(ctx, `tool-firewall: WARNING — ${lastPolicyWarnings.length} rule(s) skipped: ${lastPolicyWarnings.join("; ")}`, "warning");
+        if (lastPolicyWarnings.length > 0) say(ctx, `tool-firewall: WARNING — ${lastPolicyWarnings.length} invalid policy item(s); fail-closed (deny all): ${lastPolicyWarnings.join("; ")}`, "warning");
         return;
       }
-      if (sub === "help" || sub === "--help" || sub === "-h") return say(ctx, FIREWALL_USAGE, "info");
+      if (sub === "help" || sub === "--help" || sub === "-h") {
+        say(ctx, FIREWALL_USAGE, "info");
+        return;
+      }
       if (sub === "revoke") {
         const cwd = ctx?.cwd || process.cwd();
         const scope = { root: rootSessionId(sessionFor(ctx).id), workspace: workspaceRoot(cwd) };
         const cfg = readConfig();
         const hosts = rest.filter((t) => /^host:/i.test(t));
         const others = rest.filter((t) => !/^host:/i.test(t));
-        if (!rest.length) return say(ctx, `tool-firewall: nothing to revoke. ${FIREWALL_USAGE}`, "error");
+        if (!rest.length) {
+          say(ctx, `tool-firewall: nothing to revoke. ${FIREWALL_USAGE}`, "error");
+          return;
+        }
         // Validate every target before changing anything: invalid arguments never mutate state.
         const kh = knownHostsMeta(cfg);
         const names = hosts.map((t) => t.slice(5).toLowerCase());
         const badHost = names.find((n) => !n || !(kh.fromConfig.has(n) || kh.fromSsh.has(n)) || kh.untrusted.has(n));
-        if (badHost !== undefined) return say(ctx, `tool-firewall: "host:${badHost}" is not a trusted known host (see /firewall list). Nothing was changed.`, "error");
+        if (badHost !== undefined) {
+          say(ctx, `tool-firewall: "host:${badHost}" is not a trusted known host (see /firewall list). Nothing was changed.`, "error");
+          return;
+        }
         const lines: string[] = [];
         if (others.length) {
           const r = revokeApprovals(others, scope);
-          if (r.error) return say(ctx, `tool-firewall: ${r.error}. Nothing was changed.`, "error");
+          if (r.error) {
+            say(ctx, `tool-firewall: ${r.error}. Nothing was changed.`, "error");
+            return;
+          }
           lines.push(`revoked ${r.removed.length} approval(s)${r.removed.length ? `: ${r.removed.map((a) => `${a.id} (${a.context})`).join(", ")}` : ""}${r.resetLearning.length ? `; reset ${r.resetLearning.join(", ")}` : ""}`);
         }
         if (names.length) {
           writeConfig({ knownHosts: cfg.knownHosts.filter((h) => !names.includes(h.toLowerCase())), untrustedHosts: [...new Set([...cfg.untrustedHosts, ...names])], source: "user" });
           lines.push(`withdrew trust from ${names.map((n) => `host ${n}`).join(", ")}${names.some((n) => kh.fromSsh.has(n)) ? " (still named in ~/.ssh/config; the firewall no longer trusts it)" : ""}`);
         }
-        return say(ctx, `tool-firewall: ${lines.join("; ")}. Takes effect on the next tool call.`, "info");
+        say(ctx, `tool-firewall: ${lines.join("; ")}. Takes effect on the next tool call.`, "info");
+        return;
       }
-      return say(ctx, `tool-firewall: unknown option "${subRaw}". ${FIREWALL_USAGE}`, "error");
+      say(ctx, `tool-firewall: unknown option "${subRaw}". ${FIREWALL_USAGE}`, "error");
+      return;
     } catch (error) {
-      return say(ctx, `tool-firewall: /firewall ${sub} failed: ${String((error as Error)?.message ?? error)}`, "error");
+      say(ctx, `tool-firewall: /firewall ${sub} failed: ${errorText(error)}`, "error");
+      return;
     }
   };
 
-  pi.registerCommand("firewall", { description: "Tool firewall: /firewall [status | list | revoke <id>|session|workspace|all|host:<name> | reload]. Lists remembered approvals with their scope and revokes them.", handler: async (args: string, ctx: any) => void (await firewallCommand(args, ctx)) });
-  pi.registerCommand("firewall:reload", { description: "Reload the tool-firewall policy from disk (alias of /firewall reload)", handler: async (_args: string, ctx: any) => void (await firewallCommand("reload", ctx)) });
-  pi.registerCommand("firewall:status", { description: "Show tool-firewall status: policy, mode, judge, learning, approvals (alias of /firewall status)", handler: async (_args: string, ctx: any) => void (await firewallCommand("status", ctx)) });
+  pi.registerCommand("firewall", { description: "Tool firewall: /firewall [status | list | revoke <id>|session|workspace|all|host:<name> | reload]. Lists remembered approvals with their scope and revokes them.", handler: async (args, ctx) => {
+    await firewallCommand(args, ctx);
+  } });
+  pi.registerCommand("firewall:reload", { description: "Reload the tool-firewall policy from disk (alias of /firewall reload)", handler: async (_args, ctx) => {
+    await firewallCommand("reload", ctx);
+  } });
+  pi.registerCommand("firewall:status", { description: "Show tool-firewall status: policy, mode, judge, learning, approvals (alias of /firewall status)", handler: async (_args, ctx) => {
+    await firewallCommand("status", ctx);
+  } });
 
-  const autoCommand = async (args: string, ctx: any) => {
+  const autoCommand = async (args: string, ctx: ExtensionContext) => {
     const [option = "status", ...rest] = (args || "status").trim().split(/\s+/);
     const cwd = ctx?.cwd || process.cwd();
     const opt = option.toLowerCase();
     if (opt === "on" || opt === "off") {
       const enabled = opt === "on";
+      if (enabled && securitySnapshot(ctx).effective === "strict") {
+        say(ctx, "auto-mode: /auto on refused: strict security pins the approval strategy to the operator. Use /security to change the level.", "warning");
+        return;
+      }
+      // Manual → automatic approvals lowers oversight (a model judge decides instead of you), so it
+      // is chosen at the terminal of an interactive root session, never from a linked phone or the
+      // web console, like weakening /security. Turning approvals back to manual never asks. It
+      // writes both the saved global mode and (when present) the project auto-mode.json, so it asks
+      // unless the saved mode, the effective mode and an existing project file are all already
+      // auto: an env PI_KIT_AUTO_MODE=1 run or a project auto-mode.json cannot make the global mode
+      // auto unasked, and neither a saved auto mode nor PI_KIT_AUTO_MODE=1 (which masks the file in
+      // the effective mode) can flip a project file pinned to manual unasked.
+      if (enabled && (readConfig().mode !== "auto" || resolveMode(cwd).mode !== "auto" || legacyPinnedOff(legacyAutoModePath(cwd)))) {
+        if (!atRootTerminal(ctx)) {
+          say(ctx, "auto-mode: /auto on needs a choice at the terminal of an interactive root session; refused in headless, RPC and delegated/child sessions. PI_KIT_AUTO_MODE=1 sets it for a scripted run.", "warning");
+          return;
+        }
+        if (!await chooseAtTerminal(ctx.ui, "Turn on automatic approvals? A model judge will decide tool calls that would otherwise ask you.", "keep manual approvals", "turn on automatic approvals", promptTimeoutMs())) {
+          say(ctx, "auto-mode: unchanged (manual).", "info");
+          return;
+        }
+      }
       try {
         writeConfig({ mode: enabled ? "auto" : "manual", source: "user" });
         const legacy = legacyAutoModePath(cwd);
@@ -1094,40 +1385,60 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     if (opt === "status") {
       const cfg = readConfig();
       const m = resolveMode(cwd, cfg);
-      say(ctx, `auto-mode: ${m.mode === "auto" ? "enabled" : "disabled"} (from ${m.source}) policy=${resolvePolicy(cfg).policy} model=${judgeModelName(ctx, cfg) ?? "unset (no session model available)"} learning=${cfg.learn ? "on" : "off"} state=${configPath()}`, "info");
+      say(ctx, `auto-mode: ${securitySnapshot(ctx).effective === "strict" ? "operator (pinned by strict security; configured " + m.mode + ")" : m.mode === "auto" ? "enabled" : "disabled"} (from ${m.source}) policy=${resolvePolicy(cfg).policy} model=${judgeModelName(ctx, cfg) ?? "unset (no session model available)"} learning=${cfg.learn ? "on" : "off"} state=${configPath()}`, "info");
       return;
     }
     if (opt === "learn") {
       const on = (rest[0] ?? "").toLowerCase();
-      if (on !== "on" && on !== "off") return say(ctx, "auto-mode: usage /auto learn on|off", "error");
+      if (on !== "on" && on !== "off") {
+        say(ctx, "auto-mode: usage /auto learn on|off", "error");
+        return;
+      }
       writeConfig({ learn: on === "on" });
-      return say(ctx, `auto-mode: learning from your decisions ${on === "on" ? "on" : "off"}`, "info");
+      say(ctx, `auto-mode: learning from your decisions ${on === "on" ? "on" : "off"}`, "info");
+      return;
     }
     if (opt === "learned") {
       // Learning is scoped to the workspace the decisions were made in, and to what was not revoked since.
       const workspace = workspaceRoot(cwd);
       const all = listLearned(Date.now(), scopeRecords(readFeedback(), { workspace, since: floorFor(readApprovals(), workspace) }));
-      if (!all.length) return say(ctx, `auto-mode: no decisions recorded yet for ${workspace} (${feedbackPath()})`, "info");
-      return say(ctx, [`auto-mode: precedents for ${workspace} (signature — approvals/sessions/denials — status)`, ...all.slice(0, 40).map((l) => `  ${l.sig} — ${l.approvals}/${l.sessions}/${l.denials} — ${l.status}`)].join("\n"), "info");
+      if (!all.length) {
+        say(ctx, `auto-mode: no decisions recorded yet for ${workspace} (${feedbackPath()})`, "info");
+        return;
+      }
+      say(ctx, [`auto-mode: precedents for ${workspace} (signature — approvals/sessions/denials — status)`, ...all.slice(0, 40).map((l) => `  ${l.sig} — ${l.approvals}/${l.sessions}/${l.denials} — ${l.status}`)].join("\n"), "info");
+      return;
     }
     if (opt === "forget") {
       const sig = rest.join(" ");
-      if (!sig) return say(ctx, "auto-mode: usage /auto forget <signature> (a trailing * matches a prefix)", "error");
-      return say(ctx, `auto-mode: forgot ${forget(sig)} decision(s)`, "info");
+      if (!sig) {
+        say(ctx, "auto-mode: usage /auto forget <signature> (a trailing * matches a prefix)", "error");
+        return;
+      }
+      say(ctx, `auto-mode: forgot ${forget(sig)} decision(s)`, "info");
+      return;
     }
     if (opt === "stats") {
       const s = sessionFor(ctx);
       const per100 = s.stats.actions ? ((s.stats.human / s.stats.actions) * 100).toFixed(1) : "0";
-      return say(ctx, `auto-mode: this session ${s.stats.actions} actions · asked you ${s.stats.human} (${per100}/100) · judged ${s.stats.judged} (${s.stats.judgeBlocks} blocked) · learned hits ${s.stats.learnedHits} · session-allow repeats ${s.stats.grantHits} · denied ${s.stats.denied}`, "info");
+      say(ctx, `auto-mode: this session ${s.stats.actions} actions · asked you ${s.stats.human} (${per100}/100) · judged ${s.stats.judged} (${s.stats.judgeBlocks} blocked) · learned hits ${s.stats.learnedHits} · session-allow repeats ${s.stats.grantHits} · denied ${s.stats.denied}`, "info");
+      return;
     }
     if (opt === "profile") {
       const sub = (rest[0] ?? "").toLowerCase();
-      if (sub === "reset") return say(ctx, resetProfile() ? "auto-mode: learned profile cleared (decisions are kept; it is rebuilt from them later)" : "auto-mode: no learned profile to clear", "info");
+      if (sub === "reset") {
+        say(ctx, resetProfile() ? "auto-mode: learned profile cleared (decisions are kept; it is rebuilt from them later)" : "auto-mode: no learned profile to clear", "info");
+        return;
+      }
       if (sub === "rebuild") {
         const complete = d.complete === undefined ? modelCompleter(ctx, readConfig()) : d.complete;
-        if (!complete) return say(ctx, "auto-mode: no model available to rebuild the profile", "error");
+        if (!complete) {
+          say(ctx, "auto-mode: no model available to rebuild the profile", "error");
+          return;
+        }
         const p = await distill(complete).catch(() => null);
-        return say(ctx, p ? `auto-mode: profile rebuilt from ${p.basedOn.decisions} decision(s) and ${p.basedOn.judgements} judgement(s)` : "auto-mode: profile rebuild failed (model gave no usable answer)", p ? "info" : "error");
+        say(ctx, p ? `auto-mode: profile rebuilt from ${p.basedOn.decisions} decision(s) and ${p.basedOn.judgements} judgement(s)` : "auto-mode: profile rebuild failed (model gave no usable answer)", p ? "info" : "error");
+        return;
       }
       const p = readProfile();
       const stats = (p?.stats?.length ? p.stats : computeStats()).slice(0, 12).map((v) => `  ${statsLine(v)}`);
@@ -1138,23 +1449,29 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
         ...(stats.length ? ["Most recent kinds:", ...stats] : []),
         "It informs the judge only; /auto profile rebuild | reset",
       ];
-      return say(ctx, lines.join("\n"), "info");
+      say(ctx, lines.join("\n"), "info");
+      return;
     }
     if (opt === "explain") {
       const s = sessionFor(ctx);
       const n = Math.max(1, Math.min(20, Number(rest[0]) || 5));
       const lines = s.recent.slice(-n).map((r) => `  ${r.outcome.padEnd(5)} ${r.tier.padEnd(8)} by ${r.decider.padEnd(9)} ${r.tool}: ${r.summary.slice(0, 120)}`);
       const last = lastDetail ? ["auto-mode: last approval request (full detail)", lastDetail, ""] : [];
-      return say(ctx, [...last, ...(lines.length ? ["auto-mode: recent decisions", ...lines] : ["auto-mode: no decisions yet this session"])].join("\n"), "info");
+      say(ctx, [...last, ...(lines.length ? ["auto-mode: recent decisions", ...lines] : ["auto-mode: no decisions yet this session"])].join("\n"), "info");
+      return;
     }
     if (opt === "check") {
       const command = rest.join(" ");
       const cfg = readConfig();
-      const env: ClassifyEnv = { cwd, workspace: workspaceRoot(cwd), home: homeDir(), tmpRoots: tmpRoots(), knownHosts: trustedHosts(cfg, ctx), policy: resolvePolicy(cfg).policy };
-      const a = classifyToolCall("bash", { command }, env, getPolicy().tools.bash, getPolicy().defaults.unknown);
-      const auto = resolveMode(cwd, cfg).mode === "auto";
+      const security = securitySnapshot(ctx);
+      const env: ClassifyEnv = { cwd, workspace: workspaceRoot(cwd), home: homeDir(), tmpRoots: tmpRoots(), knownHosts: trustedHosts(cfg, ctx), policy: resolvePolicy(cfg).policy, boundaryPaths: [path.resolve(securityPath())] };
+      const a = classifyToolCall("bash", { command }, env, getPolicy().tools.bash, security.effective === "strict" ? "deny" : getPolicy().defaults.unknown);
+      const unsure = a.findings.some((f) => f.effect === "opaque" || f.code === "classifier_error");
+      const auto = resolveMode(cwd, cfg).mode === "auto" && security.effective !== "strict" && !(security.effective === "guarded" && unsure);
       const sigc = signatureOf(a, auto);
-      return say(ctx, buildDetail(a, { tier: effectiveTier(a, auto), trajectory: [], hash: actionHash("bash", { command }), signature: sigc, mode: auto ? "auto" : "manual", policy: env.policy, covers: env.policy === "pentest" ? undefined : describeFamilies(familiesFromSignature(sigc)) || undefined }), "info");
+      const covers = env.policy === "pentest" ? undefined : describeFamilies(familiesFromSignature(sigc)) || undefined;
+      say(ctx, buildDetail(a, { tier: effectiveTier(a, auto), trajectory: [], hash: actionHash("bash", { command }), signature: sigc, mode: auto ? "auto" : "manual", policy: env.policy, ...(covers !== undefined ? { covers } : {}) }), "info");
+      return;
     }
     say(ctx, `auto-mode: unknown option "${option}" — use status|on|off|explain [n]|learned|forget <sig>|learn on|off|stats|profile [rebuild|reset]|check <command>`, "error");
   };

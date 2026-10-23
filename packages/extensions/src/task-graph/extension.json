@@ -1,13 +1,13 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "task-graph",
-  "summary": "Persistent DAG task board shared by the orchestrator and implementer subagents. Planner emits tasks with dependencies; task_next hands the next unblocked task to an implementer; task_update/task_complete track progress. Stored in .pi/task-graph.json.",
+  "summary": "Persistent DAG task board shared by the orchestrator and implementer subagents. Planner emits tasks with dependencies; task_next hands the next unblocked task to an implementer; task_update/task_complete track progress; a claim not renewed within its lease returns to pending, and task_clear empties the board. Stored in .pi/task-graph.json.",
   "category": "planning",
   "tier": "T3",
   "layer": 4,
   "entry": "index.ts",
   "hooks": [],
-  "registers": { "tools": ["task_create", "task_update", "task_list", "task_next", "task_complete"], "commands": [] },
+  "registers": { "tools": ["task_create", "task_update", "task_list", "task_next", "task_complete", "task_clear"], "commands": [] },
   "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
@@ -19,7 +19,7 @@
     "models": []
   },
   "pulls": [],
-  "env": [],
+  "env": ["PI_KIT_TASK_GRAPH_LEASE_MS"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
   "status": "beta"

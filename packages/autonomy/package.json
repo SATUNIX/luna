@@ -1,12 +1,12 @@
 {
   "name": "@satunix/pi-autonomy",
-  "version": "0.2.4-beta.3",
+  "version": "0.2.4-beta.5",
   "private": true,
   "type": "module",
   "license": "MIT",
   "description": "Bounded autonomous task runner for pi-system: run contract, templates, hardened container runtime, relay and egress proxy (docs/autonomy.md)",
   "bin": {
-    "pi-autonomy": "cli.mjs"
+    "pi-autonomy": "cli.ts"
   },
   "engines": {
     "node": ">=22.19.0"

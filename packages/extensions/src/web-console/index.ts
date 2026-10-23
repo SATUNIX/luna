@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // Pi Console web UI that ships in packages/web-ui of this repo.
 //
 // It does exactly one thing: launch the existing zero-dependency server
-// (`packages/web-ui/server/server.js`) as a detached Node process and report the URL.
+// (`packages/web-ui/server/server.ts`) as a detached Node process and report the URL.
 // It never proxies sessions itself, never writes Pi session files, and does not
 // change any other extension's behaviour. The server binds loopback by default and requires
 // a per-start access token; see packages/web-ui/README.md for the security posture.
@@ -54,15 +54,29 @@ function isFile(p: string): boolean {
 }
 
 function readMarker(cwd: string = process.cwd()): { kitSource?: string } {
-  // Match uninstall.mjs: a project marker in the cwd wins, otherwise the global marker.
+  // Match uninstall.ts: a project marker in the cwd wins, otherwise the global marker.
   const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
   const file = fs.existsSync(projectMarker) ? projectMarker : path.join(agentDir(), ".pi-kit.json");
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const kitSource = "kitSource" in parsed ? parsed.kitSource : undefined;
+    return typeof kitSource === "string" ? { kitSource } : {};
   } catch {
     return {};
   }
+}
+
+/**
+ * The web UI's `server/<stem>` entry point: `.ts` in a checkout or git-delivered install, `.js` in
+ * the compiled npm artefact (internal/docs/adr/0001). Null when neither exists.
+ */
+function webUiEntry(webUiRoot: string, stem: string): string | null {
+  for (const ext of [".ts", ".js"]) {
+    const file = path.join(webUiRoot, "server", `${stem}${ext}`);
+    if (isFile(file)) return file;
+  }
+  return null;
 }
 
 /**
@@ -74,7 +88,7 @@ function readMarker(cwd: string = process.cwd()): { kitSource?: string } {
  * ship the web UI) degrades to a clear message.
  */
 export function findWebUiRoot(): string | null {
-  const hasServer = (dir: string) => isFile(path.join(dir, "server", "server.js"));
+  const hasServer = (dir: string) => webUiEntry(dir, "server") !== null;
 
   const override = process.env.PI_KIT_WEBUI_ROOT?.trim();
   if (override && hasServer(override)) return override;
@@ -232,8 +246,8 @@ function consoleProcess(pid: number, webUiRoot: string): "console" | "other" | "
   } catch {
     return "unknown";
   }
-  const serverJs = path.join(webUiRoot, "server", "server.js");
-  return raw.split("\0").includes(serverJs) ? "console" : "other";
+  const argv = raw.split("\0");
+  return [".ts", ".js"].some((ext) => argv.includes(path.join(webUiRoot, "server", `server${ext}`))) ? "console" : "other";
 }
 
 // GET a console path and return the status code and (bounded) body, or null when unreachable.
@@ -278,10 +292,11 @@ async function tokenAccepted(token: string): Promise<boolean | null> {
 // The auth mode a running console reports on its (unauthenticated) health endpoint.
 async function serverAuthMode(): Promise<"token" | "off" | null> {
   const reply = await probe("/api/health", HEALTH_TIMEOUT_MS);
-  if (!reply || reply.status !== 200) return null;
+  if (reply?.status !== 200) return null;
   try {
-    const parsed = JSON.parse(reply.body) as { auth?: unknown };
-    return parsed.auth === "off" ? "off" : parsed.auth === "token" ? "token" : null;
+    const parsed: unknown = JSON.parse(reply.body);
+    const auth: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "auth") : undefined;
+    return auth === "off" ? "off" : auth === "token" ? "token" : null;
   } catch {
     return null;
   }
@@ -356,7 +371,7 @@ async function startServer(webUiRoot: string): Promise<StartResult> {
   const out = fs.openSync(logFile(webUiRoot), "a");
   let child;
   try {
-    child = spawn(process.execPath, [path.join(webUiRoot, "server", "server.js")], {
+    child = spawn(process.execPath, [webUiEntry(webUiRoot, "server") ?? path.join(webUiRoot, "server", "server.ts")], {
       cwd: webUiRoot,
       detached: true,
       stdio: ["ignore", out, out],

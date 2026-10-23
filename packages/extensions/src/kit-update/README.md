@@ -37,6 +37,10 @@ companion changes, the recorded profile is re-applied with the kit's installer
 restart of pi; everything else reloads in place. For a local checkout, `/update kit` runs
 `git pull --ff-only`.
 
+pi is updated only up to the version the kit's `package.json` pins for its test suite. A newer pi
+is reported, not offered, because `pi update --self` always installs the newest pi (see
+[Updates](../../../../docs/updates.md); `tests/kit-update-smoke.ts`).
+
 If a kit release changes its delivery (for example from git to npm), `/update kit` moves the
 install to the new delivery, keeping its channel and profile.
 

@@ -2,14 +2,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 
-// AGENTS.md is deliberately not a candidate: pi already loads AGENTS.md/CLAUDE.md into the
-// system prompt as project context, so re-injecting it here duplicated ~700+ tokens per turn.
+// AGENTS.md is deliberately not a candidate: pi already loads the first of AGENTS.md or
+// CLAUDE.md in each directory into the system prompt as project context (not both), so
+// re-injecting it here duplicated ~700+ tokens per turn.
 const CANDIDATE_NAMES = ["GUIDELINES.md", ".pi/GUIDELINES.md"];
 
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 

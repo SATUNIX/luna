@@ -37,17 +37,21 @@ export const PHRASES = [
   "Sifting through details", "Lining things up", "Double-checking", "Piecing it together",
 ];
 
-export function toolPhrase(toolName: string, args: any): string {
+/** `String(value)` for a value of any type (tool arguments are not checked by pi). */
+const toText = (value: unknown): string => String(value);
+
+export function toolPhrase(toolName: string, args: unknown): string {
   const clip = (s: unknown, n = 40) => {
-    const v = String(s ?? "").replace(/\s+/g, " ").trim();
+    const v = toText(s ?? "").replace(/\s+/g, " ").trim();
     return v.length > n ? `${v.slice(0, n - 1)}…` : v;
   };
   const base = (p: unknown) => (typeof p === "string" ? path.basename(p) : "");
+  const input = args as { path?: unknown; command?: unknown } | null | undefined;
   switch (toolName) {
-    case "read": return `Reading ${base(args?.path) || "a file"}`;
-    case "edit": return `Editing ${base(args?.path) || "a file"}`;
-    case "write": return `Writing ${base(args?.path) || "a file"}`;
-    case "bash": return args?.command ? `Running \`${clip(args.command)}\`` : "Running a command";
+    case "read": return `Reading ${base(input?.path) || "a file"}`;
+    case "edit": return `Editing ${base(input?.path) || "a file"}`;
+    case "write": return `Writing ${base(input?.path) || "a file"}`;
+    case "bash": return input?.command ? `Running \`${clip(input.command)}\`` : "Running a command";
     case "grep": case "find": case "ls": return "Searching the workspace";
     case "subagent": case "dispatch_specialist": case "dispatch_validator": return "Delegating to a subagent";
     case "todo": return "Updating the todo list";
@@ -81,9 +85,10 @@ export const TIPS: Tip[] = [
   { text: "Press Esc to interrupt the agent." },
 ];
 
-export function pick<T>(list: T[], avoid?: T): T {
+export function pick<T>(list: T[], avoid?: T): T | undefined {
   if (list.length <= 1) return list[0];
   let item = list[Math.floor(Math.random() * list.length)];
-  if (item === avoid) item = list[(list.indexOf(item) + 1) % list.length];
+  // The index is in range (the list has at least two items), so `item` is one of them.
+  if (item === avoid) item = list[(list.indexOf(item as T) + 1) % list.length];
   return item;
 }

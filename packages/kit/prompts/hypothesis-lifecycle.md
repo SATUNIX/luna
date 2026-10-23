@@ -1,6 +1,12 @@
+---
+argument-hint: "[hypothesis]"
+---
+
 # Hypothesis Lifecycle
 
 Update hypothesis state.
+
+Hypothesis: ${@:-the hypothesis under discussion}
 
 Return:
 

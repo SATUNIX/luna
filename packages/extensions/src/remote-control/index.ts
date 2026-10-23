@@ -1,11 +1,11 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { SessionBridge, terminalUi, type BridgeState } from "./bridge.ts";
-import { ControlLink, ensureHost, HostError, hostStatus, adminRequest, resetIdentity, stopHost, stateDir, type Json } from "./host.ts";
+import { ControlLink, ensureHost, HostError, hostStatus, adminRequest, isJson, resetIdentity, show, stopHost, stateDir, type Json } from "./host.ts";
 
 // remote-control adds `/remote`: drive this pi from the pi remote Android app, directly over the
 // LAN or a VPN such as Tailscale. No cloud service is involved.
 //
-// `/remote` starts the pi remote host (packages/web-ui/server/remote-host.js, a detached Node
+// `/remote` starts the pi remote host (packages/web-ui/server/remote-host.ts, a detached Node
 // process shared by every terminal), shares this session with it, and, when no phone is linked
 // yet, shows a QR code to link one. Linking needs the one-time code from this terminal AND the
 // operator's approval here, after comparing the device ID the phone shows; phones then log in
@@ -30,9 +30,9 @@ interface Shared {
 }
 
 function shared(): Shared {
-  const g = globalThis as any;
-  if (!g[SHARED_KEY]) g[SHARED_KEY] = { wantAttach: false } satisfies Shared;
-  return g[SHARED_KEY] as Shared;
+  const g = globalThis as { [SHARED_KEY]?: Shared };
+  g[SHARED_KEY] ??= { wantAttach: false };
+  return g[SHARED_KEY];
 }
 
 const USAGE = [
@@ -52,7 +52,7 @@ const USAGE = [
 const SUBCOMMANDS = ["pair", "status", "devices", "revoke", "rename", "detach", "stop", "reset", "help"];
 
 function isTerminal(ctx: ExtensionContext): boolean {
-  const mode = (ctx as any).mode as string | undefined;
+  const mode: string | undefined = ctx.mode;
   return mode ? mode === "tui" : ctx.hasUI;
 }
 
@@ -69,11 +69,33 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The objects in a host reply's list; anything else in it is skipped. */
+function jsonList(value: unknown): Json[] {
+  return Array.isArray(value) ? value.filter(isJson) : [];
+}
+
+/** A host reply's `key` field, which must be an object (a list of objects with `list`); anything else is a host fault. */
+function replyField(reply: unknown, key: string): Json {
+  const value = isJson(reply) ? reply[key] : undefined;
+  if (!isJson(value)) throw new HostError(`the remote host sent a malformed reply (${key})`, "refused");
+  return value;
+}
+
+function replyList(reply: unknown, key: string): Json[] {
+  const value = isJson(reply) ? reply[key] : undefined;
+  if (!Array.isArray(value)) throw new HostError(`the remote host sent a malformed reply (${key})`, "refused");
+  return jsonList(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 // ------------------------------------------------------------------ rendering ---
 /** Half-block QR code: two module rows per text row, dark modules black on a white background. */
 export function qrLines(rows: string[], quiet = 2): string[] {
   const size = rows.length;
-  const dark = (r: number, c: number) => r >= 0 && r < size && c >= 0 && c < size && rows[r][c] === "1";
+  const dark = (r: number, c: number) => r >= 0 && r < size && c >= 0 && c < size && rows[r]?.[c] === "1";
   const lines: string[] = [];
   for (let r = -quiet; r < size + quiet; r += 2) {
     let line = "";
@@ -88,9 +110,13 @@ export function qrLines(rows: string[], quiet = 2): string[] {
 }
 
 function hostLine(status: Json): string {
-  const addresses: string[] = Array.isArray(status.addresses) ? status.addresses : [];
-  if (!addresses.length) return `port ${status.port} (no network address found; set PI_REMOTE_ADVERTISE)`;
-  return addresses.map((a) => `${a.includes(":") ? `[${a}]` : a}:${status.port}`).join(", ");
+  const addresses: unknown[] = Array.isArray(status.addresses) ? status.addresses : [];
+  const port = String(status.port);
+  if (!addresses.length) return `port ${port} (no network address found; set PI_REMOTE_ADVERTISE)`;
+  return addresses.map((item) => {
+    const a = String(item);
+    return `${a.includes(":") ? `[${a}]` : a}:${port}`;
+  }).join(", ");
 }
 
 /** Rows kept for what shares the screen with the widget: the waiting dialog, the footer and a spacer. */
@@ -138,16 +164,17 @@ function wrap(text: string, width: number, hang = 0): string[] {
  */
 export function pairPanel(offer: Json, width: number, termRows: number, style?: { title(s: string): string; dim(s: string): string }): string[] {
   const inner = Math.max(1, width - 2);
-  const qr = Array.isArray(offer.qr?.rows) ? qrLines(offer.qr.rows) : [];
-  const qrWidth = (offer.qr?.size || 0) + 4;
-  const expires = new Date(offer.expiresAt);
+  const qrInfo = isJson(offer.qr) ? offer.qr : undefined;
+  const qr = isStringArray(qrInfo?.rows) ? qrLines(qrInfo.rows) : [];
+  const qrWidth = (typeof qrInfo?.size === "number" ? qrInfo.size : 0) + 4;
+  const expires = new Date(typeof offer.expiresAt === "string" || typeof offer.expiresAt === "number" ? offer.expiresAt : NaN);
   const at = Number.isNaN(expires.getTime()) ? "" : ` (expires ${expires.toTimeString().slice(0, 5)})`;
   const title = `pi remote: link a phone${at}`;
   const room = termRows > 0 ? termRows - RESERVED_ROWS : Infinity;
   const fields = (w: number) => [
     ...wrap(`Address      ${hostLine(offer)}`, w, 13),
-    ...wrap(`Code         ${offer.codeDisplay}`, w, 13),
-    ...wrap(`Certificate  ${offer.fingerprintDisplay}`, w, 13),
+    ...wrap(`Code         ${String(offer.codeDisplay)}`, w, 13),
+    ...wrap(`Certificate  ${String(offer.fingerprintDisplay)}`, w, 13),
   ];
   const approve = (w: number) => wrap("You approve the phone here after it asks; the code alone links nothing.", w);
   const out: string[] = wrap(title, inner).map((line) => (style ? style.title(line) : line));
@@ -171,7 +198,7 @@ export function pairPanel(offer: Json, width: number, termRows: number, style?: 
 
 /** The widget pi mounts above the editor: a component, so pi does not cut it off at 10 lines. */
 function pairWidget(offer: Json) {
-  return (tui: any, theme: any) => ({
+  return (tui: { terminal?: { rows?: number } }, theme: Theme | undefined) => ({
     render: (width: number) =>
       pairPanel(offer, width, Number(tui?.terminal?.rows) || 0, theme ? { title: (s) => theme.bold(theme.fg("accent", s)), dim: (s) => theme.fg("dim", s) } : undefined),
     invalidate() {},
@@ -181,24 +208,25 @@ function pairWidget(offer: Json) {
 function deviceLines(devices: Json[]): string[] {
   if (!devices.length) return ["  (no phones linked; /remote pair links one)"];
   return devices.map((d) => {
-    const seen = d.lastSeenAt ? `last seen ${String(d.lastSeenAt).slice(0, 16).replace("T", " ")}` : "never seen";
-    return `  ${d.online ? "●" : "○"} ${d.name}  ${d.display}  ${seen}${d.lastAddress ? ` from ${d.lastAddress}` : ""}`;
+    const seen = d.lastSeenAt ? `last seen ${show(d.lastSeenAt).slice(0, 16).replace("T", " ")}` : "never seen";
+    return `  ${d.online ? "●" : "○"} ${String(d.name)}  ${String(d.display)}  ${seen}${d.lastAddress ? ` from ${show(d.lastAddress)}` : ""}`;
   });
 }
 
 function statusLines(status: Json, attachedHere: boolean): string[] {
-  const sessions: Json[] = Array.isArray(status.terminalSessions) ? status.terminalSessions : [];
+  const sessions: unknown[] = Array.isArray(status.terminalSessions) ? status.terminalSessions : [];
+  const recent = jsonList(status.recent);
   return [
-    `pi remote host "${status.name}" (pid ${status.pid}, ${status.version})`,
-    `  Listening    ${status.bindMode === "all" ? "all interfaces" : status.bind}, port ${status.port}`,
+    `pi remote host "${String(status.name)}" (pid ${String(status.pid)}, ${String(status.version)})`,
+    `  Listening    ${status.bindMode === "all" ? "all interfaces" : String(status.bind)}, port ${String(status.port)}`,
     `  Reach it at  ${hostLine(status)}`,
-    `  Certificate  ${status.fingerprintDisplay}`,
+    `  Certificate  ${String(status.fingerprintDisplay)}`,
     `  This session ${attachedHere ? "is shared" : "is not shared (/remote shares it)"}`,
-    `  Shared terminal sessions: ${sessions.length}; sessions started from phones: ${status.runningSessions}; open phone streams: ${status.streams}`,
+    `  Shared terminal sessions: ${sessions.length}; sessions started from phones: ${String(status.runningSessions)}; open phone streams: ${String(status.streams)}`,
     "Linked phones:",
-    ...deviceLines(Array.isArray(status.devices) ? status.devices : []),
-    ...(Array.isArray(status.recent) && status.recent.length
-      ? ["Recent refusals:", ...status.recent.map((r: Json) => `  ${String(r.at || "").slice(0, 19).replace("T", " ")} ${r.event}${r.address ? ` from ${r.address}` : ""}`)]
+    ...deviceLines(jsonList(status.devices)),
+    ...(recent.length
+      ? ["Recent refusals:", ...recent.map((r) => `  ${show(r.at || "").slice(0, 19).replace("T", " ")} ${String(r.event)}${r.address ? ` from ${show(r.address)}` : ""}`)]
       : []),
   ];
 }
@@ -228,14 +256,16 @@ async function runPairing(ctx: ExtensionCommandContext): Promise<PairOutcome> {
 
   let offer: Json;
   try {
-    offer = await admin.request("pair.create", { ttlSec: PAIR_TTL_SEC });
+    const created = await admin.request("pair.create", { ttlSec: PAIR_TTL_SEC });
+    if (!isJson(created)) throw new HostError("the remote host sent a malformed pairing offer", "refused");
+    offer = created;
   } catch (error) {
     admin.close();
     throw error;
   }
 
   ctx.ui.setWidget(WIDGET, pairWidget(offer), { placement: "aboveEditor" });
-  const expiresAt = Date.parse(offer.expiresAt) || Date.now() + PAIR_TTL_SEC * 1000;
+  const expiresAt = Date.parse(String(offer.expiresAt)) || Date.now() + PAIR_TTL_SEC * 1000;
   try {
     for (;;) {
       // Wait for a link request, the code to expire, or the operator to give up.
@@ -243,7 +273,7 @@ async function runPairing(ctx: ExtensionCommandContext): Promise<PairOutcome> {
       wake = () => waiting.abort();
       if (events.length || hostGone) waiting.abort();
       const expiry = setTimeout(() => waiting.abort(), Math.max(0, expiresAt - Date.now()));
-      const choice = await ui.select("Waiting for the phone: scan the QR code above with pi remote", ["Cancel linking"], { signal: waiting.signal });
+      const choice: unknown = await ui.select("Waiting for the phone: scan the QR code above with pi remote", ["Cancel linking"], { signal: waiting.signal });
       clearTimeout(expiry);
       wake = null;
 
@@ -266,17 +296,18 @@ async function runPairing(ctx: ExtensionCommandContext): Promise<PairOutcome> {
         continue;
       }
       if (event.name === "pair.closed") {
-        say(ctx, `remote: pairing ended: ${event.data?.reason || "closed"}. /remote pair makes a new code.`, "warning");
+        const reason = isJson(event.data) ? event.data.reason : undefined;
+        say(ctx, `remote: pairing ended: ${show(reason || "closed")}. /remote pair makes a new code.`, "warning");
         return "failed";
       }
       if (event.name !== "pair.request") continue;
 
-      const request = event.data || {};
+      const request: Json = isJson(event.data) ? event.data : {};
       ctx.ui.setWidget(WIDGET, undefined);
       const title = [
-        `Link "${request.name}" (${request.platform || "phone"}) from ${request.address || "an unknown address"}?`,
+        `Link "${String(request.name)}" (${show(request.platform || "phone")}) from ${show(request.address || "an unknown address")}?`,
         "",
-        `   Device ID   ${request.deviceIdDisplay}`,
+        `   Device ID   ${String(request.deviceIdDisplay)}`,
         "",
         "Approve only if the phone in your hand shows exactly this device ID.",
         request.alreadyLinked ? "This key is already linked; approving keeps it linked under the new name." : "",
@@ -284,14 +315,15 @@ async function runPairing(ctx: ExtensionCommandContext): Promise<PairOutcome> {
         .filter((line, i, all) => line !== "" || (i > 0 && all[i - 1] !== ""))
         .join("\n");
       const approve = "Approve: the device IDs match";
-      const answer = await ui.select(title, [approve, "Reject"], { timeout: APPROVAL_TIMEOUT_MS });
+      const answer: unknown = await ui.select(title, [approve, "Reject"], { timeout: APPROVAL_TIMEOUT_MS });
       const approved = answer === approve;
-      const result: Json = await admin.request("pair.decide", { requestId: request.requestId, approve: approved });
+      const result = await admin.request("pair.decide", { requestId: request.requestId, approve: approved });
+      if (!isJson(result)) throw new HostError("the remote host sent a malformed pairing decision", "refused");
       if (result.state === "approved") {
-        say(ctx, `remote: linked "${result.name}" (${result.deviceIdDisplay}).`);
+        say(ctx, `remote: linked "${String(result.name)}" (${String(result.deviceIdDisplay)}).`);
         return "linked";
       }
-      say(ctx, `remote: ${result.state === "rejected" ? "rejected" : result.state} "${request.name}". /remote pair makes a new code.`, "warning");
+      say(ctx, `remote: ${result.state === "rejected" ? "rejected" : String(result.state)} "${String(request.name)}". /remote pair makes a new code.`, "warning");
       return "rejected";
     }
   } finally {
@@ -311,7 +343,7 @@ export default function remoteControl(pi: ExtensionAPI) {
 
   const setStatus = (state: BridgeState, detail?: string) => {
     const ctx = currentCtx;
-    if (!ctx || !ctx.hasUI) return;
+    if (!ctx?.hasUI) return;
     try {
       if (state === "attached") ctx.ui.setStatus(STATUS, "remote ●");
       else if (state === "reconnecting") ctx.ui.setStatus(STATUS, `remote ○ ${detail ? "host not running" : "reconnecting"}`);
@@ -334,7 +366,7 @@ export default function remoteControl(pi: ExtensionAPI) {
     if (!shared().wantAttach && process.env.PI_REMOTE_AUTO_ATTACH !== "1") return;
     // Re-share after /new, /resume, /fork or /reload, or share automatically when asked to.
     // The host is never started from here: only an explicit /remote starts it.
-    bridge.attach().catch((error) => {
+    bridge.attach().catch((error: unknown) => {
       if (shared().wantAttach) setStatus("reconnecting", errorText(error));
     });
   });
@@ -344,7 +376,7 @@ export default function remoteControl(pi: ExtensionAPI) {
     currentCtx = null;
   });
 
-  const forward = (event: any, ctx: ExtensionContext) => {
+  const forward = (event: Parameters<SessionBridge["observe"]>[0], ctx: ExtensionContext) => {
     currentCtx = ctx;
     bridge.observe(event);
   };
@@ -395,10 +427,10 @@ export default function remoteControl(pi: ExtensionAPI) {
       say(ctx, `remote: the host is running but this session could not be shared: ${errorText(error)}`, "error");
       return;
     }
-    const devices: Json[] = Array.isArray(status.devices) ? status.devices : [];
+    const devices: unknown[] = Array.isArray(status.devices) ? status.devices : [];
     if (started) say(ctx, `remote: host started, reachable at ${hostLine(status)}`);
     if (forcePair || devices.length === 0) {
-      const outcome = await runPairing(ctx).catch((error) => {
+      const outcome = await runPairing(ctx).catch((error: unknown) => {
         say(ctx, `remote: linking failed: ${errorText(error)}`, "error");
         return "failed" as const;
       });
@@ -422,9 +454,13 @@ export default function remoteControl(pi: ExtensionAPI) {
       const words = args.trim().split(/\s+/).filter(Boolean);
       const sub = (words[0] || "").toLowerCase();
 
-      if (sub === "help" || sub === "-h" || sub === "--help") return say(ctx, USAGE);
+      if (sub === "help" || sub === "-h" || sub === "--help") {
+        say(ctx, USAGE);
+        return;
+      }
       if (sub && !SUBCOMMANDS.includes(sub) && !["on", "start", "attach", "off"].includes(sub)) {
-        return say(ctx, `remote: unknown action "${sub}"\n\n${USAGE}`, "error");
+        say(ctx, `remote: unknown action "${sub}"\n\n${USAGE}`, "error");
+        return;
       }
 
       // Read-only views work everywhere; anything that links phones or shares sessions needs a
@@ -434,29 +470,41 @@ export default function remoteControl(pi: ExtensionAPI) {
         try {
           status = await hostStatus();
         } catch (error) {
-          return say(ctx, `remote: ${errorText(error)}`, "error");
+          say(ctx, `remote: ${errorText(error)}`, "error");
+          return;
         }
-        if (!status) return say(ctx, `remote: the host is not running. /remote starts it. (State: ${stateDir()})`);
-        return say(ctx, statusLines(status, bridge.attached).join("\n"));
+        if (!status) {
+          say(ctx, `remote: the host is not running. /remote starts it. (State: ${stateDir()})`);
+          return;
+        }
+        say(ctx, statusLines(status, bridge.attached).join("\n"));
+        return;
       }
       if (sub === "devices") {
         try {
-          const { devices } = await adminRequest<{ devices: Json[] }>("devices.list");
-          return say(ctx, ["Linked phones:", ...deviceLines(devices)].join("\n"));
+          const devices = replyList(await adminRequest("devices.list"), "devices");
+          say(ctx, ["Linked phones:", ...deviceLines(devices)].join("\n"));
+          return;
         } catch (error) {
-          if (error instanceof HostError && error.code === "not_running") return say(ctx, "remote: the host is not running. /remote starts it.");
-          return say(ctx, `remote: ${errorText(error)}`, "error");
+          if (error instanceof HostError && error.code === "not_running") {
+            say(ctx, "remote: the host is not running. /remote starts it.");
+            return;
+          }
+          say(ctx, `remote: ${errorText(error)}`, "error");
+          return;
         }
       }
       if (!isTerminal(ctx)) {
-        return say(ctx, "remote: this only works in an interactive pi terminal: linking a phone needs a person at the computer to approve it.", "error");
+        say(ctx, "remote: this only works in an interactive pi terminal: linking a phone needs a person at the computer to approve it.", "error");
+        return;
       }
 
       if (sub === "detach" || sub === "off") {
         shared().wantAttach = false;
         const was = bridge.attached;
         bridge.detach();
-        return say(ctx, was ? "remote: this session is no longer shared. The host keeps running (/remote stop stops it)." : "remote: this session was not shared.");
+        say(ctx, was ? "remote: this session is no longer shared. The host keeps running (/remote stop stops it)." : "remote: this session was not shared.");
+        return;
       }
 
       if (sub === "stop") {
@@ -464,50 +512,76 @@ export default function remoteControl(pi: ExtensionAPI) {
         bridge.detach();
         try {
           const stopped = await stopHost();
-          return say(ctx, stopped ? "remote: host stopped; every phone is disconnected." : "remote: the host was not running.");
+          say(ctx, stopped ? "remote: host stopped; every phone is disconnected." : "remote: the host was not running.");
+          return;
         } catch (error) {
-          return say(ctx, `remote: could not stop the host: ${errorText(error)}`, "error");
+          say(ctx, `remote: could not stop the host: ${errorText(error)}`, "error");
+          return;
         }
       }
 
       if (sub === "revoke" || sub === "rename") {
         const target = words[1];
-        if (!target) return say(ctx, `Usage: /remote ${sub} <device id prefix or name>${sub === "rename" ? " <new name>" : ""}`, "error");
+        if (!target) {
+          say(ctx, `Usage: /remote ${sub} <device id prefix or name>${sub === "rename" ? " <new name>" : ""}`, "error");
+          return;
+        }
         try {
           if (sub === "rename") {
             const name = words.slice(2).join(" ");
-            if (!name) return say(ctx, "Usage: /remote rename <device id prefix or name> <new name>", "error");
-            const { device } = await adminRequest<{ device: Json }>("devices.rename", { deviceId: target, name });
-            return say(ctx, `remote: renamed ${device.display} to "${device.name}".`);
+            if (!name) {
+              say(ctx, "Usage: /remote rename <device id prefix or name> <new name>", "error");
+              return;
+            }
+            const device = replyField(await adminRequest("devices.rename", { deviceId: target, name }), "device");
+            say(ctx, `remote: renamed ${String(device.display)} to "${String(device.name)}".`);
+            return;
           }
-          const { devices } = await adminRequest<{ devices: Json[] }>("devices.list");
+          const devices = replyList(await adminRequest("devices.list"), "devices");
           const q = target.toUpperCase().replace(/[\s-]/g, "");
-          const match = devices.filter((d) => d.id.startsWith(q) || String(d.name).toUpperCase() === target.toUpperCase());
-          if (match.length !== 1) return say(ctx, `remote: ${match.length ? "more than one" : "no"} linked phone matches "${target}".\n${deviceLines(devices).join("\n")}`, "error");
-          const ok = await terminalUi(ctx.ui).confirm(`Unlink "${match[0].name}" (${match[0].display})?`, "It is disconnected at once and must be linked again to come back.");
-          if (!ok) return say(ctx, "remote: not unlinked.");
-          const { revoked } = await adminRequest<{ revoked: Json }>("devices.revoke", { deviceId: match[0].id });
-          return say(ctx, `remote: unlinked "${revoked.name}" (${revoked.display}).`);
+          const match = devices.filter((d) => (typeof d.id === "string" && d.id.startsWith(q)) || String(d.name).toUpperCase() === target.toUpperCase());
+          const [only] = match;
+          if (match.length !== 1 || !only) {
+            say(ctx, `remote: ${match.length ? "more than one" : "no"} linked phone matches "${target}".\n${deviceLines(devices).join("\n")}`, "error");
+            return;
+          }
+          const ok: unknown = await terminalUi(ctx.ui).confirm(`Unlink "${String(only.name)}" (${String(only.display)})?`, "It is disconnected at once and must be linked again to come back.");
+          if (!ok) {
+            say(ctx, "remote: not unlinked.");
+            return;
+          }
+          const revoked = replyField(await adminRequest("devices.revoke", { deviceId: only.id }), "revoked");
+          say(ctx, `remote: unlinked "${String(revoked.name)}" (${String(revoked.display)}).`);
+          return;
         } catch (error) {
-          if (error instanceof HostError && error.code === "not_running") return say(ctx, "remote: the host is not running. /remote starts it.");
-          return say(ctx, `remote: ${errorText(error)}`, "error");
+          if (error instanceof HostError && error.code === "not_running") {
+            say(ctx, "remote: the host is not running. /remote starts it.");
+            return;
+          }
+          say(ctx, `remote: ${errorText(error)}`, "error");
+          return;
         }
       }
 
       if (sub === "reset") {
-        const ok = await terminalUi(ctx.ui).confirm(
+        const ok: unknown = await terminalUi(ctx.ui).confirm(
           "Reset pi remote?",
           "The host stops, its certificate and server identity are replaced, and every linked phone is unlinked. Phones must be linked again.",
         );
-        if (!ok) return say(ctx, "remote: nothing changed.");
+        if (!ok) {
+          say(ctx, "remote: nothing changed.");
+          return;
+        }
         shared().wantAttach = false;
         bridge.detach();
         try {
           await stopHost();
           const removed = resetIdentity();
-          return say(ctx, `remote: reset (${removed.length ? `removed ${removed.join(", ")}` : "nothing to remove"}). /remote starts a host with a new identity.`);
+          say(ctx, `remote: reset (${removed.length ? `removed ${removed.join(", ")}` : "nothing to remove"}). /remote starts a host with a new identity.`);
+          return;
         } catch (error) {
-          return say(ctx, `remote: reset failed: ${errorText(error)}`, "error");
+          say(ctx, `remote: reset failed: ${errorText(error)}`, "error");
+          return;
         }
       }
 

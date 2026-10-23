@@ -1,6 +1,12 @@
+---
+argument-hint: "[change]"
+---
+
 # Docs Change Review
 
 Review a documentation change for runtime alignment.
+
+Change: ${@:-the current documentation change}
 
 Return:
 

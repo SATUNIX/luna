@@ -123,14 +123,41 @@ export function validateApproval(raw: unknown): Approval | string {
   const aExtra = unknownKey(a, ACTION_KEYS);
   if (aExtra) return `unknown action field "${aExtra}"`;
   if (!isStr(a.command, 4000) || !isStr(a.summary, 4000) || !isStrArr(a.steps, 12) || !isStrArr(a.reasons, 12) || !isStrArr(a.chain, 12)) return "bad action";
-  return raw as unknown as Approval;
+  // Every field is checked above; rebuild the entry from them (no other keys can exist).
+  const grantedBy: GrantedBy = {
+    actor: g.actor,
+    via: g.via,
+    session: g.session,
+    mode: g.mode,
+    policy: g.policy,
+    ...(typeof g.choice === "string" ? { choice: g.choice } : {}),
+    ...(typeof g.detail === "string" ? { detail: g.detail } : {}),
+  };
+  return {
+    id: raw.id,
+    createdAt: raw.createdAt,
+    expiresAt: raw.expiresAt,
+    context: raw.context,
+    session: raw.context === "session" && typeof raw.session === "string" ? raw.session : null,
+    workspace: raw.workspace,
+    cwd: raw.cwd,
+    policy: raw.policy,
+    tool: raw.tool,
+    hash: raw.hash,
+    families: raw.families,
+    scopes: raw.scopes,
+    tier: raw.tier,
+    grantedBy,
+    action: { command: a.command, summary: a.summary, steps: a.steps, reasons: a.reasons, chain: a.chain },
+  };
 }
 
 function readFloors(raw: unknown, problems: string[], now: number): Floors {
   if (raw === undefined) return emptyFloors();
   const bad = () => {
     problems.push("floors is malformed: learned and similar-action approvals are suspended until they are re-earned");
-    return { all: new Date(now).toISOString(), workspaces: {}, actions: {} } as Floors;
+    const suspended: Floors = { all: new Date(now).toISOString(), workspaces: {}, actions: {} };
+    return suspended;
   };
   if (!isObj(raw)) return bad();
   const all = raw.all === null || raw.all === undefined ? null : isTime(raw.all) ? raw.all : "bad";
@@ -158,7 +185,7 @@ export function readApprovals(now = Date.now()): ApprovalsView {
   try {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") view.problems.push(`cannot read ${file}: ${String((error as Error)?.message ?? error)}`);
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") view.problems.push(`cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`);
     return view;
   }
   let raw: unknown;
@@ -261,7 +288,7 @@ function breakStaleLock(lock: string): void {
 function withLock<T>(file: string, fn: () => T): T {
   const lock = `${file}.lock`;
   const token = `${process.pid}:${crypto.randomUUID()}\n`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
@@ -277,7 +304,7 @@ function withLock<T>(file: string, fn: () => T): T {
       } catch {
         continue; // released between the attempt and the stat
       }
-      if (Date.now() > deadline) throw new Error("the approvals file is busy (another session holds its lock); nothing was written");
+      if (Date.now() > deadline) throw new Error("the approvals file is busy (another session holds its lock); nothing was written", { cause: error });
       sleepSync(20);
     }
   }
@@ -312,7 +339,7 @@ function save(view: ApprovalsView, approvals: Approval[], floors: Floors, now: n
   }
   const live = approvals.filter((a) => a.expiresAt === null || Date.parse(a.expiresAt) > now).slice(-MAX_APPROVALS);
   const body = { schemaVersion: APPROVALS_SCHEMA_VERSION, updated: new Date(now).toISOString(), approvals: live, floors: pruneFloors(floors, now) };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${now}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmp, file);
@@ -380,7 +407,7 @@ export function revokeApprovals(selectors: string[], scope: { root: string; work
   try {
     return revokeLocked(sels, scope, now, fail);
   } catch (error) {
-    return fail(`could not withdraw approvals: ${String((error as Error)?.message ?? error)}`);
+    return fail(`could not withdraw approvals: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -404,12 +431,13 @@ function revokeLocked(sels: string[], scope: { root: string; workspace: string }
         resetLearning.push(`everything learned in ${scope.workspace}`);
       } else {
         const hits = view.approvals.filter((a) => a.id === sel || (sel.length >= 6 && a.id.startsWith(sel)));
-        if (!hits.length) return fail(`no approval matches "${sel}" (see /firewall list)`);
+        const [hit] = hits;
+        if (!hit) return fail(`no approval matches "${sel}" (see /firewall list)`);
         if (hits.length > 1) return fail(`"${sel}" matches ${hits.length} approvals (${hits.map((h) => h.id).join(", ")}): give the whole id`);
-        drop.set(hits[0].id, hits[0]);
-        if (hits[0].grantedBy.actor === "learned") {
-          floors.actions[`${hits[0].workspace}|${hits[0].hash}`] = stamp;
-          resetLearning.push(`learning of ${hits[0].id}`);
+        drop.set(hit.id, hit);
+        if (hit.grantedBy.actor === "learned") {
+          floors.actions[`${hit.workspace}|${hit.hash}`] = stamp;
+          resetLearning.push(`learning of ${hit.id}`);
         }
       }
     }

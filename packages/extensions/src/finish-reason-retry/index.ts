@@ -65,9 +65,9 @@ export const PI_CONTEXT_SAFETY_TOKENS = 4096;
  * Returns null when the window is unknown (then nothing can be said about headroom).
  */
 export function derivedOutputCap(model: { contextWindow?: number; maxTokens?: number } | undefined, inputTokens: number): number | null {
-  const window = Number(model?.contextWindow ?? 0);
+  const window = model?.contextWindow ?? 0;
   if (!Number.isFinite(window) || window <= 0) return null;
-  const maxTokens = Number(model?.maxTokens ?? 0);
+  const maxTokens = model?.maxTokens ?? 0;
   const room = Math.max(1, window - Math.max(0, inputTokens) - PI_CONTEXT_SAFETY_TOKENS);
   return maxTokens > 0 ? Math.min(maxTokens, room) : room;
 }
@@ -78,11 +78,15 @@ function agentDir(): string {
   return path.join(os.homedir(), ".pi", "agent");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function compactionBlock(file: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, ""));
-    const c = parsed?.compaction;
-    return c !== null && typeof c === "object" && !Array.isArray(c) ? (c as Record<string, unknown>) : {};
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    const c = isRecord(parsed) ? parsed.compaction : undefined;
+    return isRecord(c) && !Array.isArray(c) ? c : {};
   } catch {
     return {};
   }
@@ -144,9 +148,10 @@ export default function (pi: ExtensionAPI) {
       const model = ctx?.model as { contextWindow?: number; maxTokens?: number } | undefined;
       const input = (message.usage?.input ?? 0) + (message.usage?.cacheRead ?? 0);
       const cap = derivedOutputCap(model, input);
-      const maxTokens = Number(model?.maxTokens ?? 0);
+      const maxTokens = model?.maxTokens ?? 0;
       if (cap !== null && maxTokens > 0 && cap < maxTokens) {
-        const window = Number(model!.contextWindow);
+        // A non-null cap means the model has a positive, finite window.
+        const window = model?.contextWindow ?? 0;
         const note = `reply cut off at ${fmt(message.usage?.output ?? 0)} tokens: with ${fmt(input)} tokens of input in a ${fmt(window)} window only ${fmt(cap)} of the model's ${fmt(maxTokens)} output tokens fit (pi keeps ${fmt(PI_CONTEXT_SAFETY_TOKENS)} spare). ` +
           "The context is nearly full: compact it (/compact, /compress) or start a fresh session.";
         if (note !== lastLengthNote) {
@@ -162,7 +167,8 @@ export default function (pi: ExtensionAPI) {
     // A full context window that nothing will recover: say so in the message itself.
     if (typeof message.errorMessage === "string" && !message.errorMessage.includes(OVERFLOW_TAG)) {
       const model = ctx?.model as { contextWindow?: number } | undefined;
-      const window = Number(model?.contextWindow ?? 0) > 0 ? Number(model!.contextWindow) : 0;
+      const contextWindow = model?.contextWindow ?? 0;
+      const window = contextWindow > 0 ? contextWindow : 0;
       if (isContextOverflow(message, window)) {
         let trusted: boolean | undefined;
         try {

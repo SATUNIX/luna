@@ -14,7 +14,7 @@
     "pi_system_governance": {
       "command": "node",
       "args": [
-        "/opt/pi-agent/mcp-servers/governance/index.js"
+        "/opt/pi-agent/mcp-servers/governance/index.ts"
       ],
       "lifecycle": "lazy",
       "directTools": false,
@@ -27,7 +27,7 @@
     "memory_mcp": {
       "command": "node",
       "args": [
-        "/opt/pi-agent/mcp-servers/memory-mcp/index.js"
+        "/opt/pi-agent/mcp-servers/memory-mcp/index.ts"
       ],
       "lifecycle": "lazy",
       "directTools": false,

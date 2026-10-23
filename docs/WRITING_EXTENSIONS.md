@@ -3,9 +3,11 @@
 ## Quick start
 
 ```sh
-npm run new -- my-extension
+npm run new -- my-extension     # also runs npm run catalog
 # implement packages/extensions/src/my-extension/index.ts
 # fill packages/extensions/src/my-extension/extension.json
+# if the checkout has internal/public-release/manifest.json, add the new files to its "public" list
+npm run catalog
 npm run verify
 ```
 
@@ -37,7 +39,7 @@ for a quarantined `stub`). See the verify checks below.
 
 ## What `npm run verify` enforces (with a worked failure for each)
 
-`packages/core/verify.mjs` is the gate CI runs. Every check below fails the build; the parenthetical is
+`packages/core/verify.ts` is the gate CI runs. Every check below fails the build; the parenthetical is
 what you'd see if you broke it.
 
 | Check | Fails when | Worked failure |
@@ -58,7 +60,7 @@ what you'd see if you broke it.
 
 The self-containment lint scans every `.ts` module in an extension at any depth, so a violation in a nested file such as `sub/bad.ts` is reported just like one in `index.ts`.
 
-To reproduce any of these safely: make the change, run `node packages/core/verify.mjs`, observe the
+To reproduce any of these safely: make the change, run `node packages/core/verify.ts`, observe the
 FAIL, then revert. `npm run eval` (the offline fixture harness) and `npm run test:security`
 cover *behavioural* regressions the static gate can't see.
 

@@ -1,0 +1,13 @@
+{
+  // Node-run code (internal/docs/adr/0001): the console server, its installer and scripts. The browser
+  // code under public/ and mobile/ has its own project (stage 5).
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true
+  },
+  "include": ["./server/**/*.ts", "./*.ts", "./scripts/*.ts"],
+  "exclude": ["./public", "./mobile", "node_modules"]
+}

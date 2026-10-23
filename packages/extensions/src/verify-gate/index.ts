@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -46,6 +46,15 @@ const CHILD_ENV_FLAG = "PI_KIT_VERIFY_REVIEWER_CHILD";
 const DEFAULT_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const REVIEW_STREAM_CAP = 16 * 1024 * 1024;
 
+// Parsed JSON and other outside values stay `unknown` until guards like these narrow them.
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isArray(value: unknown): value is unknown[] {
+	return Array.isArray(value);
+}
+
 // ---------------------------------------------------------------------------
 // Check command
 // ---------------------------------------------------------------------------
@@ -56,13 +65,12 @@ const REVIEW_STREAM_CAP = 16 * 1024 * 1024;
 // missing script is reported as "nothing was checked", not conflated with a real pass.
 function hasVerifyScript(cwd: string): boolean {
 	try {
-		const pkg = JSON.parse(
+		const pkg: unknown = JSON.parse(
 			fs.readFileSync(path.join(cwd, "package.json"), "utf8"),
 		);
-		return (
-			typeof pkg?.scripts?.verify === "string" &&
-			pkg.scripts.verify.trim().length > 0
-		);
+		const scripts = isRecord(pkg) ? pkg.scripts : undefined;
+		const verify = isRecord(scripts) ? scripts.verify : undefined;
+		return typeof verify === "string" && verify.trim().length > 0;
 	} catch {
 		return false;
 	}
@@ -116,6 +124,7 @@ function runCheck(cwd: string, automatic = false): Promise<CheckResult> {
 		execFile(
 			cmd.command,
 			cmd.args,
+			// eslint-disable-next-line no-restricted-syntax -- PI_KIT_VERIFY_CMD is an operator-set shell command line by design, and npm is a .cmd shim on Windows
 			{ cwd, shell: true, timeout: 120_000, maxBuffer: 1024 * 1024 },
 			(err, stdout, stderr) => {
 				const output = (stdout + stderr).trim();
@@ -135,8 +144,26 @@ function runCheck(cwd: string, automatic = false): Promise<CheckResult> {
 // ---------------------------------------------------------------------------
 
 // Cross-extension pending marker. Other board readers fail closed while a run is active.
+// REL-5: each run writes its own .pi/verify-pending/<run>.json and removes only that file,
+// so the first of two overlapping runs (another session, or /verify beside the turn_end
+// check) cannot clear the marker while the other is still running. The legacy flat
+// .pi/verify-pending.json is still read, so a marker from an older build keeps blocking.
 function pendingMarkerPath(cwd: string): string {
 	return path.join(cwd, ".pi", "verify-pending.json");
+}
+function pendingRunDir(cwd: string): string {
+	return path.join(cwd, ".pi", "verify-pending");
+}
+function pendingRunFiles(cwd: string): string[] {
+	try {
+		const dir = pendingRunDir(cwd);
+		return fs
+			.readdirSync(dir)
+			.filter((name) => name.endsWith(".json"))
+			.map((name) => path.join(dir, name));
+	} catch {
+		return [];
+	}
 }
 
 // A verify run is normally seconds to minutes; a marker older than this is a crash
@@ -152,18 +179,24 @@ function verifyPendingTtlMs(): number {
 }
 
 /**
- * True when a verify run is genuinely in flight: the marker exists and is younger
- * than the TTL. A missing, unreadable, malformed, or stale marker is not active.
+ * True when a verify run is genuinely in flight: a marker (the legacy flat file or
+ * any per-run file) exists and is younger than the TTL. A missing, unreadable,
+ * malformed, or stale marker is not active.
  * Exported so orchestrator/conductor's local pending checks can call it instead of
  * testing the file's bare existence.
  */
 export function isVerifyPendingActive(cwd: string): boolean {
-	const file = pendingMarkerPath(cwd);
+	return [pendingMarkerPath(cwd), ...pendingRunFiles(cwd)].some(isFreshPendingFile);
+}
+
+function isFreshPendingFile(file: string): boolean {
 	try {
 		const raw = fs.readFileSync(file, "utf8");
-		let startedAt = Date.parse(
-			(JSON.parse(raw) as { startedAt?: string })?.startedAt ?? "",
-		);
+		const marker: unknown = JSON.parse(raw);
+		// Date.parse converts a non-string argument with String() itself, so converting here
+		// reads every value exactly as before while the parsed field stays `unknown`.
+		const value: unknown = isRecord(marker) ? (marker.startedAt ?? "") : "";
+		let startedAt = Date.parse(String(value));
 		// Fall back to the file's own mtime when the payload is malformed, so a corrupt
 		// crash leftover still ages out instead of blocking forever.
 		if (Number.isNaN(startedAt)) startedAt = fs.statSync(file).mtimeMs;
@@ -178,24 +211,38 @@ export function isVerifyPending(cwd: string): boolean {
 	return isVerifyPendingActive(cwd);
 }
 
-function setVerifyPending(cwd: string): void {
+/** Writes this run's own pending marker and returns its path, for clearVerifyPending. */
+function setVerifyPending(cwd: string): string {
+	const file = path.join(
+		pendingRunDir(cwd),
+		`${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`,
+	);
 	try {
-		fs.mkdirSync(path.dirname(pendingMarkerPath(cwd)), { recursive: true });
+		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(
-			pendingMarkerPath(cwd),
+			file,
 			JSON.stringify({ startedAt: new Date().toISOString() }),
 		);
 	} catch {
 		/* best effort */
 	}
+	return file;
 }
 
-function clearVerifyPending(cwd: string): void {
+function clearVerifyPending(file: string): void {
 	try {
-		fs.rmSync(pendingMarkerPath(cwd), { force: true });
+		fs.rmSync(file, { force: true });
 	} catch {
 		/* best effort */
 	}
+}
+
+// Removes crash leftovers only: the legacy flat marker and run markers past the TTL. A
+// marker that is still fresh may belong to another session's live run and is kept.
+function pruneStalePending(cwd: string): void {
+	for (const file of [pendingMarkerPath(cwd), ...pendingRunFiles(cwd)])
+		if (fs.existsSync(file) && !isFreshPendingFile(file))
+			clearVerifyPending(file);
 }
 
 // Atomic write: temp file + rename, so a concurrent reader never observes a
@@ -207,16 +254,52 @@ function writeFileAtomic(file: string, content: string): void {
 	fs.renameSync(tmp, file);
 }
 
+// The board as read from disk: verdicts other writers recorded (verifier-board, conductor's
+// validator) and any other fields are written back unchanged, so they stay `unknown` here.
 type BoardFile = {
-	verdicts: Record<string, { pass: boolean; summary: string; at: string }>;
-	generation?: number;
+	verdicts: Record<string, unknown>;
+	generation?: unknown;
+	[key: string]: unknown;
 };
+
+function isBoardFile(value: unknown): value is BoardFile {
+	return (
+		isRecord(value) &&
+		// Reject null (typeof null === "object") so { verdicts: null } falls back to
+		// the initialised { verdicts: {} } instead of crashing later mutations.
+		isRecord(value.verdicts) &&
+		!Array.isArray(value.verdicts)
+	);
+}
 
 // Cross-process advisory lock around board mutations (O_EXCL lockfile + 60 s stale
 // takeover, the same pattern verifier-board and task-graph use). Without it two writers
 // can both read the board, apply their own verdict, and write back, silently dropping the
 // other's (Area 3 F1). Lock name is shared with verifier-board and conductor's validator.
 const BOARD_LOCK_STALE_MS = 60_000;
+// REL-6: another writer holds the lock for milliseconds, so a busy lock is retried with a
+// short bounded backoff (about 1.3 s in all) before the write is reported as failed.
+const BOARD_LOCK_RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 320, 640];
+function sleepSync(ms: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function acquireBoardLock(lock: string): number | undefined {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return fs.openSync(lock, "wx");
+		} catch {
+			try {
+				if (Date.now() - fs.statSync(lock).mtimeMs > BOARD_LOCK_STALE_MS)
+					fs.rmSync(lock, { force: true });
+			} catch {
+				/* retry below */
+			}
+		}
+		const delay = BOARD_LOCK_RETRY_DELAYS_MS[attempt];
+		if (delay === undefined) return undefined;
+		sleepSync(delay);
+	}
+}
 function withBoardLock<T>(
 	cwd: string,
 	operation: () => T,
@@ -225,21 +308,9 @@ function withBoardLock<T>(
 	let fd: number | undefined;
 	try {
 		fs.mkdirSync(path.dirname(lock), { recursive: true });
-		try {
-			fd = fs.openSync(lock, "wx");
-		} catch {
-			try {
-				if (Date.now() - fs.statSync(lock).mtimeMs > BOARD_LOCK_STALE_MS)
-					fs.rmSync(lock, { force: true });
-			} catch {
-				/* fail closed below */
-			}
-			try {
-				fd = fs.openSync(lock, "wx");
-			} catch {
-				return { ok: false, reason: "verifier board is busy or unreadable" };
-			}
-		}
+		fd = acquireBoardLock(lock);
+		if (fd === undefined)
+			return { ok: false, reason: "verifier board is busy or unreadable" };
 		try {
 			return { ok: true, value: operation() };
 		} finally {
@@ -263,70 +334,120 @@ function updateBoard(cwd: string, mutate: (board: BoardFile) => void): void {
 	const file = path.join(cwd, ".pi", "verdicts.json");
 	let board: BoardFile = { verdicts: {} };
 	try {
-		const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-		if (
-			parsed &&
-			// Reject null (typeof null === "object") so { verdicts: null } falls back to
-			// the initialised { verdicts: {} } instead of crashing later mutations.
-			parsed.verdicts &&
-			typeof parsed.verdicts === "object" &&
-			!Array.isArray(parsed.verdicts)
-		)
-			board = parsed;
+		const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+		if (isBoardFile(parsed)) board = parsed;
 	} catch {
 		/* fresh board */
 	}
 	mutate(board);
 	// Monotonic generation counter (AG-04: "atomically persist verdict generations") —
 	// a cheap, always-available freshness signal every consumer can compare against,
-	// independent of wall-clock skew.
-	board.generation = (board.generation ?? 0) + 1;
+	// independent of wall-clock skew. A value that is not a number (a hand-edited board)
+	// restarts the count: `"7" + 1` would concatenate to "71".
+	board.generation =
+		(typeof board.generation === "number" ? board.generation : 0) + 1;
 	writeFileAtomic(file, JSON.stringify(board, null, 2));
 }
 
 // Auto-wire record_verdict (Epic 4 Sprint 4.1): verify-gate writes its own result to the
 // verifier-board's .pi/verdicts.json instead of relying on the model to call record_verdict.
 // Same file contract as verifier-board (self-containment forbids importing it). Exported so
-// the eval harness can exercise it directly.
+// the eval harness can exercise it directly. Returns null when the verdict was written, or
+// the reason it was not, so callers can report a lost write (REL-6) instead of only logging it.
 export function recordVerifyVerdict(
 	cwd: string,
 	source: string,
 	pass: boolean,
 	summary: string,
-): void {
+	stale = false,
+): string | null {
 	try {
 		const locked = withBoardLock(cwd, () => {
 			updateBoard(cwd, (board) => {
-				board.verdicts[source] = {
-					pass,
-					summary: summary.slice(0, 200),
-					at: new Date().toISOString(),
-				};
+				board.verdicts[source] = stale
+					? staleVerdict()
+					: {
+							pass,
+							summary: summary.slice(0, 200),
+							at: new Date().toISOString(),
+						};
 			});
 		});
 		if (!locked.ok) throw new Error(locked.reason);
+		return null;
 	} catch (error) {
 		// M-04: never let verdict bookkeeping crash verify itself, but don't go fully
 		// silent either — a swallowed write failure here is exactly how a verdict silently
 		// fails to persist.
-		console.error(
-			`[verify-gate] failed to record verdict for '${source}': ${String((error as Error)?.message ?? error)}`,
-		);
+		const message = `failed to record verdict for '${source}' (${pass ? "PASS" : "FAIL"}): ${error instanceof Error ? error.message : String(error)}`;
+		console.error(`[verify-gate] ${message}`);
+		return message;
 	}
 }
 
-function removeVerdict(cwd: string, source: string): void {
+function removeVerdict(cwd: string, source: string): string | null {
 	try {
 		const locked = withBoardLock(cwd, () => {
 			updateBoard(cwd, (board) => {
-				delete board.verdicts[source];
+				board.verdicts = Object.fromEntries(
+					Object.entries(board.verdicts).filter(([key]) => key !== source),
+				);
 			});
 		});
 		if (!locked.ok) throw new Error(locked.reason);
+		return null;
 	} catch (error) {
-		console.error(
-			`[verify-gate] failed to remove verdict '${source}': ${String((error as Error)?.message ?? error)}`,
-		);
+		const message = `failed to remove verdict '${source}': ${error instanceof Error ? error.message : String(error)}`;
+		console.error(`[verify-gate] ${message}`);
+		return message;
+	}
+}
+
+// REL-6 (staleness half): a recorded verify/review PASS describes the workspace as it was
+// when verification ran. A later successful `write` or `edit` tool result in this process
+// makes that PASS stale, so it is turned into a FAIL ("stale") and completion stays blocked
+// until verification runs again. A PASS that a run is about to record is checked against the
+// edit count taken when that run started (VerificationOptions.editCount), so an edit made while
+// the run is in progress also leaves a stale FAIL. Known limitation: a `bash` tool result
+// (sed -i, git checkout, a formatter) and edits by another process are not seen as edits.
+// Returns null when nothing needed changing or the board was updated, else the reason.
+const VERIFY_GATE_SOURCES = ["verify", "review"];
+function staleVerdict(): Record<string, unknown> {
+	return {
+		pass: false,
+		stale: true,
+		summary: "stale: the workspace changed after this verdict; run /verify again",
+		at: new Date().toISOString(),
+	};
+}
+function passingOwnSources(board: BoardFile): string[] {
+	return VERIFY_GATE_SOURCES.filter((source) => {
+		const verdict = board.verdicts[source];
+		return isRecord(verdict) && verdict.pass === true;
+	});
+}
+export function invalidateVerdictsAfterEdit(cwd: string): string | null {
+	const file = path.join(cwd, ".pi", "verdicts.json");
+	try {
+		const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+		if (!isBoardFile(parsed) || passingOwnSources(parsed).length === 0)
+			return null;
+	} catch {
+		return null; // no board: nothing recorded, completion already fails closed
+	}
+	try {
+		const locked = withBoardLock(cwd, () => {
+			updateBoard(cwd, (board) => {
+				for (const source of passingOwnSources(board))
+					board.verdicts[source] = staleVerdict();
+			});
+		});
+		if (!locked.ok) throw new Error(locked.reason);
+		return null;
+	} catch (error) {
+		const message = `failed to mark verdicts stale after an edit: ${error instanceof Error ? error.message : String(error)}`;
+		console.error(`[verify-gate] ${message}`);
+		return message;
 	}
 }
 
@@ -344,12 +465,12 @@ function firstLine(output: string): string {
 // ---------------------------------------------------------------------------
 
 export type DoneContext = {
-	goal?: string;
+	goal?: string | undefined;
 	todos: Array<{ id: number; text: string; done: boolean }>;
 	tasks: Array<{ id: string; title: string; status: string }>;
 	requests: string[];
-	focus?: string;
-	changes?: string;
+	focus?: string | undefined;
+	changes?: string | undefined;
 };
 
 function readGoal(cwd: string): string | undefined {
@@ -376,15 +497,17 @@ function readTodos(cwd: string, sessionId?: string): DoneContext["todos"] {
 
 function readTasks(cwd: string): DoneContext["tasks"] {
 	try {
-		const graph = JSON.parse(
+		const graph: unknown = JSON.parse(
 			fs.readFileSync(path.join(cwd, ".pi", "task-graph.json"), "utf8"),
 		);
-		if (!Array.isArray(graph?.tasks)) return [];
-		return graph.tasks
+		const tasks: unknown = isRecord(graph) ? graph.tasks : undefined;
+		if (!isArray(tasks)) return [];
+		return tasks
 			.filter(
-				(t: any) => typeof t?.id === "string" && typeof t?.title === "string",
+				(t): t is Record<string, unknown> & { id: string; title: string } =>
+					isRecord(t) && typeof t.id === "string" && typeof t.title === "string",
 			)
-			.map((t: any) => ({
+			.map((t) => ({
 				id: t.id,
 				title: t.title,
 				status: typeof t.status === "string" ? t.status : "unknown",
@@ -395,28 +518,29 @@ function readTasks(cwd: string): DoneContext["tasks"] {
 }
 
 function recentRequests(entries: unknown, limit = 5): string[] {
-	if (!Array.isArray(entries)) return [];
+	if (!isArray(entries)) return [];
 	const out: string[] = [];
 	for (let i = entries.length - 1; i >= 0 && out.length < limit; i--) {
-		const msg = (
-			entries[i] as {
-				type?: string;
-				message?: { role?: string; content?: unknown };
-			}
-		)?.message;
+		const entry = entries[i];
+		const msg = isRecord(entry) ? entry.message : undefined;
 		if (
-			(entries[i] as { type?: string })?.type !== "message" ||
-			msg?.role !== "user"
+			!isRecord(entry) ||
+			entry.type !== "message" ||
+			!isRecord(msg) ||
+			msg.role !== "user"
 		)
 			continue;
 		const content = msg.content;
 		const text =
 			typeof content === "string"
 				? content
-				: Array.isArray(content)
+				: isArray(content)
 					? content
-							.filter((c: any) => c?.type === "text")
-							.map((c: any) => c.text)
+							.filter(
+								(c): c is Record<string, unknown> =>
+									isRecord(c) && c.type === "text",
+							)
+							.map((c) => c.text)
 							.join("\n")
 					: "";
 		const clean = text.trim();
@@ -559,13 +683,22 @@ function sections(output: string): Map<string, string> {
 	];
 	const map = new Map<string, string>();
 	for (let i = 0; i < found.length; i++) {
-		const start = (found[i].index ?? 0) + found[i][0].length;
-		map.set(
-			found[i][1].toLowerCase(),
-			output.slice(start, found[i + 1]?.index).trim(),
-		);
+		const match = found[i];
+		const name = match?.[1];
+		if (!match || name === undefined) continue;
+		const start = (match.index ?? 0) + match[0].length;
+		map.set(name.toLowerCase(), output.slice(start, found[i + 1]?.index).trim());
 	}
 	return map;
+}
+
+function criterionStatus(
+	value: string | undefined,
+): ReviewCriterion["status"] | undefined {
+	const status = value?.toUpperCase();
+	return status === "PASS" || status === "FAIL" || status === "UNKNOWN"
+		? status
+		: undefined;
 }
 
 /** Strict parse. A malformed or self-contradicting review is rejected, never read as a pass. */
@@ -580,11 +713,13 @@ export function parseReviewOutput(
 		const m = line.match(
 			/^\s*[-*]\s*\**(PASS|FAIL|UNKNOWN)\**\s*\|\s*([^|]+?)\s*(?:\|\s*(.*))?$/i,
 		);
-		if (m)
+		const status = criterionStatus(m?.[1]);
+		const criterion = m?.[2];
+		if (status && criterion !== undefined)
 			criteria.push({
-				status: m[1].toUpperCase() as ReviewCriterion["status"],
-				criterion: m[2].trim(),
-				evidence: (m[3] ?? "").trim(),
+				status,
+				criterion: criterion.trim(),
+				evidence: (m?.[3] ?? "").trim(),
 			});
 	}
 	if (!criteria.length)
@@ -617,7 +752,7 @@ export type ReviewRunResult =
 export type ReviewRunner = (
 	cwd: string,
 	task: string,
-	options: { model?: string; signal?: AbortSignal },
+	options: { model?: string | undefined; signal?: AbortSignal | undefined },
 ) => Promise<ReviewRunResult>;
 
 function envInt(name: string, fallback: number): number {
@@ -728,20 +863,13 @@ export const runReviewerProcess: ReviewRunner = async (
 			const line = (raw: string) => {
 				if (!raw.trim()) return;
 				try {
-					const event = JSON.parse(raw) as {
-						type?: string;
-						message?: {
-							role?: string;
-							content?: Array<{ type?: string; text?: string }>;
-						};
-					};
-					if (
-						event.type === "message_end" &&
-						event.message?.role === "assistant"
-					) {
-						const text = (event.message.content ?? [])
-							.filter((c) => c.type === "text" && c.text)
-							.map((c) => c.text)
+					const event: unknown = JSON.parse(raw);
+					const message = isRecord(event) && event.type === "message_end" ? event.message : undefined;
+					if (isRecord(message) && message.role === "assistant") {
+						const content: unknown[] = Array.isArray(message.content) ? message.content : [];
+						const text = content
+							.map((c) => (isRecord(c) && c.type === "text" && typeof c.text === "string" ? c.text : ""))
+							.filter(Boolean)
 							.join("\n");
 						if (text.trim()) lastText = text;
 					}
@@ -751,8 +879,10 @@ export const runReviewerProcess: ReviewRunner = async (
 			};
 			const onData = (chunk: Buffer, isErr: boolean) => {
 				bytes += chunk.length;
-				if (bytes > REVIEW_STREAM_CAP)
-					return kill(`reviewer output exceeded ${REVIEW_STREAM_CAP} bytes`);
+				if (bytes > REVIEW_STREAM_CAP) {
+					kill(`reviewer output exceeded ${REVIEW_STREAM_CAP} bytes`);
+					return;
+				}
 				if (isErr) {
 					stderr += chunk.toString();
 					return;
@@ -769,12 +899,17 @@ export const runReviewerProcess: ReviewRunner = async (
 				if (escalation) clearTimeout(escalation);
 				signal?.removeEventListener("abort", onAbort);
 				if (buffer.trim()) line(buffer);
-				if (killed) return resolve({ ok: false, reason: killed });
-				if (code !== 0 && !lastText)
-					return resolve({
+				if (killed) {
+					resolve({ ok: false, reason: killed });
+					return;
+				}
+				if (code !== 0 && !lastText) {
+					resolve({
 						ok: false,
 						reason: stderr.trim().slice(0, 300) || `reviewer exited ${code}`,
 					});
+					return;
+				}
 				resolve(
 					lastText
 						? { ok: true, output: lastText }
@@ -790,7 +925,7 @@ export const runReviewerProcess: ReviewRunner = async (
 	} catch (error) {
 		return {
 			ok: false,
-			reason: `reviewer launch failed: ${String((error as Error)?.message ?? error)}`,
+			reason: `reviewer launch failed: ${error instanceof Error ? error.message : String(error)}`,
 		};
 	} finally {
 		if (tmpDir)
@@ -811,17 +946,23 @@ export type VerificationReport = {
 	check: CheckResult;
 	review: { ran: true; review: ParsedReview } | { ran: false; reason: string };
 	done: DoneContext;
+	/** Verdict writes that failed (REL-6): the board may still show an older verdict. */
+	boardErrors: string[];
+	/** A write or edit happened while this run was in progress, so its PASS was recorded as stale. */
+	stale: boolean;
 	reportFile: string;
 	text: string;
 };
 
 export type VerificationOptions = {
-	focus?: string;
+	focus?: string | undefined;
 	entries?: unknown;
-	sessionId?: string;
-	model?: string;
+	sessionId?: string | undefined;
+	model?: string | undefined;
 	runner?: ReviewRunner;
-	signal?: AbortSignal;
+	signal?: AbortSignal | undefined;
+	/** Count of successful write/edit tool results so far; a change during the run makes it stale. */
+	editCount?: () => number;
 };
 
 function renderReport(
@@ -868,6 +1009,19 @@ function renderReport(
 				...r.review.review.nextActions.map((a) => `- ${a}`),
 			);
 	}
+	if (r.stale)
+		lines.push(
+			"",
+			"## Stale",
+			"A write or edit happened while this verification ran, so its PASS was recorded as a stale FAIL. Run /verify again.",
+		);
+	if (r.boardErrors.length)
+		lines.push(
+			"",
+			"## Verifier board NOT updated",
+			"The board may still show an older verdict. Re-run verification once the board is free.",
+			...r.boardErrors.map((e) => `- ${e}`),
+		);
 	if (r.check.ran && !r.check.ok)
 		lines.push(
 			"",
@@ -883,16 +1037,28 @@ export async function runVerification(
 	cwd: string,
 	options: VerificationOptions = {},
 ): Promise<VerificationReport> {
-	setVerifyPending(cwd);
+	const pendingFile = setVerifyPending(cwd);
+	const boardErrors: string[] = [];
+	const note = (error: string | null): void => {
+		if (error) boardErrors.push(error);
+	};
+	const editsAtStart = options.editCount?.();
+	let stale = false;
+	// A PASS is only recorded when no write/edit happened since this run started.
+	const record = (source: string, pass: boolean, summary: string): string | null => {
+		const changed =
+			options.editCount !== undefined && options.editCount() !== editsAtStart;
+		if (pass && changed) stale = true;
+		return recordVerifyVerdict(cwd, source, pass, summary, pass && changed);
+	};
 	try {
 		const check = await runCheck(cwd);
 		if (check.ran)
-			recordVerifyVerdict(
-				cwd,
+			note(record(
 				"verify",
 				check.ok,
 				check.ok ? `${check.label} passed` : firstLine(check.output),
-			);
+			));
 
 		const done = await collectDoneContext(
 			cwd,
@@ -934,32 +1100,31 @@ export async function runVerification(
 			const summary = r.pass
 				? `${r.criteria.length}/${r.criteria.length} criteria met${r.summary ? `: ${r.summary}` : ""}`
 				: `${failing.length} of ${r.criteria.length} criteria not met: ${failing.map((c) => `${c.status} ${c.criterion}`).join("; ")}`;
-			recordVerifyVerdict(cwd, "review", r.pass, summary);
+			note(record("review", r.pass, summary));
 		} else {
-			recordVerifyVerdict(
-				cwd,
+			note(record(
 				"review",
 				false,
 				`review did not run: ${review.reason}`,
-			);
+			));
 		}
 
 		if (!check.ran) {
 			// Fail closed when nothing at all was checked. When a real review ran, a
 			// missing check command is not a failure, so drop any stale check verdict.
-			if (review.ran) removeVerdict(cwd, "verify");
+			if (review.ran) note(removeVerdict(cwd, "verify"));
 			else
-				recordVerifyVerdict(
-					cwd,
+				note(record(
 					"verify",
 					false,
 					`${check.output} — nothing was checked (reviewer: ${review.reason})`,
-				);
+				));
 		}
 
-		const pass = (!check.ran || check.ok) && review.ran && review.review.pass;
+		const pass =
+			!stale && (!check.ran || check.ok) && review.ran && review.review.pass;
 		const at = new Date();
-		const base = { pass, check, review, done };
+		const base = { pass, check, review, done, boardErrors, stale };
 		const reportFile = path.join(cwd, ".pi", "verify-report.md");
 		const report = renderReport(base, at);
 		try {
@@ -969,7 +1134,7 @@ export async function runVerification(
 		}
 		return { ...base, reportFile, text: report };
 	} finally {
-		clearVerifyPending(cwd);
+		clearVerifyPending(pendingFile);
 	}
 }
 
@@ -977,7 +1142,7 @@ export async function runVerification(
 // Extension
 // ---------------------------------------------------------------------------
 
-function modelId(ctx: any): string | undefined {
+function modelId(ctx: Pick<ExtensionContext, "model">): string | undefined {
 	const override = process.env.PI_KIT_VERIFY_REVIEW_MODEL?.trim();
 	if (override) return override;
 	const m = ctx?.model;
@@ -992,12 +1157,17 @@ function shortResult(report: VerificationReport): string {
 	const review = report.review.ran
 		? `review ${report.review.review.pass ? "PASS" : "FAIL"} (${report.review.review.criteria.filter((c) => c.status === "PASS").length}/${report.review.review.criteria.length} criteria)`
 		: `review did not run: ${report.review.reason}`;
-	return `${head}\n${check}\n${review}\nreport: ${report.reportFile}`;
+	const board = report.boardErrors.length
+		? `\nverifier board NOT updated: ${report.boardErrors.join("; ")}`
+		: "";
+	return `${head}\n${check}\n${review}${board}\nreport: ${report.reportFile}`;
 }
 
 export default function (pi: ExtensionAPI) {
 	let projectCwd = "";
 	let dirty = false;
+	let editCount = 0;
+	const edits = (): number => editCount;
 	let correctionSent = false;
 	let running = false;
 	const isReviewerChild = process.env[CHILD_ENV_FLAG] === "1";
@@ -1006,7 +1176,7 @@ export default function (pi: ExtensionAPI) {
 		projectCwd = ctx.cwd;
 		// A marker left by a crashed/SIGKILLed prior session is stale — clear it so it
 		// cannot permanently block completion. A genuinely active run is left alone.
-		if (!isVerifyPendingActive(ctx.cwd)) clearVerifyPending(ctx.cwd);
+		pruneStalePending(ctx.cwd);
 		dirty = false;
 		correctionSent = false;
 	});
@@ -1015,21 +1185,26 @@ export default function (pi: ExtensionAPI) {
 		if (event.source !== "extension") correctionSent = false;
 	});
 
-	pi.on("tool_result", async (event) => {
-		if (!event.isError && ["write", "edit"].includes(event.toolName))
-			dirty = true;
+	pi.on("tool_result", async (event, ctx) => {
+		if (event.isError || !["write", "edit"].includes(event.toolName)) return;
+		dirty = true;
+		editCount++;
+		const lost = invalidateVerdictsAfterEdit(projectCwd || ctx?.cwd || "");
+		if (lost) ctx?.ui?.notify?.(`verify: ${lost}`, "error");
 	});
 
 	pi.registerCommand("verify", {
 		description:
 			"Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus]",
-		handler: async (args, ctx: any) => {
+		handler: async (args, ctx) => {
 			const cwd = projectCwd || ctx.cwd;
-			if (running)
-				return ctx.ui?.notify?.(
+			if (running) {
+				ctx.ui?.notify?.(
 					"verify: a verification is already running",
 					"warning",
 				);
+				return;
+			}
 			running = true;
 			ctx.ui?.setStatus?.(STATUS_KEY, "running…");
 			const job = (async () => {
@@ -1039,13 +1214,14 @@ export default function (pi: ExtensionAPI) {
 						entries: ctx.sessionManager?.getBranch?.(),
 						model: isReviewerChild ? undefined : modelId(ctx),
 						sessionId: resolveSessionId(ctx.sessionManager),
+						editCount: edits,
 					});
 					ctx.ui?.setStatus?.(STATUS_KEY, report.pass ? "pass" : "FAIL");
 					ctx.ui?.notify?.(shortResult(report), report.pass ? "info" : "error");
 				} catch (error) {
 					ctx.ui?.setStatus?.(STATUS_KEY, "error");
 					ctx.ui?.notify?.(
-						`verify: error - ${String((error as Error)?.message ?? error)}`,
+						`verify: error - ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				} finally {
@@ -1076,7 +1252,7 @@ export default function (pi: ExtensionAPI) {
 					}),
 				),
 			}),
-			async execute(_id, params, signal, _onUpdate, ctx: any) {
+			async execute(_id, params, signal, _onUpdate, ctx) {
 				const cwd = projectCwd || ctx.cwd;
 				if (running)
 					return {
@@ -1096,6 +1272,7 @@ export default function (pi: ExtensionAPI) {
 						model: modelId(ctx),
 						signal,
 						sessionId: resolveSessionId(ctx.sessionManager),
+						editCount: edits,
 					});
 					return {
 						content: [{ type: "text" as const, text: report.text }],
@@ -1130,16 +1307,25 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		ctx.ui.setStatus(STATUS_KEY, "running…");
-		setVerifyPending(cwd);
+		const pendingFile = setVerifyPending(cwd);
+		const editsAtStart = editCount;
 		try {
 			const { ok, output, label } = await runCheck(cwd, true);
-			ctx.ui.setStatus(STATUS_KEY, ok ? "pass" : "FAIL");
-			recordVerifyVerdict(
+			const stale = ok && editCount !== editsAtStart;
+			ctx.ui.setStatus(STATUS_KEY, stale ? "stale" : ok ? "pass" : "FAIL");
+			const boardError = recordVerifyVerdict(
 				cwd,
 				"verify",
 				ok,
 				ok ? `${label} passed` : firstLine(output),
+				stale,
 			);
+			// REL-6: a lost write leaves the previous verdict on the board; say so.
+			if (boardError)
+				ctx.ui.notify(
+					`verify: ${boardError}. The verifier board may still show an older verdict.`,
+					"error",
+				);
 			// The verifier owns automatic run results in either extension load order.
 			// Orchestrator defers its board diagnostic for these dirty final turns.
 			if (!ok && !correctionSent) {
@@ -1154,7 +1340,7 @@ export default function (pi: ExtensionAPI) {
 				);
 			}
 		} finally {
-			clearVerifyPending(cwd);
+			clearVerifyPending(pendingFile);
 		}
 	});
 }

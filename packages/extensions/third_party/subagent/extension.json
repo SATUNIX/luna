@@ -1,20 +1,20 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "subagent",
-  "summary": "Delegate tasks to specialized subagents in isolated context windows. Single, parallel (concurrency-limited, optional background) and chain ({previous} threading) modes over JSON-mode pi subprocesses that load only the extensions the delegation guard grants (the parent's protections first). Built-in kit roles are always available; roles may set model, thinking, tools, skills (preloaded) and extensions. Esc cancels children. Also runs declarative workflows (packages/kit/workflows, ~/.pi/agent/workflows, .pi/workflows): deterministic step chains with a shared run directory, parallel groups, review gates and resume.",
+  "summary": "Delegate tasks to specialized subagents in isolated context windows. Single, parallel (concurrency-limited, optional background) and chain ({previous} threading) modes over JSON-mode pi subprocesses that load only the extensions the delegation guard grants (the parent's protections first). Built-in kit roles are always available; roles may set model, thinking, tools, skills (preloaded) and extensions. Esc cancels children. Also runs declarative workflows (packages/kit/workflows, ~/.pi/agent/workflows, .pi/workflows): deterministic step chains with a shared run directory, parallel groups, review gates and resume. The `workflow` tool runs JavaScript workflow scripts in a sandbox in the background (agent/parallel/pipeline hooks, journal and resume) and posts the result as a follow-up. A run given a result schema loads a child-only StructuredOutput tool and the host validates the submitted value itself.",
   "category": "planning",
   "tier": "T3",
   "layer": 4,
   "entry": "index.ts",
   "hooks": ["session_start", "session_shutdown"],
-  "registers": { "tools": ["subagent", "subagent_status", "subagent_stop", "workflow_run", "workflow_status"], "commands": ["subagents", "subagent-stop", "workflow"] },
+  "registers": { "tools": ["subagent", "subagent_status", "subagent_stop", "workflow_run", "workflow_status", "workflow_control", "workflow", "StructuredOutput"], "commands": ["subagents", "subagent-stop", "workflow", "workflows"] },
   "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
-    "nodeBuiltins": ["node:child_process", "node:fs", "node:path", "node:os", "node:url", "node:crypto"],
+    "nodeBuiltins": ["node:child_process", "node:fs", "node:path", "node:os", "node:url", "node:crypto", "node:module", "node:vm"],
     "npm": [],
-    "piPeers": ["typebox"],
+    "piPeers": ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"],
     "services": [],
     "models": []
   },
@@ -38,7 +38,9 @@
     "PI_KIT_AGENTS_DIR",
     "PI_KIT_SKILL_DIRS",
     "PI_KIT_WORKFLOWS_DIR",
-    "PI_KIT_TRUSTED_WORKFLOWS"
+    "PI_KIT_TRUSTED_WORKFLOWS",
+    "PI_KIT_STRUCTURED_OUTPUT_SCHEMA",
+    "PI_KIT_WORKFLOW_RUN_ID"
   ],
   "provenance": { "origin": "vendored" },
   "homeRepo": "https://github.com/earendil-works/pi",

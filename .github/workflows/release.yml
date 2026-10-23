@@ -17,7 +17,7 @@ name: release
 #   npm-publish      runs `npm publish`, needs also        (id-token: write, `npm` environment)
 #                    `inputs.publish-npm == true`
 # Every other job has read-only permissions and cannot create a release, publish or push.
-# tests/release-workflow-smoke.mjs checks this structure statically.
+# tests/release-workflow-smoke.ts checks this structure statically.
 #
 # Nothing releases unless the full CI gate passes for the same commit.
 
@@ -92,16 +92,21 @@ jobs:
             echo "dry run from $GITHUB_REF: planning as $REF"
           fi
           tags="$(npm view @satunix/pi-system dist-tags --json 2>/dev/null || echo '{}')"
-          node packages/core/publish-plan.mjs --ref "$REF" --sha "$SHA" --dist-tags "$tags" --write | tee -a "$GITHUB_OUTPUT"
+          node packages/core/publish-plan.ts --ref "$REF" --sha "$SHA" --dist-tags "$tags" --write | tee -a "$GITHUB_OUTPUT"
 
       - name: Package check
-        run: node packages/core/pack-check.mjs
+        run: node packages/core/pack-check.ts
+
+      # Node will not strip types under node_modules, so the npm artefact is compiled
+      # (internal/docs/adr/0001). Every later npm command works on the staged copy.
+      - name: Build the npm artefact
+        run: node packages/core/build-npm.ts
 
       - name: Reproducible tarball
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          npm pack --ignore-scripts --json > pack.json
+          npm pack ./dist/npm --ignore-scripts --json > pack.json
           {
             echo "### Release candidate ${VERSION}"
             echo
@@ -112,13 +117,13 @@ jobs:
       - name: npm publish (dry run only)
         env:
           TAG: ${{ steps.plan.outputs.tag }}
-        run: npm publish --dry-run --access public --tag "$TAG" --ignore-scripts
+        run: npm publish ./dist/npm --dry-run --access public --tag "$TAG" --ignore-scripts
 
       - name: Release notes preview
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          node packages/core/release-notes.mjs "$VERSION" --out release-notes.md
+          node packages/core/release-notes.ts "$VERSION" --out release-notes.md
           { echo "### Release notes"; echo; cat release-notes.md; } >> "$GITHUB_STEP_SUMMARY"
 
   github-release:
@@ -139,7 +144,7 @@ jobs:
       - name: Release notes
         env:
           VERSION: ${{ needs.plan.outputs.version }}
-        run: node packages/core/release-notes.mjs "$VERSION" --out release-notes.md
+        run: node packages/core/release-notes.ts "$VERSION" --out release-notes.md
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -177,6 +182,8 @@ jobs:
           v="$(npm --version)"; echo "npm $v"
           printf '%s\n' 11.5.1 "$v" | sort -V -C || { echo "npm $v < 11.5.1"; exit 1; }
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build the npm artefact
+        run: node packages/core/build-npm.ts
       - name: Skip if already published
         id: exists
         env:
@@ -195,4 +202,4 @@ jobs:
           # Only the very first publish needs a token (a package must exist before a trusted
           # publisher can be attached); leave the secret unset afterwards and OIDC is used.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public --tag "$TAG" --ignore-scripts
+        run: npm publish ./dist/npm --provenance --access public --tag "$TAG" --ignore-scripts

@@ -40,7 +40,7 @@ RUN npm install -g --ignore-scripts typescript typescript-language-server markdo
 COPY kit/ /opt/pi-kit/
 RUN cd /opt/pi-kit && npm ci --ignore-scripts --no-audit --no-fund \
   && HOME=/opt/pi-home PI_CODING_AGENT_DIR=/opt/pi-agent PI_KIT_UPDATE_CHECK=0 \
-     node packages/core/install.mjs --profile long-horizon --mode local --yes \
+     node packages/core/install.ts --profile long-horizon --mode local --yes \
   && chmod -R a+rX /opt/pi-kit /opt/pi-agent /opt/pi-home
 
 # Optional prebake of one repository's dependencies, from the base ref's lockfile: `npm ci --offline`

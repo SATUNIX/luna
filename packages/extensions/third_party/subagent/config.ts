@@ -7,7 +7,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NativeSettings } from "./types.ts";
 
 export const MAX_PARALLEL_TASKS = 8;
 export const DEFAULT_CONCURRENCY = 4;
@@ -115,8 +114,8 @@ export function loadInheritParentModel(): boolean {
     return !falseValue(process.env.PI_KIT_SUBAGENT_INHERIT_MODEL);
   }
   try {
-    const saved = JSON.parse(fs.readFileSync(nativeSettingsPath(), "utf8")) as NativeSettings;
-    return saved.warnings?.subagentInheritModel === true;
+    const saved: unknown = JSON.parse(fs.readFileSync(nativeSettingsPath(), "utf8"));
+    return isRecord(saved) && isRecord(saved.warnings) && saved.warnings.subagentInheritModel === true;
   } catch {
     return false;
   }
@@ -130,4 +129,17 @@ export function envInt(name: string, fallback: number, min: number, max: number)
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// String(value) for a value parsed from YAML or JSON. Scalars and lists convert exactly as
+// String() does; a mapping reads "[object Object]" as before, without relying on its toString.
+export function toText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map((item) => (item === null || item === undefined ? "" : toText(item))).join(",");
+  if (typeof value === "object" && value !== null) return Object.prototype.toString.call(value);
+  return String(value);
 }

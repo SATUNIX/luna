@@ -2,7 +2,7 @@
 
 `@satunix/pi-system` is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
 extensions, skills, prompts, themes and agent definitions in one pi package, with **profiles** that
-choose what loads. This is a beta (`0.2.4-beta.0`); read [Beta status](beta.md) first.
+choose what loads. This is a beta; read [Beta status](beta.md) first.
 
 Use this guide if you want to:
 

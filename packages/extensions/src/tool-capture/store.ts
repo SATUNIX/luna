@@ -114,7 +114,10 @@ export class CaptureStore {
     if (value instanceof ArrayBuffer) return this.putBlob(Buffer.from(value), "bytes");
     if (value instanceof Date) return { $date: Number.isNaN(value.getTime()) ? String(value) : value.toISOString() };
     if (value instanceof Error) return { $error: value.name, message: this.encode(value.message, seen, depth + 1), stack: this.encode(value.stack ?? "", seen, depth + 1) };
-    if (typeof value !== "object") return { $unknown: String(value) };
+    if (typeof value !== "object") {
+      const other: unknown = value; // not reached: typeof has no other primitive left
+      return { $unknown: String(other) };
+    }
     if (seen.has(value)) return { $circular: true };
     if (depth > 64) return { $depth_limit: true, json: this.encode(safeStringify(value), seen, depth) };
     seen.add(value);
@@ -157,7 +160,7 @@ export class CaptureStore {
       return { $blob: `sha256:${sha}`, bytes: bytes.length, encoding };
     } catch (error) {
       this.fail(error);
-      return { $blob_skipped: `write_error: ${String((error as Error)?.message ?? error).slice(0, 120)}`, bytes: bytes.length, sha256: sha };
+      return { $blob_skipped: `write_error: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`, bytes: bytes.length, sha256: sha };
     }
   }
 
@@ -167,11 +170,11 @@ export class CaptureStore {
 
   // Streams a file (e.g. pi's full bash output) into a blob without loading it into memory.
   async putFileBlob(file: string): Promise<BlobRef | Skipped> {
-    let size = 0;
+    let size: number;
     try {
       size = fs.statSync(file).size;
     } catch (error) {
-      return { $blob_skipped: `unreadable: ${String((error as Error)?.message ?? error).slice(0, 120)}`, bytes: 0 };
+      return { $blob_skipped: `unreadable: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`, bytes: 0 };
     }
     if (this.pressure !== "ok" || size > this.opts.maxBlobBytes) return { $blob_skipped: this.pressure !== "ok" ? "disk_pressure" : "exceeds_max_blob_bytes", bytes: size };
     const tmp = path.join(this.blobsDir, `.incoming-${process.pid}-${crypto.randomUUID()}.gz`);
@@ -210,7 +213,7 @@ export class CaptureStore {
         /* never created */
       }
       this.fail(error);
-      return { $blob_skipped: `write_error: ${String((error as Error)?.message ?? error).slice(0, 120)}`, bytes: size };
+      return { $blob_skipped: `write_error: ${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`, bytes: size };
     }
   }
 
@@ -283,7 +286,7 @@ export class CaptureStore {
 
   // Segments left uncompressed by processes that are gone (crash, kill -9) are compressed now.
   sweepOrphans(): void {
-    let names: string[] = [];
+    let names: string[];
     try {
       names = fs.readdirSync(this.segmentsDir);
     } catch {
@@ -358,8 +361,7 @@ export class CaptureStore {
         }
       }
     }
-    const lowFree = free !== null && free < this.opts.minFreeBytes;
-    this.pressure = lowFree ? (free! < this.opts.minFreeBytes / 4 ? "records" : "blobs") : total > this.opts.budgetBytes ? "blobs" : "ok";
+    this.pressure = free !== null && free < this.opts.minFreeBytes ? (free < this.opts.minFreeBytes / 4 ? "records" : "blobs") : total > this.opts.budgetBytes ? "blobs" : "ok";
   }
 
   private logRetention(entry: Record<string, unknown>): void {
@@ -441,12 +443,13 @@ export class CaptureStore {
 
   private fail(error: unknown): void {
     this.stats.errors++;
-    this.stats.lastError = String((error as Error)?.message ?? error).slice(0, 300);
+    this.stats.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 300);
   }
 }
 
 function wellFormed(s: string): boolean {
-  const f = (s as unknown as { isWellFormed?: () => boolean }).isWellFormed;
+  // isWellFormed is ES2024 (newer than the lib this project compiles against), so it may be absent.
+  const f = (s as string & { isWellFormed?: () => boolean }).isWellFormed;
   return typeof f === "function" ? f.call(s) : !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
 }
 
@@ -454,7 +457,7 @@ export function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value) ?? "null";
   } catch (error) {
-    return JSON.stringify({ $unserializable: String((error as Error)?.message ?? error) });
+    return JSON.stringify({ $unserializable: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -490,7 +493,7 @@ function safeMtime(p: string): number {
 
 function freeBytes(dir: string): number | null {
   try {
-    const statfs = (fs as unknown as { statfsSync?: (p: string) => { bavail: number | bigint; bsize: number | bigint } }).statfsSync;
+    const statfs: ((p: string) => { bavail: number | bigint; bsize: number | bigint }) | undefined = fs.statfsSync;
     if (typeof statfs !== "function") return null;
     const s = statfs(dir);
     return Number(s.bavail) * Number(s.bsize);

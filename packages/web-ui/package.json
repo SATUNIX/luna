@@ -1,12 +1,12 @@
 {
   "name": "@satunix/pi-console",
-  "version": "0.2.4-beta.3",
+  "version": "0.2.4-beta.5",
   "private": true,
   "type": "module",
   "license": "MIT",
   "description": "Self-hosted multi-agent / session web UI for the Pi coding agent",
   "scripts": {
-    "start": "node server/server.js"
+    "start": "node server/server.ts"
   },
   "engines": {
     "node": ">=22.19.0"

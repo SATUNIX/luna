@@ -13,7 +13,7 @@ function goalFile(cwd: string): string {
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
@@ -50,7 +50,7 @@ function readGoal(cwd: string): string | null {
     const full = raw.match(/^goal_full:\s*(.*)$/m);
     if (full?.[1] !== undefined) {
       try {
-        const parsed = JSON.parse(full[1].trim());
+        const parsed: unknown = JSON.parse(full[1].trim());
         if (typeof parsed === "string" && parsed.trim()) return parsed;
       } catch {
         /* malformed goal_full — fall back to the `goal:` scalar below */

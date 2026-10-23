@@ -256,7 +256,7 @@ const runnerKind = (kind: string): SandboxErrorKind => {
 
 /** Claude Code scripts start with `export const meta = {...}`; the body runs as a function, so the export keyword goes. */
 export function scriptBody(source: string): string {
-  return source.replace(/^((?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*)export\s+(const\s+meta\b)/, "$1$2");
+  return source.replace(/^((?:\s|\/\/[^\n]*\n|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/)*)export\s+(const\s+meta\b)/, "$1$2");
 }
 
 const message = (e: unknown): string => {

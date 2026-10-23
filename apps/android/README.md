@@ -103,5 +103,5 @@ notices; the app does not show them yet.
 ## Tests
 
 Nothing in this repository tests the app automatically. The protocol it speaks is pinned by
-`tests/remote-host-smoke.mjs`, whose client does what the app does, and the app itself has been
+`tests/remote-host-smoke.ts`, whose client does what the app does, and the app itself has been
 exercised by hand on an Android 14 emulator against a real host.

@@ -1,6 +1,12 @@
+---
+argument-hint: "[server, tool and inputs]"
+---
+
 # MCP Action Review
 
 Review a proposed MCP tool invocation before execution.
+
+Proposed action: ${@:-the most recently proposed MCP action}
 
 Return:
 

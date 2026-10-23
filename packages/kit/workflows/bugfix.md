@@ -47,13 +47,15 @@ steps:
       Fix report: {{steps.fix.output}}
 
       Re-run the reproduction and the regression test yourself and inspect the diff.
+      End your reply with a last line that is exactly VERDICT: PASS or VERDICT: FAIL.
     gate:
-      pass: "/##\\s*Verdict\\s*\\n+\\s*PASS/"
+      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"
       retry: fix
       max_loops: 2
 ---
 
 # bugfix
 
-Reproduce first, fix second. The reviewer re-runs the reproduction itself. A FAIL sends the
-fix step round again with the review attached.
+Reproduce first, fix second. The reviewer re-runs the reproduction itself. The review passes
+only when the last non-blank line of its reply is `VERDICT: PASS` (case is ignored). Anything else sends the fix
+step round again with the review attached.

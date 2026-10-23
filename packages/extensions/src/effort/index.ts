@@ -3,8 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
-import { clampTier, loadPolicy, normalizeTier, renderPrompt, tierLabel, tierLimits, tierOf, withEffortBlock } from "./policy.ts";
+import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
+import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
+import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
+import type { StandingState } from "./standing.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer, plus this extension's own
 // files. No sibling-extension imports. See CONTRIBUTING.md.
@@ -60,15 +63,49 @@ export interface ReserveInput {
   readOnly?: boolean;
   /** The child's requested tier; it is clamped to this process's tier (a child is never higher). */
   requestedTier?: string;
+  /** Workflow launches: the run id and the token openRunScope returned for it. */
+  runId?: string;
+  runToken?: string;
+}
+
+/** A workflow run's pinned scope: every agent of the run reserves with this id and token. */
+export type RunScope = { ok: true; runId: string; runToken: string; ledger: string } | { ok: false; code: string; reason: string };
+
+/** Thrown by reserveWorkflow for every denial except "concurrency" (which it waits out). */
+export class WorkflowLedgerError extends Error {
+  readonly code: string;
+  constructor(code: string, reason: string) {
+    super(reason);
+    this.name = "WorkflowLedgerError";
+    this.code = code;
+  }
+}
+
+export interface ReserveWorkflowOptions {
+  /** Aborting stops the wait for a slot; the promise then rejects with code "aborted". */
+  signal?: AbortSignal;
+  /** How often a waiting reservation asks again (default 250 ms). */
+  pollMs?: number;
 }
 
 export type Reservation =
   | { ok: true; id: string | null; childTier: string; env: Record<string, string>; attach(pid: number | undefined): void; settle(outcome: string): void }
   | { ok: false; code: string; reason: string };
 
+/** Ultracode standing mode as other extensions read it (the firewall, the workflow tool). */
+export interface StandingSnapshot extends StandingState {
+  /** Completion turns in a row since your last message. */
+  wakeChain: number;
+}
+
 export interface EffortRegistry {
   version: 1;
   snapshot(): EffortSnapshot;
+  /**
+   * Ultracode standing mode. `preauthorised` is true only after the operator answered Yes to the
+   * No-first select in this session; the firewall then runs `workflow` calls without asking.
+   */
+  standing(): StandingSnapshot;
   reserve(input: ReserveInput): Reservation;
   /** Only the trusted recovery extension calls this; the model cannot open the recovery budget. */
   setRecoveryActive(active: boolean, reason?: string): void;
@@ -78,6 +115,17 @@ export interface EffortRegistry {
    * slot first, so recovery help does not spend (and is not blocked by) the discretionary budget.
    */
   recoveryEligible(role: string, readOnly?: boolean): boolean;
+  /**
+   * Open a script-workflow run's scope in this session's workflow ledger. The scope is pinned: it
+   * outlives the per-turn ledger rotation, so a background run keeps its count across user turns.
+   * Refused in child processes and when the policy is unavailable.
+   */
+  openRunScope(runId: string): RunScope;
+  /**
+   * Reserve a slot for one agent of a workflow run. A "concurrency" denial is waited out (polling
+   * until a slot frees or `signal` aborts); every other denial throws a WorkflowLedgerError.
+   */
+  reserveWorkflow(input: { runId: string; runToken: string; role: string }, options?: ReserveWorkflowOptions): Promise<Extract<Reservation, { ok: true }>>;
   onChange(listener: () => void): () => void;
 }
 
@@ -106,6 +154,25 @@ function ledgerDir(): string {
   return path.join(agentDir(), "pi-kit", "effort", "ledgers");
 }
 
+/** Wait `ms`, or less when the signal aborts first (the caller then sees `signal.aborted`). */
+function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 interface UserConfig {
   tier: string | null;
   limits: LimitOverrides;
@@ -130,7 +197,9 @@ export function readConfig(policy: EffortPolicy, file = configPath()): UserConfi
   if (cfg.default !== undefined) {
     const tier = normalizeTier(policy, cfg.default);
     if (tier) out.tier = tier;
-    else out.warnings.push(`ignored default "${String(cfg.default)}" in ${file}: not an effort tier`);
+    // JSON.stringify, not String(): an object such as {"toString": 1} cannot be converted to a
+    // primitive, and String() would throw instead of warning.
+    else out.warnings.push(`ignored default "${typeof cfg.default === "string" ? cfg.default : JSON.stringify(cfg.default)}" in ${file}: not an effort tier`);
   }
   if (cfg.limits && typeof cfg.limits === "object" && !Array.isArray(cfg.limits)) {
     for (const [id, value] of Object.entries(cfg.limits as Record<string, unknown>)) {
@@ -156,7 +225,7 @@ export function readConfig(policy: EffortPolicy, file = configPath()): UserConfi
 export function saveDefault(tier: string | null, file = configPath()): void {
   let existing: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
   } catch {
     /* start from an empty file */
@@ -209,7 +278,9 @@ export function resolveEffective(policy: EffortPolicy, env: NodeJS.ProcessEnv, c
     cap = normalizeTier(policy, capRaw);
     if (!cap) {
       warnings.push(`PI_KIT_EFFORT_CAP="${capRaw}" is not an effort tier; using the lowest tier`);
-      cap = policy.tiers[0].id;
+      const lowest = policy.tiers[0];
+      if (!lowest) throw new Error("effort policy has no tiers");
+      cap = lowest.id;
     }
     const clamped = clampTier(policy, tier, cap);
     if (clamped !== tier) {
@@ -227,6 +298,8 @@ function say(ctx: ExtensionCommandContext | ExtensionContext, text: string, leve
 }
 
 const isChildProcess = () => Boolean(process.env.PI_KIT_EFFORT_LEDGER?.trim());
+/** Any kit child, budgeted or not: standing mode is refused in all of them. */
+const isKitChild = () => isChildProcess() || process.env.PI_KIT_INTERNAL_CHILD === "1";
 
 export default function (pi: ExtensionAPI) {
   let policy: EffortPolicy | null = null;
@@ -248,6 +321,11 @@ export default function (pi: ExtensionAPI) {
   let usageAt = 0;
   let warnedLoad = false;
   let recoveryOn = false;
+  // Workflow runs opened by this process, each pinned to the workflow ledger it was opened in.
+  const runFiles = new Map<string, string>();
+  // Ultracode standing mode: session-only, recorded with appendEntry so a reload or resume restores it.
+  let standing: StandingState = { ...STANDING_OFF };
+  let wakeChain = 0;
   // Tools this extension took out of the active set, so it only ever puts back its own removals.
   const hidden = new Set<string>();
   const listeners = new Set<() => void>();
@@ -358,9 +436,76 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /** This session's workflow ledger, created on first use (only when no file exists) and reused (also across a reload). */
+  function workflowLedger(): string {
+    if (!policy || !active) throw new Error("the effort policy is unavailable");
+    const file = path.join(ledgerDir(), `${sessionKey}-workflows.json`);
+    const wf = workflowLimits(policy);
+    const lowest = policy.tiers[0];
+    if (!lowest) throw new Error("effort policy has no tiers");
+    ledger.createLedgerIfAbsent(file, {
+      scope: `${sessionKey}-workflows`,
+      // Agents of a run start at the lowest tier: the snapshot tier and limits bound what they may delegate.
+      tier: lowest.id,
+      limits: limitsFor(lowest.id),
+      recovery: { maxInvocations: 0, maxConcurrent: 0, roles: [], active: false },
+      sessionTotalBefore: 0,
+      sessionCeiling: policy.ceilings.maxTotal,
+      mandatoryMax: MANDATORY_MAX,
+      ceilings: policy.ceilings,
+      workflow: { concurrent: wf.workflowConcurrent, totalPerRun: wf.workflowTotalPerRun, sessionTotal: wf.workflowSessionTotal },
+    });
+    // An existing file is never replaced: an unreadable one, or one without a workflow section, refuses.
+    if (!ledger.readLedger(file)?.workflow) throw new Error("the workflow ledger exists but is unreadable or not a workflow ledger");
+    return file;
+  }
+
+  function reserveWorkflowSlot(input: ReserveInput): Reservation {
+    if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so workflow agents cannot be budgeted.` };
+    const file = input.runId ? runFiles.get(input.runId) : undefined;
+    if (!file) return { ok: false, code: "run-scope", reason: "no workflow run scope is open for this run id in this session" };
+    const lowest = policy.tiers[0];
+    if (!lowest) return { ok: false, code: "no-policy", reason: "the effort policy has no tiers" };
+    const result = ledger.reserve(file, { kind: "workflow", role: input.role, runId: input.runId, runToken: input.runToken, requesterTier: active.tier, requesterLimits: limitsFor(active.tier), requesterLabel: label(active.tier) });
+    if (!result.ok) return result;
+    const id = result.id;
+    const childTier = lowest.id;
+    return {
+      ok: true,
+      id,
+      childTier,
+      env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file },
+      attach: (pid) => ledger.attach(file, id, pid),
+      settle: (outcome) => ledger.settle(file, id, outcome),
+    };
+  }
+
+  const topTier = (): string | null => policy?.tiers[policy.tiers.length - 1]?.id ?? null;
+
+  /** Whether the workflow tool is in the active tool set (the standing block is shown only then). */
+  function workflowToolActive(): boolean {
+    try {
+      return pi.getActiveTools().includes(WORKFLOW_TOOL);
+    } catch {
+      return false;
+    }
+  }
+
+  function setStanding(next: StandingState): void {
+    standing = { ...next, preauthorised: next.on && next.preauthorised };
+    if (!standing.on) wakeChain = 0;
+    try {
+      pi.appendEntry(STANDING_ENTRY_TYPE, standingData(standing));
+    } catch {
+      /* a pi without session entries keeps the state for this process only */
+    }
+    notify();
+  }
+
   const registry: EffortRegistry = {
     version: 1,
     snapshot,
+    standing: () => ({ ...standing, wakeChain }),
     onChange(listener) {
       listeners.add(listener);
       return () => void listeners.delete(listener);
@@ -373,7 +518,34 @@ export default function (pi: ExtensionAPI) {
     recoveryEligible(role: string, readOnly?: boolean): boolean {
       return Boolean(policy && recoveryOn && readOnly !== false && policy.recovery.roles.includes(role));
     },
+    openRunScope(runId: string): RunScope {
+      if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
+      if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so a workflow run cannot be budgeted.` };
+      if (runFiles.has(runId)) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" already has a scope; a run id is opened once` };
+      let file: string;
+      try {
+        fs.mkdirSync(ledgerDir(), { recursive: true });
+        file = workflowLedger();
+      } catch (error) {
+        return { ok: false, code: "no-ledger", reason: `the workflow ledger could not be created or read (${error instanceof Error ? error.message : String(error)})` };
+      }
+      const opened = ledger.openRun(file, runId);
+      if (!opened.ok) return opened;
+      runFiles.set(runId, file);
+      return { ok: true, runId, runToken: opened.runToken, ledger: file };
+    },
+    async reserveWorkflow(input, options = {}) {
+      const pollMs = Math.max(10, options.pollMs ?? 250);
+      for (;;) {
+        if (options.signal?.aborted) throw new WorkflowLedgerError("aborted", "the wait for a workflow agent slot was aborted");
+        const r = reserveWorkflowSlot({ kind: "workflow", ...input });
+        if (r.ok) return r;
+        if (r.code !== "concurrency") throw new WorkflowLedgerError(r.code, r.reason);
+        await delay(pollMs, options.signal);
+      }
+    },
     reserve(input: ReserveInput): Reservation {
+      if (input.kind === "workflow") return reserveWorkflowSlot(input);
       if (!policy || !active) {
         // Mandatory verification is not budgeted work, so an unhealthy policy must not disable it.
         if (input.kind === "mandatory") return unbudgeted(policy?.default ?? "standard");
@@ -420,7 +592,7 @@ export default function (pi: ExtensionAPI) {
   (globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = registry;
   registerProtection("effort");
 
-  pi.on("session_start", async (event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_start", async (event, ctx) => {
     (globalThis as Record<symbol, unknown>)[REGISTRY_KEY] = registry;
     if (!policy) {
       if (!warnedLoad) {
@@ -439,7 +611,8 @@ export default function (pi: ExtensionAPI) {
     }
     if (!isChildProcess()) pruneLedgers();
     openScope();
-    const reason = (event as { reason?: string } | undefined)?.reason;
+    const reason = event?.reason;
+    restoreStanding(ctx, reason);
     const warnings = [...config.warnings, ...(active?.warnings ?? [])];
     if (warnings.length && reason !== "reload") say(ctx, warnings.join("\n"), "warning");
     notify();
@@ -448,25 +621,91 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     listeners.clear();
     recoveryOn = false;
-    if ((globalThis as Record<symbol, unknown>)[REGISTRY_KEY] === registry) delete (globalThis as Record<symbol, unknown>)[REGISTRY_KEY];
+    if ((globalThis as Record<symbol, unknown>)[REGISTRY_KEY] === registry) Reflect.deleteProperty(globalThis, REGISTRY_KEY);
   });
 
   // The user-turn boundary: a tier chosen with /effort takes effect here, the delegation scope is
   // renewed for the new request, and exactly one effort block replaces any earlier one.
-  pi.on("before_agent_start", async (event: { systemPrompt?: string }) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     if (!policy) return undefined;
-    if (pending && (!active || pending.tier !== active.tier || pending.source !== active.source)) {
+    // A workflow's completion message that starts a turn while idle is a wake; your message ends the chain.
+    if (event.messageType === "custom" && event.message.customType === WORKFLOW_RESULT_TYPE) wakeChain++;
+    else if (event.messageType === "user") wakeChain = 0;
+    if (standing.on && wakeChain > WAKE_CHAIN_CAP && !(await continueWakeChain(ctx))) return undefined;
+    if (pending && (pending.tier !== active?.tier || pending.source !== active.source)) {
       active = pending;
       notify();
-    } else if (!active) active = recompute();
+    } else active ??= recompute();
     if (!active) return undefined;
     recoveryOn = false; // the recovery budget is per request: it closes with the previous one
     openScope();
     syncDelegationTools();
     notify();
-    const body = renderPrompt(policy, active.tier);
-    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
+    let body = renderPrompt(policy, active.tier);
+    const standingShown = standing.on && workflowToolActive();
+    if (standingShown) {
+      try {
+        body = `${body}\n\n${renderStanding(standing.size, standing.budget)}`;
+      } catch (error) {
+        process.stderr.write(`[effort] could not read the standing prompt: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    }
+    if (!standingShown) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
+    const reminder = `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.`;
+    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: STANDING_REMINDER_TYPE, content: reminder, display: false } };
   });
+
+  /**
+   * The wake-chain cap: more than WAKE_CHAIN_CAP completion turns in a row ask whether the agent may
+   * go on. No (the default), Escape or no screen stops this turn; the result stays in the
+   * conversation for your next message. Yes starts the count again from this turn.
+   */
+  async function continueWakeChain(ctx: ExtensionContext): Promise<boolean> {
+    const no = "No, stop and wait for my next message";
+    const yes = `Yes, let the agent continue (asks again after ${String(WAKE_CHAIN_CAP)} more)`;
+    let choice: string | undefined;
+    if (ctx.hasUI) {
+      try {
+        choice = await ctx.ui.select(`A workflow result has started ${String(wakeChain)} turns in a row without a message from you. Let the agent continue?`, [no, yes]);
+      } catch {
+        choice = undefined;
+      }
+    }
+    if (choice === yes) {
+      wakeChain = 1;
+      return true;
+    }
+    try {
+      ctx.abort();
+    } catch {
+      /* nothing to stop */
+    }
+    say(ctx, `effort: stopped after ${String(wakeChain)} workflow completion turns in a row. The result is in the conversation; send a message to continue.`, "warning");
+    return false;
+  }
+
+  /** Bring standing mode back from the session's entries: only in a root session with a screen, at E5. */
+  function restoreStanding(ctx: ExtensionContext, reason: string | undefined): void {
+    let entries: unknown[] = [];
+    try {
+      const manager: unknown = ctx.sessionManager;
+      const getBranch: unknown = typeof manager === "object" && manager !== null ? Reflect.get(manager, "getBranch") : undefined;
+      const list: unknown = typeof getBranch === "function" ? Reflect.apply(getBranch, manager, []) : [];
+      if (Array.isArray(list)) entries = list;
+    } catch {
+      /* no entries to restore from */
+    }
+    const saved = lastStandingEntry(entries);
+    standing = { ...STANDING_OFF };
+    wakeChain = 0;
+    if (!saved?.on) return;
+    // Not here: the entry is left as it is, so the session keeps it for a later resume on a screen.
+    if (isKitChild() || !ctx.hasUI || active?.tier !== topTier()) return;
+    // The pre-authorisation is never restored: session files are not firewall-protected, so a
+    // restored entry brings back the size and budget only; a fresh Yes re-authorises.
+    standing = { ...saved, preauthorised: false };
+    if (reason !== "reload") say(ctx, `Ultracode standing mode restored for this session; workflow runs are asked per call${saved.preauthorised ? " (run /effort ultracode again to pre-authorise them)" : ""}. /effort ultracode off turns it off.`);
+  }
 
   function statusText(): string {
     const s = snapshot();
@@ -475,6 +714,7 @@ export default function (pi: ExtensionAPI) {
     lines.push(`  limits: ${s.limits.maxConcurrent} concurrent, ${s.limits.maxTotal} total, ${s.limits.maxScouts} scout${s.limits.maxScouts === 1 ? "" : "s"} (children per request, counted at every depth)`);
     if (s.ledger) lines.push(`  this request: ${s.usage.live} running, ${s.usage.total}/${s.limits.maxTotal} used, ${s.usage.scouts}/${s.limits.maxScouts} scouts`);
     if (s.pinned) lines.push("  pinned: /effort saves a default for later sessions but does not change this one");
+    lines.push(standingLine());
     for (const w of s.warnings) lines.push(`  warning: ${w}`);
     lines.push("Effort sets how deep and broad the work is and how much it delegates. It does not change the model, its thinking level, the profile or any permission.");
     return lines.join("\n");
@@ -486,7 +726,7 @@ export default function (pi: ExtensionAPI) {
       const l = limitsFor(t.id);
       return `  ${t.code} ${t.label.padEnd(10)} ${String(l.maxConcurrent).padStart(2)} concurrent  ${String(l.maxTotal).padStart(2)} total  ${l.maxScouts} scout${l.maxScouts === 1 ? " " : "s"}   /effort ${t.id}`;
     });
-    return [`Effort tiers (default ${label(policy.default)}):`, ...rows, "", "  /effort <name|E1..E5|1..5>   set and save the default (applies from your next message)", "  /effort status               show the tier, limits and this request's use", "  /effort reset                forget the saved default"].join("\n");
+    return [`Effort tiers (default ${label(policy.default)}):`, ...rows, "", "  /effort <name|E1..E5|1..5>   set and save the default (applies from your next message)", "  /effort status               show the tier, limits and this request's use", "  /effort reset                forget the saved default", "  /effort memento [on|off]     Memento mode opt-in for a model (off by default)", "  /effort ultracode [--size N] [--budget N|none]   E5 plus standing mode (also /effort uc, /effort e5 --standing)", "  /effort ultracode off        back to opt-in workflows; revokes the pre-authorisation"].join("\n");
   }
 
   function choose(id: string, ctx: ExtensionCommandContext): void {
@@ -499,36 +739,243 @@ export default function (pi: ExtensionAPI) {
     config = { ...config, tier: id };
     pending = recompute();
     notify();
+    if (standing.on && id !== topTier()) {
+      setStanding({ ...standing, on: false, preauthorised: false });
+      say(ctx, "Ultracode standing mode is off (it needs E5); workflow runs are asked per call again.");
+    }
     const s = snapshot();
     const applies = s.pinned ? "Saved as your default, but this session is pinned and keeps its tier." : active && active.tier === pending?.tier ? "Already in force." : "Applies from your next message.";
     say(ctx, `Effort set to ${label(id)}. ${applies}`, "info");
   }
 
+  function standingLine(): string {
+    if (!standing.on) return "  ultracode: off (a workflow runs only when you ask for one, and each call is asked)";
+    const budget = standing.budget === null ? "no budget" : `budget ${String(standing.budget)} output tokens a run`;
+    const auth = standing.preauthorised ? "workflow runs pre-authorised for this session" : "each workflow call still asked";
+    const shown = workflowToolActive() ? "" : "; the workflow tool is not available in this session, so the standing block is not shown";
+    return `  ultracode: on, size guideline ${String(standing.size)} agents, ${budget}, ${auth}${shown}`;
+  }
+
+  /**
+   * /effort ultracode | uc | e5 --standing: E5 plus standing mode. Operator-only: refused in a child
+   * and without a screen. One No-first select decides whether workflow runs are pre-authorised for
+   * this session. `off` returns to opt-in and revokes the pre-authorisation; live runs continue.
+   */
+  async function standingCommand(words: string[], ctx: ExtensionCommandContext): Promise<void> {
+    if (!policy) return;
+    const parsed = parseStandingArgs(words);
+    if (!parsed.ok) {
+      say(ctx, `effort: ${parsed.error}. Use /effort ultracode [--size N] [--budget N|none], or /effort ultracode off. Nothing was changed.`, "error");
+      return;
+    }
+    if (parsed.action === "status") {
+      say(ctx, standingLine().trim());
+      return;
+    }
+    if (parsed.action === "off") {
+      if (!standing.on) {
+        say(ctx, "Ultracode standing mode is already off.");
+        return;
+      }
+      setStanding({ ...standing, on: false, preauthorised: false });
+      say(ctx, "Ultracode standing mode is off: a workflow runs only when you ask for one, and each call is asked again. Runs already going continue.");
+      return;
+    }
+    if (isKitChild()) {
+      say(ctx, "effort: ultracode can only be switched on in the root session, not in a child. Nothing was changed.", "error");
+      return;
+    }
+    if (!ctx.hasUI) {
+      say(ctx, "effort: switching ultracode on needs a screen to confirm on. Nothing was changed.", "error");
+      return;
+    }
+    const top = topTier();
+    if (!top) return;
+    const current = pending ?? active;
+    if (current?.pinned && current.tier !== top) {
+      say(ctx, `effort: this session is pinned at ${label(current.tier)}, and ultracode needs ${label(top)}. Nothing was changed.`, "error");
+      return;
+    }
+    const size = parsed.size ?? (standing.on ? standing.size : DEFAULT_SIZE);
+    const budget = parsed.budget === undefined ? (standing.on ? standing.budget : null) : parsed.budget;
+    const no = "No, keep asking per workflow";
+    const yes = "Yes, allow workflow runs this session";
+    // No-first: pi's confirm defaults to Yes, so this is a select whose first (default) answer is No.
+    let choice: string | undefined;
+    try {
+      choice = await ctx.ui.select(`Ultracode: ${label(top)} with standing mode (size guideline ${String(size)} agents, ${budget === null ? "no budget" : `budget ${String(budget)} output tokens a run`}). Allow the agent to start workflow runs without asking each time, for this session?`, [no, yes]);
+    } catch {
+      choice = undefined;
+    }
+    if (choice === undefined) {
+      say(ctx, "Ultracode was not switched on. Nothing was changed.");
+      return;
+    }
+    if (pending?.tier !== top) choose(top, ctx);
+    setStanding({ on: true, preauthorised: choice === yes, size, budget });
+    say(ctx, `Ultracode standing mode is on${choice === yes ? ": workflow runs are pre-authorised for this session" : ": each workflow call is still asked"}. /effort ultracode off returns to opt-in.${workflowToolActive() ? "" : " The workflow tool is not available in this session, so this has no effect until it is."}`);
+  }
+
+  /** The current session model's opt-in key, or null. */
+  const currentModel = (ctx: ExtensionCommandContext): string | null => modelKey(ctx.model?.provider, ctx.model?.id);
+
+  function mementoStatus(ctx: ExtensionCommandContext): string {
+    if (!policy) return "Effort policy unavailable.";
+    const s = snapshot();
+    const optIn = readOptIn();
+    const profile = installedProfile(ctx.cwd ?? process.cwd());
+    const model = currentModel(ctx);
+    const tierMax = mementoGenerations(policy, s.tier);
+    const allowance = mementoAllowance({ tierMax, profile, model, optIn });
+    const lines = [
+      `Memento mode (generations): ${allowance.maxGenerations} for the current model at ${label(s.tier)} (${allowance.reason}).`,
+      `  tiers: ${policy.tiers.map((t) => `${t.code} ${mementoGenerations(policy, t.id)}`).join(", ")}`,
+      `  profile: ${profile ?? "unknown"} (allowed in ${MEMENTO_PROFILES.join(" and ")})`,
+      `  opted-in models (${optInPath()}): ${optIn.models.size ? [...optIn.models].map(([k, v]) => (v.maxGenerations === null ? k : `${k} (max ${v.maxGenerations})`)).join(", ") : "none"}`,
+      ...optIn.warnings.map((w) => `  warning: ${w}`),
+      "Off by default. `/effort memento on [provider/model] [--max N]` opts a model in (you confirm it), `/effort memento off [provider/model]` opts it out. pi-autonomy reads the same allowance: a run whose contract enables generations uses at most this many for its worker model at its tier, and one generation when it is 0.",
+    ];
+    return lines.join("\n");
+  }
+
+  async function mementoCommand(words: string[], ctx: ExtensionCommandContext): Promise<void> {
+    if (!policy) return;
+    const sub = (words.shift() ?? "status").toLowerCase();
+    if (sub === "status") {
+      say(ctx, mementoStatus(ctx));
+      return;
+    }
+    if (sub !== "on" && sub !== "off") {
+      say(ctx, `effort: unknown memento command "${sub}". Use /effort memento [status|on|off] [provider/model] [--max N]. Nothing was changed.`, "error");
+      return;
+    }
+    let max: number | null = null;
+    const maxAt = words.indexOf("--max");
+    if (maxAt >= 0) {
+      const value = words[maxAt + 1] ?? "";
+      const ceiling = policy.memento.maxGenerationsCeiling;
+      if (sub === "off" || !/^\d{1,2}$/.test(value) || Number(value) > ceiling) {
+        say(ctx, sub === "off" ? "effort: --max only goes with /effort memento on. Nothing was changed." : `effort: --max needs a whole number from 0 to ${ceiling}. Nothing was changed.`, "error");
+        return;
+      }
+      max = Number(value);
+      words.splice(maxAt, 2);
+    }
+    const named = words[0];
+    if (words.length > 1 || (named !== undefined && !isModelKey(named))) {
+      say(ctx, `effort: "${words.join(" ")}" is not a <provider>/<model id>. Nothing was changed.`, "error");
+      return;
+    }
+    const model = named ?? currentModel(ctx);
+    if (!model) {
+      say(ctx, "effort: no model is selected; name one as <provider>/<model id>. Nothing was changed.", "error");
+      return;
+    }
+    if (sub === "off") {
+      try {
+        writeOptIn(model, null);
+      } catch (error) {
+        say(ctx, `effort: could not update ${optInPath()} (${error instanceof Error ? error.message : String(error)}).`, "error");
+        return;
+      }
+      say(ctx, `Memento mode is off for ${model}.`);
+      return;
+    }
+    // Opting in widens what a task may do, so only the operator, on a screen, in an allowed profile, may do it.
+    if (isChildProcess()) {
+      say(ctx, "effort: Memento mode can only be switched on in the root session, not in a child. Nothing was changed.", "error");
+      return;
+    }
+    if (!ctx.hasUI) {
+      say(ctx, "effort: switching Memento mode on needs a screen to confirm on. Nothing was changed.", "error");
+      return;
+    }
+    const profile = installedProfile(ctx.cwd ?? process.cwd());
+    if (!profile || !MEMENTO_PROFILES.includes(profile)) {
+      say(ctx, `effort: Memento mode is only available in the ${MEMENTO_PROFILES.join(" and ")} profiles (installed: ${profile ?? "unknown"}). Nothing was changed.`, "error");
+      return;
+    }
+    const tiers = policy.tiers.map((t) => `${t.code} ${max === null ? mementoGenerations(policy, t.id) : Math.min(max, mementoGenerations(policy, t.id))}`).join(", ");
+    const no = "No, keep Memento mode off for this model";
+    const yes = `Yes, allow Memento mode for ${model}`;
+    // No-first: pi's confirm defaults to Yes, so this is a select whose first (default) answer is No.
+    const choice = await ctx.ui.select(`Allow Memento mode for ${model}? A long task may then be worked in generations, each a fresh agent continuing from the last one's notebook (${tiers}).`, [no, yes]);
+    if (choice !== yes) {
+      say(ctx, `Memento mode stays off for ${model}. Nothing was changed.`);
+      return;
+    }
+    try {
+      writeOptIn(model, { maxGenerations: max });
+    } catch (error) {
+      say(ctx, `effort: could not update ${optInPath()} (${error instanceof Error ? error.message : String(error)}). Nothing was changed.`, "error");
+      return;
+    }
+    say(ctx, `Memento mode allowed for ${model}${max === null ? "" : ` (at most ${max} generations)`}. Saved in ${optInPath()}.`);
+  }
+
   pi.registerCommand("effort", {
-    description: "Choose how deep and broad the agent works and how much it delegates: `/effort` (picker), `/effort <minimal|focused|standard|thorough|exhaustive | E1..E5>`, `/effort status`, `/effort reset`. Independent of thinking level, profile and permissions.",
+    description: "Choose how deep and broad the agent works and how much it delegates: `/effort` (picker), `/effort <minimal|focused|standard|thorough|exhaustive | E1..E5>`, `/effort status`, `/effort reset`, `/effort memento [status|on|off] [provider/model]` (per-model Memento opt-in, off by default), `/effort ultracode [--size N] [--budget N|none] | off` (alias uc, or e5 --standing: E5 plus standing workflow mode). Independent of thinking level, profile and permissions.",
     getArgumentCompletions: (prefix: string) => {
-      const options = policy ? [...policy.tiers.map((t) => t.id), ...policy.tiers.map((t) => t.code), "status", "reset", "help"] : ["status", "help"];
+      const options = policy ? [...policy.tiers.map((t) => t.id), ...policy.tiers.map((t) => t.code), "status", "reset", "memento", "ultracode", "uc", "help"] : ["status", "help"];
       return options.filter((v) => v.toLowerCase().startsWith(prefix.trim().toLowerCase())).map((v) => ({ value: v, label: v }));
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const arg = args.trim();
-      if (!policy) return say(ctx, `effort: the policy could not be loaded (${loadError}).`, "error");
+      if (!policy) {
+        say(ctx, `effort: the policy could not be loaded (${loadError}).`, "error");
+        return;
+      }
       const word = arg.toLowerCase();
-      if (word === "status") return say(ctx, statusText());
-      if (word === "help" || word === "?") return say(ctx, helpText());
+      const words = arg.split(/\s+/).filter(Boolean);
+      if (words[0]?.toLowerCase() === "memento") {
+        await mementoCommand(words.slice(1), ctx);
+        return;
+      }
+      const head = words[0]?.toLowerCase() ?? "";
+      if (head === "ultracode" || head === "uc") {
+        await standingCommand(words.slice(1), ctx);
+        return;
+      }
+      const standingAt = words.findIndex((w) => w.toLowerCase() === "--standing");
+      if (standingAt >= 0) {
+        const named = normalizeTier(policy, words.find((_w, i) => i !== standingAt) ?? "");
+        if (standingAt === 0 || named !== topTier()) {
+          say(ctx, `effort: --standing goes only with ${label(topTier() ?? "")}: /effort e5 --standing (or /effort ultracode). Nothing was changed.`, "error");
+          return;
+        }
+        await standingCommand(words.filter((_w, i) => i !== 0 && i !== standingAt), ctx);
+        return;
+      }
+      if (word === "status") {
+        say(ctx, statusText());
+        return;
+      }
+      if (word === "help" || word === "?") {
+        say(ctx, helpText());
+        return;
+      }
       if (word === "reset") {
         try {
           saveDefault(null);
         } catch (error) {
-          return say(ctx, `effort: could not update ${configPath()} (${error instanceof Error ? error.message : String(error)}).`, "error");
+          say(ctx, `effort: could not update ${configPath()} (${error instanceof Error ? error.message : String(error)}).`, "error");
+          return;
         }
         config = { ...config, tier: null };
         pending = recompute();
         notify();
-        return say(ctx, `Saved default cleared; new sessions use ${label(policy.default)}.`);
+        say(ctx, `Saved default cleared; new sessions use ${label(policy.default)}.`);
+        if (standing.on && pending?.tier !== topTier()) {
+          setStanding({ ...standing, on: false, preauthorised: false });
+          say(ctx, "Ultracode standing mode is off (it needs E5); workflow runs are asked per call again.");
+        }
+        return;
       }
       if (!arg) {
-        if (!ctx.hasUI) return say(ctx, `${statusText()}\n\n${helpText()}`);
+        if (!ctx.hasUI) {
+          say(ctx, `${statusText()}\n\n${helpText()}`);
+          return;
+        }
         const s = snapshot();
         const options = policy.tiers.map((t) => `${t.code} ${t.label}${t.id === s.tier ? "  (current)" : ""} — ${limitsFor(t.id).maxTotal === 0 ? "no delegation" : `up to ${limitsFor(t.id).maxTotal} children`}`);
         const choice = await ctx.ui.select("Effort — depth and breadth of work (not thinking, profile or permissions)", options);
@@ -538,7 +985,10 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const tier = normalizeTier(policy, arg);
-      if (!tier) return say(ctx, `effort: "${arg}" is not an effort level. Use ${policy.tiers.map((t) => `${t.id} (${t.code})`).join(", ")}. Nothing was changed.`, "error");
+      if (!tier) {
+        say(ctx, `effort: "${arg}" is not an effort level. Use ${policy.tiers.map((t) => `${t.id} (${t.code})`).join(", ")}. Nothing was changed.`, "error");
+        return;
+      }
       choose(tier, ctx);
     },
   });

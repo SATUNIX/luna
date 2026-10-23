@@ -5,6 +5,7 @@
  * `/subagent-stop` commands, so every surface shows the same picture: registry rows merged
  * with the in-process live registry.
  */
+import { toText } from "./config.ts";
 import { readRunRegistry } from "./logging.ts";
 import { listLive, processAlive } from "./live.ts";
 
@@ -30,19 +31,19 @@ export interface RunRow {
 export function collectRuns(dir: string): RunRow[] {
   const byId = new Map<string, RunRow>();
   for (const entry of readRunRegistry(dir)) {
-    const id = String(entry.id);
-    const row: RunRow = byId.get(id) ?? { id, agent: "?", status: "running", start: "", end: "", task: "", log: String(entry.log ?? ""), live: false };
-    if (entry.agent) row.agent = String(entry.agent);
-    if (entry.log) row.log = String(entry.log);
+    const id = toText(entry.id);
+    const row: RunRow = byId.get(id) ?? { id, agent: "?", status: "running", start: "", end: "", task: "", log: toText(entry.log ?? ""), live: false };
+    if (entry.agent) row.agent = toText(entry.agent);
+    if (entry.log) row.log = toText(entry.log);
     if (entry.event === "end") {
-      row.status = String(entry.status ?? "end");
-      row.end = String(entry.ts ?? "");
+      row.status = toText(entry.status ?? "end");
+      row.end = toText(entry.ts ?? "");
       if (entry.turns !== undefined) row.turns = Number(entry.turns);
       if (entry.cost !== undefined) row.cost = Number(entry.cost);
       if (entry.attempts !== undefined) row.attempts = Number(entry.attempts);
     } else {
-      row.start = String(entry.ts ?? row.start);
-      if (entry.task) row.task = String(entry.task);
+      row.start = toText(entry.ts ?? row.start);
+      if (entry.task) row.task = toText(entry.task);
       if (entry.pid) row.pid = Number(entry.pid);
     }
     byId.set(id, row);

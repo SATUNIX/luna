@@ -1,12 +1,12 @@
 {
   "name": "@satunix/pi-core",
-  "version": "0.2.4-beta.3",
+  "version": "0.2.4-beta.4",
   "private": true,
   "description": "pi-system runtime, installer, verification gate, registry, schemas, and policies.",
   "type": "module",
   "license": "MIT",
   "files": [
-    "**/*.mjs",
+    "**/*.ts",
     "lib/**",
     "schema/**",
     "policies/**",
@@ -23,8 +23,8 @@
     "node": ">=22.19.0"
   },
   "bin": {
-    "pi-system-install": "./install.mjs",
-    "pi-system-verify": "./verify.mjs"
+    "pi-system-install": "./install.ts",
+    "pi-system-verify": "./verify.ts"
   },
   "dependencies": {
     "ajv": "^8.12.0"

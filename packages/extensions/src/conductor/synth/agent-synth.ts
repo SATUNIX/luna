@@ -116,7 +116,7 @@ export function synthesizeAgent(cwd: string, input: SynthesisInput): SynthesisRe
   }
 
   if (input.modelTier !== "hot_path" && input.modelTier !== "strong") {
-    return { ok: false, reason: `invalid model tier: ${input.modelTier}` };
+    return { ok: false, reason: `invalid model tier: ${String(input.modelTier)}` };
   }
 
   const tools = input.tools.join(", ");
@@ -164,7 +164,7 @@ export function writeSynthesizedAgent(cwd: string, input: SynthesisInput): Synth
   try {
     writeAtomically(path.join(cwd, ".pi", "agents", `${result.name}.md`), result.markdown);
   } catch (error) {
-    const reason = `failed to write synthesized agent ${result.name}: ${String((error as Error)?.message ?? error)}`;
+    const reason = `failed to write synthesized agent ${result.name}: ${error instanceof Error ? error.message : String(error)}`;
     auditSynthesis(cwd, input, reason, "error");
     return { ok: false, reason };
   }

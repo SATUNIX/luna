@@ -228,8 +228,8 @@ def verify_mcp_config(mcp, reporter):
 
     args = governance.get("args")
     expected_governance_paths = {
-        "/workspace/.pi/mcp-servers/governance/index.js",
-        "/opt/pi-agent/mcp-servers/governance/index.js",
+        "/workspace/.pi/mcp-servers/governance/index.ts",
+        "/opt/pi-agent/mcp-servers/governance/index.ts",
     }
     if not isinstance(args, list) or not expected_governance_paths.intersection(set(args)):
         reporter.fail("pi_system_governance args must include a known governance MCP server path")
@@ -249,8 +249,8 @@ def verify_mcp_config(mcp, reporter):
         reporter.ok('memory_mcp command is "node"')
 
     memory_args = memory_mcp.get("args")
-    if not isinstance(memory_args, list) or "/opt/pi-agent/mcp-servers/memory-mcp/index.js" not in memory_args:
-        reporter.fail("memory_mcp args must include /opt/pi-agent/mcp-servers/memory-mcp/index.js")
+    if not isinstance(memory_args, list) or "/opt/pi-agent/mcp-servers/memory-mcp/index.ts" not in memory_args:
+        reporter.fail("memory_mcp args must include /opt/pi-agent/mcp-servers/memory-mcp/index.ts")
     else:
         reporter.ok("memory_mcp points at the memory MCP launcher")
 
@@ -263,8 +263,8 @@ def verify_mcp_config(mcp, reporter):
 
 
 def extract_governance_tools(reporter):
-    generated = ROOT / ".pi" / "mcp-servers" / "governance" / "index.js"
-    server_path = generated if generated.is_file() else ROOT / "mcp-servers" / "governance" / "index.js"
+    generated = ROOT / ".pi" / "mcp-servers" / "governance" / "index.ts"
+    server_path = generated if generated.is_file() else ROOT / "mcp-servers" / "governance" / "index.ts"
     try:
         text = server_path.read_text(encoding="utf-8")
     except Exception as exc:

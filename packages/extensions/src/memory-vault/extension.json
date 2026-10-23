@@ -12,7 +12,7 @@
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
-    "nodeBuiltins": ["node:fs", "node:os", "node:path"],
+    "nodeBuiltins": ["node:crypto", "node:fs", "node:os", "node:path"],
     "npm": [],
     "piPeers": ["typebox", "@earendil-works/pi-ai"],
     "services": [],

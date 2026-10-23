@@ -1,0 +1,11 @@
+{
+  // Repository configuration written in TypeScript (eslint.config.ts, loaded by Node type stripping).
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true
+  },
+  "include": ["./eslint.config.ts"]
+}

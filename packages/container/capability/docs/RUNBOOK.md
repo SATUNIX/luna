@@ -9,7 +9,7 @@ docker compose -f capability/compose/compose.yaml --env-file capability/env/defa
 docker compose -f docker-compose.yml --env-file capability/env/defaults.env config
 ```
 
-Expected result: both render successfully, use compose name `pi-system`, mount `/srv/data/pi-system`, set `PI_KIT_PROFILE`, and expose health on `${APP_PORT:-8080}`.
+Expected result: both render successfully, use compose name `pi-system`, mount `/srv/data/pi-system`, set `PI_KIT_PROFILE`, and run `healthcheck.py --check` as the container health check.
 
 Verify root and canonical compose parity:
 
@@ -59,10 +59,14 @@ Start the workload:
 
 ```sh
 docker compose -f capability/compose/compose.yaml --env-file capability/env/defaults.env up -d --build
-curl -fsS http://127.0.0.1:8080/health
+docker inspect --format '{{.State.Health.Status}}' pi-system-pi-agent-1
+docker exec pi-system-pi-agent-1 python3 /opt/pi-agent/healthcheck.py --check
 ```
 
-Expected result: JSON with `status: ok` and `data_root_writable: true`.
+Expected result: health status `healthy`, and `--check` exits 0. `--check` is a local probe that
+the data root is writable and needs no server. The `/health` JSON endpoint is served only after
+`python3 /opt/pi-agent/healthcheck.py --serve` is started explicitly, and binds `127.0.0.1` unless
+`PI_AGENT_HEALTH_HOST` is set (`tests/container-static-smoke.ts`).
 
 ## Interactive Operation
 

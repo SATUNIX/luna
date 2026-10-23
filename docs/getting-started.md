@@ -4,7 +4,7 @@ pi-system is one pi package. You install it once, then a **profile** chooses whi
 extensions load. It is delivered from its public git repository, `github.com/SATUNIX/pi-system`:
 releases are `vX.Y.Z` tags and the `next` channel follows `main`.
 
-This is a **beta** (`0.2.4-beta.0`). See [Beta status](beta.md) for what that means.
+This is a **beta**. See [Beta status](beta.md) for what that means.
 
 ## 1. Requirements
 
@@ -17,12 +17,12 @@ npm install -g @earendil-works/pi-coding-agent
 ```
 
 The kit supports pi **0.85.1 and newer**; the version it is tested against is pinned in
-`package.json` (currently 0.87.1). See [Supply chain](supply-chain.md#pi-versions).
+`package.json` (currently 1.3.0). See [Supply chain](supply-chain.md#pi-versions).
 
 ## 2. Install the kit
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.4
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/pi-system` and runs
@@ -41,7 +41,7 @@ profile before starting, or to script the install, use the installer from a clon
 ```sh
 git clone https://github.com/SATUNIX/pi-system.git
 cd pi-system
-node packages/core/install.mjs --channel latest --profile lite
+node packages/core/install.ts --channel latest --profile lite
 ```
 
 `--channel latest` needs at least one release tag; until the first tag exists the installer stops
@@ -95,7 +95,7 @@ Register a checkout in place instead: edits take effect on `/reload`.
 ```sh
 git clone https://github.com/SATUNIX/pi-system.git && cd pi-system
 npm ci --ignore-scripts
-node packages/core/install.mjs --profile balanced --yes
+node packages/core/install.ts --profile balanced --yes
 ```
 
 `CLAUDE.md` and `CONTRIBUTING.md` (both in the repository root) describe the development workflow.

@@ -45,10 +45,10 @@ there is one, on stderr otherwise — not per turn and not again after a reload.
 
 ## Switching profiles with `/profile`
 
-`/profile` is the in-session front-end to `packages/core/install.mjs --settings-only`; it does not
+`/profile` is the in-session front-end to `packages/core/install.ts --settings-only`; it does not
 reimplement install logic. Kit-root resolution: `PI_KIT_ROOT` → the `kitSource` in the install marker (when
 it is a path) → this module's own location. Two layouts are supported: the monorepo
-(`packages/core/install.mjs` + `packages/kit/profiles`) and a legacy flat kit.
+(`packages/core/install.ts` + `packages/kit/profiles`) and a legacy flat kit.
 
 **The switch is transactional** (`profile-switch.ts`):
 
@@ -63,6 +63,13 @@ it is a path) → this module's own location. Two layouts are supported: the mon
 4. Any failure — exception, kill, timeout, non-zero exit, missing completion line, corrupt or mismatching
    result, or a failed reload — restores every snapshot byte-for-byte, removes stray lock/tmp files and says
    what happened. If a restore itself fails, the original bytes are saved to a temp directory and named.
+   The snapshots cover files only: a `pi install` the installer already ran (a companion, or the kit when
+   it was not registered) is not undone, so the message names each one instead of saying nothing was
+   changed (`tests/profile-transaction-smoke.ts`, `tests/profile-safety-smoke.ts`). `/profile` passes
+   `--no-migrate`, so a switch never moves the kit off a retired or previous source: the installer stops
+   before any change and names `/update kit` and the Migration guide instead, and no `pi remove` can
+   delete a clone that this rollback would point settings back at (`tests/profile-transaction-smoke.ts`,
+   `tests/distribution-smoke.ts`).
 5. Only then does it reload.
 
 Installer warnings (for example a stale name in `overrides.json`) are shown after a successful switch.

@@ -1,59 +1,77 @@
 # Development and public releases
 
-Private GitLab is the development source of truth. Its protected `main` accepts reviewed merge
-requests from feature, fix, agent and experiment branches. GitHub is the public release
-repository. Direct public changes must enter GitLab before the next export.
+The public GitHub repository, `github.com/SATUNIX/pi-system`, is the authoritative source.
+Development happens there: every change, from a person or an agent, is a branch and a pull
+request against `main`, and releases are tags on that repository. GitLab holds a read-only
+mirror kept as a backup. Nothing is developed or merged there, and nothing flows from it back to
+GitHub.
 
 ```mermaid
 flowchart TD
-    A[Private feature and agent branches] --> B[GitLab merge request and CI]
-    B --> C[Protected GitLab main]
-    C --> D[Protected version tag and manual publication]
-    D --> E[Allowlisted public tree]
-    E --> F[Private identifier and secret scans]
-    F --> G[Exported tree tests and documentation build]
-    G --> H[GitHub release branch and draft PR]
-    H --> I[GitHub Actions and operator review]
-    I --> J[Public GitHub main]
-    K[Community GitHub PR] --> L[Import into GitLab MR]
-    L --> B
+    A[Feature, fix and agent branches] --> P[Pre-push leak scan in the clone]
+    P --> B[Pull request on GitHub]
+    B --> C[ci and security workflows]
+    B --> R[One approving review, plus code-owner review for sensitive paths]
+    C --> M[Protected main: the next channel]
+    R --> M
+    M --> T[Operator tags vX.Y.Z: the latest channel]
+    T --> W[Optional release workflow]
+    M --> G[Read-only GitLab mirror]
 ```
 
-The publication pipeline exports files, never private Git objects, branches, commit messages or
-agent identities. Its versioned manifest classifies every tracked file as public or private.
-An unclassified path stops publication. Directory allowlists and automatic history mirroring
-are not used. Private roles, review evidence, experiment records and GitLab CI stay private.
+| What | Where |
+|---|---|
+| Code, issues, pull requests, releases | GitHub `SATUNIX/pi-system` |
+| `next` channel | every commit on `main` |
+| `latest` and pinned channels | the `vX.Y.Z` tags ([Releasing](releasing.md)) |
+| Backup | a read-only GitLab mirror of the GitHub repository |
+| Private planning notes, review evidence and engagement examples | a separate private repository, never this one |
 
-Every pipeline validates the private checkout and the actual public export. The export receives
-secret scanning, private identifier scanning, the complete public `check:all` suite and a strict
-documentation build. Narrow synthetic network fixtures are accepted only by exact path, matched
-value and line fingerprint; changed content needs review. Retired source migration uses source
-fingerprints instead of publishing private hostnames.
+## Every pushed branch is public
 
-An operator prepares a version on GitLab `main`, creates a protected `vX.Y.Z` (or prerelease) tag,
-and starts the manual publication job after the gates pass. The publisher verifies the tag
-version and its ancestry, creates a clean commit on GitHub's existing public `main`, and pushes
-`release/vX.Y.Z`. It creates a draft PR. It never force pushes, merges, tags GitHub, or publishes
-npm. An existing release branch with a different tree stops the job; an identical rerun reuses
-it. GitHub Actions independently validates the PR. The operator merges only after checks pass,
-then tags that public commit and optionally uses the existing manual GitHub release workflow.
-The public install and `latest` channel continue to use GitHub tags.
+There is no private staging copy: a branch is published the moment it is pushed. Install the
+pre-push leak scan in every clone you push from:
 
-Publication uses a repository-scoped GitHub App installation token. The private App key is
-stored as a protected GitLab file variable, scoped to the `public-release` environment on a
-protected release runner. Protect the environment when the GitLab edition supports it.
-Community Edition has no environment deployment approval gate: restrict project membership
-and version-tag creation to trusted release operators. App permissions are Contents read/write, Pull
-requests read/write and Metadata read; Workflows write is required when an export changes
-`.github/workflows`. The token is short lived and revoked after the job. Feature, agent and
-untrusted MR pipelines must not receive the key. Instance and repository protection setup is
-an operator prerequisite documented privately in the publication runbook.
+```sh
+node packages/core/prepush-scan.ts install
+```
 
-Community contributions use this path: review the GitHub PR, import or adapt it into a GitLab
-branch, merge its GitLab MR, then include it in the next export. Public reviewers can track the
-original PR from the release PR. Do not develop independently on both `main` branches.
+That writes `.git/hooks/pre-push` (it refuses to replace a different hook that is already there).
+Before each push the hook scans the commits that are not yet on the remote: every added line of
+each commit's diff, the commit message and the author and committer identities. It refuses the
+push when it finds a private host name (`*.internal`, `*.lan`, `*.local`), a home-directory path,
+a private IPv4 address, a PEM private-key header or a GitHub or AWS access-key shape, and when a
+commit adds or changes a file under `internal/`, `reviews/` or `examples/engagement/`. It scans
+history, not only the final tree, so a value added and removed again within one push is still
+refused. Findings name the commit, file and line, never the value. `tests/prepush-scan-smoke.ts`
+pins each of these through real pushes to a temporary bare repository.
 
-The implementation is pinned by the private `smoke:public-export` tests (unknown files,
-private data, symlinks and exported script classification). The publisher needs a configured
-GitHub App and a protected runner to exercise its remote path; local tests do not prove those
-remote settings.
+A synthetic fixture that has to contain such a value is admitted by an exception in
+`packages/core/leak-scan-exceptions.json`: it pins the SHA-256 of the exact match and of the
+whole line in one file, so any edit to the line is refused again. The hook says so when a push
+changes that file, and `.github/CODEOWNERS` gives it to the owner for review. To scan by hand:
+`node packages/core/prepush-scan.ts range origin/main..HEAD`.
+
+The hook is a guard against mistakes, not a boundary: `git push --no-verify` skips it. The public
+gates are gitleaks over the full history in `security.yml` and GitHub secret scanning with push
+protection ([CI security](ci-security.md)). If something private is pushed, delete the branch at
+once and treat the value as disclosed: rotate a secret, and do not rely on history rewriting.
+
+## Agents
+
+Agents work like any other contributor: they push branches and open pull requests. They use a
+non-admin bot identity with contents and pull-request write access only, `main` requires one
+approving review, and only the operator creates release tags, so an agent cannot merge its own
+pull request or cut a release. These are repository settings
+([Releasing](releasing.md#repository-settings-github)); no test in this repository can check them.
+
+## Contributions
+
+Open a pull request on GitHub; see `CONTRIBUTING.md` in the repository root. Do not push changes
+to the GitLab mirror: it follows GitHub and nothing is read back from it.
+
+## History
+
+The public history is this repository's own. Earlier development happened in a private GitLab
+project; its public changes arrived here as reviewed release commits, and its private history,
+branches and agent identities were never published.

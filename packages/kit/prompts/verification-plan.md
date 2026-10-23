@@ -1,6 +1,12 @@
+---
+argument-hint: "[change]"
+---
+
 # Verification Plan
 
 Choose the smallest meaningful verification for the current change.
+
+Change: ${@:-the current change}
 
 Return:
 

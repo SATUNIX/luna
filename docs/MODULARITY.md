@@ -53,12 +53,12 @@ Other people's repos, or your own split-out repos — installed as pi package si
 
 ## Self-containment rule (hard)
 
-At runtime an extension imports **only** `node:*` built-ins and the bundled `typebox` peer. No sibling imports, no `packages/core/lib/` imports. Enforced by `packages/core/verify.mjs` — the build fails if violated.
+At runtime an extension imports **only** `node:*` built-ins and the bundled `typebox` peer. No sibling imports, no `packages/core/lib/` imports. Enforced by `packages/core/verify.ts` — the build fails if violated.
 
 This rule is what makes "extract to own repo" a 5-minute job. Because extensions can't import
 each other, cross-extension invariants (e.g. secret-guard's protected paths staying a superset
-of pentest-governance-domain's) are held instead by **`verify.mjs` parity checks** and shared
-on-disk contracts (`.pi/verdicts.json`, `.pi/recovery/escalation.json`), never by imports. The
+of pentest-governance-domain's) are held instead by **`verify.ts` parity checks** and shared
+on-disk contracts (`.pi/verdicts.json`, `.pi/recovery/sessions/<session id>/escalation.json`), never by imports. The
 full list of enforced checks — each with a worked failure example — is in
 [`WRITING_EXTENSIONS.md`](WRITING_EXTENSIONS.md).
 
@@ -76,7 +76,7 @@ This copies `packages/extensions/src/secret-guard/` into a standalone-ready pack
 
 ## Catalog
 
-`packages/core/registry.mjs` reads all three avenues and produces `docs/EXTENSIONS.md` + `docs/registry.json`. Run with:
+`packages/core/registry.ts` reads all three avenues and produces `docs/EXTENSIONS.md` + `docs/registry.json`. Run with:
 
 ```sh
 npm run catalog

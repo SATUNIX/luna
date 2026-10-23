@@ -5,8 +5,8 @@
  * the child streamed and annotates why it stopped, rather than discarding it behind a bare
  * error string.
  */
-import { MAX_STORED_MESSAGE_TEXT, PER_TASK_OUTPUT_CAP } from "./config.ts";
-import type { Msg, SingleResult } from "./types.ts";
+import { isRecord, MAX_STORED_MESSAGE_TEXT, PER_TASK_OUTPUT_CAP } from "./config.ts";
+import type { Msg, MsgPart, SingleResult } from "./types.ts";
 
 // Thread a chain step's output into the next task. A function replacer is required: a string
 // replacement interprets `$&`, `$'`, `$1`… inside the previous output and corrupts it.
@@ -17,7 +17,7 @@ export function substitutePrevious(task: string, previous: string): string {
 export function getFinalOutput(messages: Msg[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role === "assistant") {
+    if (msg?.role === "assistant" && Array.isArray(msg.content)) {
       for (const part of msg.content) {
         if (part.type === "text" && part.text) return part.text;
       }
@@ -132,4 +132,23 @@ export function boundMessage(msg: Msg): Msg {
     return part;
   });
   return changed ? { ...msg, content } : msg;
+}
+
+const optional = (value: unknown, type: "string" | "number"): boolean => value === undefined || typeof value === type;
+
+function isMsgPart(value: unknown): value is MsgPart {
+  return isRecord(value) && typeof value.type === "string" && optional(value.text, "string") && optional(value.name, "string") && (value.arguments === undefined || isRecord(value.arguments));
+}
+
+// A message from a child's JSON event stream. The child is another process, so its output is
+// checked before use: only the fields this extension reads, and only the types it relies on.
+export function isMsg(value: unknown): value is Msg {
+  if (!isRecord(value) || typeof value.role !== "string") return false;
+  const { content, usage } = value;
+  if (content !== undefined && typeof content !== "string" && !(Array.isArray(content) && content.every(isMsgPart))) return false;
+  if (!optional(value.model, "string") || !optional(value.stopReason, "string") || !optional(value.errorMessage, "string")) return false;
+  if (usage === undefined) return true;
+  if (!isRecord(usage)) return false;
+  if (!["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every((key) => optional(usage[key], "number"))) return false;
+  return usage.cost === undefined || (isRecord(usage.cost) && optional(usage.cost.total, "number"));
 }

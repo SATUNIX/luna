@@ -7,7 +7,7 @@
   "layer": 5,
   "entry": "index.ts",
   "hooks": [],
-  "registers": { "tools": ["record_verdict", "verdict_status"], "commands": ["/verdicts"] },
+  "registers": { "tools": ["record_verdict", "verdict_status"], "commands": ["verdicts"] },
   "profiles": ["long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],

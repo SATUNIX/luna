@@ -1,9 +1,11 @@
 # Web console
 
 `packages/web-ui` is a self-hosted web console for pi: list, open and drive pi sessions from a
-browser tab. It has no runtime dependencies and no build step. Each open session is backed by a
-real `pi --mode rpc` child process; sessions you run in a terminal show up live because the server
-tails their session files. pi owns persistence: the console reads pi's session files and never
+browser tab. It has no runtime dependencies. Its browser code is TypeScript under
+`packages/web-ui/src/`, compiled by `npm run build:web` into committed `.js` files that the server
+serves as they are (`npm run smoke:web-build` fails when they are stale). Each open session is
+backed by a real `pi --mode rpc` child process; sessions you run in a terminal show up live
+because the server tails their session files. pi owns persistence: the console reads pi's session files and never
 writes them.
 
 A console can start and prompt agent sessions, so **unauthenticated access would be remote
@@ -75,7 +77,7 @@ log. `/console stop` removes that file.
   in this release; if `style-src` proves stricter than assumed, only the progress-bar widths break.
 - Nothing here was tested on Windows.
 
-The test suites that pin this behaviour are `tests/web-ui-security-smoke.mjs`,
-`tests/web-ui-bind-policy-smoke.mjs`, `tests/web-ui-rpc-smoke.mjs` and
-`packages/web-ui/scripts/ui-smoke.mjs`, all run by `npm run check:all` (the first three also by `npm run test:security`). See also
+The test suites that pin this behaviour are `tests/web-ui-security-smoke.ts`,
+`tests/web-ui-bind-policy-smoke.ts`, `tests/web-ui-rpc-smoke.ts` and
+`packages/web-ui/scripts/ui-smoke.ts`, all run by `npm run check:all` (the first three also by `npm run test:security`). See also
 `packages/web-ui/README.md` for the design and features.

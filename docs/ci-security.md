@@ -1,11 +1,10 @@
 # CI security
 
-GitLab validates canonical private development and the public export on every merge request
-and branch change. GitHub independently validates release PRs through `.github/workflows/`.
-The GitLab gate includes private role contracts, exact-file export classification, exported
-secret/private-data scans, exported `check:all` and strict documentation builds. Publication
-runs only as a manual protected version-tag job. See [Repository topology](repository-topology.md)
-and [Releasing](releasing.md).
+GitHub Actions validates every pull request and every push to `main` of the authoritative
+repository through `.github/workflows/`. Because every pushed branch is public at once, clones
+also run a local pre-push leak scan before anything leaves the machine
+([Repository topology](repository-topology.md#every-pushed-branch-is-public)). Releases are
+operator actions ([Releasing](releasing.md)).
 
 ## Workflows
 
@@ -29,16 +28,17 @@ run per profile. It also fails on a test file that no script runs or that assert
 | SAST | CodeQL, `security-extended` queries, JavaScript/TypeScript and Actions | Code-scanning alerts (branch protection) | `security.yml` |
 | SAST | Semgrep: `p/javascript`, `p/typescript`, `p/nodejs`, `p/secrets`, `p/owasp-top-ten` | ERROR severity | `.semgrepignore` |
 | Secrets | gitleaks over the full git history | Any finding | `.gitleaks.toml` (a line-level allowlist for synthetic test fixtures only) |
+| Secrets, private data | `packages/core/prepush-scan.ts` as a local pre-push hook (not CI) | Private hosts, home paths, private addresses, key and token shapes, private paths in the pushed commits | `packages/core/leak-scan-exceptions.json`; `tests/prepush-scan-smoke.ts` |
 | Secrets | GitHub secret scanning and push protection | A push containing a secret | repository settings |
 | Dependencies | `npm audit` | High or critical | triage in [Supply chain](supply-chain.md) |
 | Dependencies | `npm audit signatures` | A dependency with a missing or invalid registry signature or attestation | |
 | Dependencies | OSV-Scanner | Known vulnerabilities (OSV database) | |
 | Dependencies | Dependency review (pull requests) | A new dependency with a high-severity advisory | `security.yml` |
-| Lockfile | `packages/core/lockfile-check.mjs` | A package resolved from anywhere but the npm registry, a missing sha512 hash, or an unreviewed install script | allowlist in the script |
+| Lockfile | `packages/core/lockfile-check.ts` | A package resolved from anywhere but the npm registry, a missing sha512 hash, or an unreviewed install script | allowlist in the script |
 | Workflows | zizmor | Template injection, over-broad permissions, credential persistence, cache poisoning, unpinned actions | |
-| Package | `packages/core/pack-check.mjs` | A missing required file, a leaked private file, an oversize tarball, a profile that does not resolve from the tarball | |
-| Install | `tests/clean-install-smoke.mjs` | The packed tarball failing to install for a profile, or the real pi failing to load it | |
-| Release | `tests/release-workflow-smoke.mjs` | A release workflow that could publish or create a release on a dry run | |
+| Package | `packages/core/pack-check.ts` | A missing required file, a leaked private file, an oversize tarball, a profile that does not resolve from the tarball | |
+| Install | `tests/clean-install-smoke.ts` | The packed tarball failing to install for a profile, or the real pi failing to load it | |
+| Release | `tests/release-workflow-smoke.ts` | A release workflow that could publish or create a release on a dry run | |
 
 ## Hardening in the workflows
 
@@ -111,10 +111,10 @@ No test pins these exclusions: the `codeql` and `zizmor` jobs apply them, and a 
 
 ## Not run in CI
 
-The container-boundary probe for autonomous runs (`packages/autonomy/tests/boundary-probe.mjs`)
+The container-boundary probe for autonomous runs (`packages/autonomy/tests/boundary-probe.ts`)
 and the container capability scripts under `packages/container/capability/tests/` need a
 container engine and are run by the operator. `check:all` lists them as manual-only, with the
-reason, in `packages/core/lib/wiring.mjs`. Windows is exercised by the per-profile install check
+reason, in `packages/core/lib/wiring.ts`. Windows is exercised by the per-profile install check
 only; the full suite runs on Linux.
 
 ## Adding an allowlist entry
@@ -124,4 +124,4 @@ only; the full suite runs on Linux.
 - **Semgrep**: prefer an inline `// nosemgrep: <rule-id>` with a comment explaining why the code
   is safe; use `.semgrepignore` only for whole trees that are not shipped code.
 - **Install scripts**: read the script, then add the package to `INSTALL_SCRIPT_ALLOWLIST` in
-  `packages/core/lockfile-check.mjs` with a one-line summary of what it does.
+  `packages/core/lockfile-check.ts` with a one-line summary of what it does.

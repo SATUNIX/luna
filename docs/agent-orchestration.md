@@ -52,7 +52,7 @@ A child is a separate `pi` process started with `--no-extensions` plus an allowl
 completion reviewer in `verify-gate`, the specialists and validators in `conductor`, the second-model
 reviewer in `dual-review` (`/review` and the `dual_review` tool), and recovery. A test scans the
 extension sources and fails when a launcher of `pi` children does not ask the guard
-(`tests/delegation-guard-smoke.mjs`). There is one engine, so there is one set of rules:
+(`tests/delegation-guard-smoke.ts`). There is one engine, so there is one set of rules:
 
 ```mermaid
 flowchart TD
@@ -135,8 +135,9 @@ as `orphaned` instead of `running` forever.
 
 `progress-guard` watches the main session for repetition, oscillation, and reads-without-a-write.
 When one signature keeps recurring it injects a review/delegate checkpoint on its own — in either
-mode, no `/reflect` and no mode switch — and writes `.pi/recovery/escalation.json` for
-`recovery-orchestrator`. The reads-since-edit signal defaults to `PI_KIT_GUARD_STALL` (10) and is
+mode, no `/reflect` and no mode switch — and writes a per-session
+`.pi/recovery/sessions/<session id>/escalation.json` for that session's `recovery-orchestrator`
+(`tests/recovery-grounding-smoke.ts`). The reads-since-edit signal defaults to `PI_KIT_GUARD_STALL` (10) and is
 suppressed entirely in a session with no write-capable tool active. See
 `packages/extensions/src/progress-guard/README.md`.
 
@@ -154,6 +155,10 @@ suppressed entirely in a session with no write-capable tool active. See
   passes.
 - `/workflow run feature goal=…` / `bugfix` / `research`: the same flows as saved, resumable
   [workflows](workflows.md).
+- `workflow({name: "review-changes", args})` and the other kit
+  [built-in script workflows](script-workflows.md#built-in-script-workflows) (`understand`,
+  `design-panel`, `research-sweep`, `migrate`); the `workflow-authoring` skill is the reference
+  for writing your own script (`tests/workflow-builtin-smoke.ts`).
 - Or just ask in plain language: "plan this with a subagent, then implement and review it."
 
 ## Verification lifecycle

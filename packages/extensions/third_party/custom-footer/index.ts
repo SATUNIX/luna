@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { todoFilePath, resolveSessionId, readTodos } from "./todo-read.ts";
-import { agentDir, agentFailureCount, createTotalsCache, costOf, DEFAULT_PRICING, loadPricing, readAgents, readBranch, readCompaction, readEffort, readFirewall, readProfile, readUnattended } from "./data.ts";
-import { fmtDuration, fmtTokens, footerGlyphs, renderDetail, renderFooter, TRANSIENT_KEYS, STALE_CHIP_MS } from "./render.ts";
+import { agentDir, agentFailureCount, createTotalsCache, costOf, DEFAULT_PRICING, isRecord, loadPricing, readAgents, readBranch, readCompaction, readEffort, readFirewall, readProfile, readSecurity, readUnattended } from "./data.ts";
+import { fmtDuration, fmtTokens, footerGlyphs, renderDetail, renderFooter } from "./render.ts";
 import type { FooterMode, FooterState, StatusEntry, Theme, TodoItem } from "./render.ts";
 import { PHRASES, TIPS, pick, renderTodoWidget, toolPhrase } from "./widgets.ts";
 import type { Tip } from "./widgets.ts";
@@ -46,6 +46,13 @@ const PHRASE_ROTATE_MS = 8000;
 const TIP_ROTATE_MS = 30000;
 const MODES: FooterMode[] = ["default", "light", "heavy"];
 
+function isFooterMode(value: unknown): value is FooterMode {
+  return MODES.some((mode) => mode === value);
+}
+
+/** `String(value)` for a value of any type (event payloads are not checked by pi). */
+const toText = (value: unknown): string => String(value);
+
 export function readTodoItems(cwd: string, sessionId?: string): TodoItem[] {
   try {
     return readTodos(todoFilePath(cwd, sessionId)).todos.map((t) => ({ id: t.id, text: t.text.trim(), state: t.state }));
@@ -62,10 +69,12 @@ function settingsFile(): string {
 export function loadSettings(): UiSettings {
   const defaults: UiSettings = { footer: true, mode: "default", tips: process.env.PI_KIT_TIPS !== "0", todos: process.env.PI_KIT_TODO_WIDGET !== "0", cat: process.env.PI_KIT_CAT !== "0" };
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
+    // A file that is not an object has no usable keys: each one falls back to its default.
+    const raw: Record<string, unknown> = isRecord(parsed) ? parsed : {};
     const out: UiSettings = {
       footer: typeof raw.footer === "boolean" ? raw.footer : defaults.footer,
-      mode: MODES.includes(raw.mode) ? raw.mode : defaults.mode,
+      mode: isFooterMode(raw.mode) ? raw.mode : defaults.mode,
       tips: process.env.PI_KIT_TIPS === "0" ? false : typeof raw.tips === "boolean" ? raw.tips : defaults.tips,
       todos: process.env.PI_KIT_TODO_WIDGET === "0" ? false : typeof raw.todos === "boolean" ? raw.todos : defaults.todos,
       cat: process.env.PI_KIT_CAT === "0" ? false : typeof raw.cat === "boolean" ? raw.cat : defaults.cat,
@@ -112,7 +121,7 @@ export default function (pi: ExtensionAPI) {
   let footerInstalled = false;
   let disposed = false;
   const totalsCache = createTotalsCache();
-  let cache: Omit<FooterState, "now" | "statuses" | "running" | "agents" | "effort" | "unattended" | "compaction" | "cat"> & { statusProvider?: () => Array<[string, string]> } = {
+  let cache: Omit<FooterState, "now" | "statuses" | "running" | "agents" | "effort" | "security" | "unattended" | "compaction" | "cat"> & { statusProvider?: (() => Array<[string, string]>) | undefined } = {
     cwd: process.cwd(),
     totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
     partial: false,
@@ -146,7 +155,11 @@ export default function (pi: ExtensionAPI) {
   let applied: { state: CatState; at: number } | undefined;
   let catTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const hasTui = (ctx?: FooterCtx) => !!ctx && ctx.hasUI !== false && !!ctx.ui;
+  const hasTui = (ctx?: FooterCtx) => {
+    // Test harnesses and older hosts may omit `hasUI` (or `ui`): only an explicit false means none.
+    const host: { hasUI?: boolean; ui?: unknown } | undefined = ctx;
+    return !!host && host.hasUI !== false && !!host.ui;
+  };
   const isRunning = () => Boolean(run && run.endedAt === undefined);
   const say = (ctx: FooterCtx | undefined, text: string, level: "info" | "warning" | "error" = "info") => {
     if (ctx && hasTui(ctx) && typeof ctx.ui.notify === "function") ctx.ui.notify(text, level);
@@ -155,7 +168,7 @@ export default function (pi: ExtensionAPI) {
 
   function readTodosCached(cwd: string, sessionId: string | undefined): TodoItem[] {
     // A stat is far cheaper than parsing the file on every event; re-read only when it changed.
-    let stat = "";
+    let stat: string;
     try {
       const s = fs.statSync(todoFilePath(cwd, sessionId));
       stat = `${s.mtimeMs}:${s.size}`;
@@ -172,27 +185,27 @@ export default function (pi: ExtensionAPI) {
     ctxRef = ctx;
     const cwd = ctx.cwd ?? process.cwd();
     let entries: unknown = [];
-    try { entries = (ctx as any).sessionManager?.getEntries?.() ?? []; } catch { /* stale ctx */ }
+    try { entries = ctx.sessionManager?.getEntries?.() ?? []; } catch { /* stale ctx */ }
     const { totals, partial } = totalsCache.update(entries);
     let context: FooterState["context"];
-    try { context = (ctx.getContextUsage?.() ?? undefined) as FooterState["context"]; } catch { context = undefined; }
+    try { context = ctx.getContextUsage?.() ?? undefined; } catch { context = undefined; }
     let thinking: string | undefined;
-    try { thinking = (pi as any).getThinkingLevel?.(); } catch { thinking = undefined; }
+    try { thinking = pi.getThinkingLevel?.(); } catch { thinking = undefined; }
     let sessionName: string | undefined;
-    try { sessionName = (ctx as any).sessionManager?.getSessionName?.(); } catch { sessionName = undefined; }
-    const sessionId = resolveSessionId((ctx as any).sessionManager);
+    try { sessionName = ctx.sessionManager?.getSessionName?.(); } catch { sessionName = undefined; }
+    const sessionId = resolveSessionId(ctx.sessionManager);
     cache = {
       ...cache,
       cwd,
       branch: branchFromPi ?? cache.branch,
       sessionName,
-      provider: (ctx.model as any)?.provider,
+      provider: ctx.model?.provider,
       model: ctx.model?.id,
       thinking,
       profile,
       firewall,
       pricingSource: pricing.source,
-      context: context ? { ...context, contextWindow: context.contextWindow ?? (ctx.model as any)?.contextWindow } : { contextWindow: (ctx.model as any)?.contextWindow },
+      context: context ? { ...context, contextWindow: context.contextWindow ?? ctx.model?.contextWindow } : { contextWindow: ctx.model?.contextWindow },
       totals,
       partial,
       cost: costOf(totals, pricing),
@@ -206,23 +219,23 @@ export default function (pi: ExtensionAPI) {
   /** The bar's input: the cache plus what other extensions publish, read from memory only. */
   function state(): FooterState {
     const now = Date.now();
-    let raw: Array<[string, string]> = [];
+    let raw: Array<[string, string]>;
     try { raw = cache.statusProvider?.() ?? []; } catch { raw = []; }
     const present = new Set(raw.map(([k]) => k));
     for (const key of [...seen.keys()]) if (!present.has(key)) seen.delete(key);
     const statuses: StatusEntry[] = raw.map(([key, text]) => {
       const prior = seen.get(key);
-      if (!prior || prior.text !== text) seen.set(key, { text, at: now });
+      if (prior?.text !== text) seen.set(key, { text, at: now });
       return { key, text, ageMs: now - (seen.get(key)?.at ?? now) };
     });
-    return { ...cache, cat: catView(now), running: isRunning(), agents: readAgents(failedBase), effort: readEffort(), unattended: readUnattended(), compaction: readCompaction(), statuses, now };
+    return { ...cache, cat: catView(now), running: isRunning(), agents: readAgents(failedBase), effort: readEffort(), security: readSecurity(), unattended: readUnattended(), compaction: readCompaction(), statuses, now };
   }
 
   function installFooter(ctx: FooterCtx): void {
-    if (!hasTui(ctx) || typeof (ctx.ui as any).setFooter !== "function") return;
-    (ctx.ui as any).setFooter((tui: any, theme: Theme, footerData: any) => {
+    if (!hasTui(ctx) || typeof ctx.ui.setFooter !== "function") return;
+    ctx.ui.setFooter((tui, theme, footerData) => {
       requestRender = () => { try { tui?.requestRender?.(); } catch { /* ignore */ } };
-      cache.statusProvider = () => [...(footerData?.getExtensionStatuses?.() ?? new Map()).entries()].sort(([a]: [string], [b]: [string]) => a.localeCompare(b));
+      cache.statusProvider = () => [...(footerData?.getExtensionStatuses?.() ?? new Map<string, string>()).entries()].sort(([a], [b]) => a.localeCompare(b));
       const unsubscribe = footerData?.onBranchChange?.(() => { branchFromPi = footerData.getGitBranch?.() ?? undefined; cache.branch = branchFromPi; requestRender?.(); });
       branchFromPi = footerData?.getGitBranch?.() ?? branchFromPi;
       if (branchFromPi) cache.branch = branchFromPi;
@@ -232,7 +245,7 @@ export default function (pi: ExtensionAPI) {
             return renderFooter(state(), theme, width, settings.mode);
           } catch (error) {
             const t = cache.totals;
-            return [`status bar error (${String((error as Error)?.message ?? error)}) | in ${fmtTokens(t.input)} out ${fmtTokens(t.output)} | ${cache.model ?? "no model"}`.slice(0, Math.max(10, width))];
+            return [`status bar error (${String((error as { message?: unknown } | null | undefined)?.message ?? error)}) | in ${fmtTokens(t.input)} out ${fmtTokens(t.output)} | ${cache.model ?? "no model"}`.slice(0, Math.max(10, width))];
           }
         },
         invalidate() {},
@@ -248,28 +261,28 @@ export default function (pi: ExtensionAPI) {
 
   function removeFooter(ctx: FooterCtx): void {
     if (!hasTui(ctx)) return;
-    try { (ctx.ui as any).setFooter?.(undefined); } catch { /* ignore */ }
+    try { ctx.ui.setFooter?.(undefined); } catch { /* ignore */ }
     footerInstalled = false;
   }
 
   function updateTodoWidget(ctx: FooterCtx): void {
-    if (!hasTui(ctx) || typeof (ctx.ui as any).setWidget !== "function") return;
-    const theme = (ctx.ui as any).theme as Theme | undefined;
+    if (!hasTui(ctx) || typeof ctx.ui.setWidget !== "function") return;
+    const theme: Theme | undefined = ctx.ui.theme;
     if (!settings.todos || !theme || !cache.todos.length) {
-      (ctx.ui as any).setWidget(TODO_WIDGET, undefined);
+      ctx.ui.setWidget(TODO_WIDGET, undefined);
       return;
     }
-    (ctx.ui as any).setWidget(TODO_WIDGET, renderTodoWidget(cache.todos, theme));
+    ctx.ui.setWidget(TODO_WIDGET, renderTodoWidget(cache.todos, theme));
   }
 
   function availableTips(): Tip[] {
     let names = new Set<string>();
-    try { names = new Set((pi.getCommands?.() ?? []).map((c: any) => String(c.name).replace(/^\//, ""))); } catch { /* ignore */ }
+    try { names = new Set((pi.getCommands?.() ?? []).map((c: { name?: unknown }) => String(c.name).replace(/^\//, ""))); } catch { /* ignore */ }
     return TIPS.filter((t) => !t.requires || names.has(t.requires));
   }
 
   function workingText(now: number): string {
-    const theme = (ctxRef?.ui as any)?.theme as Theme | undefined;
+    const theme: Theme | undefined = ctxRef?.ui?.theme;
     const fg = (c: string, s: string) => (theme ? theme.fg(c, s) : s);
     const glyphs = footerGlyphs(theme ?? { fg: (_c: string, t: string) => t, bold: (t: string) => t }, settings.ascii);
     if (now - phraseAt > PHRASE_ROTATE_MS) { phrase = pick(PHRASES, phrase); phraseAt = now; }
@@ -281,17 +294,17 @@ export default function (pi: ExtensionAPI) {
 
   function tick(): void {
     const ctx = ctxRef;
-    if (disposed || !hasTui(ctx) || !isRunning()) return;
+    if (disposed || !ctx || !hasTui(ctx) || !isRunning()) return;
     const now = Date.now();
-    try { (ctx!.ui as any).setWorkingMessage?.(workingText(now)); } catch { /* ignore */ }
+    try { ctx.ui.setWorkingMessage?.(workingText(now)); } catch { /* ignore */ }
     syncCat();
     if (settings.tips) {
       if (!tip || now - tipAt > TIP_ROTATE_MS) {
         const tips = availableTips();
         tip = tips.length ? pick(tips, tip) : undefined;
         tipAt = now;
-        const theme = (ctx!.ui as any).theme as Theme | undefined;
-        if (tip && theme) (ctx!.ui as any).setWidget?.(TIP_WIDGET, [`${theme.fg("dim", "  ⎿ Tip: ")}${theme.fg("muted", tip.text)}`]);
+        const theme: Theme | undefined = ctx.ui.theme;
+        if (tip && theme) ctx.ui.setWidget?.(TIP_WIDGET, [`${theme.fg("dim", "  ⎿ Tip: ")}${theme.fg("muted", tip.text)}`]);
       }
     }
     requestRender?.();
@@ -302,14 +315,14 @@ export default function (pi: ExtensionAPI) {
     ticker = undefined;
     tip = undefined;
     const c = ctx ?? ctxRef;
-    if (hasTui(c)) {
-      try { (c!.ui as any).setWidget?.(TIP_WIDGET, undefined); } catch { /* ignore */ }
-      try { (c!.ui as any).setWorkingMessage?.(); } catch { /* ignore */ }
+    if (c && hasTui(c)) {
+      try { c.ui.setWidget?.(TIP_WIDGET, undefined); } catch { /* ignore */ }
+      try { c.ui.setWorkingMessage?.(); } catch { /* ignore */ }
     }
   }
 
   const paint = (colour: string, text: string): string => {
-    const theme = (ctxRef?.ui as any)?.theme as Theme | undefined;
+    const theme: Theme | undefined = ctxRef?.ui?.theme;
     return theme ? theme.fg(colour, text) : text;
   };
 
@@ -339,10 +352,10 @@ export default function (pi: ExtensionAPI) {
     const ctx = ctxRef;
     const now = Date.now();
     const next = catState(now);
-    if (!applied || applied.state !== next) {
+    if (applied?.state !== next) {
       applied = { state: next, at: now };
-      if (isRunning() && hasTui(ctx) && typeof (ctx!.ui as any).setWorkingIndicator === "function") {
-        try { (ctx!.ui as any).setWorkingIndicator(indicatorFor(next, paint)); } catch { /* ignore */ }
+      if (isRunning() && ctx && hasTui(ctx) && typeof ctx.ui.setWorkingIndicator === "function") {
+        try { ctx.ui.setWorkingIndicator(indicatorFor(next, paint)); } catch { /* ignore */ }
       }
     }
     armCatTimer(next, now);
@@ -358,15 +371,15 @@ export default function (pi: ExtensionAPI) {
     if (age >= transientHoldMs(result.state)) { result = undefined; return; }
     const interval = finished(state, age) ? Math.max(50, transientHoldMs(result.state) - age) : ANIMATIONS[state].intervalMs;
     catTimer = setTimeout(() => { catTimer = undefined; syncCat(); }, interval);
-    (catTimer as any).unref?.();
+    catTimer.unref?.();
   }
 
   function stopCat(ctx?: FooterCtx): void {
     if (catTimer) clearTimeout(catTimer);
     catTimer = undefined;
     const c = ctx ?? ctxRef;
-    if (applied && hasTui(c)) {
-      try { (c!.ui as any).setWorkingIndicator?.(); } catch { /* ignore */ }
+    if (applied && c && hasTui(c)) {
+      try { c.ui.setWorkingIndicator?.(); } catch { /* ignore */ }
     }
     applied = undefined;
   }
@@ -388,8 +401,8 @@ export default function (pi: ExtensionAPI) {
     disposed = false;
     settings = loadSettings();
     run = undefined;
-    stopTicker(ctx as FooterCtx);
-    stopCat(ctx as FooterCtx);
+    stopTicker(ctx);
+    stopCat(ctx);
     live = { until: 0 }; toolsRunning = 0; promptOpen = false; compacting = false; result = undefined;
     unsubscribeEffort?.();
     unsubscribeEffort = undefined;
@@ -397,26 +410,26 @@ export default function (pi: ExtensionAPI) {
     totalsCache.reset();
     todoStat = "";
     failedBase = agentFailureCount();
-    const cwd = (ctx as FooterCtx).cwd ?? process.cwd();
+    const cwd = ctx.cwd ?? process.cwd();
     // Read once per session (or reload): the installer's profile marker, the firewall config and a
     // fallback branch, so refresh() never touches the disk or a subprocess for them.
     profile = readProfile(cwd);
     firewall = readFirewall();
     cache.branch = readBranch(cwd);
-    reloadPricing(ctx as FooterCtx);
-    if (settings.footer) installFooter(ctx as FooterCtx);
+    reloadPricing(ctx);
+    if (settings.footer) installFooter(ctx);
     try {
       const effort = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { onChange?(l: () => void): () => void } | undefined;
       unsubscribeEffort = effort?.onChange?.(() => requestRender?.());
     } catch { /* the tier chip just updates on the next refresh */ }
-    refresh(ctx as FooterCtx);
+    refresh(ctx);
   });
 
   // A finished session must leave nothing running: the ticker, its widgets and the render hook.
   pi.on("session_shutdown", async (_event, ctx) => {
     disposed = true;
-    stopTicker(ctx as FooterCtx);
-    stopCat(ctx as FooterCtx);
+    stopTicker(ctx);
+    stopCat(ctx);
     result = undefined;
     unsubscribeEffort?.();
     unsubscribeEffort = undefined;
@@ -425,14 +438,14 @@ export default function (pi: ExtensionAPI) {
     run = undefined;
     activity = undefined;
     seen.clear();
-    const c = ctx as FooterCtx;
+    const c = ctx;
     if (hasTui(c)) {
-      try { (c.ui as any).setWidget?.(TODO_WIDGET, undefined); } catch { /* ignore */ }
+      try { c.ui.setWidget?.(TODO_WIDGET, undefined); } catch { /* ignore */ }
     }
   });
 
   pi.on("agent_start", async (_event, ctx) => {
-    ctxRef = ctx as FooterCtx;
+    ctxRef = ctx;
     run = { startedAt: Date.now(), input: 0, output: 0, estOutput: 0 };
     failedBase = agentFailureCount();
     phrase = pick(PHRASES);
@@ -443,20 +456,20 @@ export default function (pi: ExtensionAPI) {
     toolsRunning = 0;
     applied = undefined;
     if (ticker) clearInterval(ticker);
-    if (hasTui(ctx as FooterCtx)) {
+    if (hasTui(ctx)) {
       ticker = setInterval(tick, TICK_MS);
-      (ticker as any).unref?.();
+      ticker.unref?.();
       tick();
     }
     syncCat();
   });
 
-  pi.on("message_update", async (event: any) => {
+  pi.on("message_update", async (event) => {
     if (!run) return;
-    const e = event?.assistantMessageEvent;
+    const e: { type?: unknown; delta?: unknown } | undefined = event?.assistantMessageEvent;
     const now = Date.now();
     if (e?.type === "text_delta" || e?.type === "thinking_delta" || e?.type === "toolcall_delta") {
-      run.estOutput += Math.max(0, String(e.delta ?? "").length / 4);
+      run.estOutput += Math.max(0, toText(e.delta ?? "").length / 4);
       if (!activity || activity.until < now || !activity.label.startsWith("Running")) {
         activity = { label: e.type === "thinking_delta" ? "Thinking" : e.type === "text_delta" ? "Writing the response" : "Preparing a tool call", until: now + 1500 };
       }
@@ -464,45 +477,45 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("message_end", async (event: any, ctx) => {
-    const msg = event?.message;
+  pi.on("message_end", async (event, ctx) => {
+    const msg: { role?: unknown; usage?: { input?: unknown; output?: unknown } | null } | undefined = event?.message;
     if (run && msg?.role === "assistant") {
       run.input += Number(msg.usage?.input) || 0;
       run.output += Number(msg.usage?.output) || 0;
       run.estOutput = 0;
     }
-    refresh(ctx as FooterCtx);
+    refresh(ctx);
   });
 
-  pi.on("tool_execution_start", async (event: any) => {
+  pi.on("tool_execution_start", async (event) => {
     toolsRunning++;
     syncCat();
     activity = { label: toolPhrase(event?.toolName ?? "tool", event?.args), until: Number.MAX_SAFE_INTEGER };
   });
 
-  pi.on("tool_execution_end", async (event: any, ctx) => {
+  pi.on("tool_execution_end", async (event, ctx) => {
     activity = undefined;
     toolsRunning = Math.max(0, toolsRunning - 1);
     if (event?.isError) setResult(classifyToolError(event.result));
     else syncCat();
-    if (["todo", "write", "edit"].includes(event?.toolName)) refresh(ctx as FooterCtx);
+    if (["todo", "write", "edit"].includes(event?.toolName)) refresh(ctx);
   });
 
   pi.on("turn_end", async (_event, ctx) => {
-    refresh(ctx as FooterCtx);
+    refresh(ctx);
   });
 
-  pi.on("agent_end", async (event: any, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
     if (run) run.endedAt = Date.now();
     activity = undefined;
     toolsRunning = 0;
-    stopTicker(ctx as FooterCtx);
-    stopCat(ctx as FooterCtx);
+    stopTicker(ctx);
+    stopCat(ctx);
     if (settings.cat && run) {
-      const last = [...(Array.isArray(event?.messages) ? event.messages : [])].reverse().find((m: any) => m?.role === "assistant");
+      const last: { role?: unknown; stopReason?: unknown } | undefined = [...(Array.isArray(event?.messages) ? event.messages : [])].reverse().find((m) => m?.role === "assistant");
       setResult(last?.stopReason === "error" ? "error" : last?.stopReason === "aborted" ? "cancelled" : "success");
     }
-    refresh(ctx as FooterCtx);
+    refresh(ctx);
   });
 
   // A blocking prompt (an approval, a question) means the agent cannot go on without the user.
@@ -512,8 +525,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_compact", async () => { compacting = false; syncCat(); });
   pi.on("session_compact_failed", async () => { compacting = false; setResult("warning"); });
 
-  pi.on("model_select", async (_event, ctx) => refresh(ctx as FooterCtx));
-  pi.on("thinking_level_select", async (_event, ctx) => refresh(ctx as FooterCtx));
+  pi.on("model_select", async (_event, ctx) => refresh(ctx));
+  pi.on("thinking_level_select", async (_event, ctx) => refresh(ctx));
 
   const modeLabel = () => (settings.footer ? settings.mode : "off");
 
@@ -521,7 +534,7 @@ export default function (pi: ExtensionAPI) {
     description: "Status bar: /footer default|light|heavy, /footer on|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on|off, /footer ascii on|off, /footer cat on|off, /footer config",
     getArgumentCompletions: (prefix: string) => ["default", "light", "heavy", "on", "off", "status", "reload", "todos on", "todos off", "ascii on", "ascii off", "cat on", "cat off", "config"].filter((v) => v.startsWith(prefix.trim().toLowerCase())).map((v) => ({ value: v, label: v })),
     handler: async (args, ctx) => {
-      const footerCtx = ctx as FooterCtx;
+      const footerCtx: FooterCtx = ctx;
       const [arg, value, ...extra] = commandArgs(args);
       const persist = (message: string) => {
         const failure = saveSettings(settings);
@@ -536,39 +549,44 @@ export default function (pi: ExtensionAPI) {
 
       if (arg === "status") {
         refresh(footerCtx);
-        return say(footerCtx, renderDetail(state(), modeLabel()).concat([`  settings    tips ${settings.tips ? "on" : "off"}, todos ${settings.todos ? "on" : "off"}, cat ${settings.cat ? "on" : "off"}, ascii ${settings.ascii ? "on" : "auto"} (${settingsFile()})` ]).join("\n"));
+        say(footerCtx, renderDetail(state(), modeLabel()).concat([`  settings    tips ${settings.tips ? "on" : "off"}, todos ${settings.todos ? "on" : "off"}, cat ${settings.cat ? "on" : "off"}, ascii ${settings.ascii ? "on" : "auto"} (${settingsFile()})` ]).join("\n"));
+        return;
       }
       if (arg === "reload") {
         reloadPricing(footerCtx);
         refresh(footerCtx);
-        return say(footerCtx, `Status bar pricing reloaded from ${pricing.source}`);
+        say(footerCtx, `Status bar pricing reloaded from ${pricing.source}`);
+        return;
       }
       if (arg === "todos") {
         const next = parseOnOff(value, settings.todos);
-        if (next === null || extra.length) return invalid(`"${value}" is not on or off`);
+        if (next === null || extra.length) { invalid(`"${value}" is not on or off`); return; }
         settings.todos = next;
         refresh(footerCtx);
-        return persist(`todo checklist ${settings.todos ? "on" : "off"}`);
+        persist(`todo checklist ${settings.todos ? "on" : "off"}`);
+        return;
       }
       if (arg === "ascii") {
         const next = parseOnOff(value, Boolean(settings.ascii));
-        if (next === null || extra.length) return invalid(`"${value}" is not on or off`);
+        if (next === null || extra.length) { invalid(`"${value}" is not on or off`); return; }
         if (next) settings.ascii = true;
         else delete settings.ascii;
         refresh(footerCtx);
-        return persist(`ASCII status bar ${settings.ascii ? "on" : "off (chosen from the theme)"}`);
+        persist(`ASCII status bar ${settings.ascii ? "on" : "off (chosen from the theme)"}`);
+        return;
       }
       if (arg === "cat") {
         const next = parseOnOff(value, settings.cat);
-        if (next === null || extra.length) return invalid(`"${value}" is not on or off`);
+        if (next === null || extra.length) { invalid(`"${value}" is not on or off`); return; }
         settings.cat = next;
         if (!next) { stopCat(footerCtx); result = undefined; }
         else if (isRunning()) { applied = undefined; syncCat(); }
         refresh(footerCtx);
-        return persist(`cat ${settings.cat ? "on" : "off (pi's own spinner is used)"}`);
+        persist(`cat ${settings.cat ? "on" : "off (pi's own spinner is used)"}`);
+        return;
       }
       if (arg === "config" || arg === "settings") {
-        if (!hasTui(footerCtx) || typeof footerCtx.ui.select !== "function") return say(footerCtx, `footer: /footer config needs an interactive session. ${USAGE}`, "warning");
+        if (!hasTui(footerCtx) || typeof footerCtx.ui.select !== "function") { say(footerCtx, `footer: /footer config needs an interactive session. ${USAGE}`, "warning"); return; }
         const choice = await footerCtx.ui.select("Status bar", ["default", "light", "heavy", "off"]);
         if (!choice) return;
         if (choice === "off") settings.footer = false;
@@ -577,20 +595,23 @@ export default function (pi: ExtensionAPI) {
           settings.mode = choice as FooterMode;
         }
         apply();
-        return persist(settings.footer ? `Status bar set to ${settings.mode}` : "Status bar disabled (pi's built-in footer restored)");
+        persist(settings.footer ? `Status bar set to ${settings.mode}` : "Status bar disabled (pi's built-in footer restored)");
+        return;
       }
-      if (arg && (MODES as string[]).includes(arg)) {
-        if (value !== undefined) return invalid(`unexpected "${value}" after ${arg}`);
+      if (arg && isFooterMode(arg)) {
+        if (value !== undefined) { invalid(`unexpected "${value}" after ${arg}`); return; }
         settings.footer = true;
-        settings.mode = arg as FooterMode;
+        settings.mode = arg;
         apply();
-        return persist(`Status bar set to ${settings.mode}`);
+        persist(`Status bar set to ${settings.mode}`);
+        return;
       }
       if (arg === undefined || arg === "on" || arg === "off") {
-        if (value !== undefined) return invalid(`unexpected "${value}" after ${arg}`);
+        if (value !== undefined) { invalid(`unexpected "${value}" after ${arg}`); return; }
         settings.footer = arg === "on" ? true : arg === "off" ? false : !settings.footer;
         apply();
-        return persist(settings.footer ? "Status bar enabled" : "Status bar disabled (pi's built-in footer restored)");
+        persist(settings.footer ? "Status bar enabled" : "Status bar disabled (pi's built-in footer restored)");
+        return;
       }
       invalid(`unknown option "${arg}"`);
     },
@@ -599,19 +620,19 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("tips", {
     description: "Show or hide usage tips while the agent works: /tips on|off",
     handler: async (args, ctx) => {
-      const footerCtx = ctx as FooterCtx;
+      const footerCtx: FooterCtx = ctx;
       const [value, ...extra] = commandArgs(args);
       const next = parseOnOff(value, settings.tips);
-      if (next === null || extra.length) return say(footerCtx, `tips: "${value}" is not on or off. Nothing was changed. Usage: /tips on|off`, "error");
+      if (next === null || extra.length) { say(footerCtx, `tips: "${value}" is not on or off. Nothing was changed. Usage: /tips on|off`, "error"); return; }
       settings.tips = next;
       const failure = saveSettings(settings);
       if (!settings.tips && hasTui(footerCtx)) {
-        try { (footerCtx.ui as any).setWidget?.(TIP_WIDGET, undefined); } catch { /* ignore */ }
+        try { footerCtx.ui.setWidget?.(TIP_WIDGET, undefined); } catch { /* ignore */ }
       }
       say(footerCtx, `tips ${settings.tips ? "on" : "off"}${failure ? ` (could not save it: ${failure})` : ""}`, failure ? "warning" : "info");
     },
   });
 
   // exposed for tests
-  (pi as any).__footerDebug = { state, workingText, isInstalled: () => footerInstalled, tickerActive: () => ticker !== undefined, catTimerActive: () => catTimer !== undefined, catState: () => catState(Date.now()), seen };
+  Object.assign(pi, { __footerDebug: { state, workingText, isInstalled: () => footerInstalled, tickerActive: () => ticker !== undefined, catTimerActive: () => catTimer !== undefined, catState: () => catState(Date.now()), seen } });
 }

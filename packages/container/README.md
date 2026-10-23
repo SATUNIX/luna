@@ -10,7 +10,10 @@ and engagement scaffolding. Behaviour and skills are installed from the `pi-syst
 - Compatibility compose: `docker-compose.yml`
 - Capability id: `pi-system`
 - Persistent data root: `/srv/data/pi-system`
-- Health endpoint: `http://127.0.0.1:${APP_PORT:-8080}/health`
+- Health check: `healthcheck.py --check` is a local probe (the data root is writable) and needs
+  no server. The `/health` HTTP endpoint is served only when `healthcheck.py --serve` is run
+  explicitly, and binds `127.0.0.1` unless `PI_AGENT_HEALTH_HOST` is set
+  (`tests/container-static-smoke.ts`).
 - Interactive entry: `docker exec -it <container> pi-agent`
 
 ## Quick start
@@ -74,6 +77,12 @@ docker compose -f capability/compose/compose.yaml \
 Release builds require `PI_KIT_REPO` and fail if the baked kit cannot be verified with `pi list`.
 Dev runtime installs from `PI_KIT_PATH` without interactive flags and applies `PI_KIT_PROFILE`,
 which defaults to `balanced`.
+
+`pi-agent` fails closed: if no kit is found (neither `PI_KIT_PATH` nor `/opt/pi-system` holds
+`packages/core/install.mjs`), or `pi install` or the profile apply fails, it prints the error,
+does not start pi, and exits non-zero. `PI_AGENT_ALLOW_UNGOVERNED=1` starts pi anyway with a
+warning. The entrypoint seeds `settings.json`, `mcp.json` and `models.json` into
+`PI_CODING_AGENT_DIR`, the directory pi reads (`tests/container-static-smoke.ts`).
 
 ## CI
 

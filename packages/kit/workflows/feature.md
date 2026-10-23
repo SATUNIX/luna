@@ -51,8 +51,9 @@ steps:
       {{steps.implement.output}}
 
       Inspect the actual diff (git diff) and run the relevant checks yourself.
+      End your reply with a last line that is exactly VERDICT: PASS or VERDICT: FAIL.
     gate:
-      pass: "/##\\s*Verdict\\s*\\n+\\s*PASS/"
+      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"
       retry: implement
       max_loops: 2
 ---
@@ -60,8 +61,9 @@ steps:
 # feature
 
 The standard delegated change. The scout and planner are read-only. The implementer edits.
-The reviewer is the gate: its `## Verdict` must be `PASS`, or the implementer runs again with
-the review as feedback (at most 2 more times).
+The reviewer is the gate: the last non-blank line of its reply must be `VERDICT: PASS` (case is
+ignored), or the implementer runs again with the review as feedback (at most 2 more times). Any other last line,
+including an echoed template such as `VERDICT: PASS or FAIL`, counts as a failed review.
 
 Run it with `/workflow run feature goal="add rate limiting to the /api/orders endpoint"`, or
 ask the agent to use `workflow_run`.

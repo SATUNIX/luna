@@ -6,8 +6,8 @@
   "tier": "T2-T4",
   "layer": 5,
   "entry": "index.ts",
-  "hooks": ["session_start", "turn_end"],
-  "registers": { "tools": [], "commands": ["/recover"] },
+  "hooks": ["session_start", "tool_result", "turn_end"],
+  "registers": { "tools": [], "commands": ["recover"] },
   "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
@@ -18,6 +18,7 @@
     "services": [],
     "models": []
   },
+  "profileRequires": ["context-sieve"],
   "pulls": ["subagent", "orchestrator", "progress-guard", "verifier-board"],
   "env": ["PI_KIT_RECOVERY_MAX_ATTEMPTS", "PI_KIT_RECOVERY_SCOUTS"],
   "provenance": { "origin": "custom" },

@@ -27,6 +27,10 @@ your own context lean.
 3. For a repeatable multi-step flow, prefer a **workflow** (`workflow_run`, `/workflow list`).
    Workflows run steps deterministically, hand files between steps, loop on review gates and
    can resume after an interruption.
+4. When the control flow itself matters (fan-out over a discovered list, adversarial verify,
+   loops until nothing new turns up), use a **script workflow** through the `workflow` tool,
+   or a kit built-in (`understand`, `review-changes`, `design-panel`, `research-sweep`,
+   `migrate`). Load the `workflow-authoring` skill before writing a script.
 
 ## Context budget per role
 A subagent can't see this conversation. Give it the **minimum sufficient** context:

@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "protected-paths",
-  "summary": "Blocks write/edit/bash writes to protected paths: secrets and agent-control surfaces under the coding firewall policy, plus .git/, node_modules/ and agent definitions under the pentest policy (PI_KIT_PROTECTED_PATHS adds entries). Optional allowlist mode (PI_KIT_WRITE_ALLOWLIST) blocks writes to anything NOT allowlisted — the enforcement point for dream/print-mode runs.",
+  "summary": "Blocks write/edit/bash writes to protected paths: secrets and agent-control surfaces under the coding firewall policy, git's hooks/, config and info/ under both policies, plus .git/, node_modules/ and agent definitions under the pentest policy (PI_KIT_PROTECTED_PATHS adds entries). Optional allowlist mode (PI_KIT_WRITE_ALLOWLIST) blocks writes to anything NOT allowlisted — the enforcement point for dream/print-mode runs.",
   "category": "safety",
   "tier": "T0",
   "layer": 1,

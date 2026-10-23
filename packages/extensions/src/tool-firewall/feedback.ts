@@ -8,7 +8,7 @@
 // never learned. Precedents also go to the auto-mode judge as examples.
 import fs from "node:fs";
 import path from "node:path";
-import { feedbackPath } from "./config.ts";
+import { feedbackPath, isRecord } from "./config.ts";
 import type { Assessment, Tier } from "./classify.ts";
 
 export type FeedbackRecord = {
@@ -38,7 +38,9 @@ const NEVER_LEARN_CODES = new Set(["secret_egress", "secret_upload", "shell_over
 
 // Secrets must not land in the feedback log.
 const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  // An unterminated key is redacted to the end, so the first BEGIN consumes the rest of the text
+  // instead of every BEGIN re-scanning it for an END that is not there.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
@@ -47,7 +49,14 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{35}\b/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /\b((?:api[_-]?key|secret|token|password|passwd|pwd|auth)["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
+  // KEY=value, including a prefixed or suffixed key (DB_PASSWORD, GITLAB_TOKEN, AWS_SECRET_ACCESS_KEY,
+  // x-api-key). The keyword must start the key or follow an `_`-separated segment, and every run is
+  // bounded, so this stays linear on long identifier runs.
+  /(?<![A-Za-z0-9_])((?=(?:[A-Za-z0-9-]{0,32}_){0,4}(?:api[_-]?key|secret|token|password|passwd|pwd|auth)(?![a-z]))[A-Za-z0-9_-]{1,128}["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
+  // mysql/mariadb -p<password> (a bare -p prompts instead). Case-sensitive: -P is the port.
+  /(\b(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n|;&]{0,256}?\s-p)[^\s"',;|&]+/g,
+  // curl -u / --user / -U / --proxy-user user:password: the user is kept, the password redacted.
+  /(\bcurl\b[^\n|;&]{0,512}?\s(?:-u|--user|-U|--proxy-user)(?:\s+|=)?["']?[^\s"':]{1,256}:)[^\s"']+/g,
   /\b((?:Authorization|Bearer)[:\s]+(?:Bearer\s+|token\s+|Basic\s+)?)[A-Za-z0-9._~+/=-]{12,}/gi,
 ];
 
@@ -62,6 +71,14 @@ export function learnable(a: Assessment, tier: Tier): boolean {
   return !a.findings.some((f) => f.tier !== "low" && (NEVER_LEARN_EFFECTS.has(f.effect) || NEVER_LEARN_CODES.has(f.code) || f.tier === "critical"));
 }
 
+// A log line is kept when it has a string sig and a known decision; nothing else is checked. That is
+// deliberate: the other fields are read defensively (a record with no project or a malformed ts never
+// counts as an approval, and a malformed denial still suspends its family), so dropping such lines
+// would only ever make learning more permissive.
+function isFeedbackLine(r: unknown): r is FeedbackRecord {
+  return isRecord(r) && typeof r.sig === "string" && (r.decision === "allow" || r.decision === "deny");
+}
+
 let cache: { mtime: number; size: number; records: FeedbackRecord[] } | null = null;
 
 export function readFeedback(): FeedbackRecord[] {
@@ -73,7 +90,7 @@ export function readFeedback(): FeedbackRecord[] {
     const fd = fs.openSync(file, "r");
     try {
       st = fs.fstatSync(fd);
-      if (cache && cache.mtime === st.mtimeMs && cache.size === st.size) return cache.records;
+      if (cache?.mtime === st.mtimeMs && cache.size === st.size) return cache.records;
       text = fs.readFileSync(fd, "utf8");
     } finally {
       fs.closeSync(fd);
@@ -85,8 +102,8 @@ export function readFeedback(): FeedbackRecord[] {
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const r = JSON.parse(line);
-      if (typeof r?.sig === "string" && (r.decision === "allow" || r.decision === "deny")) records.push(r);
+      const r: unknown = JSON.parse(line);
+      if (isFeedbackLine(r)) records.push(r);
     } catch {
       /* skip a torn line */
     }
@@ -97,7 +114,7 @@ export function readFeedback(): FeedbackRecord[] {
 
 export function appendFeedback(rec: Omit<FeedbackRecord, "ts"> & { ts?: string }): void {
   const file = feedbackPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const full: FeedbackRecord = {
     ts: rec.ts ?? new Date().toISOString(),
     ...rec,
@@ -106,15 +123,15 @@ export function appendFeedback(rec: Omit<FeedbackRecord, "ts"> & { ts?: string }
     ...(rec.steps ? { steps: rec.steps.slice(0, 6).map((x) => redact(x).slice(0, 160)) } : {}),
     ...(rec.chain ? { chain: rec.chain.slice(0, 3).map((x) => redact(x).slice(0, 200)) } : {}),
     ...(rec.judge ? { judge: { verdict: rec.judge.verdict, reason: redact(rec.judge.reason).slice(0, 240) } } : {}),
-  } as FeedbackRecord;
+  };
   // One bounded line per append (< 4 KiB): O_APPEND keeps concurrent sessions from interleaving.
-  fs.appendFileSync(file, `${JSON.stringify(full)}\n`);
+  fs.appendFileSync(file, `${JSON.stringify(full)}\n`, { mode: 0o600 }); // private on create
 }
 
 // Learning is scoped. An approval given in one workspace says nothing about another, and a
 // revocation floor (approvals.ts `floorFor`) cuts off every decision made before it. Callers pass
-// the scoped records to exactStatus / statusFor / operatorApproved / listLearned. A record with no
-// (or a malformed) project or timestamp never counts: fail closed.
+// the scoped records to exactStatus / statusFor / operatorApproved / listLearned / precedentsFor.
+// A record with no (or a malformed) project or timestamp never counts: fail closed.
 export function scopeRecords(records: FeedbackRecord[], scope: { workspace?: string; since?: number }): FeedbackRecord[] {
   return records.filter((r) => (scope.workspace === undefined || r.project === scope.workspace) && (!scope.since || Date.parse(r.ts) > scope.since));
 }
@@ -140,7 +157,7 @@ function tally(sig: string, mine: FeedbackRecord[], now: number): LearnedStatus 
   const approvals = mine.filter((r) => r.decision === "allow" && Date.parse(r.ts) > lastDeny && now - Date.parse(r.ts) < LEARN_WINDOW_MS);
   const sessions = new Set(approvals.map((r) => r.session)).size;
   const denials = mine.filter((r) => r.decision === "deny").length;
-  const last = mine.length ? mine[mine.length - 1].ts : "";
+  const last = mine.at(-1)?.ts ?? "";
   let status: LearnedStatus["status"];
   if (approvals.length >= LEARN_MIN_APPROVALS && sessions >= LEARN_MIN_SESSIONS) status = "learned";
   else if (lastDeny && mine[mine.length - 1]?.decision === "deny") status = "suspended";
@@ -190,15 +207,16 @@ export function forget(match: string): number {
   const removed = records.length - keep.length;
   if (!removed) return 0;
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""));
+  fs.writeFileSync(tmp, keep.map((r) => JSON.stringify(r)).join("\n") + (keep.length ? "\n" : ""), { mode: 0o600 });
   fs.renameSync(tmp, file);
   cache = null;
   return removed;
 }
 
-// The most similar past decisions: same signature first, then shared signature keys.
-export function precedentsFor(sig: string, limit = 5): FeedbackRecord[] {
-  const records = readFeedback();
+// The most similar past decisions: same signature first, then shared signature keys. The gate
+// passes the scoped records (scopeRecords), so the judge never sees another workspace's decisions
+// or ones made before a revocation.
+export function precedentsFor(sig: string, records: FeedbackRecord[] = readFeedback(), limit = 5): FeedbackRecord[] {
   const keys = new Set(sig.split("|")[1]?.split(";").filter(Boolean) ?? []);
   const tool = sig.split("|")[0];
   const scored = records

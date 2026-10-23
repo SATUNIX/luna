@@ -142,7 +142,8 @@ A **high** action goes to the judge only when all of these hold:
 
 The judge then reasons over the **whole actions** you allowed: their command, steps,
 severity, reasons and chain. It also sees your latest request, the goal, precedents, and your
-learned profile. It allows only when this is the same kind of step: same host and privilege,
+learned profile. Precedents are your earlier decisions on similar actions in this workspace only,
+and none made before a `/firewall revoke workspace` or `revoke all` (`tests/firewall-gate-smoke.ts`). It allows only when this is the same kind of step: same host and privilege,
 same or narrower paths and services, no new kind of effect, no higher severity, continuing the
 same work. "Block" does not refuse outright. It asks you, and the card says exactly **how
 this differs** from what you allowed. A kind you have never allowed always comes to you first,
@@ -218,7 +219,11 @@ across them and is neither widened nor lost. A different session never sees it.
 ### Learning
 
 Every decision you make is also appended, with secrets redacted, to
-`~/.pi/agent/pi-kit/firewall-feedback.jsonl`. One "yes" is never "allow always", and "allow
+`~/.pi/agent/pi-kit/firewall-feedback.jsonl`. The same redaction applies to the audit log and
+the judge's input. It covers known token shapes, `KEY=value` with a prefixed key
+(`DB_PASSWORD=`, `GITLAB_TOKEN=`, `AWS_SECRET_ACCESS_KEY=`), `mysql -p<password>` and
+`curl -u user:password`, and runs in linear time on 200 KB inputs
+(`tests/firewall-gate-smoke.ts`). One "yes" is never "allow always", and "allow
 once" is remembered only by this rule:
 
 An action that you approved at least **3 times, in at least 2 sessions, within 30 days, all
@@ -284,6 +289,22 @@ The profile only informs the judge: what may reach the judge and what runs witho
 deterministic. Precedents and the profile are global examples for the judge and never allow
 anything by themselves.
 
+The judge prompt puts each input in its own block (`<request>`, `<goal>`, `<recent>`, `<action>`,
+`<grants>`, `<precedents>`, `<profile>`). Text that comes from the session, such as the request,
+the goal file, the agent's command, paths, grants and precedents, has its block tags defused: a
+`<`, a fullwidth `＜` or small `﹤`, or the entities `&lt;`, `&#60;` and `&#x3c;` is shown to the
+judge as `‹` when what follows it starts with an optional `/` and one of the block names, in any
+case. Spaces, invisible characters (default-ignorable and format characters) and combining marks
+are ignored for that check however many there are, before or inside the name, and fullwidth
+letters and `／` count as their plain forms. Other shell
+operators such as `< in.txt`, `<<EOF` and `2>&1` reach the judge unchanged; a redirection from a
+file whose name starts with a block name, such as `sort <recent.log`, is shown as
+`sort ‹recent.log`. The command is clipped to 4000 characters. Its parsed steps and its findings
+are each capped at 30 lines and 4000 characters, riskier lines first, with a `(+N more ...)` line
+for the rest. A step's text and location are clipped to 200 characters each, and a line that would
+pass the budget is skipped while shorter ones after it are still listed. A long generated script
+therefore cannot make the judge prompt unbounded (`tests/tool-firewall-smoke.ts`).
+
 `/auto profile` shows the profile, `/auto profile rebuild` rebuilds it now, and
 `/auto profile reset` clears it (your decisions are kept).
 
@@ -306,9 +327,20 @@ The installer and `/profile` write it from the profile's `firewall` field:
 - The policy always follows the profile.
 - The mode follows the profile, unless you set it with `/auto on|off` and the policy did not
   change.
+- `/auto on` lowers oversight, so unless both the saved mode in `firewall.json` and the
+  current session's mode are already automatic it asks at the terminal of an interactive root
+  session, with "No, keep manual approvals" as the first choice. It asks even while
+  `PI_KIT_AUTO_MODE=1` makes the current session automatic, because it writes the saved mode, and it asks when a project `.pi/auto-mode.json` exists and
+  does not already say `{"enabled": true}`, because it rewrites that file, even while
+  `PI_KIT_AUTO_MODE=1` overrides the file for the current session. Over RPC (a
+  linked phone or the web console), headless and in delegated/child sessions it is refused; a
+  scripted run sets `PI_KIT_AUTO_MODE=1` instead. `/auto off` never asks
+  (`tests/auto-mode-smoke.ts`).
 - Environment variables override the file: `PI_KIT_AUTO_MODE=1|0` and
   `PI_KIT_FIREWALL_PROFILE=coding|pentest`.
-- A project `.pi/auto-mode.json` from the old per-directory auto mode is still honoured.
+- A project `.pi/auto-mode.json` from the old per-directory auto mode can only downgrade:
+  `{"enabled":false}` selects manual approvals, and `{"enabled":true}` is ignored, so a file a
+  repository carries never turns automatic approvals on (`tests/firewall-gate-smoke.ts`).
 
 The **pentest** policy differs from coding in several ways:
 - it adds the operator regex rules in `policies.pentest.command_rules` of the shipped policy
@@ -321,7 +353,16 @@ The **pentest** policy differs from coding in several ways:
   records.
 
 Under **coding**, `protected-paths` blocks only secrets, key files, agent-control and audit
-surfaces, kit policy files and the firewall's own state (including the approvals file).
+surfaces, kit policy files, the firewall's own state (including the approvals file) and git's
+`hooks/`, `config`, `info/` and `worktrees/`, plus a linked worktree's `.git` file.
+
+Under both policies, git's `hooks/`, `config` and `info/` are found in the repository's git common
+directory. For a linked worktree that is the main checkout's `.git`, outside the worktree. From
+inside a linked worktree, the main checkout's own protected entries (for example
+`<repo>/.pi/verdicts.json`) are blocked too. The worktree's `.git` file and the common dir's
+`worktrees/` are blocked so the agent cannot point the lookup at a git dir it made. The lookup's
+first result for a cwd is kept for the session, and a `.git` file that does not name a real git
+dir blocks every write (`tests/workflow-worktree-smoke.ts`).
 
 ## Unattended mode
 

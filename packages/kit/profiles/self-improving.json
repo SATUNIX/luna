@@ -1,6 +1,7 @@
 {
   "name": "self-improving",
   "description": "T0–T4 full capability: everything. Needs Docker for memory MCP + a second model for dual review. Experimental tier: may carry stub/experimental extensions (skill-forge, self-improvement, memory-mem0, dual-review) that require external services or land across Epics 6+.",
+  "securityLevel": "balanced",
   "firewall": { "mode": "auto", "policy": "coding" },
   "experimental": true,
   "skills": {
@@ -11,10 +12,10 @@
     "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "human-console", "git-checkpoint", "auto-commit-on-exit",
+    "protected-paths", "tool-firewall", "human-console", "git-checkpoint",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
-    "autonomous-loop", "trigger-compact", "session-helpers", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
+    "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
     "goal-core", "task-graph", "subagent", "branch-lab", "conductor",
     "verifier-board", "provider-router",
     "memory-mem0", "dual-review", "dirty-repo-guard", "plan-mode",

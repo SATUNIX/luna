@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-container",
-  "version": "0.2.4-beta.3",
+  "version": "0.2.4-beta.4",
   "private": true,
   "description": "Container deployment wrapper: image, compose, entrypoint, overlays, and MCP servers.",
   "type": "module",

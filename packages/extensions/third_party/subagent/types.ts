@@ -4,7 +4,7 @@
  * Dependency-free (type-only imports) so every other module can use these without creating
  * an import cycle. `AgentConfig` is re-exported here as the single import point for callers.
  */
-import type { spawn } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import type { AgentConfig } from "./agents.ts";
 
 export type { AgentConfig };
@@ -18,7 +18,8 @@ export interface MsgPart {
 
 export interface Msg {
   role: string;
-  content: MsgPart[];
+  // Always a part list on assistant messages; pi's custom messages may carry a plain string.
+  content?: MsgPart[] | string;
   usage?: {
     input?: number;
     output?: number;
@@ -48,22 +49,28 @@ export interface SingleResult {
   messages: Msg[];
   stderr: string;
   usage: UsageStats;
-  model?: string;
-  stopReason?: string;
-  errorMessage?: string;
-  step?: number;
-  logPath?: string;
+  model?: string | undefined;
+  stopReason?: string | undefined;
+  errorMessage?: string | undefined;
+  step?: number | undefined;
+  logPath?: string | undefined;
   // The run id (the log filename stem). Surfaced so the TUI, subagent_status, and the
   // operator can reference a live run without re-deriving it from the log path.
-  runId?: string;
+  runId?: string | undefined;
   // True when the parent stopped waiting on a detached run; the child keeps working and
   // its outcome arrives later via onSettled.
-  detached?: boolean;
+  detached?: boolean | undefined;
   // How many attempts were made (1 unless a transient failure was retried).
-  attempts?: number;
+  attempts?: number | undefined;
   // The child's final assistant text, kept unbounded so chain mode and success output get
   // the full deliverable even though the stored message list is bounded for memory.
-  finalOutput?: string;
+  finalOutput?: string | undefined;
+  // Only for a run started with a result schema: the StructuredOutput value the host validated
+  // itself, or null when no attempt produced a valid one (structuredErrors says why).
+  structured?: Record<string, unknown> | null | undefined;
+  structuredErrors?: string[] | undefined;
+  // Set when delegation-guard refused the launch: its denial code (for example "concurrency").
+  deniedCode?: string | undefined;
 }
 
 // Why a child was force-killed by the parent. "signal" is a genuine operator/parent abort;
@@ -78,13 +85,15 @@ export interface RunLog {
   close(status: string, detail?: Record<string, unknown>): void;
 }
 
-export type SpawnChild = typeof spawn;
+// The one spawn signature the runner calls. Not `typeof spawn`: no function short of spawn itself
+// can satisfy all its overloads, so a test's stand-in child could only be passed with a cast.
+export type SpawnChild = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 
 // A child currently running under this pi process, with a handle that terminates it.
 export interface LiveChild {
   id: string;
   agent: string;
-  pid?: number;
+  pid?: number | undefined;
   startedAt: number;
   cwd: string;
   logPath: string;
@@ -102,15 +111,16 @@ export interface ToolContext {
   hasUI?: boolean;
   ui?: {
     confirm?(title: string, message: string): Promise<boolean>;
+    select?(title: string, options: string[]): Promise<string | undefined>;
     notify?(message: string, level?: string): void;
     // Footer/status-bar text. The subagent tool uses this to show a live run summary
     // (agent, elapsed, last action, run id) for human oversight and debugging.
     setStatus?(key: string, text: string | undefined): void;
   };
-  model?: { provider?: string; id?: string };
+  model?: { provider?: string; id?: string } | undefined;
   // Present on the real pi tool context; optional here so the eval harness (fakePi) and
   // older contexts keep working.
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
   abort?(): void;
 }
 

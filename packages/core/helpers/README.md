@@ -37,12 +37,12 @@ Run with no command/argument for an interactive menu.
 | `status` | Checks for `node`, `git`, and `pi` on `PATH`; reports the repo's branch and uncommitted-file count; reports whether pi's global settings exist. |
 | `install` | Interactively installs this checkout with a chosen profile (including `lite`) and scope. It always previews with `--dry-run` first and asks for confirmation before applying. |
 | `configure` | Scaffolds `~/.pi/agent/.env` from `.env.example` if it does not already exist, and optionally appends a `PI_KIT_FIREWALL_POLICY` override. Never overwrites an existing `.env`. |
-| `update-kit` | Refuses to run if the working tree has uncommitted changes (asks you to commit or stash first). Otherwise runs `git pull`, then reinstalls with `node packages/core/install.mjs --profile <chosen> --yes`. For a release install (git tag or `main`), use `/update` inside pi instead. |
+| `update-kit` | Refuses to run if the working tree has uncommitted changes (asks you to commit or stash first). Otherwise runs `git pull`, then reinstalls with `node packages/core/install.ts --profile <chosen> --yes`. For a release install (git tag or `main`), use `/update` inside pi instead. |
 | `update-pi` | Runs `npm install -g @earendil-works/pi-coding-agent` and prints the resulting version — updates the pi core binary, independent of the kit itself. |
 
 ## What these scripts intentionally do not do
 
-- They never run `git pull`, `install.mjs`, or `uninstall.mjs` with force flags,
+- They never run `git pull`, `install.ts`, or `uninstall.ts` with force flags,
   and never touch an existing `.env`.
 - `update-kit` will not proceed over a dirty working tree — this matches the
   rest of the repo's convention of never silently discarding uncommitted work.
@@ -57,6 +57,6 @@ Run with no command/argument for an interactive menu.
 Not wrapped here — run directly, since it is a one-time/rare operation:
 
 ```sh
-node packages/core/uninstall.mjs --scope global --dry-run   # preview
-node packages/core/uninstall.mjs --scope global --yes       # apply
+node packages/core/uninstall.ts --scope global --dry-run   # preview
+node packages/core/uninstall.ts --scope global --yes       # apply
 ```

@@ -20,9 +20,6 @@ Output format:
 ## Files Reviewed
 - `path/to/file.ts` (lines X-Y)
 
-## Verdict
-PASS or FAIL — one line. FAIL if there is any must-fix issue or the goal is not met.
-
 ## Critical (must fix)
 - `file.ts:42` — issue
 
@@ -31,5 +28,13 @@ PASS or FAIL — one line. FAIL if there is any must-fix issue or the goal is no
 
 ## Summary
 2-3 sentences. If FAIL, state exactly what the implementer must change.
+
+## Verdict
+VERDICT: <PASS|FAIL>
+
+The last line of your reply must be exactly `VERDICT: PASS` or exactly `VERDICT: FAIL`, with
+nothing after it. Choose FAIL if there is any must-fix issue or the goal is not met. Workflow
+gates read only that final line: anything else there, including a template copied as written,
+counts as FAIL.
 
 Tools outside the pre-approved list go through an approval step. Do not route around a denial; adapt the approach. You run headless: do NOT call `ask_human`. A child's question is written to the repo-wide human-console queue and broadcast to every interactive session, disrupting unrelated work. If genuinely blocked and scouting cannot answer it, stop and end your reply with a `## Blocked` section stating the blocker, what you tried, and the concrete options the parent should put to the operator.

@@ -10,8 +10,10 @@ nav:
   - Guides:
       - Getting Started: getting-started.md
       - Concepts: concepts.md
+      - Support and Compatibility: support.md
       - Profiles: profiles.md
       - Effort: effort.md
+      - Security Level: security-level.md
       - Updates: updates.md
       - Migration: migration.md
       - Troubleshooting: troubleshooting.md
@@ -22,9 +24,13 @@ nav:
       - Remote Control: remote-control.md
       - Autonomous Runs: autonomy.md
       - Status Bar and Costs: status-bar-and-costs.md
+      - Control Centre: control-center.md
       - Efficiency and Loops: efficiency-and-loops.md
       - Agent Orchestration: agent-orchestration.md
       - Workflows: workflows.md
+      - Script Workflows: script-workflows.md
+      - Workflow-Script Sandbox: workflow-sandbox.md
+      - Structured Output: structured-output.md
       - Memory Vault: memory.md
       - Building Extensions: building-extensions.md
       - Capability Research Workflow: capability-research-workflow.md

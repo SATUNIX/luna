@@ -18,7 +18,7 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.4
 pi
 ```
 
@@ -38,7 +38,7 @@ project scope. It wraps `pi install` and pi's settings, and is idempotent:
 ```sh
 git clone https://github.com/SATUNIX/pi-system.git
 cd pi-system
-node packages/core/install.mjs --channel latest --profile balanced
+node packages/core/install.ts --channel latest --profile balanced
 ```
 
 Run it from the clone root: the installer path is relative to the current directory.
@@ -50,22 +50,33 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--git-ref <ref>` | Register an arbitrary branch, tag or commit (git delivery only). |
 | `--mode local\|git\|npm` | `local` registers this checkout in place; `git` and `npm` register a released kit. |
 | `--scope global\|project` | Global settings (default) or `.pi/settings.json` in the current repository. |
-| `--only a,b` / `--all` | Specific extensions only, or everything. |
-| `--yes` | Do not ask for confirmation. |
+| `--only a,b` / `--all` | Specific extensions only, or everything. `--only` always adds the required base (`requiredProfileExtensions` in `packages/core/distribution.json`: `tool-firewall`, `protected-paths`, `delegation-guard`, `effort`, `session-helpers`) and warns about each one it adds (`tests/install-marker-smoke.ts`). |
+| `--yes` | Accepted for scripts; the installer never prompts. |
 | `--dry-run` | Print what would change; change nothing. |
 | `--no-externals` | Skip companion packages such as `pi-lens`. |
-| `--uninstall` | Remove the kit and the companions this installer registered. |
+| `--uninstall` | Remove the kit and the companions this installer registered. A companion you had already registered at the kit's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
+
+An unknown flag, or a value flag such as `--profile` with no value, stops the installer with exit
+code 1 and a usage line before anything changes (`tests/install-marker-smoke.ts`).
 
 The installer keeps **exactly one** registered copy of the kit: registering a checkout replaces
 a release install and the other way round, because two copies would load every extension twice.
+
+`--scope project` writes only the project's `.pi/settings.json` and `.pi/.pi-kit.json`. The firewall
+gate files, `<agent dir>/pi-kit/firewall.json` and `<agent dir>/pi-kit/security.json`, are
+machine-global, so a project-scope install (and a `/profile` switch in a project install) leaves
+them byte-identical. When the profile asks for a different firewall mode, policy or securityLevel
+than those files hold, the installer prints a `WARN` naming the global file and the
+`install.ts --scope global --profile <name>` run that applies it to every session
+(`tests/install-marker-smoke.ts`, `tests/profile-transaction-smoke.ts`).
 
 ## Channels
 
 | Channel | Install | Gets |
 |---|---|---|
-| `latest` (default) | `node packages/core/install.mjs --channel latest --profile balanced` | The newest release tag (betas count until the first stable release exists) |
-| `next` | `node packages/core/install.mjs --channel next --profile balanced` | Every commit on `main` |
-| pinned | `node packages/core/install.mjs --channel 0.2.4-beta.0 --profile balanced` | Exactly that release (tag `v0.2.4-beta.0`) |
+| `latest` (default) | `node packages/core/install.ts --channel latest --profile balanced` | The newest release tag (betas count until the first stable release exists) |
+| `next` | `node packages/core/install.ts --channel next --profile balanced` | Every commit on `main` |
+| pinned | `node packages/core/install.ts --channel <version> --profile balanced` | Exactly that release (tag `v<version>`) |
 
 `latest` needs at least one `vX.Y.Z` tag on the repository. Until the first release is tagged the
 installer stops with a message saying there are no release tags and suggests `--channel next`;
@@ -84,8 +95,8 @@ Exact per-profile extension lists and counts are generated in the
 | `self-improving` | Node, git, pi, Docker for memory services, optionally a second model (experimental) |
 
 ```sh
-node packages/core/install.mjs --channel latest --profile lite            # small local models
-node packages/core/install.mjs --channel latest --profile balanced --scope project
+node packages/core/install.ts --channel latest --profile lite            # small local models
+node packages/core/install.ts --channel latest --profile balanced --scope project
 ```
 
 Inside pi, `/profile` switches profile in place and verifies the result. See [Profiles](profiles.md).
@@ -95,8 +106,8 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 | Mode | Command | When |
 | --- | --- | --- |
 | Release from pi | `pi install git:github.com/SATUNIX/pi-system@vX.Y.Z` | Normal use; the profile is applied on first start |
-| Release from the installer | `node packages/core/install.mjs --channel <latest\|next\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
-| Local checkout (editable) | `node packages/core/install.mjs --profile <name> --yes` | Developing the kit: pi loads the checkout in place, edit and `/reload` |
+| Release from the installer | `node packages/core/install.ts --channel <latest\|next\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
+| Local checkout (editable) | `node packages/core/install.ts --profile <name> --yes` | Developing the kit: pi loads the checkout in place, edit and `/reload` |
 | Project auto-install | Ship `.pi/settings.json` in a repository | pi auto-installs on first trusted start |
 | npm (not published yet) | `npx @satunix/pi-system --profile <name>` | Only once npm delivery is switched on ([Releasing](releasing.md#npm-publication-optional)) |
 
@@ -105,10 +116,10 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 ```sh
 git clone https://github.com/SATUNIX/pi-system.git && cd pi-system
 npm ci --ignore-scripts
-node packages/core/install.mjs --profile balanced --yes
+node packages/core/install.ts --profile balanced --yes
 
-# Specific extensions only
-node packages/core/install.mjs --only secret-guard,memory-local,verify-gate --yes
+# Specific extensions only (the required base is added to them)
+node packages/core/install.ts --only memory-local,verify-gate --yes
 ```
 
 ## Coming from the private GitLab source
@@ -132,7 +143,7 @@ and bound to loopback by default.
 
 ```sh
 # Removes the kit and the companions the installer registered (from the clone root):
-node packages/core/install.mjs --uninstall
+node packages/core/install.ts --uninstall
 ```
 
 The command auto-detects the install state marker: a project marker at
@@ -188,6 +199,7 @@ MEM0_API_URL=http://localhost:8000
 | `MEM0_API_KEY` | memory-mem0 | — | mem0 API key (if auth enabled) |
 | `MEM0_USER_ID` | memory-mem0 | `pi-agent` | mem0 user/agent ID |
 | `DUAL_REVIEW_MODEL` | dual-review | — | Second model name for reviewer agent |
+| `PI_KIT_TASK_GRAPH_LEASE_MS` | task-graph | `3600000` | How long a `task_next` claim lasts without a `task_update`; an older claim returns to pending. `0` disables expiry |
 | `PI_KIT_COST_INPUT_PER_MTOK` | custom-footer | — | Override input-token dollars per million tokens |
 | `PI_KIT_COST_OUTPUT_PER_MTOK` | custom-footer | — | Override output-token dollars per million tokens |
 | `PI_KIT_COST_CACHE_READ_PER_MTOK` | custom-footer | — | Optional cache-read dollars per million tokens |

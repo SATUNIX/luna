@@ -29,7 +29,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const compiled = new Map<string, RegExp | null>();
 export function triggerRegex(trigger: string): RegExp | null {
-  if (compiled.has(trigger)) return compiled.get(trigger)!;
+  const cached = compiled.get(trigger);
+  if (cached !== undefined) return cached;
   let re: RegExp | null = null;
   try {
     if (trigger.startsWith("re:")) re = new RegExp(trigger.slice(3), "i");
@@ -53,7 +54,7 @@ export function matchTriggers(prompt: string, skills: SkillEntry[], exclude: Set
     let best: { trigger: string; weight: number } | null = null;
     for (const t of s.triggers) {
       const re = triggerRegex(t);
-      if (!re || !re.test(text)) continue;
+      if (!re?.test(text)) continue;
       const weight = t.startsWith("re:") ? 40 : t.length;
       if (!best || weight > best.weight) best = { trigger: t, weight };
     }
@@ -111,7 +112,7 @@ export function parseSkillFile(text: string, path: string, fallbackName: string,
   const raw = field("triggers");
   if (raw) {
     try {
-      const parsed = JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) triggers = parsed.filter((t): t is string => typeof t === "string" && t.trim() !== "");
     } catch {
       triggers = raw.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim().replace(/^["']|["']$/g, "")).filter(Boolean);

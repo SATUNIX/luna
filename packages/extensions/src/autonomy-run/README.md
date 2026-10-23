@@ -18,6 +18,11 @@ the `packages/autonomy` CLI (`pi-autonomy`): it runs that CLI as a child process
 /autonomy reconfigure <run> --effort E4 ...      the only way effort or budgets change for a run
 ```
 
+For a run with generations (Memento mode), `/autonomy status <run>` also shows generation n/N, the
+last rotation reason and the latest notebook (redacted), and sets the footer status line to
+`memento <run>: gen n/N, <status>; last rotation: ...`. The line changes only when you run that
+command (docs/autonomy.md, "Generations"; `tests/autonomy-command-smoke.ts`).
+
 ## Why it is a command and not a tool
 
 A run spends money and acts without approval prompts inside its container boundary. Only a person
@@ -44,7 +49,7 @@ none of them for `templates`, `init` and `plan`. Details: `docs/autonomy.md`.
 (default `~/.local/state/pi-autonomy`).
 
 A git install of the kit includes `packages/autonomy`; the npm package deliberately does not ship the
-runner (`packages/core/pack-check.mjs` forbids it), so under npm delivery `/autonomy` says the CLI is
+runner (`packages/core/pack-check.ts` forbids it), so under npm delivery `/autonomy` says the CLI is
 not installed.
 
 Ships in the `autonomous` profile only.

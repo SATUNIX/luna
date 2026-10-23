@@ -1,6 +1,12 @@
+---
+argument-hint: "[failure or context]"
+---
+
 # Code Recover
 
 Recover a coding task after failure or interruption.
+
+Context: ${@:-the latest failure or interruption}
 
 Return:
 

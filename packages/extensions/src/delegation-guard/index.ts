@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,26 +39,39 @@ export const DEFAULT_COMPANIONS = ["finish-reason-retry", "todo"];
 
 type Protections = { has(name: string): boolean; list?(): string[]; add?(name: string): unknown };
 
+/** Whatever sits under the key is a registry when it has a callable has() (a Set, or another helper's registry). */
+function isProtections(value: unknown): value is Protections {
+  return (typeof value === "object" || typeof value === "function") && value !== null && "has" in value && typeof value.has === "function";
+}
+
+function isIterable(value: object): value is Iterable<unknown> {
+  return Symbol.iterator in value && typeof value[Symbol.iterator] === "function";
+}
+
+function hasAdd(value: unknown): value is { add(name: string): unknown } {
+  return (typeof value === "object" || typeof value === "function") && value !== null && "add" in value && typeof value.add === "function";
+}
+
 function protections(): Protections | null {
-  const value = (globalThis as Record<symbol, unknown>)[PROTECTIONS_KEY] as Protections | Set<string> | undefined;
-  if (!value) return null;
-  if (typeof (value as Protections).has === "function") return value as Protections;
-  return null;
+  const value = (globalThis as Record<symbol, unknown>)[PROTECTIONS_KEY];
+  return isProtections(value) ? value : null;
 }
 
 /** Register a protection name in the shared registry (creates it as a Set when absent). */
 export function registerProtection(name: string): void {
   const g = globalThis as Record<symbol, unknown>;
-  const existing = g[PROTECTIONS_KEY] as (Set<string> & Protections) | undefined;
+  const existing = g[PROTECTIONS_KEY];
   if (!existing) g[PROTECTIONS_KEY] = new Set<string>([name]);
-  else if (typeof existing.add === "function") existing.add(name);
+  else if (hasAdd(existing)) existing.add(name);
 }
 
-function loadedProtections(): string[] {
+function loadedProtections(): unknown[] {
   const p = protections();
   if (!p) return [];
   if (typeof p.list === "function") return p.list();
-  return [...((p as unknown) as Iterable<string>)];
+  // Without list() the registry is read as a Set; one that cannot be iterated throws, as the spread always did.
+  if (!isIterable(p)) throw new TypeError("the protections registry is not iterable");
+  return [...p];
 }
 
 // --- locating extensions and their manifests --------------------------------------------------
@@ -88,9 +101,14 @@ export function kitExtensionPath(name: string): string | null {
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function readJson(file: string): Record<string, unknown> | null {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -101,7 +119,7 @@ export function governanceExtensions(): string[] {
   const names: string[] = [];
   for (const avenue of ["src", "third_party"]) {
     const dir = path.join(extensionsRoot(), avenue);
-    let entries: string[] = [];
+    let entries: string[];
     try {
       entries = fs.readdirSync(dir);
     } catch {
@@ -119,12 +137,12 @@ export function governanceExtensions(): string[] {
 export function enabledKitExtensions(cwd: string): Set<string> | null {
   let found: Set<string> | null = null;
   for (const file of [path.join(agentDir(), "settings.json"), path.join(cwd, ".pi", "settings.json")]) {
-    const packages = Array.isArray(readJson(file)?.packages) ? ((readJson(file)?.packages as unknown[]) ?? []) : [];
-    for (const pkg of packages) {
-      if (!pkg || typeof pkg !== "object") continue;
-      const entry = pkg as { source?: unknown; extensions?: unknown };
-      if (typeof entry.source !== "string" || !Array.isArray(entry.extensions)) continue;
-      const names = (entry.extensions as unknown[])
+    const listed = readJson(file)?.packages;
+    const packages: unknown[] = Array.isArray(listed) ? listed : [];
+    for (const entry of packages) {
+      if (!isRecord(entry) || typeof entry.source !== "string" || !Array.isArray(entry.extensions)) continue;
+      const extensions: unknown[] = entry.extensions;
+      const names = extensions
         .filter((e): e is string => typeof e === "string" && !e.startsWith("!"))
         .map((e) => e.match(/(?:src|third_party)\/([^/]+)\/index\.ts$/)?.[1])
         .filter((n): n is string => Boolean(n));
@@ -136,7 +154,7 @@ export function enabledKitExtensions(cwd: string): Set<string> | null {
 
 // --- the launch contract ----------------------------------------------------------------------
 
-export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user";
+export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user" | "workflow";
 
 export interface ChildRequest {
   /** The child's working directory (settings are read from here for project scope). */
@@ -146,6 +164,12 @@ export interface ChildRequest {
   role: string;
   scout?: boolean;
   readOnly?: boolean;
+  /**
+   * The read-only part of the role's tool list, when the role itself is not read-only (a scout with
+   * `bash`). A launch charged to the recovery budget is charged on this list and the guard returns it
+   * as `tools`, which the launcher must run the child with.
+   */
+  readOnlyTools?: string[] | undefined;
   requestedTier?: string;
   /** Extra kit extensions (names or absolute paths), e.g. from role frontmatter. They only add. */
   extraExtensions?: string[];
@@ -162,6 +186,13 @@ export interface ChildRequest {
    * is loaded, failing closed when one is not.
    */
   isolation?: "isolated" | "ambient";
+  /**
+   * Workflow launches (kind "workflow"): the script-workflow run id and the run token effort's
+   * openRunScope returned. The reservation is charged to that run's pinned scope, and the child
+   * never gets the subagent extension, whatever the request or the operator's companions say.
+   */
+  runId?: string;
+  runToken?: string;
 }
 
 export interface LaunchSlot {
@@ -171,14 +202,14 @@ export interface LaunchSlot {
 }
 
 export type Prepared =
-  | { ok: true; args: string[]; env: Record<string, string | undefined>; loaded: string[]; required: string[]; slot: LaunchSlot; childTier: string }
+  | { ok: true; args: string[]; env: Record<string, string | undefined>; loaded: string[]; required: string[]; slot: LaunchSlot; childTier: string; tools?: string[] | undefined }
   | { ok: false; code: string; reason: string };
 
 interface EffortRegistry {
   /** Present when the effort extension is new enough to know about recovery. */
   recoveryEligible?(role: string, readOnly?: boolean): boolean;
-  reserve(input: { kind: LaunchKind; role: string; scout?: boolean; readOnly?: boolean; requestedTier?: string }):
-    | { ok: true; id: string | null; childTier: string; env: Record<string, string>; attach(pid: number | undefined): void; settle(outcome: string): void }
+  reserve(input: { kind: LaunchKind; role: string; scout?: boolean | undefined; readOnly?: boolean | undefined; requestedTier?: string | undefined; runId?: string | undefined; runToken?: string | undefined }):
+    | { ok: true; id: string | null; childTier: string; env: Record<string, string>; attach: (pid: number | undefined) => void; settle: (outcome: string) => void }
     | { ok: false; code: string; reason: string };
 }
 
@@ -224,7 +255,7 @@ export function prepareChild(request: ChildRequest): Prepared {
 
   // Optional additions never remove anything: defaults the operator enabled, an operator
   // override list (PI_KIT_SUBAGENT_EXTENSIONS), and what the role asks for.
-  const env = { ...(request.baseEnv ?? process.env) } as Record<string, string | undefined>;
+  const env: Record<string, string | undefined> = { ...(request.baseEnv ?? process.env) };
   const enabled = enabledKitExtensions(request.cwd);
   const overrideRaw = env.PI_KIT_SUBAGENT_EXTENSIONS;
   const base = overrideRaw !== undefined ? overrideRaw.split(",").map((s) => s.trim()).filter(Boolean) : DEFAULT_COMPANIONS;
@@ -232,6 +263,8 @@ export function prepareChild(request: ChildRequest): Prepared {
   for (const name of base) if (overrideRaw !== undefined || !enabled || enabled.has(name)) extras.add(name);
   for (const name of request.extraExtensions ?? []) extras.add(name);
   if (request.needsSubagent) extras.add("subagent");
+  // A workflow agent runs at depth 1 and never delegates further.
+  if (request.kind === "workflow") extras.delete("subagent");
   const optional = new Map<string, string>();
   for (const name of ambient ? [] : extras) {
     if (paths.has(name)) continue;
@@ -242,14 +275,22 @@ export function prepareChild(request: ChildRequest): Prepared {
   // While the trusted recovery extension has recovery active, a read-only recovery role (a scout) is
   // charged to the separate recovery budget first, so a session at the lowest effort can still get
   // help when stuck and recovery never eats the discretionary budget. Once that budget is used up
-  // the launch falls back to the ordinary budget, which the tier then allows or refuses.
-  const reserveAs = (kind: LaunchKind) => effort!.reserve({ kind, role: request.role, scout: request.scout, readOnly: request.readOnly, requestedTier: request.requestedTier });
+  // the launch falls back to the ordinary budget, which the tier then allows or refuses. A role that
+  // is not read-only but offers its read tools (`readOnlyTools`) is charged to recovery as read-only
+  // only on that narrower list, which is returned as `tools` for the child to run with.
+  const narrowed = request.readOnly !== true && request.readOnlyTools && request.readOnlyTools.length > 0 ? [...request.readOnlyTools] : undefined;
+  const reserveAs = (registry: EffortRegistry, kind: LaunchKind, readOnly: boolean | undefined) => registry.reserve({ kind, role: request.role, scout: request.scout, readOnly, requestedTier: request.requestedTier, ...(kind === "workflow" ? { runId: request.runId, runToken: request.runToken } : {}) });
+  const recovery = Boolean(effort && request.kind === "discretionary" && effort.recoveryEligible?.(request.role, narrowed ? true : request.readOnly));
+  let childTools = recovery ? narrowed : undefined;
   let reservation = effort
-    ? request.kind === "discretionary" && effort.recoveryEligible?.(request.role, request.readOnly)
-      ? reserveAs("recovery")
-      : reserveAs(request.kind)
+    ? recovery
+      ? reserveAs(effort, "recovery", narrowed ? true : request.readOnly)
+      : reserveAs(effort, request.kind, request.readOnly)
     : ({ ok: true as const, id: null, childTier: "standard", env: {}, attach() {}, settle() {} });
-  if (!reservation.ok && effort && request.kind === "discretionary" && reservation.code === "recovery-budget") reservation = reserveAs("discretionary");
+  if (!reservation.ok && effort && request.kind === "discretionary" && reservation.code === "recovery-budget") {
+    childTools = undefined;
+    reservation = reserveAs(effort, "discretionary", request.readOnly);
+  }
   if (!reservation.ok) return refuse(reservation.code, reservation.reason);
 
   // Order matters, as it does in a profile: this guard first (its blocking hook must run before
@@ -257,7 +298,10 @@ export function prepareChild(request: ChildRequest): Prepared {
   // firewall, then the remaining governance, then optional companions.
   const front = ["delegation-guard", "protected-paths", "secret-guard", "tool-firewall"];
   const ordered: Array<[string, string]> = [
-    ...front.filter((n) => paths.has(n)).map((n) => [n, paths.get(n)!] as [string, string]),
+    ...front.flatMap((n): Array<[string, string]> => {
+      const p = paths.get(n);
+      return p === undefined ? [] : [[n, p]];
+    }),
     ...[...paths].filter(([n]) => !front.includes(n)).sort(([a], [b]) => a.localeCompare(b)),
     ...optional,
   ];
@@ -271,7 +315,7 @@ export function prepareChild(request: ChildRequest): Prepared {
   env.PI_KIT_CHILD_REQUIRE = required.join(",");
   for (const [key, value] of Object.entries(reservation.env)) env[key] = value;
 
-  return { ok: true, args, env, loaded: ordered.map(([n]) => n), required, slot: { id: reservation.id, attach: reservation.attach, settle: reservation.settle }, childTier: reservation.childTier };
+  return { ok: true, args, env, loaded: ordered.map(([n]) => n), required, slot: { id: reservation.id, attach: reservation.attach, settle: reservation.settle }, childTier: reservation.childTier, ...(childTools ? { tools: childTools } : {}) };
 }
 
 export interface DelegationRegistry {
@@ -299,7 +343,7 @@ export default function (pi: ExtensionAPI) {
 
   let blocked: string | null = null;
 
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_start", async (_event, ctx) => {
     (globalThis as Record<symbol, unknown>)[DELEGATION_KEY] = registry;
     const required = childRequirements();
     if (required.length === 0) return; // a root session
@@ -320,6 +364,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
-    if ((globalThis as Record<symbol, unknown>)[DELEGATION_KEY] === registry) delete (globalThis as Record<symbol, unknown>)[DELEGATION_KEY];
+    if ((globalThis as Record<symbol, unknown>)[DELEGATION_KEY] === registry) Reflect.deleteProperty(globalThis, DELEGATION_KEY);
   });
 }

@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "bin": {
-    "pi-kit-memory-mcp": "./index.js"
+    "pi-kit-memory-mcp": "./index.ts"
   },
   "scripts": {
-    "smoke": "node ./smoke.js"
+    "smoke": "node ./smoke.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

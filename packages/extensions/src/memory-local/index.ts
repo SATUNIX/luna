@@ -22,8 +22,8 @@ const MEMORY_FILE = path.join(MEMORY_DIR, "memories.json");
 const INDEX_FILE = path.join(MEMORY_DIR, "memory-index.json");
 // A non-numeric/zero/negative env value previously parsed to NaN, and `length > NaN`
 // is always false, so the cap silently disabled itself (unbounded memory file).
-function positiveIntOr(value: unknown, fallback: number): number {
-  const n = typeof value === "number" ? value : parseInt(String(value ?? ""), 10);
+function positiveIntOr(value: string | number | undefined, fallback: number): number {
+  const n = typeof value === "number" ? value : parseInt(value ?? "", 10);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 const MAX_ENTRIES = positiveIntOr(process.env.PI_KIT_MEMORY_MAX_ENTRIES, 2000);
@@ -46,7 +46,7 @@ function requestJson(urlStr: string, body: unknown, timeoutMs: number): Promise<
     try {
       url = new URL(urlStr);
     } catch (error) {
-      reject(new Error(`invalid embedding endpoint URL: ${String((error as Error)?.message ?? error)}`));
+      reject(new Error(`invalid embedding endpoint URL: ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     const payload = JSON.stringify(body);
@@ -69,7 +69,7 @@ function requestJson(urlStr: string, body: unknown, timeoutMs: number): Promise<
         try {
           resolve(JSON.parse(buf));
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       });
     });
@@ -123,7 +123,7 @@ function loadMemories(): MemoryEntry[] {
   if (cache !== null) return cache;
   if (!fs.existsSync(MEMORY_FILE)) { cache = []; return cache; }
   try {
-    const parsed = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
     // Valid JSON but wrong shape (e.g. `{}` or `null`) previously leaked straight to
     // callers as-is, so entries.push/map/length threw a TypeError. Fail safe like the
     // sibling stores (branch-lab/verifier-board/task-graph): keep only a real array,
@@ -149,7 +149,7 @@ function loadIndex(): MemoryIndex {
   if (indexCache !== null) return indexCache;
   if (!fs.existsSync(INDEX_FILE)) { indexCache = {}; return indexCache; }
   try {
-    const parsed = JSON.parse(fs.readFileSync(INDEX_FILE, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(INDEX_FILE, "utf8"));
     // Keep only a non-null, non-array object: `[]`/`null` previously became the index
     // and Object.entries/Object.keys blew up, or worse corrupt embeddings silently.
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -158,7 +158,7 @@ function loadIndex(): MemoryIndex {
       return indexCache;
     }
     const entries = Object.entries(parsed as Record<string, unknown>);
-    const valid = Object.fromEntries(entries.filter(([, value]) => isEmbedding(value))) as MemoryIndex;
+    const valid: MemoryIndex = Object.fromEntries(entries.filter((entry): entry is [string, number[]] => isEmbedding(entry[1])));
     if (Object.keys(valid).length !== entries.length) {
       process.stderr.write(`memory-local: ignoring ${entries.length - Object.keys(valid).length} invalid embeddings in ${INDEX_FILE}\n`);
     }
@@ -211,9 +211,12 @@ function cosineSimilarity(left: number[], right: number[]): number {
   let leftMag = 0;
   let rightMag = 0;
   for (let i = 0; i < left.length; i++) {
-    dot += left[i] * right[i];
-    leftMag += left[i] * left[i];
-    rightMag += right[i] * right[i];
+    // Both vectors are dense and the same length (checked above), so neither read misses.
+    const l = left[i] ?? 0;
+    const r = right[i] ?? 0;
+    dot += l * r;
+    leftMag += l * l;
+    rightMag += r * r;
   }
   if (leftMag === 0 || rightMag === 0) return 0;
   return dot / (Math.sqrt(leftMag) * Math.sqrt(rightMag));
@@ -279,7 +282,7 @@ async function searchMemories(embedder: EmbedderAdapter, query: string, limit: n
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
@@ -417,7 +420,7 @@ export default function (pi: ExtensionAPI) {
       if (remaining.length === before) {
         return { content: [{ type: "text" as const, text: `No memory with id ${params.id}` }], details: undefined };
       }
-      delete index[params.id];
+      Reflect.deleteProperty(index, params.id);
       saveAll(remaining, index);
       return { content: [{ type: "text" as const, text: `Deleted ${params.id}` }], details: undefined };
     },

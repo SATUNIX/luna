@@ -1,11 +1,11 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "session-helpers",
-  "summary": "Session-control helpers: /clear guidance, a /kit cheatsheet, all-or-nothing /profile switching (snapshots every config file, verifies marker, extension list and firewall, rolls back byte-for-byte on any failure, /profile status prints the effective configuration), /compaction status and toggles backed by the real effective compaction state (published on globalThis, warned once per session), and a lean-ctx binary preflight.",
+  "summary": "Session-control helpers: /clear guidance, all-or-nothing /profile switching (snapshots every config file, verifies marker, extension list and firewall, rolls back byte-for-byte on any failure, /profile status prints the effective configuration), /compaction status and toggles backed by the real effective compaction state (published on globalThis, warned once per session), and a lean-ctx binary preflight.",
   "category": "ui",
   "entry": "index.ts",
   "hooks": ["session_start", "model_select", "before_agent_start", "session_shutdown"],
-  "registers": { "tools": [], "commands": ["clear", "kit", "helpers", "profile", "compaction"] },
+  "registers": { "tools": [], "commands": ["clear", "profile", "compaction"] },
   "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],

@@ -1,12 +1,13 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "skipLibCheck": true
+    // Extensions are loaded by pi's own TS loader, not Node's type stripping,
+    // so non-erasable syntax (parameter properties) is allowed here.
+    "erasableSyntaxOnly": false,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true
   },
   "include": [
     "packages/extensions/src/**/*.ts",

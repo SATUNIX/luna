@@ -30,7 +30,7 @@ Copy this into a Pi System overlay or project-local MCP config when the Burp MCP
   "mcpServers": {
     "pi_system_governance": {
       "command": "node",
-      "args": ["/workspace/.pi/mcp-servers/governance/index.js"],
+      "args": ["/workspace/.pi/mcp-servers/governance/index.ts"],
       "lifecycle": "lazy",
       "directTools": false,
       "sampling": false,

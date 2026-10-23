@@ -65,14 +65,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event) => {
     if (isChild()) return undefined;
-    const prompt = event.prompt ?? "";
+    // A run started by an extension's custom message (pi 1.2+) has no prompt to route.
+    const prompt = "prompt" in event ? event.prompt : "";
     if (!prompt.trim() || prompt.trim().startsWith("/")) return undefined;
     const hits = matchTriggers(prompt, getCatalog(), seen);
     if (!hits.length) return undefined;
     const byName = new Map(getCatalog().map((s) => [s.name, s]));
     for (const h of hits) seen.add(h.name);
     const lines = hits.map((h) => {
-      const s = byName.get(h.name)!;
+      const s = byName.get(h.name);
+      if (!s) throw new Error(`skill-router: matched skill missing from the catalogue: ${h.name}`);
       return `- ${s.name}: ${s.description.slice(0, 160)} → read ${s.path}`;
     });
     return {

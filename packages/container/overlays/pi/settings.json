@@ -13,6 +13,9 @@
     "maxRetries": 2
   },
   "packages": [
-    "npm:pi-mcp-adapter@2.8.0"
+    "npm:pi-mcp-adapter@6.0.0"
+  ],
+  "extensions": [
+    "-builtin:mcp"
   ]
 }

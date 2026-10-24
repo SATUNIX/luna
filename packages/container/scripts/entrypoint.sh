@@ -14,12 +14,14 @@ for d in "$DATA_ROOT" "$PI_DIR" "$SESSION_DIR" "${DATA_ROOT}/home"; do
   fi
 done
 
-# Seed pi config from overlays if not already present
-PI_CONFIG_DIR="${HOME}/.pi/agent"
+# Seed pi config from overlays if not already present. pi reads its config from
+# PI_CODING_AGENT_DIR when that is set, so seed there ($PI_DIR), not $HOME/.pi/agent.
+PI_CONFIG_DIR="$PI_DIR"
+OVERLAY_DIR="${PI_AGENT_OVERLAY_DIR:-/opt/pi-agent/overlays/pi}"
 mkdir -p "$PI_CONFIG_DIR"
 
-for f in settings.json mcp.json models.json; do
-  src="/opt/pi-agent/overlays/pi/$f"
+for f in settings.json mcp-adapter.json models.json; do
+  src="$OVERLAY_DIR/$f"
   dst="$PI_CONFIG_DIR/$f"
   if [ -f "$src" ] && [ ! -f "$dst" ]; then
     cp "$src" "$dst"

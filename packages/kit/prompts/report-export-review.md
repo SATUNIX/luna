@@ -1,6 +1,12 @@
+---
+argument-hint: "[findings]"
+---
+
 # Report Export Review
 
 Review report readiness.
+
+Scope: ${@:-every finding in the current report}
 
 Return:
 

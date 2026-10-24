@@ -1,4 +1,5 @@
 ---
+argument-hint: "[focus]"
 mode: compact
 token_budget: small
 requires_mcp_tool: pi_system_governance.state_summary
@@ -9,7 +10,9 @@ output_block: task_state
 
 Summarize coding task state for continuation.
 
-First read compact durable state through `pi_system_governance.state_summary` with `max_items` no higher than 5. Do not dump raw logs or full diffs.
+Focus: ${@:-the whole current task}
+
+If the `pi_system_governance` MCP server is available, first read compact durable state through `pi_system_governance.state_summary` with `max_items` no higher than 5. Without it, work from the conversation and any checkpoint already in context. Do not dump raw logs or full diffs.
 
 Preserve:
 

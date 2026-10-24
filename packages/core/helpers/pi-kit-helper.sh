@@ -85,10 +85,10 @@ cmd_install() {
   scope_choice="${scope_choice:-g}"
   local scope="global"
   [ "$scope_choice" = "p" ] && scope="project"
-  echo "Running: node $ROOT/install.mjs --profile $profile --scope $scope --dry-run"
-  node "$ROOT/install.mjs" --profile "$profile" --scope "$scope" --dry-run
+  echo "Running: node $ROOT/install.ts --profile $profile --scope $scope --dry-run"
+  node "$ROOT/install.ts" --profile "$profile" --scope "$scope" --dry-run
   if confirm "Apply this install for real?"; then
-    node "$ROOT/install.mjs" --profile "$profile" --scope "$scope" --yes
+    node "$ROOT/install.ts" --profile "$profile" --scope "$scope" --yes
     c_ok "Installed. Run 'pi' then '/reload' if pi was already running, or 'pi list' to confirm."
   else
     echo "Dry run only — nothing changed."
@@ -113,8 +113,8 @@ cmd_update_kit() {
   git pull
   local profile
   profile=$(pick_profile)
-  echo "Running: node $ROOT/install.mjs --profile $profile --yes"
-  node "$ROOT/install.mjs" --profile "$profile" --yes
+  echo "Running: node $ROOT/install.ts --profile $profile --yes"
+  node "$ROOT/install.ts" --profile "$profile" --yes
   c_ok "Kit updated. Run '/reload' inside pi, or restart pi, then 'pi list' to confirm."
 }
 

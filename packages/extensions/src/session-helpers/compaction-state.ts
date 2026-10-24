@@ -60,12 +60,12 @@ export interface CompactionState {
 export interface CompactionInputs {
   cwd: string;
   /** undefined = assume trusted (older pi without ctx.isProjectTrusted). */
-  projectTrusted?: boolean;
+  projectTrusted?: boolean | undefined;
   /**
    * Active model's contextWindow. undefined/null = no model yet (nothing to complain about);
    * a number <= 0 or NaN = a model whose window is unknown (reported as such, never as 0%).
    */
-  contextWindow?: number | null;
+  contextWindow?: number | null | undefined;
   /** Whether trigger-compact is loaded in this session (its /compact-threshold command is registered). */
   kitTriggerLoaded?: boolean;
 }
@@ -82,6 +82,10 @@ interface ReadResult {
   error: string | null;
 }
 
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
 function readSettingsObject(file: string): ReadResult {
   let raw: string;
   try {
@@ -90,9 +94,9 @@ function readSettingsObject(file: string): ReadResult {
     return { value: null, present: false, error: null };
   }
   try {
-    const parsed = JSON.parse(raw.replace(/^﻿/, ""));
+    const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
     // pi treats a non-object as no settings at all
-    return { value: parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}, present: true, error: null };
+    return { value: isPlainRecord(parsed) ? parsed : {}, present: true, error: null };
   } catch (error) {
     return { value: {}, present: true, error: `${file} is not valid JSON (${error instanceof Error ? error.message : String(error)}); pi ignores it and uses defaults` };
   }
@@ -100,7 +104,7 @@ function readSettingsObject(file: string): ReadResult {
 
 function compactionBlock(settings: Record<string, unknown> | null): Record<string, unknown> {
   const block = settings?.compaction;
-  return block !== null && typeof block === "object" && !Array.isArray(block) ? (block as Record<string, unknown>) : {};
+  return isPlainRecord(block) ? block : {};
 }
 
 const has = (o: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key) && o[key] !== undefined;
@@ -258,11 +262,21 @@ export function warnOnce(ctx: { hasUI?: boolean; ui?: { notify?: (m: string, l?:
   }
   const key = `${id ?? `pid-${process.pid}`}:compaction`;
   const g = globalThis as Record<symbol, unknown>;
-  const seen = (g[WARNED_KEY] instanceof Set ? g[WARNED_KEY] : (g[WARNED_KEY] = new Set<string>())) as Set<string>;
+  const seen = warnedSet(g);
   if (seen.has(key)) return false;
   seen.add(key);
   emitWarning(ctx, `compaction: ${state.reason}`);
   return true;
+}
+
+// The per-process set of sessions already warned. Only membership of strings is asked, so a Set
+// some other code left under the key is used as one of unknown values.
+function warnedSet(g: Record<symbol, unknown>): Set<unknown> {
+  const slot = g[WARNED_KEY];
+  if (slot instanceof Set) return slot;
+  const fresh = new Set<unknown>();
+  g[WARNED_KEY] = fresh;
+  return fresh;
 }
 
 /** Mark the warning as already delivered for this session (the /compaction command reports it itself). */
@@ -271,7 +285,7 @@ export function markWarned(ctx: { sessionManager?: { getSessionId?: () => unknow
     const raw = ctx?.sessionManager?.getSessionId?.();
     const key = `${typeof raw === "string" && raw ? raw : `pid-${process.pid}`}:compaction`;
     const g = globalThis as Record<symbol, unknown>;
-    const seen = (g[WARNED_KEY] instanceof Set ? g[WARNED_KEY] : (g[WARNED_KEY] = new Set<string>())) as Set<string>;
+    const seen = warnedSet(g);
     seen.add(key);
   } catch {
     /* best effort */

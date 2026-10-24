@@ -34,12 +34,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: javascript-typescript, actions
           queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:javascript-typescript
 
@@ -53,7 +53,7 @@ jobs:
       security-events: write
     container:
       # Pinned by digest (the tag is only a label; it can be moved).
-      image: semgrep/semgrep:1.178.0@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b
+      image: semgrep/semgrep:1.182.1@sha256:451b3d875c00dac7ed5db5293e584a07de11449a409c10b3c2d2652f429630b6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,8 +63,14 @@ jobs:
           --config p/javascript --config p/typescript --config p/nodejs
           --config p/secrets --config p/owasp-top-ten
           --sarif --output semgrep.sarif
+      # Semgrep keeps `nosemgrep`-suppressed findings in SARIF (marked `suppressions`), and code
+      # scanning raises them as alerts anyway; drop them so a reviewed suppression stays quiet.
+      - run: >-
+          python3 -c "import json; p = 'semgrep.sarif'; d = json.load(open(p));
+          [run.update(results=[r for r in run.get('results', []) if not r.get('suppressions')]) for run in d['runs']];
+          json.dump(d, open(p, 'w'))"
       - if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -105,7 +111,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "26"
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run -s security:lockfile
       - run: npm audit signatures
@@ -114,15 +120,19 @@ jobs:
       # job; triage accepted upstream advisories in docs/supply-chain.md.
       - run: npm audit --audit-level=high
 
+  # Every manifest in the tree, not only the root lockfile: the MCP server lockfiles under
+  # packages/container/mcp-servers and requirements-docs.txt are scanned too, and a lockfile
+  # added later is picked up without editing this job.
   osv-scanner:
     permissions:
       contents: read
       security-events: write
       actions: read
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
     with:
       scan-args: |-
-        --lockfile=package-lock.json
+        --recursive
+        ./
 
   # PRs only: block a change that introduces a dependency with a known high-severity
   # vulnerability or a license outside the allowlist.
@@ -141,6 +151,10 @@ jobs:
         with:
           fail-on-severity: high
           allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, BlueOak-1.0.0, CC0-1.0, CC-BY-4.0, Python-2.0, Unlicense
+          # Per-package, per-version exceptions, each reviewed against the package tarball:
+          # json-schema-typed 8.0.2 (pulled in by @modelcontextprotocol/sdk) is BSD-2-Clause code; the
+          # detected "AND JSON" comes from the IETF JSON Schema description text it bundles.
+          allow-dependencies-licenses: pkg:npm/json-schema-typed@8.0.2
           comment-summary-in-pr: on-failure
 
   # The workflows are code too: template injection, over-broad permissions, credential
@@ -155,4 +169,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0

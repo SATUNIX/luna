@@ -21,13 +21,14 @@ function settingsFile(): string {
   return path.join(agentDir(), "pi-kit", "trigger-compact.json");
 }
 
-type Settings = { thresholdTokens?: number; enabled?: boolean };
+// An explicit `undefined` in a patch removes that key from the saved file.
+type Settings = { thresholdTokens?: number | undefined; enabled?: boolean | undefined };
 
 function loadPersisted(): Settings {
   try {
-    const parsed = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
     // Shape guard: a literal `null` (or an array) parses fine but has no fields to read.
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Settings) : {};
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -41,8 +42,8 @@ function loadPersistedThreshold(): number | undefined {
 }
 
 function savePersisted(patch: Settings): void {
-  const next: Settings = { ...loadPersisted(), ...patch };
-  for (const key of Object.keys(next) as Array<keyof Settings>) if (next[key] === undefined) delete next[key];
+  const merged: Settings = { ...loadPersisted(), ...patch };
+  const next = Object.fromEntries(Object.entries(merged).filter(([, value]) => value !== undefined));
   if (Object.keys(next).length === 0) {
     fs.rmSync(settingsFile(), { force: true }); // nothing saved: back to pure defaults
     return;
@@ -77,13 +78,13 @@ function readCompactionBlock(file: string): CompactionBlock | undefined {
   // One open file: the mtime and size that key the cache describe the same file that is parsed.
   let mtimeMs: number;
   let size: number;
-  let text = "";
+  let text: string;
   const cached = settingsCache.get(file);
   try {
     const fd = fs.openSync(file, "r");
     try {
       ({ mtimeMs, size } = fs.fstatSync(fd));
-      if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.block;
+      if (cached?.mtimeMs === mtimeMs && cached.size === size) return cached.block;
       text = fs.readFileSync(fd, "utf8");
     } finally {
       fs.closeSync(fd);
@@ -94,9 +95,9 @@ function readCompactionBlock(file: string): CompactionBlock | undefined {
   }
   let block: CompactionBlock | undefined;
   try {
-    const parsed = JSON.parse(text.replace(/^﻿/, "")) as { compaction?: unknown };
-    const c = parsed?.compaction;
-    block = c !== null && typeof c === "object" && !Array.isArray(c) ? (c as CompactionBlock) : {};
+    const parsed: unknown = JSON.parse(text.replace(/^\uFEFF/, ""));
+    const c: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "compaction") : undefined;
+    block = c !== null && typeof c === "object" && !Array.isArray(c) ? c : {};
   } catch {
     block = cached?.block; // mid-write or corrupt: keep the last good value
   }
@@ -197,12 +198,12 @@ export default function (pi: ExtensionAPI) {
   let pendingAtSettle = false;
   let notedInactive = false;
 
-  const triggerCompaction = (ctx: ExtensionContext, opts: { customInstructions?: string; resume?: boolean; tokens?: number } = {}) => {
+  const triggerCompaction = (ctx: ExtensionContext, opts: { customInstructions?: string | undefined; resume?: boolean; tokens?: number } = {}) => {
     inFlight = true;
     inFlightSince = Date.now();
     notifySafely(ctx, "Compaction started", "info");
     ctx.compact({
-      customInstructions: opts.customInstructions,
+      ...(opts.customInstructions !== undefined ? { customInstructions: opts.customInstructions } : {}),
       onComplete: () => {
         inFlight = false;
         notifySafely(ctx, "Compaction completed", "info");
@@ -212,7 +213,11 @@ export default function (pi: ExtensionAPI) {
         try {
           const idle = typeof ctx.isIdle === "function" ? ctx.isIdle() : true;
           const queued = typeof ctx.hasPendingMessages === "function" ? ctx.hasPendingMessages() : false;
-          if (idle && !queued) void Promise.resolve(pi.sendUserMessage(RESUME_MESSAGE)).catch(() => {});
+          if (idle && !queued) {
+            // Typed void, but a runtime that returns a promise still has its rejection caught.
+            const sendResume = (): unknown => pi.sendUserMessage(RESUME_MESSAGE);
+            void Promise.resolve(sendResume()).catch(() => {});
+          }
         } catch {
           /* stale ctx after a reload: the reload started a fresh session, nothing to resume */
         }
@@ -245,7 +250,7 @@ export default function (pi: ExtensionAPI) {
     }
     // Unknown stays unknown: no model / an unknown window returns undefined, and right after a
     // compaction pi reports tokens: null until the next response. Neither is "0 tokens".
-    if (!usage || usage.tokens === null || usage.tokens === undefined) return;
+    if (usage?.tokens === undefined || usage.tokens === null) return;
     const tokens = usage.tokens;
     if (tokens <= thresholdTokens) {
       armed = true;
@@ -261,9 +266,9 @@ export default function (pi: ExtensionAPI) {
     // trigger is at or below ours, ours can only double-trigger (both firing on the same turn) or
     // never fire; stand down and say so once.
     if (info.nativeWillFire || info.redundant) {
-      if (info.redundant && !notedInactive) {
+      if (info.redundant && info.native !== null && !notedInactive) {
         notedInactive = true;
-        notifySafely(ctx, `Kit auto-compact trigger (${formatTokens(thresholdTokens)}) is at or above pi's own trigger (${formatTokens(info.native!)} = window - reserveTokens), so pi compacts first and this trigger is idle. Lower it with /compact-threshold to use it.`, "warning");
+        notifySafely(ctx, `Kit auto-compact trigger (${formatTokens(thresholdTokens)}) is at or above pi's own trigger (${formatTokens(info.native)} = window - reserveTokens), so pi compacts first and this trigger is idle. Lower it with /compact-threshold to use it.`, "warning");
       }
       return;
     }
@@ -362,8 +367,8 @@ export default function (pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(`${formatTokens(parsed)} is at or above the ${formatTokens(window)} context window — auto-compact would never fire. Not changed.`, "error");
         return;
       }
-      if (native !== null && parsed >= native) {
-        if (ctx.hasUI) ctx.ui.notify(`${formatTokens(parsed)} is at or above pi's own compaction trigger (${formatTokens(native)} = window ${formatTokens(window!)} - reserveTokens ${formatTokens(settings.reserveTokens)}): pi would compact first, so this trigger would never fire. Not changed.`, "error");
+      if (native !== null && window !== undefined && parsed >= native) {
+        if (ctx.hasUI) ctx.ui.notify(`${formatTokens(parsed)} is at or above pi's own compaction trigger (${formatTokens(native)} = window ${formatTokens(window)} - reserveTokens ${formatTokens(settings.reserveTokens)}): pi would compact first, so this trigger would never fire. Not changed.`, "error");
         return;
       }
 

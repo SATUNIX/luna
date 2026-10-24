@@ -1,6 +1,7 @@
 {
   "name": "long-horizon",
   "description": "T0–T3 multi-hour/day tasks: balanced set + orchestration layer, with a fixed-budget compaction trigger (trigger-compact) for cost control.",
+  "securityLevel": "balanced",
   "firewall": { "mode": "auto", "policy": "coding" },
   "skills": {
     "excludeCategories": ["pentest", "mcp-governance", "evidence-reporting", "maintainer"],
@@ -10,10 +11,10 @@
     "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "human-console", "git-checkpoint", "auto-commit-on-exit",
+    "protected-paths", "tool-firewall", "human-console", "git-checkpoint",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
-    "autonomous-loop", "trigger-compact", "session-helpers", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
+    "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
     "goal-core", "task-graph", "subagent", "branch-lab",
     "verifier-board", "provider-router",
     "caveman", "pi-lens", "pi-readseek",

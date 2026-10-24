@@ -1,8 +1,12 @@
 # pi-system: instructions for the agent
 
 This file is loaded by pi as project context whenever pi runs in this repository, or in a project
-that copies it. It tells the agent how to install and use the kit. It is **not** the guide for
-developing this repository; that is `CLAUDE.md`.
+that copies it. It tells the agent how to install and use the kit. The full guide for developing
+this repository is `CLAUDE.md`, but pi loads only the first context file it finds in a directory
+(`AGENTS.override.md`, `AGENTS.md`, then `CLAUDE.md`; pi's resource loader, which no test here
+pins), so it never loads `CLAUDE.md` here. The
+rules a pi agent must follow when changing this repository are therefore repeated under
+"Maintaining this repository" below; read `CLAUDE.md` before changing code.
 
 The repository is a modular pi system packaged as an npm-workspaces monorepo:
 `packages/core/` (installer and toolchain), `packages/extensions/` (first-party `src/` plus
@@ -14,18 +18,18 @@ vendored `third_party/`), `packages/kit/` (skills, prompts, profiles, themes, ag
 Users install a release from the public repository (see `docs/INSTALL.md`):
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.7
 ```
 
 The first interactive start applies the `balanced` profile and asks for `/reload`. To choose a
 profile up front, or to register a checkout in place, use the installer:
 
 ```sh
-node packages/core/install.mjs --channel latest --profile balanced   # newest release
-node packages/core/install.mjs --profile balanced                    # this checkout, in place
-node packages/core/install.mjs --profile lite                        # small local models
-node packages/core/install.mjs --only tool-firewall,verify-gate      # specific extensions
-node packages/core/install.mjs --profile balanced --dry-run          # preview, change nothing
+node packages/core/install.ts --channel latest --profile balanced   # newest release
+node packages/core/install.ts --profile balanced                    # this checkout, in place
+node packages/core/install.ts --profile lite                        # small local models
+node packages/core/install.ts --only tool-firewall,verify-gate      # specific extensions
+node packages/core/install.ts --profile balanced --dry-run          # preview, change nothing
 ```
 
 Profiles: `quick`, `balanced`, `long-horizon`, `autonomous`, `self-improving`, `pentest`, `lite`.
@@ -63,12 +67,33 @@ files apply only with `agentScope: "project"` or `"both"`. Saved multi-step flow
 
 ## Maintaining this repository
 
-See `CLAUDE.md` for conventions and `CONTRIBUTING.md` for the extension contract. The commands
-most often needed:
+`CLAUDE.md` holds the full conventions (read it; pi does not load it for you) and
+`CONTRIBUTING.md` the extension contract. These rules apply to every change:
+
+- Never touch the operator's real pi installation or credentials when testing: use temporary
+  `HOME` and `PI_CODING_AGENT_DIR` directories, as `tests/clean-install-smoke.ts` does.
+- All code is strict TypeScript. Do not add JavaScript files, `any`, casts of untrusted data, or
+  `eslint-disable` without a reason. Run `npm run test:typecheck` and `npm run test:lint`, and
+  `npm run build:web` after editing `packages/web-ui/src/` (commit the regenerated `.js` with it).
+- Keep patches scoped. Do not run a repo-wide formatter, and do not "tidy" files you were not
+  asked to change.
+- Never write or commit secrets, and never commit on another agent's behalf or push to a
+  protected branch.
+- **This repository is public, and every pushed branch is published at once.** Work on a branch
+  and open a pull request on GitHub (`SATUNIX/pi-system`, the authoritative repository; the
+  GitLab copy is a read-only mirror). Install the leak scan in your clone before the first push
+  (`node packages/core/prepush-scan.ts install`) and never bypass it with `--no-verify`. Never
+  approve or merge your own pull request. Private notes and scratch work stay out of the repository.
+- **Releasing is an operator action.** An agent may prepare a release branch and a draft pull
+  request. It must not create or push a tag, publish a package, image or release, merge a pull
+  request, or change repository or account settings.
+- Documentation describes what the code does now, and a claim about behaviour names the test
+  that pins it (the full documentation rules are in `CLAUDE.md`).
+
+`tests/docs-smoke.ts` fails if these rules drop out of this file. The commands most often needed:
 
 - `npm run new -- <name>` scaffolds an extension; `npm run extract -- <name>` splits one out.
 - `npm run verify` validates extensions, profiles and generated docs; `npm run check:all` runs
   every check.
 - `npm run catalog` regenerates `docs/EXTENSIONS.md` and the skills and capability catalogues.
-- Releasing is an operator action (`docs/releasing.md`): an agent prepares changes and never tags,
-  publishes or merges.
+- `docs/releasing.md` describes the release flow the operator runs.

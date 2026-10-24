@@ -1,0 +1,857 @@
+{
+  "schemaVersion": 1,
+  "scanExceptions": [
+    {
+      "path": ".gitleaks.toml",
+      "lineSha256": "e1c4ee303c072fed3dc680148740e08a81a392c8340addf7d13d1547f9f66aa1",
+      "reason": "Audited synthetic fixture: gitleaks allowlist line for the tool-capture smoke's AWS documentation-style placeholder key; exact line only",
+      "matchSha256": "457643f44d19aed85fd756aa50cc0cd6b57376d4e8f5a72f9f85972a522002a3"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "lineSha256": "461e4d005f32d59166e83906288bac537df580389cee726a92946b4731147e6d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "457643f44d19aed85fd756aa50cc0cd6b57376d4e8f5a72f9f85972a522002a3"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "lineSha256": "56874288d5e0cb0f5f6c1b57686bb155a1969fe212fc69ee04e47f3e94eb5864",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "ed5935a35151e8efa9ce8d2df8d3f25053519de0911e8df25705f6437d6e0f55"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "lineSha256": "56874288d5e0cb0f5f6c1b57686bb155a1969fe212fc69ee04e47f3e94eb5864",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "457643f44d19aed85fd756aa50cc0cd6b57376d4e8f5a72f9f85972a522002a3"
+    },
+    {
+      "path": "docs/autonomy-gate.md",
+      "lineSha256": "2c3a28dc9b5224812c800c0abc043c8fc6286d6091c9b781004e1f45b1c13ca6",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/autonomy/lib/netaddr.ts",
+      "lineSha256": "a91e59fb031eaaa43af39b7722b0d20b9a2d55f96afb107b42bf07853fdfc391",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b0d56c1d28390f7e4ece0ae355b30ebe8c8618788c2d769736a939a7e0bb4dd4"
+    },
+    {
+      "path": "packages/autonomy/lib/netaddr.ts",
+      "lineSha256": "2c622d3bd037fb204ff89254ec26d434b1a6c402cc02ab81492dfd1d0cb5019d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "4fb0798e0eb02d5310d95142b51ddadf3d03fcd929382309589f573c0f923264"
+    },
+    {
+      "path": "packages/autonomy/lib/netaddr.ts",
+      "lineSha256": "715dff2813a61b51395f6d30c9b71cc656ee0dabed6b229d6af431568d9c0d63",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "5da4236dba69f926f858153f06d49edc73f54ce8cd226d7239d1948e663610e0"
+    },
+    {
+      "path": "packages/autonomy/lib/runtime.ts",
+      "lineSha256": "20d2d97b1cb297fc73425de4ddf54fe6a620a8a613d00b682499dffcd668f20c",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "346840d5a3d9fe9b61ce99955bb98df3db872090732c96aa5df1d83cb1f3e85a"
+    },
+    {
+      "path": "packages/autonomy/tests/boundary-probe.ts",
+      "lineSha256": "909244bca5995928622572292478decc4d997e59184c361dc45f2e2ac746d215",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "346840d5a3d9fe9b61ce99955bb98df3db872090732c96aa5df1d83cb1f3e85a"
+    },
+    {
+      "path": "packages/autonomy/tests/boundary-probe.ts",
+      "lineSha256": "9bc3f3336961113b15f7f0e529041c02cb5226d04d32f2a0f8f01bfe8a5dd49e",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "346840d5a3d9fe9b61ce99955bb98df3db872090732c96aa5df1d83cb1f3e85a"
+    },
+    {
+      "path": "packages/autonomy/tests/boundary-probe.ts",
+      "lineSha256": "909244bca5995928622572292478decc4d997e59184c361dc45f2e2ac746d215",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "c5eb5a4cc76a5cdb16e79864b9ccd26c3553f0c396d0a21bafb7be71c1efcd8c"
+    },
+    {
+      "path": "packages/autonomy/tests/boundary-probe.ts",
+      "lineSha256": "4f3be80781429a883eb1bff5c8955b3a48439aa67bc108930557fbe3abbdaaca",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "packages/container/Dockerfile",
+      "lineSha256": "8ca6ff3112cd94e01b84c6b74ce0ec0dc7b7058c0afc104ba6a2968518bd335f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "4a16f8d6ee16791636fd437e18b79f1de63af5e057548219e2e2b043cc9331f6"
+    },
+    {
+      "path": "packages/container/README.md",
+      "lineSha256": "1fa82973a5a20b812290ebcdca661f6e3d651f5889135bc726e86a0c0f080874",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/compose/compose.dev.yaml",
+      "lineSha256": "cbe3fb033e9566e5e14462f38ba28a2fcc7527fb8e23218861f1dca31e8a3dcc",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b98d692c4574a80e508cf6fa38e6f27ae5348e616448edaa7fe675e363669fd2"
+    },
+    {
+      "path": "packages/container/capability/compose/compose.yaml",
+      "lineSha256": "d61f7e5d3e7fea452c41e33c4491171e37037e2a220b30f6daf284f2926b1b74",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/compose/compose.yaml",
+      "lineSha256": "cdce5632ec1b91a84c96dd5957dc964f69d15d7ddefe8ac122abac8b9b3a8471",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/BURP_MCP.md",
+      "lineSha256": "d232b8fa36bd1d6e2bd8104d0e2203f34facb61f2333b6d1864a2e3b9f3b7743",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/BURP_MCP.md",
+      "lineSha256": "05a90f3967bf852d2b242f7768f0b397c46e77d6bfc44234dc5d3625e5f90520",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/BURP_MCP.md",
+      "lineSha256": "8e777b128167b712879a8edeac97b187d8d89c8073ce990cd58eb175b19a515d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/BURP_MCP.md",
+      "lineSha256": "0b0fe202ef800cb733956d12e3df1b43df9428e00ee7684dfed10b54b4205285",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/OPERATOR_GUIDE.md",
+      "lineSha256": "a7659f14d0b49b858415f1a87df78589fcc6401a8b0234893631b582e082757e",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/docs/SECURITY_MODEL.md",
+      "lineSha256": "4a73e2e5f5e7f9ec21e5eae95bc0a098ed45d1888e0eabb9aa0638e3bd8d68af",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/capability/env/defaults.env",
+      "lineSha256": "3d0e6b39ef6e4540585f66b36b60ab7de94b952b07a6d4a266322091a7b0941f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/docker-compose.yml",
+      "lineSha256": "d61f7e5d3e7fea452c41e33c4491171e37037e2a220b30f6daf284f2926b1b74",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/docker-compose.yml",
+      "lineSha256": "cdce5632ec1b91a84c96dd5957dc964f69d15d7ddefe8ac122abac8b9b3a8471",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/engagement/mcp-servers.example.yaml",
+      "lineSha256": "55f1ccb8b3f485bfff1073c4c5670658d05eda06811231f42075a7e3b71eb1ee",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/engagement/mcp-servers.example.yaml",
+      "lineSha256": "c495cc6494df34719b7abfbecf718fd66fbc39982c3525696f023515b5a4ad79",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/engagement/model.example.json",
+      "lineSha256": "38fcee0a1efa1a40a789a3f286c2829d08fb43161399e239d6b3dd4651a9584a",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/overlays/pi/models.json",
+      "lineSha256": "38fcee0a1efa1a40a789a3f286c2829d08fb43161399e239d6b3dd4651a9584a",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/scripts/validate-engagement-overlays.py",
+      "lineSha256": "9d27e892dfa2de383ffa636c6a31f576e8ab30eef2c73e3c10aafb8d887da24b",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/scripts/validate-pentest-env.sh",
+      "lineSha256": "569bd2102948a925ffb4bf287e72dee8d7592cd7c5ad0e3e63cc480524fb5514",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/scripts/validate-pentest-env.sh",
+      "lineSha256": "4799125ad9778506045a8a5b61a4c740757fcd128871bc30970ca30a23317957",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/scripts/validate-runtime-readiness.py",
+      "lineSha256": "8a85d1c642f5c60b37ddb34d2c1ace9e4be46419ae76dee7783eedfdba187dc9",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/core/eval/fixtures.ts",
+      "lineSha256": "29d3c417f172697a308c0d6c1448a24b5f0ad8aa4bc5af9718cb0aa4f11bad7c",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "1a5d44a2dca19669d72edf4c4f1c27c4c1ca4b4408fbb17f6ce4ad452d78ddb3"
+    },
+    {
+      "path": "packages/extensions/src/compress/README.md",
+      "lineSha256": "a582700271dfc5718b1c91fc51dfd6f03eefe607ebb4153392bff50731d58d52",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b0d56c1d28390f7e4ece0ae355b30ebe8c8618788c2d769736a939a7e0bb4dd4"
+    },
+    {
+      "path": "packages/extensions/src/pentest-governance-domain/index.ts",
+      "lineSha256": "91855502b903a8b2a90d79e7b6273377f5a374c49a6359aa81c4dae6872bb5e1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "packages/extensions/src/secret-guard/index.ts",
+      "lineSha256": "78f9f6d14f1889f07cc565cab112ba27bde91f27a377eab5d0886e3c97b85604",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "packages/extensions/src/tool-firewall/classify.ts",
+      "lineSha256": "ee079178c22f7893db8b54101374b12f39c7a2831d8675fcd6873ca3b4ec93d2",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "765748eb2f8033a40dcd4e663418614ccad629fe10e2d8ed067a122129133e2d"
+    },
+    {
+      "path": "packages/extensions/src/tool-firewall/trajectory.ts",
+      "lineSha256": "29296aa114d81ea12a7c98218157ca919365157877572210361d16e2114707ae",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "765748eb2f8033a40dcd4e663418614ccad629fe10e2d8ed067a122129133e2d"
+    },
+    {
+      "path": "packages/web-ui/scripts/live-sync-test.sh",
+      "lineSha256": "33807bcd962c9ed007566c1d08ea0b99a273a712267d27d0afe4a4714ff6f69c",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "packages/web-ui/scripts/smoke-test.sh",
+      "lineSha256": "32cf750c8d5f1889373211c0dd4792282e04da2571b23a1cd2858a2a116e14af",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "packages/web-ui/scripts/smoke-test.sh",
+      "lineSha256": "b0c5ca342bb3e5bd78092ca6c4bb7d642ee31950bffe1f7bf4f88c4abd658cfd",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "packages/web-ui/scripts/smoke-test.sh",
+      "lineSha256": "e4d2f94113fcb7f1a7d2bb05587cbc5b3d026b6d76013bcbb616cfdf7f8ad341",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "packages/web-ui/scripts/ui-smoke.ts",
+      "lineSha256": "8d70dcd1938d706f03aeb8121f9a4a9f64a20a291835a1b965bb3d82bbe70a35",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "packages/web-ui/scripts/ui-smoke.ts",
+      "lineSha256": "cc361db3f02c7eaae266eb19488f51c1f159abb43ee66f094de3ea9ce0fe96cf",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "tests/autonomy-boundary-smoke.ts",
+      "lineSha256": "5e71213f2cd0021cbd83b6f5864221e642c32f6ffb87c9fe8d99d5b5d731bba6",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "tests/autonomy-boundary-smoke.ts",
+      "lineSha256": "a181a642cc834d92b84b94837d90c5032e8fd122943596fd857112f9350f6423",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/autonomy-container-smoke.ts",
+      "lineSha256": "061d6b9d569f2d7662b2645778a771e723bd2c0882b9f731db8bf6196edad0cc",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "346840d5a3d9fe9b61ce99955bb98df3db872090732c96aa5df1d83cb1f3e85a"
+    },
+    {
+      "path": "tests/autonomy-container-smoke.ts",
+      "lineSha256": "c04187dd1abfe6dbc61dc16e08d10fbfb14a974eeb35f5ec152509b9804e4afd",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "e5734638ec4dbd4025bfcf4babfdef4183944d15a5748c7ee88c4d17f6c42c2f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "e5734638ec4dbd4025bfcf4babfdef4183944d15a5748c7ee88c4d17f6c42c2f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "e5734638ec4dbd4025bfcf4babfdef4183944d15a5748c7ee88c4d17f6c42c2f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "e5734638ec4dbd4025bfcf4babfdef4183944d15a5748c7ee88c4d17f6c42c2f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "e5734638ec4dbd4025bfcf4babfdef4183944d15a5748c7ee88c4d17f6c42c2f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "1d7b1ee6fd429ee776002cf64f57942fdca714d319fa76111dfe8a34f74fbeb3",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "ed5935a35151e8efa9ce8d2df8d3f25053519de0911e8df25705f6437d6e0f55"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "1d7b1ee6fd429ee776002cf64f57942fdca714d319fa76111dfe8a34f74fbeb3",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "457643f44d19aed85fd756aa50cc0cd6b57376d4e8f5a72f9f85972a522002a3"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "1d7b1ee6fd429ee776002cf64f57942fdca714d319fa76111dfe8a34f74fbeb3",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "08ca3199ed636178defd2c5583c2400171c3f1b48c9389dff92d8f5094569773",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "8e099943f7370d7ecd46ad56442e02670e8ed1a8b2ba5c42a69f06f1c050189b"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "08ca3199ed636178defd2c5583c2400171c3f1b48c9389dff92d8f5094569773",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "c77e473ca7d07f7addbaf0eb5e2a1c4ca664a2f832c38771d06fee5793704a64"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "08ca3199ed636178defd2c5583c2400171c3f1b48c9389dff92d8f5094569773",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e50a91019dd7819046c293c3e8ff0ead5a9ce4a4834c6679ea4e0ed1671233a2"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "c913ef43a42a0e134afc7bdfb93debed224a648bc58a72eb4742cc19a15decf5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "c913ef43a42a0e134afc7bdfb93debed224a648bc58a72eb4742cc19a15decf5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0808ba50df2f50d9da4b134b105f1a166ce99303a68a0a54fb5c36a2391f1617"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "c913ef43a42a0e134afc7bdfb93debed224a648bc58a72eb4742cc19a15decf5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "c5eb5a4cc76a5cdb16e79864b9ccd26c3553f0c396d0a21bafb7be71c1efcd8c"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "8e52cb4e661507a1d53f11152f8aaee674e732626561e9046b9137ac0738b52f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "ceb3f4b6cd4cabfa78b9d47e6226627eb3521b2dab9e2f3871bcc5dc08e621a9",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "5e59793240817681b48c758a50513239213b95366765fa56cd55893df9e6bac9"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "962038bbe05f34ef89f379c8ee0a40e33c0ced967bb28c14d20623b7fb7667f6",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "fcadf5b17d2c67f9946a3bf133870abad8c0f0cb0ff11d44786b922b111886b1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "43e55529fbecbc63fd0c1634c33813c913ad978ff4291068a851f29f309980aa"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "5a0d75a4de5076c6f8f5867f3f835d77c3a8a7e180359d4f28eb6299bfdb0382",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "9bcc3ec6f14f2ea8288b990df6ead4c7f56cf6e873f9ed59d0b09dfb6355ad56",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "548d5f779bc8ca926963f7e1bfd1db64be9e85cd0e01c5a20a951409e8c99f65",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "43e55529fbecbc63fd0c1634c33813c913ad978ff4291068a851f29f309980aa"
+    },
+    {
+      "path": "tests/distribution-smoke.ts",
+      "lineSha256": "84ff7b3f2de76a664dd8be79c2d0b06cd9604980c1158aa95730a2e900be6940",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "1f19107742728ff867bbfbb138fdea3b7ab8ef4c487fa519ebc811980ff7b27d"
+    },
+    {
+      "path": "tests/firewall-approvals-smoke.ts",
+      "lineSha256": "86f6d603edec8d44c718e31fac017d8cc17b7ef60ac8baa5a61d374cfa343d04",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/firewall-approvals-smoke.ts",
+      "lineSha256": "05bf08a719badaa049284c8e047268a3135c4239bd47eb6ca12685d4e34d3eac",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/firewall-approvals-smoke.ts",
+      "lineSha256": "c0828362e776201aad264244fdfff56de97f8da9992562a26aeb2c9abed280d2",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "078b96f871b32060b8b3e5537bd5947e6280dc1da4acb7e69614f4bed0b63ee0",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "7c1d93758493552cad8a837073df5e98e7f3d574f3483daa5200b8ba9ec561ff",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "061968549401b90dd163f7ce1dc3fa60da4c4ea1f3e7e4c1a8cbdf61a8efab3b",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "dc93a08c0d7c9eda7dd4dc7046f3029d70f1f49ab702ed45846df764a6a62700",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "887c8e819b10176c6050c4a31d0e308e23d6dde331bfff8c9275319deefe1524",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "2b7a8e5dcd35ac2db6016b2ebee352b068038b2abeb639faef923c5937491f40",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "3918d0d82391a797216b5ac1570ddae80ef8b49ffba6338ccc3dd4910fc9d892",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "809734c4a6db51247b15701166211cece393a440c482dc0e69128e9c797c91c1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "856ccb4c52574cb18fc892f8f37fd4a6f54787358cb502c3836f8223e67a5fb0",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "b69f00e827e554b912096bf07433511ee15725a08bc7290e4b388a919769364f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "116a1403407f7354cf12a5691292a6484e00f3c911a344337ae12b7ee6ee679c",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-unattended-smoke.ts",
+      "lineSha256": "7c5c0aa3d1ceccb4b38b7cf2b2ed54f539ea044816f45be884429e87ff4bcaf5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b0d56c1d28390f7e4ece0ae355b30ebe8c8618788c2d769736a939a7e0bb4dd4"
+    },
+    {
+      "path": "tests/firewall-unattended-smoke.ts",
+      "lineSha256": "7c5c0aa3d1ceccb4b38b7cf2b2ed54f539ea044816f45be884429e87ff4bcaf5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0de54994e927634fc113449982dfa9ebe763dbbe67fd39d525aba87a764fdbb4"
+    },
+    {
+      "path": "tests/firewall-unattended-smoke.ts",
+      "lineSha256": "5617d50b1eee7dc9a55c3be4492f0d37b5d7a002b39127350aeb07224f6ce3df",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "tests/firewall-unattended-smoke.ts",
+      "lineSha256": "5617d50b1eee7dc9a55c3be4492f0d37b5d7a002b39127350aeb07224f6ce3df",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "tests/governance-smoke.ts",
+      "lineSha256": "a4b4478423f4fabb2a6ec3cb6dad55c057563a17ea4268b2eeadde4a4b3548f1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/governance-smoke.ts",
+      "lineSha256": "a4b4478423f4fabb2a6ec3cb6dad55c057563a17ea4268b2eeadde4a4b3548f1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/memory-vault-smoke.ts",
+      "lineSha256": "c5d149af5da67ed70506ac9e8ed3a225809aa68ebe84fc10a4d276e239316fe2",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03aafb028d538b06c4341bf8cf2a692a3c6d1f36e34e0e0b376f407c6117a246"
+    },
+    {
+      "path": "tests/protected-paths-smoke.ts",
+      "lineSha256": "02607c137e37938700f6e9b386e5ea67c3ed84922c262bf0bf2fa5e1bc58e20d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/protected-paths-smoke.ts",
+      "lineSha256": "02607c137e37938700f6e9b386e5ea67c3ed84922c262bf0bf2fa5e1bc58e20d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/save-smoke.ts",
+      "lineSha256": "d7c5ab91580cba2ba8d955245fdd3628f46a31614fc0be68147bc6a396c552d1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "457643f44d19aed85fd756aa50cc0cd6b57376d4e8f5a72f9f85972a522002a3"
+    },
+    {
+      "path": "tests/save-smoke.ts",
+      "lineSha256": "d7c5ab91580cba2ba8d955245fdd3628f46a31614fc0be68147bc6a396c552d1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "000d2949ae1e15079033d2e213747bdb675c4b4038087249bd62c108390350b0"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "8fd9a609aa94823091ebaa55087f45f25921972239720a99d431f301e6303806",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "73010c9e6cecd33af97d6562fc3b57652205bab01ea35beffb9f23acbce7ec38"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "b084e912c52b1f342e3910c45f212f093957ae11cfdb0057b5a384acc85cd3a0",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "1a5d44a2dca19669d72edf4c4f1c27c4c1ca4b4408fbb17f6ce4ad452d78ddb3"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "254b10f2a06cc254247797f6a30a61fccc16c293e3fe4e4a10ae58b85fde59c8",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "9fc66ad6fe8dffb341da195622ce27317c7a1d06fe06dac1930084083be31835",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "1a5d44a2dca19669d72edf4c4f1c27c4c1ca4b4408fbb17f6ce4ad452d78ddb3"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "cbec09e75e8a9f3dd77f957f4600245df2c6a616e75631fbcb98a737c19ce323",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+    },
+    {
+      "path": "tests/secret-guard-smoke.ts",
+      "lineSha256": "40dbc78cbc0d99c771a5f006093bc3bb769aac7dbdbed1329e5d0b16504fa4d9",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "1a5d44a2dca19669d72edf4c4f1c27c4c1ca4b4408fbb17f6ce4ad452d78ddb3"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "bc4f97dbe98041ee77dcd6075ba7eab9324715fd35766139a5efda976e4eedfb",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "4f67ebf90569496c7bff7bf292706abf8464a33ca738b82e2dd548e59c49dcee",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "6af5a183026f91b05221b2aff08cfe0f187f0285fda5ed8c79d06290ba52cdeb",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "0819b8fdbc05f2560c5ff3739300885b829917a232f5f0c7804ee2da9020f2b1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "559d209de2fb322527bb1ce413033188bd20ebdad871fffd0edfc4a7649acb4f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/status-bar-smoke.ts",
+      "lineSha256": "559d209de2fb322527bb1ce413033188bd20ebdad871fffd0edfc4a7649acb4f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350"
+    },
+    {
+      "path": "tests/tool-capture-smoke.ts",
+      "lineSha256": "f97f91acbb3aa0b3d7f79aa1ff79e4cb5dbebbb5bed24ddcc5cc286155fea7d1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03d104c669e3c7b6be7f989db8b12c8b910d3be8c1e2a73c9369d3cc0ba803b5"
+    },
+    {
+      "path": "tests/tool-capture-smoke.ts",
+      "lineSha256": "4ca92bcf6172b3a9b7b2e8720abff26a27ef78b607deec9a92e1b65b74db453e",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "03aafb028d538b06c4341bf8cf2a692a3c6d1f36e34e0e0b376f407c6117a246"
+    },
+    {
+      "path": "tests/tool-capture-smoke.ts",
+      "lineSha256": "42dfc538561c6416392b56d6f553e4fa4621a6b8967b57a62c0d067463a4166e",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/web-ui-api-smoke.ts",
+      "lineSha256": "7c7b1a60dd8e04406386a212e904f7ce479134907c95a6ba0541abbade96be9b",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "tests/web-ui-api-smoke.ts",
+      "lineSha256": "a78729b7740920c3eaecf89b68fed4706a7188514fec5e411f6bc70ee20ce8af",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "53a8fcca9845a83e4522de8c4aff2853ab2f55550fbf863edb347a5a42c0dfb5"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "fe174ab58a42b3fc3360c1f264708dd8533575d21278958a18e88b5d83748c0d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "fe174ab58a42b3fc3360c1f264708dd8533575d21278958a18e88b5d83748c0d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "fe174ab58a42b3fc3360c1f264708dd8533575d21278958a18e88b5d83748c0d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "434a1cc3888ea832c651faac71f3e71dca9d59a780c41b221d81fffb02b5b816"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "bfb6ea107a70c2e6368bc372bdc3553ed36f6d4b5556461074ec47ba073e01bb",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "f4494af916862faf4a3fddff9708b2fa4b46f0bf462205b22299585b70a6a28e",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "6844bbc0d58ddca158cb57ea745047f7a81762b4d744a3e388b5b8be4885a859",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "7bbde6873dc629864ab79d5a2bac7123d7096ce4e5970618b057fe55d9ce4968",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "565dba82fcadb301ebfb3de27ee2391a7f866128d4b408d359cd6422b0e3ca1c",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "3ad5b3ea73f21e22d644d172cd638619e7f76fab1e8ec22f785b6041cedf3839",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "8db1ebb119815b98b30bf1c7b4a824307479ff28aa2de4c70c7ff9377e93c63d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "8db1ebb119815b98b30bf1c7b4a824307479ff28aa2de4c70c7ff9377e93c63d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "0546412d61ba57f140cbc562c81ed83fb1b8aae26b57bb1ac00d5eddc798ac0f"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "068e1e5ddb08ef171712c52d3c2402a0451a231256025d0aac112540b2c900d3",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "805ebf201c523f69376591c6ce5ceb3f12ebcfedad297c5f175a380426cf0b42"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "155db731bf62896b21111e3bd17fddbdb613ad39e0b8080aaeb4a9698fbd05dc",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "434a1cc3888ea832c651faac71f3e71dca9d59a780c41b221d81fffb02b5b816"
+    },
+    {
+      "path": "tests/web-ui-bind-policy-smoke.ts",
+      "lineSha256": "57567955893bb7ee40d8484d27a86c65add00a8a90139ecb26a0a981cb99b363",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "17d471c2baa2e2c3a161f06e5f63778ac95fdf16732ef6f0d903630a46bc0513"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "5f0581fcd41c0963abe4b9ef06e8ea6a7183cbd1fa2a237a395010eab43b9e5a",
+      "reason": "Contract error path for the pricing entry of a model named local-model under providerSettings, not a hostname; exact line only",
+      "matchSha256": "f474ddafe2a0d0a9974c8eec827a7bddd175b3a28247b00a2e6f57a213ff2f06"
+    },
+    {
+      "path": "tests/autonomy-container-smoke.ts",
+      "lineSha256": "c0e51beb96046fef2ac5bd1c4a63b36f4ed8ac2f1b3059bcbdd986ade6420066",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b4875abd9b570cf43e050d9f841887149ec38e5c275a94910fb2fd75d01fe419"
+    },
+    {
+      "path": "tests/autonomy-container-smoke.ts",
+      "lineSha256": "e780b66ee9c8c4a4b51872a8ed4865df4b41750d5d63ba9a16f563bb22b0248d",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "b4875abd9b570cf43e050d9f841887149ec38e5c275a94910fb2fd75d01fe419"
+    },
+    {
+      "path": "tests/autonomy-container-smoke.ts",
+      "lineSha256": "0ffcdc330eeaa177e511da163eb9225c07b3cca9a8f88c4ab3b47bb3df0bee00",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "f5047344122f0dee9974ba6761e61c6b8649e1f3968d13a635ebbf7be53a3a0d"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "bc36217af55dda2eae48be031743d79853f6eaa51f3c708ddb35d0429b4661cc",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "05db5bdfe37bb30c7bb42743ac5dbd050830644704a90d9b50d6f1cca4ec9564",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "3595ae70e81b04704c0279bceb67bb4e69cd7b8967e16248f6bd0eb08799e0ae",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "1a62825ae86aa62d1cacc4a5664e8f2d1ea95b0969bba763624ce4534b887771",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "cde0451952589ebd5d41dbdaa146465d8324f535d3584ef0ca1b0f41355108d4",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "cc1b3ef71e6c1ec52ff5cc675b1f3cbb752f12c011ae41cd0c9c4f779c73aab5",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "1f965758122a14a2b067376746da5c5e6a739cd51be40909aa2c09276b480fa6",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "735837dc19f94240db3c061abe0041f24e85dfa1f3cb5832dea364cdd0b5061f",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "tests/firewall-shell-smoke.ts",
+      "lineSha256": "4cc2ce76c66145d92e15181d257a8e05e39e22512bb827afddeb05bc57bdcdeb",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
+      "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    }
+  ]
+}

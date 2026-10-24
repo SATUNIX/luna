@@ -10,7 +10,7 @@ These pages show the heavily developed parts of the kit as Mermaid diagrams, eac
 | [Effort ledger and delegation launch contract](subagents-and-orchestration.md#the-launch-contract) | the single child-launch contract, governance extensions, the child-side self-check, effort tiers, the shared ledger and its reservations at every depth | `packages/extensions/src/delegation-guard/`, `packages/extensions/src/effort/`, `packages/extensions/third_party/subagent/launch.ts` |
 | [Memory vault, compaction and context assembly](memory-compaction-context.md) | ctx-contributions, context-sieve, vault, recaps, compaction | `packages/extensions/src/context-sieve/`, `packages/extensions/src/memory-vault/`, `packages/extensions/src/compress/`, `packages/extensions/src/save/` |
 | [Workflows and skill routing](workflows-and-skills.md) | workflow discovery and executor, skill router, verify gate | `packages/extensions/third_party/subagent/workflow.ts`, `packages/extensions/src/skill-router/`, `packages/extensions/src/verify-gate/`, `packages/kit/workflows/` |
-| [Profiles and install](profiles-and-install.md) | installer, profiles, settings, firewall config, `/profile` | `packages/core/install.mjs`, `packages/core/lib/`, `packages/kit/profiles/`, `packages/extensions/src/session-helpers/` |
+| [Profiles and install](profiles-and-install.md) | installer, profiles, settings, firewall config, `/profile` | `packages/core/install.ts`, `packages/core/lib/`, `packages/kit/profiles/`, `packages/extensions/src/session-helpers/` |
 
 For the prose behind the delegation rows, see [Effort](../effort.md) and [Agent orchestration](../agent-orchestration.md#child-governance).
 

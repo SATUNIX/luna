@@ -16,12 +16,12 @@ it.
 | Not verified | Why | Who can close it |
 |---|---|---|
 | Behaviour against real model providers: the effort prompts, the auto-mode judge's verdicts, the completion reviewer, delegation quality | The release was prepared without provider credentials; every suite uses deterministic fakes or the real pi runtime without a model | An operator with a provider, running a representative task at each effort tier |
-| The autonomous runner on rootless Podman, on macOS and Windows, and in a run of hours or days | `smoke:autonomy-container` ran on Docker only, in a disposable sandbox; the in-container boundary probe (`packages/autonomy/tests/boundary-probe.mjs`) is manual-only | An operator, per [Autonomous runs](autonomy.md) |
+| The autonomous runner on rootless Podman, on macOS and Windows, and in a run of hours or days | `smoke:autonomy-container` ran on Docker only, in a disposable sandbox; the in-container boundary probe (`packages/autonomy/tests/boundary-probe.ts`) is manual-only | An operator, per [Autonomous runs](autonomy.md) |
 | A full autonomous run against a real model provider | The relay talks to a local fake upstream in every test | An operator with a provider key and a small budget |
 | The web console's Content-Security-Policy in a browser | No browser was used | Anyone with a browser: open the console and check the progress bars render |
-| The full check suite on Windows and on Node 24 | CI runs the suite on Linux with Node 22; Windows runs the per-profile install check only | CI matrix extension |
+| The full check suite on Windows and on Node 24 | CI runs the suite on Linux with Node 26, and the pi-compat lanes with Node 22; Windows runs the per-profile install check only | CI matrix extension |
 | `git` and `npm` delivery for `/profile` and for the update path against the real public repository | No release tag exists yet, and local mode is what the suites can exercise | The first release, then a run of `/update` from an install of it |
-| pi 0.99.x | It was run once against the whole suite; it is advisory in CI, not supported | Review when pi 0.99 is adopted |
+| Interactive use on pi 1.x | The suites drive pi's runtime without a terminal; pi 1.0 made the fullscreen TUI the default and that was not exercised by hand | An operator, running each profile interactively on pi 1.3 |
 
 ## Delegation and recovery
 
@@ -31,6 +31,13 @@ it.
   kit-authored hint.
 - **`trigger-compact`'s mid-run resume** sends a visible user message and has been tested only
   with fakes. It never runs inside child sessions.
+- **Recovery triggers only on a progress-guard escalation or `/recover`.** A verification that
+  still fails after an edit, or a check that regresses, does not start recovery. Closing this needs
+  a single "worse" signal (a test count, a checkpoint diff or a `verifier-board` verdict flip) and
+  a settled definition of "the same problem" for the signature. Whether scouts should run on a
+  second provider for independence, whether an extension can drive `/fork` itself, and a token
+  ceiling before recovery gives up are also open
+  ([Recovery orchestration mode](recovery-orchestration-mode.md)).
 - **Effort budgets are accounting, not enforcement.** A hostile process owned by the same user can
   edit the ledger. Enforcing tiers at the operating-system level would need a supervisor outside
   the session.
@@ -40,19 +47,32 @@ it.
 The [Agentic security, alignment and autonomy proposal](proposals/agentic-security-and-alignment.md)
 sets out coordinated security levels, trusted content admission, intent review, OpenAPPA integration
 and verified container autonomy. It includes a staged pi 0.99.2 compatibility workstream and
-acceptance gates; these are proposed changes, not current guarantees.
+acceptance gates. The [Security level](security-level.md) control implements the local lever;
+content screening, the OpenAPPA flow engine, intent ledger, detector, authenticated operator
+events and verified off-boundary attestation remain unimplemented. Relaxed has no additional
+medium-tier routine admission set. Remaining proposal work is not a current guarantee.
 
 - **It is a guard rail, not a sandbox.** Containing what an allowed tool can reach needs an
   operating-system or container boundary (the autonomous runner provides one).
-- **Low-tier actions run unasked in every mode**, including reads by tools whose name says they only
-  read, and plain network GETs. Tightening this would prompt on every MCP `get_*`.
+- **Low-tier actions run unasked in every mode**, including covered core-tool reads, explicitly
+  allowed external APIs and plain shell network GETs. Read-like external names confer no authority
+  (`tests/firewall-shell-smoke.ts`, `tests/firewall-gate-smoke.ts`). Tightening allowed reads would
+  require a separate policy choice.
 - **Package-manager and opaque-tool network use cannot be attributed to a host** in unattended
   runs; the container network is the stop.
 - **`secret-guard` is opt-in.** The firewall already classifies credential files; whether the
   stricter pattern layer should be default needs data on its false-positive rate.
-- **Companion tools that add their own shell or edit tools** (for example `pi-lean-ctx`) are seen
-  only as unknown tools. Teaching the firewall the names of specific companions would make them
-  first-class, and would need each one reviewed.
+- **Unreviewed companion shell/edit tools** (for example `pi-lean-ctx`) need exact policy entries
+  or operator approval; parsing a shell-looking field cannot confer trust
+  (`tests/firewall-shell-smoke.ts`). Reviewed companion helpers have shipped entries, but
+  multi-target mutations still ask. Covering more shapes requires reviewed effect adapters.
+- **Exact tool names do not bind implementations.** Replacement code inherits the policy for its
+  registered name, and direct I/O by in-process extensions is outside interception. No test proves
+  isolation or implementation binding; that needs a boundary outside the pi process. See
+  [Security model](security.md#what-the-boundary-does-not-guarantee).
+- **Nested-call evidence uses synthetic events.** `tests/firewall-gate-smoke.ts` models pi 1.3's
+  `parentToolCallId` and child ids and proves parent approvals do not authorise children. No smoke
+  drives the real codemode worker or `ctx.executeTool()` through the installed pi runtime.
 - **Unattended mode trusts the supervisor's claim** that its boundary exists. It now requires the
   contract to be on a read-only mount (or another user's unwritable file), which an agent's shell
   cannot fake, and a forged launch from an interpreter is a safety-setting override. What remains:
@@ -79,7 +99,7 @@ acceptance gates; these are proposed changes, not current guarantees.
 
 ## Web console
 
-- Two version constants still read `0.1.0` (`routes.js`, `configinfo.js`); the session panel shows an
+- Two version constants still read `0.1.0` (`routes.ts`, `configinfo.ts`); the session panel shows an
   unknown context percentage as 0%.
 - The login link is passed to `xdg-open` as an argument, and the token file is readable by the agent
   the console drives (both are documented in [Web console](web-console.md); the firewall classifies
@@ -88,9 +108,10 @@ acceptance gates; these are proposed changes, not current guarantees.
 
 ## Dependencies
 
-Candidates that were evaluated and deliberately not adopted for the beta (`pi-lens` 4.x,
-`pi-readseek` 0.10.x, `pi-mcp-adapter` 3.x, `pi-subagents`, TypeScript 7) are recorded in
-[Supply chain](supply-chain.md) with their reasons. Revisit each with its own review.
+Candidates that were evaluated and deliberately not adopted for the beta (`pi-readseek` 0.12.x,
+`pi-subagents`, TypeScript 7) are recorded with their reasons: TypeScript 7 and `pi-readseek` in
+[Supply chain](supply-chain.md), and `pi-subagents` in
+[Lessons from the private system](private-system-lessons.md). Revisit each with its own review.
 
 ## Quality of long-running work
 

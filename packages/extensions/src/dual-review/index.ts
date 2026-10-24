@@ -46,12 +46,16 @@ export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, run
     const reviewEpoch = epoch;
     const prompt = `You are a code reviewer. Review the following diff for correctness, security, and style. Be concise.\n\n${diff.slice(0, 8000)}`;
     const args = DUAL_REVIEW_MODEL
-      ? ["--print", prompt, "--no-session", "--model", DUAL_REVIEW_MODEL]
-      : ["--print", prompt, "--no-session"];
+      ? ["--print", "--no-session", "--model", DUAL_REVIEW_MODEL]
+      : ["--print", "--no-session"];
     const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
     // A plain read-only model call: the guard's arguments load only the governance extensions (no formatters,
     // steering or memory), and the tools are the read-only four.
-    const child = spawnChild(process.execPath, piChildArgv(cli, [...prepared.args, "--tools", "read,grep,find,ls", ...args]), { cwd, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...prepared.env, PI_KIT_INTERNAL_CHILD: "1" } });
+    const child = spawnChild(process.execPath, piChildArgv(cli, [...prepared.args, "--tools", "read,grep,find,ls", ...args]), { cwd, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...prepared.env, PI_KIT_INTERNAL_CHILD: "1" } });
+    // The prompt (the diff) goes over stdin, which print mode reads as the prompt, never argv: argv
+    // is readable by any local user through ps. An early exit's EPIPE is reported through close.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(prompt);
     prepared.slot.attach(child.pid);
     let out = "";
     let exited = false;
@@ -95,7 +99,7 @@ export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, run
       cleanup();
       report(`## Code Review (failed)\n\nReviewer failed to start: ${error.message}`);
     });
-    child.on("close", async (code) => {
+    child.on("close", (code) => {
       cleanup();
       report(`## Code Review (${code === 0 ? "completed" : "failed"})\n\n${out.trim() || "(no output)"}`);
     });

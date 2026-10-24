@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_compact", "session_start", "before_agent_start", "session_before_compact"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

@@ -1,21 +1,22 @@
 {
   "name": "lite",
   "description": "Low-context set for small local models: default-deny firewall, checkpoints, todo, verification, context sieve, cheap readseek navigation, and a trimmed skill/prompt list.",
+  "securityLevel": "relaxed",
   "firewall": { "mode": "manual", "policy": "coding" },
   "skills": {
     "only": [
       "coding-agent-workflow", "codebase-navigation", "task-decomposition", "patch-hygiene",
       "verification-loop", "recovery-debugging", "mcp-tool-use", "small-model-execution",
-      "agent-orchestration", "self-reflection-and-recovery", "context-management", "memory"
+      "agent-orchestration", "self-reflection-and-recovery", "context-management"
     ]
   },
   "prompts": {
     "only": ["code-orient", "code-plan", "code-verify", "code-compact"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "git-checkpoint", "custom-footer", "session-helpers", "kit-update", "effort", "delegation-guard",
+    "protected-paths", "tool-firewall", "git-checkpoint", "custom-footer", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard",
     "compress", "save", "trace-ledger", "progress-guard", "todo", "verify-gate", "verifier-board",
-    "context-sieve", "caveman", "pi-readseek",
+    "context-sieve", "caveman", "pi-readseek", "skill-router",
     "subagent", "orchestrator", "goal-core"
   ]
 }

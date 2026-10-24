@@ -37,13 +37,13 @@ export function profilePath(): string {
 export function appendJudgement(j: Omit<Judgement, "ts">): void {
   try {
     const file = judgementsPath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     try {
       if (fs.statSync(file).size > ROTATE_BYTES) fs.renameSync(file, `${file}.1`);
     } catch {
       /* absent */
     }
-    fs.appendFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), ...j, reason: redact(j.reason).slice(0, 240) })}\n`);
+    fs.appendFileSync(file, `${JSON.stringify({ ts: new Date().toISOString(), ...j, reason: redact(j.reason).slice(0, 240) })}\n`, { mode: 0o600 });
   } catch {
     /* telemetry is best effort */
   }
@@ -52,7 +52,7 @@ export function appendJudgement(j: Omit<Judgement, "ts">): void {
 export function readJudgements(): Judgement[] {
   const out: Judgement[] = [];
   for (const file of [`${judgementsPath()}.1`, judgementsPath()]) {
-    let text = "";
+    let text: string;
     try {
       text = fs.readFileSync(file, "utf8");
     } catch {
@@ -61,14 +61,20 @@ export function readJudgements(): Judgement[] {
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
-        const j = JSON.parse(line);
-        if (typeof j?.sig === "string" && (j.verdict === "allow" || j.verdict === "block")) out.push(j);
+        const j: unknown = JSON.parse(line);
+        if (isJudgementLine(j)) out.push(j);
       } catch {
         /* torn line */
       }
     }
   }
   return out;
+}
+
+// Like feedback lines, a judgement line is kept on a string sig and a known verdict alone; it is
+// telemetry for the stats and the distiller, never a reason to allow anything.
+function isJudgementLine(j: unknown): j is Judgement {
+  return isPlainObject(j) && typeof j.sig === "string" && (j.verdict === "allow" || j.verdict === "block");
 }
 
 const familiesIn = (sig: string): string[] => {
@@ -91,7 +97,10 @@ export function computeStats(records: FeedbackRecord[] = readFeedback(), judgeme
       const v = get(r.tool, f);
       if (r.decision === "allow") v.approvals++;
       else v.denials++;
-      if (r.judge?.verdict === "block") r.decision === "allow" ? v.overrides++ : v.confirmed++;
+      if (r.judge?.verdict === "block") {
+        if (r.decision === "allow") v.overrides++;
+        else v.confirmed++;
+      }
       if (r.ts > v.last) v.last = r.ts;
     }
   }
@@ -115,13 +124,21 @@ export function statsLine(v: FamilyStats): string {
 
 export function readProfile(): Profile | null {
   try {
-    const p = JSON.parse(fs.readFileSync(profilePath(), "utf8"));
-    if (!p || !Array.isArray(p.principles)) return null;
+    const p: unknown = JSON.parse(fs.readFileSync(profilePath(), "utf8"));
+    if (!isPlainObject(p) || !Array.isArray(p.principles)) return null;
     // The profile is untrusted input: a malformed stats element (e.g. [null]) used to reach
     // profileFor's filter/statsLine and throw while building the judge prompt. Reject the whole
     // profile rather than partly trusting it, mirroring how a bad `principles` already returns null.
-    if (p.stats !== undefined && !(Array.isArray(p.stats) && p.stats.every(isFamilyStats))) return null;
-    return { updated: String(p.updated ?? ""), basedOn: { decisions: Number(p.basedOn?.decisions) || 0, judgements: Number(p.basedOn?.judgements) || 0 }, principles: bound(p.principles), cautions: bound(p.cautions), stats: Array.isArray(p.stats) ? (p.stats as FamilyStats[]) : [] };
+    const rawStats = p.stats;
+    let stats: FamilyStats[] = [];
+    if (rawStats !== undefined) {
+      if (!(Array.isArray(rawStats) && rawStats.every(isFamilyStats))) return null;
+      stats = rawStats;
+    }
+    const basedOn: Record<string, unknown> = isPlainObject(p.basedOn) ? p.basedOn : {};
+    const u = p.updated;
+    const updated = typeof u === "string" ? u : typeof u === "number" || typeof u === "boolean" ? String(u) : "";
+    return { updated, basedOn: { decisions: Number(basedOn.decisions) || 0, judgements: Number(basedOn.judgements) || 0 }, principles: bound(p.principles), cautions: bound(p.cautions), stats };
   } catch {
     return null;
   }
@@ -131,8 +148,7 @@ export function readProfile(): Profile | null {
 // statsLine reads. Anything else (null, a string, missing/non-numeric counters) is malformed.
 function isFamilyStats(v: unknown): v is FamilyStats {
   if (!isPlainObject(v)) return false;
-  const s = v as unknown as FamilyStats;
-  return typeof s.family === "string" && [s.approvals, s.denials, s.judgeAllows, s.judgeBlocks, s.overrides, s.confirmed].every((n) => typeof n === "number");
+  return typeof v.family === "string" && [v.approvals, v.denials, v.judgeAllows, v.judgeBlocks, v.overrides, v.confirmed].every((n) => typeof n === "number");
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -140,7 +156,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 function bound(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x: string) => x.replace(/\s+/g, " ").trim().slice(0, MAX_LINE)).slice(0, MAX_LINES) : [];
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.replace(/\s+/g, " ").trim().slice(0, MAX_LINE)).slice(0, MAX_LINES) : [];
 }
 
 // What the judge sees from the global profile for one action: the distilled principles and
@@ -174,7 +190,8 @@ export function parseDistilled(text: string): { principles: string[]; cautions: 
   const m = /\{[\s\S]*\}/.exec(text);
   if (!m) return null;
   try {
-    const v = JSON.parse(m[0]);
+    const v: unknown = JSON.parse(m[0]);
+    if (!isPlainObject(v)) return null; // null threw here before; a non-object had no lists
     const principles = bound(v.principles).map(redact);
     const cautions = bound(v.cautions).map(redact);
     return principles.length || cautions.length ? { principles, cautions } : null;
@@ -205,9 +222,9 @@ export async function distill(complete: Completer, signal?: AbortSignal): Promis
   if (!parsed) return null;
   const profile: Profile = { updated: new Date().toISOString(), basedOn: { decisions: records.length, judgements: judgements.length }, ...parsed, stats: stats.slice(0, 200) };
   const file = profilePath();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(profile, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(profile, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
   return profile;
 }
@@ -228,7 +245,7 @@ export function distillInBackground(complete: Completer | null, onDone?: (p: Pro
   if (!complete || running || !distillDue()) return false;
   const lock = `${profilePath()}.lock`;
   try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
     try {
       if (Date.now() - fs.statSync(lock).mtimeMs > 5 * 60_000) fs.unlinkSync(lock);
     } catch {

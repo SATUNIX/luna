@@ -1,4 +1,5 @@
 ---
+argument-hint: "[focus]"
 mode: checkpoint
 token_budget: small
 requires_mcp_tool: pi_system_governance.checkpoint_append
@@ -8,6 +9,8 @@ output_block: task_state
 # Agent Checkpoint
 
 Summarize the current task for continuation.
+
+Focus: ${@:-the whole current task}
 
 Preserve:
 
@@ -39,4 +42,4 @@ task_state:
   next_step:
 ```
 
-Then append the same content through `pi_system_governance.checkpoint_append`.
+If the `pi_system_governance` MCP server is available, then append the same content through `pi_system_governance.checkpoint_append`. Without it, the returned block is the checkpoint.

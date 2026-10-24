@@ -1,6 +1,7 @@
 {
   "name": "quick",
   "description": "T0–T1 safe baseline: default-deny tool-firewall (+ destructive-command blocks), protected-paths, checkpoints, memory, todo. Minimal overhead.",
+  "securityLevel": "relaxed",
   "firewall": { "mode": "manual", "policy": "coding" },
   "skills": {
     "excludeCategories": ["pentest", "mcp-governance", "evidence-reporting", "maintainer"],
@@ -10,9 +11,9 @@
     "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "human-console", "git-checkpoint", "auto-commit-on-exit",
-    "todo", "notify", "finish-reason-retry", "session-helpers", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "trace-ledger", "tool-capture", "progress-guard", "memory-vault", "skill-router",
-    "caveman",
+    "protected-paths", "tool-firewall", "human-console", "git-checkpoint",
+    "todo", "notify", "finish-reason-retry", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "trace-ledger", "tool-capture", "progress-guard", "memory-vault", "skill-router",
+    "context-sieve", "caveman",
     "subagent", "orchestrator", "goal-core"
   ]
 }

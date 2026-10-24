@@ -11,3 +11,4 @@
   - 2026-09-24: the plan-mode notice is written as a context-sieve contribution under
     `.pi/ctx-contributions/sessions/<session-id>/plan-mode.json` (flat directory when pi exposes no
     session id), matching the other producers (B-005).
+  - 2026-10-15: typed for strict TypeScript (no behaviour change).

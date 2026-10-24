@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -7,13 +7,15 @@ import path from "node:path";
 // agent break out instead of grinding. It is *assistance, not bug-fixing*.
 //
 // Autonomy dial (PI_KIT_GUARD_MODE, overridable at runtime with /boost):
-//   - "auto"    : inject a guidance nudge via a context-sieve contribution AND notify.
+//   - "auto"    : inject a guidance nudge (into the running loop and as a context-sieve
+//                 contribution for the next prompt) AND notify.
 //   - "suggest" : notify a suggestion only, never inject (default).
 // The autonomous profile should set PI_KIT_GUARD_MODE=auto; other profiles stay "suggest".
 //
-// It never blocks a tool and never emits a system prompt — guidance goes through a
-// context-sieve ctx-contribution (context-sieve is the sole injection authority). When it
-// cannot detect enough, it does nothing. Escalation beyond assistance is the operator's or
+// It never blocks a tool and never emits a system prompt — guidance goes into the running loop
+// as a hidden custom message (returned from turn_end on pi >=0.87.0, steered on older pi), and
+// into later prompts through a context-sieve ctx-contribution. When it cannot detect enough, it
+// does nothing. Escalation beyond assistance is the operator's or
 // docs/recovery-orchestration-mode.md's job.
 
 const WINDOW = 40;
@@ -56,13 +58,14 @@ export function findOscillation(signatures: string[], minLen: number = OSC_MINLE
 // than the TTL was left by a crashed loop and must NOT pin resolveMode to auto later.
 export function autonomousArmed(cwd: string): boolean {
   try {
-    const marker = JSON.parse(fs.readFileSync(path.join(cwd, ".pi", "autonomous-loop.armed.json"), "utf8")) as { armed?: unknown; at?: unknown };
-    if (marker?.armed !== true) return false;
+    const marker: unknown = JSON.parse(fs.readFileSync(path.join(cwd, ".pi", "autonomous-loop.armed.json"), "utf8"));
+    if (typeof marker !== "object" || marker === null || Reflect.get(marker, "armed") !== true) return false;
+    const markerAt: unknown = Reflect.get(marker, "at");
     // A legacy/fresh marker with no parseable heartbeat cannot be trusted to still be live:
     // treat missing or unparseable `at` as expired so a stale marker cannot pin auto mode
     // indefinitely. Only a parseable `at` within TTL keeps the loop armed.
-    if (typeof marker.at !== "string") return false;
-    const at = Date.parse(marker.at);
+    if (typeof markerAt !== "string") return false;
+    const at = Date.parse(markerAt);
     if (Number.isNaN(at)) return false;
     const ttl = Number(process.env.PI_KIT_LOOP_ARM_TTL_MS);
     const ttlMs = Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : 30 * 60 * 1000;
@@ -78,13 +81,22 @@ export function resolveMode(cwd: string, runtimeMode: "auto" | "suggest" | null)
   return process.env.PI_KIT_GUARD_MODE === "auto" ? "auto" : "suggest";
 }
 
+// REL-5: the escalation marker is scoped per session like the contributions (B-005), so a
+// child or a second session in the same cwd neither consumes nor deletes this session's
+// marker. A session without a usable id keeps the legacy flat path. recovery-orchestrator
+// resolves the same path (self-containment: duplicated, not imported).
+function escalationFile(cwd: string, sessionId: string | undefined = currentSessionId): string {
+  const base = path.join(cwd, ".pi", "recovery");
+  return isSessionId(sessionId) ? path.join(base, "sessions", sessionId, "escalation.json") : path.join(base, "escalation.json");
+}
+
 function writeEscalation(cwd: string, signature: string, reason: string, count: number): void {
   try {
-    const dir = path.join(cwd, ".pi", "recovery");
-    fs.mkdirSync(dir, { recursive: true });
+    const file = escalationFile(cwd);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(
-      path.join(dir, "escalation.json"),
-      JSON.stringify({ signature, reason, count, at: new Date().toISOString() }),
+      file,
+      JSON.stringify({ signature, reason, count, at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
       "utf8",
     );
   } catch {
@@ -94,7 +106,7 @@ function writeEscalation(cwd: string, signature: string, reason: string, count: 
 
 interface Action {
   tool: string;
-  target?: string;
+  target?: string | undefined;
   argsHash: string;
 }
 
@@ -132,7 +144,7 @@ function short(t: string): string {
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
@@ -269,8 +281,8 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    cwd = (ctx as ExtensionContext).cwd ?? process.cwd();
-    currentSessionId = resolveSessionId((ctx as ExtensionContext).sessionManager);
+    cwd = ctx.cwd ?? process.cwd();
+    currentSessionId = resolveSessionId(ctx.sessionManager);
     clearContribution(cwd); // start clean each session
     // A read-only session (no write/edit/bash-class tool active) can never "write to make
     // progress", so the reads-since-edit stall is not a meaningful signal there.
@@ -287,7 +299,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    cwd = (ctx as ExtensionContext).cwd ?? cwd;
+    cwd = ctx.cwd ?? cwd;
     const ev = event as { toolName?: string; input?: unknown };
     const tool = ev.toolName ?? "unknown";
     const action: Action = { tool, target: targetOf(ev.input), argsHash: hash(tool + " " + stableStringify(ev.input)) };
@@ -313,7 +325,7 @@ export default function (pi: ExtensionAPI) {
     const tool = ev.toolName ?? "unknown";
     if (isWrite(tool) && !ev.isError) {
       // progress was actually made: reset the stall counter and stand down any active nudge
-      cwd = (ctx as ExtensionContext).cwd ?? cwd;
+      cwd = ctx.cwd ?? cwd;
       readsSinceWrite = 0;
       lastActedSignature = "";
       sinceWrite.length = 0;
@@ -324,16 +336,16 @@ export default function (pi: ExtensionAPI) {
       // A confirmed-successful write means the stall resolved, so drop any escalation
       // marker written by a prior escalation. Otherwise recovery-orchestrator consumes a
       // stale marker on the next turn and enters deep recovery for a problem that is gone.
-      try { fs.rmSync(path.join(cwd, ".pi", "recovery", "escalation.json"), { force: true }); } catch { /* best-effort */ }
+      try { fs.rmSync(escalationFile(cwd), { force: true }); } catch { /* best-effort */ }
     }
     return undefined;
   });
 
-  pi.on("turn_end", async (_event, ctx) => {
+  pi.on("turn_end", async (event, ctx) => {
     turn += 1;
-    const c = ctx as ExtensionContext;
+    const c = ctx;
     const hit = detect();
-    if (!hit) return;
+    if (!hit) return undefined;
     const [signature, reason] = hit;
 
     // Every firing turn counts toward escalation, even while the operator-facing nudge is
@@ -345,12 +357,18 @@ export default function (pi: ExtensionAPI) {
     actCounts.set(signature, detections);
 
     const inCooldown = signature === lastActedSignature && turn - lastActedTurn < COOLDOWN_TURNS;
+    // The guidance also goes into this run (EFF-5): the contribution file is read by
+    // context-sieve only when the next prompt starts, which is too late for a loop inside one
+    // long run. A custom_message entry returned from turn_end is appended after this turn's tool
+    // results, so the next model request of the same run sees it. The file stays for the next run.
+    let inRun: string | null = null;
     if (!inCooldown) {
       lastActedSignature = signature;
       lastActedTurn = turn;
       const msg = `progress-guard: ${reason}. Auto review/delegate checkpoint incoming. (/boost status)`;
       if (mode() === "auto") {
-        writeContribution(cwd, nudgeContent(reason));
+        inRun = nudgeContent(reason);
+        writeContribution(cwd, inRun);
         if (c.hasUI) c.ui.notify(`${msg} [auto-nudged]`, "warning");
       } else if (c.hasUI) {
         c.ui.notify(msg, "warning");
@@ -362,7 +380,10 @@ export default function (pi: ExtensionAPI) {
     // the recovery marker so recovery-orchestrator can act on it. This is the automatic
     // replacement for the manual /reflect step.
     if (detections >= ESCALATE_AFTER) {
-      writeContribution(cwd, reviewDelegateContent(signature, reason, detections));
+      const checkpoint = reviewDelegateContent(signature, reason, detections);
+      writeContribution(cwd, checkpoint);
+      // Delivered in the run on the episode's first escalation and then at most once per cooldown.
+      if (!inCooldown || !escalated.has(signature)) inRun = checkpoint;
       // Write the escalation marker once per detection episode. A recurring signature keeps
       // `escalated` set, so once the consumer deletes the marker it is NOT immediately
       // re-written on the next stuck turn — only a new episode (progress reset clears the set,
@@ -374,12 +395,26 @@ export default function (pi: ExtensionAPI) {
         if (c.hasUI) c.ui.notify(`progress-guard: recurring '${signature}' — injected an automatic review/delegate checkpoint and recovery marker.`, "warning");
       }
     }
+
+    if (inRun === null) return undefined;
+    // pi >=0.87.0 makes turn_end an actionable boundary: it carries `entries` and appends the
+    // entries a handler returns. Older pi has no `entries` field and ignores the return value,
+    // so there the nudge is sent as a steering message instead: the agent loop polls steering
+    // right after turn_end and adds it before the next model request of the same run. (A
+    // non-steering custom message would only reach the session history, i.e. the next prompt.)
+    // tests/progress-guard-agsix-smoke.ts "reach the model inside the looping run" covers both.
+    if (!Array.isArray(event.entries)) {
+      pi.sendMessage({ customType: CONTRIB_ID, content: inRun, display: false }, { deliverAs: "steer" });
+      return undefined;
+    }
+    // Chain onto the entries earlier turn_end handlers proposed; a returned list replaces them.
+    return { entries: [...event.entries, { type: "custom_message", customType: CONTRIB_ID, content: inRun, display: false }] };
   });
 
   pi.registerCommand("reflect", {
     description: "Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?).",
     handler: async (_args, ctx) => {
-      const c = ctx as ExtensionContext;
+      const c = ctx;
       const content = [
         "## Self-reflection checkpoint",
         "",
@@ -399,7 +434,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("boost", {
     description: "Auto-boost control: /boost [on|off|status]. 'on' auto-nudges on detected loops this session.",
     handler: async (args, ctx) => {
-      const c = ctx as ExtensionContext;
+      const c = ctx;
       const arg = (args ?? "").trim().toLowerCase();
       if (arg === "on") {
         runtimeMode = "auto";

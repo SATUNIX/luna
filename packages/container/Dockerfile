@@ -1,7 +1,10 @@
-FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797
 
-ARG PI_CODING_AGENT_VERSION=0.87.1
-ARG PI_MCP_ADAPTER_VERSION=2.8.0
+ARG PI_CODING_AGENT_VERSION=1.4.0
+ARG PI_MCP_ADAPTER_VERSION=6.0.0
+# The npm the base image bundles carries known advisories in its own dependencies (brace-expansion,
+# undici, http-cache-semantics); this release does not.
+ARG NPM_VERSION=12.2.1
 # dev: kit is mounted / installed at runtime via PI_KIT_PATH
 # release: kit is baked into the image from git at build time
 ARG BUILD_MODE=dev
@@ -29,6 +32,7 @@ RUN apk add --no-cache \
     util-linux \
     yq \
   && update-ca-certificates \
+  && npm install -g --ignore-scripts "npm@${NPM_VERSION}" \
   && npm install -g --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}" \
   && addgroup -S piagent \
@@ -43,8 +47,16 @@ RUN apk add --no-cache \
       /opt/pi-system \
       /srv/data/pi-system
 
+# pi-mcp-adapter (overlays/pi/mcp-adapter.json) reads only its own config file, never the shared,
+# .agents, Pi mcp.json or project MCP files, and registers no `mcp__*` tools beside the `mcp` proxy,
+# so every MCP call reaches pentest-governance-domain as an `mcp` call.
+ENV PI_MCP_CONFIG_MODE=exclusive \
+    MCP_DIRECT_TOOLS=__none__
+
 WORKDIR /workspace
 
+# Both MCP servers commit a package-lock.json, so `npm ci` installs exactly the reviewed tree and
+# fails if the lockfile and package.json disagree.
 COPY --chown=piagent:piagent mcp-servers/ /opt/pi-agent/mcp-servers/
 COPY --chown=piagent:piagent overlays/     /opt/pi-agent/overlays/
 COPY --chown=piagent:piagent engagement/   /opt/pi-agent/engagement/
@@ -57,9 +69,9 @@ RUN chmod +x /usr/local/bin/pi-entrypoint \
               /usr/local/bin/pi-agent \
               /usr/local/bin/pi-agent-idle \
   && cd /opt/pi-agent/mcp-servers/governance \
-  && npm install --omit=dev --ignore-scripts \
+  && npm ci --omit=dev --ignore-scripts \
   && cd /opt/pi-agent/mcp-servers/memory-mcp \
-  && npm install --omit=dev --ignore-scripts
+  && npm ci --omit=dev --ignore-scripts
 
 USER piagent
 
@@ -68,7 +80,7 @@ USER piagent
 RUN if [ "$BUILD_MODE" = "release" ]; then \
       test -n "$PI_KIT_REPO" || (echo "PI_KIT_REPO is required for release builds" && exit 1); \
       git clone --depth 1 --branch "$PI_KIT_REF" "$PI_KIT_REPO" /opt/pi-system && \
-      cd /opt/pi-system/packages/container/mcp-servers/memory-mcp && npm install --omit=dev --ignore-scripts && \
+      cd /opt/pi-system/packages/container/mcp-servers/memory-mcp && npm ci --omit=dev --ignore-scripts && \
       pi install /opt/pi-system && \
       pi list | grep -q "pi-system" || (echo "Kit install verification failed" && exit 1); \
     fi

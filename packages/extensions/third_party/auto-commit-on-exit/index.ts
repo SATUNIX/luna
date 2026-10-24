@@ -10,7 +10,7 @@ export default function (pi: ExtensionAPI) {
     let lastAssistantText = "";
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
-      if (entry.type === "message" && entry.message.role === "assistant") {
+      if (entry?.type === "message" && entry.message.role === "assistant") {
         const content = entry.message.content;
         if (Array.isArray(content)) {
           lastAssistantText = content
@@ -25,7 +25,9 @@ export default function (pi: ExtensionAPI) {
     const firstLine = lastAssistantText.split("\n")[0] || "Work in progress";
     const commitMessage = `[pi] ${firstLine.slice(0, 50)}${firstLine.length > 50 ? "..." : ""}`;
 
-    await pi.exec("git", ["add", "-A"]);
+    // Kit artefacts (save snapshots, compaction copies, audit logs) live under <cwd>/.pi;
+    // they are session data, never project changes, so they are excluded from staging.
+    await pi.exec("git", ["add", "-A", "--", ".", ":(exclude).pi"]);
     const { code: commitCode } = await pi.exec("git", ["commit", "-m", commitMessage]);
     if (commitCode === 0 && ctx.hasUI) {
       ctx.ui.notify(`Auto-committed: ${commitMessage}`, "info");

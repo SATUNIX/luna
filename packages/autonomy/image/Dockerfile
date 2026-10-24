@@ -11,18 +11,34 @@
 #   base/   OPTIONAL: `git archive` of the base ref's package.json, lockfile and docs requirements
 #           (dependency prebake only; empty when no base ref is given)
 #   image/  this directory
-ARG NODE_IMAGE=docker.io/library/node:22-bookworm-slim
-ARG GITLEAKS_IMAGE=ghcr.io/gitleaks/gitleaks:v8.30.1
+# Base images are pinned by digest in the FROM lines themselves, where Dependabot can see and update
+# them; the tag beside each digest says what it is.
 
-FROM ${GITLEAKS_IMAGE} AS gitleaks
+# gitleaks is built from its release source rather than copied from the upstream image: the
+# v8.30.1 release binary was built with Go 1.24.13 and carries known stdlib, x/crypto, x/text and
+# klauspost/compress advisories. The build uses the pinned Go toolchain and moves only those three
+# modules to their newest releases; every module is checked against the Go checksum database.
+FROM docker.io/library/golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS gitleaks
+ARG GITLEAKS_VERSION=v8.30.1
+ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath
+RUN go mod download -json "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}" > /tmp/mod.json \
+  && src="$(sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p' /tmp/mod.json)" \
+  && cp -r "$src" /src && chmod -R u+w /src && cd /src \
+  && go get golang.org/x/crypto@v0.58.0 golang.org/x/text@v0.43.0 github.com/klauspost/compress@v1.20.3 \
+  && go build -ldflags "-s -w -X github.com/zricethezav/gitleaks/v8/version.Version=${GITLEAKS_VERSION}" -o /usr/bin/gitleaks . \
+  && /usr/bin/gitleaks version
 
-FROM ${NODE_IMAGE}
-ARG PI_VERSION=0.87.1
+FROM docker.io/library/node:26-trixie-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec
+ARG PI_VERSION=1.4.0
+# The npm the base image bundles carries known advisories in its own dependencies (brace-expansion,
+# undici, http-cache-semantics); this release does not.
+ARG NPM_VERSION=12.2.1
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates curl fd-find git jq procps python3 python3-venv ripgrep shellcheck tini \
   && rm -rf /var/lib/apt/lists/* \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+  && npm install -g --ignore-scripts "npm@${NPM_VERSION}" \
   && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
   && npm cache clean --force
 
@@ -31,8 +47,11 @@ COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
 # pi-lens (in the long-horizon profile) installs its linters and language servers with npm the
 # first time a file type is touched. Offline, npm retries and stalls the tool call, so the ones
 # common file types use are installed here, on PATH, where pi-lens finds them.
-RUN npm install -g --ignore-scripts typescript typescript-language-server markdownlint-cli2 bash-language-server \
-      yaml-language-server vscode-langservers-extracted @biomejs/biome prettier knip madge jscpd@3.5.10 \
+# Each tool is pinned exactly. TypeScript stays on 6.x: the 7.x package ships no tsserver, which
+# typescript-language-server needs.
+RUN npm install -g --ignore-scripts typescript@6.0.3 typescript-language-server@6.0.2 markdownlint-cli2@0.24.0 \
+      bash-language-server@5.8.1 yaml-language-server@2.0.0 vscode-langservers-extracted@4.10.0 \
+      @biomejs/biome@2.6.2 prettier@3.9.10 knip@6.42.1 madge@8.0.0 jscpd@5.4.2 \
   && npm cache clean --force
 
 # The harness: the kit release, installed locally into a template agent dir with the
@@ -40,7 +59,7 @@ RUN npm install -g --ignore-scripts typescript typescript-language-server markdo
 COPY kit/ /opt/pi-kit/
 RUN cd /opt/pi-kit && npm ci --ignore-scripts --no-audit --no-fund \
   && HOME=/opt/pi-home PI_CODING_AGENT_DIR=/opt/pi-agent PI_KIT_UPDATE_CHECK=0 \
-     node packages/core/install.mjs --profile long-horizon --mode local --yes \
+     node packages/core/install.ts --profile long-horizon --mode local --yes \
   && chmod -R a+rX /opt/pi-kit /opt/pi-agent /opt/pi-home
 
 # Optional prebake of one repository's dependencies, from the base ref's lockfile: `npm ci --offline`

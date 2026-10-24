@@ -89,10 +89,10 @@ function Invoke-Install {
   $scopeChoice = Read-Host "Scope: (g)lobal or (p)roject? [g]"
   if ([string]::IsNullOrWhiteSpace($scopeChoice)) { $scopeChoice = "g" }
   $scope = if ($scopeChoice -eq "p") { "project" } else { "global" }
-  Write-Host "Running: node $Root/install.mjs --profile $profile --scope $scope --dry-run"
-  node "$Root/install.mjs" --profile $profile --scope $scope --dry-run
+  Write-Host "Running: node $Root/install.ts --profile $profile --scope $scope --dry-run"
+  node "$Root/install.ts" --profile $profile --scope $scope --dry-run
   if (Confirm-Action "Apply this install for real?") {
-    node "$Root/install.mjs" --profile $profile --scope $scope --yes
+    node "$Root/install.ts" --profile $profile --scope $scope --yes
     Write-Ok "Installed. Run 'pi' then '/reload' if pi was already running, or 'pi list' to confirm."
   } else {
     Write-Host "Dry run only - nothing changed."
@@ -115,8 +115,8 @@ function Invoke-UpdateKit {
   }
   git pull
   $profile = Select-Profile
-  Write-Host "Running: node $Root/install.mjs --profile $profile --yes"
-  node "$Root/install.mjs" --profile $profile --yes
+  Write-Host "Running: node $Root/install.ts --profile $profile --yes"
+  node "$Root/install.ts" --profile $profile --yes
   Write-Ok "Kit updated. Run '/reload' inside pi, or restart pi, then 'pi list' to confirm."
 }
 

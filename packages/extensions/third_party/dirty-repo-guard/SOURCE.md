@@ -6,3 +6,4 @@
   - Upstream uses `ctx.ui.select()` for interactive prompt; kept but with fallback to block when `!ctx.hasUI`
   - No functional changes needed for Windows (pi.exec handles cross-platform git calls)
   - `provenance.origin` set to `"vendored"`
+  - Typed for strict TypeScript (no behaviour change)

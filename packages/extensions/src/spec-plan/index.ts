@@ -36,18 +36,22 @@ function countWrittenLines(text: string): number {
   return trimmed.length === 0 ? 0 : trimmed.split("\n").length;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function changedLineCount(toolName: string, input: Record<string, unknown>): number {
   if (toolName === "write") {
-    const content = (input.content ?? input.new_string ?? "") as string;
-    return countWrittenLines(content);
+    // PRO-11: only a string is content; a value of any other type counts as no lines.
+    const content = input.content ?? input.new_string;
+    return typeof content === "string" ? countWrittenLines(content) : 0;
   }
 
   let lines = 0;
   if (Array.isArray(input.edits)) {
     for (const item of input.edits) {
-      if (!item || typeof item !== "object") continue;
-      const newText = (item as Record<string, unknown>).newText;
-      if (typeof newText === "string") lines += countWrittenLines(newText);
+      if (!isRecord(item)) continue;
+      if (typeof item.newText === "string") lines += countWrittenLines(item.newText);
     }
   }
   // Legacy flat shape (pre-edits payload).
@@ -81,9 +85,10 @@ export default function (pi: ExtensionAPI) {
     const toolName = event.toolName;
     if (toolName !== "write" && toolName !== "edit") return undefined;
 
-    const input = event.input as Record<string, unknown>;
-    const filePath = input.path as string | undefined;
-    if (!filePath || !isSourceFile(filePath)) return undefined;
+    const input: unknown = event.input;
+    if (!isRecord(input)) return undefined;
+    const filePath = input.path;
+    if (typeof filePath !== "string" || !filePath || !isSourceFile(filePath)) return undefined;
 
     // Check content length — only flag large changes
     const lineCount = changedLineCount(toolName, input);

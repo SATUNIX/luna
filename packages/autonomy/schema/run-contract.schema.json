@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "urn:pi-system:autonomy:run-contract:1",
   "title": "pi-autonomy run contract, schemaVersion 1",
-  "description": "The declarative description of one autonomous run: what it is for, what it may touch and when it is finished. This schema documents the structure and is checked against the hand-written validator in lib/contract.mjs (which is authoritative: it also applies defaults and the rules JSON Schema cannot express, such as unique ids, that every backlog acceptance id names a declared check, that service images come from the allowlist, and that effort tiers exist in packages/core/policies). Unknown keys under permissions, promotion and authorisation, and unknown top-level keys, are errors; unknown keys elsewhere are warnings, which is why those objects allow additional properties here.",
+  "description": "The declarative description of one autonomous run: what it is for, what it may touch and when it is finished. This schema documents the structure and is checked against the hand-written validator in lib/contract.ts (which is authoritative: it also applies defaults and the rules JSON Schema cannot express, such as unique ids, that every backlog acceptance id names a declared check, that service images come from the allowlist, and that effort tiers exist in packages/core/policies). Unknown keys under permissions, generations, promotion and authorisation, and unknown top-level keys, are errors; unknown keys elsewhere are warnings, which is why those objects allow additional properties here.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "run", "template", "objective"],
@@ -145,7 +145,7 @@
                       "retries": { "type": "integer", "minimum": 1, "maximum": 100 }
                     }
                   },
-                  "memory": { "type": "string", "pattern": "^\\d+[kmgKMG]?$" },
+                  "memory": { "type": "string", "pattern": "^0*[1-9]\\d*[kmgKMG]?$" },
                   "cpus": { "type": ["string", "number"] }
                 }
               }
@@ -217,6 +217,20 @@
         "maxAttemptsPerStep": { "type": "integer", "minimum": 1, "maximum": 100 }
       }
     },
+    "generations": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Memento mode: time-boxed worker generations that hand a notebook to a fresh worker. Off by default; each box must fit inside the budget.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "iterationMinutes": { "type": "integer", "minimum": 5, "maximum": 240, "default": 30 },
+        "iterationUsd": { "type": ["number", "null"], "minimum": 0.01, "maximum": 100000 },
+        "maxGenerations": { "type": "integer", "minimum": 1, "maximum": 8, "default": 4 },
+        "graceMinutes": { "type": "integer", "minimum": 1, "maximum": 30, "default": 3 },
+        "resetOnNoProgress": { "type": "boolean", "default": false },
+        "notebookMaxChars": { "type": "integer", "minimum": 1000, "maximum": 6000, "default": 6000 }
+      }
+    },
     "promotion": {
       "type": "object",
       "additionalProperties": false,
@@ -240,7 +254,7 @@
       "properties": {
         "engine": { "enum": ["podman", "docker"] },
         "image": { "type": "string", "minLength": 1, "maxLength": 300 },
-        "memory": { "type": "string", "pattern": "^\\d+[kmgKMG]?$" },
+        "memory": { "type": "string", "pattern": "^0*[1-9]\\d*[kmgKMG]?$" },
         "cpus": { "type": ["string", "number"] },
         "pids": { "type": "integer", "minimum": 16, "maximum": 100000 },
         "tmpSize": { "type": "string", "pattern": "^\\d+[kmgKMG]?$" },

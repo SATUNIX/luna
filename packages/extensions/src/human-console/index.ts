@@ -1,8 +1,9 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
 
 const POLL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 900000;
@@ -10,7 +11,8 @@ const DEFAULT_TIMEOUT_MS = 900000;
 // operator can inspect them, but a repetitive bad producer must not grow the pending
 // directory without bound: keep at most this many, oldest evicted first.
 export const MAX_INVALID_QUARANTINE = 50;
-type Pending = Record<string, any>;
+type Pending = Record<string, unknown>;
+type UiContext = Pick<ExtensionContext, "ui">;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
 
 function root(cwd: string): string { return process.env.PI_KIT_HUMAN_CONSOLE_DIR?.trim() || path.join(cwd, ".pi", "human-console"); }
@@ -29,8 +31,14 @@ function pruneInvalid(cwd: string): void {
   for (const { file } of byMtime.slice(0, byMtime.length - MAX_INVALID_QUARANTINE)) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
 }
 function audit(cwd: string, event: Record<string, unknown>): void { const file = auditPath(cwd); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`); }
-function sleep(ms: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve) => { let onAbort: (() => void) | undefined; const timer = setTimeout(() => { if (onAbort) signal?.removeEventListener("abort", onAbort); resolve(); }, ms); onAbort = () => { clearTimeout(timer); resolve(); }; signal?.addEventListener("abort", onAbort, { once: true }); }); }
-function requester(ctx: any): Record<string, unknown> { return { pid: process.pid, sessionId: ctx?.sessionId || ctx?.sessionManager?.sessionId || null, agent: ctx?.agent?.name || ctx?.agentName || "root" }; }
+function sleep(ms: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms); const onAbort = () => { clearTimeout(timer); resolve(); }; signal?.addEventListener("abort", onAbort, { once: true }); }); }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+// A field of a value that may not be an object (or may be an array or class instance): undefined when there is none.
+function prop(value: unknown, key: string): unknown { return typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined; }
+// A request field as text, exactly as String() has always shown it.
+function text(value: unknown): string { return String(value); }
+function isString(value: unknown): value is string { return typeof value === "string"; }
+function requester(ctx: unknown): Record<string, unknown> { return { pid: process.pid, sessionId: prop(ctx, "sessionId") || prop(prop(ctx, "sessionManager"), "sessionId") || null, agent: prop(prop(ctx, "agent"), "name") || prop(ctx, "agentName") || "root" }; }
 function isSafeRequestId(value: unknown): value is string { return typeof value === "string" && SAFE_REQUEST_ID.test(value); }
 function requestedTimeout(request: Pending, fallback?: number): number | undefined {
   const value = Number(request.timeoutMs);
@@ -40,7 +48,6 @@ async function waitForUi<T>(prompt: Promise<T> | T, timeoutMs?: number, signal?:
   if (signal?.aborted) return { settled: false };
   return new Promise((resolve) => {
     let done = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: { settled: boolean; value?: T }) => {
       if (done) return;
       done = true;
@@ -49,7 +56,7 @@ async function waitForUi<T>(prompt: Promise<T> | T, timeoutMs?: number, signal?:
       resolve(result);
     };
     const abort = () => finish({ settled: false });
-    timer = timeoutMs === undefined ? undefined : setTimeout(abort, timeoutMs);
+    const timer = timeoutMs === undefined ? undefined : setTimeout(abort, timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });
     Promise.resolve(prompt).then((value) => finish({ settled: true, value }), () => finish({ settled: true }));
   });
@@ -67,8 +74,8 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
   try {
     while (!signal?.aborted && Date.now() < deadline) {
       try {
-        const value = JSON.parse(fs.readFileSync(file, "utf8"));
-        if (value?.id === id) return { resolved: true, approved: value.approved === true, answer: typeof value.answer === "string" ? value.answer : null, timedOut: false };
+        const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (isRecord(value) && value.id === id) return { resolved: true, approved: value.approved === true, answer: typeof value.answer === "string" ? value.answer : null, timedOut: false };
       } catch { /* not resolved yet */ }
       await sleep(Math.min(POLL_MS, Math.max(1, deadline - Date.now())), signal);
     }
@@ -84,16 +91,17 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
   }
 }
 
-async function answerQuestion(ctx: any, request: Pending, signal?: AbortSignal, timeoutMs?: number): Promise<{ approved: boolean; answer: string | null }> {
-  const options = Array.isArray(request.options) ? request.options.filter((x: unknown) => typeof x === "string") : [];
+async function answerQuestion(ctx: UiContext, request: Pending, signal?: AbortSignal, timeoutMs?: number): Promise<{ approved: boolean; answer: string | null }> {
+  const options: string[] = Array.isArray(request.options) ? request.options.filter(isString) : [];
+  const question = text(request.question ?? "");
   if (options.length && ctx.ui?.select) {
     const other = "Other (type an answer)";
-    const selection = await waitForUi(ctx.ui.select(request.question, [...options, other]), timeoutMs, signal);
+    const selection = await waitForUi(ctx.ui.select(question, [...options, other]), timeoutMs, signal);
     if (!selection.settled) return { approved: false, answer: null };
     const selected = selection.value;
-    if (selected && selected !== other) return { approved: true, answer: String(selected) };
+    if (selected && selected !== other) return { approved: true, answer: selected };
   }
-  const input = ctx.ui?.input ? await waitForUi(ctx.ui.input(request.question, request.context || ""), timeoutMs, signal) : { settled: true, value: null };
+  const input = ctx.ui?.input ? await waitForUi(ctx.ui.input(question, text(request.context || "")), timeoutMs, signal) : { settled: true, value: null };
   if (!input.settled) return { approved: false, answer: null };
   const answer = input.value;
   return { approved: Boolean(answer), answer: typeof answer === "string" && answer.trim() ? answer : null };
@@ -103,10 +111,12 @@ async function answerQuestion(ctx: any, request: Pending, signal?: AbortSignal, 
 // and tell) is shown as a menu; the title and card go in the menu header. Choices starting
 // with "Allow" approve; "Deny and tell…" also collects a note for the agent. Without choices
 // (or without a select UI) it stays a yes/no confirm.
-async function answerApproval(ctx: any, request: Pending, timeoutMs: number | undefined): Promise<{ approved: boolean; answer: string | null; note?: string | null }> {
-  const choices: string[] = Array.isArray(request.choices) ? request.choices.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 6) : [];
+async function answerApproval(ctx: UiContext, request: Pending, timeoutMs: number | undefined): Promise<{ approved: boolean; answer: string | null; note?: string | null }> {
+  const choices: string[] = Array.isArray(request.choices) ? request.choices.filter((x: unknown): x is string => typeof x === "string" && x.trim() !== "").slice(0, 6) : [];
+  const title = text(request.title || "Approve tool call?");
+  const body = text(request.body || "");
   if (choices.length && typeof ctx.ui?.select === "function") {
-    const header = [request.title || "Approve tool call?", request.body || ""].filter(Boolean).join("\n");
+    const header = [title, body].filter(Boolean).join("\n");
     const picked = await waitForUi(ctx.ui.select(header, choices), timeoutMs);
     const choice = picked.settled && typeof picked.value === "string" ? picked.value : null;
     if (!choice) return { approved: false, answer: null };
@@ -118,23 +128,121 @@ async function answerApproval(ctx: any, request: Pending, timeoutMs: number | un
     }
     return { approved: false, answer: choice, note };
   }
-  const confirmation = ctx.ui?.confirm ? await waitForUi(ctx.ui.confirm(request.title || "Approve tool call?", request.body || ""), timeoutMs) : { settled: true, value: false };
+  const confirmation = ctx.ui?.confirm ? await waitForUi(ctx.ui.confirm(title, body), timeoutMs) : { settled: true, value: false };
   return { approved: confirmation.settled && confirmation.value === true, answer: null };
 }
 
+type Answer = { approved: boolean; answer: string | null; note?: string | null };
+// The subagent extension publishes pause/resume for its live workflow runs here (see its control.ts);
+// read loosely so this extension stays self-contained and works when that one is not loaded.
+const WORKFLOW_CONTROL_KEY = Symbol.for("pi-kit.workflow-control");
+// The pause is sent with origin "safety", so the run stays held for the operator: the agent's own
+// workflow_control resume is refused; only the operator's Yes here or /workflow resume lifts it.
+function controlWorkflowRun(runId: string, action: "pause" | "resume"): { ok: boolean; message: string } {
+  const registry: unknown = Reflect.get(globalThis, WORKFLOW_CONTROL_KEY);
+  const control = prop(registry, "control");
+  if (typeof control !== "function") return { ok: false, message: "workflow run control is not available in this session" };
+  try {
+    const result: unknown = Reflect.apply(control, registry, [runId, action, action === "pause" ? "safety" : "operator"]);
+    const message = prop(result, "message");
+    return { ok: prop(result, "ok") === true, message: typeof message === "string" ? message : "" };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+function deadlineOf(request: Pending): number {
+  const createdMs = Date.parse(text(request.createdAt)) || Date.now();
+  return createdMs + (requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS);
+}
+// Write the answer for a pending request and remove the pending file. The pending file may already
+// be gone (another resolver, or a requester that gave up): a missing file is success, not an error.
+function writeAnswer(cwd: string, id: string, file: string, result: Answer): void {
+  fs.writeFileSync(path.join(resolvedDir(cwd), `${id}.json`), JSON.stringify({ id, decidedAt: new Date().toISOString(), approved: result.approved, answer: result.answer, note: result.note ?? null }));
+  try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
+}
+function stickyNote(runId: string, note?: string | null): string {
+  return `denied for the rest of workflow run ${runId}${note ? `: ${note}` : ""}`;
+}
+
 export default function humanConsole(pi: ExtensionAPI) {
+  const runBroker = new RunApprovalBroker();
+  // A grouped request takes the shown request's answer, if it is still pending and in time.
+  const answerMember = (ctx: ExtensionContext, id: string, result: Answer) => {
+    const file = path.join(pendingDir(ctx.cwd), `${id}.json`);
+    let parsed: unknown;
+    try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+    if (!isRecord(parsed) || parsed.id !== id || Date.now() > deadlineOf(parsed)) return;
+    writeAnswer(ctx.cwd, id, file, result);
+  };
+  const askToResume = async (ctx: ExtensionContext, runId: string, distinct: number) => {
+    try {
+      const paused = controlWorkflowRun(runId, "pause");
+      audit(ctx.cwd, { event: "workflow_approvals_pause", runId, distinct, ok: paused.ok });
+      if (!paused.ok) {
+        ctx.ui?.notify?.(`human-console: workflow run ${runId} has had ${distinct} distinct approvals but could not be paused (${paused.message})`, "warning");
+        return;
+      }
+      const header = `Workflow run ${runId} has had ${distinct} distinct actions approved, so it is paused: no new agents start.\nResume it?`;
+      let resume = false;
+      if (typeof ctx.ui?.select === "function") {
+        const picked = await waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES]), DEFAULT_TIMEOUT_MS);
+        resume = picked.settled && picked.value === PAUSE_CHOICE_YES;
+      }
+      if (resume) controlWorkflowRun(runId, "resume");
+      audit(ctx.cwd, { event: "workflow_approvals_resume_answer", runId, resumed: resume });
+    } finally {
+      runBroker.pauseAnswered(runId);
+    }
+  };
+  const processRunApproval = async (ctx: ExtensionContext, file: string, request: Pending, run: RunRequest) => {
+    const deadline = deadlineOf(request);
+    if (Date.now() > deadline) {
+      runBroker.leave(run);
+      try { fs.unlinkSync(file); } catch { /* already removed */ }
+      return;
+    }
+    const offer = runBroker.offer(run);
+    if (offer.kind === "wait") return;
+    if (offer.kind === "resolve") {
+      writeAnswer(ctx.cwd, run.id, file, offer.approved ? { approved: true, answer: RUN_CHOICE_ALLOW_RUN } : { approved: false, answer: null, note: stickyNote(run.runId) });
+      audit(ctx.cwd, { event: offer.reason === "sticky_deny" ? "workflow_approval_sticky_deny" : "workflow_approval_run_grant", runId: run.runId, id: run.id, actionHash: run.hash });
+      return;
+    }
+    let settled = false;
+    try {
+      const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}`;
+      const result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, Math.max(1, deadline - Date.now()));
+      // No answer before the requester's deadline: it has already failed closed; decide nothing.
+      if (!result.approved && result.answer === null && Date.now() >= deadline) {
+        try { fs.unlinkSync(file); } catch { /* already removed */ }
+        return;
+      }
+      const approved = result.approved;
+      const outcome = runBroker.settle(run, { approved, runGrant: result.answer === RUN_CHOICE_ALLOW_RUN });
+      settled = true;
+      const answer: Answer = approved ? { approved, answer: result.answer } : { approved, answer: result.answer, note: stickyNote(run.runId, result.note) };
+      writeAnswer(ctx.cwd, run.id, file, answer);
+      for (const id of outcome.members) answerMember(ctx, id, answer);
+      audit(ctx.cwd, { event: "workflow_approval_decided", runId: run.runId, id: run.id, actionHash: run.hash, approved, runGrant: approved && !run.high && result.answer === RUN_CHOICE_ALLOW_RUN, grouped: outcome.members.length, distinct: outcome.distinct });
+      if (outcome.pause) await askToResume(ctx, run.runId, outcome.distinct);
+    } finally {
+      if (!settled) runBroker.abandon(run);
+    }
+  };
   let watcher: ReturnType<typeof setInterval> | null = null;
   let lastScanError: string | null = null;
   const processing = new Set<string>();
-  const processOne = async (ctx: any, file: string) => {
+  const processOne = async (ctx: ExtensionContext, file: string) => {
     try {
-      let request: Pending;
-      try { request = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
+      let parsed: unknown;
+      try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
         audit(ctx.cwd, { event: "human_console_invalid_pending_json", file: path.basename(file) });
         try { fs.renameSync(file, `${file}.invalid`); } catch { /* leave it for operator inspection */ }
         return;
       }
-      if (!isSafeRequestId(request?.id)) {
+      const request: Pending = isRecord(parsed) ? parsed : {};
+      const id = request.id;
+      if (!isSafeRequestId(id)) {
         audit(ctx.cwd, { event: "human_console_invalid_pending_id", file: path.basename(file) });
         try { fs.renameSync(file, `${file}.invalid`); } catch { /* leave it for operator inspection */ }
         return;
@@ -144,11 +252,16 @@ export default function humanConsole(pi: ExtensionAPI) {
         try { fs.renameSync(file, `${file}.invalid`); } catch { /* leave it for operator inspection */ }
         return;
       }
+      const run = request.kind === "approval" ? runRequestOf(request) : null;
+      if (run) {
+        await processRunApproval(ctx, file, request, run);
+        return;
+      }
       const timeoutMs = requestedTimeout(request, DEFAULT_TIMEOUT_MS);
-      let result: { approved: boolean; answer: string | null; note?: string | null };
+      let result: Answer;
       if (request.kind === "approval") result = await answerApproval(ctx, request, timeoutMs);
       else result = await answerQuestion(ctx, request, undefined, timeoutMs);
-      const createdMs = Date.parse(request.createdAt) || Date.now();
+      const createdMs = Date.parse(String(request.createdAt)) || Date.now();
       if (Date.now() > createdMs + (timeoutMs ?? DEFAULT_TIMEOUT_MS)) {
         // The requester gave up at its deadline (brokerRequest unlinks both files in its
         // finally); do not recreate an orphan resolved file. Drop the pending file too so
@@ -156,14 +269,12 @@ export default function humanConsole(pi: ExtensionAPI) {
         try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
         return;
       }
-      fs.writeFileSync(path.join(resolvedDir(ctx.cwd), `${request.id}.json`), JSON.stringify({ id: request.id, decidedAt: new Date().toISOString(), approved: result.approved, answer: result.answer, note: result.note ?? null }));
-      // The pending file may already be gone: another watcher/process can resolve and
-      // remove it between our read and this unlink. A missing file is success, not an
-      // error; an unguarded unlinkSync here is an unhandled rejection that kills pi.
-      try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
+      // writeAnswer tolerates a pending file that is already gone: an unguarded unlinkSync
+      // here is an unhandled rejection that kills pi.
+      writeAnswer(ctx.cwd, id, file, result);
     } finally { processing.delete(file); }
   };
-  const processPending = (ctx: any) => {
+  const processPending = (ctx: ExtensionContext) => {
     try {
       ensure(ctx.cwd);
       pruneInvalid(ctx.cwd);
@@ -190,14 +301,14 @@ export default function humanConsole(pi: ExtensionAPI) {
       }
     }
   };
-  pi.on("session_start", async (_event, ctx: any) => {
+  pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
     processPending(ctx);
-    watcher = setInterval(() => { void processPending(ctx); }, POLL_MS); watcher.unref?.();
+    watcher = setInterval(() => { processPending(ctx); }, POLL_MS); watcher.unref?.();
   });
-  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; });
-  pi.registerTool({ name: "ask_human", label: "Ask human", description: "Ask the operator a concise clarifying question.", parameters: Type.Object({ question: Type.String(), options: Type.Optional(Type.Array(Type.String())), context: Type.Optional(Type.String()), timeoutMs: Type.Optional(Type.Number({ minimum: 1 })) }), async execute(_id, params, signal, _onUpdate, ctx: any) {
-    let answer: string | null = null;
+  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; runBroker.clear(); });
+  pi.registerTool({ name: "ask_human", label: "Ask human", description: "Ask the operator a concise clarifying question.", parameters: Type.Object({ question: Type.String(), options: Type.Optional(Type.Array(Type.String())), context: Type.Optional(Type.String()), timeoutMs: Type.Optional(Type.Number({ minimum: 1 })) }), async execute(_id, params, signal, _onUpdate, ctx) {
+    let answer: string | null;
     // An interactive question is bounded too: a UI that never answers (a closed terminal, an RPC client that ignores
     // the request) must not park the agent for ever. Without a timeoutMs of its own it gets the console's timeout.
     if (ctx.hasUI && ctx.ui) answer = (await answerQuestion(ctx, { kind: "question", ...params }, signal, requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)))).answer;

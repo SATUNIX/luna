@@ -8,7 +8,7 @@ Compaction is triggered by pi itself (at the context window minus `reserveTokens
 
 ## Component and data flow
 
-Producers write JSON contribution files into `<cwd>/.pi/ctx-contributions/` (session-scoped at `<cwd>/.pi/ctx-contributions/sessions/<session-id>/` when the host exposes a session id, with the flat directory as the fallback). context-sieve is the only component that reads them and decides what becomes part of the system prompt and what becomes one hidden message. memory-vault injects its own separate hidden message (`memory-recall`), and it and the compaction extensions write to disk independently of the assembly path.
+Producers write JSON contribution files into `<cwd>/.pi/ctx-contributions/` (session-scoped at `<cwd>/.pi/ctx-contributions/sessions/<session-id>/` when the host exposes a session id, with the flat directory as the fallback). context-sieve is the only component that reads them and decides what becomes part of the system prompt and what becomes its one hidden message. It is not the only source of hidden messages: memory-vault injects its own (`memory-recall`) and skill-router adds a `skill-router` message listing matching skills (nothing pins either message), `effort` adds its standing-mode reminder (`tests/effort-standing-smoke.ts`), and progress-guard's `turn_end` returns its looping nudge as a hidden `custom_message` entry inside the run that is looping, besides writing it as a contribution for the next prompt (`tests/progress-guard-agsix-smoke.ts`). memory-vault and the compaction extensions write to disk independently of the assembly path.
 
 ```mermaid
 flowchart LR
@@ -21,6 +21,8 @@ flowchart LR
     MV["memory-vault"]
     V[("Vault directory: Memory, Projects/p/Memory, Projects/p/Recaps, MEMORY.md, .pi-index, .trash")]
     RM["Hidden message: memory-recall"]
+    PGT["progress-guard turn_end"]
+    PGM["Hidden message: progress-guard, inside the run"]
     CP["compress"]
     SV["save"]
     SN[("Latest Compact.md and Compacts/*.md")]
@@ -33,6 +35,7 @@ flowchart LR
     GK -.->|"pinned as Active goal"| CP
     MV <--> V
     MV --> RM
+    PGT --> PGM
     CP -->|"/compress summary"| SN
     SV -->|"/save snapshot and compaction copies"| SN
 ```
@@ -47,7 +50,7 @@ Contributions with an explicit `channel` go where they ask; otherwise the ids in
 
 ```mermaid
 flowchart TD
-    S["session_start: create the session directory, clear lastMessage"]
+    S["session_start: create the session directory, clear lastInjected"]
     R["before_agent_start: read *.json except sieve-budget.json"]
     SK{"mtime older than the process-start epoch minus 2 s?"}
     SKIP["skip as a prior-session leftover"]
@@ -58,7 +61,7 @@ flowchart TD
     MS["message list"]
     WIN["budgetFor: scale each budget to the model's context window"]
     BS["assembleWithBudget: sort by priority desc then id, cap at the smaller of own and remaining budget, truncate"]
-    SAME{"message text identical to lastMessage?"}
+    SAME{"any contribution new or changed since lastInjected?"}
     OUT1["systemPrompt = event.systemPrompt plus blocks"]
     OUT2["hidden message: customType context-sieve, display false"]
     NOMSG["do not inject the message again"]
@@ -77,14 +80,14 @@ flowchart TD
     WIN --> BS
     BS --> OUT1
     BS --> SAME
-    SAME -->|no| OUT2
-    SAME -->|yes| NOMSG
+    SAME -->|"yes: inject only those, name the unchanged ones"| OUT2
+    SAME -->|no| NOMSG
     OUT1 --> TL
     OUT2 --> TL
     NOMSG --> TL
 ```
 
-Budgets are 4096 system tokens (`PI_KIT_CTX_BUDGET_TOKENS`) and 1200 message tokens (`PI_KIT_CTX_MESSAGE_BUDGET_TOKENS`), with `CHARS_PER_TOKEN = 4`, and each contribution's own `budgetTokens` is applied as well. With a known model context window the defaults are cut to 10% (system) and 3% (message) of the window when that is smaller, never below 64 tokens, and any budget, even an explicit one, is held to half the window. An unknown window (no model, or `contextWindow <= 0`) keeps the configured numbers and is recorded as `null` in `sieve-budget.json`, together with `windowClamped`. A message block is suppressed when its text is identical to `lastMessage`; `lastMessage` is cleared at `session_start` and after every compaction.
+Budgets are 4096 system tokens (`PI_KIT_CTX_BUDGET_TOKENS`) and 1200 message tokens (`PI_KIT_CTX_MESSAGE_BUDGET_TOKENS`), with `CHARS_PER_TOKEN = 4`, and each contribution's own `budgetTokens` is applied as well. With a known model context window the defaults are cut to 10% (system) and 3% (message) of the window when that is smaller, never below 64 tokens, and any budget, even an explicit one, is held to half the window. An unknown window (no model, or `contextWindow <= 0`) keeps the configured numbers and is recorded as `null` in `sieve-budget.json`, together with `windowClamped`. Message-channel contributions are compared one by one with `lastInjected`, a map from contribution id to the text last injected for it this session. Only new or changed contributions are injected; the unchanged ones are named in a single "(Still current, injected earlier in this conversation: ...)" line, and when nothing is new or changed no message is injected and `message.skippedUnchanged` is `true`. The injected ids are recorded under `message.injected` in `sieve-budget.json`. A contribution that disappears is dropped from `lastInjected`, so it is injected again if it comes back, and `lastInjected` is cleared at `session_start` and after every compaction (`tests/context-budget-smoke.ts`).
 
 ## Memory lifecycle (save, search, recap)
 
@@ -184,7 +187,7 @@ flowchart TD
     NAT["pi native LLM summary"]
     SC["session_compact"]
     MVC["memory-vault: clear the injected set"]
-    CSC["context-sieve: clear lastMessage"]
+    CSC["context-sieve: clear lastInjected"]
     SVC["save: copy the summary to Latest Compact.md and Compacts"]
     SAVE["/save: summariser side call, no compaction"]
     CMDS --> SBC
@@ -238,7 +241,7 @@ sequenceDiagram
     PI->>Save: session_compact
     Save->>Vault: copy the summary to Latest Compact.md and Compacts
     PI->>Sieve: session_compact
-    Sieve->>Sieve: clear lastMessage
+    Sieve->>Sieve: clear lastInjected
     PI->>MV: session_compact
     MV->>MV: clear the injected set
 ```
@@ -259,3 +262,4 @@ sequenceDiagram
 - `packages/extensions/src/custom-compaction/index.ts` — no-op `session_before_compact` and the unsupported-template notice.
 - `packages/extensions/src/save/index.ts` — `/save`, and the copy of each compaction summary to `Latest Compact.md`.
 - `packages/extensions/src/guidelines/index.ts` — an example contribution producer.
+- `packages/extensions/src/progress-guard/index.ts` — the loop nudge: a contribution for later prompts and the hidden `turn_end` `custom_message` inside the run.

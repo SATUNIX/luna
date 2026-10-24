@@ -18,6 +18,7 @@
     "services": [],
     "models": []
   },
+  "profileRequires": ["context-sieve"],
   "pulls": [],
   "env": ["PI_KIT_GUIDELINES_PATH"],
   "provenance": { "origin": "custom" },

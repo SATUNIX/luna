@@ -6,6 +6,7 @@
  *   <vault>/Projects/<project>/<project>.md         project hub: memories + recent recaps
  *   <vault>/Projects/<project>/Memory/<slug>.md     project memories
  *   <vault>/Projects/<project>/Recaps/YYYY-MM-DD.md per-turn recaps, one "## HH:MM — title" each
+ *   <vault>/Projects/<project>/.pi-project.json    the canonical root that owns this project folder
  *   <vault>/.pi-index/                              search index, lock, error log (hidden from Obsidian)
  *   <vault>/.trash/                                 forgotten notes (Obsidian's own trash folder)
  *
@@ -13,6 +14,7 @@
  * against file mtimes on every read, so concurrent sessions see each other's writes (the old
  * store cached memories.json once per process and rewrote it whole, losing concurrent writes).
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +37,7 @@ function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 }
 
-function readJson(file: string): any {
+function readJson(file: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
@@ -43,23 +45,40 @@ function readJson(file: string): any {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+/** A YAML scalar as a string, or "" for anything that is not a string/number/boolean/bigint. */
+function scalarString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  return "";
+}
+
 const off = (v: string | undefined) => /^(0|false|off|no)$/i.test(v?.trim() ?? "");
 
 // Settings: env wins, then <agent dir>/pi-kit/memory.json, then defaults.
 export function loadConfig(): VaultConfig {
-  const file = readJson(path.join(agentDir(), "pi-kit", "memory.json")) ?? {};
+  const file = asRecord(readJson(path.join(agentDir(), "pi-kit", "memory.json")));
   const num = (env: string | undefined, fromFile: unknown, fallback: number) => {
     const n = Number(env ?? fromFile);
     return Number.isFinite(n) && n > 0 ? n : fallback;
   };
   const root = process.env.PI_KIT_VAULT?.trim() || (typeof file.vault === "string" && file.vault.trim()) || path.join(os.homedir(), ".pi", "vault");
+  const recapModel = process.env.PI_KIT_RECAP_MODEL?.trim() || (typeof file.recapModel === "string" ? file.recapModel : undefined);
   return {
     root: path.resolve(root.replace(/^~(?=$|\/)/, os.homedir())),
     recaps: process.env.PI_KIT_RECAPS !== undefined ? !off(process.env.PI_KIT_RECAPS) : file.recaps !== false,
-    recapModel: process.env.PI_KIT_RECAP_MODEL?.trim() || (typeof file.recapModel === "string" ? file.recapModel : undefined),
     autoPromote: process.env.PI_KIT_MEMORY_AUTOPROMOTE !== undefined ? !off(process.env.PI_KIT_MEMORY_AUTOPROMOTE) : file.autoPromote !== false,
     recallLimit: num(process.env.PI_KIT_MEMORY_RECALL_LIMIT, file.recallLimit, 3),
     minScore: num(process.env.PI_KIT_MEMORY_MIN_SCORE, file.minScore, 1.5),
+    // exactOptionalPropertyTypes: omit recapModel when unset rather than storing undefined.
+    ...(recapModel ? { recapModel } : {}),
   };
 }
 
@@ -74,15 +93,100 @@ export function slugify(text: string, max = 60): string {
   return slug || "note";
 }
 
-// A project is named after its git root (so every subdirectory shares one project), else cwd.
-export function projectName(cwd: string): string {
+// The directory a project is named after: its git root (so every subdirectory shares one
+// project), else cwd.
+function projectRoot(cwd: string): string {
   let dir = path.resolve(cwd);
   for (;;) {
-    if (fs.existsSync(path.join(dir, ".git"))) return slugify(path.basename(dir));
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
     const parent = path.dirname(dir);
-    if (parent === dir) return slugify(path.basename(path.resolve(cwd)));
+    if (parent === dir) return path.resolve(cwd);
     dir = parent;
   }
+}
+
+// The project's display name: the project root's directory name. Two repositories with the
+// same name share it, so it is not the vault key on its own; resolveProject is.
+export function projectName(cwd: string): string {
+  return slugify(path.basename(projectRoot(cwd)));
+}
+
+// Each project folder records the canonical root it belongs to, so a same-named repository
+// elsewhere never reads (or is injected with) its recaps and memories.
+const OWNER_FILE = ".pi-project.json";
+
+/** The canonical root that owns Projects/<key>: a path, null when the folder is unowned, "" when the record is unreadable. */
+function projectOwner(root: string, key: string): string | null {
+  const file = path.join(projectDir(root, key), OWNER_FILE);
+  if (!fs.existsSync(file)) return null;
+  const owner = asRecord(readJson(file)).path;
+  return typeof owner === "string" ? owner : "";
+}
+
+/** The folder canonical root id already owns: one of the candidates, else any project folder (a symlinked name claimed earlier). */
+function ownedKey(root: string, candidates: readonly string[], id: string): string | undefined {
+  const owned = candidates.find((key) => projectOwner(root, key) === id);
+  if (owned) return owned;
+  let keys: string[] = [];
+  try {
+    keys = fs.readdirSync(path.join(root, "Projects")).sort();
+  } catch {
+    /* no projects yet */
+  }
+  return keys.find((key) => projectOwner(root, key) === id);
+}
+
+/**
+ * The vault key for cwd's project. The first root to use a name keeps the plain name (so a
+ * folder written before ownership was recorded stays with the repository that opens it
+ * first); any other root with that name gets "<name>-<hash of its canonical path>". The
+ * claim is written to Projects/<key>/.pi-project.json; nothing is moved or deleted. A root
+ * reached through a symlink resolves to the folder its canonical path already owns, whichever
+ * path opened it first. An already-recorded owner is found without taking the vault lock.
+ * When a new claim is forced off the plain name by a record whose owner path no longer exists
+ * (a moved repository, or a vault synced from a machine with other paths), the folder is not
+ * taken over; the error log and notify say how to reassign it.
+ */
+export function resolveProject(root: string, cwd: string, notify?: (message: string) => void): string {
+  const dir = projectRoot(cwd);
+  let id = dir;
+  try {
+    id = fs.realpathSync(dir);
+  } catch {
+    /* keep the resolved path */
+  }
+  const name = slugify(path.basename(id));
+  const digest = createHash("sha256").update(id).digest("hex");
+  const hashed = `${name}-${digest.slice(0, 12)}`;
+  const plain = [...new Set([slugify(path.basename(dir)), name])];
+  const candidates = [...new Set([...plain, hashed, `${name}-${digest}`])];
+  const known = ownedKey(root, candidates, id);
+  if (known) return known;
+  let key: string;
+  try {
+    key = withLock(root, () => {
+      const owned = ownedKey(root, candidates, id);
+      if (owned) return owned;
+      const free = candidates.find((k) => projectOwner(root, k) === null);
+      if (!free) return `${name}-${digest}`;
+      writeAtomic(path.join(projectDir(root, free), OWNER_FILE), `${JSON.stringify({ path: id })}\n`);
+      return free;
+    });
+  } catch (error) {
+    // Never fall back to the shared plain name: an unrecorded hashed key is still unique.
+    logError(root, `project ownership not recorded for ${id}: ${String(error)}`);
+    return hashed;
+  }
+  if (!plain.includes(key)) {
+    for (const k of plain) {
+      const owner = projectOwner(root, k);
+      if (!owner || fs.existsSync(owner)) continue;
+      const message = `memory-vault: Projects/${k}/ belongs to ${owner}, which no longer exists; this repository uses Projects/${key}/. If it moved, set "path" to ${JSON.stringify(id)} in Projects/${k}/${OWNER_FILE} to keep its history.`;
+      logError(root, message);
+      notify?.(message);
+    }
+  }
+  return key;
 }
 
 export const projectDir = (root: string, project: string) => path.join(root, "Projects", project);
@@ -136,7 +240,7 @@ export interface Note {
 function yamlValue(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map((x) => yamlValue(x)).join(", ")}]`;
   if (typeof v === "boolean" || typeof v === "number") return String(v);
-  const s = String(v ?? "");
+  const s = scalarString(v);
   return /^[\w./@+-][\w ./@+:-]*$/.test(s) && !/^(true|false|null|yes|no)$/i.test(s) && !/:\s/.test(s) ? s : JSON.stringify(s);
 }
 
@@ -171,27 +275,28 @@ export function parseNote(text: string, file: string): Note | null {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!m) return null;
   const fm: Record<string, unknown> = {};
-  for (const line of m[1].split(/\r?\n/)) {
+  for (const line of (m[1] ?? "").split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (kv) fm[kv[1]] = parseScalar(kv[2]);
+    const key = kv?.[1];
+    if (key !== undefined) fm[key] = parseScalar(kv?.[2] ?? "");
   }
   const type = MEMORY_TYPES.includes(fm.type as MemoryType) ? (fm.type as MemoryType) : "fact";
   const tags = Array.isArray(fm.tags) ? fm.tags.map(String) : typeof fm.tags === "string" && fm.tags ? [fm.tags] : [];
   const id = typeof fm.id === "string" && fm.id ? fm.id : path.basename(file, ".md");
   return {
     file,
-    body: m[2].trim(),
+    body: (m[2] ?? "").trim(),
     meta: {
       id,
       title: typeof fm.title === "string" && fm.title ? fm.title : id,
       type,
       scope: fm.scope === "global" ? "global" : "project",
-      project: typeof fm.project === "string" ? fm.project : undefined,
+      ...(typeof fm.project === "string" ? { project: fm.project } : {}),
       tags,
       pinned: fm.pinned === true,
-      created: String(fm.created ?? ""),
-      updated: String(fm.updated ?? fm.created ?? ""),
-      source: String(fm.source ?? "unknown"),
+      created: scalarString(fm.created),
+      updated: scalarString(fm.updated ?? fm.created),
+      source: fm.source === undefined || fm.source === null ? "unknown" : scalarString(fm.source),
     },
   };
 }
@@ -226,7 +331,7 @@ export function withLock<T>(root: string, fn: () => T): T {
       } catch {
         /* vanished */
       }
-      if (Date.now() > deadline) throw new Error(`memory vault is locked (${lock}); remove it if no pi session is writing`);
+      if (Date.now() > deadline) throw new Error(`memory vault is locked (${lock}); remove it if no pi session is writing`, { cause: error });
       sleepSync(25);
     }
   }
@@ -429,6 +534,9 @@ export function saveMemory(root: string, input: SaveInput): SaveResult {
         existing = parseNote(fs.readFileSync(target, "utf8"), target);
       }
     }
+    const pinned = input.pinned ?? existing?.meta.pinned;
+    // exactOptionalPropertyTypes: omit project/pinned rather than storing explicit undefined
+    // (serializeNote drops undefined and unpinned values either way, so the output is unchanged).
     const meta: NoteMeta = {
       id: existing?.meta.id ?? slug,
       // A fuzzy match keeps the note's own title: the filename (Obsidian's note name) and any
@@ -437,12 +545,12 @@ export function saveMemory(root: string, input: SaveInput): SaveResult {
       // An update keeps the note's type unless a type was given explicitly.
       type: requestedType ?? existing?.meta.type ?? "fact",
       scope,
-      project: scope === "project" ? input.project : undefined,
       tags: [...new Set([...(existing?.meta.tags ?? []), ...tags])],
-      pinned: input.pinned ?? existing?.meta.pinned,
       created: existing?.meta.created || now,
       updated: now,
       source: input.source ?? existing?.meta.source ?? "agent",
+      ...(scope === "project" ? { project: input.project } : {}),
+      ...(pinned !== undefined ? { pinned } : {}),
     };
     const link = scope === "project" ? `\n\nProject: [[Projects/${input.project}/${input.project}|${input.project}]]` : "";
     writeAtomic(target, serializeNote(meta, `${body}${link}`));
@@ -475,8 +583,9 @@ export function searchMemories(
   }
   const terms = new Set(tokenize(query)).size;
   const scored = bm25(query, docs).filter((s) => !opts.gate || passesFloor(s, terms, opts.minScore ?? 1.5));
-  return scored.slice(0, opts.limit ?? 5).map((s) => {
-    const entry = index.get(s.id)!;
+  return scored.slice(0, opts.limit ?? 5).flatMap((s) => {
+    const entry = index.get(s.id);
+    if (!entry) return []; // raced with a delete between scoring and read
     const file = path.join(root, s.id);
     let snippet = "";
     try {
@@ -484,16 +593,19 @@ export function searchMemories(
     } catch {
       /* raced with a delete */
     }
-    return { rel: s.id, file, meta: entry.meta, score: s.score, snippet };
+    return [{ rel: s.id, file, meta: entry.meta, score: s.score, snippet }];
   });
 }
 
-// Resolve a memory by id, slug or vault-relative path, preferring the current project.
+// Resolve a memory by id, slug or vault-relative path, preferring the current project, then global.
 export function findMemory(root: string, ref: string, project: string): { rel: string; meta: NoteMeta } | null {
   const index = loadIndex(root);
   const norm = ref.trim().replace(/\.md$/, "");
   const candidates = [...index.entries()].filter(([rel, e]) => rel.replace(/\.md$/, "") === norm || e.meta.id === norm || path.basename(rel, ".md") === norm);
-  candidates.sort(([a], [b]) => Number(b.includes(path.join("Projects", project))) - Number(a.includes(path.join("Projects", project))));
+  // Current project first, then global, then other projects ("Projects/api/" never matches "Projects/api-<hash>/").
+  const mine = path.join("Projects", project) + path.sep;
+  const rank = (rel: string) => (rel.startsWith(mine) ? 2 : rel.startsWith("Projects" + path.sep) ? 0 : 1);
+  candidates.sort(([a], [b]) => rank(b) - rank(a));
   return candidates[0] ? { rel: candidates[0][0], meta: candidates[0][1].meta } : null;
 }
 
@@ -570,7 +682,7 @@ export interface RecapSection {
 // The newest `count` recap sections for a project, newest first.
 export function recentRecaps(root: string, project: string, count: number): RecapSection[] {
   const dir = path.join(projectDir(root, project), "Recaps");
-  let files: string[] = [];
+  let files: string[];
   try {
     files = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().reverse();
   } catch {
@@ -581,7 +693,7 @@ export function recentRecaps(root: string, project: string, count: number): Reca
     const text = fs.readFileSync(path.join(dir, f), "utf8");
     const sections = text.split(/\n(?=## )/).filter((s) => s.startsWith("## ")).reverse();
     for (const s of sections) {
-      out.push({ date: f.replace(/\.md$/, ""), heading: s.split("\n")[0].replace(/^## /, ""), text: s.trim() });
+      out.push({ date: f.replace(/\.md$/, ""), heading: (s.split("\n")[0] ?? "").replace(/^## /, ""), text: s.trim() });
       if (out.length >= count) return out;
     }
   }
@@ -605,7 +717,7 @@ function writeIndexPages(root: string, project: string): void {
     "",
     "Maintained by pi (memory-vault). Edit the notes themselves, not this page.",
     "",
-    ...groups.flatMap((g) => [`## ${g === "Global" ? "Global" : `[[Projects/${g}/${g}|${g}]]`}`, "", ...byGroup.get(g)!.sort((a, b) => a[1].meta.title.localeCompare(b[1].meta.title)).map(line), ""]),
+    ...groups.flatMap((g) => [`## ${g === "Global" ? "Global" : `[[Projects/${g}/${g}|${g}]]`}`, "", ...(byGroup.get(g) ?? []).sort((a, b) => a[1].meta.title.localeCompare(b[1].meta.title)).map(line), ""]),
   ].join("\n");
   writeAtomic(path.join(root, "MEMORY.md"), memory);
 
@@ -645,10 +757,10 @@ export function migrateMemoryLocal(root: string, project: string): number {
   let count = 0;
   if (Array.isArray(entries)) {
     for (const e of entries) {
-      if (!e || typeof e.text !== "string" || !e.text.trim()) continue;
+      if (!isRecord(e) || typeof e.text !== "string" || !e.text.trim()) continue;
       const text = e.text.trim();
       saveMemory(root, {
-        title: text.split(/[.\n]/)[0].slice(0, 80),
+        title: (text.split(/[.\n]/)[0] ?? "").slice(0, 80),
         body: text,
         tags: Array.isArray(e.tags) ? e.tags.map(String) : [],
         scope: "global", // memory-local had no scope; global keeps them reachable everywhere

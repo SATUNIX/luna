@@ -36,3 +36,69 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "deps"
+
+  # The MCP servers bundled into the container image keep their own manifests, outside the root
+  # workspace, so the root npm entry above never sees them.
+  - package-ecosystem: npm
+    directories:
+      - /packages/container/mcp-servers/governance
+      - /packages/container/mcp-servers/memory-mcp
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mcp-servers:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # The docs toolchain (requirements-docs.txt).
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docs-toolchain:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # Base images pinned by digest in the FROM lines of the container Dockerfile, the autonomy image
+  # Dockerfile and the role-runner Containerfile, and the memory-mcp compose service. Dependabot
+  # does not follow a FROM that names an ARG, so each base is written in its FROM line.
+  - package-ecosystem: docker
+    directories:
+      - /packages/container
+      - /packages/autonomy/image
+      - /packages/role-runner
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: docker-compose
+    directory: /packages/container/mcp-servers/memory-mcp
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+
+  # The Android companion app's Gradle plugins and libraries.
+  - package-ecosystem: gradle
+    directory: /apps/android
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      android:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"

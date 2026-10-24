@@ -17,12 +17,16 @@ const DEFAULT_THRESHOLD = parseInt(process.env.PI_KIT_ORCH_THRESHOLD ?? "3", 10)
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 
 function isSessionId(value: unknown): value is string {
   return typeof value === "string" && SESSION_ID_RE.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function resolveSessionId(sessionManager?: unknown): string | undefined {
@@ -186,10 +190,16 @@ function clearDirective(cwd: string): void {
 // route had no real input in production and always fell through to the hot-path model.
 // orchestrator already computes a real per-input complexity score on every `input`
 // event (used to decide whether to write a delegation directive); expose that same
-// signal to provider-router via a small, well-known-path file, the same cross-extension
+// signal to provider-router via a small, well-known-path file (per session, see below), the same cross-extension
 // file-contract convention this kit already uses for .pi/verdicts.json etc.
-function classificationFile(cwd: string): string {
-  return path.join(cwd, ".pi", "task-classification.json");
+// ORC-9: scoped per session like the contributions (B-005), so another session or a child
+// in the same cwd never routes on this session's score. A session without a usable id
+// keeps the legacy flat .pi/task-classification.json. provider-router resolves the same path.
+function classificationFile(cwd: string, sessionId: string | undefined = currentSessionId): string {
+  const base = path.join(cwd, ".pi");
+  return isSessionId(sessionId)
+    ? path.join(base, "task-classification", "sessions", `${sessionId}.json`)
+    : path.join(base, "task-classification.json");
 }
 
 function writeClassification(cwd: string, score: number): void {
@@ -198,7 +208,7 @@ function writeClassification(cwd: string, score: number): void {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       classificationFile(cwd),
-      JSON.stringify({ score, taskType: score >= DEFAULT_THRESHOLD ? "complex" : "simple", at: new Date().toISOString() }),
+      JSON.stringify({ score, taskType: score >= DEFAULT_THRESHOLD ? "complex" : "simple", at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
       "utf8",
     );
   } catch {
@@ -212,17 +222,17 @@ function clearClassification(cwd: string): void {
 
 // AG-04 fix: verdicts older than this are no longer trusted as proof of a current-state
 // pass, even if their stored `pass` flag is still true — a long-running session can
-// pass a check, keep editing for hours, and never re-verify. Only enforced when `at`
-// parses to a real date; an unparseable/missing timestamp does not itself cause a
-// staleness block (kept permissive there so a hand-constructed board without a real
-// timestamp still round-trips its `pass` flag as-is).
+// pass a check, keep editing for hours, and never re-verify. Missing, malformed and
+// future timestamps cannot establish freshness either. Kept in parity with
+// verifier-board and conductor without runtime sibling imports.
 const VERDICT_MAX_AGE_MS = Number(process.env.PI_KIT_VERDICT_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
 
+// Shared completion contract: tests/verifier-board-trust-smoke.ts pins all local readers.
 function isStale(at: unknown): boolean {
-  if (typeof at !== "string") return false;
+  if (typeof at !== "string") return true;
   const parsed = Date.parse(at);
-  if (Number.isNaN(parsed)) return false;
-  return Date.now() - parsed > VERDICT_MAX_AGE_MS;
+  const now = Date.now();
+  return Number.isNaN(parsed) || parsed > now || now - parsed > VERDICT_MAX_AGE_MS;
 }
 
 // Sources reserved for independent, non-model writers (verify-gate writes `verify`/`review`,
@@ -241,11 +251,25 @@ function isTrustedVerdictSource(source: unknown): boolean {
 // .pi/verdicts.json, read here without importing verify-gate (self-containment). The
 // TTL mirrors verify-gate.isVerifyPendingActive (PI_KIT_VERIFY_PENDING_TTL_MS, default
 // 30 min): a marker left by a SIGKILLed/crashed session must not block completion forever.
+// REL-5: verify-gate writes one .pi/verify-pending/<run>.json per run; the legacy flat
+// .pi/verify-pending.json is still honoured.
 function verifyPending(cwd: string): boolean {
-  const file = path.join(cwd, ".pi", "verify-pending.json");
+  let runs: string[] = [];
+  try {
+    const dir = path.join(cwd, ".pi", "verify-pending");
+    runs = fs.readdirSync(dir).filter((name) => name.endsWith(".json")).map((name) => path.join(dir, name));
+  } catch {
+    /* no per-run markers */
+  }
+  return [path.join(cwd, ".pi", "verify-pending.json"), ...runs].some(freshPendingMarker);
+}
+
+function freshPendingMarker(file: string): boolean {
   try {
     const raw = fs.readFileSync(file, "utf8");
-    let startedAt = Date.parse(JSON.parse(raw)?.startedAt ?? "");
+    const marker: unknown = JSON.parse(raw);
+    // String() is the conversion Date.parse applies itself; a missing startedAt still parses to NaN.
+    let startedAt = Date.parse(String(isRecord(marker) ? marker.startedAt : undefined));
     if (Number.isNaN(startedAt)) startedAt = fs.statSync(file).mtimeMs;
     const ttl = Number(process.env.PI_KIT_VERIFY_PENDING_TTL_MS);
     const ttlMs = Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : 30 * 60 * 1000;
@@ -277,17 +301,17 @@ export function missionCompleteBlocked(cwd: string): { blocked: boolean; failing
   } catch {
     return { blocked: true, failing: ["(verdict board unreadable or corrupt)"] };
   }
-  const verdicts = (board as { verdicts?: unknown })?.verdicts;
-  if (!verdicts || typeof verdicts !== "object" || Array.isArray(verdicts)) {
+  const verdicts = isRecord(board) ? board.verdicts : undefined;
+  if (!isRecord(verdicts) || Array.isArray(verdicts)) {
     return { blocked: true, failing: ["(verdict board malformed)"] };
   }
-  const sources = Object.keys(verdicts as Record<string, unknown>);
+  const sources = Object.keys(verdicts);
   if (sources.length === 0) {
     return { blocked: true, failing: ["(no verdicts recorded yet)"] };
   }
   const failing = sources.filter((k) => {
-    const v = (verdicts as Record<string, { pass?: unknown; at?: unknown }>)[k];
-    return !v || v.pass !== true || isStale(v.at);
+    const v = verdicts[k];
+    return !isRecord(v) || v.pass !== true || isStale(v.at);
   });
   if (failing.length > 0) return { blocked: true, failing };
   // Every recorded source passes and is fresh, but completion also requires at least one
@@ -324,8 +348,10 @@ export default function (pi: ExtensionAPI) {
       // Ordinary document/report edits do not imply an automatic npm verification contract.
       // Explicit implementation workflows still require a board without a script.
       try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
-        if (typeof pkg.scripts?.verify === "string" && pkg.scripts.verify.trim()) {
+        const pkg: unknown = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+        const scripts = isRecord(pkg) ? pkg.scripts : undefined;
+        const verify = isRecord(scripts) ? scripts.verify : undefined;
+        if (typeof verify === "string" && verify.trim()) {
           verificationRequired = true;
           autoVerificationExpected = true;
         }
@@ -359,8 +385,17 @@ export default function (pi: ExtensionAPI) {
     if (!board.blocked || failing.length === 0) return undefined;
     let results = failing.join(", ");
     try {
-      const board = JSON.parse(fs.readFileSync(path.join(dir, ".pi", "verdicts.json"), "utf8"));
-      results = failing.map((source) => `${source}: ${String(board.verdicts?.[source]?.summary || "no check result").slice(0, 200)}`).join("; ");
+      const board: unknown = JSON.parse(fs.readFileSync(path.join(dir, ".pi", "verdicts.json"), "utf8"));
+      // A null board keeps the reason, as reading a property of it (and throwing) did before.
+      if (board !== null) {
+        const recorded = isRecord(board) ? board.verdicts : undefined;
+        results = failing.map((source) => {
+          const verdict = isRecord(recorded) ? recorded[source] : undefined;
+          // Any writer can put anything in the board file: unknown, rendered as before.
+          const summary: unknown = isRecord(verdict) && verdict.summary ? verdict.summary : "no check result";
+          return `${source}: ${String(summary).slice(0, 200)}`;
+        }).join("; ");
+      }
     } catch { /* retain the precise missing/corrupt-board reason */ }
     const message =
       `[orchestrator verification diagnostic] Check result: ${results}. ` +
@@ -469,7 +504,7 @@ export default function (pi: ExtensionAPI) {
       verificationRequired = false;
       correctionSent = false;
       ctx.ui.setStatus?.("orchestrator", "plan-only");
-      await pi.sendUserMessage(planOnlyDirective(task), ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined);
+      pi.sendUserMessage(planOnlyDirective(task), typeof ctx.isIdle === "function" && !ctx.isIdle() ? { deliverAs: "followUp" } : undefined);
     },
   });
 
@@ -490,7 +525,7 @@ export default function (pi: ExtensionAPI) {
       verificationRequired = true;
       correctionSent = false;
       ctx.ui.setStatus?.("orchestrator", "implement+review");
-      await pi.sendUserMessage(implementReviewDirective(task), ctx.isIdle?.() === false ? { deliverAs: "followUp" } : undefined);
+      pi.sendUserMessage(implementReviewDirective(task), typeof ctx.isIdle === "function" && !ctx.isIdle() ? { deliverAs: "followUp" } : undefined);
     },
   });
 }

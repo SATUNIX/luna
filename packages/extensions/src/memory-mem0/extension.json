@@ -12,7 +12,7 @@
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
-    "nodeBuiltins": ["node:child_process", "node:http", "node:https", "node:url", "node:util"],
+    "nodeBuiltins": ["node:child_process", "node:http", "node:https", "node:path", "node:url", "node:util"],
     "npm": [],
     "piPeers": ["typebox"],
     "services": ["memory-mcp", "optional mem0"],

@@ -12,11 +12,14 @@ type Status = "pending" | "in_progress" | "done" | "blocked";
 interface Task {
   id: string;
   title: string;
-  description?: string;
+  description?: string | undefined;
   dependsOn: string[];
   status: Status;
   notes?: string;
   createdAt: string;
+  // When task_next claimed the task (renewed by task_update while in_progress). A claim older
+  // than the lease is handed out again, so a crashed implementer cannot hold a task forever.
+  claimedAt?: string | undefined;
 }
 
 interface Graph {
@@ -24,6 +27,34 @@ interface Graph {
 }
 
 const VALID_STATUSES: Status[] = ["pending", "in_progress", "done", "blocked"];
+
+// Claim lease: longer than a subagent's default 30-minute wall-clock bound, so a live implementer
+// keeps its task. Read per call; 0 disables expiry.
+const DEFAULT_LEASE_MS = 60 * 60 * 1000;
+function leaseMs(): number {
+  const raw = process.env.PI_KIT_TASK_GRAPH_LEASE_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_LEASE_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_LEASE_MS;
+}
+
+// Return expired in_progress claims to pending. A claim with no claimedAt (written by an older
+// build) has no known age and is left alone; task_update can still return it to pending.
+function reclaimExpired(g: Graph, now: number): string[] {
+  const lease = leaseMs();
+  if (lease <= 0) return [];
+  const reclaimed: string[] = [];
+  for (const t of g.tasks) {
+    if (t.status !== "in_progress" || typeof t.claimedAt !== "string") continue;
+    const at = Date.parse(t.claimedAt);
+    if (Number.isNaN(at) || now - at > lease) {
+      t.status = "pending";
+      t.claimedAt = undefined;
+      reclaimed.push(t.id);
+    }
+  }
+  return reclaimed;
+}
 
 // Advisory lock for mutating task-graph operations. An O_EXCL lockfile gives cross-process
 // mutual exclusion (parallel implementer subagents are separate processes), and a stale lock
@@ -56,30 +87,45 @@ function graphPath(cwd: string): string {
   return path.join(cwd, ".pi", "task-graph.json");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const isStatus = (value: unknown): value is Status => VALID_STATUSES.some((s) => s === value);
+
 function load(cwd: string): Graph {
   try {
-    const g = JSON.parse(fs.readFileSync(graphPath(cwd), "utf8")) as Graph;
-    if (Array.isArray(g.tasks)) {
+    const g: unknown = JSON.parse(fs.readFileSync(graphPath(cwd), "utf8"));
+    if (isRecord(g) && Array.isArray(g.tasks)) {
       // WU-2: a graph may be edited externally or persisted by an older build, so an
       // element may be a non-object or lack dependsOn. Validate on load and repair/drop
       // rather than crashing depStatus/isUnblocked (which read t.dependsOn).
+      // ORC-10: each task is rebuilt from checked fields, never cast. An unknown status becomes
+      // "blocked" (never claimed, never counted done), non-string dependencies are dropped, a
+      // non-string title falls back to the id, and non-string optional text is left out.
       const tasks: Task[] = [];
       let dropped = 0;
       let repaired = 0;
       for (const raw of g.tasks) {
-        if (!raw || typeof raw !== "object" || typeof raw.id !== "string" || raw.id.length === 0) {
+        if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length === 0) {
           dropped++;
           continue;
         }
-        if (!Array.isArray(raw.dependsOn)) {
-          raw.dependsOn = [];
-          repaired++;
-        }
-        tasks.push(raw);
+        const deps: unknown[] = Array.isArray(raw.dependsOn) ? raw.dependsOn : [];
+        const dependsOn = deps.filter((d): d is string => typeof d === "string");
+        const status = isStatus(raw.status) ? raw.status : "blocked";
+        const title = typeof raw.title === "string" ? raw.title : raw.id;
+        const createdAt = typeof raw.createdAt === "string" ? raw.createdAt : "";
+        if (!Array.isArray(raw.dependsOn) || dependsOn.length !== deps.length || status !== raw.status || title !== raw.title || createdAt !== raw.createdAt) repaired++;
+        const task: Task = { id: raw.id, title, dependsOn, status, createdAt };
+        if (typeof raw.description === "string") task.description = raw.description;
+        if (typeof raw.notes === "string") task.notes = raw.notes;
+        if (typeof raw.claimedAt === "string") task.claimedAt = raw.claimedAt;
+        tasks.push(task);
       }
       if (dropped > 0 || repaired > 0) {
         process.stderr.write(
-          `[task-graph] load: dropped ${dropped} malformed task(s), repaired ${repaired} missing dependsOn in ${graphPath(cwd)}\n`,
+          `[task-graph] load: dropped ${dropped} malformed task(s), repaired ${repaired} malformed task(s) in ${graphPath(cwd)}\n`,
         );
       }
       return { tasks };
@@ -90,11 +136,8 @@ function load(cwd: string): Graph {
   return { tasks: [] };
 }
 
-// Atomic write (temp file + rename): a concurrent reader (e.g. a parallel implementer
-// subagent) never observes a partially-written graph. This does not provide true
-// cross-process mutual exclusion for two near-simultaneous writers - a real lease system
-// (advisory lock + retry) is tracked as forward work in the Capability Engineering
-// Roadmap - but it does close the torn-write failure mode within a single write.
+// Atomic write (temp file + rename): a reader that takes no lock (task_list) never observes a
+// partially-written graph. Writers are serialized by withGraphLock above.
 function save(cwd: string, g: Graph): void {
   const dir = path.join(cwd, ".pi");
   fs.mkdirSync(dir, { recursive: true });
@@ -220,8 +263,11 @@ export default function (pi: ExtensionAPI) {
             return text(`Cannot complete ${t.id}: unfinished dependencies (${unfinished.join(", ")})`);
           }
           t.status = params.status as Status;
+          if (t.status !== "in_progress") t.claimedAt = undefined;
         }
         if (params.notes !== undefined) t.notes = params.notes;
+        // Any update of an in_progress task is a sign of life: it renews the claim's lease.
+        if (t.status === "in_progress") t.claimedAt = new Date().toISOString();
         save(ctx.cwd, g);
         return text(`Updated ${t.id}: ${t.status}`);
       });
@@ -248,15 +294,19 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_next",
     label: "Task: next",
-    description: "Return the next actionable task: a pending task whose dependencies are all done. Claims it (marks in_progress) so a second call does not hand out the same task twice.",
+    description: "Return the next actionable task: a pending task whose dependencies are all done. Claims it (marks in_progress) so a second call does not hand out the same task twice. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const result = withGraphLock(ctx.cwd, () => {
         const g = load(ctx.cwd);
+        const now = Date.now();
+        const reclaimed = reclaimExpired(g, now);
+        const note = reclaimed.length > 0 ? `Reclaimed expired claim(s): ${reclaimed.join(", ")}\n` : "";
         const next = g.tasks.find((t) => t.status === "pending" && isUnblocked(g, t));
         if (!next) {
+          if (reclaimed.length > 0) save(ctx.cwd, g);
           const remaining = g.tasks.filter((t) => t.status !== "done").length;
-          return text(remaining === 0 ? "All tasks done." : "No unblocked task (remaining tasks are waiting on dependencies).");
+          return text(note + (remaining === 0 ? "All tasks done." : "No unblocked task (remaining tasks are waiting on dependencies)."));
         }
         // AG-03 fix: task_next previously only READ the next task without claiming it, so
         // two consecutive calls (e.g. two implementer subagents racing to pull work) both
@@ -264,8 +314,9 @@ export default function (pi: ExtensionAPI) {
         // cycle, before returning it. The exclusive lock makes claim-vs-claim atomic across
         // processes, so two parallel implementers cannot both win the same task.
         next.status = "in_progress";
+        next.claimedAt = new Date(now).toISOString();
         save(ctx.cwd, g);
-        return text(`Next: ${next.id} — ${next.title}${next.description ? `\n${next.description}` : ""}`);
+        return text(`${note}Next: ${next.id} — ${next.title}${next.description ? `\n${next.description}` : ""}`);
       });
       return result.ok ? result.value : text(`Cannot update task graph: ${result.reason}`);
     },
@@ -288,9 +339,25 @@ export default function (pi: ExtensionAPI) {
           return text(`Cannot complete ${t.id}: unfinished dependencies (${unfinished.join(", ")})`);
         }
         t.status = "done";
+        t.claimedAt = undefined;
         save(ctx.cwd, g);
         const left = g.tasks.filter((x) => x.status !== "done").length;
         return text(`Completed ${t.id}. ${left} task(s) remaining.`);
+      });
+      return result.ok ? result.value : text(`Cannot update task graph: ${result.reason}`);
+    },
+  });
+
+  pi.registerTool({
+    name: "task_clear",
+    label: "Task: clear",
+    description: "Remove every task from the shared task graph, to start a new plan or mission in the same project.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      const result = withGraphLock(ctx.cwd, () => {
+        const count = load(ctx.cwd).tasks.length;
+        save(ctx.cwd, { tasks: [] });
+        return text(`Cleared ${count} task(s).`);
       });
       return result.ok ? result.value : text(`Cannot update task graph: ${result.reason}`);
     },

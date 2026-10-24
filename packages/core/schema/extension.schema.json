@@ -65,7 +65,7 @@
         "enum": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"]
       },
       "minItems": 0,
-      "description": "Profiles the extension ships in (docs/profiles.md). quick=T0-T1, balanced=T0-T3 core, long-horizon=T0-T3 full, autonomous=T0-T3+loop, self-improving=T0-T4, pentest=security-engagement-optimised Conductor composition, lite=low-context set for small local models. Empty [] means quarantined (status stub) — kept in-repo but shipped in no profile. verify.mjs cross-checks this list against profiles/*.json exactly."
+      "description": "Profiles the extension ships in (docs/profiles.md). quick=T0-T1, balanced=T0-T3 core, long-horizon=T0-T3 full, autonomous=T0-T3+loop, self-improving=T0-T4, pentest=security-engagement-optimised Conductor composition, lite=low-context set for small local models. Empty [] means quarantined (status stub) — kept in-repo but shipped in no profile. verify.ts cross-checks this list against profiles/*.json exactly."
     },
     "enabledByDefault": { "type": "boolean" },
     "childGovernance": {
@@ -89,6 +89,12 @@
       }
     },
     "pulls": { "type": "array" },
+    "profileRequires": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "description": "Companion capabilities required when this extension is selected by a curated profile. Does not create a runtime import or auto-install dependency."
+    },
     "env": { "type": "array", "items": { "type": "string" } },
     "provenance": {
       "type": "object",

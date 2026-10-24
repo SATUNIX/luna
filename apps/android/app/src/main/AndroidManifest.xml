@@ -20,6 +20,11 @@
         android:usesCleartextTraffic="false"
         tools:targetApi="34">
 
+        <!-- Exported because it is the launcher activity and handles pirc://pair links; Android
+             requires exported="true" for both. A pairing link only opens the "Link a computer?"
+             screen, which waits for the user to tap Link, and the computer must then approve the
+             phone in the terminal. -->
+        <!-- nosemgrep: java.android.security.exported_activity.exported_activity -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"

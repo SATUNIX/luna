@@ -4,6 +4,18 @@ Mem0-compatible memory tools. By default (`PI_KIT_MEMORY_BACKEND` unset or `mcp`
 proxy the kit memory MCP server; with `PI_KIT_MEMORY_BACKEND=mem0` they speak the legacy mem0
 REST API directly (`MEM0_API_URL`, optional `MEM0_API_KEY` / `MEM0_USER_ID`).
 
+## Memory MCP server location
+
+The default transport runs `node <kit>/packages/container/mcp-servers/memory-mcp/index.ts --call
+<tool> <json>`, with the script path resolved from this extension's own location, never from the
+working directory, so a repository cannot supply the server. `PI_KIT_MEMORY_MCP_COMMAND` and
+`PI_KIT_MEMORY_MCP_ARGS` (whitespace-separated) override the command line. Every argument that does
+not start with `-` must be an absolute path, and a command containing a path separator must be
+absolute (a bare name such as `node` is looked up on `PATH`). Anything else is refused with
+`memory MCP unavailable: ...` and nothing is started. The memory server is not part of the npm
+package, so outside a kit checkout the default transport reports itself unavailable. See
+`tests/memory-mem0-smoke.ts`.
+
 ## Failure and circuit behaviour (legacy REST path)
 
 An HTTP response with status `>= 400` is treated as a failure, not as a successful response:
@@ -15,5 +27,5 @@ An HTTP response with status `>= 400` is treated as a failure, not as a successf
   `mem0 unavailable: circuit open (3 consecutive failures). Restart session to reset.` without
   contacting the service.
 
-See `tests/memory-mem0-smoke.mjs` for the hermetic regression coverage (local `node:http`
+See `tests/memory-mem0-smoke.ts` for the hermetic regression coverage (local `node:http`
 server; no Docker/Qdrant).

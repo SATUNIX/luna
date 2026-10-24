@@ -7,14 +7,14 @@ offline and is the CI default.
 ## Run
 
 Requirements: Node, Docker Desktop/Engine, a built `pi-system:local`
-image (Pi 0.76.0 was used for the recorded cycle evidence; the kit now pins 0.87.1), and a provider in `~/.pi/agent/models.json`.
+image (Pi 0.76.0 was used for the recorded cycle evidence; the image now installs pi 1.4.0), and a provider in `~/.pi/agent/models.json`.
 
 From the kit checkout:
 
 ```sh
-node packages/core/eval/live/run.mjs --provider pentest --cases hello,clarification,coding,cyber-guided,verify-failure --timeout 300
-node packages/core/eval/live/run.mjs --variant lite --cases hello,clarification,coding,cyber --timeout 300
-node packages/core/eval/live/run.mjs --kit /path/to/unchanged-checkout --cases hello,clarification --timeout 120
+node packages/core/eval/live/run.ts --provider pentest --cases hello,clarification,coding,cyber-guided,verify-failure --timeout 300
+node packages/core/eval/live/run.ts --variant lite --cases hello,clarification,coding,cyber --timeout 300
+node packages/core/eval/live/run.ts --kit /path/to/unchanged-checkout --cases hello,clarification --timeout 120
 ```
 
 Optional arguments: `--models <file>`, `--model <id>`, `--image <image>`.
@@ -75,7 +75,7 @@ failed/error controls (including no cases), and `2` when all behavioral controls
 pass but report evidence review is pending. A separate review artifact records
 that review; it does not rewrite the original run's outcome.
 
-The offline regression suite is `node --test tests/live-evaluation-integrity.test.mjs`.
+The offline regression suite is `node --test tests/live-evaluation-integrity.test.ts`.
 It injects missing/corrupt evidence, interrupted event streams and partial usage,
 and confirms later cases still produce results after a case failure.
 

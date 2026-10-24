@@ -1,6 +1,12 @@
+---
+argument-hint: "[task]"
+---
+
 # Code Orient
 
 Inspect the repository for a coding task.
+
+Task: ${@:-the current task}
 
 Return:
 

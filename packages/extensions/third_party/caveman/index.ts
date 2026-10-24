@@ -47,18 +47,22 @@ const DEFAULT_DETAIL_TRIGGERS = [
 ];
 
 function configPath(): string {
-  return path.join(os.homedir(), ".pi", "agent", "caveman.json");
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+  return path.join(agentDir, "caveman.json");
 }
 
 function loadConfig(): CavemanConfig {
   const fallback: CavemanConfig = { defaultLevel: "full", detailTriggers: DEFAULT_DETAIL_TRIGGERS };
   try {
-    const raw = JSON.parse(fs.readFileSync(configPath(), "utf8")) as Partial<CavemanConfig>;
-    const triggers = Array.isArray(raw.detailTriggers)
-      ? raw.detailTriggers.filter((entry): entry is string => typeof entry === "string")
+    const raw: unknown = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return fallback;
+    const detailTriggers: unknown = Reflect.get(raw, "detailTriggers");
+    const defaultLevel: unknown = Reflect.get(raw, "defaultLevel");
+    const triggers = Array.isArray(detailTriggers)
+      ? detailTriggers.filter((entry): entry is string => typeof entry === "string")
       : [];
     return {
-      defaultLevel: LEVELS.includes(raw.defaultLevel as Level) ? (raw.defaultLevel as Level) : fallback.defaultLevel,
+      defaultLevel: LEVELS.find((level) => level === defaultLevel) ?? fallback.defaultLevel,
       detailTriggers: triggers.length > 0 ? triggers : fallback.detailTriggers,
     };
   } catch {
@@ -74,7 +78,7 @@ function envLevel(): Level | null {
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 let currentSessionId: string | undefined;
 

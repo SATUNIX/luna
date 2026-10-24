@@ -6,7 +6,9 @@ import os from "node:os";
 
 // Protected paths depend on the firewall policy (the same `policy` tool-firewall reads):
 //   coding  — secrets, key files and the agent-control/audit surfaces. `.git/`,
-//             `node_modules/` and `.pi/agents/` are ordinary work there.
+//             `node_modules/` and `.pi/agents/` are ordinary work there, except git's
+//             hooks/, config and info/ and a linked worktree's link to its git dir (see
+//             gitControlPaths), protected under both.
 //   pentest — everything in coding plus repository internals, dependencies, agent
 //             definitions and the engagement records.
 // PI_KIT_PROTECTED_PATHS (semicolon-separated) can only ADD entries.
@@ -17,6 +19,11 @@ const CODING_PROTECTED = [
   // trail, re-arm autonomous mode, or weaken the firewall for a later session.
   ".pi/auto-mode.json", ".pi/verdicts.json", ".pi/trace.jsonl",
   ".pi/tool-firewall-audit.jsonl", ".pi/ctx-contributions/",
+  // The copies trace-ledger and tool-firewall rotate their logs into at 4 MiB.
+  ".pi/trace.jsonl.1", ".pi/tool-firewall-audit.jsonl.1",
+  // The operator's goal: the firewall judge and the system prompt read it as operator intent, so only
+  // the /goal command (goal-core, not a tool call) writes it.
+  ".pi/GOAL.yaml",
   "packages/core/policies/",
   "packages/extensions/src/tool-firewall/default-policy.json",
 ];
@@ -33,14 +40,18 @@ function firewallConfigPath(): string {
   return process.env.PI_KIT_FIREWALL_CONFIG?.trim() || path.join(agentDir(), "pi-kit", "firewall.json");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 // Self-contained mirror of tool-firewall's resolvePolicy: env, then firewall.json, then coding.
 // An unreadable config falls back to coding, whose list still covers secrets and control files.
 export function firewallPolicy(): "coding" | "pentest" {
   const env = process.env.PI_KIT_FIREWALL_PROFILE?.trim().toLowerCase();
   if (env === "pentest" || env === "coding") return env;
   try {
-    const policy = JSON.parse(fs.readFileSync(firewallConfigPath(), "utf8"))?.policy;
-    if (policy === "pentest") return "pentest";
+    const config: unknown = JSON.parse(fs.readFileSync(firewallConfigPath(), "utf8"));
+    if (isRecord(config) && config.policy === "pentest") return "pentest";
   } catch {
     /* no config: coding */
   }
@@ -57,13 +68,90 @@ function firewallStatePaths(): string[] {
     // Remembered approvals: a planted entry here would let an action run without asking.
     process.env.PI_KIT_FIREWALL_APPROVALS?.trim() || path.join(dir, "firewall-approvals.json"),
     process.env.PI_KIT_FIREWALL_SESSIONS_DIR?.trim() || path.join(dir, "firewall-sessions"),
+    // Workflow digest grants (subagent's "Trust this digest"): a planted digest would run a project workflow unasked.
+    path.join(dir, "trusted-workflows.json"),
+    // Per-model Memento opt-ins (effort's "/effort memento on"): a planted entry would opt a model in unasked.
+    path.join(dir, "autonomy.json"),
     // The tool I/O capture log (tool-capture): the agent must not rewrite its own record.
     process.env.PI_KIT_CAPTURE_DIR?.trim() || path.join(dir, "capture"),
   ].map(normalizeSlashes);
 }
 
+// Git's own control files, under either policy: a write to a hook, the config (core.hooksPath,
+// core.fsmonitor, aliases) or info/ (attributes, exclude) runs code or changes what git does in
+// every checkout of the repository. They live in the git common directory, which for a linked
+// worktree (`.git` is a file naming its git dir) is the main checkout's `.git`, outside the
+// worktree. The link itself (the worktree's `.git` file and `<common>/worktrees/`, which holds
+// each worktree's gitdir and commondir) is protected too: rewriting it would point this lookup,
+// and git, at a directory the agent made. The checkout that holds the common dir has its own
+// protected entries protected too, so a workflow agent in `<repo>/.pi/worktrees/...` cannot reach
+// them by an absolute path. A `.git` file that does not name a real git dir is `invalid`, and
+// every write is blocked (fail closed).
+// `links` (a linked worktree's `.git` file) match exactly: `.git/...` under a `.git` file cannot exist.
+export interface GitControl { paths: string[]; links: string[]; roots: string[]; invalid?: string }
+
+export function gitControlPaths(cwd: string): GitControl {
+  let dir = path.resolve(cwd);
+  for (let i = 0; i < 40; i++) {
+    const dotGit = path.join(dir, ".git");
+    let stat: fs.Stats | undefined;
+    try { stat = fs.statSync(dotGit); } catch { stat = undefined; }
+    if (stat) {
+      const links: string[] = [];
+      let commonDir = dotGit;
+      if (stat.isFile()) {
+        const invalid = { paths: [], links: [normalizeSlashes(dotGit)], roots: [], invalid: `${normalizeSlashes(dotGit)} does not name a valid git dir` };
+        const match = /^gitdir:\s*(.+?)\s*$/m.exec(readText(dotGit));
+        if (!match?.[1]) return invalid;
+        const gitDir = canonicalPath(path.resolve(dir, match[1]));
+        if (!isDirectory(gitDir)) return invalid;
+        const common = readText(path.join(gitDir, "commondir")).trim();
+        commonDir = common ? canonicalPath(path.resolve(gitDir, common)) : gitDir;
+        // A linked worktree's git dir is `<common>/worktrees/<name>` and the common dir is a real
+        // repository; a submodule's (no commondir file) is its own common dir.
+        if (common && (path.dirname(gitDir) !== path.join(commonDir, "worktrees") || !isDirectory(path.join(commonDir, "objects")))) return invalid;
+        links.push(normalizeSlashes(dotGit));
+      }
+      const paths = ["hooks", "config", "info", "worktrees"].map((name) => normalizeSlashes(path.join(commonDir, name)));
+      const roots = path.basename(commonDir) === ".git" ? [path.dirname(commonDir)] : [];
+      return { paths, links, roots };
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return { paths: [], links: [], roots: [] };
+}
+
+// What each cwd's lookup found the first time (the extension primes it with the session's cwd
+// when it loads, before any tool call). Later lookups only add to it, so an agent that rewrites a
+// `.git` file afterwards cannot drop the protections the original link gave.
+const firstGitControl = new Map<string, GitControl>();
+
+function trustedGitControl(cwd: string): GitControl {
+  const key = path.resolve(cwd);
+  const fresh = gitControlPaths(key);
+  const first = firstGitControl.get(key);
+  if (!first) {
+    firstGitControl.set(key, fresh);
+    return fresh;
+  }
+  return { paths: [...first.paths, ...fresh.paths], links: [...first.links, ...fresh.links], roots: [...new Set([...first.roots, ...fresh.roots])], ...(fresh.invalid ? { invalid: fresh.invalid } : {}) };
+}
+
+function isDirectory(file: string): boolean {
+  try { return fs.statSync(file).isDirectory(); } catch { return false; }
+}
+
+function readText(file: string): string {
+  try { return fs.readFileSync(file, "utf8"); } catch { return ""; }
+}
+
 function getProtectedPaths(cwd: string): string[] {
-  const defaults = firewallPolicy() === "pentest" ? PENTEST_PROTECTED : CODING_PROTECTED;
+  const policyDefaults = firewallPolicy() === "pentest" ? PENTEST_PROTECTED : CODING_PROTECTED;
+  const git = trustedGitControl(cwd);
+  const mainCheckout = git.roots.flatMap((root) => policyDefaults.filter((entry) => entry.includes("/")).map((entry) => normalizeSlashes(path.join(root, entry))));
+  const defaults = [...policyDefaults, ...git.paths, ...mainCheckout];
   const env = process.env.PI_KIT_PROTECTED_PATHS;
   // PI_KIT_PROTECTED_PATHS can only ADD to the defaults. It previously replaced them, so a
   // child handed a custom list silently lost .env and control-surface protection.
@@ -179,7 +267,7 @@ function bashWriteTargets(command: string): string[] {
   // flag (skipping flags and the inline s/…/…/ program) so a protected operand is caught
   // wherever it sits in the argument list, not only when it happens to be last.
   for (const m of command.matchAll(/\b(?:sed|perl)\b[^\n|;&]*?\s-i\S*([^\n|;&]*)/g)) {
-    for (const rawToken of m[1].split(/\s+/)) {
+    for (const rawToken of (m[1] ?? "").split(/\s+/)) {
       const stripped = stripQuotes(rawToken);
       if (!stripped || stripped.startsWith("-") || looksLikeInlineProgram(rawToken, stripped)) continue;
       push(stripped);
@@ -212,42 +300,83 @@ function looksLikeInlineProgram(rawToken: string, stripped: string): boolean {
 // loads first creates the registry, the others add to it. It is a consistency check, not a
 // boundary against code running in the same process.
 const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
+interface RegistryLike {
+  add(name: string): unknown;
+  has(name: string): unknown;
+  list?: unknown;
+}
+function isRegistryLike(value: unknown): value is RegistryLike {
+  return (typeof value === "object" || typeof value === "function") && value !== null
+    && "add" in value && typeof value.add === "function"
+    && "has" in value && typeof value.has === "function";
+}
+function isIterable(value: unknown): value is Iterable<unknown> {
+  return (typeof value === "object" || typeof value === "function") && value !== null
+    && Symbol.iterator in value && typeof value[Symbol.iterator] === "function";
+}
+// Every kit producer stores a Set; an existing registry is iterated as one, as before.
+const sortedNames = (registry: unknown): string[] => (isIterable(registry) ? [...registry].map(String).sort() : []);
+
+// Tool arguments come from the model: a field is a string, absent (undefined or null), or malformed.
+type TextField = { ok: true; value: string | undefined } | { ok: false; key: string };
+// The first of `keys` that is present (`??` order). A present non-string is malformed, never skipped.
+function textField(input: Record<string, unknown>, keys: readonly string[]): TextField {
+  for (const key of keys) {
+    const value = input[key];
+    if (value === undefined || value === null) continue;
+    return typeof value === "string" ? { ok: true, value } : { ok: false, key };
+  }
+  return { ok: true, value: undefined };
+}
 function registerProtection(name: string): void {
   try {
-    const g = globalThis as unknown as Record<symbol, any>;
-    let reg = g[PROTECTIONS_KEY];
-    if (!reg || typeof reg.add !== "function" || typeof reg.has !== "function") {
+    const g = globalThis as Record<symbol, unknown>;
+    const existing = g[PROTECTIONS_KEY];
+    let reg: RegistryLike;
+    if (isRegistryLike(existing)) {
+      reg = existing;
+    } else {
       reg = new (class ProtectionRegistry extends Set<string> {})();
       g[PROTECTIONS_KEY] = reg;
     }
     reg.add(name);
-    if (typeof reg.list !== "function") Object.defineProperty(reg, "list", { value: () => [...reg].map(String).sort(), enumerable: false, configurable: true });
+    if (typeof reg.list !== "function") Object.defineProperty(reg, "list", { value: () => sortedNames(reg), enumerable: false, configurable: true });
   } catch {
     /* the registry must never break the protection itself */
   }
 }
 
 export default function (pi: ExtensionAPI) {
+  // Record the session checkout's git link before any tool call can change it.
+  trustedGitControl(process.cwd());
   pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName;
-    const input = event.input as Record<string, unknown>;
+    const raw: unknown = event.input;
+    const input = isRecord(raw) ? raw : {};
     const cwd = ctx.cwd || process.cwd();
 
     let candidatePaths: string[] = [];
-    if (toolName === "write" || toolName === "edit") {
-      const filePath = input.path as string | undefined;
-      if (filePath) candidatePaths = [filePath];
-    } else if (toolName === "bash") {
-      const command = (input.command as string | undefined) ?? (input.cmd as string | undefined) ?? (input.script as string | undefined);
-      if (command) candidatePaths = bashWriteTargets(command);
+    const field = toolName === "write" || toolName === "edit" ? textField(input, ["path"]) : toolName === "bash" ? textField(input, ["command", "cmd", "script"]) : null;
+    if (field && !field.ok) {
+      const msg = `protected-paths: blocked ${toolName}: ${field.key} is not a string`;
+      if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+      return { block: true, reason: msg };
     }
+    if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value) : [field.value];
     if (candidatePaths.length === 0) return undefined;
 
+    const git = trustedGitControl(cwd);
+    if (git.invalid) {
+      const msg = `protected-paths: blocked ${toolName}: ${git.invalid}`;
+      if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+      return { block: true, reason: msg };
+    }
     const protectedList = getProtectedPaths(cwd);
     const allowlist = getWriteAllowlist();
     for (const filePath of candidatePaths) {
       // Denylist always applies.
-      if (isProtected(filePath, protectedList, cwd)) {
+      const candidateAbs = canonicalPath(path.resolve(cwd, normalizeSlashes(filePath)));
+      if (isProtected(filePath, protectedList, cwd) || git.links.some((link) => canonicalPath(link) === candidateAbs)) {
         const msg = `protected-paths: blocked ${toolName} to protected path: ${filePath}`;
         if (ctx.hasUI) ctx.ui.notify(msg, "warning");
         return { block: true, reason: msg };

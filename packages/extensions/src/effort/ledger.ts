@@ -18,7 +18,13 @@
  *  - "mandatory" launches (completion review, validators) are required by verification policy,
  *    so they are always allowed up to a fixed bound and never draw on the discretionary budget;
  *  - "user" launches are ones the person typed (a /workflow command): they are not the agent's own
- *    initiative, so only the platform ceilings bound them, and they never draw on the tier budget.
+ *    initiative, so only the platform ceilings bound them, and they never draw on the tier budget;
+ *  - "workflow" launches are the agents of a script-workflow run. They are charged to the session's
+ *    workflow ledger, a separate file that the per-turn scope rotation never replaces, against the
+ *    run's own scope (opened with openRun and named by its run id plus the run token only the engine
+ *    holds): at most `concurrent` live per run, `totalPerRun` per run and `sessionTotal` across the
+ *    session's runs. They never count toward the tier budget or the session ceiling. A "concurrency"
+ *    denial means "wait for a slot"; every other denial is final for the request.
  *
  * Effort budgets govern cost and behaviour, not security: the ledger is a file the session can
  * write, so a hostile process with shell access in the same account could tamper with it. The
@@ -29,7 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TierLimits } from "./policy.ts";
 
-export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user";
+export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user" | "workflow";
 
 export interface LiveEntry {
   id: string;
@@ -39,6 +45,8 @@ export interface LiveEntry {
   requesterTier: string;
   pid: number | null;
   reservedAt: number;
+  /** The workflow run the slot belongs to (workflow launches only). */
+  runId?: string;
 }
 
 export interface Charge {
@@ -48,6 +56,26 @@ export interface Charge {
   role: string;
   scout: boolean;
   outcome?: string;
+}
+
+/** One workflow run's pinned scope. Only a hash of its token is stored. */
+export interface WorkflowRun {
+  tokenHash: string;
+  used: number;
+  openedAt: number;
+}
+
+/** The workflow limits a workflow ledger is created with. */
+export interface WorkflowInit {
+  concurrent: number;
+  totalPerRun: number;
+  sessionTotal: number;
+}
+
+/** The workflow part of a session's workflow ledger: the limits, the session's use, and each run. */
+export interface WorkflowSection extends WorkflowInit {
+  used: number;
+  runs: Record<string, WorkflowRun>;
 }
 
 export interface LedgerData {
@@ -71,9 +99,11 @@ export interface LedgerData {
   mandatoryUsed: number;
   live: LiveEntry[];
   charges: Charge[];
+  /** Present only on a session's workflow ledger. */
+  workflow?: WorkflowSection;
 }
 
-export type DenialCode = "no-ledger" | "concurrency" | "total" | "scouts" | "tier" | "session-ceiling" | "recovery-closed" | "recovery-budget" | "recovery-role" | "mandatory-budget" | "invalid";
+export type DenialCode = "no-ledger" | "concurrency" | "total" | "scouts" | "tier" | "session-ceiling" | "recovery-closed" | "recovery-budget" | "recovery-role" | "mandatory-budget" | "run-scope" | "invalid";
 
 export interface Denial {
   ok: false;
@@ -89,7 +119,7 @@ export interface Granted {
 export interface ReserveRequest {
   kind: LaunchKind;
   role: string;
-  scout?: boolean;
+  scout?: boolean | undefined;
   /** The tier of the process asking (a child asks with its own, lower-or-equal tier). */
   requesterTier: string;
   /** That tier's own limits: a child's request is bounded by the tighter of these and the ledger's. */
@@ -97,7 +127,10 @@ export interface ReserveRequest {
   /** A short label of the tier for messages, e.g. "E3 Standard". */
   requesterLabel: string;
   /** Whether the requested role is read-only (recovery launches accept only those). */
-  readOnly?: boolean;
+  readOnly?: boolean | undefined;
+  /** Workflow launches: the run the agent belongs to, and the token openRun returned for it. */
+  runId?: string | undefined;
+  runToken?: string | undefined;
 }
 
 const LOCK_STALE_MS = 15_000;
@@ -174,7 +207,7 @@ export function withLock<T>(file: string, fn: () => T): T {
       } catch {
         continue; // the holder released it between our attempt and the stat
       }
-      if (Date.now() > deadline) throw new Error(`timed out waiting for the effort ledger lock ${lock}`);
+      if (Date.now() > deadline) throw new Error(`timed out waiting for the effort ledger lock ${lock}`, { cause: error });
       sleepSync(15);
     }
   }
@@ -190,11 +223,33 @@ export function withLock<T>(file: string, fn: () => T): T {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+function isWorkflowRun(value: unknown): value is WorkflowRun {
+  return isRecord(value) && typeof value.tokenHash === "string" && isCount(value.used) && typeof value.openedAt === "number";
+}
+
+function isWorkflowSection(value: unknown): value is WorkflowSection {
+  if (!isRecord(value) || !isCount(value.concurrent) || !isCount(value.totalPerRun) || !isCount(value.sessionTotal) || !isCount(value.used)) return false;
+  const runs = value.runs;
+  return isRecord(runs) && !Array.isArray(runs) && Object.values(runs).every(isWorkflowRun);
+}
+
+// Checks the version and the two lists (and the workflow section, which reserve reads field by
+// field), nothing more: the ledger is this session's own file, and the budget it carries governs
+// cost, not security (see the header).
+function isLedgerData(value: unknown): value is LedgerData {
+  return isRecord(value) && value.schemaVersion === 1 && Array.isArray(value.live) && Array.isArray(value.charges) && (value.workflow === undefined || isWorkflowSection(value.workflow));
+}
+
 export function readLedger(file: string): LedgerData | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as LedgerData;
-    if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.live) || !Array.isArray(parsed.charges)) return null;
-    return parsed;
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isLedgerData(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -206,10 +261,39 @@ function writeLedger(file: string, data: LedgerData): void {
   fs.renameSync(tmp, file);
 }
 
-export function createLedger(file: string, init: Pick<LedgerData, "scope" | "tier" | "limits" | "recovery" | "sessionTotalBefore" | "sessionCeiling" | "mandatoryMax" | "ceilings">): LedgerData {
-  const data: LedgerData = {
+type LedgerInit = Pick<LedgerData, "scope" | "tier" | "limits" | "recovery" | "sessionTotalBefore" | "sessionCeiling" | "mandatoryMax" | "ceilings"> & { workflow?: WorkflowInit };
+
+export function createLedger(file: string, init: LedgerInit): LedgerData {
+  const data = freshLedger(init);
+  withLock(file, () => writeLedger(file, data));
+  return data;
+}
+
+/**
+ * Create the ledger only when no file exists at `file` (checked and written under the lock). An
+ * existing file is never replaced, even an unreadable one: a tampered or corrupt ledger must keep
+ * refusing (code "no-ledger") rather than come back as a fresh, empty budget. Returns whether it
+ * created the file.
+ */
+export function createLedgerIfAbsent(file: string, init: LedgerInit): boolean {
+  return withLock(file, () => {
+    try {
+      fs.lstatSync(file);
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+    writeLedger(file, freshLedger(init));
+    return true;
+  });
+}
+
+function freshLedger(init: LedgerInit): LedgerData {
+  const { workflow, ...rest } = init;
+  return {
     schemaVersion: 1,
-    ...init,
+    ...rest,
+    ...(workflow ? { workflow: { concurrent: workflow.concurrent, totalPerRun: workflow.totalPerRun, sessionTotal: workflow.sessionTotal, used: 0, runs: {} } } : {}),
     recovery: { ...init.recovery, active: false },
     createdAt: Date.now(),
     userUsed: 0,
@@ -220,8 +304,6 @@ export function createLedger(file: string, init: Pick<LedgerData, "scope" | "tie
     live: [],
     charges: [],
   };
-  withLock(file, () => writeLedger(file, data));
-  return data;
 }
 
 /** Drop reservations that will never settle: a dead process, or a slot that never got a pid. */
@@ -234,9 +316,43 @@ function reap(data: LedgerData, now: number): void {
 
 const deny = (code: DenialCode, reason: string): Denial => ({ ok: false, code, reason });
 
+/** A run id: short, and safe in a file name and a message. */
+export const RUN_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+export const hashToken = (token: string): string => crypto.createHash("sha256").update(token).digest("hex");
+
+function tokenMatches(tokenHash: string, token: string): boolean {
+  const a = Buffer.from(tokenHash, "utf8");
+  const b = Buffer.from(hashToken(token), "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Open a workflow run's scope in a workflow ledger (one created with `workflow` limits). A run id is
+ * opened once: opening it again is refused, so a second caller can neither reset the run's count
+ * nor replace its token. Returns the run token, which every reservation for the run must carry.
+ */
+export function openRun(file: string, runId: string, now = Date.now(), newToken: () => string = () => crypto.randomBytes(24).toString("hex")): { ok: true; runToken: string } | Denial {
+  if (!RUN_ID_RE.test(runId)) return deny("invalid", `"${runId.slice(0, 80)}" is not a valid workflow run id (letters, digits, ".", "_" and "-", at most 64)`);
+  try {
+    return withLock(file, () => {
+      const data = readLedger(file);
+      if (!data) return deny("no-ledger", "the workflow ledger is missing or unreadable, so the run cannot be budgeted");
+      if (!data.workflow) return deny("run-scope", "this ledger is not a workflow ledger");
+      if (Object.hasOwn(data.workflow.runs, runId)) return deny("run-scope", `workflow run "${runId}" already has a scope; a run id is opened once`);
+      const runToken = newToken();
+      data.workflow.runs[runId] = { tokenHash: hashToken(runToken), used: 0, openedAt: now };
+      writeLedger(file, data);
+      return { ok: true as const, runToken };
+    });
+  } catch (error) {
+    return deny("no-ledger", `the workflow ledger could not be updated (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
 /** Atomically reserve a slot, or say exactly why not. A grant charges the ledger permanently. */
 export function reserve(file: string, request: ReserveRequest, now = Date.now(), newId: () => string = () => `${process.pid}-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`): Granted | Denial {
-  if (!/^(discretionary|recovery|mandatory|user)$/.test(request.kind)) return deny("invalid", `unknown launch kind "${request.kind}"`);
+  if (!/^(discretionary|recovery|mandatory|user|workflow)$/.test(request.kind)) return deny("invalid", `unknown launch kind "${request.kind}"`);
   try {
     return withLock(file, () => {
       const data = readLedger(file);
@@ -247,7 +363,20 @@ export function reserve(file: string, request: ReserveRequest, now = Date.now(),
       const entry: LiveEntry = { id, kind: request.kind, role: request.role, scout, requesterTier: request.requesterTier, pid: null, reservedAt: now };
       const live = data.live.filter((e) => e.kind === request.kind);
 
-      if (request.kind === "user") {
+      if (request.kind === "workflow") {
+        const wf = data.workflow;
+        if (!wf) return deny("run-scope", "workflow launches need the session's workflow ledger and an open run scope");
+        const runId = request.runId;
+        const run = runId !== undefined && Object.hasOwn(wf.runs, runId) ? wf.runs[runId] : undefined;
+        if (!runId || !run || typeof request.runToken !== "string" || !tokenMatches(run.tokenHash, request.runToken)) return deny("run-scope", `no open workflow run matches this request (unknown run id or wrong run token)`);
+        if (wf.used >= wf.sessionTotal) return deny("session-ceiling", `workflow runs in this session have started ${wf.used} agents, the session limit (${wf.sessionTotal}). Start a new session for more.`);
+        if (run.used >= wf.totalPerRun) return deny("total", `workflow run "${runId}" has started ${run.used} agents, the per-run limit (${wf.totalPerRun}); retries and failed agents count.`);
+        const liveRun = data.live.filter((e) => e.kind === "workflow" && e.runId === runId).length;
+        if (liveRun >= wf.concurrent) return deny("concurrency", `${liveRun} agents of workflow run "${runId}" are already running (limit ${wf.concurrent}). Wait for one to finish.`);
+        run.used++;
+        wf.used++;
+        entry.runId = runId;
+      } else if (request.kind === "user") {
         if (data.userUsed >= data.ceilings.maxTotal) return deny("total", `this request has already run ${data.userUsed} user-directed children, the platform ceiling (${data.ceilings.maxTotal})`);
         if (live.length >= data.ceilings.maxConcurrent) return deny("concurrency", `${live.length} user-directed children are already running (platform ceiling ${data.ceilings.maxConcurrent})`);
         data.userUsed++;

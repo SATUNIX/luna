@@ -1,15 +1,15 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "auto-commit-on-exit",
-  "summary": "Automatically commits uncommitted changes when the pi session shuts down, using the last assistant message as the commit message.",
+  "summary": "Opt-in (no profile enables it): commits uncommitted changes when the pi session shuts down, using the last assistant message as the commit message. Never stages the .pi/ directory.",
   "category": "execution",
   "tier": "T0",
   "layer": 1,
   "entry": "index.ts",
   "hooks": ["session_shutdown"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
-  "enabledByDefault": true,
+  "profiles": [],
+  "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
     "nodeBuiltins": [],
@@ -22,5 +22,5 @@
   "env": [],
   "provenance": { "origin": "vendored" },
   "homeRepo": null,
-  "status": "stable"
+  "status": "experimental"
 }

@@ -54,7 +54,8 @@ export type SaveDeps = {
 
 // --- argument parsing ---------------------------------------------------------
 
-export type SaveArgs = { project?: string; update?: boolean; note: string };
+// `project` is explicitly undefined when `--project` ends the line with no name.
+export type SaveArgs = { project?: string | undefined; update?: boolean; note: string };
 
 /** Parse `/save [--project "Name"] [--update|--no-update] [note…]`. */
 export function parseArgs(raw: string): SaveArgs {
@@ -63,6 +64,8 @@ export function parseArgs(raw: string): SaveArgs {
   const note: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+    // Every match fills one of the two groups, so a token is always a string.
+    if (t === undefined) continue;
     if (t === "--no-update") out.update = false;
     else if (t === "--update") out.update = true;
     else if (t === "--project" || t === "-p") out.project = tokens[++i];
@@ -128,10 +131,16 @@ export function resolveTarget(cwd: string, project?: string): Target {
 
 // The vault must never hold a secret. The summarizer is told to omit them, but
 // a model can still copy one from a tool result, so mask the common shapes.
+// The github_pat_, bearer and URL-credential entries are copied verbatim from
+// tool-capture's SECRET_PATTERNS (extensions are standalone, so no shared import);
+// tests/save-smoke.ts checks save masks every sample tool-capture flags for them, and that
+// redact stays linear on a long run of scheme characters.
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+  /(authorization\s*[:=]\s*["']?(?:bearer|basic|token)\s+)[^\s"']{8,}/gi,
+  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bsk-[A-Za-z0-9_-]{20,}/g,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
@@ -157,15 +166,16 @@ function stamp(d: Date): { iso: string; file: string } {
   return { iso: d.toISOString(), file };
 }
 
+// metaFor fills every key; a value it could not find is undefined.
 export type SnapshotMeta = {
   kind: SnapshotKind;
   when: Date;
   cwd: string;
-  project?: string;
-  sessionFile?: string;
-  model?: string;
-  contextTokens?: number;
-  note?: string;
+  project?: string | undefined;
+  sessionFile?: string | undefined;
+  model?: string | undefined;
+  contextTokens?: number | undefined;
+  note?: string | undefined;
 };
 
 export function renderSnapshot(summary: string, meta: SnapshotMeta): string {
@@ -230,8 +240,11 @@ export function updatePrompt(paths: { latest: string }, target: Target): string 
 
 // --- default summarizer (pi's own compaction prompt, no compaction) ----------
 
+/** The model type pi's registry resolves request auth for (pi types ctx.model as Model<any>). */
+type RegistryModel = Parameters<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>[0];
+
 async function piSummarize(ctx: ExtensionContext, instructions: string, signal: AbortSignal): Promise<string> {
-  const model = ctx.model;
+  const model: RegistryModel | undefined = ctx.model;
   if (!model) throw new Error("no model is selected");
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok) throw new Error(`no request auth for ${model.provider}: ${auth.error}`);
@@ -291,7 +304,10 @@ export function registerSave(pi: ExtensionAPI, deps: SaveDeps = defaultDeps): vo
     description:
       'Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note]',
     handler: async (rawArgs: string, ctx: ExtensionContext) => {
-      if (running) return notify(ctx, "save: a save is already running", "warning");
+      if (running) {
+        notify(ctx, "save: a save is already running", "warning");
+        return;
+      }
       const fail = (err: unknown) =>
         notify(ctx, `save: nothing written - ${err instanceof Error ? err.message : String(err)}`, "error");
 
@@ -303,13 +319,17 @@ export function registerSave(pi: ExtensionAPI, deps: SaveDeps = defaultDeps): vo
         if (!project && vaultProjectsDir() && ctx.hasUI) {
           const local = "(no vault project: write to this workspace)";
           const choice = await ctx.ui.select("Save the snapshot to which vault project?", [local, ...listProjects()]);
-          if (choice === undefined) return notify(ctx, "save: cancelled");
+          if (choice === undefined) {
+            notify(ctx, "save: cancelled");
+            return;
+          }
           project = choice === local ? undefined : choice;
         }
         target = resolveTarget(ctx.cwd, project);
         if (target.project) stickyProject = target.project;
       } catch (err) {
-        return fail(err);
+        fail(err);
+        return;
       }
 
       running = true;
@@ -356,12 +376,13 @@ export function registerSave(pi: ExtensionAPI, deps: SaveDeps = defaultDeps): vo
     },
   });
 
-  pi.on("session_compact", async (event: any, ctx: ExtensionContext) => {
+  pi.on("session_compact", async (event, ctx) => {
     if (process.env.PI_KIT_SAVE_ON_COMPACT === "0") return;
     try {
       const entry = event?.compactionEntry;
       if (typeof entry?.summary !== "string" || !entry.summary.trim()) return;
-      const kind: SnapshotKind = entry.details?.compressor === "pi-kit-compress" ? "compress" : "compact";
+      const details = entry.details;
+      const kind: SnapshotKind = typeof details === "object" && details !== null && "compressor" in details && details.compressor === "pi-kit-compress" ? "compress" : "compact";
       const target = resolveTarget(ctx.cwd, currentProject());
       const when = deps.now();
       writeSnapshot(target, renderSnapshot(entry.summary, metaFor(ctx, kind, when, target)), kind, when);

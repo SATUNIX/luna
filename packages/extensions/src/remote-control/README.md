@@ -25,7 +25,7 @@ is put together.
 
 - `host.ts` finds `packages/web-ui` (as `/console` does: `PI_KIT_WEBUI_ROOT`, then relative to
   this extension, then the checkout in the install marker), starts
-  `packages/web-ui/server/remote-host.js` detached when it is not already running, and speaks the
+  `packages/web-ui/server/remote-host.ts` detached when it is not already running, and speaks the
   host's loopback control channel with the secret from `control.json`.
 - `index.ts` registers `/remote`, draws the pairing QR code as a widget, asks the operator to
   approve each link request, and re-shares the session after `/new`, `/resume`, `/fork` and
@@ -43,5 +43,5 @@ Self-containment: it imports only `node:*` builtins and pi peers.
 
 ## Tests
 
-`npm run smoke:remote-control` (`tests/remote-control-extension-smoke.mjs`) loads the extension
-against the real host; `npm run smoke:remote-host` (`tests/remote-host-smoke.mjs`) covers the host.
+`npm run smoke:remote-control` (`tests/remote-control-extension-smoke.ts`) loads the extension
+against the real host; `npm run smoke:remote-host` (`tests/remote-host-smoke.ts`) covers the host.

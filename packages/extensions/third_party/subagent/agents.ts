@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { toText } from "./config.ts";
 
 export type AgentScope = "user" | "project" | "both";
 export type AgentSource = "kit" | "user" | "project";
@@ -24,21 +25,21 @@ export type AgentSource = "kit" | "user" | "project";
 export interface AgentConfig {
 	name: string;
 	description: string;
-	tools?: string[];
-	model?: string;
+	tools?: string[] | undefined;
+	model?: string | undefined;
 	// Thinking level passed to the child (`--thinking`), e.g. "low" | "medium" | "high".
-	thinking?: string;
+	thinking?: string | undefined;
 	// Skill names whose SKILL.md bodies are preloaded into the child's system prompt.
-	skills?: string[];
+	skills?: string[] | undefined;
 	// Extra kit extensions (names or paths) to load in the isolated child.
-	extensions?: string[];
+	extensions?: string[] | undefined;
 	// Per-role wall-clock ceiling, overriding PI_KIT_SUBAGENT_MAX_RUNTIME_MS.
-	maxRuntimeMs?: number;
+	maxRuntimeMs?: number | undefined;
 	// Effort tier the child works at (minimal..exhaustive, E1..E5). Clamped to the parent's tier at launch:
 	// a child never runs above its parent. Effort never grants permissions.
-	effort?: string;
+	effort?: string | undefined;
 	// Counts against the scout limit of the effort budget (the built-in `scout` role always does).
-	scout?: boolean;
+	scout?: boolean | undefined;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -79,11 +80,11 @@ function parseDuration(value: string | undefined): number | undefined {
 }
 
 export function parseAgentFile(content: string, source: AgentSource, filePath: string): AgentConfig | null {
-	const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
+	const { frontmatter, body } = parseFrontmatter(content);
 	const str = (key: string): string | undefined => {
 		const v = frontmatter[key];
 		if (Array.isArray(v)) return v.map(String).join(",");
-		return v === undefined || v === null ? undefined : String(v);
+		return v === undefined || v === null ? undefined : toText(v);
 	};
 	const name = str("name");
 	const description = str("description");

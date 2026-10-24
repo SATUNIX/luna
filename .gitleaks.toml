@@ -8,20 +8,25 @@ useDefault = true
 description = "Synthetic test fixtures and placeholder tokens"
 regexTarget = "line"
 regexes = [
-  # tests/save-smoke.mjs: fake tokens that the redaction test must scrub.
+  # tests/save-smoke.ts: fake tokens that the redaction test must scrub.
   '''glpat-ABCDEFGHIJKLMNOPQRST and AKIAABCDEFGHIJKLMNOP''',
-  # packages/core/eval/live/target.mjs: placeholder bearer tokens for the throwaway eval target.
+  # packages/core/eval/live/target.ts: placeholder bearer tokens for the throwaway eval target.
   '''Bearer lab-[a-z]+''',
-  # tests/firewall-gate-smoke.mjs, tests/tool-capture-smoke.mjs: fake bearer tokens the
+  # tests/firewall-gate-smoke.ts, tests/tool-capture-smoke.ts: fake bearer tokens the
   # firewall/capture redaction must handle.
   '''Authorization: Bearer abcdefghijklmnop(1234)?''',
-  # packages/web-ui/scripts/ui-smoke.mjs: obvious counting-sequence tokens for the console's
+  # packages/web-ui/scripts/ui-smoke.ts: obvious counting-sequence tokens for the console's
   # client tests; they authenticate nothing.
   '''const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef"''',
   '''const TOKEN = "fedcba9876543210fedcba9876543210fedcba9876543210"''',
-  # tests/autonomy-contract-smoke.mjs: credential-shaped placeholders the contract validator must
+  # tests/autonomy-contract-smoke.ts: credential-shaped placeholders the contract validator must
   # refuse (the AWS documentation-style key and an alphabet-sequence GitLab token).
   '''"glpat-abcdefghij0123456789", "ghp_0123456789abcdefghij0123456789abcd", "AKIAABCDEFGHIJKLMNOP"''',
-  # tests/secret-guard-smoke.mjs: a stub key body ("abc") the secret guard must block.
+  # tests/secret-guard-smoke.ts: a stub key body ("abc") the secret guard must block.
   '''BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END''',
+  # tests/firewall-gate-smoke.ts and tests/tool-capture-smoke.ts: the redaction tables use
+  # obvious made-up values (sequential letters/digits, "hunter2hunter2") that redact() must mask.
+  '''\["(DB_PASSWORD=Zx9pLmQ2rT7vWy psql|export GITLAB_TOKEN=abc123def456ghi789|AWS_SECRET_ACCESS_KEY=abcdEFGHijklMNOP5678 aws s3 ls|curl -H 'x-api-key: abcdefghijkl' x|curl -u admin:hunter2hunter2 http://x|curl --user=admin:hunter2 x)", "''',
+  # tests/tool-capture-smoke.ts (history): the AWS documentation-style placeholder key.
+  '''const awsKey = "AKIAABCDEFGHIJKLMNOP";''',
 ]

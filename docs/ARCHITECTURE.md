@@ -10,17 +10,17 @@
 | Vendored | `packages/extensions/third_party/<name>/` | Adapted upstream extensions (with `SOURCE.md` provenance) |
 | External | `packages/core/sources.json` | Other repos — installed as sibling packages via `pi install git:…` |
 
-`packages/core/registry.mjs` unifies all three into `docs/EXTENSIONS.md`. Profiles reference extension **names** — never paths — so moving an extension between avenues doesn't change anything that refers to it.
+`packages/core/registry.ts` unifies all three into `docs/EXTENSIONS.md`. Profiles reference extension **names** — never paths — so moving an extension between avenues doesn't change anything that refers to it.
 
 ## Extension contract
 
 Every extension:
 - Lives in a single folder (`packages/extensions/src/<name>/` or `packages/extensions/third_party/<name>/`)
 - Has a stable `index.ts` entry point
-- Has an `extension.json` metadata file (validated by `packages/core/verify.mjs`)
+- Has an `extension.json` metadata file (validated by `packages/core/verify.ts`)
 - Imports only `node:*` built-ins and the `typebox` peer — **no sibling imports, no `packages/core/lib`**
 
-This self-containment rule is mechanically enforced by `packages/core/verify.mjs` and is what makes `npm run extract -- <name>` a 5-minute job.
+This self-containment rule is mechanically enforced by `packages/core/verify.ts` and is what makes `npm run extract -- <name>` a 5-minute job.
 
 ## Skills and prompts
 
@@ -36,21 +36,28 @@ Profiles (`packages/kit/profiles/*.json`) are lists of extension names, plus opt
 
 ## Toolchain
 
+Distribution facts have one owner each. `npm run -s distribution:inspect` derives identity,
+runtime compatibility, delivery, capability metadata and profile contracts without creating
+another manifest. [Support and compatibility](support.md) names those owners and the evidence
+required before claiming support. `verify` and `smoke:distribution-contract` enforce mandatory
+profile protections, contribution producers' required context assembler and unique declared tool
+names within each profile.
+
 `packages/core/` is the toolchain only — never imported at extension runtime:
-- `install.mjs` — installs the kit + profile, from a checkout or as a release (git or npm; also the package's `npx` entry point)
-- `lib/distribution.mjs` — reads `distribution.json`; git sources, release tags and channels
-- `release.mjs` / `release-notes.mjs` — cut a release commit and tag (never pushes); write its notes (the GitHub Release itself is created by `.github/workflows/release.yml`)
-- `pack-check.mjs` — checks the npm tarball; `publish-plan.mjs` / `snapshot-version.mjs` pick the npm version and dist-tag; `lockfile-check.mjs` checks lockfile integrity
-- `verify.mjs` — the static gate: schema + tsc + self-containment + collision + profile/manifest
+- `install.ts` — installs the kit + profile, from a checkout or as a release (git or npm; also the package's `npx` entry point)
+- `lib/distribution.ts` — reads `distribution.json`; git sources, release tags and channels
+- `release.ts` / `release-notes.ts` — cut a release commit and tag (never pushes); write its notes (the GitHub Release itself is created by `.github/workflows/release.yml`)
+- `pack-check.ts` — checks the npm tarball; `publish-plan.ts` / `snapshot-version.ts` pick the npm version and dist-tag; `lockfile-check.ts` checks lockfile integrity
+- `verify.ts` — the static gate: schema + tsc + self-containment + collision + profile/manifest
   drift + stub quarantine + firewall policy + security parity + catalogue/matrix drift + docs
   nav. **Every check has a worked failure example in `WRITING_EXTENSIONS.md`.**
-- `registry.mjs` / `skills-catalogue.mjs` / `capability-matrix.mjs` — generate the catalogues
-- `docs-nav-check.mjs` — offline `mkdocs build --strict` stand-in; `check-mermaid.mjs` — parses every Mermaid diagram
-- `check-all.mjs` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.mjs`)
-- `lib/effort.mjs` — the effort policy loader shared by the toolchain and the autonomy runner
+- `registry.ts` / `skills-catalogue.ts` / `capability-matrix.ts` — generate the catalogues
+- `docs-nav-check.ts` — offline `mkdocs build --strict` stand-in; `check-mermaid.ts` — parses every Mermaid diagram
+- `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`)
+- `lib/effort.ts` — the effort policy loader shared by the toolchain and the autonomy runner
 - `eval/` — the offline behavioural fixture harness (`npm run eval`)
-- `dream.mjs` — offline dream-mode pass (allowlisted internal state only; it does not write `AGENTS.md`)
-- `new-extension.mjs` / `extract-extension.mjs` — scaffolding helpers
+- `dream.ts` — offline dream-mode pass (allowlisted internal state only; it does not write `AGENTS.md`)
+- `new-extension.ts` / `extract-extension.ts` — scaffolding helpers
 - `lib/` — shared toolchain utilities
 
 Static checks (`verify`) + behavioural checks (`eval`, `test:security`) + docs checks

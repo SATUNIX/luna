@@ -18,6 +18,7 @@
     "services": [],
     "models": []
   },
+  "profileRequires": ["context-sieve"],
   "pulls": [],
   "env": ["PI_KIT_GUARD_MODE", "PI_KIT_GUARD_REPEAT", "PI_KIT_GUARD_STALL", "PI_KIT_GUARD_OSC", "PI_KIT_GUARD_ESCALATE"],
   "provenance": { "origin": "custom" },

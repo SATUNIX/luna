@@ -8,16 +8,18 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { runRegistry } from "./run-model.ts";
 import type { LiveChild } from "./types.ts";
 
 const live = new Map<string, LiveChild>();
 
 // Read-only view for the status bar (globalThis so extensions stay self-contained): how many children
-// run right now and how many have finished, and failed, since this session started.
+// run right now and how many have finished, and failed, since this session started, plus how many
+// workflow runs are active in the telemetry registry (run-model.ts).
 const SUBAGENTS_KEY = Symbol.for("pi-kit.subagents");
 let finished = 0;
 let failures = 0;
-(globalThis as Record<symbol, unknown>)[SUBAGENTS_KEY] = { snapshot: () => ({ live: live.size, finished, failures }) };
+(globalThis as Record<symbol, unknown>)[SUBAGENTS_KEY] = { snapshot: () => ({ live: live.size, finished, failures, workflows: runRegistry.activeCount() }) };
 
 /** Count a settled child (called once per run, whatever its outcome). */
 export function noteFinished(failed: boolean): void {

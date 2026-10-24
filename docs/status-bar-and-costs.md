@@ -121,7 +121,7 @@ Not covered: the two-line "head" cat, a blinking or wandering idle cat, a sleepi
 a retrying state (the faces exist, but nothing in pi reports them to the extension), and a spinner
 glyph after the text (pi's indicator sits before it). Tool errors are classified by their text
 because no structured denial signal exists, so an unusual refusal message is shown as a warning.
-`tests/cat-status-smoke.mjs` (`npm run smoke:cat-status`) pins the animation table, the priority,
+`tests/cat-status-smoke.ts` (`npm run smoke:cat-status`) pins the animation table, the priority,
 the wiring to pi's events and the command.
 
 ## Tips and the todo checklist

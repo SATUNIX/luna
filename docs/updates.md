@@ -24,12 +24,28 @@ The `kit-update` extension, loaded in every profile, checks all three parts.
 |---|---|
 | `/update` | Check now, then pick: everything, pi-system, pi, linked packages, or a channel switch |
 | `/update status` | Installed and available versions for every part |
-| `/update all` | Update pi-system and linked packages, re-apply your profile, reload; then update pi |
+| `/update all` | Update pi-system and linked packages, re-apply your profile, reload; then update pi, up to the tested version (below) |
 | `/update kit`, `/update pi`, `/update packages` | Update one part |
 | `/update channel latest` / `next` / `X.Y.Z` | Follow the other channel, or pin a release |
 
 Every update asks for confirmation first. A new pi version needs a restart of pi; everything
 else reloads in place.
+
+### pi stays within the tested version
+
+`/update` moves pi only up to the version the installed pi-system release is tested with. That is
+the pi version its `package.json` pins for the test suite ([Support](support.md) lists the tested
+and supported versions).
+
+- A newer pi still shows in `/update status`, together with the tested version.
+- `/update pi` and `/update all` leave pi where it is and say why. They cannot stop part-way,
+  because `pi update --self` always installs the newest pi.
+- To go past the tested version, update pi-system first (a newer release may be tested with the
+  newer pi), or run `pi update --self` yourself.
+- If pi is already newer than the tested version, `/update status` says so.
+- A kit whose `package.json` has no exact pin keeps offering the newest pi.
+
+`tests/kit-update-smoke.ts` pins each of these cases.
 
 ### Updates are verified
 
@@ -58,13 +74,29 @@ reports "up to date" for a lookup that did not happen.
 After pi-system updates, your recorded profile is re-applied, so extensions a new release adds to
 your profile load, and companions move to the kit's newly reviewed pins.
 
+Verification stops a failed update; it does not undo successful earlier package installs or
+restore an updated checkout. When the run stops after the kit was replaced and before the profile
+was re-applied, the message says the new kit is running with the previous profile's settings,
+names the version (and commit) the kit was at with the command that goes back to it where one
+exists (`/update channel <version>`, or `git -C <checkout> reset --keep <commit>` for a local
+checkout), and prints the exact installer command that re-applies the profile
+(`tests/kit-update-smoke.ts`). Save a copy of your agent directory before changing releases, keep
+the previous tag, and reinstall that tag and re-apply your profile if recovery is needed.
+`smoke:kit-update` checks the stop-on-failure behaviour; whole-update crash recovery is not
+covered. Avoid simultaneous updates or profile switches from multiple sessions.
+
+Uninstall uses the installation marker to identify managed companion packages. If any removal
+fails, it returns a nonzero exit status and keeps the marker so the same command can be retried
+after fixing the error. The marker is removed only after all removals succeed; `--dry-run`
+changes nothing. `smoke:install-marker` checks partial failure, marker preservation and retry.
+
 ## Channels
 
 | Channel | Registered in pi as | Gets |
 |---|---|---|
 | `latest` | `git:github.com/SATUNIX/pi-system@v<newest release>` | The newest release tag. Betas count until the first stable release; after that, only stable releases |
 | `next` | `git:github.com/SATUNIX/pi-system` (no tag) | Every commit on `main` |
-| pinned | `git:github.com/SATUNIX/pi-system@v0.2.4-beta.0` | Exactly that release, never moved automatically |
+| pinned | `git:github.com/SATUNIX/pi-system@v<version>` | Exactly that release, never moved automatically |
 
 `latest` and a pin look the same in pi's settings (a tag). The installer records which one you
 chose in `~/.pi/agent/.pi-kit.json`, and `/update` follows that record.
@@ -91,7 +123,7 @@ The same updates from a shell:
 
 ```sh
 pi update --self                                                    # pi
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.1          # the kit, to a new release (latest or a pin)
+pi install git:github.com/SATUNIX/pi-system@v<version>             # the kit, to a new release (latest or a pin)
 pi update git:github.com/SATUNIX/pi-system                         # the kit, on next
 pi update --extensions                                              # every unpinned package
 node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs --profile balanced --yes --settings-only
@@ -117,6 +149,22 @@ Where releases come from is set in `packages/core/distribution.json` (`"delivery
 delivery (`@satunix/pi-system` dist-tags) is built but the package is not published; see
 [Releasing](releasing.md#npm-publication-optional). When a kit release changes the delivery,
 `/update kit` moves each install over, keeping its channel and profile.
+
+`git.previousSources` lists former public delivery sources. Registrations from those
+repositories are recognised as the kit, ignoring transport and ref. When one differs from the
+current `git.source`, `/update kit` offers to move it using the installer, keeping its channel,
+profile and project scope. An exact version remains an exact version. This list is separate from
+`git.legacySources`, whose retired private sources must never be contacted. Malformed
+`previousSources` metadata is refused. The list is empty in the shipped configuration
+(`tests/kit-update-smoke.ts`, `tests/distribution-smoke.ts` and
+`tests/distribution-contract-smoke.ts`).
+
+The kit also recognises itself under the package name `@satunix/luna` and the repository
+`github.com/SATUNIX/luna` (any ref, any URL form), as well as every pi-system form. A repository
+named `luna` under another owner or host is not the kit, so a fork of it is recognised only
+through an explicit `previousSources` entry. The unrelated npm package `luna` is never touched by
+duplicate-registration cleanup (`tests/install-profile-filter-smoke.ts`,
+`tests/profile-command-smoke.ts`).
 
 ## Coming from the private GitLab source
 

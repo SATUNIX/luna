@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { completeSimple, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import path from "node:path";
 import {
@@ -11,11 +11,10 @@ import {
   loadIndex,
   logError,
   migrateMemoryLocal,
-  projectName,
   recentRecaps,
+  resolveProject,
   saveMemory,
   searchMemories,
-  type MemoryType,
   type VaultConfig,
 } from "./vault.ts";
 import { AUTO_PROMOTE_TYPES, RECAP_SYSTEM, digestTurn, isTrivial, parseRecap, recapPrompt, type Completer } from "./recap.ts";
@@ -48,7 +47,9 @@ function text(content: string, isError = false) {
 
 // Default completer: the configured recap model ("provider/id"), else the session model.
 function modelCompleter(ctx: ExtensionContext, cfg: VaultConfig): Completer | null {
-  let model = ctx.model;
+  // ctx.model is Model<any> in pi's types; the registry's find() returns Model<Api>. Pin the
+  // local to Model<Api> so the any does not flow into getApiKeyAndHeaders/completeSimple.
+  let model: Model<Api> | undefined = ctx.model;
   if (cfg.recapModel) {
     const slash = cfg.recapModel.indexOf("/");
     const found = slash > 0 ? ctx.modelRegistry.find(cfg.recapModel.slice(0, slash), cfg.recapModel.slice(slash + 1)) : undefined;
@@ -61,10 +62,17 @@ function modelCompleter(ctx: ExtensionContext, cfg: VaultConfig): Completer | nu
     const auth = await registry.getApiKeyAndHeaders(chosen);
     if (!auth.ok) throw new Error(`no request auth for ${chosen.provider}: ${auth.error}`);
     const headers = auth.headers ? Object.fromEntries(Object.entries(auth.headers).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
+    // exactOptionalPropertyTypes: omit the optional fields rather than assigning explicit undefined.
+    const options: SimpleStreamOptions = {
+      maxTokens: 1200,
+      ...(auth.apiKey !== undefined ? { apiKey: auth.apiKey } : {}),
+      ...(headers !== undefined ? { headers } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+    };
     const reply = await completeSimple(
       chosen,
       { systemPrompt: system, messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
-      { apiKey: auth.apiKey, headers, signal, maxTokens: 1200 },
+      options,
     );
     return reply.content
       .filter((p) => p.type === "text")
@@ -88,7 +96,9 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
 
   pi.on("session_start", async (_event, ctx) => {
     cfg = loadConfig();
-    project = projectName(ctx.cwd);
+    project = resolveProject(cfg.root, ctx.cwd, (message) => {
+      if (ctx.hasUI) ctx.ui.notify(message, "warning");
+    });
     // A child (e.g. a workflow's "remember" step) may use the tools, which need the project;
     // it never recalls, recaps or migrates.
     if (isChild()) return;
@@ -121,7 +131,8 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
         }
       }
       firstPrompt = false;
-      const hits = searchMemories(cfg.root, event.prompt ?? "", { project, limit: cfg.recallLimit + injected.size, minScore: cfg.minScore, gate: true })
+      // A run started by an extension's custom message (pi 1.2+) has no prompt to recall against.
+      const hits = searchMemories(cfg.root, "prompt" in event ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size, minScore: cfg.minScore, gate: true })
         .filter((h) => !injected.has(h.rel))
         .slice(0, cfg.recallLimit);
       if (hits.length) {
@@ -140,7 +151,8 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
 
   pi.on("agent_end", async (event, ctx) => {
     if (isChild() || !cfg.recaps) return;
-    const digest = digestTurn((event as { messages?: any[] }).messages ?? []);
+    const messages: readonly unknown[] = event.messages ?? [];
+    const digest = digestTurn(messages);
     if (!digest || isTrivial(digest)) return;
     if (pending >= 2) return; // a backlog means the recap model is slow or failing: drop, don't pile up
     const complete = deps.complete ?? modelCompleter(ctx, cfg);
@@ -164,9 +176,10 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
           return;
         }
         appendRecap(root, proj, parsed.recap, now(), sessionId);
+        // Model-derived candidates stay in this project: only an explicit save makes a memory global.
         if (autoPromote) {
           for (const c of parsed.candidates.filter((c) => AUTO_PROMOTE_TYPES.has(c.type))) {
-            saveMemory(root, { title: c.title, body: c.body, type: c.type, scope: c.type === "preference" ? "global" : "project", project: proj, source: "recap" });
+            saveMemory(root, { title: c.title, body: c.body, type: c.type, scope: "project", project: proj, source: "recap" });
           }
         }
         try {
@@ -175,7 +188,7 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
           /* the session may have moved on */
         }
       })
-      .catch((error) => logError(root, `recap failed: ${String(error)}`))
+      .catch((error: unknown) => logError(root, `recap failed: ${String(error)}`))
       .finally(() => {
         pending--;
       });
@@ -204,7 +217,17 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
     }),
     async execute(_id, params) {
       try {
-        const r = saveMemory(cfg.root, { title: params.title, body: params.content, type: params.type as MemoryType | undefined, tags: params.tags, scope: params.scope, pinned: params.pinned, project, source: "agent" });
+        // exactOptionalPropertyTypes: omit optionals the caller left unset rather than passing undefined.
+        const r = saveMemory(cfg.root, {
+          title: params.title,
+          body: params.content,
+          project,
+          source: "agent",
+          ...(params.type !== undefined ? { type: params.type } : {}),
+          ...(params.tags !== undefined ? { tags: params.tags } : {}),
+          ...(params.scope !== undefined ? { scope: params.scope } : {}),
+          ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
+        });
         return text(`Memory ${r.action}: ${r.rel}`);
       } catch (error) {
         return text(`memory_save failed: ${String(error)}`, true);
@@ -223,7 +246,7 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
       limit: Type.Optional(Type.Number()),
     }),
     async execute(_id, params) {
-      const hits = searchMemories(cfg.root, params.query, { project, scope: params.scope, limit: Math.max(1, Math.min(Number(params.limit) || 8, 25)) });
+      const hits = searchMemories(cfg.root, params.query, { project, limit: Math.max(1, Math.min(Number(params.limit) || 8, 25)), ...(params.scope !== undefined ? { scope: params.scope } : {}) });
       return text(hits.length ? formatHits(hits) : "No matching memories.");
     },
   });
@@ -253,7 +276,7 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
         scope = "global";
         raw = raw.replace(/^global:\s*/i, "");
       }
-      const title = raw.split(/[.\n]/)[0].split(/\s+/).slice(0, 10).join(" ");
+      const title = (raw.split(/[.\n]/)[0] ?? "").split(/\s+/).slice(0, 10).join(" ");
       const r = saveMemory(cfg.root, { title, body: raw, scope, project, source: "user", type: /\b(prefer|always|never|don't|do not)\b/i.test(raw) ? "preference" : "fact" });
       ctx.ui.notify(`Memory ${r.action}: ${r.rel}`, "info");
     },

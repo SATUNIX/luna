@@ -22,7 +22,7 @@ node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs \
   --profile <your profile> --yes --settings-only --capture-overrides
 ```
 
-(Once a release is tagged, `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0` pins it.) The
+(Once a release is tagged, `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.6` pins it.) The
 installer sees the retired registration and:
 
 - **registers the public source and removes the retired one**, so the kit is not loaded twice
@@ -47,8 +47,8 @@ A `PI_SYSTEM_GIT_SOURCE` that still names a retired source (the earlier SSH inst
 export one) is **ignored with a warning** by this release's code. Unset it. To use SSH with the
 public repository, set `PI_SYSTEM_GIT_SOURCE=git:git@github.com:SATUNIX/pi-system`.
 
-Pinned by `tests/kit-update-smoke.mjs` (detection, no contact with the retired host, no pull) and
-`tests/distribution-smoke.mjs` (the installer's source selection, channel and hand-edit capture).
+Pinned by `tests/kit-update-smoke.ts` (detection, no contact with the retired host, no pull) and
+`tests/distribution-smoke.ts` (the installer's source selection, channel and hand-edit capture).
 The move has been exercised against local fixtures and a stand-in `pi`, not against the real public
 repository, because no release tag exists yet.
 

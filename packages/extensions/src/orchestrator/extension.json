@@ -15,9 +15,9 @@
   "registers": {
     "tools": [],
     "commands": [
-      "/orchestrate",
-      "/orchestrate-plan",
-      "/orchestrate-implement-review"
+      "orchestrate",
+      "orchestrate-plan",
+      "orchestrate-implement-review"
     ]
   },
   "profiles": [
@@ -46,6 +46,7 @@
     "services": [],
     "models": []
   },
+  "profileRequires": ["context-sieve"],
   "pulls": [
     "subagent"
   ],

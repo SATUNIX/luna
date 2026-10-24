@@ -29,7 +29,7 @@ flowchart LR
   native -->|TLS, certificate pinned| host
 ```
 
-- The **remote host** (`packages/web-ui/server/remote-host.js`) is a Node process that `/remote`
+- The **remote host** (`packages/web-ui/server/remote-host.ts`) is a Node process that `/remote`
   starts in the background and that every pi terminal on the computer shares. It serves
   pi-console's API (see [Web console](web-console.md)) over HTTPS to linked phones only, and adds
   linking, sign-in and terminal sharing. It keeps running after pi exits, until `/remote stop`.
@@ -49,7 +49,7 @@ flowchart LR
    columns wide, so the panel is laid out for the terminal it is in: the QR code beside the details
    when the terminal is wide, above them when it is only tall, and otherwise the details alone,
    with the size the QR code needs. The details are enough to link a phone by hand. The panel
-   follows the terminal as it is resized. `tests/remote-control-extension-smoke.mjs` pins the
+   follows the terminal as it is resized. `tests/remote-control-extension-smoke.ts` pins the
    three layouts and that no line is wider than the terminal.
 3. In the app, tap **Link a computer** and scan the QR code. The camera app works too: the code is
    a `pirc://pair` link that opens pi remote. Without a camera, choose **Enter the details
@@ -90,7 +90,7 @@ and `PI_REMOTE_ADVERTISE` adds names, such as a MagicDNS name, to the list.
 
 ### A computer without a terminal session
 
-On a headless computer, `node packages/web-ui/server/remote-cli.js` manages the host, over SSH for
+On a headless computer, `node packages/web-ui/server/remote-cli.ts` manages the host, over SSH for
 example: `start`, `status`, `pair` (shows the QR code and asks for the approval in that terminal),
 `devices`, `revoke`, `rename` and `stop`. It must run as the same user as the host.
 
@@ -182,7 +182,8 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
   lock.
 - **pi remote has been run on an Android 14 emulator only**, not on a physical phone, and QR
   decoding through a real camera has not been exercised (a `pirc://pair` link, which takes the same
-  path after decoding, has). It needs Android 10 or newer.
+  path after decoding, has). The current build, which targets Android 17, has only been launched
+  on an Android 17 test image without system bars or a keyboard. It needs Android 10 or newer.
 - **No iOS app.** The host has been run on Linux only; macOS is untested and Windows is not
   supported.
 - The app is installed from an APK you build and sign. Updates must be signed with the same key
@@ -190,7 +191,7 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
 
 ## Tests that pin this
 
-`tests/remote-host-smoke.mjs` (`npm run smoke:remote-host`) runs the real host with a stub pi and a
+`tests/remote-host-smoke.ts` (`npm run smoke:remote-host`) runs the real host with a stub pi and a
 protocol client that does what the app does. It checks that the state is owner-only and the
 served certificate is the pinned one; that every `/api` route needs a token; that wrong codes burn
 an offer and a proof made over another certificate burns the code; that a correct code waits for
@@ -200,7 +201,7 @@ phone; that the control secret never reaches a pi child; that a terminal session
 and driven; that revoking a phone, or the phone unlinking itself, ends its token and streams at
 once; and that repeated failures block the address.
 
-`tests/remote-control-extension-smoke.mjs` (`npm run smoke:remote-control`) loads the extension
+`tests/remote-control-extension-smoke.ts` (`npm run smoke:remote-control`) loads the extension
 against the real host. It checks that nothing opens until `/remote`; that a phone is linked only
 after the terminal approves its device ID; that history and live events reach the phone; that
 prompts, steering, abort, model and thinking changes work from the phone and `/remote` does not;

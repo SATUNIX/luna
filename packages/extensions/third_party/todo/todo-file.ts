@@ -67,8 +67,8 @@ export function readTodos(filePath: string): { todos: Todo[]; nextId: number } {
   for (const line of content.split(/\r?\n/)) {
     const m = line.match(/^- \[([ xX~])\] #(\d+): (.+)$/);
     if (m) {
-      const id = parseInt(m[2], 10);
-      todos.push({ id, text: m[3], state: m[1] === "~" ? "active" : m[1] === " " ? "open" : "done" });
+      const id = parseInt(m[2] ?? "", 10);
+      todos.push({ id, text: m[3] ?? "", state: m[1] === "~" ? "active" : m[1] === " " ? "open" : "done" });
       if (id >= nextId) nextId = id + 1;
     }
   }

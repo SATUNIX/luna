@@ -19,21 +19,28 @@ interface Verdict {
   at: string;
   evidence?: string;
 }
+// The board is read back from disk, so each verdict stays `unknown` until the code reading it
+// checks its shape: a corrupt entry is simply not a pass.
 interface Board {
-  verdicts: Record<string, Verdict>;
+  verdicts: Record<string, unknown>;
   generation?: number;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
 }
 
 // Kept in parity with orchestrator's own copy (self-containment forbids importing it) —
 // AG-04: a verdict older than this is no longer trusted as proof of a current-state
-// pass. Only enforced when `at` parses to a real date.
+// pass. Missing, malformed and future timestamps cannot establish freshness either.
 const VERDICT_MAX_AGE_MS = Number(process.env.PI_KIT_VERDICT_MAX_AGE_MS) || 24 * 60 * 60 * 1000;
 
+// Shared completion contract: tests/verifier-board-trust-smoke.ts pins all local readers.
 function isStale(at: unknown): boolean {
-  if (typeof at !== "string") return false;
+  if (typeof at !== "string") return true;
   const parsed = Date.parse(at);
-  if (Number.isNaN(parsed)) return false;
-  return Date.now() - parsed > VERDICT_MAX_AGE_MS;
+  const now = Date.now();
+  return Number.isNaN(parsed) || parsed > now || now - parsed > VERDICT_MAX_AGE_MS;
 }
 
 function boardPath(cwd: string): string {
@@ -42,8 +49,10 @@ function boardPath(cwd: string): string {
 
 function load(cwd: string): Board {
   try {
-    const b = JSON.parse(fs.readFileSync(boardPath(cwd), "utf8")) as Board;
-    if (b.verdicts && typeof b.verdicts === "object" && !Array.isArray(b.verdicts)) return b;
+    const b: unknown = JSON.parse(fs.readFileSync(boardPath(cwd), "utf8"));
+    if (isRecord(b) && isRecord(b.verdicts) && !Array.isArray(b.verdicts)) {
+      return typeof b.generation === "number" ? { verdicts: b.verdicts, generation: b.generation } : { verdicts: b.verdicts };
+    }
   } catch {
     /* fall through */
   }
@@ -94,7 +103,7 @@ export function isBoardComplete(b: Board): boolean {
   let trustedPassing = false;
   for (const s of sources) {
     const v = b.verdicts[s];
-    if (!v || v.pass !== true || isStale(v.at)) return false;
+    if (!isRecord(v) || v.pass !== true || isStale(v.at)) return false;
     if (isTrustedVerdictSource(s)) trustedPassing = true;
   }
   return trustedPassing;
@@ -105,10 +114,10 @@ export function summarize(b: Board): { overall: boolean; lines: string[] } {
   if (sources.length === 0) return { overall: false, lines: ["(no verdicts recorded yet)"] };
   const lines = sources.map((s) => {
     const v = b.verdicts[s];
-    if (!v || typeof v !== "object") return `- ${s}: FAIL — (malformed verdict)`;
+    if (!isRecord(v)) return `- ${s}: FAIL — (malformed verdict)`;
     const stale = v.pass && isStale(v.at);
     const label = stale ? "STALE (re-verify)" : v.pass ? "PASS" : "FAIL";
-    return `- ${s}: ${label} — ${v.summary}`;
+    return `- ${s}: ${label} — ${String(v.summary)}`;
   });
   return { overall: isBoardComplete(b), lines };
 }
@@ -136,9 +145,15 @@ function todos(cwd: string, sessionId?: string): { open: string[]; total: number
 
 function tasks(cwd: string): { open: string[]; total: number } {
   try {
-    const g = JSON.parse(fs.readFileSync(path.join(cwd, ".pi", "task-graph.json"), "utf8"));
-    const list = Array.isArray(g?.tasks) ? g.tasks : [];
-    return { open: list.filter((t: any) => t?.status !== "done").map((t: any) => `${t.id} [${t.status}] ${t.title}`), total: list.length };
+    const g: unknown = JSON.parse(fs.readFileSync(path.join(cwd, ".pi", "task-graph.json"), "utf8"));
+    const list: unknown[] = isRecord(g) && Array.isArray(g.tasks) ? g.tasks : [];
+    const open = list.filter((t) => !isRecord(t) || t.status !== "done").map((t) => {
+      // Reading a field of a null entry threw here before, which leaves the task line out; keep that.
+      if (t === null) throw new TypeError("null task-graph entry");
+      const task: Record<string, unknown> = isRecord(t) ? t : {};
+      return `${String(task.id)} [${String(task.status)}] ${String(task.title)}`;
+    });
+    return { open, total: list.length };
   } catch {
     return { open: [], total: 0 };
   }
@@ -213,12 +228,13 @@ export default function (pi: ExtensionAPI) {
       }
       const locked = withBoardLock(ctx.cwd, () => {
         const b = load(ctx.cwd);
-        b.verdicts[params.source] = {
+        const verdict: Verdict = {
           pass: params.pass,
           summary: params.summary,
           at: new Date().toISOString(),
           ...(params.evidence ? { evidence: params.evidence.slice(0, 500) } : {}),
         };
+        b.verdicts[params.source] = verdict;
         save(ctx.cwd, b);
         return b;
       });
@@ -245,7 +261,7 @@ export default function (pi: ExtensionAPI) {
       if ((args ?? "").trim() === "clear") {
         const locked = withBoardLock(ctx.cwd, () => {
           const current = load(ctx.cwd);
-          const cleared: Board = { verdicts: {}, generation: current.generation };
+          const cleared: Board = { verdicts: {}, ...(current.generation !== undefined ? { generation: current.generation } : {}) };
           save(ctx.cwd, cleared);
           return cleared;
         });

@@ -10,7 +10,10 @@ and engagement scaffolding. Behaviour and skills are installed from the `pi-syst
 - Compatibility compose: `docker-compose.yml`
 - Capability id: `pi-system`
 - Persistent data root: `/srv/data/pi-system`
-- Health endpoint: `http://127.0.0.1:${APP_PORT:-8080}/health`
+- Health check: `healthcheck.py --check` is a local probe (the data root is writable) and needs
+  no server. The `/health` HTTP endpoint is served only when `healthcheck.py --serve` is run
+  explicitly, and binds `127.0.0.1` unless `PI_AGENT_HEALTH_HOST` is set
+  (`tests/container-static-smoke.ts`).
 - Interactive entry: `docker exec -it <container> pi-agent`
 
 ## Quick start
@@ -75,6 +78,45 @@ Release builds require `PI_KIT_REPO` and fail if the baked kit cannot be verifie
 Dev runtime installs from `PI_KIT_PATH` without interactive flags and applies `PI_KIT_PROFILE`,
 which defaults to `balanced`.
 
+`pi-agent` fails closed: if no kit is found (neither `PI_KIT_PATH` nor `/opt/pi-system` holds
+`packages/core/install.mjs`), or `pi install` or the profile apply fails, it prints the error,
+does not start pi, and exits non-zero. `PI_AGENT_ALLOW_UNGOVERNED=1` starts pi anyway with a
+warning. The entrypoint seeds `settings.json`, `mcp-adapter.json` and `models.json` into
+`PI_CODING_AGENT_DIR`, the directory pi reads (`tests/container-static-smoke.ts`). It seeds a
+file only when it is missing, so a data root from an earlier image keeps its `settings.json`, and
+with it the earlier `pi-mcp-adapter` pin, until you update the `packages` entry by hand (see
+[MCP adapter](#mcp-adapter)).
+
+## MCP adapter
+
+The image runs `pi-mcp-adapter@6.0.0`, pinned in `overlays/pi/settings.json` (and, for
+reference, the `PI_MCP_ADAPTER_VERSION` build argument). pi installs it into
+`PI_CODING_AGENT_DIR/npm` the first time it starts. The adapter replaces Pi's built-in MCP client;
+the overlay's `"-builtin:mcp"` entry keeps the built-in off, so the adapter does not rewrite
+`settings.json` itself.
+
+The adapter reads its servers and settings from `mcp-adapter.json` in `PI_CODING_AGENT_DIR`, and
+from nothing else: the image sets `PI_MCP_CONFIG_MODE=exclusive`, so Pi's own `mcp.json`,
+`~/.config/mcp/mcp.json`, `~/.agents/mcp.json` and a project's `.mcp.json` or `.pi/` MCP files are
+not read. Add a server, such as the Burp bridge in `capability/docs/BURP_MCP.md`, to that file.
+The image also sets `MCP_DIRECT_TOOLS=__none__`, and `mcp-adapter.json` sets
+`namespaceProxyTools: false`, so the model sees one MCP tool, `mcp`, and every MCP call reaches
+`pentest-governance-domain` under that name. Without them, 6.0.0 registers an `mcp__<server>` proxy
+per server and a deferred `mcp__<server>__<tool>` tool per server tool, and runs each `mcp` call as
+a nested call to that tool, which MCP-only mode blocks. `allowInstall`, `allowScriptToolSave` and
+`jev` are off, so the model cannot add servers or script tools, and tool search never calls the
+remote Jev service.
+
+`scripts/validate-pentest-env.sh` (run by `tests/container-static-smoke.ts`) fails when the pin,
+one of these settings or one of the two environment variables changes. No automated test loads the
+adapter into pi: the tool surface above was checked by hand in a built image.
+
+A data root seeded by an image that ran `pi-mcp-adapter@2.8.0` keeps that pin in its
+`settings.json`. To move it to this image, change the `packages` entry to
+`npm:pi-mcp-adapter@6.0.0` and add `"extensions": ["-builtin:mcp"]` (or delete `settings.json`,
+which the entrypoint then seeds again). The entrypoint seeds `mcp-adapter.json` beside the old
+`mcp.json`; 6.0.0 ignores `mcp.json`, so copy any server you added there into `mcp-adapter.json`.
+
 ## CI
 
 The root [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the kit verify gate and
@@ -125,8 +167,8 @@ Dockerfile              ← pins pi-coding-agent; installs the monorepo
 capability/compose/     ← canonical compose files
 capability/env/         ← non-secret defaults
 mcp-servers/governance/ ← pi_system_governance MCP server (evidence, notes, state)
-mcp-servers/memory-mcp/ ← durable memory MCP server (Qdrant-backed)
-overlays/pi/            ← settings.json, mcp.json, models.json seeded at startup
+mcp-servers/memory-mcp/ ← durable memory MCP server (SQLite and JSONL)
+overlays/pi/            ← settings.json, mcp-adapter.json, models.json seeded at startup
 engagement/             ← example scope/ROE/tool-policy templates
 scripts/                ← entrypoint, pi-agent launcher, healthcheck, validation
 capability/docs/        ← operator guide, runbook, security model, golden path

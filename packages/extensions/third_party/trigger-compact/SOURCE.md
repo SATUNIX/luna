@@ -20,3 +20,6 @@
     session already above the threshold fires once and a threshold that compaction cannot get under
     cannot loop; (5) unknown usage (no window, `tokens: null` after a compaction) is never read as 0;
     (6) `compaction.enabled`/`reserveTokens` are read with pi's precedence and trust rules.
+  - 2026-10-15: typed for strict TypeScript (no behaviour change).
+  - The settings file is read as unknown; its `compaction` block is used only when it is a plain
+    object, as before, without a cast (nothing pins this).

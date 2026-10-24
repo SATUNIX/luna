@@ -6,7 +6,7 @@ future work; see [Roadmap](roadmap.md) for that.
 
 ## What the kit is
 
-Pi System is a **capability layer for the [pi coding agent](https://github.com/earendil-works/pi)**:
+Pi System is an **opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi)**:
 extensions, skills, prompt templates, themes, profiles and an installer. It adds what pi
 deliberately leaves out of its core (a permission gate, delegation, durable memory, verification,
 recovery, observability) and packages it so one command installs a coherent set.
@@ -52,7 +52,7 @@ lower ones are solid.
 
 | Tier | Name | The agent can | Provided by |
 |---|---|---|---|
-| **T0** | Safe substrate | Not damage the repository or leak secrets; every action is recoverable; progress survives a crash. | guards, checkpoints, auto-commit |
+| **T0** | Safe substrate | Not damage the repository or leak secrets; every action is recoverable; progress survives a crash. | guards, checkpoints |
 | **T1** | Durable quick-task agent | Make fast, correct edits; remember project facts; keep context lean. | memory, handoff, context hygiene |
 | **T2** | Verified agent | Refuse to declare victory on broken code; self-correct from verifier feedback. | verify-gate, verifier-board |
 | **T3** | Long-horizon agent | Hold a goal and plan, persist state across context resets, isolate risky work, recover by evidence. | goal-core, task-graph, branch-lab, autonomous-loop |

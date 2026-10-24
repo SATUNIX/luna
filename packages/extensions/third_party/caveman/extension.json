@@ -7,7 +7,7 @@
   "layer": 3,
   "entry": "index.ts",
   "hooks": ["session_start", "input"],
-  "registers": { "tools": [], "commands": ["/caveman"] },
+  "registers": { "tools": [], "commands": ["caveman"] },
   "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
@@ -18,8 +18,9 @@
     "services": [],
     "models": []
   },
+  "profileRequires": ["context-sieve"],
   "pulls": [],
-  "env": ["PI_KIT_CAVEMAN_LEVEL"],
+  "env": ["PI_KIT_CAVEMAN_LEVEL", "PI_CODING_AGENT_DIR"],
   "provenance": { "origin": "vendored" },
   "homeRepo": "https://github.com/jonjonrankin/pi-caveman",
   "status": "beta"

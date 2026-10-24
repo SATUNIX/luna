@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "_comment": "Shipped firewall policy (v2). AUTHORITATIVE runtime copy: packages/core/policies/default.json is a byte-identical mirror (verify.mjs enforces it). Override with PI_KIT_FIREWALL_POLICY=/path/to/policy.json. Shell commands are analysed by tool-firewall's parser and classifier (tiers low/medium/high/critical), not by regexes; `tools` pins non-shell tools (allow = known, content still analysed; ask = always ask a human; deny = never). `defaults.unknown` applies to tools with no entry and no read-only name. `command_rules` are OPERATOR rules matched in every policy against the raw command and each parsed step (deny -> critical, ask -> high). `policies.pentest.command_rules` add the strict engagement rules (a superset of pentest-governance-domain's DESTRUCTIVE_COMMANDS, checked by verify.mjs) when firewall.json selects the pentest policy.",
+  "_comment": "Shipped firewall policy (v2). AUTHORITATIVE runtime copy: packages/core/policies/default.json is a byte-identical mirror (verify.ts enforces it). Override with PI_KIT_FIREWALL_POLICY=/path/to/policy.json. Shell commands are analysed by tool-firewall's parser and classifier (tiers low/medium/high/critical), not by regexes; `tools` pins non-shell tools (allow = known, content still analysed; ask = always ask a human; deny = never). `defaults.unknown` applies to external tools with no exact entry; names and command fields do not grant authority (ask -> high, deny -> critical). Only exact, case-sensitive pi core identities (read/bash/powershell/edit/write/grep/find/ls) and bundled codemode/tool_search remain known under ask; aliases merely select adapters and confer no trust. Incomplete adapters require operator approval, even with allow. Codemode scripts need approval and every nested call is independently gated; a deny default requires exact entries for every tool. Explicit tool ask/deny applies to every adapter. Invalid policy files/rules deny ALL calls until repaired; content digests detect revisions, and pending approvals are re-evaluated after a revision. Reviewed companion read helpers are allowed explicitly; multi-target mutation/code-execution helpers ask. Exact names cannot authenticate implementations. External network_read adapters require an exact allow entry with risk_class network_read. `command_rules` are OPERATOR rules matched in every policy against the raw command and each parsed step (deny -> critical, ask -> high). `policies.pentest.command_rules` add the strict engagement rules (a superset of pentest-governance-domain's DESTRUCTIVE_COMMANDS, checked by verify.ts) when firewall.json selects the pentest policy.",
   "defaults": {
     "unknown": "ask"
   },
@@ -31,7 +31,7 @@
     },
     "todo": {
       "decision": "allow",
-      "risk_class": "read_only"
+      "risk_class": "task_state"
     },
     "write": {
       "decision": "allow",
@@ -81,7 +81,15 @@
       "decision": "allow",
       "risk_class": "read_only"
     },
+    "task_clear": {
+      "decision": "allow",
+      "risk_class": "task_state"
+    },
     "record_verdict": {
+      "decision": "allow",
+      "risk_class": "verdict"
+    },
+    "StructuredOutput": {
       "decision": "allow",
       "risk_class": "verdict"
     },
@@ -123,7 +131,7 @@
     },
     "skill_score": {
       "decision": "allow",
-      "risk_class": "read_only"
+      "risk_class": "skill_write"
     },
     "branch_create": {
       "decision": "allow",
@@ -134,7 +142,7 @@
       "risk_class": "branch_write"
     },
     "branch_discard": {
-      "decision": "allow",
+      "decision": "ask",
       "risk_class": "branch_write"
     },
     "branch_merge": {
@@ -161,9 +169,17 @@
       "decision": "allow",
       "risk_class": "delegation"
     },
+    "workflow": {
+      "decision": "ask",
+      "risk_class": "delegation"
+    },
     "workflow_status": {
       "decision": "allow",
       "risk_class": "read_only"
+    },
+    "workflow_control": {
+      "decision": "allow",
+      "risk_class": "process_control"
     },
     "verify_completion": {
       "decision": "allow",
@@ -188,6 +204,10 @@
     "goal_status": {
       "decision": "allow",
       "risk_class": "read_only"
+    },
+    "loop_complete": {
+      "decision": "allow",
+      "risk_class": "task_state"
     },
     "pilens_analyze": {
       "decision": "allow",
@@ -226,12 +246,104 @@
       "risk_class": "read_only"
     },
     "pilens_lsp_navigation": {
-      "decision": "allow",
-      "risk_class": "read_only"
+      "decision": "ask",
+      "risk_class": "code_exec"
     },
     "pilens_lsp_diagnostics": {
       "decision": "allow",
       "risk_class": "read_only"
+    },
+    "symbol_search": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "project_report": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "effective_config": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "lens_diagnostic_mark": {
+      "decision": "ask",
+      "risk_class": "file_write"
+    },
+    "pi_lens_activate_tools": {
+      "decision": "allow",
+      "risk_class": "tool_discovery"
+    },
+    "powershell": {
+      "decision": "allow",
+      "risk_class": "shell"
+    },
+    "codemode": {
+      "decision": "ask",
+      "risk_class": "code_exec"
+    },
+    "tool_search": {
+      "decision": "allow",
+      "risk_class": "tool_discovery"
+    },
+    "dispatch_specialist": {
+      "decision": "allow",
+      "risk_class": "delegation"
+    },
+    "dispatch_validator": {
+      "decision": "allow",
+      "risk_class": "delegation"
+    },
+    "ast_grep_search": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "ast_grep_outline": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "ast_grep_dump": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "ast_dump": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "module_report": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "read_enclosing": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "ast_grep_replace": {
+      "decision": "ask",
+      "risk_class": "file_write"
+    },
+    "lsp_navigation": {
+      "decision": "ask",
+      "risk_class": "code_exec"
+    },
+    "search": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "refs": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "def": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "hover": {
+      "decision": "allow",
+      "risk_class": "read_only"
+    },
+    "rename": {
+      "decision": "ask",
+      "risk_class": "file_write"
     }
   },
   "command_rules": {

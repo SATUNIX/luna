@@ -3,7 +3,11 @@
 A self-hosted web console for the **Pi coding agent**: list, create, run, and interact with
 Pi sessions and the agents defined in your Pi installation — from one browser tab.
 
-- **Zero dependencies, no build step.** Plain Node.js (`node:http`) backend, vanilla JS frontend.
+- **No runtime dependencies.** Plain Node.js (`node:http`) backend; `package.json` lists no
+  `dependencies`. The browser code is TypeScript in `src/`, compiled by `npm run build:web` into
+  the committed `public/js/` and `mobile/` `.js` files (`internal/docs/adr/0002`). Edit `src/`,
+  never the generated `.js`: `npm run smoke:web-build` fails when they differ. Serving the console
+  compiles nothing.
 - **Real Pi sessions.** Each open session is backed by a real `pi --mode rpc` child process;
   the console proxies Pi's JSONL protocol and streams events to the browser over SSE.
 - **Live sync with the CLI.** Sessions you run in the terminal show up live in the console:
@@ -46,7 +50,8 @@ The prompt composer's border is violet `#5200ff` by design.
 
 **Chat messages render markdown** — headings, lists, tables, blockquotes, inline code and
 fenced code blocks, with syntax colouring (keywords magenta, strings lime, numbers orange,
-comments dim, functions violet). Rendering is done by `public/js/markdown.js`, which builds DOM
+comments dim, functions violet). Rendering is done by `src/public/js/markdown.ts` (served as
+`public/js/markdown.js`), which builds DOM
 nodes directly and never parses HTML from a message, so agent output cannot inject markup;
 links are scheme-checked.
 
@@ -60,13 +65,16 @@ The three triangles in the top bar toggle the sessions panel, the inspector and 
 - Node.js ≥ 22.19 (pi's own minimum)
 - The `pi` CLI on `PATH`
 - A configured provider/model in `<pi home>/models.json`
-  (defaults to `~/.pi/agent`, overridable with `PI_CODING_AGENT_DIR`)
+  (defaults to `~/.pi/agent`, overridable with `PI_CODING_AGENT_DIR`). The New session picker
+  lists only the providers in `models.json`; a provider you signed in to with `/login` and that
+  has no `models.json` entry does not appear (`tests/web-ui-server-smoke.ts`).
 
 ## Run
 
+From the repository root:
+
 ```bash
-cd pi-console
-npm start
+npm --prefix packages/web-ui start    # runs node packages/web-ui/server/server.ts
 ```
 
 The server generates an access token for this run and prints a login link on the terminal:
@@ -93,6 +101,14 @@ Standalone setup, from the repo root:
 npm run install:web   # checks prerequisites, registers the extension, prints how to start
 ```
 
+With a kit already installed, it reinstalls the installed profile only when that profile (with
+`<agent dir>/pi-kit/overrides.json` applied) includes `web-console`. For a profile that does not,
+such as `quick` or `lite`, it changes nothing, names the profiles that include it, suggests
+`--profile balanced`, and does not offer `/console`; if `overrides.json` also lists `web-console`
+in `extensions.remove`, it says that entry must be removed too. For a profile that includes
+`web-console` but whose `extensions.remove` drops it, it names that entry as the cause instead
+(`tests/web-ui-install-smoke.ts`).
+
 Environment overrides:
 
 | Variable | Default | Purpose |
@@ -118,7 +134,11 @@ Environment overrides:
   session from the web is refused (409) while another process owns it, so two writers never clash.
 - **New session** — choose working directory, agent, provider/model, and thinking level.
 - **Agents** — browse, **create, edit, rename and delete** the agents discovered from
-  `~/.pi/agents` and the project `.pi/agents`; start a session pre-bound to any of them.
+  the user directory `<agent dir>/agents` (`~/.pi/agent/agents` unless `PI_CODING_AGENT_DIR`
+  moves it; the same directory the subagent tool reads user roles from) and the project
+  directory, which is the kit's own `packages/kit/agents` unless `PI_CONSOLE_PROJECT_AGENTS`
+  names another (`server/config.ts`; the tests point both at temporary directories,
+  `tests/web-ui-api-smoke.ts`); start a session pre-bound to any of them.
   Agent GET/DELETE/PUT accept `?source=user|project` to disambiguate duplicate names
   (the same name can exist at both levels).
 - **Live chat** — assistant replies rendered as **markdown** with coloured code blocks,
@@ -127,7 +147,7 @@ Environment overrides:
 - **Inspector** — per-session stats (tokens in/out/cache, cost, context-window usage), the
   session's own todo list, and pi-lens diagnostics for the files it touched.
 - **Thinking wheel** — an animated activity readout that rotates through status phrases
-  (`Working`, `Triangulating`, …) and switches to concrete labels (`Reading server.js`,
+  (`Working`, `Triangulating`, …) and switches to concrete labels (`Reading server.ts`,
   `Running \`ls\``,`Delegating to a subagent`) as the agent works, plus an elapsed timer.
 - **Config view** — how this installation is set up: pi home, settings, models, paths, lens
   status, prompt templates and skills.
@@ -139,32 +159,32 @@ Environment overrides:
 ## Architecture
 
 ```
-Browser (public/)  ──HTTP──▶  server/server.js  ──JSONL stdin/stdout──▶  pi --mode rpc
+Browser (public/)  ──HTTP──▶  server/server.ts  ──JSONL stdin/stdout──▶  pi --mode rpc
         ▲                      REST + SSE hub                                  │
         └────── SSE events ◀─────────── events ───────────────────────────────┘
 ```
 
 | File | Responsibility |
 | --- | --- |
-| `server/config.js` | paths, ports, runtime dir |
-| `server/security.js` | bind/token policy, Host / Origin / token / content-type gate, security headers |
-| `server/validate.js` | validation of session ids, spawn config and RPC arguments |
-| `server/agents.js` | discover + parse agent `.md` files (frontmatter + body) |
-| `server/agentstore.js` | create/update/delete agent files (path-safe, the only writer) |
-| `server/models.js` | providers/models from `models.json` + default from `settings.json` |
-| `server/sessions.js` | read-only listing of Pi's session `.jsonl` files |
-| `server/spawn.js` | spawn/kill one `pi --mode rpc` child per session; JSONL framing; response correlation; event fan-out |
-| `server/tailer.js` | follow a session file written by another process (live CLI sync) |
-| `server/stats.js` | token/cost/context stats (live RPC, or computed from the session file) |
-| `server/todos.js` | read the kit's per-session todo file |
-| `server/lens.js` | pi-lens session diagnostics |
-| `server/configinfo.js` | installation config + prompt templates + skills |
-| `server/routes.js` | REST endpoints + SSE stream |
-| `server/server.js` | HTTP server, static files, shutdown |
+| `server/config.ts` | paths, ports, runtime dir |
+| `server/security.ts` | bind/token policy, Host / Origin / token / content-type gate, security headers |
+| `server/validate.ts` | validation of session ids, spawn config and RPC arguments |
+| `server/agents.ts` | discover + parse agent `.md` files (frontmatter + body) |
+| `server/agentstore.ts` | create/update/delete agent files (path-safe, the only writer) |
+| `server/models.ts` | providers/models from `models.json` only + default from `settings.json` |
+| `server/sessions.ts` | read-only listing of Pi's session `.jsonl` files |
+| `server/spawn.ts` | spawn/kill one `pi --mode rpc` child per session; JSONL framing; response correlation; event fan-out |
+| `server/tailer.ts` | follow a session file written by another process (live CLI sync) |
+| `server/stats.ts` | token/cost/context stats (live RPC, or computed from the session file) |
+| `server/todos.ts` | read the kit's per-session todo file |
+| `server/lens.ts` | pi-lens session diagnostics |
+| `server/configinfo.ts` | installation config + prompt templates + skills |
+| `server/routes.ts` | REST endpoints + SSE stream |
+| `server/server.ts` | HTTP server, static files, shutdown |
 
-The same modules also serve phones. `server/remote-host.js` (started by `/remote`) offers this API
+The same modules also serve phones. `server/remote-host.ts` (started by `/remote`) offers this API
 over HTTPS to phones linked with the pi remote Android app, and `server/remote/*` adds linking,
-signed-challenge sign-in, terminal-session sharing and answers to dialogs; `server/remote-cli.js`
+signed-challenge sign-in, terminal-session sharing and answers to dialogs; `server/remote-cli.ts`
 manages it without a pi terminal. `mobile/` holds the app's screens, which reuse
 `public/js/render.js` and `public/js/panels.js`. See `docs/remote-control.md`.
 
@@ -218,7 +238,7 @@ of attaching a second writer.
 
 ```bash
 scripts/smoke-test.sh [provider] [model]   # full end-to-end check (server + real pi child)
-node scripts/ui-smoke.mjs                  # offline frontend wiring check (no browser needed)
+node scripts/ui-smoke.ts                  # offline frontend wiring check (no browser needed)
 ```
 
 `smoke-test.sh` starts the server on an isolated port and an isolated session directory, then

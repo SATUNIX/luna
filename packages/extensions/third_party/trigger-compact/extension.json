@@ -7,7 +7,7 @@
   "layer": 3,
   "entry": "index.ts",
   "hooks": ["turn_end", "agent_settled"],
-  "registers": { "tools": [], "commands": ["/trigger-compact", "/compact-threshold"] },
+  "registers": { "tools": [], "commands": ["trigger-compact", "compact-threshold"] },
   "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],

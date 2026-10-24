@@ -1,4 +1,4 @@
-// host.ts — find, start, stop and talk to the pi remote host (packages/web-ui/server/remote-host.js).
+// host.ts — find, start, stop and talk to the pi remote host (packages/web-ui/server/remote-host.ts).
 //
 // The host is a separate detached Node process so that it outlives any one pi session and serves
 // every terminal that attaches. This module only ever talks to it over its loopback control
@@ -17,13 +17,24 @@ const READY_POLL_MS = 250;
 const LOG_ROTATE_BYTES = 1024 * 1024;
 const LOG_TAIL_BYTES = 800;
 
-export type Json = Record<string, any>;
+/** A JSON object from the host (or about to go to it). Its fields are unchecked until read. */
+export type Json = Record<string, unknown>;
+
+/** A host field as a template literal shows it (the host sends strings; anything else shows as it always has). */
+export function show(value: unknown): string {
+  return String(value);
+}
+
+/** Whether a parsed value is a JSON object (not null, not an array). */
+export function isJson(value: unknown): value is Json {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 }
 
-/** Must match stateDir() in packages/web-ui/server/remote/store.js. */
+/** Must match stateDir() in packages/web-ui/server/remote/store.ts. */
 export function stateDir(): string {
   return process.env.PI_REMOTE_STATE_DIR || path.join(agentDir(), "remote-control");
 }
@@ -42,11 +53,23 @@ function isFile(p: string): boolean {
 
 function readJson(file: string): Json | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isJson(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The web UI's `server/<stem>` entry point: `.ts` in a checkout or git-delivered install, `.js` in
+ * the compiled npm artefact (internal/docs/adr/0001). Null when neither exists.
+ */
+function webUiEntry(webUiRoot: string, stem: string): string | null {
+  for (const ext of [".ts", ".js"]) {
+    const file = path.join(webUiRoot, "server", `${stem}${ext}`);
+    if (isFile(file)) return file;
+  }
+  return null;
 }
 
 /**
@@ -55,7 +78,7 @@ function readJson(file: string): Json | null {
  * install marker. Returns null rather than guessing.
  */
 export function findWebUiRoot(): string | null {
-  const hasHost = (dir: string) => isFile(path.join(dir, "server", "remote-host.js"));
+  const hasHost = (dir: string) => webUiEntry(dir, "remote-host") !== null;
   const override = process.env.PI_KIT_WEBUI_ROOT?.trim();
   if (override && hasHost(override)) return override;
   try {
@@ -75,12 +98,12 @@ export function findWebUiRoot(): string | null {
 }
 
 export class HostError extends Error {
-  constructor(
-    message: string,
-    readonly code: "not_running" | "refused" | "timeout" | "closed" | "start_failed" = "refused",
-    readonly status?: number,
-  ) {
+  readonly code: "not_running" | "refused" | "timeout" | "closed" | "start_failed";
+  readonly status: number | undefined;
+  constructor(message: string, code: HostError["code"] = "refused", status?: number) {
     super(message);
+    this.code = code;
+    this.status = status;
   }
 }
 
@@ -88,21 +111,27 @@ export class HostError extends Error {
 export class ControlLink {
   private buffer = "";
   private nextId = 1;
-  private pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   closed = false;
   onMessage: (msg: Json) => void = () => {};
   onClose: () => void = () => {};
 
-  private constructor(private socket: net.Socket) {}
+  private readonly socket: net.Socket;
+
+  private constructor(socket: net.Socket) {
+    this.socket = socket;
+  }
 
   /** Connect and authenticate. Throws HostError("not_running") when no host answers. */
   static open(role: "admin" | "bridge", timeoutMs = HELLO_TIMEOUT_MS): Promise<ControlLink> {
     const control = readJson(statePath("control.json"));
-    if (!control || !Number.isInteger(control.port) || typeof control.secret !== "string") {
+    const port = control?.port;
+    const secret = control?.secret;
+    if (typeof port !== "number" || !Number.isInteger(port) || typeof secret !== "string") {
       return Promise.reject(new HostError("the remote host is not running", "not_running"));
     }
     return new Promise((resolve, reject) => {
-      const socket = net.connect({ host: "127.0.0.1", port: control.port });
+      const socket = net.connect({ host: "127.0.0.1", port });
       const link = new ControlLink(socket);
       let greeted = false;
       const timer = setTimeout(() => {
@@ -112,7 +141,7 @@ export class ControlLink {
       socket.setNoDelay(true);
       socket.setEncoding("utf8");
       socket.on("connect", () => {
-        socket.write(`${JSON.stringify({ t: "hello", secret: control.secret, role, pid: process.pid })}\n`);
+        socket.write(`${JSON.stringify({ t: "hello", secret, role, pid: process.pid })}\n`);
       });
       socket.on("data", (chunk: string) => {
         link.buffer += chunk;
@@ -121,12 +150,15 @@ export class ControlLink {
           const line = link.buffer.slice(0, nl).replace(/\r$/, "");
           link.buffer = link.buffer.slice(nl + 1);
           if (!line.trim()) continue;
-          let msg: Json;
+          let parsed: unknown;
           try {
-            msg = JSON.parse(line);
+            parsed = JSON.parse(line);
           } catch {
             continue;
           }
+          // A record that is not an object (`null`, a number) has no fields. Reading one as if it had
+          // threw here, inside the socket's data listener, where nothing catches it and pi exits.
+          const msg: Json = isJson(parsed) ? parsed : {};
           if (!greeted) {
             clearTimeout(timer);
             if (msg.t === "hello" && msg.ok === true) {
@@ -160,12 +192,12 @@ export class ControlLink {
   }
 
   private dispatch(msg: Json): void {
-    if (msg.t === "res" && typeof msg.id === "string" && this.pending.has(msg.id)) {
-      const entry = this.pending.get(msg.id)!;
+    const entry = msg.t === "res" && typeof msg.id === "string" ? this.pending.get(msg.id) : undefined;
+    if (entry && typeof msg.id === "string") {
       this.pending.delete(msg.id);
       clearTimeout(entry.timer);
       if (msg.ok) entry.resolve(msg.data);
-      else entry.reject(new HostError(String(msg.error || "the remote host refused the request"), "refused", msg.status));
+      else entry.reject(new HostError(show(msg.error || "the remote host refused the request"), "refused", typeof msg.status === "number" ? msg.status : undefined));
       return;
     }
     try {
@@ -184,11 +216,11 @@ export class ControlLink {
     }
   }
 
-  /** An admin request; resolves with the reply's data. */
-  request<T = Json>(op: string, args: Json = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  /** An admin request; resolves with the reply's data, unchecked. */
+  request(op: string, args: Json = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
     if (this.closed) return Promise.reject(new HostError("the control connection is closed", "closed"));
     const id = `r${this.nextId++}`;
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new HostError(`the remote host did not answer (${op})`, "timeout"));
@@ -206,22 +238,27 @@ export class ControlLink {
 }
 
 /** One admin round trip: open, ask, close. */
-export async function adminRequest<T = Json>(op: string, args: Json = {}): Promise<T> {
+export async function adminRequest(op: string, args: Json = {}): Promise<unknown> {
   const link = await ControlLink.open("admin");
   try {
-    return await link.request<T>(op, args);
+    return await link.request(op, args);
   } finally {
     link.close();
   }
 }
 
 export async function hostStatus(): Promise<Json | null> {
+  let data: unknown;
   try {
-    return await adminRequest("status");
+    data = await adminRequest("status");
   } catch (error) {
     if (error instanceof HostError && (error.code === "not_running" || error.code === "timeout")) return null;
     throw error;
   }
+  // No data reads as no host, as it always has; data that is not an object is a host fault, not a status.
+  if (!data) return null;
+  if (!isJson(data)) throw new HostError("the remote host sent a malformed status", "refused");
+  return data;
 }
 
 function tailLog(): string {
@@ -278,7 +315,7 @@ export async function ensureHost(): Promise<EnsureResult> {
   const out = fs.openSync(logFile, "a", 0o600);
   let exited: { code: number | null } | null = null;
   try {
-    const child = spawn(process.execPath, [path.join(root, "server", "remote-host.js")], {
+    const child = spawn(process.execPath, [webUiEntry(root, "remote-host") ?? path.join(root, "server", "remote-host.ts")], {
       cwd: root,
       detached: true,
       stdio: ["ignore", out, out],

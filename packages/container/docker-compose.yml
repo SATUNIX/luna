@@ -6,8 +6,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PI_CODING_AGENT_VERSION: ${PI_CODING_AGENT_VERSION:-0.87.1}
-        PI_MCP_ADAPTER_VERSION: ${PI_MCP_ADAPTER_VERSION:-2.8.0}
+        PI_CODING_AGENT_VERSION: ${PI_CODING_AGENT_VERSION:-1.4.0}
+        PI_MCP_ADAPTER_VERSION: ${PI_MCP_ADAPTER_VERSION:-6.0.0}
     image: ${PI_AGENT_IMAGE:-pi-system:local}
     working_dir: /workspace
     stdin_open: true
@@ -15,12 +15,11 @@ services:
     environment:
       HOME: /srv/data/pi-system/home
       PI_AGENT_DATA_ROOT: /srv/data/pi-system
-      PI_AGENT_HEALTH_HOST: 0.0.0.0
       PI_AGENT_HEALTH_PORT: ${APP_PORT:-8080}
       PI_CODING_AGENT_DIR: /srv/data/pi-system/pi-agent
       PI_CODING_AGENT_SESSION_DIR: /srv/data/pi-system/sessions
       PI_KIT_MEMORY_BACKEND: ${PI_KIT_MEMORY_BACKEND:-mcp}
-      PI_KIT_MEMORY_MCP_ARGS: ${PI_KIT_MEMORY_MCP_ARGS:-/opt/pi-agent/mcp-servers/memory-mcp/index.js}
+      PI_KIT_MEMORY_MCP_ARGS: ${PI_KIT_MEMORY_MCP_ARGS:-/opt/pi-agent/mcp-servers/memory-mcp/index.ts}
       PI_KIT_MEMORY_MCP_COMMAND: ${PI_KIT_MEMORY_MCP_COMMAND:-node}
       PI_KIT_MEMORY_MCP_DATA_ROOT: /srv/data/pi-system
       PI_OFFLINE: ${PI_OFFLINE:-0}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Entrypoint of the autonomy image (docs/autonomy.md). One image, roles chosen by the supervisor
-# (packages/autonomy/lib/docker.mjs):
+# (packages/autonomy/lib/docker.ts):
 #   agent               pi in RPC mode on /work; stdout is the RPC channel, so everything
 #                       else goes to stderr
 #   bundle <branch>     write the worker repo's branch to /out/agent.bundle (repo mounted read-only)
@@ -11,7 +11,7 @@
 #                       point the worker repo's branch at <sha> from /in/branch.bundle; tags matching
 #                       <tag-glob> (unmerged cycles) become branches under <attempts-glob>
 # Acceptance checks do not run through this entrypoint: they run in their own network-less
-# container through lib/check-runner.mjs, from definitions in the run directory.
+# container through lib/check-runner.ts, from definitions in the run directory.
 set -euo pipefail
 role="${1:-agent}"; shift || true
 git_() { git -c safe.directory='*' -c core.hooksPath=/dev/null -c protocol.file.allow=always "$@"; }
@@ -71,7 +71,7 @@ node -e '
 [ -f /opt/pi-kit/package.json ] || { echo "kit missing at /opt/pi-kit" >&2; exit 3; }
 [ -d /state/npm-cache ] || { [ -d /opt/npm-cache ] && cp -a /opt/npm-cache /state/npm-cache || mkdir -p /state/npm-cache; }
 # The relay is the only provider endpoint; the key here is a placeholder the relay replaces.
-# The supervisor writes /state/run-models.json with the run's model specs (lib/models.mjs).
+# The supervisor writes /state/run-models.json with the run's model specs (lib/models.ts).
 provider_name=openrouter
 [ "${PI_PROVIDER:-openrouter}" = openrouter ] || provider_name=relay
 if [ -f /state/run-models.json ]; then cp /state/run-models.json /state/agent/models.json

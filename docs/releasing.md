@@ -18,31 +18,54 @@ release on its own, and the release workflow defaults to a dry run.
 
 ## Cutting a release
 
+`main` is protected, so a release lands through a reviewed pull request on GitHub, never a direct
+push:
+
 ```sh
-# 1. On main, with a clean tree: add a "## [0.2.4-beta.1]" section to CHANGELOG.md and commit it.
+# 1. Fetch the tags, then branch from main with a clean tree. Add a "## [0.2.4-beta.4]" section
+#    to CHANGELOG.md and commit it.
+git fetch --tags origin
+git switch -c release/v0.2.4-beta.4 origin/main
 # 2. Run the full gate, bump every package.json and the lockfile, commit, tag (local only).
 #    The gate is `npm ci --dry-run`, `npm run check:all` (about eight minutes), the lockfile check and a
 #    strict MkDocs build (`python -m pip install -r requirements-docs.txt` first; the script says so
 #    before it starts if MkDocs is missing):
-npm run release -- 0.2.4-beta.1
-# 3. Review the commit and tag, then push both:
-git push origin main --follow-tags
+npm run release -- 0.2.4-beta.4
+# 3. Push the branch and merge it into main through a reviewed pull request:
+git push -u origin release/v0.2.4-beta.4
+# 4. Once the release commit is on main, push the tag:
+git push origin v0.2.4-beta.4
 ```
 
-`release.mjs` refuses to run on a dirty tree, without a CHANGELOG section, or when the version does
-not move forward (prerelease-aware: `0.2.4-beta.0 < 0.2.4-beta.1 < 0.2.4`). It never pushes.
-`npm run release -- 0.2.4-beta.1 --dry-run` runs every gate without changing anything.
-`--bump-only` syncs the version fields and lockfile without gates, commit or tag, which is how a
-release branch is prepared.
+`release.ts` never pushes. It refuses to run:
 
-**The first release** is the version already in `package.json` (`0.2.4-beta.0`). With no `v*`
-tags yet, `npm run release -- 0.2.4-beta.0` finds every version field already at that version and
-only gates and tags it.
+- on a dirty tree, or without a CHANGELOG section;
+- when the version is already tagged, or is not newer than the newest release tag in the clone
+  (prerelease-aware: `0.2.4-beta.9 < 0.2.4-beta.10 < 0.2.4`), which is why step 1 fetches the
+  tags;
+- when the version is older than `package.json`'s.
+
+`npm run release -- 0.2.4-beta.4 --dry-run` runs every gate without changing anything.
+
+`--bump-only` syncs these without gates, commit or tag:
+
+- the version fields;
+- the README's version badge;
+- the install pins in the README, `AGENTS.md` and `docs/`;
+- the lockfile.
+
+That prepares a release branch whose version change is reviewed on its own. After that branch
+merges, `npm run release -- <version>` on main finds every version field already at the version,
+so it only gates and tags. The first release, the version already in `package.json` before any
+tag exists, works the same way. `tests/release-plan-smoke.ts` covers each of these cases, and
+`tests/docs-smoke.ts` fails when a pin or the badge disagrees with `package.json`.
 
 Users on `latest` see a new release the next time `/update` checks (at most a day later, or
 straight away with `/update`). A tag is the release even if a later workflow fails: `/update`
-reads tags. If a tag is wrong, delete it (`git push origin :refs/tags/vX.Y.Z` and
-`git tag -d vX.Y.Z`), fix the problem and release again.
+reads tags. If a release turns out wrong, fix it forward: release a new version with the fix,
+and say in its notes which release it replaces. Never move, delete or recreate a tag once it is
+public. Pinned installs and `/update` would then see a different release under the same name,
+which [Support](support.md) rules out.
 
 ## The release workflow
 
@@ -59,7 +82,7 @@ pull request.
 
 `dry-run` defaults to **ticked**. The two jobs with side effects are guarded by an explicit
 `inputs.dry-run == false` comparison, so any other event type, or an empty input, also means "no
-side effects". `tests/release-workflow-smoke.mjs` checks this structure and is run by `check:all`,
+side effects". `tests/release-workflow-smoke.ts` checks this structure and is run by `check:all`,
 and it fails against a workflow that publishes on a dry run.
 
 ```mermaid
@@ -74,8 +97,8 @@ flowchart LR
 
 Recommended order for a release:
 
-1. Merge the release commit to `main`; wait for CI.
-2. `npm run release -- <version>` locally, push the tag (above).
+1. Land the release commit on `main` through a reviewed pull request (above), and wait for CI.
+2. Push the tag (above).
 3. Run the `release` workflow from the tag with the defaults (dry run) and read the `plan`
    summary: tarball contents, `npm publish --dry-run` output, release notes.
 4. Run it again from the tag with **dry-run unticked** to create the GitHub Release. Leave
@@ -85,9 +108,16 @@ Recommended order for a release:
 
 These are operator actions; the repository does not change its own settings.
 
-- **Protect `main`**: require pull requests, the `ci` checks and the `security` checks; block
-  force pushes.
-- **Protect tags `v*`**: restrict who can create them.
+- **Protect `main`**: require pull requests with **one approving review** and review from code
+  owners (`.github/CODEOWNERS` maps the firewall, policies, installer, release tooling and
+  security documents to the owner), the `ci` checks and the `security` checks; block force
+  pushes. When a matrix job is renamed (a pi-compat lane, a profile), update the required check
+  names with it, or the rule waits for a check that never runs.
+- **Protect tags `v*`**: only the operator creates them.
+- **Agent identity**: agents push and open pull requests as a separate non-admin bot account or
+  GitHub App with contents and pull-request write access only, never as the owner. With one
+  required approval, an agent cannot merge its own pull request.
+- **Dependabot**: turn on alerts and security updates.
 - **Code scanning and secret scanning**: enable them; `security.yml` uploads SARIF and runs
   gitleaks.
 - **Actions**: allow only the pinned actions in use; workflow tokens default to read-only.
@@ -120,21 +150,18 @@ delivery is the supported path. To enable npm as well, an operator needs to:
    git as the default; git delivery keeps working without it.
 
 The npm channels are dist-tags: `latest` for releases, `beta` for prereleases once a stable release
-exists, and `release-X.Y` for maintenance releases (`packages/core/publish-plan.mjs`).
+exists, and `release-X.Y` for maintenance releases (`packages/core/publish-plan.ts`).
 
 ## Local checks
 
 ```sh
 npm run check:all            # everything CI runs, including the delivery, update and install tests
 npm run security:lockfile    # lockfile integrity
-node packages/core/release-notes.mjs 0.2.4-beta.0   # preview the notes for a release
+node packages/core/release-notes.ts 0.2.4-beta.0   # preview the notes for a release
 ```
 
-## Canonical release preparation
+## Where releases come from
 
-Prepare changes and the version in private GitLab first. The protected version-tag pipeline
-constructs and validates a public export, then an operator starts the manual publication job.
-It creates a GitHub release branch and draft PR without copying private history. Merge after
-GitHub checks pass, then create the public tag on that reviewed public commit. The GitHub
-workflow above handles optional release/package publication after that step.
+Releases are cut on GitHub, the authoritative repository: the release branch, its pull request
+and the tag all live there. The GitLab mirror only follows GitHub and is never released from.
 See [repository topology](repository-topology.md).

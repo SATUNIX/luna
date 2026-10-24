@@ -35,11 +35,15 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.JavaScriptReplyProxy
@@ -83,18 +87,22 @@ class MainActivity : FragmentActivity(), Bridge.Shell {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Android 15 and later always draw an app targeting API 35+ edge to edge, so every
+        // version does: the bars stay black with light icons and insetFrame() keeps the page
+        // clear of them, the display cutout and the keyboard.
+        enableEdgeToEdge(SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         applySecureScreen()
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            setContentView(message(getString(R.string.webview_missing)))
+            setContentView(insetFrame().apply { addView(message(getString(R.string.webview_missing))) })
             return
         }
         store = HostStore(this)
         bridge = Bridge(this, store, Remote(applicationContext, store))
         pendingLink = linkFrom(intent)
 
-        val frame = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val frame = insetFrame()
         val web = buildWebView()
         frame.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root = frame
@@ -408,6 +416,21 @@ class MainActivity : FragmentActivity(), Bridge.Shell {
     }
 
     // ---------------------------------------------------------------- helpers ---
+
+    /**
+     * A black root that pads its content by the system bars, the display cutout and the
+     * keyboard. Edge to edge, `adjustResize` no longer shrinks the window for the keyboard, so
+     * the IME inset here is what keeps the composer above it.
+     */
+    private fun insetFrame() = FrameLayout(this).apply {
+        setBackgroundColor(Color.BLACK)
+        ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
+            val types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
+            val edge = insets.getInsets(types)
+            view.setPadding(edge.left, edge.top, edge.right, edge.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+    }
 
     private fun message(text: String) = TextView(this).apply {
         this.text = text

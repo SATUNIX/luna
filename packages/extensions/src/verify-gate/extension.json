@@ -7,7 +7,7 @@
   "layer": 5,
   "entry": "index.ts",
   "hooks": ["session_start", "input", "tool_result", "turn_end"],
-  "registers": { "tools": ["verify_completion"], "commands": ["/verify"] },
+  "registers": { "tools": ["verify_completion"], "commands": ["verify"] },
   "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],

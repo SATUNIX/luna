@@ -10,6 +10,7 @@ export type Recent = { at: number; tool: string; summary: string; tier: Tier; ef
 
 export type SessionState = {
   id: string;
+  securityBinding?: string;
   credentialReads: { what: string; at: number }[];
   downloads: string[];
   untrusted: boolean;
@@ -55,6 +56,26 @@ function isRecent(v: unknown): v is Recent {
   );
 }
 
+type Stats = SessionState["stats"];
+type CachedVerdict = SessionState["judgeCache"][string];
+const STAT_KEYS = ["actions", "human", "judged", "judgeBlocks", "learnedHits", "grantHits", "denied"] as const satisfies readonly (keyof Stats)[];
+
+function isCredentialRead(v: unknown): v is SessionState["credentialReads"][number] {
+  return isPlainObject(v) && typeof v.what === "string" && typeof v.at === "number";
+}
+
+// A judgeCache entry is replayed as the judge's verdict, so it must have the shape the judge returns.
+function isCachedVerdict(v: unknown): v is CachedVerdict {
+  return (
+    isPlainObject(v) &&
+    (v.verdict === "allow" || v.verdict === "block") &&
+    typeof v.reason === "string" &&
+    typeof v.turn === "string" &&
+    (v.differs === undefined || typeof v.differs === "string") &&
+    (v.confidence === undefined || v.confidence === "high" || v.confidence === "medium" || v.confidence === "low")
+  );
+}
+
 export function loadSession(id: string): SessionState {
   let raw: unknown;
   try {
@@ -68,14 +89,35 @@ export function loadSession(id: string): SessionState {
     return base;
   }
   const rejected: string[] = [];
-  const pick = <T>(key: keyof SessionState, valid: (v: unknown) => boolean, fallback: T): T => {
+  const pick = <T>(key: keyof SessionState, valid: (v: unknown) => v is T, fallback: T): T => {
     const v = raw[key];
-    if (valid(v)) return v as T;
-    if (v !== undefined) rejected.push(String(key));
+    if (valid(v)) return v;
+    if (v !== undefined) rejected.push(key);
     return fallback;
   };
+  // Each counter is kept only when it is a number: `stats.actions++` on a string would concatenate.
+  const stats: Stats = { ...base.stats };
   const statsRaw = raw.stats;
   if (statsRaw !== undefined && !isPlainObject(statsRaw)) rejected.push("stats");
+  if (isPlainObject(statsRaw)) {
+    for (const key of STAT_KEYS) {
+      const v = statsRaw[key];
+      if (typeof v === "number") stats[key] = v;
+      else if (v !== undefined) rejected.push("stats");
+    }
+  }
+  // Drop only the malformed judgeCache entries, as for recent: a valid cached verdict still counts.
+  let judgeCache = base.judgeCache;
+  if (raw.judgeCache !== undefined) {
+    if (isPlainObject(raw.judgeCache)) {
+      const entries = Object.entries(raw.judgeCache);
+      const kept = entries.filter((e): e is [string, CachedVerdict] => isCachedVerdict(e[1]));
+      judgeCache = Object.fromEntries(kept);
+      if (kept.length !== entries.length) rejected.push("judgeCache");
+    } else {
+      rejected.push("judgeCache");
+    }
+  }
   // recent is an array of rows the /auto explain renderer and judge prompt read field-by-field:
   // drop only the elements missing the renderer's fields rather than the whole array, so a
   // single persisted `{}` cannot crash r.outcome.padEnd while valid rows still render.
@@ -88,16 +130,28 @@ export function loadSession(id: string): SessionState {
       rejected.push("recent");
     }
   }
+  // credentialReads feeds the cross-action secret_egress finding, so drop only the malformed rows:
+  // one bad row must not erase the valid reads and let a later network send go unflagged.
+  let credentialReads = base.credentialReads;
+  if (raw.credentialReads !== undefined) {
+    if (Array.isArray(raw.credentialReads)) {
+      credentialReads = raw.credentialReads.filter(isCredentialRead);
+      if (credentialReads.length !== raw.credentialReads.length) rejected.push("credentialReads");
+    } else {
+      rejected.push("credentialReads");
+    }
+  }
   const session: SessionState = {
     id,
-    credentialReads: pick("credentialReads", (v) => Array.isArray(v) && v.every(isPlainObject), base.credentialReads),
-    downloads: pick("downloads", (v) => Array.isArray(v) && v.every((x) => typeof x === "string"), base.downloads),
-    untrusted: pick("untrusted", (v) => typeof v === "boolean", base.untrusted),
+    ...(typeof raw.securityBinding === "string" ? { securityBinding: raw.securityBinding } : {}),
+    credentialReads,
+    downloads: pick("downloads", (v): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string"), base.downloads),
+    untrusted: pick("untrusted", (v): v is boolean => typeof v === "boolean", base.untrusted),
     recent,
-    deletes: pick("deletes", (v) => Array.isArray(v) && v.every((x) => typeof x === "number"), base.deletes),
-    judgeCache: pick("judgeCache", isPlainObject, base.judgeCache),
-    stats: { ...base.stats, ...(isPlainObject(statsRaw) ? (statsRaw as SessionState["stats"]) : {}) },
-    updated: pick("updated", (v) => typeof v === "number", base.updated),
+    deletes: pick("deletes", (v): v is number[] => Array.isArray(v) && v.every((x) => typeof x === "number"), base.deletes),
+    judgeCache,
+    stats,
+    updated: pick("updated", (v): v is number => typeof v === "number", base.updated),
   };
   if (rejected.length) process.stderr.write(`tool-firewall: ignoring malformed session fields in ${fileFor(id)}: ${[...new Set(rejected)].slice(0, 8).join(", ")}\n`);
   return session;
@@ -108,9 +162,9 @@ export function saveSession(s: SessionState): void {
   try {
     s.updated = Date.now();
     const file = fileFor(s.id);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 });
     fs.renameSync(tmp, file);
     if (Date.now() - lastPrune > 3_600_000) {
       lastPrune = Date.now();
@@ -135,14 +189,17 @@ export function trajectoryFindings(a: Assessment, s: SessionState, now = Date.no
   const out: Finding[] = [];
   const remoteSends = a.sends.filter((x) => !x.local);
   // Same-command secret + send is already critical in the classifier; this is the cross-action chain.
-  if (remoteSends.length && !a.credentialReads.length && s.credentialReads.length) {
-    const last = s.credentialReads[s.credentialReads.length - 1];
-    out.push({ tier: "high", effect: "network_send", code: "secret_egress", detail: `sends data to ${remoteSends[0].dest} after this session read ${last.what}`, key: `egress ${remoteSends[0].dest}` });
+  const [send] = remoteSends;
+  const last = s.credentialReads.at(-1);
+  if (send && !a.credentialReads.length && last) {
+    out.push({ tier: "high", effect: "network_send", code: "secret_egress", detail: `sends data to ${send.dest} after this session read ${last.what}`, key: `egress ${send.dest}` });
   }
   const ran = [...a.executes, ...a.chmodExec];
   const fetched = [...s.downloads, ...a.downloads];
   const hit = ran.find((p) => fetched.includes(p));
-  if (hit) out.push({ tier: "high", effect: "obfuscated_exec", code: "download_exec", detail: `runs or makes executable ${hit}, which was downloaded`, key: `download-exec` });
+  // The reason comes before the path: the card clips each line to its width, and a long absolute
+  // path must not push "downloaded" off the end of the History line.
+  if (hit) out.push({ tier: "high", effect: "obfuscated_exec", code: "download_exec", detail: `runs or makes executable a file this session downloaded: ${hit}`, key: `download-exec` });
   if (a.deletes > 0 && a.findings.some((f) => f.effect === "delete" && TIER_RANK[f.tier] >= 1)) {
     const recent = s.deletes.filter((t) => now - t < DELETE_WINDOW_MS);
     if (recent.length >= DELETE_BURST) out.push({ tier: "high", effect: "delete", code: "delete_burst", detail: `${recent.length} deletions in the last ${DELETE_WINDOW_MS / 60000} minutes`, key: "delete-burst" });

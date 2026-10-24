@@ -25,19 +25,41 @@ interface Part {
 interface Message {
   role?: string;
   content?: string | Part[];
-  customType?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+// The agent-run messages reach us as unknown (pi's AgentMessage shape varies across the supported
+// range and its type is not bundled here), so narrow each to the small shape digestTurn reads.
+function toPart(value: unknown): Part {
+  if (!isRecord(value)) return {};
+  return {
+    ...(typeof value.type === "string" ? { type: value.type } : {}),
+    ...(typeof value.text === "string" ? { text: value.text } : {}),
+    ...(typeof value.name === "string" ? { name: value.name } : {}),
+    ...(isRecord(value.arguments) ? { arguments: value.arguments } : {}),
+  };
+}
+
+function toMessage(value: unknown): Message {
+  if (!isRecord(value)) return {};
+  const content = value.content;
+  return {
+    ...(typeof value.role === "string" ? { role: value.role } : {}),
+    ...(typeof content === "string" ? { content } : Array.isArray(content) ? { content: content.map(toPart) } : {}),
+  };
 }
 
 const textOf = (content: Message["content"]): string =>
   typeof content === "string"
     ? content
-    : (content ?? [])
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => p.text)
-        .join("\n");
+    : (content ?? []).flatMap((p) => (p.type === "text" && p.text ? [p.text] : [])).join("\n");
 
 // Summarise the messages of one agent run (from the user's prompt to the final answer).
-export function digestTurn(messages: Message[]): TurnDigest | null {
+export function digestTurn(rawMessages: readonly unknown[]): TurnDigest | null {
+  const messages = rawMessages.map(toMessage);
   let start = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "user") {
@@ -45,22 +67,25 @@ export function digestTurn(messages: Message[]): TurnDigest | null {
       break;
     }
   }
-  if (start < 0) return null;
-  const prompt = textOf(messages[start].content).trim();
+  const first = messages[start];
+  if (start < 0 || !first) return null;
+  const prompt = textOf(first.content).trim();
   const tools: string[] = [];
   const files = new Set<string>();
   let answer = "";
   let outputChars = 0;
   for (const m of messages.slice(start + 1)) {
-    if (m.role !== "assistant" || typeof m.content === "string") continue;
-    for (const p of m.content ?? []) {
+    const content = m.content;
+    if (m.role !== "assistant" || typeof content === "string") continue;
+    for (const p of content ?? []) {
       if (p.type === "toolCall" && p.name) {
-        const target = p.arguments?.path ?? p.arguments?.file_path ?? p.arguments?.command;
+        const argPath = p.arguments?.path;
+        const target = argPath ?? p.arguments?.file_path ?? p.arguments?.command;
         tools.push(typeof target === "string" ? `${p.name} ${target.slice(0, 80)}` : p.name);
-        if ((p.name === "edit" || p.name === "write") && typeof p.arguments?.path === "string") files.add(p.arguments.path);
+        if ((p.name === "edit" || p.name === "write") && typeof argPath === "string") files.add(argPath);
       }
     }
-    const text = textOf(m.content);
+    const text = textOf(content);
     if (text.trim()) {
       answer = text;
       outputChars += text.length;
@@ -115,20 +140,30 @@ export function parseRecap(raw: string, d: TurnDigest): ParsedRecap | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
-  let obj: any;
+  let obj: unknown;
   try {
     obj = JSON.parse(raw.slice(start, end + 1));
   } catch {
     return null;
   }
-  if (!obj || typeof obj.title !== "string" || typeof obj.did !== "string" || !obj.title.trim() || !obj.did.trim()) return null;
+  // Model output: validate every field before use.
+  if (!isRecord(obj)) return null;
+  const title = typeof obj.title === "string" ? obj.title : "";
+  const did = typeof obj.did === "string" ? obj.did : "";
+  if (!title.trim() || !did.trim()) return null;
   const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim()) : []);
-  const candidates: MemoryCandidate[] = (Array.isArray(obj.memory_candidates) ? obj.memory_candidates : [])
-    .filter((c: any) => c && typeof c.title === "string" && typeof c.body === "string" && c.title.trim() && c.body.trim())
-    .map((c: any) => ({ type: MEMORY_TYPES.includes(c.type) ? c.type : "fact", title: c.title.trim(), body: c.body.trim() }))
+  const rawCandidates = Array.isArray(obj.memory_candidates) ? obj.memory_candidates : [];
+  const candidates: MemoryCandidate[] = rawCandidates
+    .filter(isRecord)
+    .filter((c) => typeof c.title === "string" && typeof c.body === "string" && c.title.trim() && c.body.trim())
+    .map((c) => ({
+      type: typeof c.type === "string" && (MEMORY_TYPES as readonly string[]).includes(c.type) ? (c.type as MemoryType) : "fact",
+      title: String(c.title).trim(),
+      body: String(c.body).trim(),
+    }))
     .slice(0, 3);
   return {
-    recap: { title: obj.title.trim(), did: obj.did.trim(), next: typeof obj.next === "string" ? obj.next.trim() : "", decisions: strings(obj.decisions), files: d.files },
+    recap: { title: title.trim(), did: did.trim(), next: typeof obj.next === "string" ? obj.next.trim() : "", decisions: strings(obj.decisions), files: d.files },
     candidates,
   };
 }

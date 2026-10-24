@@ -5,7 +5,7 @@
 - Date: 2026-07-03
 - Changes (reimplementation, not a verbatim port):
   - Upstream injects its compression directive by returning `{ systemPrompt }` from
-    `before_agent_start`. That is **forbidden** in this kit — `packages/core/verify.mjs` lint 5b reserves
+    `before_agent_start`. That is **forbidden** in this kit — `packages/core/verify.ts` lint 5b reserves
     system-prompt assembly to `extensions/context-sieve`. Rewritten to instead write a
     `.pi/ctx-contributions/sessions/<session-id>/caveman.json` contribution (the flat
     `.pi/ctx-contributions/caveman.json` when pi exposes no session id) that context-sieve assembles
@@ -22,3 +22,5 @@
   - `/caveman` command preserved (toggle / level / on / off / status).
   - 2026-09-24: contribution file moved to the per-session directory (B-005); non-string
     `detailTriggers` entries in the config are ignored.
+  - The config file is read as unknown and checked: one that is not a JSON object, or a
+    `defaultLevel` that is not a known level, falls back to the defaults (nothing pins this).

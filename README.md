@@ -6,20 +6,20 @@
 
 <p align="center">
   <a href="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.3-blue" alt="version 0.2.4-beta.1"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.6-blue" alt="version 0.2.4-beta.6"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a>
 </p>
 
-**pi-system** is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
+**pi-system** is an opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi):
 a permission gate for tool calls, governed delegation to sub-agents, verification, durable memory,
 bounded recovery, a status bar, and an installer that ties them together as **profiles**. It is
 one pi package, installed once.
 
-> **Beta.** This is `0.2.4-beta.0`, the first public beta. It is tested, but it is not a stable
-> release: expect rough edges, read [Beta status](docs/beta.md) for what is and is not covered, and
-> report problems in the issue tracker. The tool firewall is a guard rail, not a sandbox
+> **Beta.** This is a public beta. It is tested, but it is not a stable release: expect rough
+> edges, read [Beta status](docs/beta.md) for what is and is not covered, and report problems in
+> the issue tracker. The tool firewall is a guard rail, not a sandbox
 > ([Security model](docs/security.md)).
 
 ## Install
@@ -28,7 +28,7 @@ Requirements: Node.js 22.19 or newer, git, and pi.
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.6
 pi
 ```
 
@@ -44,7 +44,7 @@ source. (An old checkout cannot migrate itself.)
 
 | Want to | Do |
 |---|---|
-| See what the kit offers | `/kit` |
+| Open the control centre | `/kit`, `/helpers` or `alt+m` ([Control centre](docs/control-center.md)) |
 | Switch profile | `/profile` (picker) or `/profile lite` |
 | Choose how hard the agent works and how much it delegates | `/effort` or `/effort thorough` ([Effort](docs/effort.md)) |
 | See what pi, the kit and packages can update to | `/update` ([Updates](docs/updates.md)) |
@@ -55,7 +55,8 @@ source. (An old checkout cannot migrate itself.)
 ## Profiles
 
 A profile chooses which extensions, skills and prompts load, and the firewall mode. Switching is
-transactional: it verifies the result and rolls back on any failure. Lists and counts are
+verified, with configuration rollback on reported failures. Whole-update crash recovery and
+concurrent profile switches have limits described in [Updates](docs/updates.md). Lists and counts are
 generated in the [capability matrix](docs/capability-matrix.md).
 
 | Profile | For |
@@ -103,5 +104,6 @@ see [`CONTRIBUTING.md`](CONTRIBUTING.md) to add an extension. Security reports: 
 Licence: MIT, © SATUNIX. Vendored third-party code is credited in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Development is canonical in private GitLab; GitHub distributes reviewed public releases.
+This GitHub repository is where pi-system is developed and released; pull requests are welcome
+(see [`CONTRIBUTING.md`](CONTRIBUTING.md)). A read-only GitLab mirror is kept as a backup.
 See [repository topology](docs/repository-topology.md) for the release and contribution flow.

@@ -94,10 +94,11 @@ export function catFrames(state: CatState): string[] {
 export function frameAt(state: CatState, elapsedMs: number): string {
   const a = ANIMATIONS[state];
   const frames = catFrames(state);
-  if (frames.length === 1) return frames[0];
+  // Every animation in the table has at least one frame, so the `?? ""` fallbacks never apply.
+  if (frames.length === 1) return frames[0] ?? "";
   const index = Math.max(0, Math.floor(elapsedMs / a.intervalMs));
-  if (a.mode === "once") return frames[Math.min(index, frames.length - 1)];
-  return frames[index % frames.length];
+  if (a.mode === "once") return frames[Math.min(index, frames.length - 1)] ?? "";
+  return frames[index % frames.length] ?? "";
 }
 
 /** True once a `once` animation has played through (always false for a loop). */
@@ -115,7 +116,7 @@ export type Paint = (colour: string, text: string) => string;
  */
 export function indicatorFor(state: CatState, paint: Paint): { frames: string[]; intervalMs: number } {
   const a = ANIMATIONS[state];
-  const frames = a.mode === "once" ? [catFrames(state).at(-1)!] : catFrames(state);
+  const frames = a.mode === "once" ? [catFrames(state).at(-1) ?? ""] : catFrames(state);
   return { frames: frames.map((f) => paint(a.colour, f)), intervalMs: a.intervalMs };
 }
 
@@ -133,9 +134,11 @@ export const CAT_STYLES: CatStyle[] = ["compact"];
  */
 export function classifyToolError(result: unknown): CatState {
   let text = "";
+  // `String(value)` for a value of any type: a tool result is whatever the tool returned.
+  const toText = (value: unknown): string => String(value);
   try {
     const parts = (result as { content?: Array<{ text?: unknown }> } | undefined)?.content;
-    text = Array.isArray(parts) ? parts.map((p) => String(p?.text ?? "")).join(" ") : String(result ?? "");
+    text = Array.isArray(parts) ? parts.map((p) => toText(p?.text ?? "")).join(" ") : toText(result ?? "");
   } catch { /* unreadable result: treat as a plain failure */ }
   return /\b(blocked|denied|not permitted|refused|forbidden|policy)\b/i.test(text.slice(0, 600)) ? "denied" : "warning";
 }

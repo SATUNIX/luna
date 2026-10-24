@@ -44,10 +44,10 @@ export interface ChildRunOptions {
   // Written to the child's stdin and then closed. pi's print mode merges piped stdin into the
   // initial prompt, so the task travels here instead of as one argv string: a single argument
   // is capped at 128 KiB on Linux (MAX_ARG_STRLEN), which a chain's {previous} output exceeds.
-  stdin?: string;
+  stdin?: string | undefined;
   cwd: string;
   env: Record<string, string | undefined>;
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
   streamCap: number;
   idleTimeoutMs: number;
   // Hard ceiling on total run time. A child that keeps emitting bytes resets the idle
@@ -55,18 +55,18 @@ export interface ChildRunOptions {
   maxRuntimeMs: number;
   // Liveness tick cadence. 0 disables.
   heartbeatMs: number;
-  spawnChild?: SpawnChild;
-  onSpawn?(handle: { pid?: number; terminate(): void }): void;
-  onLine(line: string): void;
-  onStderr(text: string): void;
-  onKill(reason: KillReason): void;
-  onHeartbeat?(info: ChildHeartbeat): void;
+  spawnChild?: SpawnChild | undefined;
+  onSpawn?: (handle: { pid?: number | undefined; terminate: () => void }) => void;
+  onLine: (line: string) => void;
+  onStderr: (text: string) => void;
+  onKill: (reason: KillReason) => void;
+  onHeartbeat?: (info: ChildHeartbeat) => void;
 }
 
 export interface ChildOutcome {
   exitCode: number;
-  killReason?: KillReason;
-  spawnFailure?: string;
+  killReason?: KillReason | undefined;
+  spawnFailure?: string | undefined;
 }
 
 export async function runChildProcess(options: ChildRunOptions): Promise<ChildOutcome> {
@@ -186,7 +186,7 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
       resolve(code ?? 1);
     });
     proc.on("error", (error) => {
-      spawnFailure = String((error as Error)?.message || error);
+      spawnFailure = String(error?.message || error);
       cleanup();
       resolve(1);
     });

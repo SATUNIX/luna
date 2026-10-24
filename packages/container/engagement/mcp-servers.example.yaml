@@ -13,7 +13,7 @@ mcp_servers:
     transport: stdio
     command: node
     args:
-      - /workspace/.pi/mcp-servers/governance/index.js
+      - /workspace/.pi/mcp-servers/governance/index.ts
     lifecycle: lazy
     directTools: false
     sampling: false

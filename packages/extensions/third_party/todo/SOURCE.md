@@ -10,3 +10,4 @@
   - 2026-09-14: added `start`, `done`, `remove`, `add` with `items[]`, and an in-progress `[~]` state.
     Every action returns the full list with progress. `/todos` prints the list and the file path.
     The checklist widget lives in `custom-footer` (reads the same `TODO.md`).
+  - 2026-10-15: typed for strict TypeScript (no behaviour change).

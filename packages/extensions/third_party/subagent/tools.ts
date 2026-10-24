@@ -23,6 +23,7 @@ import { collectRuns, formatRunTable } from "./status.ts";
 import { stopAllLive, stopLive, stopRecordedRun, recordStop } from "./live.ts";
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
+import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
 
 const TaskItem = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -216,13 +217,10 @@ async function runChainMode(
   parentModel: string | undefined,
   inheritParentModel: boolean,
 ) {
-  const results: SingleResult[] = [];
   let previous = "";
-  for (let i = 0; i < chain.length; i++) {
-    const step = chain[i];
+  for (const [i, step] of chain.entries()) {
     const task = substitutePrevious(step.task, previous);
     const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: step.agent, task, cwd: step.cwd, step: i + 1, signal, overrides: step.effort ? { effort: step.effort } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel });
-    results.push(r);
     if (r.detached) {
       return textResult(`Chain detached at step ${i + 1} (${step.agent}): running in the background (run ${r.runId ?? "?"}). Follow it with subagent_status id=${r.runId ?? "<run>"}.`);
     }
@@ -231,8 +229,8 @@ async function runChainMode(
     }
     previous = r.finalOutput || getFinalOutput(r.messages);
   }
-  const last = results[results.length - 1];
-  return textResult(last.finalOutput || getFinalOutput(last.messages) || "(no output)");
+  // `previous` holds the last step's output (finalOutput, else its final message text).
+  return textResult(previous || "(no output)");
 }
 
 async function runParallelMode(
@@ -270,8 +268,10 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   // agentScope "project"/"both" they shadow the maintained kit roles. Identical copies are not
   // reported, so the listed names are exactly the customised/drifted files.
   pi.on("session_start", async (_event, rawCtx) => {
-    const ctx = rawCtx as unknown as ToolContext;
+    const ctx: ToolContext = rawCtx;
     if (process.env.PI_KIT_INTERNAL_CHILD === "1" || !ctx.hasUI) return;
+    // The /workflows status line reports to this session's footer.
+    bindWorkflowStatus(ctx);
     const stale = staleProjectRoleCopies(ctx.cwd ?? process.cwd());
     if (stale.length) {
       ctx.ui?.notify?.(
@@ -283,6 +283,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   // A session ending must not leave its children running unattended.
   pi.on("session_shutdown", async () => {
     stopAllLive();
+    workflowStatus.unbind();
   });
 
   pi.registerTool({
@@ -298,7 +299,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, rawCtx) {
-      const ctx = rawCtx as unknown as ToolContext;
+      const ctx: ToolContext = rawCtx;
       const reportUpdate = makeReporter(ctx, onUpdate);
       const parentModel = resolveParentModel(ctx);
       const inheritParentModel = loadInheritParentModel();
@@ -324,7 +325,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
       }
 
       if (scope === "project" || scope === "both") {
-        const trustError = await projectTrustError(agents, discovery.projectAgentsDir, params as unknown as Record<string, unknown>, ctx);
+        const trustError = await projectTrustError(agents, discovery.projectAgentsDir, params, ctx);
         if (trustError) return textResult(trustError, trustError.startsWith("Blocked"));
       }
 
@@ -335,7 +336,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
         if (params.tasks && params.tasks.length > 0) {
           return await runParallelMode(pi, params.tasks, ctx, agents, signal, reportUpdate, parentModel, inheritParentModel, background);
         }
-        const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: params.agent as string, task: params.task as string, cwd: params.cwd, signal, overrides: params.effort ? { effort: String(params.effort) } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel, background });
+        const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: params.agent as string, task: params.task as string, cwd: params.cwd, signal, overrides: params.effort ? { effort: params.effort } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel, background });
         if (r.detached) {
           return textResult(`Subagent ${r.agent} running in the background (detached). run: ${r.runId ?? "?"}\nFollow with subagent_status id=${r.runId ?? "<run>"}; stop with subagent_stop id=${r.runId ?? "<run>"}.`);
         }
@@ -359,10 +360,10 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     promptSnippet: "Inspect recent subagent runs and their logs",
     parameters: SubagentStatusParams,
     async execute(_toolCallId, params, _signal, _onUpdate, rawCtx) {
-      const ctx = rawCtx as unknown as ToolContext;
+      const ctx: ToolContext = rawCtx;
       const dir = subagentStateDir(ctx.cwd ?? process.cwd());
       if (params.id) {
-        const id = String(params.id);
+        const id = params.id;
         // The id is model-supplied and is joined into a filesystem path; reject anything
         // that could traverse out of the state dir before reading.
         if (!isValidRunId(id)) return textResult("Invalid run id.", true);
@@ -389,9 +390,9 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     promptSnippet: "Stop running subagents",
     parameters: SubagentStopParams,
     async execute(_toolCallId, params, _signal, _onUpdate, rawCtx) {
-      const ctx = rawCtx as unknown as ToolContext;
+      const ctx: ToolContext = rawCtx;
       const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      const target = params.all ? "all" : params.id ? String(params.id) : undefined;
+      const target = params.all ? "all" : params.id ? params.id : undefined;
       const result = stopTargets(dir, target);
       return textResult(result.text, !result.ok);
     },
@@ -400,11 +401,11 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   pi.registerCommand("subagents", {
     description: "Check in on subagents: running and recent runs with log paths. /subagents [limit]",
     handler: async (args, rawCtx) => {
-      const ctx = rawCtx as unknown as ToolContext;
+      const ctx: ToolContext = rawCtx;
       const dir = subagentStateDir(ctx.cwd ?? process.cwd());
       const rows = collectRuns(dir);
       const running = rows.filter((r) => r.status === "running").length;
-      const limit = Math.max(1, Math.min(Number(String(args ?? "").trim()) || 20, 100));
+      const limit = Math.max(1, Math.min(Number((args ?? "").trim()) || 20, 100));
       const body = rows.length
         ? `${running} running, ${rows.length} total\n\n${formatRunTable(rows, limit)}\n\n/subagent-stop <id|all> to stop`
         : "No subagent runs recorded.";
@@ -415,9 +416,9 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   pi.registerCommand("subagent-stop", {
     description: "Stop running subagents (safety). /subagent-stop [<id>|all]; no args lists running runs.",
     handler: async (args, rawCtx) => {
-      const ctx = rawCtx as unknown as ToolContext;
+      const ctx: ToolContext = rawCtx;
       const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      const target = String(args ?? "").trim() || undefined;
+      const target = (args ?? "").trim() || undefined;
       if (target === "all" && ctx.ui?.confirm) {
         const running = collectRuns(dir).filter((r) => r.status === "running").length;
         const ok = await ctx.ui.confirm("Stop all subagents?", `This terminates ${running} running subagent(s).`);

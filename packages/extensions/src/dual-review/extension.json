@@ -7,7 +7,7 @@
   "layer": 5,
   "entry": "index.ts",
   "hooks": ["session_start", "input", "session_shutdown", "session_before_switch"],
-  "registers": { "tools": ["dual_review"], "commands": ["/review"] },
+  "registers": { "tools": ["dual_review"], "commands": ["review"] },
   "profiles": ["self-improving"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],

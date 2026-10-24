@@ -11,3 +11,4 @@
     New notes use mode 0600. Native no-follow rejects final-component symlinks on supporting
     platforms; Windows does not provide that native protection. Regression coverage:
     `smoke:handoff`.
+  - Typed for strict TypeScript (no behaviour change).

@@ -40,7 +40,7 @@ surface) rather than tools the operator must remember to invoke.
   content}` (the flat `.pi/ctx-contributions/<id>.json` is the legacy fallback, used only
   when the host exposes no session id and resolved with the canonical safe-id pattern in
   `packages/extensions/src/verifier-board/todo-read.ts`). context-sieve assembles these contributions under a
-  token budget, and `packages/core/verify.mjs` lint 5b enforces this injection monopoly. See
+  token budget, and `packages/core/verify.ts` lint 5b enforces this injection monopoly. See
   `packages/extensions/src/guidelines/index.ts` and `packages/extensions/third_party/caveman/index.ts` for the pattern.
 - **Load order.** context-sieve wipes contributions on `session_start` and reads them in
   `before_agent_start`. `packages/extensions/third_party/*` loads after `packages/extensions/src/*`, so vendored producers write in
@@ -57,7 +57,7 @@ surface) rather than tools the operator must remember to invoke.
 | Mode | When | How |
 |---|---|---|
 | **Vendor** (`packages/extensions/third_party/<name>/`) | Small, low/zero-dep, needs local modification, or must ship inside the kit package | Copy/reimplement source, add `SOURCE.md` + `extension.json`, keep self-contained |
-| **External reference** (`packages/core/sources.json`, `mode:"reference"`) | Heavier native/WASM deps, or a maintained npm pi package | Add entry with `source`, `entry`, `provides`, `profiles`; `packages/core/install.mjs` installs it as an independent pi package when a selected profile includes its name |
+| **External reference** (`packages/core/sources.json`, `mode:"reference"`) | Heavier native/WASM deps, or a maintained npm pi package | Add entry with `source`, `entry`, `provides`, `profiles`; `packages/core/install.ts` installs it as an independent pi package when a selected profile includes its name |
 
 ## 5. Wire it in
 
@@ -71,7 +71,7 @@ surface) rather than tools the operator must remember to invoke.
 ```sh
 npm run verify                         # schema + tsc + self-containment + injection-monopoly lint
 npm run smoke:package                  # the npm tarball still has everything each profile needs
-node packages/core/install.mjs --profile balanced --dry-run
+node packages/core/install.ts --profile balanced --dry-run
 npm run catalog                        # regenerate docs/EXTENSIONS.md
 npm run docs:build
 ```

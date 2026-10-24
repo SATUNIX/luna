@@ -1,6 +1,6 @@
 # Burp MCP Setup
 
-This capability does not bundle or run a Burp MCP server. It provides Pi MCP client capability through `pi-mcp-adapter@2.8.0` and uses `host.docker.internal` so a Burp MCP bridge running on the host can be reached from the container.
+This capability does not bundle or run a Burp MCP server. It provides Pi MCP client capability through `pi-mcp-adapter` (pinned in `overlays/pi/settings.json`) and uses `host.docker.internal` so a Burp MCP bridge running on the host can be reached from the container.
 
 ## Expected Topology
 
@@ -13,24 +13,30 @@ Pi inside container
   -> Burp Suite
 ```
 
-## Example `.pi/mcp.json`
+## Example `mcp-adapter.json`
 
-Copy this into a Pi System overlay or project-local MCP config when the Burp MCP bridge is available:
+The image reads MCP servers only from `mcp-adapter.json` in `PI_CODING_AGENT_DIR`
+(`/srv/data/pi-system/pi-agent/mcp-adapter.json`); a project-local `.mcp.json` or `.pi/mcp.json` is
+not read. Add the Burp server next to the seeded ones when the Burp MCP bridge is available:
 
 ```json
 {
   "settings": {
     "toolPrefix": "server",
     "directTools": false,
+    "namespaceProxyTools": false,
     "sampling": false,
     "samplingAutoApprove": false,
     "autoAuth": false,
-    "elicitationAutoOpenUrls": false
+    "elicitation": false,
+    "allowInstall": false,
+    "allowScriptToolSave": false,
+    "jev": false
   },
   "mcpServers": {
     "pi_system_governance": {
       "command": "node",
-      "args": ["/workspace/.pi/mcp-servers/governance/index.js"],
+      "args": ["/opt/pi-agent/mcp-servers/governance/index.ts"],
       "lifecycle": "lazy",
       "directTools": false,
       "sampling": false,

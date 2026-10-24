@@ -22,7 +22,8 @@
     content, not just line count; narrow terminals drop the least important segment first, shorten
     long ones, and never drop a boundary or failure warning for telemetry. Widths are terminal
     columns (`width.ts`: wide characters, emoji clusters, combining marks, ANSI/OSC 8).
-  - Shows the effort tier (and a pending change), unattended state (what the firewall enforces, never
+  - Shows the security level (requested → effective when raised, with a warning marker) beside
+    the effort tier (and a pending change), unattended state (what the firewall enforces, never
     what the environment claims), compaction state and live/failed children, read from read-only
     registries their owners publish on globalThis (`data.ts`); costs are labelled measured,
     estimated or unknown (unknown is not zero); unknown context is `?`, not 0%.
@@ -42,3 +43,6 @@
     self-clearing timer. New hooks: `ui_prompt_start/end` (waiting for user) and
     `session_before_compact`, `session_compact`, `session_compact_failed` (crunching).
   - `/footer cat on|off`, saved in `ui.json`; `PI_KIT_CAT=0` forces it off.
+- A pricing file that parses to something other than a JSON object is reported as unreadable and
+  the bar keeps its prior pricing, the same path a parse error takes; it is never cast (nothing
+  pins this).

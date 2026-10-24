@@ -1,4 +1,4 @@
-import type { ExecResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,8 @@ import {
   warnOnce,
   type CompactionState,
 } from "./compaction-state.ts";
-import { transactionalSwitch, type Expectation, type SwitchOutcome } from "./profile-switch.ts";
+import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
+import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
 
 // Self-containment rule: import only node:* builtins and typebox peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -39,31 +40,6 @@ const CLEAR_GUIDE = [
   "so you rarely need to do it by hand.",
 ].join("\n");
 
-const KIT_SHEET = [
-  "pi-kit cheatsheet - type / in the composer to autocomplete any command.",
-  "",
-  "Session / context (pi built-ins, always available regardless of profile):",
-  "  /new       Start a new session (closest match to Claude Code's /clear)",
-  "  /compact   Compact the current context, keeping the thread",
-  "  /fork      Fork a new branch from a previous user message",
-  "  /clone     Duplicate the current session at this point",
-  "  /tree      Navigate the session tree / switch branches",
-  "  /resume    Resume a different session      /session  Session info and stats",
-  "  /model     Switch model   /settings  Settings menu   /hotkeys  Key bindings",
-  "",
-  "pi-kit helpers:",
-  "  /clear     How to reset context (guidance only - does not clear on its own)",
-  "  /kit       Show this cheatsheet            /helpers  Alias for /kit",
-  "  /footer    Toggle the GitOps status bar    (/footer status, /footer reload)",
-  "  /todos     Show the working todo list      /goal     Show or set the current goal",
-  "  /profile   Switch the kit profile (rolls back on failure)   /profile status  Effective configuration",
-  "  /update    Check for and apply pi / kit / package updates (latest or next channel)",
-  "  /compaction  Is auto-compaction really on, and when? (/compaction status, on, off, trigger on|off)",
-  "",
-  "Profile-dependent (present when the matching extension is loaded):",
-  "  /verify  /orchestrate  /handoff  /trigger-compact  /compress  /save  /verdicts",
-  "  /plan  /caveman  /firewall:status   /improve (self-improving profile only)",
-].join("\n");
 
 type Level = "info" | "warning" | "error";
 
@@ -72,7 +48,13 @@ type Level = "info" | "warning" | "error";
 // all. Without a UI the message goes to stderr (stdout stays reserved for the run's own output);
 // notify is still called best-effort so a UI-less host that does implement it keeps working.
 function report(ctx: ExtensionContext, content: string, level: Level = "info"): void {
-  if (ctx.hasUI) {
+  let hasUI: boolean;
+  try {
+    hasUI = ctx.hasUI;
+  } catch {
+    return; // pi throws on any use of a ctx that a reload replaced: nothing left to tell
+  }
+  if (hasUI) {
     try {
       ctx.ui.notify(content, level);
     } catch {
@@ -99,12 +81,12 @@ function show(ctx: ExtensionContext, content: string): void {
 // --- profile switching -------------------------------------------------------
 // `/profile` is a TUI front-end for the same operation the CLI installer performs:
 // reinstall the registered kit package with a different profile (`node
-// packages/core/install.mjs --profile <name> --yes`), then reload so pi re-reads
+// packages/core/install.ts --profile <name> --yes`), then reload so pi re-reads
 // settings.json. The install logic stays single-sourced in the installer; this
 // command only locates the kit checkout, picks a profile, and drives it.
 
 // Kit layouts we can drive. The monorepo is the source of truth
-// (<root>/packages/core/install.mjs + <root>/packages/kit/profiles); a legacy flat
+// (<root>/packages/core/install.ts + <root>/packages/kit/profiles); a legacy flat
 // kit checkout keeps the installer at <root>/kit/install.mjs with profiles beside
 // it. The published npm package keeps the monorepo layout. Anything else makes /profile
 // degrade to a clear "set PI_KIT_ROOT" message rather than guessing.
@@ -130,11 +112,24 @@ function isDir(p: string): boolean {
   }
 }
 
+/**
+ * The kit installer under a kit root, by stem (internal/docs/adr/0001): install.ts in a checkout or
+ * git install, install.js in the compiled npm artefact, install.mjs in kits from before the
+ * TypeScript migration (a delivery or channel switch can land on one).
+ */
+function kitInstaller(root: string): string | null {
+  for (const name of ["install.ts", "install.js", "install.mjs"]) {
+    const candidate = path.join(root, "packages", "core", name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** Resolve the installer + profiles for a kit root, or null if `root` is not a kit. */
 export function resolveKitLayout(root: string): KitLayout | null {
-  const monorepoInstaller = path.join(root, "packages", "core", "install.mjs");
+  const monorepoInstaller = kitInstaller(root);
   const monorepoProfiles = path.join(root, "packages", "kit", "profiles");
-  if (isFile(monorepoInstaller) && isDir(monorepoProfiles)) {
+  if (monorepoInstaller && isFile(monorepoInstaller) && isDir(monorepoProfiles)) {
     return { root, installer: monorepoInstaller, profilesDir: monorepoProfiles };
   }
   const legacyInstaller = path.join(root, "kit", "install.mjs");
@@ -157,13 +152,29 @@ interface Marker {
   installedAt?: string;
 }
 
+function toMarker(raw: Record<string, unknown>): Marker {
+  const marker: Marker = {};
+  for (const key of ["kitSource", "profile", "scope", "mode", "installedAt"] as const) {
+    const v = raw[key];
+    if (typeof v === "string") marker[key] = v;
+  }
+  for (const key of ["ref", "channel"] as const) {
+    const v = raw[key];
+    if (typeof v === "string" || v === null) marker[key] = v;
+  }
+  if (raw.companions !== undefined) marker.companions = raw.companions;
+  if (raw.extensions !== undefined) marker.extensions = raw.extensions;
+  return marker;
+}
+
 function readMarker(cwd: string = process.cwd()): Marker {
-  // Match uninstall.mjs: a project marker in the cwd wins, otherwise the global marker.
+  // Match uninstall.ts: a project marker in the cwd wins, otherwise the global marker.
   const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
   const file = fs.existsSync(projectMarker) ? projectMarker : path.join(agentDir(), ".pi-kit.json");
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    // Written by the kit's installer, but still a file: a field of the wrong type is left out.
+    return isRecord(parsed) ? toMarker(parsed) : {};
   } catch {
     return {};
   }
@@ -205,7 +216,8 @@ export function listProfiles(kitRoot: string): ProfileInfo[] {
       const name = f.replace(/\.json$/, "");
       let description = "";
       try {
-        description = (JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).description ?? "").trim();
+        const value = prop(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")), "description") ?? "";
+        description = typeof value === "string" ? value.trim() : "";
       } catch {
         /* a malformed profile is still selectable; the installer will reject it */
       }
@@ -216,9 +228,34 @@ export function listProfiles(kitRoot: string): ProfileInfo[] {
 
 // --- actual loaded set vs profiles ------------------------------------------
 
-function readJsonFile(file: string): any {
+/** A value decoded from JSON at a file boundary, before any shape is asserted. */
+type JsonValue = string | number | boolean | null | undefined | JsonValue[] | { [key: string]: JsonValue };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+// Everything JSON.parse can return passes; the check makes that a proof rather than a cast.
+function isJsonValue(v: unknown): v is JsonValue {
+  if (v === null || v === undefined || typeof v === "string" || typeof v === "number" || typeof v === "boolean") return true;
+  if (Array.isArray(v)) return v.every(isJsonValue);
+  return isRecord(v) && Object.values(v).every(isJsonValue);
+}
+
+// `v?.[key]` for parsed JSON: undefined unless v is a plain object.
+function prop(v: unknown, key: string): JsonValue {
+  return isRecord(v) && isJsonValue(v[key]) ? v[key] : undefined;
+}
+
+// A parsed JSON value as message text: what `${v}` printed for a scalar, JSON for anything else.
+function shown(v: unknown): string {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null || v === undefined ? String(v) : JSON.stringify(v);
+}
+
+function readJsonFile(file: string): JsonValue {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isJsonValue(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -234,32 +271,73 @@ function sameDir(a: string, b: string): boolean {
 
 export const KIT_PACKAGE = "@satunix/pi-system";
 
-// True for `npm:@satunix/pi-system` on any channel or version.
+// Keep recognition independent of the current delivery default.
+const KIT_PACKAGE_NAMES = new Set(["@satunix/pi-system", "@satunix/luna"]);
+function isKitPackageName(name: unknown): boolean {
+  return typeof name === "string" && KIT_PACKAGE_NAMES.has(name);
+}
+function isKitLocalPackageName(name: unknown): boolean {
+  return isKitPackageName(name) || name === "pi-system";
+}
+
+// True for either scoped kit identity on any channel or version.
 export function isKitNpmSource(source: string): boolean {
   if (!source.startsWith("npm:")) return false;
   const body = source.slice(4);
-  return body === KIT_PACKAGE || body.startsWith(`${KIT_PACKAGE}@`);
+  return [...KIT_PACKAGE_NAMES].some((name) => body === name || body.startsWith(`${name}@`));
 }
 
-// True for a git source of a pi-system repository on any ref (`git:host/owner/pi-system[@ref]`,
-// `git:git@host:owner/pi-system[@ref]`, or an https/ssh URL).
-export function isKitGitSource(source: string): boolean {
+// A repository key for the URL forms /profile recognises, ignoring any ref.
+function gitSourceKey(source: string): string | null {
+  const url = source.startsWith("git:") && !source.startsWith("git://") ? source.slice(4) : /^(https?|ssh|git):\/\//i.test(source) ? source : null;
+  if (!url) return null;
+  const match = url.trim().match(/^(?:[a-z]+:\/\/(?:[^@/]+@)?|git@)?([^/:]+)(?::\d+)?[/:](.+)$/i);
+  if (!match) return null;
+  const [, host = "", rest = ""] = match;
+  const repo = rest.split("@")[0]?.replace(/\.git$/, "").replace(/\/+$/, "");
+  return repo ? `${host}/${repo}`.toLowerCase() : null;
+}
+
+export function isKitGitSource(source: string, previousSources: readonly string[] = []): boolean {
   const url = source.startsWith("git:") ? source.slice(4) : /^(https?|ssh|git):\/\//i.test(source) ? source : null;
-  if (!url) return false;
-  return /[/:]pi-system(\.git)?(@[^/:]*)?$/i.test(url.trim());
+  // Preserve every legacy match, including its ref restrictions.
+  if (url && /[/:]pi-system(\.git)?(@[^/:]*)?$/i.test(url.trim())) return true;
+  const key = gitSourceKey(source);
+  return key !== null && (key === "github.com/satunix/luna" || previousSources.some((previous) => gitSourceKey(previous) === key));
+}
+
+function previousKitSources(kitRoot: string): string[] {
+  const config = readJsonFile(path.join(kitRoot, "packages", "core", "distribution.json"));
+  const value = prop(prop(config, "git"), "previousSources");
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((source: unknown) => typeof source !== "string" || !gitSourceKey(source))) {
+    throw new Error("distribution.git.previousSources must be an array of git sources");
+  }
+  return value.filter((source): source is string => typeof source === "string");
 }
 
 // The kit's own package entry: a local path equal to kitRoot, or the npm or git package when
 // kitRoot is pi's installed copy of it (<agent dir>/npm/node_modules/..., <agent dir>/git/...).
 function isKitEntrySource(source: string, base: string, kitRoot: string): boolean {
-  if (isKitNpmSource(source) || isKitGitSource(source)) {
+  if (isKitNpmSource(source) || isKitGitSource(source, previousKitSources(kitRoot))) {
     // Mirror kit-update's isKitRoot: accept the legacy "pi-system" package name and require
     // the monorepo installer, so /profile agrees with /update for legacy-named checkouts.
-    const name = readJsonFile(path.join(kitRoot, "package.json"))?.name;
-    return (name === KIT_PACKAGE || name === "pi-system") && fs.existsSync(path.join(kitRoot, "packages", "core", "install.mjs"));
+    const name = prop(readJsonFile(path.join(kitRoot, "package.json")), "name");
+    return isKitLocalPackageName(name) && kitInstaller(kitRoot) !== null;
   }
   if (source.startsWith("npm:") || source.startsWith("git:")) return false;
   return sameDir(path.resolve(base, source), kitRoot);
+}
+
+// The `packages` array of a parsed settings file ([] when absent or malformed).
+function kitPackages(settings: unknown): unknown[] {
+  const packages = prop(settings, "packages");
+  return Array.isArray(packages) ? packages : [];
+}
+
+// A package entry's source: the string itself, or the `source` of an object entry.
+function packageSource(pkg: unknown): JsonValue {
+  return typeof pkg === "string" ? pkg : prop(pkg, "source");
 }
 
 // Names of kit extensions in the kit's settings entry (null when the entry is missing or
@@ -267,13 +345,14 @@ function isKitEntrySource(source: string, base: string, kitRoot: string): boolea
 export function loadedKitExtensions(settingsFile: string, kitRoot: string): string[] | null {
   const settings = readJsonFile(settingsFile);
   const base = path.dirname(settingsFile);
-  for (const pkg of Array.isArray(settings?.packages) ? settings.packages : []) {
-    const source = typeof pkg === "string" ? pkg : pkg?.source;
+  for (const pkg of kitPackages(settings)) {
+    const source = packageSource(pkg);
     if (typeof source !== "string" || !isKitEntrySource(source, base, kitRoot)) continue;
-    if (typeof pkg === "string" || !Array.isArray(pkg.extensions)) return null;
-    return pkg.extensions
+    const extensions = prop(pkg, "extensions");
+    if (typeof pkg === "string" || !Array.isArray(extensions)) return null;
+    return extensions
       .map((e: unknown) => (typeof e === "string" ? e.match(/(?:src|third_party)\/([^/]+)\/index\.ts$/)?.[1] : undefined))
-      .filter((n: string | undefined): n is string => Boolean(n));
+      .filter((n): n is string => Boolean(n));
   }
   return null;
 }
@@ -285,8 +364,8 @@ export function loadedKitExtensions(settingsFile: string, kitRoot: string): stri
 function projectKitEntry(settingsFile: string, kitRoot: string): boolean {
   const settings = readJsonFile(settingsFile);
   const base = path.dirname(settingsFile);
-  for (const pkg of Array.isArray(settings?.packages) ? settings.packages : []) {
-    const source = typeof pkg === "string" ? pkg : pkg?.source;
+  for (const pkg of kitPackages(settings)) {
+    const source = packageSource(pkg);
     if (typeof source === "string" && isKitEntrySource(source, base, kitRoot)) return true;
   }
   return false;
@@ -299,7 +378,8 @@ function isKitExtension(kitRoot: string, name: string): boolean {
 function readOverrides(): { add: string[]; remove: string[] } {
   const raw = readJsonFile(path.join(agentDir(), "pi-kit", "overrides.json"));
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  return { add: list(raw?.extensions?.add), remove: list(raw?.extensions?.remove) };
+  const extensions = prop(raw, "extensions");
+  return { add: list(prop(extensions, "add")), remove: list(prop(extensions, "remove")) };
 }
 
 export function hasOverridesFile(): boolean {
@@ -311,7 +391,8 @@ export function profileKitExtensions(kitRoot: string, profile: string): string[]
   const layout = resolveKitLayout(kitRoot);
   const def = layout ? readJsonFile(path.join(layout.profilesDir, `${profile}.json`)) : null;
   const o = readOverrides();
-  const include: string[] = Array.isArray(def?.include) ? def.include : [];
+  const rawInclude = prop(def, "include");
+  const include: string[] = Array.isArray(rawInclude) ? rawInclude.filter((n): n is string => typeof n === "string") : [];
   const out = include.filter((n) => !o.remove.includes(n));
   for (const n of o.add) if (!out.includes(n)) out.push(n);
   return out.filter((n) => isKitExtension(kitRoot, n));
@@ -324,7 +405,7 @@ export function diffSets(from: string[], to: string[]): { add: string[]; remove:
 // Which profile the loaded set matches: exact, or the closest by symmetric difference. Profiles can
 // have identical extension sets (long-horizon and autonomous do): `prefer` (the marker's profile) wins
 // such a tie, otherwise the alphabetically first twin would be reported for both.
-export function matchProfile(kitRoot: string, loaded: string[], profiles: string[], prefer?: string): { exact?: string; closest?: string; distance: number } {
+export function matchProfile(kitRoot: string, loaded: string[], profiles: string[], prefer?: string): { exact?: string; closest?: string | undefined; distance: number } {
   let best: { name?: string; distance: number } = { distance: Number.POSITIVE_INFINITY };
   const ordered = prefer && profiles.includes(prefer) ? [prefer, ...profiles.filter((p) => p !== prefer)] : profiles;
   for (const name of ordered) {
@@ -337,7 +418,7 @@ export function matchProfile(kitRoot: string, loaded: string[], profiles: string
 }
 
 // The installer is a Node script. Under a compiled `pi` binary process.execPath is pi itself,
-// and `pi install.mjs ...` would read the script path as a prompt — so only use execPath when
+// and `pi install.ts ...` would read the script path as a prompt — so only use execPath when
 // it is a JS runtime, else the `node` on PATH.
 function nodeBinary(): string {
   const exe = (process.execPath || "").replace(/\\/g, "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
@@ -356,7 +437,8 @@ export function currentCompactionState(pi: ExtensionAPI, ctx: ExtensionContext):
   let contextWindow: number | null | undefined;
   try {
     // A model with no window is reported as 0 (unknown), no model at all as undefined.
-    contextWindow = ctx.model ? Number((ctx.model as { contextWindow?: unknown }).contextWindow ?? 0) : undefined;
+    const model: unknown = ctx.model;
+    contextWindow = model ? Number((isRecord(model) ? model.contextWindow : undefined) ?? 0) : undefined;
   } catch {
     contextWindow = undefined;
   }
@@ -366,7 +448,7 @@ export function currentCompactionState(pi: ExtensionAPI, ctx: ExtensionContext):
   } catch {
     projectTrusted = undefined;
   }
-  let kitTriggerLoaded = false;
+  let kitTriggerLoaded: boolean;
   try {
     kitTriggerLoaded = pi.getCommands().some((cmd) => cmd.name === "compact-threshold");
   } catch {
@@ -399,18 +481,21 @@ function writeJsonAtomic(file: string, value: unknown): void {
 // settings file that does not parse (writing {} back would erase the operator's config).
 export function setGlobalCompactionEnabled(enabled: boolean): void {
   const file = path.join(agentDir(), "settings.json");
-  let settings: any = {};
+  let settings: Record<string, unknown> = {};
   if (fs.existsSync(file)) {
-    settings = readJsonFile(file);
-    if (!settings || typeof settings !== "object") throw new Error(`${file} is not valid JSON; not changed`);
+    const parsed = readJsonFile(file);
+    if (!isRecord(parsed)) throw new Error(`${file} is not valid JSON; not changed`);
+    settings = parsed;
   }
-  settings.compaction = { ...(settings.compaction ?? {}), enabled };
+  const previous = settings.compaction ?? {};
+  settings.compaction = { ...(typeof previous === "object" && previous !== null ? previous : {}), enabled };
   writeJsonAtomic(file, settings);
 }
 
 export function setKitTriggerEnabled(enabled: boolean): void {
   const file = path.join(agentDir(), "pi-kit", "trigger-compact.json");
-  const current = readJsonFile(file) ?? {};
+  const raw = readJsonFile(file) ?? {};
+  const current = isRecord(raw) ? raw : {};
   if (enabled) delete current.enabled;
   else current.enabled = false;
   if (Object.keys(current).length === 0) fs.rmSync(file, { force: true });
@@ -474,11 +559,13 @@ function leanCtxBinaryPresent(): boolean {
 // for a reload; `/profile` picks another. PI_KIT_AUTO_PROFILE=0 turns this off,
 // PI_KIT_AUTO_PROFILE=<name> picks the profile.
 export function unfilteredKitEntry(settingsFile: string): boolean {
+  const root = findKitRoot();
+  const previousSources = root ? previousKitSources(root) : [];
   const settings = readJsonFile(settingsFile);
-  for (const pkg of Array.isArray(settings?.packages) ? settings.packages : []) {
-    const source = typeof pkg === "string" ? pkg : pkg?.source;
-    if (typeof source !== "string" || !(isKitNpmSource(source) || isKitGitSource(source))) continue;
-    return typeof pkg === "string" || !Array.isArray(pkg.extensions);
+  for (const pkg of kitPackages(settings)) {
+    const source = packageSource(pkg);
+    if (typeof source !== "string" || !(isKitNpmSource(source) || isKitGitSource(source, previousSources))) continue;
+    return typeof pkg === "string" || !Array.isArray(prop(pkg, "extensions"));
   }
   return false;
 }
@@ -490,8 +577,10 @@ export const unfilteredNpmKitEntry = unfilteredKitEntry;
 // The mechanics (snapshot, verify, rollback) live in ./profile-switch.ts; this part decides which
 // files a switch can touch and what the requested profile expects, then drives the installer.
 
-// Extensions whose absence widens what the agent may do; /profile status flags them.
-const MANDATORY_PROTECTION = ["tool-firewall", "protected-paths"];
+// Extensions whose absence widens what the agent may do; /profile status flags them. Extensions may
+// not import core, so this is a copy: tests/profile-safety-smoke.ts pins it to the protections in
+// distribution.json requiredProfileExtensions.
+export const MANDATORY_PROTECTION: readonly string[] = ["tool-firewall", "protected-paths"];
 const NOTABLE_EXTENSIONS = [
   "tool-firewall", "protected-paths", "verify-gate", "verifier-board", "trigger-compact", "custom-compaction", "context-sieve",
   "finish-reason-retry", "autonomous-loop", "autonomy-run", "conductor", "subagent", "delegation-guard", "effort", "memory-vault", "goal-core",
@@ -503,14 +592,14 @@ export function firewallConfigFile(): string {
 
 /**
  * The firewall a profile demands, or null when the profile names a policy or mode this kit does
- * not know. Mirrors firewallConfigFor() in packages/core/lib/profiles.mjs; an unknown value must
+ * not know. Mirrors firewallConfigFor() in packages/core/lib/profiles.ts; an unknown value must
  * stop the switch rather than quietly become the default.
  */
-export function firewallExpectation(def: any): { policy: "coding" | "pentest"; mode: "auto" | "manual" } | null {
-  const fw = def?.firewall;
+export function firewallExpectation(def: unknown): { policy: "coding" | "pentest"; mode: "auto" | "manual" } | null {
+  const fw = prop(def, "firewall");
   if (fw === undefined || fw === null) return { policy: "coding", mode: "manual" };
-  if (typeof fw !== "object" || Array.isArray(fw)) return null;
-  const { policy, mode } = fw as { policy?: unknown; mode?: unknown };
+  if (!isRecord(fw)) return null;
+  const { policy, mode } = fw;
   if (policy !== undefined && policy !== "coding" && policy !== "pentest") return null;
   if (mode !== undefined && mode !== "auto" && mode !== "manual") return null;
   return { policy: policy === "pentest" ? "pentest" : "coding", mode: mode === "auto" ? "auto" : "manual" };
@@ -524,6 +613,7 @@ export function switchFiles(projectCwd: string): string[] {
     path.join(projectCwd, ".pi", "settings.json"),
     path.join(projectCwd, ".pi", ".pi-kit.json"),
     firewallConfigFile(),
+    process.env.PI_KIT_SECURITY_CONFIG?.trim() || path.join(agentDir(), "pi-kit", "security.json"),
     path.join(agentDir(), "pi-kit", "overrides.json"),
     path.join(agentDir(), ".env"),
   ];
@@ -544,11 +634,15 @@ interface SwitchRequest {
 async function runSwitch(pi: ExtensionAPI, c: ExtensionContext, req: SwitchRequest): Promise<SwitchOutcome> {
   const def = readJsonFile(path.join(req.layout.profilesDir, `${req.target}.json`));
   const fw = firewallExpectation(def);
-  if (!fw) {
+  const rawSecurityLevel = prop(def, "securityLevel");
+  const securityLevel = rawSecurityLevel === undefined ? (req.target === "pentest" ? "guarded" : "balanced") : rawSecurityLevel;
+  if (!fw || typeof securityLevel !== "string" || !["relaxed", "balanced", "guarded", "strict"].includes(securityLevel)) {
     return {
       ok: false,
       stage: "install",
-      message: `profile: refusing to switch to "${req.target}": its firewall block names an unknown policy or mode (${JSON.stringify(def?.firewall)}). Known policies: coding, pentest; modes: auto, manual. Nothing was changed.`,
+      message: !fw
+        ? `profile: refusing to switch to "${req.target}": its firewall block names an unknown policy or mode (${JSON.stringify(prop(def, "firewall"))}). Known policies: coding, pentest; modes: auto, manual. Nothing was changed.`
+        : `profile: refusing to switch to "${req.target}": unknown or unavailable securityLevel ${JSON.stringify(securityLevel)}. Nothing was changed.`,
       warnings: [],
       rolledBack: false,
       rollbackErrors: [],
@@ -557,9 +651,10 @@ async function runSwitch(pi: ExtensionAPI, c: ExtensionContext, req: SwitchReque
   }
   const command = c as ExtensionCommandContext;
   return transactionalSwitch({
-    exec: (cmd, args, options) => pi.exec(cmd, args, options) as Promise<{ stdout: string; stderr: string; code: number; killed?: boolean }>,
+    exec: (cmd, args, options) => pi.exec(cmd, args, options),
     command: nodeBinary(),
-    args: req.installArgs,
+    // --no-migrate: the rollback below restores files only, so the switch never moves the kit's source.
+    args: [...req.installArgs, "--no-migrate"],
     cwd: req.projectScoped ? req.projectCwd : req.layout.root,
     timeoutMs: 120_000,
     files: switchFiles(req.projectCwd),
@@ -570,6 +665,7 @@ async function runSwitch(pi: ExtensionAPI, c: ExtensionContext, req: SwitchReque
       markerFile: req.projectScoped ? path.join(req.projectCwd, ".pi", ".pi-kit.json") : path.join(agentDir(), ".pi-kit.json"),
       settingsFile: req.projectScoped ? path.join(req.projectCwd, ".pi", "settings.json") : path.join(agentDir(), "settings.json"),
       firewallFile: firewallConfigFile(),
+      security: { file: securityFilePath(agentDir()), level: securityLevel },
       extensions: () => profileKitExtensions(req.kitRoot, req.target),
       firewall: fw,
       loadedExtensions: (file) => loadedKitExtensions(file, req.kitRoot),
@@ -599,8 +695,8 @@ function companionLabel(source: string): string {
 function registeredSources(settingsFile: string): Set<string> {
   const out = new Set<string>();
   const settings = readJsonFile(settingsFile);
-  for (const pkg of Array.isArray(settings?.packages) ? settings.packages : []) {
-    const source = typeof pkg === "string" ? pkg : pkg?.source;
+  for (const pkg of kitPackages(settings)) {
+    const source = packageSource(pkg);
     if (typeof source === "string") out.add(source);
   }
   return out;
@@ -611,11 +707,14 @@ function overridesSummary(): string {
   if (!fs.existsSync(file)) return "none";
   const raw = readJsonFile(file);
   if (!raw || typeof raw !== "object") return `UNREADABLE (${file} is not valid JSON; the installer will refuse to switch until it is fixed)`;
-  const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  const n = (section: string, key: string) => {
+    const v = prop(prop(raw, section), key);
+    return Array.isArray(v) ? v.length : 0;
+  };
   const parts = [
-    `extensions +${n(raw.extensions?.add)}/-${n(raw.extensions?.remove)}`,
-    `skills -${n(raw.skills?.exclude)}/+${n(raw.skills?.include)}`,
-    `prompts -${n(raw.prompts?.exclude)}/+${n(raw.prompts?.include)}`,
+    `extensions +${n("extensions", "add")}/-${n("extensions", "remove")}`,
+    `skills -${n("skills", "exclude")}/+${n("skills", "include")}`,
+    `prompts -${n("prompts", "exclude")}/+${n("prompts", "include")}`,
   ];
   return `${parts.join(", ")} (${file})`;
 }
@@ -649,8 +748,11 @@ export function effectiveConfigLines(input: StatusInput): string[] {
   const fw = readJsonFile(firewallConfigFile());
   if (!fw || typeof fw !== "object") lines.push(`Firewall: no config at ${firewallConfigFile()} (tool-firewall uses its built-in defaults)`);
   else {
-    const known = (fw.policy === "coding" || fw.policy === "pentest") && (fw.mode === "auto" || fw.mode === "manual");
-    lines.push(`Firewall: policy ${fw.policy ?? "?"} · mode ${fw.mode ?? "?"}${fw.source ? ` (${fw.source === "user" ? "set with /auto" : "from the profile"})` : ""}${known ? "" : "  WARNING: unknown policy or mode - the firewall treats this as invalid, run /profile <name> to rewrite it"}`);
+    const policy = prop(fw, "policy");
+    const mode = prop(fw, "mode");
+    const source = prop(fw, "source");
+    const known = (policy === "coding" || policy === "pentest") && (mode === "auto" || mode === "manual");
+    lines.push(`Firewall: policy ${shown(policy ?? "?")} · mode ${shown(mode ?? "?")}${source ? ` (${source === "user" ? "set with /auto" : "from the profile"})` : ""}${known ? "" : "  WARNING: unknown policy or mode - the firewall treats this as invalid, run /profile <name> to rewrite it"}`);
   }
   if (compaction) {
     const src = compaction.source === "default" ? "default" : `${compaction.source} settings`;
@@ -675,7 +777,7 @@ async function applyDefaultProfile(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   if (!ctx.hasUI) return;
   const setting = process.env.PI_KIT_AUTO_PROFILE?.trim();
   if (["0", "off", "false", "no"].includes((setting ?? "").toLowerCase())) return;
-  const cwd = (ctx as ExtensionCommandContext).cwd ?? process.cwd();
+  const cwd = ctx.cwd ?? process.cwd();
   const scope = unfilteredKitEntry(path.join(cwd, ".pi", "settings.json")) ? "project" : "global";
   if (scope === "global" && !unfilteredKitEntry(path.join(agentDir(), "settings.json"))) return;
   const kitRoot = findKitRoot();
@@ -746,26 +848,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("kit", {
-    description: "Show the pi-kit slash-command cheatsheet (built-ins + kit helpers).",
-    handler: async (_args, ctx) => {
-      show(ctx, KIT_SHEET);
-    },
-  });
-
-  pi.registerCommand("helpers", {
-    description: "Alias for /kit - show the pi-kit slash-command cheatsheet.",
-    handler: async (_args, ctx) => {
-      show(ctx, KIT_SHEET);
-    },
-  });
 
   pi.registerCommand("compaction", {
     description: "Show or change auto-compaction: /compaction [status|on|off|trigger on|trigger off]",
     getArgumentCompletions: (prefix: string) =>
       ["status", "on", "off", "trigger on", "trigger off"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, ctx) => {
-      const c = ctx as ExtensionCommandContext;
+      const c = ctx;
       const kitLoaded = pi.getCommands().some((cmd) => cmd.name === "compact-threshold");
       let arg = args.trim().toLowerCase().replace(/\s+/g, " ");
       if (!arg && c.hasUI) {
@@ -824,7 +913,7 @@ export default function (pi: ExtensionAPI) {
       return ["status", "list", ...names].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v }));
     },
     handler: async (args, ctx) => {
-      const c = ctx as ExtensionCommandContext;
+      const c = ctx;
       const kitRoot = findKitRoot();
       const layout = kitRoot ? resolveKitLayout(kitRoot) : null;
       if (!kitRoot || !layout) {
@@ -897,7 +986,7 @@ export default function (pi: ExtensionAPI) {
         target = profiles[labels.indexOf(choice)]?.name ?? "";
       }
 
-      // Renamed profiles (mirrors PROFILE_ALIASES in packages/core/lib/profiles.mjs).
+      // Renamed profiles (mirrors PROFILE_ALIASES in packages/core/lib/profiles.ts).
       if (target === "engagement") target = "pentest";
       if (!profiles.some((p) => p.name === target)) {
         report(c, `profile: unknown profile "${target}". Known: ${profiles.map((p) => p.name).join(", ")}. Nothing was changed.`, "error");
@@ -906,6 +995,19 @@ export default function (pi: ExtensionAPI) {
       if (target === current) {
         report(c, `profile: already on "${target}" - nothing to do.`, "info");
         return;
+      }
+
+      // A switch that lowers the security level in force is a weakening (security-guard.ts).
+      const levelOf = (name: string | null | undefined) => (name ? prop(readJsonFile(path.join(layout.profilesDir, `${name}.json`)), "securityLevel") : undefined);
+      const lowering = securityLowering(securityFilePath(agentDir()), levelOf(current ?? marker.profile), levelOf(target));
+      if (lowering) {
+        const answer = await confirmLowering(c, target, lowering);
+        if (answer !== "confirmed") {
+          report(c, answer === "refused"
+            ? `profile: switching to "${target}" lowers security from ${lowering.from} to ${lowering.to}, which needs a choice at the terminal of an interactive root session; refused in headless, RPC and delegated/child sessions. Nothing was changed.`
+            : `profile: kept security at ${lowering.from}; nothing was changed. /security sets the level on its own.`, answer === "refused" ? "warning" : "info");
+          return;
+        }
       }
 
       // First switch after hand edits: offer to keep them (they would otherwise be replaced by
@@ -931,7 +1033,7 @@ export default function (pi: ExtensionAPI) {
 
       let outcome: SwitchOutcome;
       try {
-        // install.mjs derives a project install's settings and marker paths from
+        // install.ts derives a project install's settings and marker paths from
         // process.cwd(), so a project-scoped switch must run in the user's project rather
         // than in the kit root. A global switch is unaffected.
         outcome = await runSwitch(pi, c, {
@@ -951,12 +1053,12 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         outcome = { ok: false, stage: "install", message: `profile: switch to "${target}" FAILED: ${error instanceof Error ? error.message : String(error)}`, warnings: [], rolledBack: false, rollbackErrors: [], backupDir: null };
       }
-      if (c.hasUI) {
-        try {
-          c.ui.setStatus("profile", undefined);
-        } catch {
-          /* stale ctx */
-        }
+      // After a successful switch the reload has replaced this ctx, and pi throws on any use of
+      // it, reading hasUI included.
+      try {
+        if (c.hasUI) c.ui.setStatus("profile", undefined);
+      } catch {
+        /* stale ctx */
       }
       if (!outcome.ok) report(c, outcome.message + (outcome.warnings.length ? `\nWarnings:\n${outcome.warnings.map((w) => `  ${w}`).join("\n")}` : ""), "error");
       // On success the reload has already replaced this instance: the announcement was made before it.

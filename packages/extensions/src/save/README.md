@@ -14,8 +14,11 @@ agent or session to continue the work.
    exists even if the model narrates a tool call it never made.
    - `<target>/Latest Compact.md`: overwritten on every save.
    - `<target>/Compacts/YYYY-MM-DD HHmmss - save.md`: one log file per save.
-3. It masks common secret shapes (private keys, `glpat-`, `ghp_`, AWS key IDs,
-   `sk-`, JWTs, `password=`) before it writes.
+3. It masks common secret shapes (private keys, `glpat-`, `ghp_`, `github_pat_`,
+   AWS key IDs, `sk-`, JWTs, `Authorization: Bearer`/`Basic`/`token` headers,
+   credentials in URLs such as `postgres://user:pass@host`, `password=`) before
+   it writes. The header, `github_pat_` and URL shapes are tool-capture's
+   patterns (`tests/save-smoke.ts`, `testRedactsToolCaptureShapes`).
 4. For a vault project, it queues one prompt that tells the agent to update the
    project's `Current State.md` and save durable facts to memory. If the agent
    is busy, the prompt waits as a follow-up.

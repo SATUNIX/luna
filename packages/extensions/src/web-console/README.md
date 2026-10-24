@@ -4,7 +4,7 @@
 that ships in [`packages/web-ui`](../../web-ui).
 
 The command does one thing: launch the existing zero-dependency server
-(`packages/web-ui/server/server.js`) as a detached Node process and report its URL. It does
+(`packages/web-ui/server/server.ts`) as a detached Node process and report its URL. It does
 not proxy sessions itself, never writes Pi session files, and changes no other extension's
 behaviour.
 
@@ -31,7 +31,7 @@ fresh server (overwriting the pid file), unless the pid file names a live consol
 stopped responding; then it says so instead of starting a second server on the same port.
 
 `stop` only signals the pid when it is the console. On Linux that is checked from the process
-command line (`/proc/<pid>/cmdline` must name this web UI's `server/server.js`), so a hung console
+command line (`/proc/<pid>/cmdline` must name this web UI's `server/server.ts`), so a hung console
 is stopped and a pid the OS has reused for an unrelated process is not. Where the command line
 cannot be read, the console must answer its health endpoint.
 

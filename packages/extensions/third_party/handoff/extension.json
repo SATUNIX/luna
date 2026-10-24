@@ -7,7 +7,7 @@
   "layer": 3,
   "entry": "index.ts",
   "hooks": ["session_shutdown"],
-  "registers": { "tools": [], "commands": ["/handoff"] },
+  "registers": { "tools": [], "commands": ["handoff"] },
   "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],

@@ -5,7 +5,7 @@ import java.security.MessageDigest
 
 /**
  * Identifiers exactly as the computer computes and shows them
- * (packages/web-ui/server/remote/codes.js and tls.js), so the operator can compare screens.
+ * (packages/web-ui/server/remote/codes.ts and tls.ts), so the operator can compare screens.
  */
 object Codes {
     // Crockford base32 without I, L, O and U.

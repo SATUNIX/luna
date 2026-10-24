@@ -1,0 +1,12 @@
+{
+  // Node-run code (internal/docs/adr/0001): erasable syntax only, from tsconfig.base.json.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["./examples", "node_modules"]
+}

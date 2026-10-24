@@ -45,7 +45,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Everything the phone says to a computer (packages/web-ui/server/remote/api.js):
+ * Everything the phone says to a computer (packages/web-ui/server/remote/api.ts):
  *
  *   GET  /v1/hello                       who answers at an address (checked against the pin)
  *   POST /v1/pair, GET /v1/pair/:id      linking: code + proof of the new key, then the
@@ -118,7 +118,7 @@ class Remote(private val context: Context, private val store: HostStore) {
         val response = call.await()
         return withContext(Dispatchers.IO) {
             response.use { r ->
-                val text = r.body?.string().orEmpty()
+                val text = r.body.string()
                 Reply(r.code, runCatching { JSONObject(text) }.getOrNull())
             }
         }
@@ -384,11 +384,11 @@ class Remote(private val context: Context, private val store: HostStore) {
                     continue
                 }
                 if (response.code != 200) {
-                    val error = withContext(Dispatchers.IO) { runCatching { JSONObject(response.body!!.string()).optString("error") }.getOrNull() }
+                    val error = withContext(Dispatchers.IO) { runCatching { JSONObject(response.body.string()).optString("error") }.getOrNull() }
                     throw BridgeError("http_${response.code}", error?.takeIf { it.isNotEmpty() } ?: "HTTP ${response.code}", response.code)
                 }
                 store.touch(host.id, address)
-                withContext(Dispatchers.IO) { readEvents(response.body!!.source(), streamId, record, sink) }
+                withContext(Dispatchers.IO) { readEvents(response.body.source(), streamId, record, sink) }
                 return
             } finally {
                 response.close()
@@ -624,7 +624,7 @@ class Remote(private val context: Context, private val store: HostStore) {
                 entry.call = call
                 val reply = try {
                     val response = call.await()
-                    withContext(Dispatchers.IO) { response.use { Reply(it.code, runCatching { JSONObject(it.body?.string().orEmpty()) }.getOrNull()) } }
+                    withContext(Dispatchers.IO) { response.use { Reply(it.code, runCatching { JSONObject(it.body.string()) }.getOrNull()) } }
                 } catch (e: IOException) {
                     if (entry.cancelled) return JSONObject().put("state", "cancelled")
                     if (PinnedTls.isPinMismatch(e)) throw BridgeError.pinMismatch()

@@ -1,0 +1,19 @@
+{
+  // Browser code (internal/docs/adr/0002): these sources, compiled by `npm run build:web` into the
+  // committed public/js and mobile/js. DOM types, no Node types: server shapes the client shares
+  // come from Node-free modules (`import type` only).
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "rewriteRelativeImportExtensions": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "rootDir": "."
+  },
+  "include": ["./**/*.ts"]
+}

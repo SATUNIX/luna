@@ -2,7 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import https from "node:https";
 import http from "node:http";
-import { URL } from "node:url";
+import path from "node:path";
+import { URL, fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -15,9 +16,28 @@ const MEM0_KEY = process.env.MEM0_API_KEY ?? "";
 const MEM0_USER = process.env.MEM0_USER_ID ?? "pi-agent";
 const MEMORY_BACKEND = process.env.PI_KIT_MEMORY_BACKEND ?? "mcp";
 const MCP_COMMAND = process.env.PI_KIT_MEMORY_MCP_COMMAND ?? "node";
-const MCP_ARGS = (process.env.PI_KIT_MEMORY_MCP_ARGS ?? "packages/container/mcp-servers/memory-mcp/index.js")
-  .split(/\s+/)
-  .filter(Boolean);
+// The default memory server is the one shipped beside this extension, resolved from this file,
+// never from the working directory: a cwd-relative script would let any opened repository plant
+// packages/container/mcp-servers/memory-mcp/index.ts and have an auto-allowed tool run it (ORC-2).
+const DEFAULT_MCP_SCRIPT = fileURLToPath(new URL("../../../container/mcp-servers/memory-mcp/index.ts", import.meta.url));
+const MCP_ARGS = process.env.PI_KIT_MEMORY_MCP_ARGS === undefined ? [DEFAULT_MCP_SCRIPT] : process.env.PI_KIT_MEMORY_MCP_ARGS.split(/\s+/).filter(Boolean);
+
+/**
+ * Why the configured MCP command line would resolve code against the working directory, or null
+ * when it does not. A command with a path separator must be absolute (a bare name is looked up on
+ * PATH), and every non-flag argument, the script path included, must be an absolute path.
+ */
+function cwdRelativeMcpTarget(command: string, args: readonly string[]): string | null {
+  if (/[\\/]/.test(command) && !path.isAbsolute(command)) {
+    return `PI_KIT_MEMORY_MCP_COMMAND "${command}" is a relative path; set an absolute path`;
+  }
+  for (const arg of args) {
+    if (!arg.startsWith("-") && !path.isAbsolute(arg)) {
+      return `PI_KIT_MEMORY_MCP_ARGS argument "${arg}" is not an absolute path; script arguments must be absolute so a repository cannot supply the script`;
+    }
+  }
+  return null;
+}
 
 const CIRCUIT_THRESHOLD = 3;
 const REQUEST_TIMEOUT_MS = 5000;
@@ -32,6 +52,8 @@ type MemMcpTransport = { post(path: string, body: unknown): Promise<{ status: nu
 const memoryMcpTransport: MemMcpTransport = {
   async post(toolPath: string, body: unknown) {
     const toolName = toolPath.replace(/^\/+/, "");
+    const refused = cwdRelativeMcpTarget(MCP_COMMAND, MCP_ARGS);
+    if (refused) throw new Error(refused);
     const { stdout } = await execFileAsync(MCP_COMMAND, [...MCP_ARGS, "--call", toolName, JSON.stringify(body)], {
       timeout: REQUEST_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
@@ -145,7 +167,7 @@ export default function (_pi: ExtensionAPI) {
       if (!MEM0_URL) return notConfigured();
       if (circuitOpen) return circuitDegraded();
       const result = await safeRequest("POST", `${MEM0_URL}/memories/`, { messages: [{ role: "user", content: params.text }], user_id: MEM0_USER });
-      if (!result.ok) return { content: [{ type: "text" as const, text: `mem0 error: ${result.err}` }], details: undefined };
+      if (!result.ok) return { content: [{ type: "text" as const, text: `mem0 error: ${String(result.err)}` }], details: undefined };
       return { content: [{ type: "text" as const, text: `mem0 add: ${JSON.stringify(result.data)}` }], details: undefined };
     },
   });
@@ -171,9 +193,16 @@ export default function (_pi: ExtensionAPI) {
       if (circuitOpen) return circuitDegraded();
       const limit = params.limit ?? 5;
       const result = await safeRequest("POST", `${MEM0_URL}/memories/search/`, { query: params.query, user_id: MEM0_USER, limit });
-      if (!result.ok) return { content: [{ type: "text" as const, text: `mem0 error: ${result.err}` }], details: undefined };
-      const results = Array.isArray(result.data) ? result.data : (result.data as { results?: unknown[] })?.results ?? [];
-      const text = (results as { memory?: string }[]).map((r, i) => `${i + 1}. ${r.memory ?? JSON.stringify(r)}`).join("\n");
+      if (!result.ok) return { content: [{ type: "text" as const, text: `mem0 error: ${String(result.err)}` }], details: undefined };
+      // The response is unknown: a non-list results field is no results, and an entry without a
+      // string memory is shown as JSON rather than dereferenced.
+      const data: unknown = result.data;
+      const listed: unknown = Array.isArray(data) ? data : typeof data === "object" && data !== null ? Reflect.get(data, "results") : undefined;
+      const results: unknown[] = Array.isArray(listed) ? listed : [];
+      const text = results.map((r, i) => {
+        const memory: unknown = typeof r === "object" && r !== null ? Reflect.get(r, "memory") : undefined;
+        return `${i + 1}. ${typeof memory === "string" ? memory : JSON.stringify(r)}`;
+      }).join("\n");
       return { content: [{ type: "text" as const, text: text || "No results." }], details: undefined };
     },
   });

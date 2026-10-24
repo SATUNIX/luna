@@ -27,8 +27,8 @@
   "registers": {
     "tools": [],
     "commands": [
-      "/footer",
-      "/tips"
+      "footer",
+      "tips"
     ]
   },
   "profiles": [

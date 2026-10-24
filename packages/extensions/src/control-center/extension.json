@@ -1,0 +1,60 @@
+{
+  "$schema": "../../../core/schema/extension.schema.json",
+  "name": "control-center",
+  "summary": "One navigable control centre for the kit: /kit (and its /helpers alias, plus alt+m) opens a searchable hub of levels and pages — profile, effort, thinking, security, autonomy, work, session, connect and system. Rows show their current value where a process registry publishes one, fall back to the typed command, and hold back any change that lowers oversight until a confirmation the terminal alone can answer.",
+  "category": "ui",
+  "tier": "T1",
+  "layer": 6,
+  "entry": "index.ts",
+  "hooks": [
+    "session_start"
+  ],
+  "registers": {
+    "tools": [],
+    "commands": [
+      "kit",
+      "helpers"
+    ]
+  },
+  "profiles": [
+    "quick",
+    "balanced",
+    "long-horizon",
+    "autonomous",
+    "self-improving",
+    "pentest",
+    "lite"
+  ],
+  "enabledByDefault": true,
+  "platforms": [
+    "windows",
+    "linux",
+    "darwin"
+  ],
+  "runtime": {
+    "nodeBuiltins": [
+      "fs",
+      "os",
+      "path",
+      "url"
+    ],
+    "npm": [],
+    "piPeers": [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-tui"
+    ],
+    "services": [],
+    "models": []
+  },
+  "pulls": [],
+  "env": [
+    "PI_CODING_AGENT_DIR",
+    "PI_KIT_INTERNAL_CHILD"
+  ],
+  "provenance": {
+    "origin": "custom"
+  },
+  "homeRepo": null,
+  "status": "beta",
+  "childGovernance": false
+}

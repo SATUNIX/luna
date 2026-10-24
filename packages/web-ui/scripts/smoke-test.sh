@@ -45,7 +45,7 @@ echo "  provider=${PROVIDER} model=${MODEL} port=${PORT}"
 
 echo "[1] start server (isolated session dir)"
 TMP_SESSIONS=$(mktemp -d)
-(cd "${ROOT}" && PI_CONSOLE_TOKEN="${TOKEN}" PI_CONSOLE_PORT="${PORT}" PI_CODING_AGENT_SESSION_DIR="${TMP_SESSIONS}" node server/server.js) >/tmp/pi-console-smoke.log 2>&1 &
+(cd "${ROOT}" && PI_CONSOLE_TOKEN="${TOKEN}" PI_CONSOLE_PORT="${PORT}" PI_CODING_AGENT_SESSION_DIR="${TMP_SESSIONS}" node server/server.ts) >/tmp/pi-console-smoke.log 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 30); do
 	curl -s "${AUTH[@]}" --max-time 2 "${BASE}/api/health" >/dev/null 2>&1 && break
@@ -137,11 +137,11 @@ curl -s "${AUTH[@]}" --max-time 10 "${BASE}/api/agents/${AG}?source=user" | grep
 curl -s "${AUTH[@]}" --max-time 10 -X POST "${BASE}/api/agents" -H 'Content-Type: application/json' -d '{"name":"../../evil"}' | grep -q '"error"' && ok "rejects path traversal" || bad "traversal not rejected"
 curl -s "${AUTH[@]}" --max-time 10 -X PUT "${BASE}/api/agents/${AG}" -H 'Content-Type: application/json' -d "{\"description\":\"updated\",\"tools\":[\"read\",\"grep\"],\"body\":\"updated\",\"source\":\"user\"}" | grep -q 'updated' && ok "update agent" || bad "update agent"
 curl -s "${AUTH[@]}" --max-time 10 -X DELETE -H 'Content-Type: application/json' "${BASE}/api/agents/${AG}?source=user" | grep -q '"deleted":true' && ok "delete agent" || bad "delete agent"
-[[ ! -f /home/operator/.pi/agents/${AG}.md ]] && ok "agent file removed" || bad "agent file left behind"
+[[ ! -f "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/agents/${AG}.md" ]] && ok "agent file removed" || bad "agent file left behind"
 
 echo "[13] offline UI wiring check"
-if (cd "${ROOT}" && node scripts/ui-smoke.mjs >/tmp/pi-console-ui-smoke.log 2>&1); then ok "ui-smoke.mjs"; else bad "ui-smoke.mjs (see /tmp/pi-console-ui-smoke.log)"; fi
-if (cd "${ROOT}" && node scripts/tailer-test.mjs >/tmp/pi-console-tailer-test.log 2>&1); then ok "tailer-test.mjs (fragmented writes)"; else bad "tailer-test.mjs (see /tmp/pi-console-tailer-test.log)"; fi
+if (cd "${ROOT}" && node scripts/ui-smoke.ts >/tmp/pi-console-ui-smoke.log 2>&1); then ok "ui-smoke.ts"; else bad "ui-smoke.ts (see /tmp/pi-console-ui-smoke.log)"; fi
+if (cd "${ROOT}" && node scripts/tailer-test.ts >/tmp/pi-console-tailer-test.log 2>&1); then ok "tailer-test.ts (fragmented writes)"; else bad "tailer-test.ts (see /tmp/pi-console-tailer-test.log)"; fi
 
 if (cd "${ROOT}" && scripts/live-sync-test.sh >/tmp/pi-console-live-sync.log 2>&1); then ok "live-sync-test.sh (incremental CLI updates)"; else bad "live-sync-test.sh (see /tmp/pi-console-live-sync.log)"; fi
 

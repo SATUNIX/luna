@@ -1,16 +1,36 @@
-# Changes to CI/CD, release tooling, delivery and the security layer need owner review.
+# Owner review for CI/CD, release tooling, delivery, the installer and the security layer.
+# With "Require review from Code Owners" enabled in the main branch rules, a change to any path
+# below needs the owner's approval; the one required approval on main covers everything else.
 /.github/                                        @SATUNIX
+/.gitleaks.toml                                  @SATUNIX
+/SECURITY.md                                     @SATUNIX
 /package.json                                    @SATUNIX
 /package-lock.json                               @SATUNIX
+/docs/security.md                                @SATUNIX
+/docs/security-level.md                          @SATUNIX
+/docs/ci-security.md                             @SATUNIX
+/docs/supply-chain.md                            @SATUNIX
+/docs/autonomy-gate.md                           @SATUNIX
+/docs/releasing.md                               @SATUNIX
+/docs/repository-topology.md                     @SATUNIX
 /packages/core/distribution.json                 @SATUNIX
 /packages/core/sources.json                      @SATUNIX
-/packages/core/release.mjs                       @SATUNIX
-/packages/core/publish-plan.mjs                  @SATUNIX
-/packages/core/lockfile-check.mjs                @SATUNIX
+/packages/core/policies/                         @SATUNIX
+/packages/core/release.ts                        @SATUNIX
+/packages/core/publish-plan.ts                   @SATUNIX
+/packages/core/lockfile-check.ts                 @SATUNIX
+/packages/core/install.ts                        @SATUNIX
 /packages/core/install.mjs                       @SATUNIX
+/packages/core/uninstall.ts                      @SATUNIX
+/packages/core/lib/profiles.ts                   @SATUNIX
+/packages/core/lib/leak-scan.ts                  @SATUNIX
+/packages/core/leak-scan-exceptions.json         @SATUNIX
+/packages/core/prepush-scan.ts                   @SATUNIX
+/packages/kit/profiles/                          @SATUNIX
 /packages/extensions/src/tool-firewall/          @SATUNIX
 /packages/extensions/src/secret-guard/           @SATUNIX
 /packages/extensions/src/delegation-guard/       @SATUNIX
+/packages/extensions/src/pentest-governance-domain/ @SATUNIX
 /packages/extensions/src/effort/                 @SATUNIX
 /packages/extensions/src/kit-update/             @SATUNIX
 /packages/extensions/third_party/protected-paths/ @SATUNIX

@@ -19,41 +19,43 @@
  */
 import os from "node:os";
 import path from "node:path";
-import type { AgentsView, CompactionView, Cost, EffortView, FirewallView, UnattendedView, UsageTotals } from "./data.ts";
+import type { AgentsView, CompactionView, Cost, EffortView, FirewallView, SecurityView, UnattendedView, UsageTotals } from "./data.ts";
 import { displayWidth, padDisplay, truncateDisplay } from "./width.ts";
 
-export type Theme = { fg: (color: string, text: string) => string; bold: (text: string) => string; name?: string };
+// Method syntax so pi's own Theme (whose fg takes its ThemeColor union) is accepted as is.
+export type Theme = { fg(color: string, text: string): string; bold(text: string): string; name?: string | undefined };
 export type FooterMode = "default" | "light" | "heavy";
 export type TodoItem = { id: number; text: string; state: "open" | "active" | "done" };
 export type StatusEntry = { key: string; text: string; ageMs?: number };
 
 export type FooterState = {
   cwd: string;
-  branch?: string;
-  sessionName?: string;
-  provider?: string;
-  model?: string;
-  thinking?: string;
-  profile?: string;
-  context?: { tokens?: number | null; contextWindow?: number; percent?: number | null };
+  branch?: string | undefined;
+  sessionName?: string | undefined;
+  provider?: string | undefined;
+  model?: string | undefined;
+  thinking?: string | undefined;
+  profile?: string | undefined;
+  context?: { tokens?: number | null; contextWindow?: number | undefined; percent?: number | null } | undefined;
   totals: UsageTotals;
   partial: boolean;
   cost: Cost;
-  pricingSource?: string;
-  effort?: EffortView;
-  unattended?: UnattendedView;
-  compaction?: CompactionView;
-  agents?: AgentsView;
-  firewall?: FirewallView;
+  pricingSource?: string | undefined;
+  effort?: EffortView | undefined;
+  security?: SecurityView | undefined;
+  unattended?: UnattendedView | undefined;
+  compaction?: CompactionView | undefined;
+  agents?: AgentsView | undefined;
+  firewall?: FirewallView | undefined;
   /** True while a request is running (stale transient chips stay visible then). */
-  running?: boolean;
+  running?: boolean | undefined;
   /** The cat for the idle footer: a coloured, fixed-width face and, after an event, its status text. */
-  cat?: { text: string; label?: string };
+  cat?: { text: string; label?: string | undefined } | undefined;
   statuses: StatusEntry[];
   todos: TodoItem[];
   now: number;
   /** Force ASCII glyphs (also chosen automatically for ISO/ANSI/TTY themes). */
-  ascii?: boolean;
+  ascii?: boolean | undefined;
 };
 
 // --- formatting -------------------------------------------------------------------------------
@@ -160,9 +162,10 @@ export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40
   const text = raw.replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim();
   const label = key.replace(/^pi-kit-/, "");
   // Many extensions already prefix their own name ("trace-ledger: lost=0").
-  const prefixed = text.match(/^([\w.-]+):\s*(.*)$/);
-  const name = prefixed && prefixed[1].toLowerCase() === label.toLowerCase() ? prefixed[1] : label;
-  const value = prefixed && prefixed[1].toLowerCase() === label.toLowerCase() ? prefixed[2] : text;
+  const [, ownName, ownValue = ""] = text.match(/^([\w.-]+):\s*(.*)$/) ?? [];
+  const sameName = ownName?.toLowerCase() === label.toLowerCase();
+  const name = sameName ? ownName : label;
+  const value = sameName ? ownValue : text;
   const chip = `${theme.fg("dim", name)} ${theme.fg(SEVERITY_COLOR[chipSeverity(value)], value)}`;
   return truncateDisplay(chip, maxWidth);
 }
@@ -189,9 +192,9 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): 
   const byLeastImportant = () => [...l, ...r].sort((a, b) => b.prio - a.prio);
   // 1. shorter forms
   for (let guard = 0; guard < 64 && size().total > width; guard++) {
-    const target = byLeastImportant().find((s) => s.alts && s.alts.length);
+    const target = byLeastImportant().find((s) => s.alts?.length);
     if (!target) break;
-    target.text = target.alts!.shift()!;
+    target.text = target.alts?.shift() ?? target.text;
   }
   // 2. drop secondary segments (priority 2 and below, least important first) before any warning or
   //    identity segment is touched
@@ -209,8 +212,8 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): 
   //    list stays one keystroke away in /footer status. Identity (priority 1) goes last of all.
   if (size().total > width) {
     const critical = [...l, ...r].filter((s) => s.prio === 0);
-    if (critical.length >= 2) {
-      const first = critical[0];
+    const first = critical[0];
+    if (first && critical.length >= 2) {
       const merged: Seg = { id: "critical", prio: 0, text: `${first.text} +${critical.length - 1}` };
       const replace = (segs: Seg[]) => {
         let placed = false;
@@ -235,6 +238,13 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): 
 // --- segments ---------------------------------------------------------------------------------
 
 type Ctx = { state: FooterState; theme: Theme; glyphs: Glyphs; mode: FooterMode; width: number };
+
+function securitySegment({ state, theme }: Ctx): Seg | null {
+  const s = state.security;
+  if (!s) return null;
+  const label = s.requested === s.effective ? s.effective : `${s.requested}→${s.effective}`;
+  return { id: "security", prio: 1, text: theme.fg(s.warning ? "warning" : "accent", `sec ${label}${s.warning ? " !" : ""}`) };
+}
 
 function effortSegment({ state, theme, glyphs }: Ctx, full: boolean): Seg | null {
   const e = state.effort;
@@ -318,7 +328,7 @@ function tokenSegments({ state, theme, glyphs }: Ctx): Seg[] {
   const cost = `${theme.fg("dim", "cost ")}${theme.fg(costColor, fmtCostView(state.cost))}${state.cost.kind === "estimated" ? theme.fg("dim", " est") : ""}${state.partial ? theme.fg("warning", " partial") : ""}`;
   return [
     { id: "tokens", prio: 5, text: `${theme.fg("dim", "session ")}${tokens}`, alts: [tokens] },
-    { id: "cost", prio: 5, text: cost, alts: [`${theme.fg(costColor, fmtCostView(state.cost))}`] },
+    { id: "cost", prio: 5, text: cost, alts: [theme.fg(costColor, fmtCostView(state.cost))] },
   ];
 }
 
@@ -333,13 +343,15 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   const warnings = warningSegments(ctx);
   const effortShort = effortSegment(ctx, false);
   const effortFull = effortSegment(ctx, true);
+  const security = securitySegment(ctx);
   const work = workSegments(ctx);
   const chips = chipSegments(ctx);
   const catSeg: Seg[] = state.cat ? [{ id: "cat", prio: 5, text: state.cat.label ? `${state.cat.text} ${theme.fg("dim", state.cat.label)}` : state.cat.text, alts: [state.cat.text] }] : [];
   const modelSeg: Seg | null = state.model ? { id: "model", prio: 1, text: theme.fg("accent", state.model), alts: [truncateDisplay(theme.fg("accent", state.model), 18)] } : null;
 
   if (mode === "light") {
-    const left: Seg[] = [projectSeg, ...warnings, ...(effortShort ? [effortShort] : []), contextSegment(ctx), ...work, ...(branchSegment(ctx) ? [branchSegment(ctx)!] : []), ...chips];
+    const branch = branchSegment(ctx);
+    const left: Seg[] = [projectSeg, ...warnings, ...(effortShort ? [effortShort] : []), ...(security ? [security] : []), contextSegment(ctx), ...work, ...(branch ? [branch] : []), ...chips];
     const right: Seg[] = [...catSeg, ...(modelSeg ? [{ ...modelSeg, prio: 5 }] : [])];
     return [truncateDisplay(fitLine(left, right, width, sep), width)];
   }
@@ -347,9 +359,10 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   // Line 1: where and with what
   const think = state.thinking && state.thinking !== "off" ? { id: "think", prio: 4, text: theme.fg(thinkingColor(state.thinking), `think ${state.thinking}`) } : null;
   const profile = state.profile ? { id: "profile", prio: 4, text: `${theme.fg("dim", "profile ")}${theme.fg("text", state.profile)}` } : null;
-  const line1Left: Seg[] = [projectSeg, ...(branchSegment(ctx) ? [branchSegment(ctx)!] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(state.cwd)) }, ...(state.sessionName ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${state.sessionName}`) }] : [])];
+  const branch = branchSegment(ctx);
+  const line1Left: Seg[] = [projectSeg, ...(branch ? [branch] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(state.cwd)) }, ...(state.sessionName ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${state.sessionName}`) }] : [])];
   // keep the path after the branch in reading order, but as the first thing to go
-  const line1Right: Seg[] = [...(state.provider ? [{ id: "provider", prio: 6, text: theme.fg("dim", state.provider) }] : []), ...(modelSeg ? [modelSeg] : [{ id: "model", prio: 1, text: theme.fg("dim", "no model") }]), ...(think ? [think] : []), ...(profile ? [profile] : []), ...(effortFull ? [effortFull] : [])];
+  const line1Right: Seg[] = [...(state.provider ? [{ id: "provider", prio: 6, text: theme.fg("dim", state.provider) }] : []), ...(modelSeg ? [modelSeg] : [{ id: "model", prio: 1, text: theme.fg("dim", "no model") }]), ...(think ? [think] : []), ...(profile ? [profile] : []), ...(effortFull ? [effortFull] : []), ...(security ? [security] : [])];
   const lines = [fitLine(line1Left, line1Right, width, sep)];
 
   // Line 2: state of the work
@@ -380,6 +393,7 @@ export function renderDetail(state: FooterState, mode: string): string[] {
   rows.push(`  location    ${state.cwd}${state.branch ? ` (git ${state.branch})` : ""}`);
   rows.push(`  model       ${state.provider ? `${state.provider} ` : ""}${state.model ?? "none"}${state.thinking && state.thinking !== "off" ? `, thinking ${state.thinking}` : ""}`);
   if (state.profile) rows.push(`  profile     ${state.profile}`);
+  if (state.security) rows.push(`  security    ${state.security.effective} (requested ${state.security.requested})${state.security.warning ? "; warning: /security status" : ""}`);
   if (state.effort) rows.push(`  effort      ${state.effort.code} ${state.effort.label}${state.effort.pinned ? " (pinned by the run or parent)" : ""}${state.effort.pendingCode ? `; ${state.effort.pendingCode} from the next message` : ""}${state.effort.usage ? `; this request: ${state.effort.usage.total}/${state.effort.usage.maxTotal} children, ${state.effort.usage.scouts}/${state.effort.usage.maxScouts} scouts, ${state.effort.usage.live} running` : ""}`);
   const c = state.context ?? {};
   rows.push(`  context     ${typeof c.percent === "number" ? `${c.percent.toFixed(0)}% used` : "unknown"}${c.tokens != null && c.contextWindow ? ` (${c.tokens}/${c.contextWindow} tokens)` : c.contextWindow ? ` (window ${c.contextWindow} tokens)` : ""}`);

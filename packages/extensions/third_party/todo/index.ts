@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   resolveSessionId,
@@ -19,7 +19,7 @@ import {
 // whole list with progress, so the transcript shows the plan and state. The
 // custom-footer renders the same file as a checklist above the editor.
 
-function currentFile(ctx?: any): string {
+function currentFile(ctx?: Pick<ExtensionContext, "cwd" | "sessionManager">): string {
   const cwd = ctx?.cwd ?? process.cwd();
   return todoFilePath(cwd, resolveSessionId(ctx?.sessionManager));
 }
@@ -39,7 +39,7 @@ export default function (pi: ExtensionAPI) {
       items: Type.Optional(Type.Array(Type.String(), { description: "Several todo texts to add at once (for add)" })),
       id: Type.Optional(Type.Number({ description: "Todo ID (for start, done, toggle, remove)" })),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx: any) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const todoFile = currentFile(ctx);
       const { todos, nextId } = readTodos(todoFile);
       const find = () => {
@@ -61,7 +61,7 @@ export default function (pi: ExtensionAPI) {
         }
         case "start": {
           const r = find();
-          if (!r.todo) return text(r.error!);
+          if (!r.todo) return text(r.error);
           // One item in progress at a time keeps the plan readable.
           for (const t of todos) if (t.state === "active") t.state = "open";
           r.todo.state = "active";
@@ -70,21 +70,21 @@ export default function (pi: ExtensionAPI) {
         }
         case "done": {
           const r = find();
-          if (!r.todo) return text(r.error!);
+          if (!r.todo) return text(r.error);
           r.todo.state = "done";
           writeTodos(todoFile, todos);
           return text(renderTodos(todos, `Done #${r.todo.id}: ${r.todo.text}`));
         }
         case "toggle": {
           const r = find();
-          if (!r.todo) return text(r.error!);
+          if (!r.todo) return text(r.error);
           r.todo.state = r.todo.state === "done" ? "open" : "done";
           writeTodos(todoFile, todos);
           return text(renderTodos(todos, `#${r.todo.id} ${r.todo.state === "done" ? "done" : "undone"}: ${r.todo.text}`));
         }
         case "remove": {
           const r = find();
-          if (!r.todo) return text(r.error!);
+          if (!r.todo) return text(r.error);
           writeTodos(todoFile, todos.filter((t) => t !== r.todo));
           return text(renderTodos(todos.filter((t) => t !== r.todo), `Removed #${r.todo.id}`));
         }

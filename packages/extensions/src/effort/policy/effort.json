@@ -1,5 +1,5 @@
 {
-  "$comment": "Central definition of the five effort tiers (docs/effort.md). It lives inside the effort extension so the extension stays self-contained and extractable; the toolchain (packages/core/lib/effort.mjs, the autonomy runner, verify) reads this same file. Effort controls execution depth and breadth only: it never changes the model, its thinking level, the profile or any permission. Limits are defaults, not quotas to consume; users may lower or raise them in <agent dir>/pi-kit/effort.json within the platform ceilings below. Edit the numbers here, not in code.",
+  "$comment": "Central definition of the five effort tiers (docs/effort.md). It lives inside the effort extension so the extension stays self-contained and extractable; the toolchain (packages/core/lib/effort.ts, the autonomy runner, verify) reads this same file. Effort controls execution depth and breadth only: it never changes the model, its thinking level, the profile or any permission. Limits are defaults, not quotas to consume; users may lower or raise them in <agent dir>/pi-kit/effort.json within the platform ceilings below. Edit the numbers here, not in code.",
   "schemaVersion": 1,
   "default": "standard",
   "sharedPromptFile": "shared.md",
@@ -8,6 +8,12 @@
     "maxTotal": 64,
     "maxScouts": 8
   },
+  "workflow": {
+    "$comment": "Script workflows (the \"workflow\" launch kind). Each run opens its own pinned scope in a per-session workflow ledger that the per-turn scope rotation never replaces. workflowConcurrent bounds live agents in one run, workflowTotalPerRun the agents one run may ever start, and workflowSessionTotal the agents all runs in a session may start. These launches never draw on the tier budget or on ceilings.maxTotal.",
+    "workflowConcurrent": 16,
+    "workflowTotalPerRun": 1000,
+    "workflowSessionTotal": 2000
+  },
   "recovery": {
     "$comment": "A separate, small budget so a minimal-effort session can still recover from being stuck. It is only spendable while the trusted recovery extension has recovery active (the model cannot switch it on), only for read-only roles, and it never adds to the discretionary budget.",
     "maxInvocations": 2,
@@ -15,6 +21,10 @@
     "roles": [
       "scout"
     ]
+  },
+  "memento": {
+    "$comment": "Memento mode (generations): a long task worked in time-boxed generations that hand over a notebook. Each tier's memento.maxGenerations is the most generations a task at that tier may use (0 means none); it is an allowance, not a target, and it applies only to a model the operator opted in to in <agent dir>/pi-kit/autonomy.json, in the long-horizon and autonomous profiles. A tier never exceeds maxGenerationsCeiling and never falls below the tier before it.",
+    "maxGenerationsCeiling": 8
   },
   "tiers": [
     {
@@ -32,6 +42,9 @@
         "maxConcurrent": 0,
         "maxTotal": 0,
         "maxScouts": 0
+      },
+      "memento": {
+        "maxGenerations": 0
       }
     },
     {
@@ -48,6 +61,9 @@
         "maxConcurrent": 1,
         "maxTotal": 1,
         "maxScouts": 1
+      },
+      "memento": {
+        "maxGenerations": 0
       }
     },
     {
@@ -66,6 +82,9 @@
         "maxConcurrent": 2,
         "maxTotal": 3,
         "maxScouts": 1
+      },
+      "memento": {
+        "maxGenerations": 0
       }
     },
     {
@@ -82,6 +101,9 @@
         "maxConcurrent": 4,
         "maxTotal": 8,
         "maxScouts": 2
+      },
+      "memento": {
+        "maxGenerations": 2
       }
     },
     {
@@ -99,6 +121,9 @@
         "maxConcurrent": 6,
         "maxTotal": 16,
         "maxScouts": 3
+      },
+      "memento": {
+        "maxGenerations": 4
       }
     }
   ]

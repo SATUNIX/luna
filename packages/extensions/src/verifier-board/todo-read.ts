@@ -1,6 +1,6 @@
 // Read-only copy of the per-session todo file location + format that
 // vendor/todo/todo-file.ts owns and writes. Duplicated here (not imported)
-// because packages/core/verify.mjs's self-containment lint forbids an extension from
+// because packages/core/verify.ts's self-containment lint forbids an extension from
 // importing another extension/vendor package's internals — every extension
 // must stay independently extractable. Keep this in sync with
 // vendor/todo/todo-file.ts if the on-disk format ever changes; only vendor/todo
@@ -57,8 +57,10 @@ export function readTodos(filePath: string): { todos: Todo[]; nextId: number } {
   for (const line of content.split(/\r?\n/)) {
     const m = line.match(/^- \[([ xX~])\] #(\d+): (.+)$/);
     if (m) {
-      const id = parseInt(m[2], 10);
-      todos.push({ id, text: m[3], state: m[1] === "~" ? "active" : m[1] === " " ? "open" : "done" });
+      // Every group in the pattern is mandatory, so a match always fills all three.
+      const [, mark = "", digits = "", text = ""] = m;
+      const id = parseInt(digits, 10);
+      todos.push({ id, text, state: mark === "~" ? "active" : mark === " " ? "open" : "done" });
       if (id >= nextId) nextId = id + 1;
     }
   }

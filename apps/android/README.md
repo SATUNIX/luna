@@ -27,8 +27,8 @@ Android 10 (API 29) or newer. Application id `io.github.satunix.piremote`.
 
 ## Building
 
-You need JDK 17 and the Android SDK command-line tools with `platforms;android-34` and
-`build-tools;34.0.0`. Android Studio is not required. Point Gradle at the SDK with `ANDROID_HOME`
+You need JDK 17 or newer and the Android SDK command-line tools with `platforms;android-37.2` and
+`build-tools;37.0.0`. Android Studio is not required. Point Gradle at the SDK with `ANDROID_HOME`
 (or `sdk.dir` in `local.properties`, which git ignores). The Gradle wrapper is pinned with a
 checksum in `gradle/wrapper/gradle-wrapper.properties`.
 
@@ -103,5 +103,8 @@ notices; the app does not show them yet.
 ## Tests
 
 Nothing in this repository tests the app automatically. The protocol it speaks is pinned by
-`tests/remote-host-smoke.mjs`, whose client does what the app does, and the app itself has been
-exercised by hand on an Android 14 emulator against a real host.
+`tests/remote-host-smoke.ts`, whose client does what the app does. The app itself has been
+exercised by hand on an Android 14 emulator against a real host. The current build targets Android
+17 (API 37), which always draws the app edge to edge; it has been launched on an Android 17 test
+image, which has no status bar, navigation bar or on-screen keyboard, so how it clears them on a
+phone has not been checked by hand.

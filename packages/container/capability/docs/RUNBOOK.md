@@ -9,7 +9,7 @@ docker compose -f capability/compose/compose.yaml --env-file capability/env/defa
 docker compose -f docker-compose.yml --env-file capability/env/defaults.env config
 ```
 
-Expected result: both render successfully, use compose name `pi-system`, mount `/srv/data/pi-system`, set `PI_KIT_PROFILE`, and expose health on `${APP_PORT:-8080}`.
+Expected result: both render successfully, use compose name `pi-system`, mount `/srv/data/pi-system`, set `PI_KIT_PROFILE`, and run `healthcheck.py --check` as the container health check.
 
 Verify root and canonical compose parity:
 
@@ -27,7 +27,7 @@ Run readiness validation before starting an interactive Pi loop:
 python3 scripts/validate-runtime-readiness.py
 ```
 
-Expected result: required Pi profile files are readable, `.pi/mcp.json` remains MCP proxy-only, `pi_system_governance` has exact local tool-policy mappings, committed MCP/engagement overlays do not contain secret-looking values, and root/canonical compose parity passes. On a host checkout where `/srv/data/pi-system` does not exist, the validator may warn that data directory creation is deferred to container/Pi System runtime.
+Expected result: required Pi profile files are readable, `.pi/mcp-adapter.json` remains MCP proxy-only, `pi_system_governance` has exact local tool-policy mappings, committed MCP/engagement overlays do not contain secret-looking values, and root/canonical compose parity passes. On a host checkout where `/srv/data/pi-system` does not exist, the validator may warn that data directory creation is deferred to container/Pi System runtime.
 
 Optionally probe local Ollama:
 
@@ -59,10 +59,14 @@ Start the workload:
 
 ```sh
 docker compose -f capability/compose/compose.yaml --env-file capability/env/defaults.env up -d --build
-curl -fsS http://127.0.0.1:8080/health
+docker inspect --format '{{.State.Health.Status}}' pi-system-pi-agent-1
+docker exec pi-system-pi-agent-1 python3 /opt/pi-agent/healthcheck.py --check
 ```
 
-Expected result: JSON with `status: ok` and `data_root_writable: true`.
+Expected result: health status `healthy`, and `--check` exits 0. `--check` is a local probe that
+the data root is writable and needs no server. The `/health` JSON endpoint is served only after
+`python3 /opt/pi-agent/healthcheck.py --serve` is started explicitly, and binds `127.0.0.1` unless
+`PI_AGENT_HEALTH_HOST` is set (`tests/container-static-smoke.ts`).
 
 ## Interactive Operation
 
@@ -119,7 +123,7 @@ grep 'PI_TOOLS:-mcp' scripts/pi-agent
 Inspect the MCP adapter settings:
 
 ```sh
-jq '.settings.directTools, .settings.samplingAutoApprove, .settings.autoAuth, .settings.elicitationAutoOpenUrls, .mcpServers.pi_system_governance.directTools' .pi/mcp.json
+jq '.settings.directTools, .settings.samplingAutoApprove, .settings.autoAuth, .settings.elicitationAutoOpenUrls, .mcpServers.pi_system_governance.directTools' .pi/mcp-adapter.json
 ```
 
 Expected result: direct tools are not in the default launcher profile, the local `pi_system_governance` server is configured behind MCP proxy mode, `directTools` is `false`, `samplingAutoApprove` is `false`, `autoAuth` is `false`, and URL auto-open elicitation is disabled. Local append tools use bounded text fields and lock-protected writes.

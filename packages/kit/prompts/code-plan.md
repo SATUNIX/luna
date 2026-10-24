@@ -1,6 +1,12 @@
+---
+argument-hint: "[change]"
+---
+
 # Code Plan
 
 Plan a coding change.
+
+Change: ${@:-the current task}
 
 Return:
 

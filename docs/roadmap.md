@@ -23,13 +23,17 @@ In rough priority order:
    an `/update` from an install of the tag, a representative task at more than one effort tier
    with a real provider, a small autonomous run with a real provider on the default rootless
    Podman engine, and the web console in a browser. Results feed back into [Future work](future-work.md).
-2. **pi 0.99.** Review the newest pi against the whole suite, decide whether to widen the peer
-   range, and move the pinned test version.
-3. **Companion packages.** Review `pi-lens` 4.x, `pi-readseek` 0.10.x and `pi-mcp-adapter` 3.x each
-   as a whole, with a real-terminal check, and adopt or record why not
-   ([Supply chain](supply-chain.md)).
+2. **Keep up with pi 1.x.** The suite now runs against pi 1.4.0. Move the pin with each pi minor
+   after a whole-suite run, and review new extension events (project trust, UI prompt events) for
+   the security work.
+3. **Companion packages.** Review `pi-readseek` 0.12.x as a whole, with a real-terminal check,
+   and adopt it or record why not ([Supply chain](supply-chain.md)).
 4. **Wider coverage in CI.** The full suite on Windows and macOS, and on Node 24.
-5. **Firewall and approvals.** Decide whether `secret-guard` should be a default layer; teach the
+5. **Firewall and approvals.** Extend [Security level](security-level.md) with authenticated
+   operator events and verified off-boundary attestation; implement content screening, the
+   OpenAPPA flow engine, intent ledger and detector before advertising their protection.
+   Review any additional relaxed admissions against narrower classifier effects.
+   Decide whether `secret-guard` should be a default layer; teach the
    classifier the names of reviewed companion tools; tighten manual-mode reads if the prompt
    volume proves acceptable.
 6. **Autonomous runs.** More run templates, and operator-facing tooling to inspect and resume a

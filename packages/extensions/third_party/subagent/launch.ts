@@ -14,18 +14,23 @@ import type { AgentConfig } from "./agents.ts";
 
 export const DELEGATION_KEY = Symbol.for("pi-kit.delegation");
 
-export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user";
+export type LaunchKind = "discretionary" | "recovery" | "mandatory" | "user" | "workflow";
 
 export interface LaunchRequest {
   cwd: string;
   kind: LaunchKind;
   role: string;
-  scout?: boolean;
-  readOnly?: boolean;
-  requestedTier?: string;
-  extraExtensions?: string[];
-  needsSubagent?: boolean;
-  baseEnv?: Record<string, string | undefined>;
+  scout?: boolean | undefined;
+  readOnly?: boolean | undefined;
+  /** The read-only part of a role's tool list (`readOnlyTools`): a recovery launch runs with exactly these. */
+  readOnlyTools?: string[] | undefined;
+  requestedTier?: string | undefined;
+  extraExtensions?: string[] | undefined;
+  needsSubagent?: boolean | undefined;
+  baseEnv?: Record<string, string | undefined> | undefined;
+  /** Workflow launches: the run id and the token effort's openRunScope returned for it. */
+  runId?: string | undefined;
+  runToken?: string | undefined;
 }
 
 export interface LaunchSlot {
@@ -35,7 +40,7 @@ export interface LaunchSlot {
 }
 
 export type PreparedLaunch =
-  | { ok: true; args: string[]; env: Record<string, string | undefined>; loaded: string[]; required: string[]; slot: LaunchSlot; childTier: string }
+  | { ok: true; args: string[]; env: Record<string, string | undefined>; loaded: string[]; required: string[]; slot: LaunchSlot; childTier: string; tools?: string[] | undefined }
   | { ok: false; code: string; reason: string };
 
 interface DelegationRegistry {
@@ -58,12 +63,28 @@ export function prepareChildLaunch(request: LaunchRequest): PreparedLaunch {
   }
 }
 
-const WRITE_TOOLS = new Set(["write", "edit", "subagent", "notebook_edit"]);
+/**
+ * The tools that can only read. Everything else can change state: `bash` and `powershell` run any
+ * command, and an extension or MCP tool (or a `*` pattern) is not known to be harmless.
+ */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", "ls"]);
 
-/** A role is read-only when its tool list is explicit and names no write, edit or delegation tool. */
+/** A role is read-only when its tool list is explicit and names only read tools (no shell, write, edit or delegation). */
 export function isReadOnlyRole(agent: AgentConfig, tools: string[] | undefined): boolean {
   const list = tools ?? agent.tools;
-  return Boolean(list && list.length > 0 && !list.some((t) => WRITE_TOOLS.has(t)));
+  return Boolean(list && list.length > 0 && list.every((t) => READ_ONLY_TOOLS.has(t)));
+}
+
+/**
+ * The read tools of a role that is not read-only (a scout with `bash`), or undefined when the role is
+ * already read-only or has no read tool. delegation-guard charges a recovery launch only on this list
+ * and then hands it back, so the child runs with exactly these tools.
+ */
+export function readOnlyTools(agent: AgentConfig, tools: string[] | undefined): string[] | undefined {
+  const list = tools ?? agent.tools;
+  if (!list || list.length === 0 || isReadOnlyRole(agent, list)) return undefined;
+  const narrowed = list.filter((t) => READ_ONLY_TOOLS.has(t));
+  return narrowed.length > 0 ? narrowed : undefined;
 }
 
 /** Scouts are the investigation-only role; a role may also say `scout: true` in its frontmatter. */

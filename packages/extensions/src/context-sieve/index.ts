@@ -73,7 +73,7 @@ function channelOf(c: Contribution): "system" | "message" {
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated here (not
 // imported) because every extension must stay independently extractable
-// (packages/core/verify.mjs self-containment lint).
+// (packages/core/verify.ts self-containment lint).
 const SESSION_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 function isSessionId(value: unknown): value is string {
@@ -148,7 +148,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function writeBudgetEvent(dir: string, event: { totalTokens: number; budget: number; dropped: string[]; included: string[]; truncated: string[]; message?: { tokens: number; included: string[]; skippedUnchanged: boolean }; contextWindow?: number | null; windowClamped?: boolean }): void {
+function writeBudgetEvent(dir: string, event: { totalTokens: number; budget: number; dropped: string[]; included: string[]; truncated: string[]; message?: { tokens: number; included: string[]; injected: string[]; skippedUnchanged: boolean }; contextWindow?: number | null; windowClamped?: boolean }): void {
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "sieve-budget.json"), JSON.stringify(event, null, 2));
@@ -255,17 +255,19 @@ function assembleWithBudget(
 
 export default function (pi: ExtensionAPI) {
   let contribDir = "";
-  // The last message-channel text injected this session. An identical block is not injected
-  // again: it is already in the conversation history, and repeating it every turn would only
-  // grow the context. Reset when compaction may have summarised it away.
-  let lastMessage = "";
+  // The text of each message-channel contribution as last injected this session, by id. A
+  // contribution whose text is unchanged is not injected again: its earlier copy is already in
+  // the conversation history, and repeating it would only grow the context. The comparison is
+  // per contribution, so one changing contribution does not re-inject every unchanged one.
+  // Reset when compaction may have summarised the earlier copies away.
+  const lastInjected = new Map<string, string>();
 
   pi.on("session_compact", async () => {
-    lastMessage = "";
+    lastInjected.clear();
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    lastMessage = "";
+    lastInjected.clear();
     contribDir = getContribDir(ctx.cwd, resolveSessionId(ctx.sessionManager));
     fs.mkdirSync(contribDir, { recursive: true });
     // Never delete another session's contributions; readContributions ignores files
@@ -292,7 +294,23 @@ export default function (pi: ExtensionAPI) {
     const system = assembleWithBudget(contributions.filter((c) => channelOf(c) === "system"), budgetTokens * CHARS_PER_TOKEN);
     const message = assembleWithBudget(contributions.filter((c) => channelOf(c) === "message"), messageBudgetTokens * CHARS_PER_TOKEN);
     const messageText = message.assembled.join("\n\n");
-    const skippedUnchanged = messageText !== "" && messageText === lastMessage;
+    const fresh: string[] = [];
+    const injected: string[] = [];
+    const unchanged: string[] = [];
+    const current = new Map<string, string>();
+    message.included.forEach((id, i) => {
+      const text = message.assembled[i] ?? "";
+      current.set(id, text);
+      if (lastInjected.get(id) === text) {
+        unchanged.push(id);
+      } else {
+        fresh.push(text);
+        injected.push(id);
+      }
+    });
+    // A contribution that is gone is forgotten, so it is injected again if it comes back.
+    for (const id of [...lastInjected.keys()]) if (!current.has(id)) lastInjected.delete(id);
+    const skippedUnchanged = messageText !== "" && injected.length === 0;
 
     writeBudgetEvent(dir, {
       totalTokens: estimateTokens(system.assembled.join("\n\n")),
@@ -300,16 +318,17 @@ export default function (pi: ExtensionAPI) {
       dropped: [...system.dropped, ...message.dropped],
       included: [...system.included, ...message.included],
       truncated: [...system.truncatedIds, ...message.truncatedIds],
-      message: { tokens: estimateTokens(messageText), included: message.included, skippedUnchanged },
+      message: { tokens: estimateTokens(messageText), included: message.included, injected, skippedUnchanged },
       contextWindow: window,
       windowClamped,
     });
 
     const result: { systemPrompt?: string; message?: { customType: string; content: string; display: boolean } } = {};
     if (system.assembled.length > 0) result.systemPrompt = event.systemPrompt + "\n\n" + system.assembled.join("\n\n");
-    if (messageText && !skippedUnchanged) {
-      lastMessage = messageText;
-      result.message = { customType: "context-sieve", content: `[Context for this request — injected automatically, not written by the user]\n\n${messageText}`, display: false };
+    if (injected.length > 0) {
+      for (const id of injected) lastInjected.set(id, current.get(id) ?? "");
+      const stillCurrent = unchanged.length > 0 ? `\n\n(Still current, injected earlier in this conversation: ${unchanged.join(", ")}.)` : "";
+      result.message = { customType: "context-sieve", content: `[Context for this request — injected automatically, not written by the user]\n\n${fresh.join("\n\n")}${stillCurrent}`, display: false };
     }
     return result.systemPrompt || result.message ? result : undefined;
   });

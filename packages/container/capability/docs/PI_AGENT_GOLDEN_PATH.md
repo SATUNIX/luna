@@ -30,7 +30,7 @@ Implemented profile surfaces:
 
 - `.pi/APPEND_SYSTEM.md`: runtime behavior and MCP-only operating contract.
 - `.pi/settings.json`: default model, sessions, compaction, retry, MCP adapter package.
-- `.pi/mcp.json`: MCP proxy mode with direct tools disabled, sampling auto-approval disabled, and local `pi_system_governance` MCP server wiring.
+- `.pi/mcp-adapter.json`: MCP proxy mode with direct tools disabled, sampling auto-approval disabled, and local `pi_system_governance` MCP server wiring.
 - `.pi/mcp-servers/governance/`: local MCP server for evidence, notes, checkpoints, task state, memory, verification, and compact state summaries.
 - `.pi/extensions/pentest-governance/index.ts`: tool-call governance, audit logging, and policy-bound approval decisions.
 - `.pi/skills/`: pentest, MCP, coding, documentation, checkpointing, and validation workflow skills.

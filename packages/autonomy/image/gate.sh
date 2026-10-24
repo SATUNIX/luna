@@ -2,7 +2,7 @@
 # The reference acceptance check for improving THIS kit's own repository (pi-system): its offline
 # checks, run as one contract check (`run: ["/opt/autonomy/gate.sh"]`). It is an example of a
 # check definition, not a built-in: any contract can name other commands. It runs inside
-# lib/check-runner.mjs, so the working directory is already a clean clone of the accepted head
+# lib/check-runner.ts, so the working directory is already a clean clone of the accepted head
 # with the held-out overlay applied, and there is no network. Exit 0 only when every step passed.
 # Output: /gate/gate.log and /gate/result.json (per-step detail, evidence for the supervisor).
 # Semgrep is not run (its rules come from the network); CI runs it on the merge request.

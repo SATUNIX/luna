@@ -35,6 +35,10 @@ REQUIRED_MCP_SETTINGS = {
     "autoAuth": False,
     "elicitation": False,
     "elicitationAutoOpenUrls": False,
+    "namespaceProxyTools": False,
+    "allowInstall": False,
+    "allowScriptToolSave": False,
+    "jev": False,
 }
 REQUIRED_GOVERNANCE_SETTINGS = {
     "directTools": False,
@@ -142,7 +146,7 @@ def config_path(name):
 
 
 def verify_required_files(reporter):
-    required = [config_path("settings.json"), config_path("mcp.json"), config_path("models.json")]
+    required = [config_path("settings.json"), config_path("mcp-adapter.json"), config_path("models.json")]
     for relative_path in required:
         path = ROOT / relative_path
         if not path.is_file():
@@ -162,7 +166,7 @@ def verify_required_files(reporter):
         reporter.warn(".pi/APPEND_SYSTEM.md is absent; runtime may rely on installed pi-kit prompts instead")
 
     settings = load_json(str(config_path("settings.json")), reporter)
-    mcp = load_json(str(config_path("mcp.json")), reporter)
+    mcp = load_json(str(config_path("mcp-adapter.json")), reporter)
     models = load_json(str(config_path("models.json")), reporter)
     return settings, mcp, models
 
@@ -198,27 +202,27 @@ def verify_mcp_config(mcp, reporter):
         return
     settings = mcp.get("settings")
     if not isinstance(settings, dict):
-        reporter.fail(".pi/mcp.json must contain object settings")
+        reporter.fail(".pi/mcp-adapter.json must contain object settings")
         return
 
     for key, expected in REQUIRED_MCP_SETTINGS.items():
         actual = settings.get(key)
         if actual is not expected:
-            reporter.fail(f".pi/mcp.json settings.{key} must be {str(expected).lower()}")
+            reporter.fail(f".pi/mcp-adapter.json settings.{key} must be {str(expected).lower()}")
         else:
-            reporter.ok(f".pi/mcp.json settings.{key} is {str(expected).lower()}")
+            reporter.ok(f".pi/mcp-adapter.json settings.{key} is {str(expected).lower()}")
 
     servers = mcp.get("mcpServers")
     if not isinstance(servers, dict):
-        reporter.fail(".pi/mcp.json must contain object mcpServers")
+        reporter.fail(".pi/mcp-adapter.json must contain object mcpServers")
         return
     governance = servers.get("pi_system_governance")
     if not isinstance(governance, dict):
-        reporter.fail(".pi/mcp.json must configure pi_system_governance")
+        reporter.fail(".pi/mcp-adapter.json must configure pi_system_governance")
         return
     memory_mcp = servers.get("memory_mcp")
     if not isinstance(memory_mcp, dict):
-        reporter.fail(".pi/mcp.json must configure memory_mcp")
+        reporter.fail(".pi/mcp-adapter.json must configure memory_mcp")
         return
 
     if governance.get("command") != "node":
@@ -228,8 +232,8 @@ def verify_mcp_config(mcp, reporter):
 
     args = governance.get("args")
     expected_governance_paths = {
-        "/workspace/.pi/mcp-servers/governance/index.js",
-        "/opt/pi-agent/mcp-servers/governance/index.js",
+        "/workspace/.pi/mcp-servers/governance/index.ts",
+        "/opt/pi-agent/mcp-servers/governance/index.ts",
     }
     if not isinstance(args, list) or not expected_governance_paths.intersection(set(args)):
         reporter.fail("pi_system_governance args must include a known governance MCP server path")
@@ -249,8 +253,8 @@ def verify_mcp_config(mcp, reporter):
         reporter.ok('memory_mcp command is "node"')
 
     memory_args = memory_mcp.get("args")
-    if not isinstance(memory_args, list) or "/opt/pi-agent/mcp-servers/memory-mcp/index.js" not in memory_args:
-        reporter.fail("memory_mcp args must include /opt/pi-agent/mcp-servers/memory-mcp/index.js")
+    if not isinstance(memory_args, list) or "/opt/pi-agent/mcp-servers/memory-mcp/index.ts" not in memory_args:
+        reporter.fail("memory_mcp args must include /opt/pi-agent/mcp-servers/memory-mcp/index.ts")
     else:
         reporter.ok("memory_mcp points at the memory MCP launcher")
 
@@ -263,8 +267,8 @@ def verify_mcp_config(mcp, reporter):
 
 
 def extract_governance_tools(reporter):
-    generated = ROOT / ".pi" / "mcp-servers" / "governance" / "index.js"
-    server_path = generated if generated.is_file() else ROOT / "mcp-servers" / "governance" / "index.js"
+    generated = ROOT / ".pi" / "mcp-servers" / "governance" / "index.ts"
+    server_path = generated if generated.is_file() else ROOT / "mcp-servers" / "governance" / "index.ts"
     try:
         text = server_path.read_text(encoding="utf-8")
     except Exception as exc:
@@ -380,7 +384,7 @@ def scan_secret_text(path, text, reporter):
 
 
 def verify_no_committed_secrets(reporter):
-    paths = [ROOT / config_path("mcp.json")]
+    paths = [ROOT / config_path("mcp-adapter.json")]
     root_mcp = ROOT / ".mcp.json"
     if root_mcp.exists():
         paths.append(root_mcp)

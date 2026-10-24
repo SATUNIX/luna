@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Launch pi with the agent profile. Attaches to the current terminal.
-# Usage: pi-agent [--kit <local-path>] [extra pi args]
+# Usage: pi-agent [extra pi args]
+#
+# Fails closed: if no pi-kit is found, or installing it or applying the profile fails, pi is not
+# started and the exit status is non-zero. PI_AGENT_ALLOW_UNGOVERNED=1 starts pi anyway, with a
+# warning, for debugging only.
 
 DATA_ROOT="${PI_AGENT_DATA_ROOT:-/srv/data/pi-system}"
 PI_KIT_PATH="${PI_KIT_PATH:-}"
+PROFILE="${PI_KIT_PROFILE:-balanced}"
 
 log() { echo "[pi-agent] $*" >&2; }
 
-# Prefer explicit PI_KIT_PATH; fall back to /opt/pi-system (dev mount point)
+ungoverned() {
+  if [ "${PI_AGENT_ALLOW_UNGOVERNED:-0}" = "1" ]; then
+    log "WARN: $1; PI_AGENT_ALLOW_UNGOVERNED=1, so starting pi WITHOUT the governed profile"
+  else
+    log "ERROR: $1; refusing to start pi without the governed profile (set PI_AGENT_ALLOW_UNGOVERNED=1 to override)"
+    exit 1
+  fi
+}
+
+# Prefer explicit PI_KIT_PATH; fall back to /opt/pi-system (dev mount point, or the release bake)
 if [ -z "$PI_KIT_PATH" ] && [ -d "/opt/pi-system" ]; then
   PI_KIT_PATH="/opt/pi-system"
 fi
 
-# Install pi-kit if a local path is configured (dev mode)
-if [ -n "$PI_KIT_PATH" ] && [ -d "$PI_KIT_PATH" ]; then
+if [ -n "$PI_KIT_PATH" ] && [ -f "$PI_KIT_PATH/packages/core/install.mjs" ]; then
   log "Installing pi-kit from $PI_KIT_PATH..."
-  pi install "$PI_KIT_PATH" 2>/dev/null || log "WARN: pi install returned non-zero"
-  log "Applying ${PI_KIT_PROFILE:-balanced} profile..."
-  node "$PI_KIT_PATH/packages/core/install.mjs" --profile "${PI_KIT_PROFILE:-balanced}" --scope global 2>/dev/null || log "WARN: profile apply returned non-zero"
+  if ! pi install "$PI_KIT_PATH"; then
+    ungoverned "pi install $PI_KIT_PATH failed"
+  else
+    log "Applying $PROFILE profile..."
+    node "$PI_KIT_PATH/packages/core/install.mjs" --profile "$PROFILE" --scope global \
+      || ungoverned "applying the $PROFILE profile failed"
+  fi
+else
+  ungoverned "no pi-kit found (PI_KIT_PATH='${PI_KIT_PATH}' has no packages/core/install.mjs; mount a kit at /opt/pi-system or set PI_KIT_PATH)"
 fi
 
 log "Starting pi..."

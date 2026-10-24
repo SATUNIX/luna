@@ -1,15 +1,17 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import fs from "node:fs";
 
-// secret-guard is the UNIVERSAL secrets/protected-path boundary (ships in every profile,
-// including `quick` which has no pentest-governance-domain). It blocks three classes:
+// secret-guard is an opt-in, pattern-based secrets/protected-path backstop. It ships in no
+// profile (extension.json: "profiles": [], experimental); an operator adds it deliberately.
+// When loaded it blocks four classes (tests/secret-guard-smoke.ts):
+//   0. read/grep/find/ls/glob of a credential file (SECRET_READ_* patterns),
 //   1. writes/edits to secret files or protected engagement/repo-control paths,
 //   2. writes/edits whose CONTENT is a high-confidence secret (key material, tokens),
 //   3. shell commands that read/copy/encode/exfiltrate a secret or protected path.
 //
 // Self-containment forbids importing pentest-governance-domain, so PROTECTED_PATTERNS
-// below is kept a SUPERSET of that extension's list and verify.mjs fails if they diverge
+// below is kept a SUPERSET of that extension's list and verify.ts fails if they diverge
 // (Epic 2 Sprint 2.2 "cross-link ... so the two lists can't silently diverge").
 
 // Secret FILE signatures (path/filename based).
@@ -31,7 +33,7 @@ const SECRET_PATH_PATTERNS = [
 ];
 
 // Protected paths — MUST remain a superset of pentest-governance-domain's PROTECTED_PATTERNS.
-// verify.mjs enforces the parity. Keep the string forms identical so the check can match.
+// verify.ts enforces the parity. Keep the string forms identical so the check can match.
 const PROTECTED_PATTERNS = [
   ".env",
   ".git/",
@@ -187,7 +189,7 @@ const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth
 // it, and the file can never be created or regenerated at all. Deliberately narrow: exact
 // basenames only, and content is STILL scanned for secrets further down, so a template that
 // actually contains a credential remains blocked. PROTECTED_PATTERNS and SECRET_PATH_PATTERNS
-// are left untouched so verify.mjs's literal parity extraction against
+// are left untouched so verify.ts's literal parity extraction against
 // pentest-governance-domain still holds. Mirrored in pentest-governance-domain and
 // third_party/protected-paths, which carry the same exemption.
 function isEnvTemplatePath(filePath: string): boolean {
@@ -221,7 +223,7 @@ function isProtectedPath(filePath: string): boolean {
   return PROTECTED_PATTERNS.some(pattern => normalized === pattern || normalized.includes(pattern));
 }
 
-// Env-configured control paths, kept outside PROTECTED_PATTERNS so verify.mjs's literal
+// Env-configured control paths, kept outside PROTECTED_PATTERNS so verify.ts's literal
 // parity extraction stays valid. Fail-closed: an override adds protection, never removes it.
 function configuredHumanConsolePaths(cwd: string): string[] {
   const configured = process.env.PI_KIT_HUMAN_CONSOLE_DIR?.trim();
@@ -251,6 +253,22 @@ function commandReferencesProtected(command: string, cwd: string = process.cwd()
   return false;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Tool arguments come from the model: a field is a string, absent (falsy, as `||` skipped it), or malformed.
+type TextField = { ok: true; value: string | undefined } | { ok: false; key: string };
+// The first of `keys` that is set (`||` order). A set non-string is malformed, never skipped.
+function textField(input: Record<string, unknown>, keys: readonly string[]): TextField {
+  for (const key of keys) {
+    const value = input[key];
+    if (!value) continue;
+    return typeof value === "string" ? { ok: true, value } : { ok: false, key };
+  }
+  return { ok: true, value: undefined };
+}
+
 function contentOf(input: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const key of ["content", "text", "new_string", "newText", "newString", "data", "body"]) {
@@ -261,9 +279,9 @@ function contentOf(input: Record<string, unknown>): string {
   // array the guard never sees an edit payload, so a secret written via edit is not detected.
   if (Array.isArray(input.edits)) {
     for (const item of input.edits) {
-      if (!item || typeof item !== "object") continue;
+      if (!isRecord(item)) continue;
       for (const key of ["oldText", "newText", "new_string", "newString", "old_string", "content", "text"]) {
-        const value = (item as Record<string, unknown>)[key];
+        const value = item[key];
         if (typeof value === "string") parts.push(value);
       }
     }
@@ -285,11 +303,28 @@ function detectSecretContent(content: string): string | null {
 // loads first creates the registry, the others add to it. It is a consistency check, not a
 // boundary against code running in the same process.
 const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
+
+/** What another protection may already have stored under the key (every copy of this helper stores a Set). */
+interface RegistryLike extends Iterable<unknown> {
+  add(name: string): unknown;
+  has(name: string): unknown;
+  list?: unknown;
+}
+
+function isRegistryLike(value: unknown): value is RegistryLike {
+  return (typeof value === "object" || typeof value === "function") && value !== null
+    && "add" in value && typeof value.add === "function"
+    && "has" in value && typeof value.has === "function"
+    && Symbol.iterator in value && typeof value[Symbol.iterator] === "function";
+}
+
 function registerProtection(name: string): void {
   try {
-    const g = globalThis as unknown as Record<symbol, any>;
-    let reg = g[PROTECTIONS_KEY];
-    if (!reg || typeof reg.add !== "function" || typeof reg.has !== "function") {
+    const g = globalThis as Record<symbol, unknown>;
+    const existing = g[PROTECTIONS_KEY];
+    let reg: RegistryLike;
+    if (isRegistryLike(existing)) reg = existing;
+    else {
       reg = new (class ProtectionRegistry extends Set<string> {})();
       g[PROTECTIONS_KEY] = reg;
     }
@@ -303,8 +338,14 @@ function registerProtection(name: string): void {
 export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName;
-    const input = (event.input || {}) as Record<string, unknown>;
-    const rawPath = (input.path as string | undefined) || (input.file as string | undefined);
+    const raw: unknown = event.input;
+    const input = isRecord(raw) ? raw : {};
+    const pathField = textField(input, ["path", "file"]);
+    const commandField = toolName === "bash" ? textField(input, ["command", "cmd", "script"]) : null;
+    for (const field of [pathField, commandField]) {
+      if (field && !field.ok) return blocked(ctx, `secret-guard: blocked ${toolName}: ${field.key} is not a string`);
+    }
+    const rawPath = pathField.ok ? pathField.value : undefined;
     const cwd = ctx.cwd || process.cwd();
     const target = rawPath ? targetPaths(rawPath, cwd) : undefined;
     // 0. Direct reads/searches of credential files (defense in depth, not OS isolation;
@@ -318,7 +359,9 @@ export default function (pi: ExtensionAPI) {
       if (target && isSecretPath(target.scoped)) {
         return blocked(ctx, `secret-guard: blocked ${toolName} to secret file: ${rawPath}`);
       }
-      const configuredAdminPaths = [process.env.PI_KIT_FIREWALL_POLICY, process.env.PI_KIT_FIREWALL_AUDIT_LOG, process.env.PI_KIT_FIREWALL_APPROVALS, process.env.PI_KIT_UNATTENDED_CONTRACT].filter((p): p is string => !!p).map(p => normalizePath(resolvedPath(p, cwd)));
+      // tool-firewall rotates its audit log to `<path>.1` past 4 MiB, so the rotated copy is protected too.
+      const auditLog = process.env.PI_KIT_FIREWALL_AUDIT_LOG;
+      const configuredAdminPaths = [process.env.PI_KIT_FIREWALL_POLICY, auditLog, auditLog ? `${auditLog}.1` : undefined, process.env.PI_KIT_FIREWALL_APPROVALS, process.env.PI_KIT_UNATTENDED_CONTRACT].filter((p): p is string => !!p).map(p => normalizePath(resolvedPath(p, cwd)));
       const absoluteProtected = PROTECTED_PATTERNS.filter(pattern => pattern.startsWith("/"));
       if (target && (isProtectedPath(target.scoped) || absoluteProtected.some(pattern => target.absolute.includes(pattern)) || configuredAdminPaths.includes(target.absolute) || withinAny(target.absolute, configuredHumanConsolePaths(cwd)))) {
         return blocked(ctx, `secret-guard: blocked ${toolName} to protected path: ${rawPath}`);
@@ -331,7 +374,7 @@ export default function (pi: ExtensionAPI) {
 
     // 3. Shell commands: direct leaks, or read/copy/encode/transfer of a secret/protected path.
     if (toolName === "bash") {
-      const command = (input.command as string | undefined) || (input.cmd as string | undefined) || (input.script as string | undefined);
+      const command = commandField?.ok ? commandField.value : undefined;
       if (command) {
         for (const candidate of new Set([command, deobfuscateShellText(command)])) {
           for (const pattern of SECRET_BASH_LEAK_PATTERNS) {
@@ -352,7 +395,7 @@ export default function (pi: ExtensionAPI) {
   registerProtection("secret-guard");
 }
 
-function blocked(ctx: any, msg: string): { block: true; reason: string } {
+function blocked(ctx: Pick<ExtensionContext, "hasUI" | "ui">, msg: string): { block: true; reason: string } {
   if (ctx.hasUI) ctx.ui.notify(msg, "warning");
   return { block: true, reason: msg };
 }

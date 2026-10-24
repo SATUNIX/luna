@@ -10,19 +10,34 @@ Projects/<project>/<project>.md         project hub: memories + recent recaps
 Projects/<project>/Memory/<slug>.md     project memories
 Projects/<project>/Recaps/<date>.md     automatic per-turn recaps
 Projects/<project>/Workflows/<run>/     workflow runs with `vault: true`
+Projects/<project>/.pi-project.json     the canonical root that owns this folder
 .pi-index/                              search index, lock, errors.log (hidden from Obsidian)
 .trash/                                 forgotten notes (recoverable)
 ```
 
-`<project>` is the git root's directory name, so every subdirectory of a repository shares
-one project.
+`<project>` is named after the git root (else the working directory), so every subdirectory of
+a repository shares one project. Each project folder records the canonical, symlink-resolved
+root that owns it in `Projects/<project>/.pi-project.json`. The first root to open a name keeps
+the plain folder, including a folder written before ownership was recorded; another repository
+with the same directory name gets `<name>-<hash of its canonical path>`, so it never recalls
+or is injected with the first one's recaps and memories. Nothing is moved or deleted
+(`tests/memory-vault-smoke.ts`, check 12).
+
+A root reached through a symlink uses the folder its canonical path already owns, whichever
+path opened it first. A recorded owner is looked up without taking the vault lock. A folder is
+never taken over because its recorded owner path no longer exists, so a moved repository (or a
+vault synced from a machine with different checkout paths) starts a `<name>-<hash>` folder. Its
+first session then writes a warning to `.pi-index/errors.log` and the session UI naming the
+old folder; to keep its history, set `"path"` in that folder's `.pi-project.json` to the new
+canonical path (`tests/memory-vault-smoke.ts`, check 12).
 
 ## Two kinds of memory
 
 **Automatic: recaps.** After each substantive turn (one with tool calls, or a long answer), a
 small model writes a recap: a title, what was done, the next step, files touched, and
 decisions. It is appended to `Projects/<project>/Recaps/<date>.md`. Decisions, preferences
-and gotchas it flags are promoted to memory notes, deduplicated. Trivial turns and subagent
+and gotchas it flags are promoted to memory notes in that project, deduplicated; a promoted
+note is never global (`tests/memory-vault-smoke.ts`, check 5). Trivial turns and subagent
 children are skipped. The first prompt of every new session gets the last three recaps, so
 pi knows where you left off.
 
@@ -72,4 +87,5 @@ Secrets (tokens, keys, `password=`-style values) are redacted before anything is
 `/save --project <p>` also writes into the vault's project folder when the vault exists.
 
 The older `memory-local` store (`~/.pi/agent/memory-local/memories.json`) is imported
-automatically once.
+automatically once. Do not load `memory-local` next to `memory-vault`: both register
+`memory_search`, and pi keeps only one of them.

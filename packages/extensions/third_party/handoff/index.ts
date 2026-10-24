@@ -44,7 +44,7 @@ export default function (pi: ExtensionAPI) {
     const recentTools: string[] = [];
     for (let i = entries.length - 1; i >= 0 && recentTools.length < 5; i--) {
       const e = entries[i];
-      if (e.type === "message" && e.message.role === "toolResult") {
+      if (e?.type === "message" && e.message.role === "toolResult") {
         const msg = e.message as { toolName?: string };
         if (msg.toolName) recentTools.unshift(msg.toolName);
       }

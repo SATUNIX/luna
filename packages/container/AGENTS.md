@@ -28,8 +28,11 @@ upstream Pi with the `pi-system` kit. Use the `wrapper-runtime-maintainer` skill
 
 ## Security controls
 
-- Keep MCP direct tools, sampling auto-approval, auto-auth and URL auto-open elicitation disabled in
-  `overlays/pi/mcp.json`; `scripts/validate-pentest-env.sh` fails if one is turned on.
+- Keep MCP direct and namespace tools, sampling auto-approval, auto-auth, URL auto-open
+  elicitation, agent-added servers and script tools, and Jev semantic search disabled in
+  `overlays/pi/mcp-adapter.json`, and keep `PI_MCP_CONFIG_MODE=exclusive` and
+  `MCP_DIRECT_TOOLS=__none__` in the `Dockerfile`; `scripts/validate-pentest-env.sh` fails if one
+  is turned on or removed.
 - Deny unknown MCP tools by default; require a human to approve non-read-only or target-impacting
   actions.
 - Preserve append-only evidence and audit semantics; write controlled state only through

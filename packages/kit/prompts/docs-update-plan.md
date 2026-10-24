@@ -1,6 +1,12 @@
+---
+argument-hint: "[change]"
+---
+
 # Documentation Update Plan
 
 Plan a documentation change.
+
+Change: ${@:-the documentation change under discussion}
 
 Return:
 

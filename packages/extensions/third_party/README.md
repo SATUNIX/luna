@@ -3,7 +3,7 @@
 Extensions under `third_party/` are adapted from upstream projects. Each directory contains a
 `SOURCE.md` recording the origin and what was changed. The upstream licence text and credits are
 in one place, the repository's `THIRD_PARTY_NOTICES.md` (generated from the `SOURCE.md` files by
-`node packages/core/gen-notices.mjs`), rather than a copy in each directory. They are vendored
+`node packages/core/gen-notices.ts`), rather than a copy in each directory. They are vendored
 rather than referenced from npm because the kit carries local modifications that upstream does
 not publish.
 

@@ -52,6 +52,15 @@ content screening, the OpenAPPA flow engine, intent ledger, detector, authentica
 events and verified off-boundary attestation remain unimplemented. Relaxed has no additional
 medium-tier routine admission set. Remaining proposal work is not a current guarantee.
 
+- **Inline interpreter code is matched coarsely, not understood.** The firewall and
+  `protected-paths` share one fail-closed rule: inline code run by a listed interpreter family,
+  wrapper or shell that mentions an agent-configuration segment or distinctive tail next to any
+  write- or exec-capable call is high and blocked, and it over-blocks such code by design
+  ([Security](security.md) lists the families, wrappers and shells). It cannot see a path computed
+  entirely at runtime with no distinctive segment or tail in the command text (character codes,
+  decoded strings, a value read from a file), an unlisted interpreter or wrapper, nor code run from
+  a script file; closing that needs
+  the operating-system or container boundary below, not more text matching.
 - **It is a guard rail, not a sandbox.** Containing what an allowed tool can reach needs an
   operating-system or container boundary (the autonomous runner provides one).
 - **Low-tier actions run unasked in every mode**, including covered core-tool reads, explicitly
@@ -60,8 +69,9 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   require a separate policy choice.
 - **Package-manager and opaque-tool network use cannot be attributed to a host** in unattended
   runs; the container network is the stop.
-- **`secret-guard` is opt-in.** The firewall already classifies credential files; whether the
-  stricter pattern layer should be default needs data on its false-positive rate.
+- **`secret-guard` is in two profiles only.** It loads in `balanced` and `autonomous`; whether the
+  other profiles should load it needs data on its false-positive rate (its path rule blocks every
+  write to a path containing `secret` or `credentials`).
 - **Unreviewed companion shell/edit tools** (for example `pi-lean-ctx`) need exact policy entries
   or operator approval; parsing a shell-looking field cannot confer trust
   (`tests/firewall-shell-smoke.ts`). Reviewed companion helpers have shipped entries, but
@@ -73,11 +83,18 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
 - **Nested-call evidence uses synthetic events.** `tests/firewall-gate-smoke.ts` models pi 1.3's
   `parentToolCallId` and child ids and proves parent approvals do not authorise children. No smoke
   drives the real codemode worker or `ctx.executeTool()` through the installed pi runtime.
-- **Unattended mode trusts the supervisor's claim** that its boundary exists. It now requires the
-  contract to be on a read-only mount (or another user's unwritable file), which an agent's shell
-  cannot fake, and a forged launch from an interpreter is a safety-setting override. What remains:
-  something that can mount filesystems, run code inside the pi process, or act as root. Tying the
-  contract to a secret only the supervisor holds would close the last gap.
+- **Unattended mode trusts the supervisor's claim** that its boundary exists. It requires the
+  contract to be on a read-only mount (or another user's unwritable file) seen from the initial
+  user namespace, which an agent's shell cannot fake, and a forged launch from an interpreter is a
+  safety-setting override. What remains: something that can run code inside the pi process, or
+  act as root. Tying the contract to a secret only the supervisor holds would close the last gap,
+  and would also let workers under a rootless engine run unattended, which the namespace rule
+  currently refuses. The autonomy boundary probe does not yet report whether the worker is in the
+  initial user namespace.
+- **The human console's request files** are still written with plain `fs` calls (on the ESLint
+  allowlist as a known gap); moving them to the safe-write helper is pending.
+- **Inline interpreter code that builds a credential path at run time** (rather than naming it
+  literally) is not recognised by the classifier.
 - **Approvals bind command text, not effect.** An approved `git push` follows a re-pointed remote,
   and an approved script runs after an edit. Binding an approval to the resolved effect (the remote
   URL, the script's content hash) would close it, at the cost of more prompts.
@@ -97,6 +114,14 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
 - **`autonomous` and `long-horizon`** load nearly the same set; the difference is the autonomous run
   tooling ([Autonomous runs](autonomy.md)).
 
+## Remote control
+
+- **Critical-tier approval cards start on *Allow once*,** like every other card (the SEC-5
+  decision, [Remote control](remote-control.md#the-yes-first-decision-sec-5)). Starting critical
+  cards on *Deny*, or requiring an explicit gesture for them, would compensate further.
+- **The Android app lock is off by default.** Turning it on by default needs a first-run flow that
+  explains it.
+
 ## Web console
 
 - Two version constants still read `0.1.0` (`routes.ts`, `configinfo.ts`); the session panel shows an
@@ -105,6 +130,20 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   the console drives (both are documented in [Web console](web-console.md); the firewall classifies
   reading the token file as a credential read, which asks you but is not a lock). Moving the token
   behind a one-time exchange, so it never appears in a command line, would close the first.
+
+## Releases and repository governance
+
+- **Signed release tags.** Tags are annotated, not signed, and `/update` verifies no signature.
+  Signing `v*` tags, publishing the allowed signers and verifying them in `/update` would bind a
+  release to the operator's key.
+- **A branch-namespace rule** restricting who may create which branch names.
+- **A scheduled settings drift check** that fails when the live repository settings differ from
+  `.github/expected-settings.json`; it is run by hand before releases.
+- **A blocking ReDoS rule in the `semgrep` job.** ESLint rejects non-literal regular expressions,
+  and CodeQL's ReDoS queries block a merge only through the declared code-scanning merge
+  protection; no Semgrep rule for slow patterns is added.
+- **Image scanning in CI.** Container images are scanned by hand when they change
+  ([Vulnerability management](vulnerability-management.md#risk-acceptance-register)).
 
 ## Dependencies
 

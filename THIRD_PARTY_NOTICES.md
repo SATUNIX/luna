@@ -77,6 +77,7 @@ SOFTWARE.
     `detailTriggers` entries in the config are ignored.
   - The config file is read as unknown and checked: one that is not a JSON object, or a
     `defaultLevel` that is not a known level, falls back to the defaults (nothing pins this).
+  - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).
 
 - Concept attribution: the concept derives in turn from the `caveman` project by
   Julius Brussee (https://github.com/JuliusBrussee/caveman), which is MIT-licensed with a
@@ -192,6 +193,7 @@ SOFTWARE.
     `.pi/ctx-contributions/sessions/<session-id>/plan-mode.json` (flat directory when pi exposes no
     session id), matching the other producers (B-005).
   - 2026-10-15: typed for strict TypeScript (no behaviour change).
+  - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).
 
 ### `protected-paths`
 
@@ -210,6 +212,27 @@ SOFTWARE.
     main checkout's own protected entries are protected too (`tests/workflow-worktree-smoke.ts`)
   - `<agent dir>/pi-kit/autonomy.json` (the per-model Memento opt-ins `/effort memento on` writes) is
     protected under both policies, so the agent cannot opt a model in itself (`tests/protected-paths-smoke.ts`)
+  - pi's autoload locations in the agent directory (extensions/, skills/, prompts/, themes/, npm/, git/,
+    SYSTEM.md, APPEND_SYSTEM.md, the global context files, settings.json, models.json, auth.json,
+    trust.json, .pi-kit.json), `~/.agents/skills`, the remote host's state directory
+    (`PI_REMOTE_STATE_DIR`, else `<agent dir>/remote-control`) and the project's `.pi/.pi-kit.json` are
+    protected under both policies (`tests/protected-paths-corpus-smoke.ts`)
+  - bash write targets expand `~`, `$HOME` and `$PI_CODING_AGENT_DIR`; a target built at runtime whose
+    literal tail names a protected entry is blocked; literal Node/Python/Ruby writers, copy and rename
+    destinations and `ln -s` link targets are write targets (`tests/protected-paths-corpus-smoke.ts`)
+  - bash write targets also include Perl `open` targets, the source of a hard link (`ln`) and of
+    `cp -l`/`cp -s`, a `git clone` destination, the repository a working-tree git command names with
+    `-C` or reaches by `cd`, `tar -x -C`, `unzip -d`, `7z -o` and `rsync` destinations, and a
+    relative target after `cd <dir>` (`tests/protected-paths-corpus-smoke.ts`)
+  - when a bash command runs inline interpreter code with a write-capable call, every path the program
+    names is a write target: an absolute or `~` literal (including one wrapped in `expanduser`), and the
+    literal parts of a path composed at runtime (`Path.home()/"…"`, a join call with a runtime argument,
+    `homedir() + "/…"`, an interpolated string, a literal after `chdir`) under the home directory, `~/.pi`
+    and the agent directories (`tests/protected-paths-corpus-smoke.ts`)
+  - a bash command that runs an interpreter on inline code, mentions an agent-configuration segment and
+    has any write- or exec-capable call is blocked whatever path it builds, by the shared fail-closed rule
+    in `shared/inline-guard.ts` (a generated copy of `packages/core/shared/inline-guard.ts`, also used by
+    tool-firewall; `tests/protected-paths-corpus-smoke.ts`)
 
 ### `subagent`
 
@@ -360,6 +383,12 @@ SOFTWARE.
     `runner.ts` loads with `-e`; `schema.ts` is a byte-identical copy of
     `packages/role-runner/src/schema.ts`. The host re-validates the child's submitted arguments,
     retries once, then returns `null`. See `docs/structured-output.md`.
+  - **Safe writes and shared redaction (2026-10-24):** run files, logs, the live state and the
+    worktree journal are written through the generated `shared/safe-fs.ts` (no symbolic link
+    followed under the workspace; temporary prompt files are created exclusively), `redact.ts`
+    applies the kit's shared table (`shared/redact.ts`) after its own rules, and workflow gate
+    patterns and structured-output patterns use the shared `shared/safe-regex.ts` check
+    (`tests/workspace-symlink-smoke.ts`, `tests/redaction-corpus-smoke.ts`, `tests/workflow-smoke.ts`).
 
 ### `todo`
 
@@ -374,6 +403,7 @@ SOFTWARE.
     Every action returns the full list with progress. `/todos` prints the list and the file path.
     The checklist widget lives in `custom-footer` (reads the same `TODO.md`).
   - 2026-10-15: typed for strict TypeScript (no behaviour change).
+  - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).
 
 ### `trigger-compact`
 

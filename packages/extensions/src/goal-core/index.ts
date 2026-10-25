@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 // goal-core: owns the mission goal. Persists it to .pi/GOAL.yaml and contributes it to the
 // model-visible prompt via a ctx-contribution (context-sieve is the single injection authority —
@@ -65,9 +66,7 @@ function readGoal(cwd: string): string | null {
 
 function writeContribution(cwd: string, goal: string): void {
   try {
-    const dir = contribDir(cwd);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    writeFileSafe(
       contribFile(cwd),
       JSON.stringify({
         id: "goal-core",
@@ -75,7 +74,7 @@ function writeContribution(cwd: string, goal: string): void {
         budgetTokens: 400,
         content: `## Active Goal\n${goal}`,
       }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     /* best effort */
@@ -83,13 +82,12 @@ function writeContribution(cwd: string, goal: string): void {
 }
 
 function setGoal(cwd: string, goal: string): void {
-  const dir = path.join(cwd, ".pi");
-  fs.mkdirSync(dir, { recursive: true });
   const firstLine = goal.split(/\r?\n/)[0];
   const yaml = /[\r\n]/.test(goal)
     ? `goal: ${firstLine}\ngoal_full: ${JSON.stringify(goal)}\ncreated: ${new Date().toISOString()}\n`
     : `goal: ${goal}\ncreated: ${new Date().toISOString()}\n`;
-  fs.writeFileSync(goalFile(cwd), yaml, "utf8");
+  // Workspace state: written without following a committed symlink (./shared/safe-fs.ts).
+  writeFileSafe(goalFile(cwd), yaml, { root: cwd });
   writeContribution(cwd, goal);
 }
 

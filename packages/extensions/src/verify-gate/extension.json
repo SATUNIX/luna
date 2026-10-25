@@ -12,7 +12,7 @@
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
-    "nodeBuiltins": ["node:child_process", "node:fs", "node:os", "node:path", "node:url"],
+    "nodeBuiltins": ["node:child_process", "node:fs", "node:os", "node:path", "node:url", "node:crypto"],
     "npm": [],
     "piPeers": ["typebox", "@earendil-works/pi-coding-agent"],
     "services": [],

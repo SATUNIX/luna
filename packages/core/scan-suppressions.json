@@ -1,0 +1,271 @@
+{
+  "$comment": "Every way a scanner or linter finding is switched off in this repository, with its reason. tests/suppression-inventory-smoke.ts fails when a suppression exists that is not listed here, or a listed one no longer exists. Inline entries are keyed by file, marker and the SHA-256 of the trimmed line, so editing a suppressed line needs this file updated in the same change.",
+  "inline": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "marker": "zizmor: ignore",
+      "lineSha256": "4b70d37c58d6cc44fe8b4f99889201d8423e2e51ea3091c8ac7e5192aa624bf6",
+      "reason": "pi-compat installs a pi version outside the lockfile on purpose; the version is a matrix literal passed through the environment"
+    },
+    {
+      "file": "apps/android/app/src/main/AndroidManifest.xml",
+      "marker": "nosemgrep",
+      "lineSha256": "39004f2d49608afaab3509269343d13612772f439f435a3897e027ad03086072",
+      "reason": "the launcher activity must be exported; the pairing deep link still needs a tap and terminal approval"
+    },
+    {
+      "file": "packages/autonomy/lib/egress-proxy.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "8da812317a2de534c35c8b3a9d167861628056fcdbd652b11125ba2ee447e293",
+      "reason": "req.url is a string or undefined; anything else becomes text that fails the pattern below"
+    },
+    {
+      "file": "packages/autonomy/lib/egress-proxy.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "7293a0ebab4f731ee4f6063e103f493debe642b915cf11e90f9def9bb8b21ee2",
+      "reason": "control characters are exactly what this rejects"
+    },
+    {
+      "file": "packages/autonomy/lib/netaddr.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "7293a0ebab4f731ee4f6063e103f493debe642b915cf11e90f9def9bb8b21ee2",
+      "reason": "control characters are exactly what this rejects"
+    },
+    {
+      "file": "packages/autonomy/relay.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "389c5ebe8ab516faa4bebd403fc7bbcd55b3d8301245821a3960fb31a02789bf",
+      "reason": "the model id is untrusted JSON; whatever it is, its text is what the allowlist compares"
+    },
+    {
+      "file": "packages/autonomy/relay.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "b5f56a9d4ba45bf61a3beca6da40f5db1a7dc1b5f6f7f72ae6e5274115e56e63",
+      "reason": "callers pass the response text; anything else is read as its text"
+    },
+    {
+      "file": "packages/container/scripts/healthcheck.py",
+      "marker": "noqa",
+      "lineSha256": "7184dc836d4316fee8849e4dd26a53ae142773eb8b9ead6131793884ecb03325",
+      "reason": "BaseHTTPRequestHandler requires the method name do_GET"
+    },
+    {
+      "file": "packages/core/eval/live/isolation.ts",
+      "marker": "nosemgrep",
+      "lineSha256": "62937b2963013dfc88fe625e548d8c26f6c2c2b117fc36e2397d8599161ea1e6",
+      "reason": "in-container isolation probe of plain-HTTP lab services on the eval network; not shipped code"
+    },
+    {
+      "file": "packages/core/eval/live/isolation.ts",
+      "marker": "nosemgrep",
+      "lineSha256": "3d20bb5e3f473c907ec81e2644d83b75fc1908dd6033eaeb82ea6bf58309f9e5",
+      "reason": "in-container isolation probe of plain-HTTP lab services on the eval network; not shipped code"
+    },
+    {
+      "file": "packages/core/release.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "f5f77e4de70bba1ed24c2dbcb70dc7ee2fbd419751f29e777ccf44609d701dba",
+      "reason": "run() takes fixed literal command lines (npm is a .cmd shim on Windows); the version and paths go through execFileSync in git(); tests/release-lockfile-smoke.ts asserts these literal lines"
+    },
+    {
+      "file": "packages/extensions/src/verify-gate/index.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "09e170e9f44aa9a513c3ef5df997a49b05a2a826b18f622afb4bb563fbc94bde",
+      "reason": "PI_KIT_VERIFY_CMD is an operator-set shell command line by design, and npm is a .cmd shim on Windows"
+    },
+    {
+      "file": "packages/role-runner/src/context.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "57dc6d41fa38ee3944005b7088d1aa19c630aea0aaef279e3691c93ab53a94ed",
+      "reason": "last-resort fallback for values JSON.stringify rejects (cycles, BigInt); unreachable for JSON.parse input"
+    },
+    {
+      "file": "packages/web-ui/public/js/app.js",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "119691c89448daa5daff53cd97ecb62953864b8c5b42eaafcb068495cdef16a2",
+      "reason": "the same listener that was added below"
+    },
+    {
+      "file": "packages/web-ui/public/js/app.js",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "4f0d42f90b6afd56a6acd83754ec529a76645ed65eea365a3930ea3bc35cbf2a",
+      "reason": "the listener returns its attempt's promise so a direct caller (the ui smoke) can wait; it catches its own errors"
+    },
+    {
+      "file": "packages/web-ui/server/remote/devices.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "26090febcbc2c2d0a1c8f5548da9fa1571ed120cc13c8c12ebb39de9d4745279",
+      "reason": "control characters are exactly what this removes"
+    },
+    {
+      "file": "packages/web-ui/server/remote/pairing.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "26090febcbc2c2d0a1c8f5548da9fa1571ed120cc13c8c12ebb39de9d4745279",
+      "reason": "control characters are exactly what this removes"
+    },
+    {
+      "file": "packages/web-ui/server/server.ts",
+      "marker": "nosemgrep",
+      "lineSha256": "5774ec0738ac5143e88306d66a17cc88b7516add97a0a918ea2013e9567913d2",
+      "reason": "the path is resolved and checked against the static allowlist (known) before sendFile"
+    },
+    {
+      "file": "packages/web-ui/src/public/js/app.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "119691c89448daa5daff53cd97ecb62953864b8c5b42eaafcb068495cdef16a2",
+      "reason": "the same listener that was added below"
+    },
+    {
+      "file": "packages/web-ui/src/public/js/app.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "4f0d42f90b6afd56a6acd83754ec529a76645ed65eea365a3930ea3bc35cbf2a",
+      "reason": "the listener returns its attempt's promise so a direct caller (the ui smoke) can wait; it catches its own errors"
+    },
+    {
+      "file": "tests/check-all-npm-smoke.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "56983a345acf8a67bf19311d0c8f411487397cbf2619421308d8503ba891d0d6",
+      "reason": "the expected value: this test pins the win32 npm.cmd shim that needs a shell"
+    },
+    {
+      "file": "tests/guard-smoke.ts",
+      "marker": "@ts-expect-error",
+      "lineSha256": "0cc66ece9efa705f01aa288b51152341b34c9c9cfe112fa4eafe489fd8d6aa82",
+      "reason": "`context: undefined` is not a Model"
+    },
+    {
+      "file": "tests/observability-contracts-smoke.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "94b784d06ea365e0429b45a394a3594eac4bf49b38d41e391cd9f7b49b11c550",
+      "reason": "evaluates a method body from the installed, pinned pi runtime (not untrusted input) to test against it"
+    },
+    {
+      "file": "tests/pi-cli-smoke.ts",
+      "marker": "@ts-expect-error",
+      "lineSha256": "279d0972b1aa13051c5179837304694349c353ce052936ba6c0f16dd308d50a0",
+      "reason": "deliberately the wrong type, to prove runPi checks it at run time"
+    },
+    {
+      "file": "tests/profile-command-smoke.ts",
+      "marker": "eslint-disable-next-line",
+      "lineSha256": "cbf7e0275757d7038ac9a7b9375ea4ead75768f6ea2cbbd866a1c16981db4759",
+      "reason": "the alias is under test on purpose"
+    },
+    {
+      "file": "tests/workflow-smoke.ts",
+      "marker": "@ts-expect-error",
+      "lineSha256": "917e82e21f51c79d42648e02e87f9eb1af442c6983c46acaeda5f8c7b0ba7777",
+      "reason": "a partial run state on purpose"
+    },
+    {
+      "file": "tests/workflow-smoke.ts",
+      "marker": "@ts-expect-error",
+      "lineSha256": "9f5d3e0cc74ca79dd927fa7d99961d9a04774362e52e5ca0e020687b4f3f3862",
+      "reason": "a partial run state and workflow on purpose"
+    }
+  ],
+  "semgrepignore": [
+    {
+      "path": "docs/",
+      "reason": "documentation is prose, not shipped code"
+    },
+    {
+      "path": "tests/",
+      "reason": "test fixtures deliberately contain fake credentials and attack strings"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "reason": "the gitleaks allowlist necessarily contains the fake credentials it allows"
+    },
+    {
+      "path": ".pi/",
+      "reason": "local runtime state, never committed"
+    },
+    {
+      "path": "node_modules/",
+      "reason": "installed dependencies, audited by npm audit and OSV instead"
+    },
+    {
+      "path": "dist/",
+      "reason": "build output"
+    },
+    {
+      "path": "site/",
+      "reason": "the built documentation site"
+    }
+  ],
+  "codeql": {
+    "pathsIgnore": [
+      {
+        "path": "tests",
+        "reason": "test suites deliberately do what the queries look for; not shipped"
+      },
+      {
+        "path": "packages/*/tests",
+        "reason": "package test suites; not shipped"
+      },
+      {
+        "path": "packages/*/scripts",
+        "reason": "package smoke and build scripts; not in the runtime path"
+      },
+      {
+        "path": "packages/core/eval",
+        "reason": "in-container probes and the eval harness; not shipped"
+      },
+      {
+        "path": "site",
+        "reason": "generated documentation site"
+      },
+      {
+        "path": "node_modules",
+        "reason": "installed dependencies"
+      }
+    ],
+    "queryFilters": [
+      {
+        "id": "js/insufficient-password-hash",
+        "reason": "the two sites hash an environment variable name and a random provider key, not stored passwords"
+      },
+      {
+        "id": "js/file-access-to-http",
+        "reason": "the console loopback probe sends the console token to the console itself"
+      },
+      {
+        "id": "js/http-to-file-access",
+        "reason": "the authenticated agent editor writes the validated agent file the user asked for"
+      }
+    ]
+  },
+  "gitleaks": [
+    {
+      "description": "save-smoke: fake GitLab and AWS tokens the redaction test must scrub"
+    },
+    {
+      "description": "live eval target and its recorded evidence: placeholder bearer tokens for the throwaway target"
+    },
+    {
+      "description": "firewall-gate and tool-capture smokes: fake bearer tokens and redaction tables that redact() must mask"
+    },
+    {
+      "description": "web console client smoke: counting-sequence tokens that authenticate nothing"
+    },
+    {
+      "description": "autonomy-contract smoke: credential-shaped placeholders the contract validator must refuse"
+    },
+    {
+      "description": "secret-guard smoke: a stub key body the secret guard must block"
+    }
+  ],
+  "zizmor": [
+    {
+      "rule": "self-repository",
+      "target": "release.yml:48",
+      "reason": "the release workflow calls ci.yml of the same commit as a gate"
+    },
+    {
+      "rule": "self-repository",
+      "target": "release.yml:58",
+      "reason": "the release workflow calls security.yml of the same commit as a gate"
+    }
+  ]
+}

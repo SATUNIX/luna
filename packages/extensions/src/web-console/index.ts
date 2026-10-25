@@ -6,6 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { trustedMarkerKitRoot } from "./shared/kit-source.ts";
 
 // web-console adds `/console` (alias `/webui`): start, stop, and check the bundled
 // Pi Console web UI that ships in packages/web-ui of this repo.
@@ -83,11 +84,15 @@ function webUiEntry(webUiRoot: string, stem: string): string | null {
  * Locate `packages/web-ui`. Precedence:
  *   1. PI_KIT_WEBUI_ROOT override
  *   2. relative to this extension (<root>/packages/extensions/src/web-console -> <root>/packages/web-ui)
- *   3. the checkout recorded in the install marker (.pi-kit.json)
+ *   3. the checkout recorded in the install marker (.pi-kit.json), only when trustedMarkerKitRoot
+ *      (./shared/kit-source.ts) accepts it: absolute, outside the workspace of `cwd` through any
+ *      links, and the kit by package name. A project marker is repository content, so a relative
+ *      or in-workspace kitSource would let an opened repository choose the server this spawns; it
+ *      is ignored and reported through `warn`.
  * Returns null rather than guessing, so a generated npm surface (which does not
  * ship the web UI) degrades to a clear message.
  */
-export function findWebUiRoot(): string | null {
+export function findWebUiRoot(cwd: string = process.cwd(), warn?: (message: string) => void): string | null {
   const hasServer = (dir: string) => webUiEntry(dir, "server") !== null;
 
   const override = process.env.PI_KIT_WEBUI_ROOT?.trim();
@@ -101,10 +106,11 @@ export function findWebUiRoot(): string | null {
     /* import.meta.url unavailable (non-ESM loader) - fall through */
   }
 
-  const marker = readMarker();
+  const marker = readMarker(cwd);
   if (marker.kitSource) {
-    const fromMarker = path.join(marker.kitSource, "packages", "web-ui");
-    if (hasServer(fromMarker)) return fromMarker;
+    const trusted = trustedMarkerKitRoot(marker.kitSource, cwd, (dir) => hasServer(path.join(dir, "packages", "web-ui")));
+    if (trusted && "root" in trusted) return path.join(trusted.root, "packages", "web-ui");
+    if (trusted) warn?.(`console: ignored ${trusted.ignored}. An install marker never chooses the server that runs.`);
   }
 
   return null;
@@ -480,7 +486,7 @@ export function openBrowser(url: string): boolean {
   }
 }
 
-function notify(ctx: ExtensionCommandContext, message: string, level: "info" | "error"): void {
+function notify(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error"): void {
   if (ctx.hasUI) ctx.ui.notify(message, level);
 }
 
@@ -509,7 +515,7 @@ async function handleConsole(args: string, ctx: ExtensionCommandContext): Promis
     return;
   }
 
-  const webUiRoot = findWebUiRoot();
+  const webUiRoot = findWebUiRoot(ctx.cwd || process.cwd(), (message) => notify(ctx, message, "warning"));
   if (!webUiRoot) {
     notify(
       ctx,

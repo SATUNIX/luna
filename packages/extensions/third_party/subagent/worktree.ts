@@ -22,6 +22,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
 export const WORKTREE_CAP = 16;
 // Branch and directory names are built from these, so no dots (no "..", no ".lock"), no slashes.
@@ -167,8 +168,7 @@ export async function createWorkflowWorktree(opts: { cwd: string; runId: string;
 }
 
 function appendJournal(file: string, outcome: WorktreeOutcome): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(file, `${JSON.stringify(outcome)}\n`, { mode: 0o600 });
+  appendFileSafe(file, `${JSON.stringify(outcome)}\n`, { ...piWorkspaceOptions(file, 0o600), dirMode: 0o700 });
 }
 
 // Git options for every finish-time command: nothing configured to run (fsmonitor, hooks) runs,

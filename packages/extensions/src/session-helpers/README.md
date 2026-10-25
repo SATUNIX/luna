@@ -46,8 +46,9 @@ there is one, on stderr otherwise — not per turn and not again after a reload.
 ## Switching profiles with `/profile`
 
 `/profile` is the in-session front-end to `packages/core/install.ts --settings-only`; it does not
-reimplement install logic. Kit-root resolution: `PI_KIT_ROOT` → the `kitSource` in the install marker (when
-it is a path) → this module's own location. Two layouts are supported: the monorepo
+reimplement install logic. Kit-root resolution: `PI_KIT_ROOT` → the `kitSource` in the install marker (only
+when it is an absolute path outside the workspace, through any links, whose `package.json` names the
+kit; `shared/kit-source.ts`) → this module's own location. Two layouts are supported: the monorepo
 (`packages/core/install.ts` + `packages/kit/profiles`) and a legacy flat kit.
 
 **The switch is transactional** (`profile-switch.ts`):

@@ -21,6 +21,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendFileSafe, rotateFileSafe, writeFileSafe } from "./shared/safe-fs.ts";
 import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
@@ -29,6 +30,7 @@ import { isUncertainBlock, runJudge, type Completer, type Verdict } from "./judg
 import { loadSession, recordAction, rootSessionId, saveSession, trajectoryFindings, type SessionGrant, type SessionState } from "./trajectory.ts";
 import { addApproval, describeScope, findExact, floorFor, readApprovals, reportProblems, revokeApprovals, sessionApprovals, similarApprovals, SESSION_APPROVAL_TTL_MS, type Approval, type ApprovalsView } from "./approvals.ts";
 import { createUnattended, unattendedDenial, type ProvenanceIo, type UnattendedState } from "./unattended.ts";
+import { loadConsoleKey, requestDigest, verifyAnswer } from "./console-auth.ts";
 import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isSessionChoice, type CardExtras } from "./card.ts";
 
 import { profileDefault, REGISTRY_KEY, resolveSecurity, securityPath, type SecuritySnapshot } from "./security-level.ts";
@@ -329,7 +331,7 @@ function seal(value: unknown, seen = new WeakSet<object>()): void {
 
 // The test hook's OS facts: each one present must be a function, or the real OS facts are used.
 function isProvenanceIo(v: unknown): v is ProvenanceIo {
-  return isRecord(v) && ["getuid", "mountinfo", "writable"].every((k) => v[k] === undefined || typeof v[k] === "function");
+  return isRecord(v) && ["getuid", "mountinfo", "writable", "namespaces", "subuid"].every((k) => v[k] === undefined || typeof v[k] === "function");
 }
 
 function actionHash(toolName: string, input: unknown): string {
@@ -351,13 +353,16 @@ const AUDIT_ROTATE_BYTES = 4 * 1024 * 1024;
 function audit(record: Record<string, unknown>): void {
   try {
     const filePath = auditPath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    // The default log is in the workspace a cloned repository controls, so it is written without
+    // following symlinks from the workspace root down (./shared/safe-fs.ts); an operator-set
+    // PI_KIT_FIREWALL_AUDIT_LOG is trusted. tests/workspace-symlink-smoke.ts pins this.
+    const options = process.env.PI_KIT_FIREWALL_AUDIT_LOG ? { mode: 0o600 } : { root: process.cwd(), mode: 0o600 };
     try {
-      if (fs.statSync(filePath).size > AUDIT_ROTATE_BYTES) fs.renameSync(filePath, `${filePath}.1`);
+      rotateFileSafe(filePath, AUDIT_ROTATE_BYTES, options);
     } catch {
-      /* absent, or another process rotated it first */
+      /* a refused rotation leaves the append below to refuse too */
     }
-    fs.appendFileSync(filePath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...record })}\n`, { mode: 0o600 });
+    appendFileSafe(filePath, `${JSON.stringify({ timestamp: new Date().toISOString(), ...record })}\n`, options);
   } catch {
     /* the audit log must never break a tool call */
   }
@@ -424,13 +429,17 @@ function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: st
   const agentName = field(field(ctx, "agent"), "name") || field(ctx, "agentName");
   const titleAgent: unknown = agentName || (process.env.PI_KIT_INTERNAL_CHILD ? "subagent" : "headless session");
   const workflowRun = workflowRunOf();
+  // The console and its answers sit where the agent works, so an answer counts only when the console
+  // signed it with its key, bound to these exact pending bytes (console-auth.ts). Without a usable key
+  // no answer could be accepted: report that at once instead of waiting for a timeout.
+  const key = loadConsoleKey({ create: false });
+  if (!key.ok) return Promise.resolve({ approved: false, timedOut: false, unavailable: `the human console's answer key cannot be used (${key.why})`, timeoutMs });
+  const pendingText = JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${String(titleAgent)})`, body, choices, autoModeRationale: note, timeoutMs, ...(workflowRun !== undefined && hash !== undefined ? { workflowRun, actionHash: hash } : {}) });
+  const digest = requestDigest(pendingText);
   try {
     fs.mkdirSync(pending, { recursive: true });
     fs.mkdirSync(resolved, { recursive: true });
-    fs.writeFileSync(
-      path.join(pending, `${id}.json`),
-      JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${String(titleAgent)})`, body, choices, autoModeRationale: note, timeoutMs, ...(workflowRun !== undefined && hash !== undefined ? { workflowRun, actionHash: hash } : {}) }),
-    );
+    fs.writeFileSync(path.join(pending, `${id}.json`), pendingText);
   } catch (error) {
     return Promise.resolve({ approved: false, timedOut: false, unavailable: `could not file the request in the human console at ${root} (${errorText(error)})`, timeoutMs });
   }
@@ -453,19 +462,30 @@ function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: st
       resolve({ timeoutMs, ...result });
     };
     const timer = setInterval(() => {
+      let value: unknown;
       try {
-        const value: unknown = JSON.parse(fs.readFileSync(path.join(resolved, `${id}.json`), "utf8"));
-        const answer = field(value, "answer");
-        const choice = typeof answer === "string" && choices?.includes(answer) ? answer : undefined;
-        const rawNote = field(value, "note");
-        const note = typeof rawNote === "string" && rawNote.trim() ? rawNote.trim().slice(0, 500) : undefined;
-        // Audit is best-effort (it swallows its own errors) and MUST never throw; finish()
-        // is called regardless and MUST stay unconditional so the promise always settles.
-        audit({ event: "human_console_resolved", toolName, id, approved: field(value, "approved") === true, choice });
-        finish({ approved: field(value, "approved") === true, timedOut: false, choice, note });
-        return;
+        value = JSON.parse(fs.readFileSync(path.join(resolved, `${id}.json`), "utf8"));
       } catch {
-        /* waiting */
+        value = undefined; /* waiting */
+      }
+      if (value !== undefined) {
+        const checked = verifyAnswer(key.key, { id, requestDigest: digest }, value);
+        if (checked.ok) {
+          const choice = checked.answer !== null && choices?.includes(checked.answer) ? checked.answer : undefined;
+          const note = checked.note?.trim() ? checked.note.trim().slice(0, 500) : undefined;
+          // Audit is best-effort (it swallows its own errors) and MUST never throw; finish()
+          // is called regardless and MUST stay unconditional so the promise always settles.
+          audit({ event: "human_console_resolved", toolName, id, approved: checked.approved, choice });
+          finish({ approved: checked.approved, timedOut: false, choice, note });
+          return;
+        }
+        // A forged, foreign or rewritten answer is dropped and the wait goes on (at worst a timeout).
+        audit({ event: "human_console_answer_rejected", toolName, id, why: checked.why });
+        try {
+          fs.unlinkSync(path.join(resolved, `${id}.json`));
+        } catch {
+          /* already gone */
+        }
       }
       if (signal?.aborted || Date.now() >= deadline) {
         // Invariant: audit() is non-throwing and best-effort; finish() must remain
@@ -1353,7 +1373,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       // Manual → automatic approvals lowers oversight (a model judge decides instead of you), so it
       // is chosen at the terminal of an interactive root session, never from a linked phone or the
       // web console, like weakening /security. Turning approvals back to manual never asks. It
-      // writes both the saved global mode and (when present) the project auto-mode.json, so it asks
+      // writes the saved global mode (and the legacy file in PI_KIT_AUTO_MODE_STATE_DIR), so it asks
       // unless the saved mode, the effective mode and an existing project file are all already
       // auto: an env PI_KIT_AUTO_MODE=1 run or a project auto-mode.json cannot make the global mode
       // auto unasked, and neither a saved auto mode nor PI_KIT_AUTO_MODE=1 (which masks the file in
@@ -1370,11 +1390,12 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       }
       try {
         writeConfig({ mode: enabled ? "auto" : "manual", source: "user" });
-        const legacy = legacyAutoModePath(cwd);
-        if (process.env.PI_KIT_AUTO_MODE_STATE_DIR || fs.existsSync(legacy)) {
-          fs.mkdirSync(path.dirname(legacy), { recursive: true });
-          fs.writeFileSync(legacy, JSON.stringify({ enabled }));
-        }
+        // The legacy state file is rewritten only in an operator-set PI_KIT_AUTO_MODE_STATE_DIR (no
+        // symlink followed). A project's own .pi/auto-mode.json is never written: it is repository
+        // content, and following a committed link there let /auto off truncate an arbitrary file.
+        // A project file that pins manual is reported below and must be removed by hand.
+        const stateDir = process.env.PI_KIT_AUTO_MODE_STATE_DIR?.trim();
+        if (stateDir) writeFileSafe(legacyAutoModePath(cwd), JSON.stringify({ enabled }), { root: stateDir });
         const eff = resolveMode(cwd);
         say(ctx, `auto-mode: ${enabled ? "enabled" : "disabled"}${eff.mode !== (enabled ? "auto" : "manual") ? ` (but ${eff.source} overrides it: ${eff.mode})` : ""}`, "info");
       } catch (error) {

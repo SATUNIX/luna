@@ -12,6 +12,7 @@ import { capabilityMatrixContent } from "./capability-matrix.ts";
 import { extensionsCatalogueDrift, type ExtensionManifest } from "./registry.ts";
 import { noticesContent } from "./gen-notices.ts";
 import { checkDocsNav } from "./docs-nav-check.ts";
+import { checkSharedCopies, SHARED_COPIES } from "./gen-shared.ts";
 import { skillsCatalogueContent } from "./skills-catalogue.ts";
 import { buildDistributionContract, distributionContractProblems } from "./distribution-contract.ts";
 import { buildCommandContractInput, commandContractProblems } from "./lib/command-contract.ts";
@@ -624,13 +625,22 @@ if (fs.existsSync(sourcesPath)) {
     fail("workflow redaction copy check: redact.ts, trace-ledger or secret-guard source missing");
   }
 
+  // 8d''. Shared security helpers: every generated copy of packages/core/shared/* (safe-fs, redact,
+  //       safe-regex, kit-source, inline-guard) is byte-identical to its source plus the fixed header (packages/core/gen-shared.ts).
+  console.log("\n[verify] shared helper copies");
+  {
+    const problems = checkSharedCopies(ROOT);
+    for (const p of problems) fail(p);
+    if (!problems.length) console.log(`  OK: ${Object.values(SHARED_COPIES).reduce((n, list) => n + list.length, 0)} generated copies match packages/core/shared/`);
+  }
+
   // 8e. Skills catalogue drift + skills frontmatter lint (Epic 3 Sprint 3.1).
   console.log("\n[verify] skills catalogue");
   const skillsCatalogueScript = path.join(CORE_DIR, "skills-catalogue.ts");
   if (fs.existsSync(skillsCatalogueScript)) {
     // Kept in parity with packages/core/skills-catalogue.ts's CATEGORY_ORDER by hand (duplicated,
     // not imported - importing that script would run its top-level doc-generation code
-    // as a side effect). M-06 fix: previously only checked that "category:" was present
+    // as a side effect). It previously only checked that "category:" was present
     // and non-empty, not that its VALUE was one of the recognized categories - a typo
     // silently filed the skill nowhere in the generated catalogue instead of failing loud.
     const KNOWN_SKILL_CATEGORIES = new Set([

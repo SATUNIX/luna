@@ -68,6 +68,17 @@ Every source file is strict TypeScript, and `check:all` keeps it that way
   type in a test uses `@ts-expect-error` with a comment saying what runtime check it proves.
 - Shared shapes are defined once next to their schema and imported, never redeclared.
 
+## Security standard
+
+Every change also follows the [secure development standard](docs/security-standard.md): file
+writes through the safe-write helper, temporary files and modes, regular-expression safety, the
+one redaction table, network clients, child processes, untrusted data, dependency adoption,
+suppressions and the review rules. Each rule names the lint rule or test that enforces it. The
+[threat model](docs/threat-model.md) says why, and [security controls](docs/security-controls.md)
+lists every control with its test and CI job. A security fix lands with a regression test that
+uses a harmless command in place of anything destructive, and fixes the whole class of the
+problem, not only the instance reported.
+
 ## Per-extension contract
 
 1. One folder per extension: `packages/extensions/src/<name>/` or `packages/extensions/third_party/<name>/`.
@@ -108,9 +119,12 @@ do not hand-edit them.
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 GitHub (`SATUNIX/pi-system`) is the authoritative repository: fork or branch, then open a pull
-request against `main`. `main` needs one approving review, plus the owner's review for the paths
-in `.github/CODEOWNERS` (CI, release tooling, the installer, profiles, policies, the firewall and
-the other security extensions, and the security documents). The GitLab copy is a read-only
+request against `main`. The `main` ruleset declared in `.github/expected-settings.json` requires
+one approving review, the owner's review for the paths in `.github/CODEOWNERS` (CI, release
+tooling, the installer, profiles, policies, the firewall and the other security extensions, the
+tests and the security documents), approval of the last push, resolved review threads and every
+required check; GitHub enforces it ([CI security](docs/ci-security.md#repository-settings)). The
+author of a pull request, person or agent, never approves it. The GitLab copy is a read-only
 mirror; do not open merge requests there. See [repository topology](docs/repository-topology.md).
 
 Every pushed branch is public at once. Before your first push, install the leak scan:
@@ -120,5 +134,6 @@ node packages/core/prepush-scan.ts install
 ```
 
 It refuses a push whose commits carry a private host name, a home-directory path, a private
-address, a key or token shape, or a file under `internal/`, `reviews/` or `examples/engagement/`
+address, a key or token shape, a private review or roadmap item ID (`SR`, `R`, `P`, `M` or `D`,
+a hyphen and a number: describe the item instead), or a file under `internal/`, `reviews/` or `examples/engagement/`
 (`tests/prepush-scan-smoke.ts`).

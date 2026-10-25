@@ -2,7 +2,7 @@
 
 Worktree and branch manager for isolated pi sessions. Provides tools to create, list, switch, discard, and merge git branches so risky or experimental tasks run in isolation from the main working tree.
 
-Leases are stored in `PI_KIT_BRANCH_LEASES_FILE` or `.pi/branch-leases.json`. `PI_KIT_MAX_BRANCHES` overrides the maximum number of concurrent branches. Worktrees are created under the system temp directory in `pi-branch-lab/<repo key>/<taskId>`, where the repo key is the first 12 hex characters of the SHA-256 of `git rev-parse --show-toplevel`, so two repositories can lease the same `taskId` (`tests/branch-lab-smoke.ts`). At session start, leases whose worktree directory no longer exists (for example after a reboot clears the temp directory) are dropped from the lease file; their `pi/<taskId>` branches are kept (`tests/branch-lab-smoke.ts`).
+Leases are stored in `PI_KIT_BRANCH_LEASES_FILE` or `.pi/branch-leases.json`. `PI_KIT_MAX_BRANCHES` overrides the maximum number of concurrent branches. Worktrees are created under a per-user directory in the system temp directory, `pi-kit-<uid>/pi-branch-lab/<repo key>/<taskId>`; `pi-kit-<uid>` is created with mode 0700, and one that is a symbolic link, not a directory or owned by another user is refused (`tests/branch-lab-smoke.ts`), where the repo key is the first 12 hex characters of the SHA-256 of `git rev-parse --show-toplevel`, so two repositories can lease the same `taskId` (`tests/branch-lab-smoke.ts`). At session start, leases whose worktree directory no longer exists (for example after a reboot clears the temp directory) are dropped from the lease file; their `pi/<taskId>` branches are kept (`tests/branch-lab-smoke.ts`).
 
 Tools:
 

@@ -6,6 +6,7 @@ import path from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { redact } from "./shared/redact.ts";
 
 // Wraps the mem0 REST API. Requires MEM0_API_URL (e.g. http://localhost:8000) and optionally MEM0_API_KEY.
 // See packages/container/mcp-servers/memory-mcp/README.md for Docker setup. Status experimental: needs the mem0/Qdrant service running,
@@ -38,6 +39,21 @@ function cwdRelativeMcpTarget(command: string, args: readonly string[]): string 
   }
   return null;
 }
+
+/**
+ * Why the API key must not be sent to `url`, or null. The key goes in an Authorization header, so
+ * plain http:// is allowed only to a loopback host, or when MEM0_ALLOW_INSECURE_HTTP=1 says the
+ * operator accepts sending it unencrypted. Without a key there is nothing to protect.
+ */
+export function insecureKeyProblem(url: URL, hasKey: boolean, allowInsecure = process.env.MEM0_ALLOW_INSECURE_HTTP === "1"): string | null {
+  if (!hasKey || url.protocol !== "http:" || allowInsecure) return null;
+  const host = url.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return null;
+  return `mem0: refusing to send MEM0_API_KEY over plain http:// to ${host}; use https://, or set MEM0_ALLOW_INSECURE_HTTP=1`;
+}
+
+/** Largest mem0 response body read, in bytes. */
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 const CIRCUIT_THRESHOLD = 3;
 const REQUEST_TIMEOUT_MS = 5000;
@@ -79,6 +95,11 @@ function request(method: string, urlStr: string, body?: unknown): Promise<{ stat
       reject(new Error(`mem0: invalid URL "${urlStr}"`));
       return;
     }
+    const insecure = insecureKeyProblem(url, MEM0_KEY !== "");
+    if (insecure) {
+      reject(new Error(insecure));
+      return;
+    }
     const payload = body ? JSON.stringify(body) : undefined;
     const opts = {
       method,
@@ -91,7 +112,10 @@ function request(method: string, urlStr: string, body?: unknown): Promise<{ stat
     const transport = url.protocol === "https:" ? https : http;
     const req = transport.request(url, opts, (res) => {
       let buf = "";
-      res.on("data", (c: Buffer) => { buf += c.toString(); });
+      res.on("data", (c: Buffer) => {
+        buf += c.toString();
+        if (buf.length > MAX_RESPONSE_BYTES) req.destroy(new Error(`mem0: response larger than ${MAX_RESPONSE_BYTES} bytes`));
+      });
       res.on("end", () => {
         clearTimeout(timer);
         // An HTTP error is a failure, not a successful response: resolve only 2xx so
@@ -156,9 +180,12 @@ export default function (_pi: ExtensionAPI) {
       text: Type.String({ description: "Memory text to store" }),
     }),
     async execute(_id, params) {
+      // A memory outlives the session and leaves the process, so the kit's secret shapes are masked
+      // first (./shared/redact.ts; tests/redaction-corpus-smoke.ts).
+      const text = redact(params.text);
       if (MEMORY_BACKEND !== "mem0") {
         try {
-          const result = await memoryMcpTransport.post("memory_store", { topic: "mem0_add", content: params.text, tags: ["mem0-compatible"] });
+          const result = await memoryMcpTransport.post("memory_store", { topic: "mem0_add", content: text, tags: ["mem0-compatible"] });
           return { content: [{ type: "text" as const, text: `memory MCP add: ${JSON.stringify(result.data)}` }], details: undefined };
         } catch (err) {
           return mcpNotConfigured(err);
@@ -166,7 +193,7 @@ export default function (_pi: ExtensionAPI) {
       }
       if (!MEM0_URL) return notConfigured();
       if (circuitOpen) return circuitDegraded();
-      const result = await safeRequest("POST", `${MEM0_URL}/memories/`, { messages: [{ role: "user", content: params.text }], user_id: MEM0_USER });
+      const result = await safeRequest("POST", `${MEM0_URL}/memories/`, { messages: [{ role: "user", content: text }], user_id: MEM0_USER });
       if (!result.ok) return { content: [{ type: "text" as const, text: `mem0 error: ${String(result.err)}` }], details: undefined };
       return { content: [{ type: "text" as const, text: `mem0 add: ${JSON.stringify(result.data)}` }], details: undefined };
     },

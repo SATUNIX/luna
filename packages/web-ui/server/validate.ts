@@ -89,11 +89,41 @@ export function requireObject(value: unknown): Record<string, unknown> {
 	return value;
 }
 
+/** Is `child` inside `parent` (both already resolved)? */
+function inside(child: string, parent: string): boolean {
+	const rel = path.relative(parent, child);
+	return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/**
+ * A session file to resume: a `.jsonl` regular file inside the sessions directory (symbolic links
+ * resolved), given as an absolute path. It reaches pi's argv as the value of `--session`, so a value
+ * that looks like an option, or names a file elsewhere, is refused. Resuming only ever needs a file
+ * pi itself wrote under its sessions directory (routes.ts finds it by session id).
+ */
+export function sessionFileToResume(value: unknown, sessionsDir: string | undefined): string {
+	if (typeof value !== "string" || value === "" || value.length > 4096 || value.includes("\0")) throw new HttpError(400, "invalid session file");
+	if (value.startsWith("-")) throw new HttpError(400, "invalid session file: it looks like an option");
+	if (!path.isAbsolute(value) || !value.endsWith(".jsonl")) throw new HttpError(400, "invalid session file: an absolute path to a .jsonl session is expected");
+	if (!sessionsDir) throw new HttpError(400, "invalid session file: no sessions directory to resume from");
+	let real: string;
+	let root: string;
+	try {
+		real = fs.realpathSync(value);
+		root = fs.realpathSync(sessionsDir);
+	} catch {
+		throw new HttpError(400, "invalid session file: it does not exist");
+	}
+	if (!inside(real, root)) throw new HttpError(400, "invalid session file: it is not in the sessions directory");
+	if (!fs.statSync(real).isFile()) throw new HttpError(400, "invalid session file: not a regular file");
+	return real;
+}
+
 /**
  * Validate the fields of a spawn request. The returned object is what createSession uses,
- * so nothing unvalidated ever reaches argv.
+ * so nothing unvalidated ever reaches argv. `sessionsDir` is where a resumed session must live.
  */
-export function sanitizeSpawnConfig(input: unknown, { defaultCwd }: { defaultCwd: string }): SpawnConfig {
+export function sanitizeSpawnConfig(input: unknown, { defaultCwd, sessionsDir }: { defaultCwd: string; sessionsDir?: string }): SpawnConfig {
 	const config = requireObject(input);
 	const cwdRaw = config.cwd === undefined || config.cwd === null || config.cwd === "" ? defaultCwd : config.cwd;
 	if (typeof cwdRaw !== "string" || cwdRaw.length > 4096 || cwdRaw.includes("\0") || !path.isAbsolute(cwdRaw)) {
@@ -115,13 +145,7 @@ export function sanitizeSpawnConfig(input: unknown, { defaultCwd }: { defaultCwd
 	if (agentSource !== undefined && agentSource !== "user" && agentSource !== "project") {
 		throw new HttpError(400, "invalid agent source");
 	}
-	let resumeSessionFile: string | undefined;
-	if (config.resumeSessionFile !== undefined) {
-		if (typeof config.resumeSessionFile !== "string" || config.resumeSessionFile.includes("\0")) {
-			throw new HttpError(400, "invalid session file");
-		}
-		resumeSessionFile = config.resumeSessionFile;
-	}
+	const resumeSessionFile = config.resumeSessionFile === undefined ? undefined : sessionFileToResume(config.resumeSessionFile, sessionsDir);
 	const agent = optionalString(config.agent, "agent", { max: 64 });
 	const provider = optionalString(config.provider, "provider", { pattern: MODEL_ARG_RE });
 	const model = optionalString(config.model, "model", { pattern: MODEL_ARG_RE });

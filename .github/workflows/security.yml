@@ -64,11 +64,35 @@ jobs:
           --config p/secrets --config p/owasp-top-ten
           --sarif --output semgrep.sarif
       # Semgrep keeps `nosemgrep`-suppressed findings in SARIF (marked `suppressions`), and code
-      # scanning raises them as alerts anyway; drop them so a reviewed suppression stays quiet.
-      - run: >-
-          python3 -c "import json; p = 'semgrep.sarif'; d = json.load(open(p));
-          [run.update(results=[r for r in run.get('results', []) if not r.get('suppressions')]) for run in d['runs']];
-          json.dump(d, open(p, 'w'))"
+      # scanning raises them as alerts anyway; drop them so a reviewed suppression stays quiet, but
+      # list every one in the job summary so a suppression is never invisible. Each inline
+      # suppression is also recorded in packages/core/scan-suppressions.json
+      # (tests/suppression-inventory-smoke.ts).
+      - name: Move suppressed results to the job summary
+        run: |
+          python3 - <<'PY'
+          import json, os
+          path = "semgrep.sarif"
+          with open(path) as f:
+              data = json.load(f)
+          suppressed = []
+          for run in data["runs"]:
+              kept = []
+              for result in run.get("results", []):
+                  if result.get("suppressions"):
+                      loc = (result.get("locations") or [{}])[0].get("physicalLocation", {})
+                      where = "%s:%s" % (loc.get("artifactLocation", {}).get("uri", "?"), loc.get("region", {}).get("startLine", "?"))
+                      suppressed.append("| `%s` | `%s` |" % (result.get("ruleId", "?"), where))
+                  else:
+                      kept.append(result)
+              run["results"] = kept
+          with open(path, "w") as f:
+              json.dump(data, f)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Semgrep: %d suppressed result(s)\n\n" % len(suppressed))
+              if suppressed:
+                  f.write("| Rule | Location |\n|---|---|\n" + "\n".join(suppressed) + "\n")
+          PY
       - if: always()
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
@@ -80,8 +104,10 @@ jobs:
           --config p/secrets --config p/owasp-top-ten
 
   # Secret scanning over the FULL git history, with the repository's .gitleaks.toml (default
-  # rules plus a line-level allowlist for synthetic test fixtures). The binary is fetched from
-  # the upstream release and verified against a pinned checksum.
+  # rules plus path-bound [[allowlists]] for synthetic test fixtures: with condition = "AND", a
+  # finding is allowed only when its file matches the allowlist's paths and its line matches its
+  # regexes). The binary is fetched from the upstream release and verified against a pinned
+  # checksum.
   gitleaks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -119,6 +145,20 @@ jobs:
       # dev toolchain (the pi framework, TypeScript, ajv). High and critical findings fail the
       # job; triage accepted upstream advisories in docs/supply-chain.md.
       - run: npm audit --audit-level=high
+      # Every other lockfile lockfile-check discovers (the MCP servers the container installs),
+      # each installed without scripts and audited where it lives. The list is captured by a
+      # checked assignment: `--list` exits non-zero on an error or when it finds no lockfile, and a
+      # failing command substitution in the `for` line would be ignored.
+      - name: Audit every other lockfile
+        run: |
+          locks="$(node packages/core/lockfile-check.ts --list)"
+          for lock in $locks; do
+            dir="$(dirname "$lock")"
+            if [ "$dir" = "." ]; then continue; fi
+            echo "::group::$dir"
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund && npm audit signatures && npm audit --audit-level=high)
+            echo "::endgroup::"
+          done
 
   # Every manifest in the tree, not only the root lockfile: the MCP server lockfiles under
   # packages/container/mcp-servers and requirements-docs.txt are scanned too, and a lockfile
@@ -140,9 +180,10 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Read-only: the result is in the job summary rather than a PR comment, so the release
+    # workflow can call this workflow without granting pull-requests: write.
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,7 +196,32 @@ jobs:
           # json-schema-typed 8.0.2 (pulled in by @modelcontextprotocol/sdk) is BSD-2-Clause code; the
           # detected "AND JSON" comes from the IETF JSON Schema description text it bundles.
           allow-dependencies-licenses: pkg:npm/json-schema-typed@8.0.2
-          comment-summary-in-pr: on-failure
+          comment-summary-in-pr: never
+
+  # PRs only: the pre-push leak scan over the pull request's commits, exactly as the hook runs it,
+  # with the exceptions read from the base branch (a contributor without the hook, or a push with
+  # --no-verify, is still checked before merge). A match admitted only by an exception this pull
+  # request adds fails, and so does a change to packages/core/leak-scan-exceptions.json mixed with
+  # other files: new exceptions land in their own pull request first. There is no bypass for
+  # the release bot: a release whose export changes the exceptions arrives as an exceptions-only
+  # pull request plus a release pull request stacked on it, and this job fails on the release one
+  # until the exceptions one has merged (docs/releasing.md, "Releases that change scan exceptions").
+  leak-scan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+      - name: Leak scan of the pull request's commits
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node packages/core/prepush-scan.ts range --base "origin/${BASE_REF}" "origin/${BASE_REF}..HEAD"
 
   # The workflows are code too: template injection, over-broad permissions, credential
   # persistence, unpinned actions, dangerous triggers.

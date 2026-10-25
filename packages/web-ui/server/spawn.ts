@@ -10,7 +10,7 @@ import * as crypto from "node:crypto";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { isRecord, parseJson } from "../../core/lib/guard.ts";
-import { PI_BIN, RUNTIME_DIR, DEFAULT_CWD } from "./config.ts";
+import { PI_BIN, RUNTIME_DIR, DEFAULT_CWD, SESSIONS_DIR } from "./config.ts";
 import { agentBody, resolveAgent } from "./agents.ts";
 import { HttpError, sanitizeSpawnConfig, type SpawnConfig, type StreamingBehaviour, type ThinkingLevel } from "./validate.ts";
 
@@ -404,7 +404,7 @@ function buildArgv(config: SpawnConfig): string[] {
  * Every field is validated (validate.ts) before it can reach argv or the filesystem.
  */
 export async function createSession(input: unknown): Promise<PiRpcProcess> {
-	const config = sanitizeSpawnConfig(input, { defaultCwd: DEFAULT_CWD });
+	const config = sanitizeSpawnConfig(input, { defaultCwd: DEFAULT_CWD, sessionsDir: SESSIONS_DIR });
 	const cwd = config.cwd;
 
 	const argv = buildArgv(config);

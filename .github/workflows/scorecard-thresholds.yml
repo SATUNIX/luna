@@ -1,0 +1,50 @@
+name: scorecard-thresholds
+
+# The gate on OpenSSF Scorecard scores. scorecard.yml publishes the rating, which fails
+# nothing; this runs Scorecard again without publishing and fails when a gating check scores
+# below its floor in .github/scorecard-thresholds.json (a check that cannot be scored, -1, fails
+# too). Weekly and manual only, so a newly published advisory turns the scheduled run red without
+# blocking unrelated merges.
+
+on:
+  schedule:
+    - cron: "11 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scorecard-thresholds-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  thresholds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # read the repository and the thresholds file
+      actions: read # read workflow runs for the CI-Tests and Dangerous-Workflow checks
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.json
+          results_format: json
+          publish_results: false
+      - name: Gating checks meet their floors
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const floors = JSON.parse(fs.readFileSync(".github/scorecard-thresholds.json", "utf8")).floors;
+            const checks = new Map(JSON.parse(fs.readFileSync("results.json", "utf8")).checks.map((c) => [c.name, c.score]));
+            let failed = 0;
+            for (const [name, floor] of Object.entries(floors)) {
+              const score = checks.has(name) ? checks.get(name) : -1;
+              const pass = score >= floor;
+              console.log(`${pass ? "ok  " : "FAIL"} ${name}: ${score} (floor ${floor})`);
+              if (!pass) failed++;
+            }
+            process.exit(failed ? 1 : 0);
+          '

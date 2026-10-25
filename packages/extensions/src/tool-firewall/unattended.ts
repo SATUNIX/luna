@@ -28,7 +28,16 @@
 //     directory) and must have a provenance a process running as this user cannot fake: it is on a
 //     read-only mount (the supervisor mounts /run read-only) or it is owned by another user and this
 //     process cannot write it. A file the same user created and then `chmod 0444`-ed proves nothing, so
-//     it is refused, for root too.
+//     it is refused, for root too;
+//   - neither proof counts outside the initial user namespace: an unprivileged user can `unshare` a user
+//     and mount namespace (and a PID namespace, so that its own process is PID 1 there), bind-mount a
+//     file read-only and appear to own nothing. Both routes therefore need this process to be in the
+//     initial user namespace (its namespace id is the kernel's fixed initial one and its uid map is the
+//     identity map), where an unprivileged user cannot make a mount namespace; a read-only mount
+//     counts only in PID 1's mount namespace as well, and another user's file never when the owner is
+//     one of this user's subordinate ids (/etc/subuid), which the user can create files as without
+//     root. A worker under a rootless engine runs in a user namespace its user made, which looks the
+//     same from inside as one an agent made, so there the mode fails closed (normal rules apply).
 // Children (subagents, grandchildren) are separate processes that inherit the environment, read the same
 // contract and validate it themselves: a child that cannot read the contract is not unattended.
 //
@@ -38,6 +47,7 @@
 // guard rail, and the container (not this file) is the boundary.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const KNOWN_BOUNDARIES = new Set(["container"]);
@@ -108,9 +118,20 @@ function normaliseRemotes(raw: unknown, warnings: string[]): string[] {
   return [...new Set(out)];
 }
 
-// The facts the provenance rule reads, injectable so a test can present a mount table or an owner
-// without root. Only code running inside the pi process can supply them: the environment cannot.
-export type ProvenanceIo = { getuid?: () => number; mountinfo?: () => string | null; writable?: (file: string) => boolean };
+// The namespaces of this process and of PID 1 (`/proc/<pid>/ns/{user,mnt}` link text, null when it
+// cannot be read: PID 1 of a host belongs to root) and this process's /proc/self/uid_map.
+export type NsIds = { user: string; mnt: string };
+export type NamespaceFacts = { self: NsIds | null; init: NsIds | null; uidMap: string | null };
+
+// The facts the provenance rule reads, injectable so a test can present a mount table, an owner or a
+// namespace without root. Only code running inside the pi process can supply them: the environment cannot.
+export type ProvenanceIo = {
+  getuid?: () => number;
+  mountinfo?: () => string | null;
+  writable?: (file: string) => boolean;
+  namespaces?: () => NamespaceFacts;
+  subuid?: () => string | null;
+};
 
 // Mount points are octal-escaped in /proc/self/mountinfo (a space is \040).
 const unescapeMount = (s: string): string => s.replace(/\\([0-7]{3})/g, (_, o: string) => String.fromCharCode(parseInt(o, 8)));
@@ -148,14 +169,71 @@ const canWrite = (file: string): boolean => {
   }
 };
 
+const readNsIds = (pid: string): NsIds | null => {
+  try {
+    return { user: fs.readlinkSync(`/proc/${pid}/ns/user`), mnt: fs.readlinkSync(`/proc/${pid}/ns/mnt`) };
+  } catch {
+    return null;
+  }
+};
+const readText = (file: string): string | null => {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+};
+const readNamespaces = (): NamespaceFacts => ({ self: readNsIds("self"), init: readNsIds("1"), uidMap: readText("/proc/self/uid_map") });
+
+// Where this process stands: in PID 1's user and mount namespaces ("same"), in others ("different"),
+// or unknown (PID 1's cannot be read, or there is no /proc); and whether its user namespace is the
+// initial one (the identity uid map; a platform without /proc/self/uid_map has no user namespaces).
+// The initial user namespace has a fixed id on Linux (PROC_USER_INIT_INO); a namespace a user makes never has it.
+export const INITIAL_USER_NS = "user:[4026531837]";
+
+export function namespaceStanding(facts: NamespaceFacts, platform: string = process.platform): { kind: "same" | "different" | "unknown"; initialUser: boolean } {
+  const kind = facts.self && facts.init ? (facts.self.user === facts.init.user && facts.self.mnt === facts.init.mnt ? "same" : "different") : "unknown";
+  const initialUser = platform !== "linux" ? facts.uidMap === null : facts.self?.user === INITIAL_USER_NS && facts.uidMap !== null && /^\s*0\s+0\s+4294967295\s*$/.test(facts.uidMap);
+  return { kind, initialUser };
+}
+
+// Is `uid` one of this user's subordinate ids (/etc/subuid: `name-or-uid:start:count`)? A user can
+// create files owned by those ids without root (newuidmap), so such an owner is not "another user".
+export function isSubordinateId(uid: number, subuid: string | null, self: { uid: number; name: string }): boolean {
+  for (const line of (subuid ?? "").split("\n")) {
+    const [who, start, count] = line.trim().split(":");
+    if (!who || (who !== self.name && who !== String(self.uid))) continue;
+    const from = Number(start);
+    const n = Number(count);
+    if (Number.isInteger(from) && Number.isInteger(n) && uid >= from && uid < from + n) return true;
+  }
+  return false;
+}
+
+const userName = (): string => {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return "";
+  }
+};
+
 // Could a process running as this user have written the contract? Only a read-only mount, or a file
-// another user owns and this process cannot write, is proof that it did not.
+// another user owns and this process cannot write, is proof that it did not, and only in namespaces
+// this user could not have made (see the header).
 export function contractProvenance(file: string, st: { uid: number }, io: ProvenanceIo = {}): { ok: true; via: string } | { ok: false; why: string } {
+  const ns = namespaceStanding((io.namespaces ?? readNamespaces)());
+  if (!ns.initialUser) return { ok: false, why: `this process is not in the initial user namespace, so it may be in one this user made (with unshare, or a rootless container engine), where a read-only mount or another owner of the contract ${file} proves nothing; unattended mode needs a worker in the initial user namespace` };
+  if (ns.kind === "different") return { ok: false, why: `this process is not in the user and mount namespaces of PID 1, so it may be in a namespace this user made, where a read-only mount or another owner of the contract ${file} proves nothing` };
   const info = (io.mountinfo ?? readMountinfo)();
   const held = info ? mountHolding(file, info) : null;
-  if (held?.ro) return { ok: true, via: `the read-only mount ${held.point}` };
+  if (held?.ro && ns.kind === "same") return { ok: true, via: `the read-only mount ${held.point}` };
   const uid = (io.getuid ?? (() => (typeof process.getuid === "function" ? process.getuid() : -1)))();
-  if (uid !== -1 && st.uid !== uid && !(io.writable ?? canWrite)(file)) return { ok: true, via: "a file owned by another user that this process cannot write" };
+  if (uid !== -1 && st.uid !== uid && !(io.writable ?? canWrite)(file)) {
+    if (isSubordinateId(st.uid, (io.subuid ?? (() => readText("/etc/subuid")))(), { uid, name: userName() })) return { ok: false, why: `the contract ${file} is owned by uid ${st.uid}, one of this user's subordinate ids, which this user can create files as without root` };
+    return { ok: true, via: "a file owned by another user that this process cannot write" };
+  }
+  if (held?.ro) return { ok: false, why: `the contract ${file} is on a read-only mount, but PID 1's namespaces cannot be read to show the mount was not made in a namespace this user created (the supervisor starts the worker in the container's own namespaces)` };
   return { ok: false, why: `the contract ${file} is neither on a read-only mount nor owned by another user, so a process running as this user could have written it (the supervisor mounts /run read-only)` };
 }
 

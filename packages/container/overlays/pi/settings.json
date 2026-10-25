@@ -13,7 +13,7 @@
     "maxRetries": 2
   },
   "packages": [
-    "npm:pi-mcp-adapter@6.0.0"
+    "/opt/pi-agent/tools/node_modules/pi-mcp-adapter"
   ],
   "extensions": [
     "-builtin:mcp"

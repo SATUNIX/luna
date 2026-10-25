@@ -28,11 +28,15 @@ working here never sees this file unless it reads it: the safety rules below are
   pushed branch is published at once. Develop on a branch and open a pull request there; the
   GitLab copy is a read-only mirror. Install the pre-push leak scan in every clone you push from
   (`node packages/core/prepush-scan.ts install`, `docs/repository-topology.md`) and never skip it
-  with `--no-verify`. An agent never approves or merges its own pull request. Keep private notes,
+  with `--no-verify`. An agent never approves or merges its own pull request (the review rule is
+  declared in `.github/expected-settings.json` and enforced by GitHub). Keep private notes,
   review evidence and scratch work out of the repository.
 - **Releasing is an operator action.** An agent may prepare a release branch and a draft pull
   request. It must not create or push a tag, publish a package, image or release, merge a pull
   request, or change repository or account settings. See `docs/releasing.md`.
+- Follow the secure development standard (`docs/security-standard.md`) for file writes, temporary
+  files, regular expressions, redaction, network clients, child processes and suppressions, and
+  fix the whole class of a security finding, not only the instance reported.
 - All code is strict TypeScript; follow "TypeScript standard" in `CONTRIBUTING.md`. Run
   `npm run test:typecheck` and `npm run test:lint` before considering a code change done, and
   `npm run build:web` after editing `packages/web-ui/src/` (commit the regenerated `.js` with it).

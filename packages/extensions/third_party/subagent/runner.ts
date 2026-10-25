@@ -38,6 +38,7 @@ import {
   toText,
 } from "./config.ts";
 import type { AgentConfig, SingleResult, SpawnChild, UsageStats } from "./types.ts";
+import { createFileExclusive } from "./shared/safe-fs.ts";
 
 // Operator-owned exact-role grants include the complete role definition, including its
 // optional model frontmatter. The execution policy decides whether it is used.
@@ -66,7 +67,7 @@ function writePromptTempFile(agentName: string, prompt: string): { dir: string; 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
   const safeName = agentName.replace(/[^\w.-]+/g, "_");
   const filePath = path.join(dir, `prompt-${safeName}.md`);
-  fs.writeFileSync(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
+  createFileExclusive(filePath, prompt, { root: dir, mode: 0o600 });
   return { dir, filePath };
 }
 
@@ -387,7 +388,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
       if (structured) {
         if (!tmpDir) tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
         schemaPath = path.join(tmpDir, "result-schema.json");
-        fs.writeFileSync(schemaPath, JSON.stringify(schema), { encoding: "utf-8", mode: 0o600 });
+        createFileExclusive(schemaPath, JSON.stringify(schema), { root: tmpDir, mode: 0o600 });
       }
       // The task goes over stdin (merged into the prompt by print mode), never argv: see
       // ChildRunOptions.stdin.

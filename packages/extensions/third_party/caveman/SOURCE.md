@@ -24,3 +24,4 @@
     `detailTriggers` entries in the config are ignored.
   - The config file is read as unknown and checked: one that is not a JSON object, or a
     `defaultLevel` that is not a known level, falls back to the defaults (nothing pins this).
+  - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).

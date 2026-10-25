@@ -12,3 +12,4 @@
     `.pi/ctx-contributions/sessions/<session-id>/plan-mode.json` (flat directory when pi exposes no
     session id), matching the other producers (B-005).
   - 2026-10-15: typed for strict TypeScript (no behaviour change).
+  - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).

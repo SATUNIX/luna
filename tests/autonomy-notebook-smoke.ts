@@ -184,14 +184,13 @@ try {
     } finally { rm(dir); }
   });
 
-  await check("the copied redaction patterns are identical to memory-vault's", () => {
-    const block = (file: string): string => {
-      const text = fs.readFileSync(path.join(ROOT, file), "utf8");
-      const m = /const SECRET_PATTERNS: RegExp\[\] = \[[\s\S]*?\n\];/.exec(text);
-      assert.ok(m, `${file} has a SECRET_PATTERNS block`);
-      return m[0];
-    };
-    assert.equal(block("packages/autonomy/lib/notebook.ts"), block("packages/extensions/src/memory-vault/vault.ts"));
+  await check("the notebook and memory-vault redact with the kit's one canonical table, byte for byte", async () => {
+    // The notebook imports packages/core/shared/redact.ts; memory-vault holds its generated copy.
+    const notebookSrc = fs.readFileSync(path.join(ROOT, "packages/autonomy/lib/notebook.ts"), "utf8");
+    assert.match(notebookSrc, /from "\.\.\/\.\.\/core\/shared\/redact\.ts"/, "the notebook uses the canonical redactor");
+    assert.doesNotMatch(notebookSrc, /const SECRET_PATTERNS/, "the notebook keeps no private pattern list");
+    const { checkSharedCopies } = await import("../packages/core/gen-shared.ts");
+    assert.deepEqual(checkSharedCopies().filter((p) => p.includes("redact")), [], "every redactor copy matches the canonical table");
   });
 
   done();

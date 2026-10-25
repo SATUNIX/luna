@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadExtension, fakePi } from "../packages/core/eval/harness.ts";
+import { answerPending, startConsole } from "./console-answer.ts";
 
 function withCwd<T>(cwd: string, fn: () => T | Promise<T>): Promise<T> {
   const previous = process.cwd();
@@ -185,6 +186,9 @@ async function testBrokerResolvesWhenAuditFails() {
   const pendingDir = path.join(consoleDir, "pending");
   const restoreConsole = setEnv("PI_KIT_HUMAN_CONSOLE_DIR", consoleDir);
   const restoreDataRoot = setEnv("PENTEST_DATA_ROOT", dataRoot);
+  // The console answer key lives in the agent directory: keep it in this scratch workspace.
+  const restoreAgentDir = setEnv("PI_CODING_AGENT_DIR", path.join(workspace, "agent"));
+  startConsole(); // the console creates the answer key; requesters never do
   // Short deadline so the pre-fix timeout-branch throw is reached promptly; the broker
   // poll interval is unref'd, so a keepalive is held while the call is outstanding.
   const restoreTimeout = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "1500");
@@ -207,8 +211,7 @@ async function testBrokerResolvesWhenAuditFails() {
       originalAudit = fs.readFileSync(auditFile);
       // Corrupt the chain tail: every subsequent audit()/appendChainedJsonl() throws.
       fs.appendFileSync(auditFile, "CORRUPT-NOT-JSON\n");
-      fs.mkdirSync(path.join(consoleDir, "resolved"), { recursive: true });
-      fs.writeFileSync(path.join(consoleDir, "resolved", `${id}.json`), JSON.stringify({ id, approved: true }));
+      answerPending(consoleDir, id, { approved: true });
 
       const result = await Promise.race([
         call,
@@ -227,6 +230,7 @@ async function testBrokerResolvesWhenAuditFails() {
     process.removeListener("uncaughtException", onUncaught);
     clearInterval(keepAlive);
     restoreTimeout();
+    restoreAgentDir();
     restoreDataRoot();
     restoreConsole();
   }

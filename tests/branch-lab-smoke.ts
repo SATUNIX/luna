@@ -287,6 +287,15 @@ async function realGitSafety(): Promise<void> {
       assert.notEqual(pathB, pathA, "worktree paths must be keyed by repository");
       assert.equal(path.basename(pathB), sharedId);
       assert.equal(path.basename(path.dirname(path.dirname(pathB))), "pi-branch-lab");
+      // The worktrees live under a per-user parent, not a shared name in the temp directory.
+      const userRoot = path.dirname(path.dirname(path.dirname(pathB)));
+      const uid = typeof process.getuid === "function" ? process.getuid() : null;
+      if (uid !== null) {
+        assert.equal(path.basename(userRoot), `pi-kit-${uid}`, "the worktree parent is named for this user");
+        const st = fs.lstatSync(userRoot);
+        assert.ok(st.isDirectory() && !st.isSymbolicLink() && st.uid === uid, "the per-user parent is this user's own directory");
+        assert.equal(st.mode & 0o077, 0, "the per-user parent is private (0700)");
+      }
     });
 
     await withCwd(repoA, async () => {

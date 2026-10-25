@@ -9,6 +9,7 @@ import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, i
 import type * as Approvals from "../packages/extensions/src/tool-firewall/approvals.ts";
 import type * as Feedback from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { array, number, object, optional, parseJsonAs, string, unknownValue } from "../packages/core/lib/guard.ts";
+import { answerPending, startConsole } from "./console-answer.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
 /** What the firewall's tool_call handler returns when it blocks a call. */
@@ -59,6 +60,7 @@ const restores = [
   setEnv("PI_KIT_FIREWALL_ROOT_SESSION", undefined),
   setEnv("PI_KIT_INTERNAL_CHILD", undefined),
 ];
+startConsole(); // the console creates the answer key; requesters never do
 // The firewall broker's poll timer is unref'd in production; this offline harness has no other
 // ref'd handles while it awaits a broker resolution/timeout, so hold the loop open.
 const keepAlive = setInterval(() => {}, 1000);
@@ -481,8 +483,7 @@ try {
       assert.ok(req, "broker request written");
       assert.ok(req.choices.some((c) => /^Allow for this session \(similar steps/.test(c)), "the console gets the full menu");
       assert.ok(req.body.split("\n").length <= 9, "console body leaves room for its title line");
-      fs.mkdirSync(path.join(ws, "console", "resolved"), { recursive: true });
-      fs.writeFileSync(path.join(ws, "console", "resolved", `${req.id}.json`), JSON.stringify({ id: req.id, approved: true, answer: req.choices[1] }));
+      answerPending(path.join(ws, "console"), req.id, { approved: true, answer: req.choices[1] ?? null });
       assert.equal(await pending, undefined);
       fs.rmSync(dir, { recursive: true, force: true });
       // A sibling subagent inherits the lease through the shared root.

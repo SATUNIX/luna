@@ -9,7 +9,13 @@
 //            the key itself (proof of possession, and a check that no one re-encrypted the
 //            connection in between). It waits for the operator: the code alone never links a
 //            device. The phone polls it by a 128-bit id only it was told.
+//   decision approving needs the last four characters of the device ID, typed by the operator
+//            from the phone's screen (the terminal does not show them), so a reflexive Enter
+//            on the Yes-first prompt cannot link a phone nobody compared; a wrong value rejects.
+//   contest  a second device presenting the code of an offer that is already claimed means the
+//            code has leaked: both are refused and the operator starts again.
 import crypto from "node:crypto";
+import net from "node:net";
 import { CODE_RE, formatCode, formatDeviceId, newPairingCode, normalizeCode, randomSecret, safeEqual } from "./codes.ts";
 import { type DevicePublicKey, type DeviceRegistry, cleanDeviceName, parseDevicePublicKey } from "./devices.ts";
 
@@ -46,7 +52,7 @@ export function cleanPlatform(value: unknown): string {
 }
 
 /** Why a pairing step was refused; `code` is the machine-readable reason a phone sees. */
-export type PairingErrorCode = "no_offer" | "offer_burned" | "bad_code" | "bad_key" | "bad_proof" | "unknown_request" | "not_owner";
+export type PairingErrorCode = "no_offer" | "offer_burned" | "offer_contested" | "bad_code" | "bad_key" | "bad_proof" | "unknown_request" | "not_owner";
 
 export class PairingError extends Error {
 	readonly status: number;
@@ -60,6 +66,36 @@ export class PairingError extends Error {
 
 export type PairRequestState = "pending" | "approved" | "rejected" | "cancelled" | "expired";
 
+/**
+ * Where a claim came from, as the terminal shows it: loopback, a private LAN range, the
+ * carrier-grade NAT block and IPv6 prefix Tailscale assigns from, or anywhere else ("other", which
+ * the terminal warns about).
+ */
+export type AddressScope = "loopback" | "lan" | "tailscale" | "other" | "unknown";
+
+export function addressScope(address: string | null | undefined): AddressScope {
+	const raw = (address ?? "").trim().replace(/^::ffff:/i, "");
+	const kind = net.isIP(raw);
+	if (!kind) return "unknown";
+	if (kind === 4) {
+		const [a = -1, b = -1] = raw.split(".").map(Number);
+		if (a === 127) return "loopback";
+		if (a === 100 && b >= 64 && b <= 127) return "tailscale";
+		if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)) return "lan";
+		return "other";
+	}
+	const v6 = raw.toLowerCase();
+	if (v6 === "::1") return "loopback";
+	if (/^fd7a:115c:a1e0:/.test(v6)) return "tailscale";
+	if (/^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6)) return "lan";
+	return "other";
+}
+
+/** The part of a device ID the operator types to approve it: its last four characters. */
+export function deviceConfirmation(deviceId: string): string {
+	return deviceId.slice(-4);
+}
+
 /** What may be shown about a request (no internal handles). */
 export interface PublicPairRequest {
 	requestId: string;
@@ -71,6 +107,7 @@ export interface PublicPairRequest {
 	state: PairRequestState;
 	reason: string | null;
 	alreadyLinked: boolean;
+	addressScope: AddressScope;
 }
 
 /**
@@ -80,6 +117,8 @@ export interface PublicPairRequest {
 export interface PairingOwner {
 	onPairRequest?: ((request: PublicPairRequest) => void) | undefined;
 	onOfferClosed?: ((offer: PairOffer, reason: string) => void) | undefined;
+	/** A pending request on this owner's offer was closed before the decision (a second claim). */
+	onRequestClosed?: ((request: PublicPairRequest) => void) | undefined;
 }
 
 export interface PairOffer {
@@ -132,6 +171,10 @@ export interface CreateOfferOptions {
 
 export interface DecideOptions {
 	readonly owner?: PairingOwner | null | undefined;
+	/** What the operator typed for the last four characters of the device ID (approving only). */
+	readonly confirm?: unknown;
+	/** Who decided, for the audit record (remote-host.ts: the terminal process). */
+	readonly decidedBy?: Readonly<Record<string, unknown>> | undefined;
 }
 
 /** What Pairings needs from the device registry (DeviceRegistry provides it). */
@@ -152,6 +195,8 @@ export class Pairings {
 	readonly onAudit: PairingAudit;
 	readonly now: () => number;
 	offer: PairOffer | null = null;
+	/** The offer claimed last and its request: a second device presenting its code contests it. */
+	private claimed: { readonly code: string; readonly offerId: string; readonly requestId: string } | null = null;
 	readonly requests = new Map<string, PairRequest>();
 
 	constructor({ fingerprint, devices, onAudit = () => {}, now = () => Date.now() }: PairingsOptions) {
@@ -215,8 +260,11 @@ export class Pairings {
 	claim({ code, publicKey, name, proof, platform, address }: PairClaim): PairRequest {
 		this.expire();
 		const offer = this.offer;
-		if (offer?.state !== "open") throw new PairingError(410, "no_offer", "no pairing code is active; run /remote pair on the computer");
 		const typed = normalizeCode(code);
+		if (offer?.state !== "open") {
+			this.contest(typed, address);
+			throw new PairingError(410, "no_offer", "no pairing code is active; run /remote pair on the computer");
+		}
 		if (!CODE_RE.test(typed) || !safeEqual(typed, offer.code)) {
 			offer.attempts++;
 			this.onAudit({ event: "pair_bad_code", offer: offer.id, address, attempts: offer.attempts });
@@ -277,21 +325,46 @@ export class Pairings {
 		};
 		this.requests.set(request.id, request);
 		this.offer = null; // single use
+		this.claimed = { code: offer.code, offerId: offer.id, requestId: request.id };
 		this.onAudit({ event: "pair_request", deviceId: parsed.id, name: deviceName, address });
 		if (offer.owner && typeof offer.owner.onPairRequest === "function") offer.owner.onPairRequest(publicRequest(request));
 		return request;
 	}
 
-	/** The operator's answer. Approving stores the device. */
-	decide(requestId: string, approve: boolean, { owner }: DecideOptions = {}): PublicPairRequest {
+	/**
+	 * A correct code for the offer that was already claimed, while its request still waits: two
+	 * devices hold the code, so it has leaked. The waiting request is cancelled (the operator starts
+	 * again) and the claimant is refused.
+	 */
+	private contest(typed: string, address: string): void {
+		const claimed = this.claimed;
+		if (!claimed || !CODE_RE.test(typed) || !safeEqual(typed, claimed.code)) return;
+		const request = this.requests.get(claimed.requestId);
+		if (request?.state !== "pending") return;
+		this.claimed = null;
+		this.onAudit({ event: "pair_second_claim", offer: claimed.offerId, address, firstAddress: request.address });
+		this.settle(request, "cancelled", "a second device presented the same pairing code, so the code has leaked; start a new pairing");
+		if (request.owner && typeof request.owner.onRequestClosed === "function") request.owner.onRequestClosed(publicRequest(request));
+		throw new PairingError(409, "offer_contested", "this pairing code was already used by another device; pairing cancelled");
+	}
+
+	/**
+	 * The operator's answer. Approving needs the last four characters of the device ID as the
+	 * operator typed them from the phone; a wrong value rejects the request. Approving stores the
+	 * device.
+	 */
+	decide(requestId: string, approve: boolean, { owner, confirm, decidedBy }: DecideOptions = {}): PublicPairRequest {
 		const request = this.requests.get(requestId);
 		if (!request) throw new PairingError(404, "unknown_request", "no such pairing request");
 		if (owner && request.owner && owner !== request.owner) throw new PairingError(403, "not_owner", "this pairing belongs to another terminal");
 		if (request.state !== "pending") return publicRequest(request);
-		if (approve) {
+		if (approve && !safeEqual(normalizeCode(confirm), deviceConfirmation(request.deviceId))) {
+			this.settle(request, "rejected", "the device ID typed at the computer did not match the phone's");
+			this.onAudit({ event: "pair_rejected", deviceId: request.deviceId, name: request.name, reason: "confirmation_mismatch", ...(decidedBy ? { decidedBy } : {}) });
+		} else if (approve) {
 			this.devices.add({ publicKey: request.publicKey, name: request.name, platform: request.platform, address: request.address });
 			this.settle(request, "approved", null);
-			this.onAudit({ event: "pair_approved", deviceId: request.deviceId, name: request.name });
+			this.onAudit({ event: "pair_approved", deviceId: request.deviceId, name: request.name, address: request.address, ...(decidedBy ? { decidedBy } : {}) });
 		} else {
 			this.settle(request, "rejected", "the operator rejected the link");
 			this.onAudit({ event: "pair_rejected", deviceId: request.deviceId, name: request.name });
@@ -347,6 +420,7 @@ export function publicRequest(request: PairRequest): PublicPairRequest {
 		state: request.state,
 		reason: request.reason,
 		alreadyLinked: request.alreadyLinked,
+		addressScope: addressScope(request.address),
 	};
 }
 

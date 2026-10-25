@@ -36,6 +36,7 @@ export interface ControlConnection {
 	subscribed?: boolean;
 	onPairRequest?: (request: unknown) => void;
 	onOfferClosed?: (offer: { readonly id: string }, reason: string) => void;
+	onRequestClosed?: (request: unknown) => void;
 	/** Write one record; false when the connection is closed or the write failed or is buffered. */
 	send(obj: unknown): boolean;
 	close(): void;

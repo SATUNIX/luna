@@ -1,14 +1,28 @@
 name: pi-kit-memory-mcp
 
+# Qdrant for a mem0 server you run yourself (docs/INSTALL.md, "Memory backends"). The store holds
+# memories that are later put into prompts, so it is never published unauthenticated:
+#   - the port binds loopback only;
+#   - QDRANT_API_KEY is required: compose refuses to start without it, and Qdrant then refuses
+#     every request that does not carry the key;
+#   - the unprivileged image runs as a non-root user, with every capability dropped and no
+#     privilege escalation.
+# tests/compose-policy-smoke.ts checks these rules for every compose file in the repository.
 services:
   qdrant:
-    image: qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
+    image: qdrant/qdrant:v1.20.0-unprivileged@sha256:8c215051dc7bc15221b5f89c100a84a4b04d0dd8497fb73e6fa86fc948d1a41d
     ports:
-      - "${QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?set QDRANT_API_KEY to a long random value; Qdrant refuses requests without it}
     volumes:
       - type: volume
         source: qdrant-data
         target: /qdrant/storage
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
 volumes:

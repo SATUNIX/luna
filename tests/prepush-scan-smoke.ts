@@ -10,7 +10,7 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { addedLines, PRIVATE_PATH_PREFIXES } from "../packages/core/prepush-scan.ts";
-import { blockedMatches } from "../packages/core/lib/leak-scan.ts";
+import { blockedMatches, DENYLIST_ENV } from "../packages/core/lib/leak-scan.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-prepush-"));
@@ -33,6 +33,27 @@ const HOST = "build" + ".internal";
 const TOKEN = "gh" + "p_" + "a".repeat(36);
 const AWS = "AK" + "IA" + "B".repeat(16);
 const PEM = "-----BEGIN " + "PRIVATE KEY-----";
+// The classes added for the gaps the 2026-10 review found: CGNAT, unique-local IPv6, macOS
+// and Windows home paths, .home.arpa and .ts.net names, and the DSA, encrypted and PGP key headers.
+const CGNAT = "100." + "100.7.8";
+const ULA = "fd" + "12:3456::1";
+const MAC_HOME = "/Us" + "ers/alice/src";
+const WIN_HOME = "C:" + "\\Us" + "ers\\alice\\src";
+// Windows paths are case-insensitive, and the drive-letter form has no URL ambiguity.
+const WIN_HOME_LOWER = "c:" + "\\us" + "ers\\alice\\src";
+const WIN_HOME_UPPER = "C:" + "\\US" + "ERS\\ALICE";
+const SSH2 = "---- BEGIN " + "SSH2 ENCRYPTED PRIVATE KEY ----";
+const ARPA = "nas" + ".home" + ".arpa";
+const TAILNET = "laptop.tail1234" + ".ts" + ".net";
+const DSA = "-----BEGIN " + "DSA PRIVATE KEY-----";
+const ENC = "-----BEGIN " + "ENCRYPTED PRIVATE KEY-----";
+const PGP = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----";
+// A private security-review finding ID: the report is private, so public files describe the risk instead.
+const REVIEW_ID = "S" + "R-" + "24";
+// Private roadmap and review item IDs (R, P, M or D, a hyphen and one or two digits): the roadmap
+// is private too, so public files describe the item instead.
+const ROADMAP_IDS = ["R-" + "7", "P-" + "15", "M-" + "04", "D-" + "3", "(" + "R-" + "9" + "):", "AG-03/" + "M-" + "05"];
+const NEW_CLASSES = [CGNAT, ULA, MAC_HOME, WIN_HOME, WIN_HOME_LOWER, WIN_HOME_UPPER, ARPA, TAILNET, DSA, ENC, PGP, SSH2, REVIEW_ID, ...ROADMAP_IDS];
 
 let passed = 0;
 function ok(name: string): void { passed++; console.log(`  ok  ${name}`); }
@@ -57,11 +78,31 @@ function scan(repo: string, ...args: string[]): { status: number | null; out: st
 
 try {
   // 1. The rules: each blocked class matches; documentation addresses and public hosts do not.
-  for (const value of [HOME_PATH, PRIVATE_IP, LAB_IP, "172." + "20.0.1", HOST, "nas" + ".lan", TOKEN, "github" + "_pat_" + "c".repeat(30), AWS, PEM]) {
-    assert.equal(blockedMatches(`x ${value} y`).length, 1, "a blocked class matches");
+  for (const value of [HOME_PATH, PRIVATE_IP, LAB_IP, "172." + "20.0.1", HOST, "nas" + ".lan", TOKEN, "github" + "_pat_" + "c".repeat(30), AWS, PEM, ...NEW_CLASSES]) {
+    assert.equal(blockedMatches(`x ${value} y`).length, 1, `a blocked class matches (${NEW_CLASSES.indexOf(value)})`);
   }
-  for (const value of ["example.com", "192.0.2.1", "172.32.0.1", "/usr/home", "ghp_short"]) assert.deepEqual(blockedMatches(value), [], `${value} is not blocked`);
-  ok("blocked classes match; documentation addresses and public hosts do not");
+  for (const value of ["example.com", "192.0.2.1", "172.32.0.1", "/usr/home", "ghp_short", "100.63.0.1", "100.128.0.1", "https://api.github.com/users/octocat", "https://example.com/Users/", "fe80::1", "-----BEGIN PUBLIC KEY-----", "---- BEGIN SSH2 PUBLIC KEY ----", "sr-only", "USR-1", "SR-x", "ISSR-12",
+    // Look-alikes of a roadmap ID: lower case, three or more digits, a longer token, a word suffix.
+    "mkdir -p 1", "r-7", "d-3", "P-256", "SHA-256", "Node-22", "R-123", "AR-1", "XM-04", "R-1a", "UTF-8", "D-Bus", "M-x", "ISO-8859-1"]) {
+    assert.deepEqual(blockedMatches(value), [], `${value} is not blocked`);
+  }
+  ok("blocked classes match (including CGNAT, ULA, macOS and Windows homes in any case, SSH2 key headers, .home.arpa, .ts.net, DSA/encrypted/PGP keys, private review IDs, private roadmap IDs); documentation addresses, public hosts and URL routes do not");
+
+  // 1b. The operator's private denylist: literal terms from a file outside the repository, matched
+  // case-insensitively; an unreadable denylist throws rather than scanning without it.
+  const denylist = path.join(temp, "denylist.txt");
+  fs.writeFileSync(denylist, "# private machine names\nexamplebox\n\n");
+  const saved = process.env[DENYLIST_ENV];
+  try {
+    process.env[DENYLIST_ENV] = denylist;
+    assert.deepEqual(blockedMatches("ssh ExampleBox now"), ["ExampleBox"], "a denylist term matches, any case");
+    assert.deepEqual(blockedMatches("an example box"), [], "only the literal term matches");
+    process.env[DENYLIST_ENV] = path.join(temp, "missing-denylist.txt");
+    assert.throws(() => blockedMatches("x"), /ENOENT/, "a named but unreadable denylist fails closed");
+  } finally {
+    if (saved === undefined) Reflect.deleteProperty(process.env, DENYLIST_ENV); else process.env[DENYLIST_ENV] = saved;
+  }
+  ok("the operator denylist blocks literal terms from a private file and fails closed when unreadable");
 
   // 2. Hunk parsing consumes exactly the hunk's lines, so content that looks like a header is content.
   const patch = ["diff --git a/f b/f", "--- a/f", "+++ b/f", "@@ -1,2 +1,2 @@", "-old", "-gone", "+++ b/decoy", "+@@ -9 +9 @@", "\\ No newline at end of file", "@@ -0,0 +10 @@", "+last\r", ""].join("\n");
@@ -82,7 +123,6 @@ try {
   const excepted = `fixture address ${PRIVATE_IP}`;
   const exceptions = { schemaVersion: 1, scanExceptions: [{ path: "docs/fixture.md", matchSha256: sha(PRIVATE_IP), lineSha256: sha(excepted), reason: "test" }] };
   commit(repo, "packages/core/leak-scan-exceptions.json", JSON.stringify(exceptions, null, 2) + "\n");
-  commit(repo, "README.md", "public\n");
 
   // 3. install writes an executable hook, is idempotent, and never replaces a different hook.
   const installed = scan(repo, "install");
@@ -111,18 +151,25 @@ try {
   assert.ok(!fs.existsSync(path.join(temp, "missing-target")), "nothing is written through the symlink");
   ok("install writes an executable hook, reinstalls idempotently and refuses to replace another hook or write through a dangling symlink");
 
-  // 4. A clean first push passes; a later push checks only the new commits.
+  // 4. A clean first push passes (the exceptions alone: an exceptions-only change is allowed and
+  // called out); a later push checks only the new commits.
   let r = push(repo, "main");
   assert.equal(r.status, 0, r.out);
-  assert.match(r.out, /2 commit\(s\) checked/);
+  assert.match(r.out, /1 commit\(s\) checked/);
+  assert.match(r.out, /no trusted base/, "an empty remote has no trusted base, so no exceptions apply");
+  commit(repo, "README.md", "public\n");
   commit(repo, "docs/a.md", "fine\n");
+  r = push(repo, "main");
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /2 commit\(s\) checked/);
+  commit(repo, "docs/a2.md", "fine\n");
   r = push(repo, "main");
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /1 commit\(s\) checked/);
   ok("a clean push passes; commits already on the remote are not rescanned");
 
   // 5. Each blocked class in an added line refuses the push, and the value is never printed.
-  for (const [i, value] of [HOME_PATH, LAB_IP, HOST, TOKEN, AWS, PEM].entries()) {
+  for (const [i, value] of [HOME_PATH, LAB_IP, HOST, TOKEN, AWS, PEM, ...NEW_CLASSES].entries()) {
     git(repo, "switch", "-q", "-c", `leak-${i}`, "main");
     commit(repo, "docs/leak.md", `line one\nsee ${value} here\n`);
     r = push(repo, `leak-${i}`);
@@ -187,9 +234,47 @@ try {
   assert.equal(r.status, 0, r.out);
   ok("an exceptions change is called out for owner review; a branch deletion passes");
 
+  // 10b. The pushed commits cannot approve their own exceptions. An exception added in the
+  // same push as the line it admits is refused, and so is one added on the branch first: only the
+  // remote's default branch (the trusted base) supplies exceptions.
+  const selfLine = `self-approved ${LAB_IP}`;
+  const selfAdded = { ...exceptions, scanExceptions: [...exceptions.scanExceptions, { path: "docs/self.md", matchSha256: sha(LAB_IP), lineSha256: sha(selfLine), reason: "self-added" }] };
+  git(repo, "switch", "-q", "-c", "self-exc", "main");
+  commit(repo, "packages/core/leak-scan-exceptions.json", JSON.stringify(selfAdded, null, 2) + "\n");
+  commit(repo, "docs/self.md", `${selfLine}\n`);
+  r = push(repo, "self-exc");
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /docs\/self\.md:1: blocked identifier/, "the new exception does not admit its own line");
+  assert.match(r.out, /changed together with other files/, "mixing an exceptions change with content is refused");
+  assert.ok(!r.out.includes(LAB_IP), "the value is not printed");
+  git(repo, "switch", "-q", "-c", "self-exc-staged", "main");
+  commit(repo, "packages/core/leak-scan-exceptions.json", JSON.stringify(selfAdded, null, 2) + "\n");
+  r = push(repo, "self-exc-staged");
+  assert.equal(r.status, 0, `an exceptions-only push is allowed: ${r.out}`);
+  commit(repo, "docs/self.md", `${selfLine}\n`);
+  r = push(repo, "self-exc-staged");
+  assert.equal(r.status, 1, `an exception on the branch, not on main, admits nothing: ${r.out}`);
+  // The pull-request job's form: the range scan applies the hook's rules. A match admitted
+  // only by the head's new exception fails, and so does the mixed exceptions-and-content change;
+  // --pending-from only names which findings the new exception would admit.
+  const prScan = scan(repo, "range", "--base", "main", "main..self-exc");
+  assert.equal(prScan.status, 1, prScan.out);
+  assert.match(prScan.out, /changed together with other files/, "the pull-request scan applies the mixed-change rule");
+  const pendingScan = scan(repo, "range", "--base", "main", "--pending-from", "self-exc", "main..self-exc");
+  assert.equal(pendingScan.status, 1, `a self-approved exception still fails with --pending-from: ${pendingScan.out}`);
+  assert.match(pendingScan.out, /docs\/self\.md:1: blocked identifier \(value redacted\) \(admitted only by an exception these commits add/);
+  assert.match(pendingScan.out, /changed together with other files/, "--pending-from does not lift the mixed-change rule");
+  // The legitimate order: the exceptions-only change passes on its own; once it is on the base,
+  // the content it admits passes too.
+  assert.equal(scan(repo, "range", "--base", "main", "main..self-exc-staged~1").status, 0, "an exceptions-only range passes");
+  assert.equal(scan(repo, "range", "--base", "self-exc-staged~1", "self-exc-staged~1..self-exc-staged").status, 0, "content admitted by an exception already on the base passes");
+  ok("pushed commits cannot approve their own exceptions, in the hook or the pull-request scan; exceptions land first, then content");
+
   // 11. Misuse and git errors refuse instead of passing.
   assert.equal(scan(repo).status, 2);
   assert.equal(scan(repo, "range", "no-such-ref").status, 2);
+  assert.equal(scan(repo, "range", "--base").status, 2, "a flag without its revision");
+  assert.equal(scan(repo, "range", "--base", "no-such-ref", "main..HEAD").status, 2, "an unknown base");
   ok("usage errors and unknown revisions exit 2 (push refused)");
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

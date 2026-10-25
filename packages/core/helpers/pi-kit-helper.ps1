@@ -101,7 +101,16 @@ function Invoke-Install {
 
 function Invoke-UpdatePi {
   Write-Heading "Updating pi core (@earendil-works/pi-coding-agent)"
-  npm install -g @earendil-works/pi-coding-agent
+  # The version the kit is tested against (its exact devDependencies pin), never "latest", and
+  # without install scripts.
+  $kitPackage = Join-Path (Split-Path -Parent (Split-Path -Parent $Root)) "package.json"
+  $version = (Get-Content -Raw $kitPackage | ConvertFrom-Json).devDependencies.'@earendil-works/pi-coding-agent'
+  if (-not ($version -match '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$')) {
+    Write-Err "Could not read an exact pi version from the kit's package.json (got '$version'); not installing."
+    return
+  }
+  Write-Host "Running: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@$version"
+  npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@$version"
   pi --version
 }
 

@@ -35,6 +35,7 @@ import type { SingleResult, SpawnChild } from "./types.ts";
 import { runWorkflowScript, type QuickjsLocation, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, type WorktreeOutcome } from "./worktree.ts";
+import { appendFileSafe, ensureDirSafe, piWorkspaceOptions, writeFileSafe } from "./shared/safe-fs.ts";
 
 export const MAX_AGENTS_PER_RUN = 1000;
 export const MAX_CONCURRENCY = 16;
@@ -136,18 +137,19 @@ export type StartResult =
 
 export const scriptRunsRoot = (cwd: string): string => path.join(cwd, ".pi", "workflows", "runs");
 
+// Run directories live under <workspace>/.pi/, so nothing on the way is followed through a
+// committed symlink (./shared/safe-fs.ts; tests/workspace-symlink-smoke.ts).
 function ensurePrivateDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureDirSafe(dir, { ...piWorkspaceOptions(dir), dirMode: 0o700 });
   fs.chmodSync(dir, 0o700);
 }
 
 function writePrivate(file: string, text: string): void {
-  fs.writeFileSync(file, text, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  writeFileSafe(file, text, piWorkspaceOptions(file, 0o600));
 }
 
 function appendPrivate(file: string, line: string): void {
-  fs.appendFileSync(file, line, { mode: 0o600 });
+  appendFileSafe(file, line, piWorkspaceOptions(file, 0o600));
   fs.chmodSync(file, 0o600);
 }
 

@@ -9,6 +9,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { trustedMarkerKitRoot } from "./shared/kit-source.ts";
 
 const HELLO_TIMEOUT_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -75,9 +76,12 @@ function webUiEntry(webUiRoot: string, stem: string): string | null {
 /**
  * Locate `packages/web-ui` (the host ships there, beside pi-console). Same precedence as
  * web-console: PI_KIT_WEBUI_ROOT, then relative to this extension, then the checkout named in the
- * install marker. Returns null rather than guessing.
+ * install marker, only when trustedMarkerKitRoot (./shared/kit-source.ts) accepts it: absolute,
+ * outside the workspace of `cwd` through any links, and the kit by package name. A project marker
+ * is repository content, so any other kitSource is ignored and reported through `warn`. Returns
+ * null rather than guessing.
  */
-export function findWebUiRoot(): string | null {
+export function findWebUiRoot(cwd: string = process.cwd(), warn?: (message: string) => void): string | null {
   const hasHost = (dir: string) => webUiEntry(dir, "remote-host") !== null;
   const override = process.env.PI_KIT_WEBUI_ROOT?.trim();
   if (override && hasHost(override)) return override;
@@ -88,11 +92,12 @@ export function findWebUiRoot(): string | null {
   } catch {
     /* import.meta.url unavailable: fall through */
   }
-  const projectMarker = path.join(process.cwd(), ".pi", ".pi-kit.json");
+  const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
   const marker = readJson(fs.existsSync(projectMarker) ? projectMarker : path.join(agentDir(), ".pi-kit.json"));
   if (marker && typeof marker.kitSource === "string") {
-    const fromMarker = path.join(marker.kitSource, "packages", "web-ui");
-    if (hasHost(fromMarker)) return fromMarker;
+    const trusted = trustedMarkerKitRoot(marker.kitSource, cwd, (dir) => hasHost(path.join(dir, "packages", "web-ui")));
+    if (trusted && "root" in trusted) return path.join(trusted.root, "packages", "web-ui");
+    if (trusted) warn?.(`ignored ${trusted.ignored}; an install marker never chooses the host that runs.`);
   }
   return null;
 }
@@ -292,10 +297,11 @@ export async function ensureHost(): Promise<EnsureResult> {
   const running = await hostStatus();
   if (running) return { started: false, status: running };
 
-  const root = findWebUiRoot();
+  const ignored: string[] = [];
+  const root = findWebUiRoot(process.cwd(), (message) => ignored.push(message));
   if (!root) {
     throw new HostError(
-      "could not locate packages/web-ui (the remote host ships there). Run pi from the pi-system checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.",
+      `could not locate packages/web-ui (the remote host ships there). Run pi from the pi-system checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.${ignored.map((m) => ` (${m})`).join("")}`,
       "start_failed",
     );
   }

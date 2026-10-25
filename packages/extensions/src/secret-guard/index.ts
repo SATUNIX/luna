@@ -2,8 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import path from "node:path";
 import fs from "node:fs";
 
-// secret-guard is an opt-in, pattern-based secrets/protected-path backstop. It ships in no
-// profile (extension.json: "profiles": [], experimental); an operator adds it deliberately.
+// secret-guard is a pattern-based secrets/protected-path backstop, loaded by the balanced and
+// autonomous profiles; the others record an exemption (packages/core/lib/protection-coverage.ts).
 // When loaded it blocks four classes (tests/secret-guard-smoke.ts):
 //   0. read/grep/find/ls/glob of a credential file (SECRET_READ_* patterns),
 //   1. writes/edits to secret files or protected engagement/repo-control paths,

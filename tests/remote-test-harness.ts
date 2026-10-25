@@ -15,9 +15,12 @@ import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type tls from "node:tls";
+import { pathToFileURL } from "node:url";
 import { type ExitResult, type Sandbox, REPO, baseEnv, makeSandbox } from "./web-ui-test-harness.ts";
 
 export const REMOTE_HOST_JS = path.join(REPO, "packages", "web-ui", "server", "remote-host.ts");
+/** Preloaded into a test host: the pids it treats as the operator's terminal (remote-terminal-preload.ts). */
+export const TERMINAL_PRELOAD = path.join(REPO, "tests", "remote-terminal-preload.ts");
 
 // A stub `pi --mode rpc` that also emits session events: a streamed answer for a normal prompt,
 // and an approval dialog for a prompt that says "ask".
@@ -111,6 +114,11 @@ export function readControl(sandbox: RemoteSandbox): ControlInfo | null {
 export interface StartRemoteHostOptions {
 	/** Extra environment on top of baseEnv() and the PI_REMOTE_* defaults. */
 	env?: NodeJS.ProcessEnv;
+	/**
+	 * Processes the host treats as the operator's interactive terminal when they approve a phone
+	 * (default: this test process). Any other process is judged for real (remote/peer.ts).
+	 */
+	terminalPids?: readonly number[];
 }
 
 /** A running remote-host.ts child. */
@@ -128,10 +136,10 @@ export interface RemoteHostHandle {
 }
 
 /** Start remote-host.ts; resolves once control.json names a live control port. */
-export async function startRemoteHost(sandbox: RemoteSandbox, { env = {} }: StartRemoteHostOptions = {}): Promise<RemoteHostHandle> {
-	const child = spawn(process.execPath, [REMOTE_HOST_JS], {
+export async function startRemoteHost(sandbox: RemoteSandbox, { env = {}, terminalPids = [process.pid] }: StartRemoteHostOptions = {}): Promise<RemoteHostHandle> {
+	const child = spawn(process.execPath, ["--import", pathToFileURL(TERMINAL_PRELOAD).href, REMOTE_HOST_JS], {
 		cwd: sandbox.cwd,
-		env: baseEnv(sandbox, { PI_REMOTE_STATE_DIR: sandbox.stateDir, PI_REMOTE_BIND: "loopback", PI_REMOTE_PORT: "0", PI_REMOTE_NAME: "test-box", ...env }),
+		env: baseEnv(sandbox, { PI_REMOTE_STATE_DIR: sandbox.stateDir, PI_REMOTE_BIND: "loopback", PI_REMOTE_PORT: "0", PI_REMOTE_NAME: "test-box", PI_REMOTE_TEST_TERMINAL_PIDS: terminalPids.join(","), ...env }),
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let output = "";

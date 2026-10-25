@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 const READ_ONLY_TOOLS = new Set(["read", "bash", "grep", "find", "ls"]);
 
@@ -39,12 +40,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   function writeContrib(cwd: string): void {
-    const dir = contribDir(cwd);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(
       contribPath(cwd),
       JSON.stringify({ id: "plan-mode", priority: 90, budgetTokens: 200, content: PLAN_NOTICE }),
-      "utf8",
+      { root: cwd },
     );
   }
 

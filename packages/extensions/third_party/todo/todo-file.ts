@@ -16,6 +16,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { isInside, writeFileSafe } from "./shared/safe-fs.ts";
 
 export type TodoState = "open" | "active" | "done";
 
@@ -75,10 +76,14 @@ export function readTodos(filePath: string): { todos: Todo[]; nextId: number } {
   return { todos, nextId };
 }
 
-export function writeTodos(filePath: string, todos: Todo[]): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+/**
+ * Writes the todo file. A file inside the workspace `cwd` (TODO.md, .pi/todos/) is repository
+ * territory, so it is written without following a committed symlink (./shared/safe-fs.ts;
+ * tests/workspace-symlink-smoke.ts); a file the operator placed elsewhere is trusted.
+ */
+export function writeTodos(filePath: string, todos: Todo[], cwd: string = process.cwd()): void {
   const lines = todos.map((t) => `- [${MARK[t.state]}] #${t.id}: ${t.text}`);
-  fs.writeFileSync(filePath, `# TODO\n\n${lines.join("\n")}\n`);
+  writeFileSafe(filePath, `# TODO\n\n${lines.join("\n")}\n`, isInside(cwd, filePath) ? { root: cwd } : {});
 }
 
 export function renderTodos(todos: Todo[], headline?: string): string {

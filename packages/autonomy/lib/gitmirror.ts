@@ -47,15 +47,42 @@ export interface MirrorConfig extends PublishConfig {
   readonly gitIdentity: { readonly name: string; readonly email: string };
 }
 
+/** The most output a host git call reads (spawnSync's maxBuffer); a larger output is a failure. */
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+const GIT_TIMEOUT_MS = 300_000;
+
+function spawnGit(gitDir: string, args: readonly string[], { timeoutMs = GIT_TIMEOUT_MS, maxBuffer = GIT_MAX_BUFFER, input }: { timeoutMs?: number; maxBuffer?: number; input?: string | undefined } = {}) {
+  return spawnSync("git", ["-c", "core.hooksPath=/dev/null", `--git-dir=${gitDir}`, ...args], {
+    encoding: "utf8", timeout: timeoutMs, input, maxBuffer,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+}
+
+/** A bounded read: git's whole stdout, or why it could not be had (output over maxBytes, or any other failure). */
+export type BoundedGitRead =
+  | { readonly ok: true; readonly stdout: string }
+  | { readonly ok: false; readonly overflow: boolean; readonly detail: string };
+
+/**
+ * Run git and read at most maxBytes of output. Never returns a partial output: an output over the
+ * cap is `overflow`, and a timeout, a signal or a non-zero exit is a failure with its detail. For
+ * callers that must fail closed when a read is incomplete (the merge review's diff).
+ */
+export function gitBounded(g: HostGit, args: readonly string[], maxBytes: number, { timeoutMs = GIT_TIMEOUT_MS }: { timeoutMs?: number } = {}): BoundedGitRead {
+  const r = spawnGit(g.gitDir, args, { timeoutMs, maxBuffer: maxBytes });
+  const code = r.error && "code" in r.error ? r.error.code : undefined;
+  if (code === "ENOBUFS") return { ok: false, overflow: true, detail: `output over ${maxBytes} bytes` };
+  if (r.error) return { ok: false, overflow: false, detail: r.error.message };
+  if (r.status !== 0) return { ok: false, overflow: false, detail: r.signal ? `killed by ${r.signal}` : (r.stderr.trim().split("\n").slice(-3).join(" | ") || `exit ${String(r.status)}`) };
+  return { ok: true, stdout: r.stdout.trim() };
+}
+
 /** A git runner bound to one repository. Hooks are disabled for every call. */
-export function hostGit(gitDir: string, { timeoutMs = 300_000 }: { timeoutMs?: number } = {}): HostGit {
+export function hostGit(gitDir: string, { timeoutMs = GIT_TIMEOUT_MS }: { timeoutMs?: number } = {}): HostGit {
   function run(args: readonly string[], opts?: GitRunOptions & { readonly allowFail?: false | undefined }): string;
   function run(args: readonly string[], opts: GitRunOptions): string | null;
   function run(args: readonly string[], { allowFail = false, input }: GitRunOptions = {}): string | null {
-    const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", `--git-dir=${gitDir}`, ...args], {
-      encoding: "utf8", timeout: timeoutMs, input, maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    });
+    const r = spawnGit(gitDir, args, { timeoutMs, input });
     if (r.error || r.status !== 0) {
       if (allowFail) return null;
       throw new Error(`git ${args[0] ?? ""} failed: ${r.error?.message ?? r.stderr.trim().split("\n").slice(-3).join(" | ")}`);

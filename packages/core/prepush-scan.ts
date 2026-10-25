@@ -9,23 +9,39 @@
  * under a private path (`PRIVATE_PATH_PREFIXES`). Findings name the commit, file and line, never
  * the value. Exit status: 0 clean, 1 findings, 2 usage or git errors (the push is refused).
  *
+ * Allowlists come from the trusted base, never from the commits being checked: the exceptions are
+ * read from the remote's default branch as this clone last fetched it (`<remote>/HEAD`, else
+ * `<remote>/main`), or from `--base <rev>`; with neither there are none. A pushed range that
+ * changes the exceptions file together with any other file is refused, so a commit cannot add an
+ * identifier and the exception that admits it in one push. An exceptions-only change passes (it
+ * holds hashes and reasons, and is itself scanned) and is called out for owner review; the content
+ * it admits can be pushed once it is on the default branch.
+ *
  *   node packages/core/prepush-scan.ts install            # write .git/hooks/pre-push
  *   node packages/core/prepush-scan.ts hook <remote> <url> # what the hook runs (refs on stdin)
- *   node packages/core/prepush-scan.ts range <rev-list args...>   # scan by hand, e.g. origin/main..HEAD
+ *   node packages/core/prepush-scan.ts range [--base <rev>] [--pending-from <rev>] <rev-list args...>
+ *       # scan by hand, e.g. origin/main..HEAD, with the same rules as the hook (the pull-request
+ *       # job runs this). --pending-from <rev> only names, among the findings, the matches that the
+ *       # exceptions committed at <rev> would admit once they reach the default branch; they still
+ *       # fail, and so does an exceptions change mixed with other files.
  *
  * Pinned by `tests/prepush-scan-smoke.ts`. It is a local guard against mistakes, not a boundary:
- * `git push --no-verify` skips it, so the public CI secret scan and owner review stay the gate.
+ * `git push --no-verify` skips it, so the `leak-scan` pull-request job in `security.yml`, the
+ * public CI secret scan and code-owner review of the exceptions file stay the gate.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { blockedMatches, isExcepted, readScanExceptions, SCAN_EXCEPTIONS_FILE, type ScanException } from "./lib/leak-scan.ts";
+import { blockedMatches, isExcepted, parseScanExceptions, SCAN_EXCEPTIONS_FILE, type ScanException } from "./lib/leak-scan.ts";
 
 /** Paths that belong to the private sidecar and must never appear in the public repository. */
 export const PRIVATE_PATH_PREFIXES: readonly string[] = ["internal/", "reviews/", "examples/engagement/"];
 
 export interface Finding { commit: string; where: string; problem: string }
+
+/** What one scan found: the findings, plus what the exceptions-file rule needs. */
+export interface ScanResult { commits: number; findings: Finding[]; pending: Finding[]; exceptionsChanged: boolean; otherChanged: boolean }
 
 const ZERO = /^0+$/;
 
@@ -81,11 +97,16 @@ export function addedLines(patch: string): Array<{ file: string; lineNo: number;
   return out;
 }
 
-/** Scan the commits that `revArgs` (rev-list arguments) selects. */
-export function scanCommits(repo: string, revArgs: string[], exceptions: readonly ScanException[]): { commits: number; findings: Finding[]; exceptionsChanged: boolean } {
+/**
+ * Scan the commits that `revArgs` (rev-list arguments) selects against `exceptions` (from the
+ * trusted base). A match admitted only by `pending` (exceptions a pull request adds) goes to
+ * `pending` instead of `findings`.
+ */
+export function scanCommits(repo: string, revArgs: string[], exceptions: readonly ScanException[], pending: readonly ScanException[] = []): ScanResult {
   const shas = git(repo, ["rev-list", "--reverse", ...revArgs, "--"]).split("\n").filter(Boolean);
   const findings: Finding[] = [];
-  let exceptionsChanged = false;
+  const pendingFindings: Finding[] = [];
+  let exceptionsChanged = false, otherChanged = false;
   for (const sha of shas) {
     const short = sha.slice(0, 12);
     const meta = git(repo, ["show", "-s", "--format=%an <%ae>%n%cn <%ce>%n%B", sha]).split("\n");
@@ -94,35 +115,58 @@ export function scanCommits(repo: string, revArgs: string[], exceptions: readonl
     });
     const parents = git(repo, ["rev-list", "--parents", "-n", "1", sha]).trim().split(" ").slice(1);
     const base = parents[0] === undefined ? ["--root", sha] : [parents[0], sha];
-    const changed = git(repo, ["diff-tree", "-r", "-z", "--name-only", "--no-renames", "--diff-filter=d", ...base]).split("\0").filter(Boolean);
+    const changed = git(repo, ["diff-tree", "-r", "-z", "--no-commit-id", "--name-only", "--no-renames", "--diff-filter=d", ...base]).split("\0").filter(Boolean);
     for (const file of changed) {
       if (PRIVATE_PATH_PREFIXES.some((prefix) => file.startsWith(prefix))) findings.push({ commit: short, where: file, problem: "adds or changes a private path" });
       if (file === SCAN_EXCEPTIONS_FILE) exceptionsChanged = true;
+      else otherChanged = true;
     }
     const patch = git(repo, ["diff-tree", "-r", "-p", "--text", "-U0", "--no-renames", "--no-ext-diff", "--no-color", ...base]);
     for (const { file, lineNo, text } of addedLines(patch)) {
       for (const match of blockedMatches(text)) {
-        if (!isExcepted(exceptions, file, match, text)) findings.push({ commit: short, where: `${file}:${lineNo}`, problem: "blocked identifier (value redacted)" });
+        if (isExcepted(exceptions, file, match, text)) continue;
+        const finding = { commit: short, where: `${file}:${lineNo}`, problem: "blocked identifier (value redacted)" };
+        (isExcepted(pending, file, match, text) ? pendingFindings : findings).push(finding);
       }
     }
   }
-  return { commits: shas.length, findings, exceptionsChanged };
+  return { commits: shas.length, findings, pending: pendingFindings, exceptionsChanged, otherChanged };
+}
+
+/** The exceptions file as committed at `rev`, or none when `rev` has no such file. */
+export function exceptionsAt(repo: string, rev: string): ScanException[] {
+  let text: string;
+  try { text = git(repo, ["show", `${rev}:${SCAN_EXCEPTIONS_FILE}`]); } catch { return []; }
+  return parseScanExceptions(text);
+}
+
+/** The trusted base for a remote: its default branch as last fetched (`<remote>/HEAD`, else `<remote>/main`), or null. */
+export function trustedBase(repo: string, remote: string): string | null {
+  for (const ref of [`refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`]) {
+    try { return git(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).trim(); } catch { /* try the next */ }
+  }
+  return null;
 }
 
 function repoRoot(cwd: string): string {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
 }
 
-function loadExceptions(root: string): ScanException[] {
-  const file = path.join(root, SCAN_EXCEPTIONS_FILE);
-  return fs.existsSync(file) ? readScanExceptions(file) : [];
-}
-
-function report(result: { commits: number; findings: Finding[]; exceptionsChanged: boolean }): number {
+/**
+ * Print a result and return the exit status. Every caller applies the same rules: a match
+ * no trusted-base exception admits fails, including one admitted only by an exception the scanned
+ * commits add (`pending`, named as such), and an exceptions change mixed with other files fails.
+ */
+export function report(result: ScanResult, base: string | null): number {
+  const findings = [...result.findings, ...result.pending.map((f) => ({ ...f, problem: `${f.problem} (admitted only by an exception these commits add: land it on the default branch first, in its own owner-reviewed change)` }))];
+  if (result.exceptionsChanged && result.otherChanged) {
+    findings.push({ commit: "range", where: SCAN_EXCEPTIONS_FILE, problem: "changed together with other files; land new exceptions in their own owner-reviewed change first (exceptions are read from the trusted base, not the pushed commits). A release pull request stacked on its release/<tag>-exceptions pull request passes once that one is merged with a merge commit and this branch is updated from the default branch" });
+  }
+  console.error(`pre-push scan: exceptions read from ${base === null ? "nowhere (no trusted base: none apply)" : `trusted base ${base.slice(0, 12)}`}`);
   if (result.exceptionsChanged) console.error(`pre-push scan: the pushed commits change ${SCAN_EXCEPTIONS_FILE}; every added exception needs owner review`);
-  for (const f of result.findings) console.error(`pre-push scan: commit ${f.commit} ${f.where}: ${f.problem}`);
-  if (result.findings.length) {
-    console.error(`pre-push scan: ${result.findings.length} finding(s) in ${result.commits} commit(s); push refused. Fix the commits (rewrite before pushing), or add a reviewed exception to ${SCAN_EXCEPTIONS_FILE}.`);
+  for (const f of findings) console.error(`pre-push scan: commit ${f.commit} ${f.where}: ${f.problem}`);
+  if (findings.length) {
+    console.error(`pre-push scan: ${findings.length} finding(s) in ${result.commits} commit(s); push refused. Fix the commits (rewrite before pushing), or land a reviewed exception in ${SCAN_EXCEPTIONS_FILE} on the default branch first.`);
     return 1;
   }
   console.error(`pre-push scan: ${result.commits} commit(s) checked, no blocked identifiers or private paths`);
@@ -183,14 +227,33 @@ function main(argv: string[]): number {
     const remote = rest[0] ?? "origin";
     const root = repoRoot(cwd);
     const revs = fs.readFileSync(0, "utf8").split("\n").filter((l) => l.trim()).map((l) => rangeFor(root, remote, l)).filter((r): r is string[] => r !== null);
-    const exceptions = loadExceptions(root);
-    const findings: Finding[] = [];
-    let commits = 0, exceptionsChanged = false;
-    for (const r of revs) { const res = scanCommits(root, r, exceptions); commits += res.commits; findings.push(...res.findings); exceptionsChanged ||= res.exceptionsChanged; }
-    return report({ commits, findings, exceptionsChanged });
+    const base = trustedBase(root, remote);
+    const exceptions = base === null ? [] : exceptionsAt(root, base);
+    const total: ScanResult = { commits: 0, findings: [], pending: [], exceptionsChanged: false, otherChanged: false };
+    for (const r of revs) {
+      const res = scanCommits(root, r, exceptions);
+      total.commits += res.commits; total.findings.push(...res.findings);
+      total.exceptionsChanged ||= res.exceptionsChanged; total.otherChanged ||= res.otherChanged;
+    }
+    return report(total, base);
   }
-  if (command === "range" && rest.length) { const root = repoRoot(cwd); return report(scanCommits(root, rest, loadExceptions(root))); }
-  console.error("usage: prepush-scan.ts install | hook <remote> <url> | range <rev-list args...>");
+  if (command === "range") {
+    const root = repoRoot(cwd);
+    let baseArg: string | null = null, pendingFrom: string | null = null;
+    const args = [...rest];
+    while (args[0] === "--base" || args[0] === "--pending-from") {
+      const [flag, value] = [args.shift(), args.shift()];
+      if (value === undefined) { console.error(`pre-push scan: ${String(flag)} needs a revision`); return 2; }
+      if (flag === "--base") baseArg = value; else pendingFrom = value;
+    }
+    if (args.length) {
+      const base = baseArg === null ? trustedBase(root, "origin") : git(root, ["rev-parse", "--verify", `${baseArg}^{commit}`]).trim();
+      const exceptions = base === null ? [] : exceptionsAt(root, base);
+      const pending = pendingFrom === null ? [] : exceptionsAt(root, pendingFrom);
+      return report(scanCommits(root, args, exceptions, pending), base);
+    }
+  }
+  console.error("usage: prepush-scan.ts install | hook <remote> <url> | range [--base <rev>] [--pending-from <rev>] <rev-list args...>");
   return 2;
 }
 

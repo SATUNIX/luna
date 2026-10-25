@@ -10,7 +10,7 @@
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
-    "nodeBuiltins": ["fs", "os", "path", "url"],
+    "nodeBuiltins": ["crypto", "fs", "os", "path", "url"],
     "npm": [],
     "piPeers": [],
     "services": [],

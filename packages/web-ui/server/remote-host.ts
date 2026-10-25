@@ -26,6 +26,7 @@ import { type ControlConnection, type ControlMessage, ControlServer } from "./re
 import { type DeviceRecord, DeviceRegistry } from "./remote/devices.ts";
 import { DialogTracker } from "./remote/dialogs.ts";
 import { Pairings } from "./remote/pairing.ts";
+import { inspectPeer } from "./remote/peer.ts";
 import { encodeQr } from "./remote/qr.ts";
 import { audit, ControlFileSchema, ensurePrivateDir, readAudit, readJsonFile, readJsonFileAs, stateDir, statePaths, writePrivateFile } from "./remote/store.ts";
 import { assertUsable, certificateFingerprint, createTlsIdentity, displayFingerprint } from "./remote/tls.ts";
@@ -139,6 +140,7 @@ function advertisedAddresses(bind: Bind): string[] {
 }
 
 const bind = resolveBind(env.PI_REMOTE_BIND);
+const BIND_ALL_WARNING = "bound to every interface (PI_REMOTE_BIND unset or all): anything that can reach this port can try to link a phone, which needs a code from the terminal and your approval. Set PI_REMOTE_BIND=tailscale, or loopback, unless the phones are on this LAN only";
 const portRaw = (env.PI_REMOTE_PORT ?? "").trim();
 const port = portRaw === "" ? DEFAULT_PORT : Number(portRaw);
 if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`PI_REMOTE_PORT "${portRaw.slice(0, 20)}" is not a port number.`);
@@ -226,6 +228,21 @@ const fingerprint = certificateFingerprint(certPem);
 // ------------------------------------------------------------- components ---
 const onAudit = (record: Readonly<Record<string, unknown>>): void => audit(paths.audit, record);
 const devices = new DeviceRegistry(paths.devices);
+// Every linked device got there through an approval this host audited (pair_approved). One that
+// did not (a record written into devices.json by something else) is suspended: listed, refused at
+// login, and reported, until the operator revokes it or pairs it again.
+const startupWarnings: string[] = [];
+{
+	const approved = new Set(readAudit(paths.audit, Number.MAX_SAFE_INTEGER).filter((r) => r.event === "pair_approved" && typeof r.deviceId === "string").map((r) => r.deviceId));
+	for (const d of devices.list()) {
+		if (approved.has(d.id)) continue;
+		devices.suspend(d.id);
+		audit(paths.audit, { event: "device_unaudited", deviceId: d.id, name: d.name });
+		const line = `linked device "${d.name}" (${formatDeviceId(d.id)}) has no pairing approval in audit.jsonl, so it was not linked through this host: it is suspended (it cannot log in) until you revoke it or pair it again`;
+		startupWarnings.push(line);
+		log(`WARNING: ${line}`);
+	}
+}
 const pairings = new Pairings({ fingerprint, devices, onAudit });
 const auth = new Authenticator({ devices, fingerprint, serverId: identity.serverId, tokenTtlMs });
 const limiter = new RateLimiter();
@@ -266,6 +283,7 @@ function deviceView(d: DeviceRecord, online: ReadonlySet<string>) {
 		id: d.id,
 		display: formatDeviceId(d.id),
 		name: d.name,
+		suspended: devices.isSuspended(d.id),
 		platform: d.platform,
 		pairedAt: d.pairedAt,
 		lastSeenAt: d.lastSeenAt,
@@ -293,7 +311,8 @@ function status() {
 		runningSessions: pc.listLiveSessions().filter((p) => p.alive).length,
 		streams: api.streamCount(),
 		offer: pairings.offerSummary(),
-		recent: readAudit(paths.audit, 40).filter((r) => typeof r.event === "string" && /failure|bad_|rejected|blocked|unlinked|revoked/.test(r.event)).slice(-8),
+		warnings: [...(bind.mode === "all" ? [BIND_ALL_WARNING] : []), ...startupWarnings],
+		recent: readAudit(paths.audit, 40).filter((r) => typeof r.event === "string" && /failure|bad_|rejected|blocked|unlinked|revoked|unaudited|second_claim|decide_refused/.test(r.event)).slice(-8),
 	};
 }
 
@@ -319,6 +338,7 @@ function onAdmin(conn: ControlConnection, msg: ControlMessage): void {
 			return;
 		case "pair.create": {
 			conn.onPairRequest = (request) => conn.send({ t: "evt", name: "pair.request", data: request });
+			conn.onRequestClosed = (request) => conn.send({ t: "evt", name: "pair.request.closed", data: request });
 			conn.onOfferClosed = (offer, reason) => conn.send({ t: "evt", name: "pair.closed", data: { offerId: offer.id, reason } });
 			// An absent or unusable ttlSec leaves the offer's default lifetime (Pairings clamps the rest).
 			const ttlMs = Number(msg.ttlSec) * 1000;
@@ -344,14 +364,28 @@ function onAdmin(conn: ControlConnection, msg: ControlMessage): void {
 			pairings.cancelOffer("cancelled by the operator");
 			reply({ cancelled: true });
 			return;
-		case "pair.decide":
+		case "pair.decide": {
 			// Request ids are strings; anything else matches no request (as Pairings would answer).
 			if (typeof msg.requestId !== "string") {
 				refuse("no such pairing request", 404);
 				return;
 			}
+			// Approving a phone gives it the operator's authority, so it must come from a person: the
+			// connection's process must be an interactive terminal's foreground process (remote/peer.ts).
+			// A rejection may come from anywhere.
+			let decidedBy: Record<string, unknown> | undefined;
+			if (msg.approve === true) {
+				const peer = inspectPeer(conn.socket.remotePort, conn.socket.localPort);
+				if (!peer.ok) {
+					onAudit({ event: "pair_decide_refused", why: peer.why, pid: peer.pid });
+					notify(`refused a phone approval that did not come from an interactive terminal (${peer.why})`, "warning");
+					refuse(`approving a phone needs a person at an interactive terminal: the connection's process does not qualify (${peer.why})`, 403);
+					return;
+				}
+				decidedBy = { pid: peer.pid, tty: peer.tty };
+			}
 			try {
-				const result = pairings.decide(msg.requestId, msg.approve === true, { owner: conn });
+				const result = pairings.decide(msg.requestId, msg.approve === true, { owner: conn, confirm: msg.confirm, decidedBy });
 				if (result.state === "approved") notify(`linked "${result.name}" (${result.deviceIdDisplay})`);
 				reply(result);
 				return;
@@ -359,6 +393,7 @@ function onAdmin(conn: ControlConnection, msg: ControlMessage): void {
 				refuse(errorMessage(error), errorStatus(error));
 				return;
 			}
+		}
 		case "devices.list":
 			reply({ devices: devices.list().map((d) => deviceView(d, auth.activeDeviceIds())) });
 			return;
@@ -470,7 +505,7 @@ writePrivateFile(
 
 log(`listening on https://${bind.host.includes(":") ? `[${bind.host}]` : bind.host}:${httpsPort} (${bind.mode}); reachable at ${addresses.join(", ") || "(no addresses found)"}`);
 log(`certificate fingerprint ${displayFingerprint(fingerprint)}; ${devices.list().length} linked device(s)`);
-if (bind.mode === "all") log("bound to every interface: anything that can reach this port can try to link, which needs a code from the terminal and your approval");
+if (bind.mode === "all") log(`WARNING: ${BIND_ALL_WARNING}`);
 
 // --------------------------------------------------------------- shutdown ---
 let stopping = false;

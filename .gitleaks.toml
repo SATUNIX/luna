@@ -1,32 +1,67 @@
 # Loaded automatically by the `gitleaks` job in .github/workflows/security.yml (gitleaks reads
-# .gitleaks.toml from the scan root). The default rules stay on; this only allowlists known
-# synthetic values, matched on the line, never whole files.
+# .gitleaks.toml from the scan root). The default rules stay on. Each allowlist below admits one
+# set of known synthetic fixture lines in the named files only: `condition = "AND"` means a finding
+# is allowed only when its file matches `paths` AND its line matches `regexes`, so the same text in
+# any other file is still a finding. The paths include the `.mjs` names the tests had before they
+# moved to TypeScript, because the gitleaks job scans the full history. Every allowlist is listed
+# in packages/core/scan-suppressions.json (tests/suppression-inventory-smoke.ts).
 [extend]
 useDefault = true
 
-[allowlist]
-description = "Synthetic test fixtures and placeholder tokens"
+[[allowlists]]
+description = "save-smoke: fake GitLab and AWS tokens the redaction test must scrub"
+condition = "AND"
 regexTarget = "line"
+paths = ['''^tests/save-smoke\.(?:mjs|ts)$''']
 regexes = [
-  # tests/save-smoke.ts: fake tokens that the redaction test must scrub.
   '''glpat-ABCDEFGHIJKLMNOPQRST and AKIAABCDEFGHIJKLMNOP''',
-  # packages/core/eval/live/target.ts: placeholder bearer tokens for the throwaway eval target.
-  '''Bearer lab-[a-z]+''',
-  # tests/firewall-gate-smoke.ts, tests/tool-capture-smoke.ts: fake bearer tokens the
-  # firewall/capture redaction must handle.
+]
+
+[[allowlists]]
+description = "live eval target and its recorded evidence: placeholder bearer tokens for the throwaway target"
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^packages/core/eval/live/target\.ts$''',
+  '''^(?:internal/)?docs/agent-improvement/cycles/[^/]+/03-evidence/[^/]+\.md$''',
+]
+regexes = ['''Bearer lab-[a-z]+''']
+
+[[allowlists]]
+description = "firewall-gate and tool-capture smokes: fake bearer tokens and redaction tables that redact() must mask"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/(?:firewall-gate|tool-capture)-smoke\.(?:mjs|ts)$''']
+regexes = [
   '''Authorization: Bearer abcdefghijklmnop(1234)?''',
-  # packages/web-ui/scripts/ui-smoke.ts: obvious counting-sequence tokens for the console's
-  # client tests; they authenticate nothing.
-  '''const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef"''',
-  '''const TOKEN = "fedcba9876543210fedcba9876543210fedcba9876543210"''',
-  # tests/autonomy-contract-smoke.ts: credential-shaped placeholders the contract validator must
-  # refuse (the AWS documentation-style key and an alphabet-sequence GitLab token).
-  '''"glpat-abcdefghij0123456789", "ghp_0123456789abcdefghij0123456789abcd", "AKIAABCDEFGHIJKLMNOP"''',
-  # tests/secret-guard-smoke.ts: a stub key body ("abc") the secret guard must block.
-  '''BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END''',
-  # tests/firewall-gate-smoke.ts and tests/tool-capture-smoke.ts: the redaction tables use
-  # obvious made-up values (sequential letters/digits, "hunter2hunter2") that redact() must mask.
+  # Obvious made-up values (sequential letters/digits, "hunter2hunter2").
   '''\["(DB_PASSWORD=Zx9pLmQ2rT7vWy psql|export GITLAB_TOKEN=abc123def456ghi789|AWS_SECRET_ACCESS_KEY=abcdEFGHijklMNOP5678 aws s3 ls|curl -H 'x-api-key: abcdefghijkl' x|curl -u admin:hunter2hunter2 http://x|curl --user=admin:hunter2 x)", "''',
-  # tests/tool-capture-smoke.ts (history): the AWS documentation-style placeholder key.
+  # The AWS documentation-style placeholder key.
   '''const awsKey = "AKIAABCDEFGHIJKLMNOP";''',
 ]
+
+[[allowlists]]
+description = "web console client smoke: counting-sequence tokens that authenticate nothing"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^packages/web-ui/scripts/ui-smoke\.(?:mjs|ts)$''']
+regexes = [
+  '''const TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef"''',
+  '''const TOKEN = "fedcba9876543210fedcba9876543210fedcba9876543210"''',
+]
+
+[[allowlists]]
+description = "autonomy-contract smoke: credential-shaped placeholders the contract validator must refuse"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/autonomy-contract-smoke\.(?:mjs|ts)$''']
+regexes = [
+  '''"glpat-abcdefghij0123456789", "ghp_0123456789abcdefghij0123456789abcd", "AKIAABCDEFGHIJKLMNOP"''',
+]
+
+[[allowlists]]
+description = "secret-guard smoke: a stub key body the secret guard must block"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/secret-guard-smoke\.(?:mjs|ts)$''']
+regexes = ['''BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END''']

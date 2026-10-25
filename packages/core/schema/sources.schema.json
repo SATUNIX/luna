@@ -20,7 +20,16 @@
           },
           "provides": { "type": "array", "items": { "type": "string" } },
           "profiles": { "type": "array", "items": { "type": "string" } },
-          "review": { "type": "string" }
+          "review": { "type": "string" },
+          "integrity": {
+            "type": "string",
+            "pattern": "^sha512-[A-Za-z0-9+/]{86}==$",
+            "description": "The package's sha512 dist.integrity. After `pi install` the installer compares the integrity npm recorded in pi's npm-root package-lock.json with this value and stops on a difference."
+          },
+          "allowInstallScripts": {
+            "type": "string",
+            "description": "The reviewed reason this companion needs its dependency lifecycle scripts. Absent: the install runs with npm_config_ignore_scripts=true."
+          }
         }
       }
     }

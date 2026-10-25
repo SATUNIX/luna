@@ -15,7 +15,7 @@ Terminology throughout:
 - **Proposal** specifies intended implementation and acceptance gates.
 - **Unproven capability** requires host integration, regression evidence or empirical calibration before being advertised.
 
-Current operational documentation remains in [Security model](../security.md), [Tool firewall and auto mode](../architecture/tool-firewall-and-auto-mode.md), [Autonomous runs](../autonomy.md) and [Supply chain](../supply-chain.md). The implementation baseline is pi-system commit `555a577316b51af17f7941733201a72832255e8a`. Findings below are pinned to that snapshot, rather than assumed true of later fixes.
+The current threat model, with assets, attackers, trust boundaries and the control for each, is [Threat model](../threat-model.md); this proposal's threat discussion below is its design history. Current operational documentation remains in [Security model](../security.md), [Tool firewall and auto mode](../architecture/tool-firewall-and-auto-mode.md), [Autonomous runs](../autonomy.md) and [Supply chain](../supply-chain.md). The implementation baseline is pi-system commit `555a577316b51af17f7941733201a72832255e8a`. Findings below are pinned to that snapshot, rather than assumed true of later fixes.
 
 ## Baselines and pi 0.99.2 compatibility
 

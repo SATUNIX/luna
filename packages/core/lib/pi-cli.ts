@@ -29,13 +29,15 @@ export interface RunPiOptions {
   platform?: NodeJS.Platform;
   /** Injected for tests; defaults to `spawnSync`. */
   spawn?: typeof spawnSync;
+  /** Variables added to the inherited environment for this child (for example npm_config_ignore_scripts). */
+  env?: Readonly<Record<string, string>>;
 }
 
 /**
  * Run `bin args...` and throw when it fails to start or exits non-zero, as `execSync` did.
  * `bin` is the pi executable (a path, or "pi" to look it up on PATH).
  */
-export function runPi(bin: string, args: readonly string[], { stdio = "inherit", platform = process.platform, spawn = spawnSync }: RunPiOptions = {}): SpawnSyncReturns<string | Buffer> {
+export function runPi(bin: string, args: readonly string[], { stdio = "inherit", platform = process.platform, spawn = spawnSync, env }: RunPiOptions = {}): SpawnSyncReturns<string | Buffer> {
   // Checked as unknown: callers pass strings read from files, and a non-string must never reach the process.
   const values: readonly unknown[] = args;
   for (const a of values) {
@@ -45,7 +47,7 @@ export function runPi(bin: string, args: readonly string[], { stdio = "inherit",
   const windows = platform === "win32";
   if (windows) for (const a of args) if (WINDOWS_UNSAFE.test(a)) throw new Error(`refusing to pass ${JSON.stringify(a.slice(0, 80))} to pi on Windows: it contains a shell metacharacter`);
   const command = windows && /\s/.test(bin) ? `"${bin}"` : bin;
-  const r = spawn(command, args, { stdio, shell: windows, windowsHide: true });
+  const r = spawn(command, args, { stdio, shell: windows, windowsHide: true, ...(env ? { env: { ...process.env, ...env } } : {}) });
   if (r.error) throw r.error;
   if (r.status !== 0) {
     throw new PiExitError(`pi ${args[0] ?? ""} exited with ${r.status ?? r.signal}`.trim(), r.status, r.stderr);

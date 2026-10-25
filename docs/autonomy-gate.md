@@ -14,8 +14,10 @@ ML models, separate daemon and sandboxing are deferred.
      tracking;
    - obfuscation such as `r''m`, `r\m` and `$'\x72m'`;
    - wrappers: `sudo`, `env`, `timeout`, `nice`, `xargs`, `find -exec`, `bash -c`, `eval`,
-     `tmux send-keys`, and `ssh host '…'`, whose remote command is parsed and classified
-     too.
+     `tmux send-keys`, `su -c`, privilege and namespace launchers (`pkexec`, `chroot`,
+     `unshare`, `bwrap`, …), project runners (`uv run`, `poetry run`, `mise exec`, …),
+     terminal launchers, and `ssh host '…'`, whose remote command is parsed and classified
+     too. [Parser coverage](#parser-coverage) lists the rest.
 
    Anything it cannot parse reliably is treated as opaque and never auto-allowed. A writer
    fed by `xargs` or `parallel` (`touch`, `cp`, `mv`, `tee`, `chmod`, …) writes to paths the
@@ -55,6 +57,63 @@ What runs without asking in every mode is the **low** tier: reads of paths that 
 credentials (inside or outside the workspace), git reads, network GETs, workspace writes,
 ordinary development tooling, and tools whose name reads as read-only (`get_…`, `list_…`).
 `/firewall status` prints this for the mode in force.
+
+An executable the classifier has no rule for is **medium**, not routine: it asks in manual mode
+and goes to the judge in auto mode. A short reviewed list of read-only text utilities (`cut`,
+`column`, `paste`, `base64`, `od`, …) stays low. A shell function defined earlier in the same
+command is low to call. Its body is rated where it is defined, with its positional parameters
+(`$1`, `"$@"`) unresolved, because the parser does not bind a call's arguments to them; instead
+every path argument of the call is checked as a read and as a write, so passing a safety-control
+path to a function is high whatever the body does with it (`tests/firewall-shell-smoke.ts`).
+
+Starting another coding agent (`pi`, `claude`, `codex`, `gemini`, `aider` and others) is
+recognised by identity: the bare command, the command by absolute or relative path
+(`/usr/local/bin/pi`), a package runner (`npx`, `pnpm dlx`, `bunx`), a package path under
+`node_modules`, or `python -m`. One started with a moved `HOME`, `XDG_CONFIG_HOME`,
+`PI_CODING_AGENT_DIR` or its own home variable (`CODEX_HOME`) runs with a configuration the
+operator did not set up, so it is high; so is one started with a flag that turns its own
+approvals off (`tests/firewall-shell-smoke.ts`).
+
+## Parser coverage
+
+The parser's contract is that every command bash would execute from a command line is either a
+parsed segment, which the classifier rates, or reported as opaque, which never runs without
+asking. Beyond the forms above it parses:
+
+- command text inside `$(( ))`, `(( ))`, the word operand of a parameter expansion, quoted or
+  not (`${x:-…}`, `${x:=…}`), and a `case` pattern; and, when it contains a substitution, an
+  array subscript or arithmetic operand (reported as opaque);
+- function definitions (`f() { …; }`, `function f`), `coproc`, and brace expansion, including in
+  a command name (opaque when mixed with quoting or past 64 expansions);
+- hook and callback text bash runs later: `PS0`, `PS1`, `PS2`, `PS4`, `PROMPT_COMMAND` and
+  `BASH_FUNC_*` values, whether set as a prefix, with `export`/`declare` or as an `env NAME=value`
+  operand, `trap`, `alias`, `mapfile`/`readarray -C`, `complete`/`compgen -C`, `bind -x`;
+  `BASH_ENV` and `ENV` are medium, including when `env` or a prefix hands them to a shell it
+  starts (the environment a wrapper passes stays on the commands that shell runs);
+- builtins that change what a later command name runs: a name redefined by `alias` or by
+  `hash -p` earlier in the same command is classified as the alias value or hashed path with the
+  call's arguments; an alias whose value is not a simple command, and `enable -f`, are opaque;
+- `source` or `.` of standard input with a here-document, and a shell reading its script from one;
+- `fc` without `-l`, `expect -c`, debugger command scripts and `systemd-nspawn` are opaque;
+- wrappers that run a command: about thirty exec, privilege and namespace launchers, the project
+  runners, `nix-shell --run`, `nix develop -c`, `pnpm exec`, `nodemon --exec`, `entr`,
+  `concurrently`, `hyperfine`, `script -c`, `gdb --args`, `perf` and terminal emulators. A wrapper
+  given an option the parser does not know is opaque rather than guessed at. Running inside a
+  namespace wrapper or `systemd-run` is at least medium.
+
+`tests/firewall-shell-smoke.ts` pins these rows. `tests/firewall-exec-oracle-smoke.ts` checks the
+contract against bash itself: it runs a corpus of benign commands in real bash with a `PATH` of
+logging stubs (inside `bwrap` when it works on the host, otherwise in a scratch directory with the
+same stub `PATH`), records every command that ran, and fails when one ran that the parser neither
+returned as a segment nor reported as opaque, or when one of them was rated routine.
+
+Not covered: values that arrive at run time. `IFS` changes, arithmetic indirection through a
+variable set elsewhere and a command name built from a variable the parser cannot resolve are not
+modelled; a dynamic command name is never routine, but a dynamic argument is checked only as far
+as its literal text. An alias or `hash` entry set outside the command (a shell profile, a sourced
+file) is not known, an alias value ending in a space (which makes bash expand the next word as an
+alias too) is not followed, and a function's positional parameters are not bound to the call's
+arguments (the arguments are checked as reads and writes instead, as above).
 
 ## Three outcomes
 
@@ -175,6 +234,32 @@ The choices are:
 
 Headless sessions and subagents send the same menu through the human console. A console
 without menu support still answers yes/no.
+
+**Console answers are authenticated.** The console's files live in the workspace
+(`.pi/human-console`), where the agent can write, so a file in `resolved/` is not evidence that a
+person answered. Each answer carries an HMAC-SHA256 over the request id, the SHA-256 of the
+request's exact pending bytes and the decision, made with a key at
+`<agent directory>/human-console/response.key` (64 hex characters, mode 0600 in a 0700
+directory, owned by the operator). Only the interactive console creates the key, when its session
+starts; a requester (the firewall, `pentest-governance-domain`, `ask_human`) never does, and one
+that finds no key files nothing and reports that the console must start first. The tool
+firewall, `pentest-governance-domain` and `ask_human` accept only an answer whose MAC verifies
+for the request they wrote; an unsigned, forged, rewritten or replayed answer is deleted,
+audited as `human_console_answer_rejected` and the wait goes on, so it ends in the usual timeout.
+A key that is missing, a symbolic link, open to other users, owned by another user or malformed,
+or a key directory that is a symbolic link, open to other users or another user's, makes the
+console unavailable (UNCERTAIN, fail closed). The key is outside the workspace and the console
+directory. The firewall classifies `<agent directory>/human-console` as a credential for reads and
+a security control for writes: reading the key directly, through a glob, by reading the directory
+or the agent directory recursively, or with `find -exec` is a high-tier credential read, and
+writing the key or creating, linking, copying or moving the directory is high. This keeps the
+agent's tool calls away from the key by policy, not by the kernel. Residual risks: inline
+interpreter code that builds the key's path at run time is not recognised by that rule (the
+firewall cannot see a path assembled at run time), and code inside a pi process (an extension), a
+same-user process that is not a tool call, or an agent whose request to read the key you approve
+can read it.
+`tests/human-console-auth-smoke.ts` (`npm run smoke:human-console-auth`) pins the key checks, the
+refusals, the classifier tiers for those read and write forms and an end-to-end approval.
 
 ### What an approval covers
 
@@ -331,8 +416,11 @@ The installer and `/profile` write it from the profile's `firewall` field:
   current session's mode are already automatic it asks at the terminal of an interactive root
   session, with "No, keep manual approvals" as the first choice. It asks even while
   `PI_KIT_AUTO_MODE=1` makes the current session automatic, because it writes the saved mode, and it asks when a project `.pi/auto-mode.json` exists and
-  does not already say `{"enabled": true}`, because it rewrites that file, even while
-  `PI_KIT_AUTO_MODE=1` overrides the file for the current session. Over RPC (a
+  does not already say `{"enabled": true}`, even while `PI_KIT_AUTO_MODE=1` overrides the file
+  for the current session. `/auto` writes the legacy file only in an operator-set
+  `PI_KIT_AUTO_MODE_STATE_DIR`, without following a symbolic link there; a project's own
+  `.pi/auto-mode.json` is repository content and is never written, so one that selects manual
+  approvals stays in force until you remove it (`tests/workspace-symlink-smoke.ts`). Over RPC (a
   linked phone or the web console), headless and in delegated/child sessions it is refused; a
   scripted run sets `PI_KIT_AUTO_MODE=1` instead. `/auto off` never asks
   (`tests/auto-mode-smoke.ts`).
@@ -416,6 +504,18 @@ extension loads:
   process could rewrite, or the pentest policy, means **not unattended**, with a loud warning
   (stderr at load, a notice at session start, `/firewall status`). The normal interactive or
   headless rules then apply: fail closed, never silently permissive.
+- A read-only mount or a foreign owner proves the contract came from outside only in the initial
+  user namespace. Any user can create a user and mount namespace (and a PID namespace, in which its
+  own process is PID 1) and make a read-only bind mount there, or own files as one of its
+  subordinate ids (`/etc/subuid`). So both proofs count only when the process is in the initial
+  user namespace (the kernel's fixed initial namespace id and the identity uid map); a read-only
+  mount counts only in PID 1's mount namespace as well, and a foreign owner never when it is one of
+  the user's subordinate ids. A worker in a rootful engine's container (Docker without user
+  namespace remapping) passes. A worker under a rootless engine is in a user namespace its user
+  made, which cannot be told apart from one an agent made, so it is not unattended and the normal
+  headless rules apply. `tests/firewall-unattended-smoke.ts` covers each case, including real
+  `unshare` namespaces, with and without a PID namespace and its own `/proc`, where the kernel
+  allows them.
 - The contract is re-read on every call. Any change to it, or its removal, turns the mode off
   for the rest of the process.
 - It is visible: `globalThis[Symbol.for("pi-kit.unattended")]` is a frozen
@@ -474,6 +574,9 @@ session". It is the regression and tuning tool:
   sends the other 28 to the judge, which asks you only about steps that differ from it.
 
 ## Limits
+
+Where the gate sits among the kit's trust boundaries, and what it is not meant to stop, is in the
+[threat model](threat-model.md).
 
 This is still a decision gate, not a sandbox. An allowed call runs with the agent's full
 privileges. The parser covers the shell forms agents actually produce, and unparseable input

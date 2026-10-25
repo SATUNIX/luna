@@ -41,7 +41,11 @@ cannot be read, the console must answer its health endpoint.
 
 1. `PI_KIT_WEBUI_ROOT` (explicit override)
 2. relative to this extension (`<root>/packages/extensions/src/web-console` → `<root>/packages/web-ui`)
-3. the checkout recorded in `~/.pi/agent/.pi-kit.json`
+3. the `kitSource` checkout in the install marker (a project `.pi/.pi-kit.json`, else
+   `~/.pi/agent/.pi-kit.json`), only when it is an absolute path that resolves, through any links,
+   outside the workspace and whose `package.json` names the kit. A committed project marker is
+   repository content, so any other `kitSource` is ignored with a warning and never chooses the
+   server that runs (`packages/core/shared/kit-source.ts`, pinned by `tests/kit-root-trust-smoke.ts`).
 
 Generated npm surfaces do not ship the web UI, so the command reports that clearly instead of
 guessing.

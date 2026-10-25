@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord, parseJson } from "../../core/lib/guard.ts";
+import { redactSecrets as redactKitSecrets } from "../../core/shared/redact.ts";
 import { untrusted } from "./templates/common.ts";
 
 export const NOTEBOOK_SCHEMA = 1;
@@ -102,32 +103,11 @@ export type NotebookParse =
   | { ok: false; problems: string[] };
 
 // --- redaction ---------------------------------------------------------------
-// Copied from packages/extensions/src/memory-vault/vault.ts (the autonomy package does not import
-// extensions); tests/autonomy-notebook-smoke.ts fails when the two pattern lists differ.
-const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
-  /\bsk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /\b((?:api[_-]?key|secret|token|password|passwd|pwd|auth)["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
-];
+// The kit's canonical table (packages/core/shared/redact.ts); tests/redaction-corpus-smoke.ts checks it.
 
 /** `text` with secret-shaped values replaced, and how many were replaced. */
 export function redactSecrets(text: string): { text: string; count: number } {
-  let out = text;
-  let count = 0;
-  for (const re of SECRET_PATTERNS) {
-    out = out.replace(re, (m: string, prefix: unknown) => {
-      count++;
-      return typeof prefix === "string" && m.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]";
-    });
-  }
-  return { text: out, count };
+  return redactKitSecrets(text);
 }
 
 // --- parsing -----------------------------------------------------------------

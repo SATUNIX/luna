@@ -6,6 +6,7 @@ import os from "node:os";
 import https from "node:https";
 import http from "node:http";
 import { URL } from "node:url";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 interface MemoryEntry {
   id: string;
@@ -310,9 +311,8 @@ function memoryContribPath(cwd: string): string {
 
 function writeRecallContribution(cwd: string, entries: MemoryEntry[]): void {
   try {
-    const dir = path.dirname(memoryContribPath(cwd));
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(
       memoryContribPath(cwd),
       JSON.stringify({
         id: "memory-local",
@@ -320,7 +320,7 @@ function writeRecallContribution(cwd: string, entries: MemoryEntry[]): void {
         budgetTokens: 400,
         content: `## Recalled memory\n${formatEntries(entries)}`,
       }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     /* best effort */

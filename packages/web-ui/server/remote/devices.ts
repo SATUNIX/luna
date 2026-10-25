@@ -75,6 +75,8 @@ export class DeviceRegistry {
 	readonly file: string;
 	private readonly devices = new Map<string, DeviceRecord>();
 	private readonly keys = new Map<string, crypto.KeyObject>();
+	/** Devices kept in the file but not trusted to log in (remote-host.ts: no pairing record in the audit log). */
+	private readonly suspended = new Set<string>();
 	private dirty = false;
 	private lastWrite = 0;
 
@@ -105,8 +107,19 @@ export class DeviceRegistry {
 		return this.devices.get(id) ?? null;
 	}
 
+	/** The key a device logs in with; none for a suspended device, so it cannot get a token. */
 	publicKey(id: string): crypto.KeyObject | null {
+		if (this.suspended.has(id)) return null;
 		return this.keys.get(id) ?? null;
+	}
+
+	/** Keep a device listed but refuse its logins until it is paired again (or revoked). */
+	suspend(id: string): void {
+		if (this.devices.has(id)) this.suspended.add(id);
+	}
+
+	isSuspended(id: string): boolean {
+		return this.suspended.has(id);
 	}
 
 	/** Find a device by full id or an unambiguous prefix (dashes ignored, case-insensitive). Only a string matches. */
@@ -137,6 +150,7 @@ export class DeviceRegistry {
 		};
 		this.devices.set(record.id, record);
 		this.keys.set(record.id, parsed.key);
+		this.suspended.delete(record.id); // paired again through the operator: trusted again
 		this.save();
 		return record;
 	}
@@ -152,6 +166,7 @@ export class DeviceRegistry {
 	remove(id: string): boolean {
 		const existed = this.devices.delete(id);
 		this.keys.delete(id);
+		this.suspended.delete(id);
 		if (existed) this.save();
 		return existed;
 	}

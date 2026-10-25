@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import { Type } from "typebox";
 import { finalAssistantOutput, pendingValidatorFindings, registerValidatorTools } from "./validate/validator.ts";
+import { appendFileSafe, createFileExclusive, openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 
 // conductor: durable, restartable engagement lifecycle state. It only contributes
 // context for context-sieve to inject; it never injects a system prompt itself.
@@ -143,11 +144,8 @@ function readEngagement(cwd: string): Engagement | null {
 
 // Atomic write: a reader on another turn never sees a partially-written engagement record.
 function saveEngagement(cwd: string, engagement: Engagement): void {
-  const file = engagementFile(cwd);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(engagement, null, 2), "utf8");
-  fs.renameSync(temp, file);
+  // Workspace state is written without following committed symlinks (./shared/safe-fs.ts).
+  writeFileSafe(engagementFile(cwd), JSON.stringify(engagement, null, 2), { root: cwd });
 }
 
 // Shared completion contract: tests/verifier-board-trust-smoke.ts pins all local readers.
@@ -240,9 +238,7 @@ function shortHash(value: string): string {
 
 function appendTrace(cwd: string, entry: TraceEntry): void {
   try {
-    const file = path.join(cwd, ".pi", "trace.jsonl");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf8");
+    appendFileSafe(path.join(cwd, ".pi", "trace.jsonl"), JSON.stringify(entry) + "\n", { root: cwd });
   } catch {
     /* best effort: audit logging never breaks an engagement operation */
   }
@@ -270,10 +266,11 @@ export function withEngagementLock<T>(cwd: string, operation: () => T): T | { ok
   const lock = path.join(cwd, ".pi", "engagement", "recursion.lock");
   let fd: number | undefined;
   try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    try { fd = fs.openSync(lock, "wx"); } catch {
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
-      try { fd = fs.openSync(lock, "wx"); } catch { return { ok: false, reason: "engagement ledger is busy or unreadable" }; }
+    fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+    if (fd === undefined) {
+      try { if (Date.now() - fs.lstatSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
+      fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+      if (fd === undefined) return { ok: false, reason: "engagement ledger is busy or unreadable" };
     }
     try { return operation(); } finally {
       try { if (fd !== undefined) fs.closeSync(fd); } catch { /* release best effort */ }
@@ -493,7 +490,7 @@ export const runSpecialistProcess: SpecialistRunner = async (cwd, agent, task, c
   if (!launchApproved(definition.digest)) return { ok: false, reason: `specialist role ${agent} is not approved, or changed after it was approved` };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-conductor-specialist-")); const promptFile = path.join(dir, "agent.md");
   try {
-    fs.writeFileSync(promptFile, definition.prompt, { encoding: "utf8", mode: 0o600 });
+    createFileExclusive(promptFile, definition.prompt, { root: dir, mode: 0o600 });
     const bounds = specialistBounds();
     const cli = fileURLToPath(new URL("./cli.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
     const args = ["--mode", "json", "-p", "--no-session", "--tools", definition.tools.join(","), "--append-system-prompt", promptFile];
@@ -587,13 +584,12 @@ function writeContribution(cwd: string, engagement: Engagement | null): void {
       fs.rmSync(file, { force: true });
       return;
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({
+    writeFileSafe(file, JSON.stringify({
       id: "conductor",
       priority: 80,
       budgetTokens: 300,
       content: `## Engagement\nPhase: ${engagement.phase} (started ${engagement.startedAt})`,
-    }), "utf8");
+    }), { root: cwd });
   } catch {
     /* best effort */
   }

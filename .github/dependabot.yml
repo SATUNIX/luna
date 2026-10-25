@@ -53,6 +53,21 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # The pinned pi and pi-mcp-adapter tool lockfiles the autonomy and container images install from.
+  - package-ecosystem: npm
+    directories:
+      - /packages/autonomy/image/tools
+      - /packages/container/tools
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      image-tools:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
   # The docs toolchain (requirements-docs.txt).
   - package-ecosystem: pip
     directory: /

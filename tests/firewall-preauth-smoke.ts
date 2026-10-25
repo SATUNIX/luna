@@ -17,6 +17,7 @@ import { loadModule, setEnv, tmpWorkspace, rmWorkspace, ROOT } from "../packages
 import { isRecord } from "../packages/core/lib/guard.ts";
 import type * as DelegationGuard from "../packages/extensions/src/delegation-guard/index.ts";
 import type { Completer } from "../packages/extensions/src/tool-firewall/judge.ts";
+import { signedAnswerText, startConsole } from "./console-answer.ts";
 
 interface ToolResult {
   content: Array<{ type: string; text: string }>;
@@ -144,6 +145,7 @@ const restores = [
   setEnv("PI_KIT_INTERNAL_CHILD", undefined),
   setEnv("PI_KIT_FIREWALL_ROOT_SESSION", undefined),
 ];
+startConsole(); // the console creates the answer key; requesters never do
 fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
 // The firewall broker's poll timer is unref'd in production; this offline harness has no other
 // ref'd handles while it awaits a broker resolution/timeout, so hold the loop open.
@@ -315,13 +317,14 @@ try {
     config("manual");
     const pendingDir = path.join(consoleDir, "pending");
     const resolvedDir = path.join(consoleDir, "resolved");
-    const answer = async (): Promise<{ id: string }> => {
+    const answer = async (): Promise<{ id: string; bytes: Buffer }> => {
       await until(() => fs.existsSync(pendingDir) && fs.readdirSync(pendingDir).some((f) => f.endsWith(".json")), "broker request", 8000);
       const file = fs.readdirSync(pendingDir).find((f) => f.endsWith(".json"));
       assert.ok(file, "broker request file");
-      const req = JSON.parse(fs.readFileSync(path.join(pendingDir, file), "utf8")) as { id: string };
+      const bytes = fs.readFileSync(path.join(pendingDir, file));
+      const req = JSON.parse(bytes.toString("utf8")) as { id: string };
       fs.unlinkSync(path.join(pendingDir, file));
-      return req;
+      return { id: req.id, bytes };
     };
     const s = await session();
     let r = await s.run([{ id: "high", command: HIGH }, { id: "low", command: LOW }]);
@@ -329,7 +332,7 @@ try {
     await sleep(150);
     assert.equal(s.log.length, 0, "nothing ran while the broker request was pending");
     fs.mkdirSync(resolvedDir, { recursive: true });
-    fs.writeFileSync(path.join(resolvedDir, `${req.id}.json`), JSON.stringify({ id: req.id, approved: false }));
+    fs.writeFileSync(path.join(resolvedDir, `${req.id}.json`), signedAnswerText(req.bytes, req.id, { approved: false }));
     await r.done;
     assert.ok(!s.executed("high") && s.executed("low"));
 
@@ -337,7 +340,7 @@ try {
     r = await s2.run([{ id: "high", command: HIGH }]);
     const req2 = await answer();
     assert.equal(s2.log.length, 0);
-    fs.writeFileSync(path.join(resolvedDir, `${req2.id}.json`), JSON.stringify({ id: req2.id, approved: true, answer: "Allow once" }));
+    fs.writeFileSync(path.join(resolvedDir, `${req2.id}.json`), signedAnswerText(req2.bytes, req2.id, { approved: true, answer: "Allow once" }));
     await r.done;
     assert.ok(s2.executed("high"));
 

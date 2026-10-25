@@ -33,7 +33,7 @@ In rough priority order:
    operator events and verified off-boundary attestation; implement content screening, the
    OpenAPPA flow engine, intent ledger and detector before advertising their protection.
    Review any additional relaxed admissions against narrower classifier effects.
-   Decide whether `secret-guard` should be a default layer; teach the
+   Decide whether `secret-guard` should load in the remaining profiles; teach the
    classifier the names of reviewed companion tools; tighten manual-mode reads if the prompt
    volume proves acceptable.
 6. **Autonomous runs.** More run templates, and operator-facing tooling to inspect and resume a

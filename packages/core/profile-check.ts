@@ -43,6 +43,7 @@ import { resolveProfile } from "./lib/resolve.ts";
 import { mergePackageBlock, readSettings } from "./lib/settings.ts";
 import { loadExtension, fakePi } from "./eval/harness.ts";
 import { requiredProfileExtensions } from "./distribution-contract.ts";
+import { protectionCoverageProblems } from "./lib/protection-coverage.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, extensionRelPath } from "./lib/paths.ts";
 
 type ResolvedExtension = ReturnType<typeof resolveProfile>[number];
@@ -96,14 +97,16 @@ function checkStubsAndOrdering(includes: readonly string[], label: string, isExp
 // warning when auto-compaction is off or cannot work, so a profile without it has no way to see or fix
 // either. Also prints how the profile manages compaction, so `npm run profile:check` documents the
 // per-profile difference instead of leaving it implicit.
-// (secret-guard is quarantined - it ships in no profile - so it is not required here.)
+// Every mandatory protection (tool-firewall, secret-guard, protected-paths) must be included or carry
+// a recorded exemption in packages/core/lib/protection-coverage.ts (tests/profile-protections-smoke.ts).
 const REQUIRED_EVERYWHERE = requiredProfileExtensions();
 const FIREWALL_POLICIES = ["coding", "pentest"];
 const FIREWALL_MODES = ["auto", "manual"];
-function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readonly string[], label: string): void {
-  for (const name of REQUIRED_EVERYWHERE) {
-    if (!includes.includes(name)) fail(`${label}: '${name}' is missing (every profile must carry it)`);
+function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readonly string[], label: string, name: string): void {
+  for (const required of REQUIRED_EVERYWHERE) {
+    if (!includes.includes(required)) fail(`${label}: '${required}' is missing (every profile must carry it)`);
   }
+  for (const problem of protectionCoverageProblems(name, includes)) fail(`${label}: ${problem}`);
   if (!["relaxed", "balanced", "guarded", "strict"].includes(String(def.securityLevel))) fail(`${label}: unknown or missing securityLevel ${JSON.stringify(def.securityLevel)}`);
   const fw = def.firewall;
   if (fw !== undefined) {
@@ -222,7 +225,7 @@ async function checkProfile(name: string): Promise<void> {
     return;
   }
   checkStubsAndOrdering(includes, `profile ${name}`, !!def.experimental);
-  checkSafetyAndCompaction(def, includes, `profile ${name}`);
+  checkSafetyAndCompaction(def, includes, `profile ${name}`, name);
   const resolved = checkInstallNarrowing(includes, `profile ${name}`);
   if (resolved) await checkLoad(resolved, `profile ${name}`);
 }

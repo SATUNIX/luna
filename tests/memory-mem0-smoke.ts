@@ -10,10 +10,26 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { insecureKeyProblem } from "../packages/extensions/src/memory-mem0/index.ts";
 import { isolateKitEnv, loadExtension, fakePi, rmWorkspace, setEnv, textOf, tmpWorkspace } from "../packages/core/eval/harness.ts";
 
 const server = http.createServer((req, res) => {
   requestCount++;
+  let body = "";
+  req.on("data", (c: Buffer) => { body += c.toString(); });
+  req.on("end", () => {
+    lastBody = body;
+    respond(res);
+  });
+});
+
+function respond(res: http.ServerResponse): void {
+  if (mode === "huge") {
+    // Larger than the extension's response cap (4 MiB): the read must stop, not buffer it all.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(`{"results":[{"memory":"${"x".repeat(5 * 1024 * 1024)}"}]}`);
+    return;
+  }
   res.writeHead(mode === "500" ? 500 : 200, { "Content-Type": "application/json" });
   if (mode === "healthy") {
     res.end(JSON.stringify({ results: [{ memory: "the sky is blue" }] }));
@@ -24,10 +40,11 @@ const server = http.createServer((req, res) => {
   } else {
     res.end(JSON.stringify({ detail: "internal server error" }));
   }
-});
+}
 
 let mode = "healthy";
 let requestCount = 0;
+let lastBody = "";
 
 type FakePi = ReturnType<typeof fakePi>;
 
@@ -206,6 +223,32 @@ async function run(): Promise<void> {
       const pi = await loadMem0(port);
       assert.equal(await search(pi, "sky"), "No results.", "a non-list results field is no results");
     }
+
+    // (d) A memory leaves the process and outlives the session, so a secret-shaped value
+    // in it is masked before the request is sent. The value is synthetic and built at run time.
+    mode = "healthy";
+    {
+      const pi = await loadMem0(port);
+      const value = "example" + "0000".repeat(4);
+      await add(pi, `remember DB_PASSWORD=${value} for later`);
+      assert.match(lastBody, /DB_PASSWORD=\[REDACTED\]/, `the stored memory is redacted (got ${lastBody})`);
+      assert.ok(!lastBody.includes(value), "the secret value never reaches the server");
+    }
+
+    // (e) An oversized response is refused instead of being buffered without limit.
+    mode = "huge";
+    {
+      const pi = await loadMem0(port);
+      assert.match(await search(pi, "sky"), /larger than/i, "an oversized response is reported as an error");
+    }
+
+    // (f) The API key is sent only over https:// or to a loopback host, unless the operator opts in.
+    assert.equal(insecureKeyProblem(new URL("https://mem0.example.invalid"), true, false), null);
+    assert.equal(insecureKeyProblem(new URL("http://127.0.0.1:8000"), true, false), null);
+    assert.equal(insecureKeyProblem(new URL("http://localhost:8000"), true, false), null);
+    assert.equal(insecureKeyProblem(new URL("http://mem0.example.invalid"), false, false), null, "no key, nothing to protect");
+    assert.match(insecureKeyProblem(new URL("http://mem0.example.invalid"), true, false) ?? "", /plain http/);
+    assert.equal(insecureKeyProblem(new URL("http://mem0.example.invalid"), true, true), null, "the opt-in allows it");
 
     await checkMcpTransport();
 

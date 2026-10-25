@@ -10,8 +10,13 @@
 //     opens reaches the phone and the phone's answer reaches the child;
 //   - a terminal session attached over the control channel can be watched and driven;
 //   - revoking a device ends its token and its open streams; repeated failed logins block;
-//   - shutdown stops children and removes control.json.
+//   - shutdown stops children and removes control.json;
+//   - SEC-5 compensating controls: approving needs the device ID's last four characters, a second
+//     claim of a code cancels the pairing, an approval from a process that is not an interactive
+//     terminal is refused, every phone dialog answer is audited with its device, a device record
+//     with no pairing approval on record is suspended at start, and binding every interface warns.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -230,7 +235,7 @@ try {
 		assert.equal(res.status, 202);
 		const waiting = phone.request<PairJson>("GET", `/v1/pair/${jsonOf(res).requestId}?wait=10`);
 		const evt = await admin.waitFor((m) => m.t === "evt" && m.name === "pair.request" && evtData(m).name === "Pixel Test");
-		await admin.request("pair.decide", { requestId: evtData(evt).requestId, approve: true });
+		await admin.request("pair.decide", { requestId: evtData(evt).requestId, approve: true, confirm: evtData(evt).deviceId.slice(-4) });
 		const decided = await waiting;
 		assert.equal(jsonOf(decided).state, "approved");
 		assert.equal(jsonOf(decided).deviceId, jsonOf(res).deviceId);
@@ -255,7 +260,7 @@ try {
 		assert.equal(res.status, 202, res.text);
 		const waiting = leaver.request<PairJson>("GET", `/v1/pair/${jsonOf(res).requestId}?wait=10`);
 		const evt = await admin.waitFor((m) => m.t === "evt" && m.name === "pair.request" && evtData(m).name === "Leaving Phone");
-		await admin.request("pair.decide", { requestId: evtData(evt).requestId, approve: true });
+		await admin.request("pair.decide", { requestId: evtData(evt).requestId, approve: true, confirm: evtData(evt).deviceId.slice(-4).toLowerCase() });
 		assert.equal(jsonOf(await waiting).state, "approved");
 		leaver.deviceId = jsonOf(res).deviceId;
 		assert.equal((await leaver.login()).status, 200);
@@ -270,6 +275,89 @@ try {
 		const list = await admin.request<DeviceList>("devices.list");
 		assert.ok(!list.devices.some((d) => d.id === leaver.deviceId));
 		assert.ok(list.devices.some((d) => d.id === phone.deviceId), "other phones stay linked");
+	});
+
+	await check("approving needs the device ID's last four characters from the phone; a wrong value rejects", async () => {
+		const offer = await admin.request<PairOffer>("pair.create");
+		const p = new PhoneClient({ port: host.port, fingerprint: host.fingerprint, name: "Unchecked Phone" });
+		const res = await p.pair<PairJson>(offer.code);
+		assert.equal(res.status, 202, res.text);
+		const evt = await admin.waitFor((m) => m.t === "evt" && m.name === "pair.request" && evtData(m).name === "Unchecked Phone");
+		const wrong = evtData(evt).deviceId.slice(-4) === "0000" ? "1111" : "0000";
+		const result = await admin.request<{ state: string; reason: string }>("pair.decide", { requestId: evtData(evt).requestId, approve: true, confirm: wrong });
+		assert.equal(result.state, "rejected", "a wrong confirmation rejects, it does not approve");
+		assert.match(result.reason, /did not match/);
+		const none = await admin.request<{ state: string }>("pair.decide", { requestId: evtData(evt).requestId, approve: true, confirm: evtData(evt).deviceId.slice(-4) });
+		assert.equal(none.state, "rejected", "the decision is final");
+		const list = await admin.request<DeviceList>("devices.list");
+		assert.ok(!list.devices.some((d) => d.id === evtData(evt).deviceId), "nothing was linked");
+	});
+
+	await check("a second device presenting a claimed code cancels the pairing (second claim refused)", async () => {
+		const offer = await admin.request<PairOffer>("pair.create");
+		const first = new PhoneClient({ port: host.port, fingerprint: host.fingerprint, name: "First Phone" });
+		const second = new PhoneClient({ port: host.port, fingerprint: host.fingerprint, name: "Second Phone" });
+		const res = await first.pair<PairJson>(offer.code);
+		assert.equal(res.status, 202, res.text);
+		const evt = await admin.waitFor((m) => m.t === "evt" && m.name === "pair.request" && evtData(m).name === "First Phone");
+		const contested = await second.pair<{ code: string }>(offer.code);
+		assert.equal(contested.status, 409, contested.text);
+		assert.equal(jsonOf(contested).code, "offer_contested");
+		await admin.waitFor((m) => m.t === "evt" && m.name === "pair.request.closed" && evtData(m).requestId === evtData(evt).requestId);
+		const poll = await first.request<PairJson & { reason: string }>("GET", `/v1/pair/${jsonOf(res).requestId}`);
+		assert.equal(jsonOf(poll).state, "cancelled", "the first claim is cancelled too: the code has leaked");
+		const late = await admin.request<{ state: string }>("pair.decide", { requestId: evtData(evt).requestId, approve: true, confirm: evtData(evt).deviceId.slice(-4) });
+		assert.equal(late.state, "cancelled", "a contested request cannot be approved");
+		const audit = fs.readFileSync(path.join(sandbox.stateDir, "audit.jsonl"), "utf8");
+		assert.match(audit, /"event":"pair_second_claim"/);
+	});
+
+	await check("a phone approval from a process that is not an interactive terminal is refused", async () => {
+		// A detached child, as pi runs an agent's shell command: its own session, no controlling terminal.
+		const script = `const net = await import("node:net");
+const [port, secret] = process.argv.slice(1);
+const socket = net.connect({ host: "127.0.0.1", port: Number(port) });
+let buffer = "";
+socket.setEncoding("utf8");
+socket.on("connect", () => { socket.write(JSON.stringify({ t: "hello", secret, role: "admin" }) + "\\n"); socket.write(JSON.stringify({ t: "req", id: "1", op: "pair.create" }) + "\\n"); });
+socket.on("data", (chunk) => {
+  buffer += chunk;
+  let nl;
+  while ((nl = buffer.indexOf("\\n")) !== -1) {
+    const msg = JSON.parse(buffer.slice(0, nl)); buffer = buffer.slice(nl + 1);
+    if (msg.t === "res" && msg.id === "1") console.log("OFFER " + msg.data.code);
+    if (msg.t === "evt" && msg.name === "pair.request") socket.write(JSON.stringify({ t: "req", id: "2", op: "pair.decide", requestId: msg.data.requestId, approve: true, confirm: msg.data.deviceId.slice(-4) }) + "\\n");
+    if (msg.t === "res" && msg.id === "2") { console.log("DECIDE " + JSON.stringify(msg)); } // stays connected: closing would cancel the request
+  }
+});`;
+		const child = spawn(process.execPath, ["--input-type=module", "-e", script, String(host.control.port), host.control.secret], { detached: true, stdio: ["pipe", "pipe", "pipe"] });
+		let out = "";
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (c: string) => (out += c));
+		const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+		try {
+			await waitUntil(() => /^OFFER /m.test(out), 10_000, "the detached client to open an offer");
+			const code = /^OFFER (\S+)/m.exec(out)?.[1] ?? "";
+			const p = new PhoneClient({ port: host.port, fingerprint: host.fingerprint, name: "Agent Phone" });
+			const res = await p.pair<PairJson>(code);
+			assert.equal(res.status, 202, res.text);
+			await waitUntil(() => /^DECIDE /m.test(out), 10_000, "the detached client's decision");
+			assert.match(out, /"ok":false/, "the approval is refused");
+			assert.match(out, /"status":403/);
+			assert.match(out, /interactive terminal/);
+			if (process.platform === "linux") assert.match(out, /no controlling terminal/, "the host found the client's process and judged it");
+			const poll = await p.request<PairJson>("GET", `/v1/pair/${jsonOf(res).requestId}`);
+			assert.equal(jsonOf(poll).state, "pending", "nothing was decided");
+			const list = await admin.request<DeviceList>("devices.list");
+			assert.ok(!list.devices.some((d) => d.id === jsonOf(res).deviceId), "nothing was linked");
+			const audit = fs.readFileSync(path.join(sandbox.stateDir, "audit.jsonl"), "utf8");
+			assert.match(audit, /"event":"pair_decide_refused"/);
+			const approvedBy = audit.trim().split("\n").map((l) => JSON.parse(l) as { event: string; decidedBy?: { pid: number } }).filter((r) => r.event === "pair_approved");
+			assert.ok(approvedBy.length > 0 && approvedBy.every((r) => r.decidedBy?.pid === process.pid), "every approval names the terminal process that gave it");
+		} finally {
+			child.kill();
+			await exited;
+		}
 	});
 
 	await check("challenges are single use and bound to the certificate", async () => {
@@ -349,6 +437,12 @@ try {
 		assert.equal(answer.status, 200, answer.text);
 		await stream.waitFor((f) => f.event === "ui_resolved" && f.data.id === request.data.dialog.id);
 		await waitUntil(() => sandbox.stubEvents().some((e) => e.event === "cmd" && e.cmd.type === "extension_ui_response" && e.cmd.value === "Deny"), 5000, "the child to receive the answer");
+		// The answer is audited with the device that gave it (SEC-5 compensating control).
+		const answers = fs.readFileSync(path.join(sandbox.stateDir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>).filter((r) => r.event === "phone_dialog_answer");
+		assert.equal(answers.length, 1, "one audit record per phone answer");
+		assert.equal(answers[0]?.deviceId, phone.deviceId);
+		assert.equal(answers[0]?.choice, "Deny");
+		assert.equal(answers[0]?.method, "select");
 		const again = await phone.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/ui-response`, { dialogId: request.data.dialog.id, value: "Allow once" });
 		assert.equal(again.status, 404, "a dialog is answered once");
 		stream.close();
@@ -412,13 +506,18 @@ try {
 		assert.equal(level.status, 200, level.text);
 		assert.equal((await bridge.waitFor((m) => m.t === "cmd" && m.op === "set_thinking")).level, "high");
 
-		bridge.send({ t: "ui", dialog: { id: "tdlg1", method: "confirm", title: "Approve tool call?", message: "bash: ls" } });
+		bridge.send({ t: "ui", dialog: { id: "tdlg1", method: "confirm", title: "Approve tool call?", message: "HIGH · bash · ls" } });
 		const ui = await stream.waitFor((f) => f.event === "ui_request");
 		assert.equal(ui.data.dialog.method, "confirm");
 		const answered = await phone.request("POST", "/api/sessions/term-session-1/ui-response", { dialogId: "tdlg1", confirmed: true });
 		assert.equal(answered.status, 200, answered.text);
 		const uiCmd = await bridge.waitFor((m) => m.t === "cmd" && m.op === "ui_response");
 		assert.equal(uiCmd.confirmed, true);
+		assert.equal((uiCmd.by as { deviceId?: string } | undefined)?.deviceId, phone.deviceId, "the terminal is told which phone answered");
+		const termAnswer = fs.readFileSync(path.join(sandbox.stateDir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>).filter((r) => r.event === "phone_dialog_answer" && r.session === "term-session-1");
+		assert.equal(termAnswer.length, 1, "the terminal-session answer is audited once");
+		assert.equal(termAnswer[0]?.tier, "high", "with the approval card's tier");
+		assert.equal(termAnswer[0]?.choice, "yes");
 		await stream.waitFor((f) => f.event === "ui_resolved" && f.data.id === "tdlg1");
 
 		// Bridge frames are untrusted too: a field of the wrong type is ignored or refused, never stringified.
@@ -489,6 +588,38 @@ try {
 			assert.equal(alive, false, `stub pi ${start.pid} still running`);
 		}
 		hostToStop = null;
+	});
+
+	await check("a device record with no pairing approval on record is suspended at start; binding every interface warns", async () => {
+		const planted = makeRemoteSandbox("pi-remote-planted-");
+		let second: RemoteHostHandle | null = null;
+		try {
+			const p = new PhoneClient({ port: 1, fingerprint: "", name: "Planted Phone" });
+			fs.mkdirSync(planted.stateDir, { recursive: true, mode: 0o700 });
+			const record = new DeviceRegistry(path.join(planted.stateDir, "devices.json")).add({ publicKey: p.publicKeyB64, name: "Planted Phone" });
+			second = await startRemoteHost(planted, { env: { PI_REMOTE_BIND: "all" } });
+			p.port = second.port;
+			p.fingerprint = second.fingerprint;
+			p.deviceId = record.id;
+			const out = second.output();
+			assert.match(out, /WARNING: linked device "Planted Phone" .* has no pairing approval in audit\.jsonl/);
+			assert.match(out, /WARNING: bound to every interface .* PI_REMOTE_BIND=tailscale, or loopback/);
+			const ctl = await ControlClient.connect(second.control);
+			try {
+				const status = await ctl.request<{ warnings: string[]; devices: Array<{ id: string; suspended: boolean }> }>("status");
+				assert.ok(status.warnings.some((w) => /bound to every interface/.test(w)), "status carries the bind warning");
+				assert.ok(status.warnings.some((w) => /Planted Phone/.test(w)), "and the suspended device");
+				assert.equal(status.devices.find((d) => d.id === record.id)?.suspended, true);
+			} finally {
+				ctl.close();
+			}
+			const login = await p.login();
+			assert.notEqual(login.status, 200, "a suspended device cannot log in");
+			assert.match(fs.readFileSync(path.join(planted.stateDir, "audit.jsonl"), "utf8"), /"event":"device_unaudited"/);
+		} finally {
+			await second?.stop();
+			planted.cleanup();
+		}
 	});
 } finally {
   restoreKitEnv();

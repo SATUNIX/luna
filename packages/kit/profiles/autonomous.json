@@ -11,7 +11,7 @@
     "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "human-console", "git-checkpoint",
+    "protected-paths", "tool-firewall", "secret-guard", "human-console", "git-checkpoint",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
     "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",

@@ -18,6 +18,8 @@ nav:
       - Migration: migration.md
       - Troubleshooting: troubleshooting.md
       - Security Model: security.md
+      - Threat Model: threat-model.md
+      - Security Controls: security-controls.md
       - Autonomy Gate: autonomy-gate.md
       - Tool I/O Capture: tool-capture.md
       - Web Console: web-console.md
@@ -51,6 +53,10 @@ nav:
       - Recovery Orchestration Mode (design): recovery-orchestration-mode.md
       - Releasing: releasing.md
       - CI Security: ci-security.md
+      - Secure Development Standard: security-standard.md
+      - Vulnerability Management: vulnerability-management.md
+      - Incident Response: incident-response.md
+      - Operator Checklist: operator-checklist.md
   - Reference:
       - Capability Matrix: capability-matrix.md
       - Supply Chain: supply-chain.md

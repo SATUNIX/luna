@@ -75,9 +75,17 @@ log. `/console stop` removes that file.
   printed URL instead.
 - The Content-Security-Policy and the browser behaviour have not been exercised in a real browser
   in this release; if `style-src` proves stricter than assumed, only the progress-bar widths break.
+- **Whoever holds the token, or a linked phone, starts sessions with your authority.** A new
+  session runs `pi --mode rpc` as you, in a folder the caller names, with your installed profile,
+  so the tool firewall and its approvals apply as they do at a terminal. The agents offered for a
+  session come from your agent directory and the kit's (`PI_CONSOLE_PROJECT_AGENTS`), never from
+  the folder the session starts in, and pi in RPC mode loads a folder's own project resources only
+  if you trusted that folder. Continuing a saved session is accepted only for an absolute path to
+  a `.jsonl` regular file inside pi's sessions directory, after symbolic links are resolved, that
+  does not start with `-` (`tests/web-ui-spawn-validate-smoke.ts`).
 - Nothing here was tested on Windows.
 
 The test suites that pin this behaviour are `tests/web-ui-security-smoke.ts`,
-`tests/web-ui-bind-policy-smoke.ts`, `tests/web-ui-rpc-smoke.ts` and
-`packages/web-ui/scripts/ui-smoke.ts`, all run by `npm run check:all` (the first three also by `npm run test:security`). See also
+`tests/web-ui-bind-policy-smoke.ts`, `tests/web-ui-rpc-smoke.ts`, `tests/web-ui-spawn-validate-smoke.ts` and
+`packages/web-ui/scripts/ui-smoke.ts`, all run by `npm run check:all` (all but the last also by `npm run test:security`). See also
 `packages/web-ui/README.md` for the design and features.

@@ -16,9 +16,10 @@ import { stripVTControlCharacters } from "node:util";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { fakePi, isolateKitEnv, loadExtension, loadModule, setEnv } from "../packages/core/eval/harness.ts";
 import type * as RemoteHost from "../packages/extensions/src/remote-control/host.ts";
-import { PhoneClient, makeRemoteSandbox, readControl, waitUntil, type PhoneResponse, type PhoneStream } from "./remote-test-harness.ts";
+import { PhoneClient, TERMINAL_PRELOAD, makeRemoteSandbox, readControl, waitUntil, type PhoneResponse, type PhoneStream } from "./remote-test-harness.ts";
 import { REPO, baseEnv } from "./web-ui-test-harness.ts";
 
 // ---------------------------------------------------------------- types ---
@@ -113,6 +114,10 @@ for (const [key, value] of Object.entries(
 		PI_REMOTE_PORT: "0",
 		PI_REMOTE_NAME: "test-box",
 		PI_KIT_WEBUI_ROOT: path.join(REPO, "packages", "web-ui"),
+		// The host the extension starts approves a phone only from an interactive terminal; this test
+		// process plays the operator's terminal (tests/remote-terminal-preload.ts).
+		NODE_OPTIONS: `--import ${pathToFileURL(TERMINAL_PRELOAD).href}`,
+		PI_REMOTE_TEST_TERMINAL_PIDS: String(process.pid),
 	}),
 )) {
 	restore.push(setEnv(key, value));
@@ -273,11 +278,16 @@ try {
 	phone.deviceId = jsonOf(claim).deviceId;
 	const approval = await nextDialog((d) => d.title.includes("Device ID"));
 	assert.ok(waiting.aborted, "the waiting prompt closed when the request arrived");
-	assert.ok(approval.title.includes(jsonOf(claim).deviceIdDisplay), "the approval prompt shows the phone's device ID");
+	const shownId = jsonOf(claim).deviceIdDisplay;
+	assert.ok(approval.title.includes(`${shownId.slice(0, -4)}····`), "the approval prompt shows the phone's device ID without its last group");
+	assert.ok(!approval.title.includes(shownId), "the last group is typed from the phone, never shown here");
 	assert.ok(approval.title.includes("Smoke Phone"), "and its name");
+	assert.ok(present(approval.options, "approval options")[0]?.startsWith("Approve"), "Approve stays listed first (SEC-5)");
 	const early = await phone.login();
 	assert.equal(early.status, 401, "the phone cannot log in before the terminal approves");
 	approval.answer(present(approval.options, "approval options").find((o) => o.startsWith("Approve")));
+	const typed = await nextDialog((d) => d.title.startsWith("Type the last four characters"));
+	typed.answer(shownId.slice(-4).toLowerCase());
 	await running;
 	const login = await phone.login();
 	assert.equal(login.status, 200, `login after approval: ${login.text}`);
@@ -392,7 +402,12 @@ try {
 	assert.equal(await firewall, "Deny", "the phone's answer is returned to the extension that asked");
 	assert.ok(tuiCopy.aborted, "and the terminal's copy is closed");
 	await stream.waitFor((f) => f.event === "ui_resolved" && f.data.id === request.data.dialog.id && f.data.by === "phone");
-	ok("a phone answers a dialog another extension opened; the terminal's copy closes");
+	// Attributed: the terminal says which phone answered, and the host audits it with the device ID.
+	assert.ok(terminal.notes.some((n) => /"Smoke Phone" \(.+\) answered "Allow bash: .*" from the phone: Deny/.test(n.message)), "the terminal is told which phone answered");
+	const phoneAnswers = fs.readFileSync(path.join(sandbox.stateDir, "audit.jsonl"), "utf8").trim().split("\n").filter((l) => l.includes('"event":"phone_dialog_answer"'));
+	assert.equal(phoneAnswers.length, 1, "one audit record for the phone's answer");
+	assert.ok(phoneAnswers[0]?.includes(`"deviceId":"${phone.deviceId ?? ""}"`) && phoneAnswers[0].includes('"choice":"Deny"'), "naming the device and the choice");
+	ok("a phone answers a dialog another extension opened; the terminal's copy closes; the answer is attributed and audited");
 
 	const confirm = ctx.ui.confirm("Proceed?", "Deploy to staging");
 	const confirmRequest = await stream.waitFor((f) => f.event === "ui_request" && f.data.dialog.method === "confirm");

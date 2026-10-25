@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadExtension, fakePi, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { answerPending, startConsole } from "./console-answer.ts";
 
 type Note = [message: string, level: string | undefined];
 
@@ -26,6 +27,7 @@ async function fixture(policy: unknown) {
     setEnv("PI_KIT_HUMAN_CONSOLE_DIR", path.join(workspace, "console")),
     setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "2000"),
   ];
+  startConsole(); // the console creates the answer key; requesters never do
   const notes: Note[] = [];
   const ctx = { cwd: workspace, hasUI: true, ui: { notify: (message: string, level?: string) => notes.push([message, level]), confirm: async () => true } };
   const register = await loadExtension("extensions/tool-firewall/index.ts");
@@ -164,9 +166,7 @@ async function pendingBrokerRechecksPolicy(): Promise<void> {
     assert.ok(requestFile, "broker request is pending");
     const id = requestFile.replace(/\.json$/, "");
     fs.writeFileSync(f.policyFile, JSON.stringify({ ...base, tools: { pending: { decision: "deny" } } }));
-    const resolved = path.join(f.workspace, "console", "resolved");
-    fs.mkdirSync(resolved, { recursive: true });
-    fs.writeFileSync(path.join(resolved, requestFile), JSON.stringify({ id, approved: true, answer: "Allow for this session" }));
+    answerPending(path.join(f.workspace, "console"), id, { approved: true, answer: "Allow for this session" });
     const result = await pending;
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /HARD DENY/);

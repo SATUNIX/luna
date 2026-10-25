@@ -51,6 +51,12 @@ that removes `tool-firewall`, `secret-guard` or `protected-paths` stops the swit
 another extension every profile requires (`delegation-guard`, `effort`, `session-helpers`) is
 ignored with a warning (`tests/profile-safety-smoke.ts`).
 
+Those three are the mandatory protections. Every shipped profile loads `tool-firewall` and
+`protected-paths`; `secret-guard` loads in `balanced` and `autonomous`, and each other profile
+records why it goes without it in `packages/core/lib/protection-coverage.ts`. `npm run profile:check`
+fails a profile that drops a mandatory protection without a recorded exemption
+(`tests/profile-protections-smoke.ts`).
+
 ## The lite profile
 
 `lite` is for small local coding models. It loads:

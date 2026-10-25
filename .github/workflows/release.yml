@@ -19,7 +19,8 @@ name: release
 # Every other job has read-only permissions and cannot create a release, publish or push.
 # tests/release-workflow-smoke.ts checks this structure statically.
 #
-# Nothing releases unless the full CI gate passes for the same commit.
+# Nothing releases unless the full CI gate and the full security workflow pass for the same commit,
+# and npm receives the exact tarball the plan job built and inspected (its sha512 is checked).
 
 on:
   workflow_dispatch:
@@ -46,10 +47,20 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci.yml
 
+  # The security workflow for the same commit: CodeQL, Semgrep, gitleaks, the dependency
+  # audits, OSV and zizmor. security-events: write is for their SARIF uploads, actions: read for
+  # the OSV reusable workflow.
+  security:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/security.yml
+
   # Side-effect free: plans the version, proves the tarball and `npm publish` would work, and
   # prints what a release would contain. Read-only token, no environment, no secrets.
   plan:
-    needs: gate
+    needs: [gate, security]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -57,6 +68,8 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      integrity: ${{ steps.pack.outputs.integrity }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,7 +104,16 @@ jobs:
             REF="refs/tags/v$(node -p "require('./package.json').version")"
             echo "dry run from $GITHUB_REF: planning as $REF"
           fi
-          tags="$(npm view @satunix/pi-system dist-tags --json 2>/dev/null || echo '{}')"
+          # No published version yet (npm's E404) plans as a first release; any other npm error fails
+          # the job instead of planning against empty dist-tags (tests/workflow-policy-smoke.ts).
+          if tags="$(npm view @satunix/pi-system dist-tags --json 2>"$RUNNER_TEMP/npm-view.err")"; then
+            :
+          elif grep -q E404 "$RUNNER_TEMP/npm-view.err"; then
+            tags='{}'
+          else
+            cat "$RUNNER_TEMP/npm-view.err" >&2
+            exit 1
+          fi
           node packages/core/publish-plan.ts --ref "$REF" --sha "$SHA" --dist-tags "$tags" --write | tee -a "$GITHUB_OUTPUT"
 
       - name: Package check
@@ -103,6 +125,7 @@ jobs:
         run: node packages/core/build-npm.ts
 
       - name: Reproducible tarball
+        id: pack
         env:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
@@ -112,12 +135,22 @@ jobs:
             echo
             node -e 'const p=require("./pack.json")[0]; console.log(`- tarball: \`${p.filename}\`, ${p.files.length} files, ${p.size} bytes packed, ${p.unpackedSize} unpacked`); console.log(`- sha512: \`${p.integrity}\``)'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          node -e 'const p=require("./pack.json")[0]; console.log(`tarball=${p.filename}`); console.log(`integrity=${p.integrity}`)' >> "$GITHUB_OUTPUT"
 
       # `--dry-run` uploads nothing. This is the only npm command in this job.
       - name: npm publish (dry run only)
         env:
           TAG: ${{ steps.plan.outputs.tag }}
-        run: npm publish ./dist/npm --dry-run --access public --tag "$TAG" --ignore-scripts
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "./${TARBALL}" --dry-run --access public --tag "$TAG" --ignore-scripts
+
+      # The inspected tarball is what npm-publish publishes: it is never rebuilt.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-tarball
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Release notes preview
         env:
@@ -167,9 +200,8 @@ jobs:
       contents: read
       id-token: write # npm trusted publishing + provenance
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      # No checkout and no install: this job publishes the tarball the plan job built and
+      # inspected, after checking it is byte-identical (sha512) to what plan reported.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
@@ -181,9 +213,18 @@ jobs:
         run: |
           v="$(npm --version)"; echo "npm $v"
           printf '%s\n' 11.5.1 "$v" | sort -V -C || { echo "npm $v < 11.5.1"; exit 1; }
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Build the npm artefact
-        run: node packages/core/build-npm.ts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-tarball
+          path: tarball
+      - name: The tarball is the one plan inspected
+        env:
+          TARBALL: ${{ needs.plan.outputs.tarball }}
+          INTEGRITY: ${{ needs.plan.outputs.integrity }}
+        run: |
+          actual="sha512-$(openssl dgst -sha512 -binary "tarball/${TARBALL}" | base64 -w0)"
+          if [ "$actual" != "$INTEGRITY" ]; then echo "tarball sha512 differs from the plan job's"; exit 1; fi
+          echo "verified ${TARBALL} ${actual}"
       - name: Skip if already published
         id: exists
         env:
@@ -202,4 +243,5 @@ jobs:
           # Only the very first publish needs a token (a package must exist before a trusted
           # publisher can be attached); leave the secret unset afterwards and OIDC is used.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./dist/npm --provenance --access public --tag "$TAG" --ignore-scripts
+          TARBALL: ${{ needs.plan.outputs.tarball }}
+        run: npm publish "./tarball/${TARBALL}" --provenance --access public --tag "$TAG" --ignore-scripts

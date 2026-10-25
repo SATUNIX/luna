@@ -38,6 +38,41 @@ class ApiError extends Error {
 /** How a dialog is answered: cancelled, a yes/no, or a value (a select option or typed text). */
 export type DialogAnswer = { cancelled: true } | { confirmed: boolean } | { value: string };
 
+/** What a phone-answered dialog showed, as far as the audit record needs it. */
+export interface AnsweredDialog {
+	readonly method: string;
+	readonly title: string;
+	readonly message?: string | undefined;
+	readonly options?: readonly string[] | undefined;
+}
+
+const TIER_HEAD = /^(?:UNCERTAIN · )?(low|MEDIUM|HIGH|CRITICAL) · /;
+
+/**
+ * The audit record for a dialog a phone answered: which device, which session and dialog, the
+ * tool-firewall tier when the dialog is an approval card (its first line names it), and the choice.
+ * Typed text is recorded by length only: it may be anything the operator wrote.
+ */
+export function phoneAnswerRecord(device: Pick<DeviceRecord, "id" | "name">, session: string, dialogId: string, dialog: AnsweredDialog | undefined, answer: DialogAnswer): Record<string, unknown> {
+	const head = `${dialog?.message ?? ""}\n${dialog?.title ?? ""}`.split("\n").map((l) => TIER_HEAD.exec(l.trim())?.[1]).find((t) => t !== undefined);
+	let choice: string;
+	if ("cancelled" in answer) choice = "cancelled";
+	else if ("confirmed" in answer) choice = answer.confirmed ? "yes" : "no";
+	else if (dialog?.options?.includes(answer.value)) choice = answer.value.slice(0, 120);
+	else choice = `typed text (${answer.value.length} characters)`;
+	return {
+		event: "phone_dialog_answer",
+		deviceId: device.id,
+		device: device.name,
+		session,
+		dialogId,
+		method: dialog?.method ?? "unknown",
+		title: (dialog?.title ?? "").split("\n")[0]?.slice(0, 120) ?? "",
+		...(head ? { tier: head.toLowerCase() } : {}),
+		choice,
+	};
+}
+
 /** A pi child this host (or pi-console's routes) started, as the remote API reads it. */
 export interface LiveSession extends DialogSource {
 	readonly publicId: string;
@@ -646,7 +681,15 @@ export function createApi({ console: pc, auth, devices, pairings, limiter, hub, 
 
 	// --------------------------------------------------------- terminal sessions ---
 	/** A phone's command for a terminal session; false when the route is pi-console's (stats, todos, lens). */
-	async function terminalRoute(req: http.IncomingMessage, res: http.ServerResponse, bridged: BridgeSession, sub: string | undefined, method: string): Promise<boolean> {
+	// Every dialog a phone answers is audited with the device, and the terminal is told, so an
+	// approval given from a phone is never anonymous (SEC-5 compensating control).
+	function recordPhoneAnswer(device: DeviceRecord, session: string, dialogId: string, dialog: AnsweredDialog | undefined, answer: DialogAnswer): void {
+		const record = phoneAnswerRecord(device, session, dialogId, dialog, answer);
+		onAudit(record);
+		notify?.(`"${device.name}" (${formatDeviceId(device.id)}) answered${typeof record.tier === "string" ? ` a ${record.tier}-tier` : ""} dialog "${String(record.title)}" from the phone: ${String(record.choice)}`);
+	}
+
+	async function terminalRoute(req: http.IncomingMessage, res: http.ServerResponse, bridged: BridgeSession, sub: string | undefined, method: string, device: DeviceRecord): Promise<boolean> {
 		if (sub === "prompt" && method === "POST") {
 			const body = bodyAs(PromptBodySchema, await readJson(req));
 			const message = body.message?.trim() ?? "";
@@ -684,9 +727,11 @@ export function createApi({ console: pc, auth, devices, pairings, limiter, hub, 
 		if (sub === "ui-response" && method === "POST") {
 			const body = bodyAs(AnswerBodySchema, await readJson(req));
 			const dialogId = str(body.dialogId, "dialogId", { max: 64, pattern: /^[A-Za-z0-9_-]+$/, required: true });
-			if (!bridged.dialogs.has(dialogId)) throw new ApiError(404, "that dialog is no longer open");
+			const dialog = bridged.dialogs.get(dialogId);
+			if (!dialog) throw new ApiError(404, "that dialog is no longer open");
 			const answer = answerFrom(body);
-			await bridged.command("ui_response", { dialogId, ...answer });
+			await bridged.command("ui_response", { dialogId, ...answer, by: { deviceId: device.id, display: formatDeviceId(device.id), name: device.name } });
+			recordPhoneAnswer(device, bridged.id, dialogId, dialog, answer);
 			sendJson(res, 200, { answered: true });
 			return true;
 		}
@@ -743,15 +788,18 @@ export function createApi({ console: pc, auth, devices, pairings, limiter, hub, 
 
 			const bridged = hub.get(id);
 			if (bridged) {
-				if (await terminalRoute(req, res, bridged, sub, method)) return;
+				if (await terminalRoute(req, res, bridged, sub, method, device)) return;
 			} else if (sub === "ui-response" && method === "POST") {
 				const proc = pc.getSession(id);
 				if (!proc?.alive) throw new ApiError(404, "session is not running");
 				const body = bodyAs(AnswerBodySchema, await readJson(req));
 				const dialogId = str(body.dialogId, "dialogId", { max: 100, pattern: /^[A-Za-z0-9._:-]+$/, required: true });
 				if (!dialogs.has(proc, dialogId)) throw new ApiError(404, "that dialog is no longer open");
-				proc.respondUi(dialogId, answerFrom(body));
+				const answer = answerFrom(body);
+				const dialog = dialogs.open(proc).find((d) => d.id === dialogId);
+				proc.respondUi(dialogId, answer);
 				dialogs.resolve(proc, dialogId, "phone");
+				recordPhoneAnswer(device, id, dialogId, dialog, answer);
 				sendJson(res, 200, { answered: true });
 				return;
 			}

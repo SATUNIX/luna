@@ -150,9 +150,9 @@ for (const rel of DOCS) {
 // Actually run the safe offline subset documented in the onboarding path.
 execFileSync("node", ["packages/core/profile-check.ts", "--profile", "balanced"], { cwd: ROOT, stdio: "pipe" });
 
-// Secret-guard ships experimental/opt-in (empty `profiles`, `enabledByDefault: false`):
-// no profile `include` lists it. Keep the docs honest about that — the security table
-// must not claim it is in "every profile", and no profile description may name an
+// Secret-guard ships in the balanced and autonomous profiles only (the other profiles record an
+// exemption in packages/core/lib/protection-coverage.ts). Keep the docs honest about that — the
+// security table must not claim it is in "every profile", and no profile description may name an
 // extension its own include list lacks.
 const securityMd = fs.readFileSync(path.join(ROOT, "docs", "security.md"), "utf8");
 for (const line of securityMd.split(/\r?\n/)) {
@@ -265,15 +265,16 @@ for (const name of new Set(recoveryMd.match(/PI_KIT_[A-Z0-9_]+/g) ?? [])) {
 }
 assert.ok(!/\/unstuck\b/.test(recoveryMd), "docs/recovery-orchestration-mode.md offers /unstuck, which no extension registers");
 
-// SEC-8: secret-guard ships in no profile and blocks reads of credential files.
+// SEC-8: secret-guard ships in balanced and autonomous only, and blocks reads of credential files.
 const secretGuardSrc = readRel("packages/extensions/src/secret-guard/index.ts");
 const secretGuardReadme = readRel("packages/extensions/src/secret-guard/README.md");
 const secretGuardManifest: unknown = JSON.parse(readRel("packages/extensions/src/secret-guard/extension.json"));
 assert.ok(typeof secretGuardManifest === "object" && secretGuardManifest !== null && "profiles" in secretGuardManifest && "summary" in secretGuardManifest
   && typeof secretGuardManifest.summary === "string", "secret-guard's extension.json has profiles and a summary");
-assert.deepEqual(secretGuardManifest.profiles, [], "secret-guard's manifest lists no profile; update these guards if that changes");
+assert.deepEqual(secretGuardManifest.profiles, ["balanced", "autonomous"], "secret-guard's manifest lists balanced and autonomous; update these guards if that changes");
+assert.match(secretGuardReadme, /balanced.{0,40}autonomous/s, "secret-guard README must name the profiles that load it");
 for (const [where, text] of [["index.ts header", secretGuardSrc.slice(0, 1200)], ["README.md", secretGuardReadme], ["extension.json summary", secretGuardManifest.summary]] as const) {
-  assert.ok(!/ships in every profile|universal/i.test(text), `secret-guard ${where} must not call it universal or say it ships in every profile (it is opt-in)`);
+  assert.ok(!/ships in every profile|universal/i.test(text), `secret-guard ${where} must not call it universal or say it ships in every profile (it is in balanced and autonomous only)`);
 }
 assert.ok(!/Reading secret files/i.test(secretGuardReadme), "secret-guard README must not say reads of secret files are allowed (index.ts blocks them)");
 for (const name of new Set(secretGuardReadme.match(/`([A-Z][A-Z0-9_]*_PATTERNS)`/g) ?? [])) {

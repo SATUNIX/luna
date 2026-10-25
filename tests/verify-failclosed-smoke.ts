@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AG-04 / M-04 regression coverage: verification must fail closed. Fully offline — no
+ * AG-04 regression coverage: verification must fail closed. Fully offline — no
  * live pi, no network (the verify subprocess this exercises is `node -e "process.exit(N)"`,
  * matching the existing eval fixture's own deterministic stand-in for a broken tsc).
  */

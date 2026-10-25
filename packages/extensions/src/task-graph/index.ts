@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
+import { openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 
 // task-graph: a persistent DAG task board shared by the orchestrator and its implementer subagents.
 // The planner emits tasks (with dependencies); implementers claim the next unblocked task and mark
@@ -65,12 +66,15 @@ function withGraphLock<T>(cwd: string, operation: () => T): { ok: true; value: T
   const lock = path.join(cwd, ".pi", "task-graph.lock");
   let fd: number | undefined;
   try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    try { fd = fs.openSync(lock, "wx"); } catch {
+    // Workspace state: the lock and the graph never go through a committed symlink
+    // (./shared/safe-fs.ts).
+    fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+    if (fd === undefined) {
       try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+        if (Date.now() - fs.lstatSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true });
       } catch { /* fail closed below */ }
-      try { fd = fs.openSync(lock, "wx"); } catch { return { ok: false, reason: "task-graph is busy or unreadable" }; }
+      fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+      if (fd === undefined) return { ok: false, reason: "task-graph is busy or unreadable" };
     }
     try {
       return { ok: true, value: operation() };
@@ -139,12 +143,7 @@ function load(cwd: string): Graph {
 // Atomic write (temp file + rename): a reader that takes no lock (task_list) never observes a
 // partially-written graph. Writers are serialized by withGraphLock above.
 function save(cwd: string, g: Graph): void {
-  const dir = path.join(cwd, ".pi");
-  fs.mkdirSync(dir, { recursive: true });
-  const file = graphPath(cwd);
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(g, null, 2), "utf8");
-  fs.renameSync(tmp, file);
+  writeFileSafe(graphPath(cwd), JSON.stringify(g, null, 2), { root: cwd });
 }
 
 function nextId(g: Graph): string {
@@ -153,7 +152,7 @@ function nextId(g: Graph): string {
   return `t${n}`;
 }
 
-// AG-03/M-05 fix: task_create previously accepted any depends_on list unchecked - a
+// AG-03 fix: task_create previously accepted any depends_on list unchecked - a
 // missing task ID or a task depending on itself both silently "succeeded", so the graph
 // was not actually a DAG. Validate before insertion. The full cycle walk below is
 // defense in depth: today's tool surface only lets depends_on reference already-created

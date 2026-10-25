@@ -9,9 +9,9 @@
 |---|---|---|---|
 | `lite` | Low-context / small local models | T0–T1 | 23 |
 | `quick` | Quick fix | T0–T1 | 25 |
-| `balanced` | Daily coding | T0–T2 | 34 |
+| `balanced` | Daily coding | T0–T2 | 35 |
 | `long-horizon` | Multi-hour / multi-day | T0–T3 | 40 |
-| `autonomous` | Set-and-walk-away | T0–T3 | 41 |
+| `autonomous` | Set-and-walk-away | T0–T3 | 42 |
 | `self-improving` | Full / self-improving (experimental) | T0–T4 | 47 |
 | `pentest` | Security engagement (strict) | T0–T3+ | 41 |
 
@@ -47,6 +47,7 @@
 | `finish-reason-retry` | safety | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `pentest-governance-domain` | safety | beta | · | · | · | · | · | · | ✓ |
 | `protected-paths` | safety | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `secret-guard` | safety | beta | · | · | ✓ | · | ✓ | · | · |
 | `tool-firewall` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `control-center` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `custom-footer` | ui | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

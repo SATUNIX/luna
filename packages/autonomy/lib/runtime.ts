@@ -205,7 +205,9 @@ export class DockerRuntime implements Runtime {
 
   /** The containment check every `run` passes before it executes, plus positive resource limits (see limitProblems). */
   checked(args: readonly string[], { networks = [], role, secretEnvNames = [] }: CheckedOptions): RunFacts {
-    const facts = assertRunArgs(args, { roots: this.roots, networks, role, secretEnvNames, allowRoot: this.contract.runtime.user === "0:0" });
+    // The image is re-checked here too: the worker image, or one of the contract's service images.
+    const allowedImages = [this.cfg.image, ...this.contract.permissions.network.serviceImages];
+    const facts = assertRunArgs(args, { roots: this.roots, networks, role, secretEnvNames, allowRoot: this.contract.runtime.user === "0:0", allowedImages });
     const problems = limitProblems(facts);
     if (problems.length) throw new Error(`refusing to start ${role}: ${problems.join("; ")}`);
     return facts;

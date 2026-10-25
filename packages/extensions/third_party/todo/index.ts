@@ -41,6 +41,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const todoFile = currentFile(ctx);
+      const workspace = ctx?.cwd ?? process.cwd();
       const { todos, nextId } = readTodos(todoFile);
       const find = () => {
         if (params.id === undefined) return { error: "Error: id required" };
@@ -56,7 +57,7 @@ export default function (pi: ExtensionAPI) {
           if (!texts.length) return text("Error: text or items required");
           let id = nextId;
           for (const t of texts) todos.push({ id: id++, text: t, state: "open" });
-          writeTodos(todoFile, todos);
+          writeTodos(todoFile, todos, workspace);
           return text(renderTodos(todos, texts.length === 1 ? `Added #${nextId}: ${texts[0]}` : `Added #${nextId}-#${id - 1}`));
         }
         case "start": {
@@ -65,31 +66,31 @@ export default function (pi: ExtensionAPI) {
           // One item in progress at a time keeps the plan readable.
           for (const t of todos) if (t.state === "active") t.state = "open";
           r.todo.state = "active";
-          writeTodos(todoFile, todos);
+          writeTodos(todoFile, todos, workspace);
           return text(renderTodos(todos, `Started #${r.todo.id}: ${r.todo.text}`));
         }
         case "done": {
           const r = find();
           if (!r.todo) return text(r.error);
           r.todo.state = "done";
-          writeTodos(todoFile, todos);
+          writeTodos(todoFile, todos, workspace);
           return text(renderTodos(todos, `Done #${r.todo.id}: ${r.todo.text}`));
         }
         case "toggle": {
           const r = find();
           if (!r.todo) return text(r.error);
           r.todo.state = r.todo.state === "done" ? "open" : "done";
-          writeTodos(todoFile, todos);
+          writeTodos(todoFile, todos, workspace);
           return text(renderTodos(todos, `#${r.todo.id} ${r.todo.state === "done" ? "done" : "undone"}: ${r.todo.text}`));
         }
         case "remove": {
           const r = find();
           if (!r.todo) return text(r.error);
-          writeTodos(todoFile, todos.filter((t) => t !== r.todo));
+          writeTodos(todoFile, todos.filter((t) => t !== r.todo), workspace);
           return text(renderTodos(todos.filter((t) => t !== r.todo), `Removed #${r.todo.id}`));
         }
         case "clear": {
-          writeTodos(todoFile, []);
+          writeTodos(todoFile, [], workspace);
           return text(`Cleared ${todos.length} todos`);
         }
         default:

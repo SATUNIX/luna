@@ -209,7 +209,7 @@ function deviceLines(devices: Json[]): string[] {
   if (!devices.length) return ["  (no phones linked; /remote pair links one)"];
   return devices.map((d) => {
     const seen = d.lastSeenAt ? `last seen ${show(d.lastSeenAt).slice(0, 16).replace("T", " ")}` : "never seen";
-    return `  ${d.online ? "●" : "○"} ${String(d.name)}  ${String(d.display)}  ${seen}${d.lastAddress ? ` from ${show(d.lastAddress)}` : ""}`;
+    return `  ${d.online ? "●" : "○"} ${String(d.name)}  ${String(d.display)}  ${seen}${d.lastAddress ? ` from ${show(d.lastAddress)}` : ""}${d.suspended === true ? "  (SUSPENDED: no pairing approval on record; revoke it or pair it again)" : ""}`;
   });
 }
 
@@ -219,6 +219,7 @@ function statusLines(status: Json, attachedHere: boolean): string[] {
   return [
     `pi remote host "${String(status.name)}" (pid ${String(status.pid)}, ${String(status.version)})`,
     `  Listening    ${status.bindMode === "all" ? "all interfaces" : String(status.bind)}, port ${String(status.port)}`,
+    ...(Array.isArray(status.warnings) ? status.warnings.filter((w): w is string => typeof w === "string").map((w) => `  WARNING: ${show(w)}`) : []),
     `  Reach it at  ${hostLine(status)}`,
     `  Certificate  ${String(status.fingerprintDisplay)}`,
     `  This session ${attachedHere ? "is shared" : "is not shared (/remote shares it)"}`,
@@ -233,6 +234,12 @@ function statusLines(status: Json, attachedHere: boolean): string[] {
 
 // ------------------------------------------------------------------- pairing ---
 type PairOutcome = "linked" | "rejected" | "cancelled" | "failed";
+
+/** A device ID as the pairing prompt shows it: the last group hidden (the operator types it from the phone). */
+export function maskDeviceId(display: unknown): string {
+  const groups = (typeof display === "string" ? display : "").split("-");
+  return groups.length > 1 ? [...groups.slice(0, -1), "····"].join("-") : "····";
+}
 
 /**
  * Show a pairing code and QR code, wait for a phone to claim it, and ask the operator to approve.
@@ -304,26 +311,36 @@ async function runPairing(ctx: ExtensionCommandContext): Promise<PairOutcome> {
 
       const request: Json = isJson(event.data) ? event.data : {};
       ctx.ui.setWidget(WIDGET, undefined);
+      // The last group of the device ID is not shown here: approving needs it typed from the phone's
+      // screen, so the comparison actually happens (the host checks it, remote/pairing.ts).
       const title = [
         `Link "${String(request.name)}" (${show(request.platform || "phone")}) from ${show(request.address || "an unknown address")}?`,
+        request.addressScope === "other" ? "WARNING: that address is outside the LAN and Tailscale ranges. Reject unless you know why." : "",
         "",
-        `   Device ID   ${String(request.deviceIdDisplay)}`,
+        `   Device ID   ${maskDeviceId(request.deviceIdDisplay)}`,
         "",
-        "Approve only if the phone in your hand shows exactly this device ID.",
+        "Approve only if the phone in your hand shows this device ID; you will type its last four characters.",
         request.alreadyLinked ? "This key is already linked; approving keeps it linked under the new name." : "",
       ]
         .filter((line, i, all) => line !== "" || (i > 0 && all[i - 1] !== ""))
         .join("\n");
       const approve = "Approve: the device IDs match";
       const answer: unknown = await ui.select(title, [approve, "Reject"], { timeout: APPROVAL_TIMEOUT_MS });
-      const approved = answer === approve;
-      const result = await admin.request("pair.decide", { requestId: request.requestId, approve: approved });
+      let approved = answer === approve;
+      let confirm = "";
+      if (approved) {
+        const typed: unknown = await ui.input("Type the last four characters of the device ID shown on the phone", "4 characters", { timeout: APPROVAL_TIMEOUT_MS });
+        confirm = typeof typed === "string" ? typed.trim() : "";
+        approved = confirm !== "";
+      }
+      const result = await admin.request("pair.decide", { requestId: request.requestId, approve: approved, ...(approved ? { confirm } : {}) });
       if (!isJson(result)) throw new HostError("the remote host sent a malformed pairing decision", "refused");
       if (result.state === "approved") {
         say(ctx, `remote: linked "${String(result.name)}" (${String(result.deviceIdDisplay)}).`);
         return "linked";
       }
-      say(ctx, `remote: ${result.state === "rejected" ? "rejected" : String(result.state)} "${String(request.name)}". /remote pair makes a new code.`, "warning");
+      const why = typeof result.reason === "string" && result.reason ? ` (${show(result.reason)})` : "";
+      say(ctx, `remote: ${result.state === "rejected" ? "rejected" : String(result.state)} "${String(request.name)}"${why}. /remote pair makes a new code.`, "warning");
       return "rejected";
     }
   } finally {

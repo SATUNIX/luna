@@ -11,10 +11,14 @@
 // Children inherit the environment and validate the contract themselves. Effort and model choices never
 // grant a permission. Offline: the judge is a stub that fails the test if it is ever called.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
-import { isRecord } from "../packages/core/lib/guard.ts";
+import { boolean, isRecord, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+
+const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
 /** Environment overrides applied by setEnv(); undefined unsets a variable. */
 type Env = Record<string, string | undefined>;
@@ -32,6 +36,15 @@ interface ProvenanceOs {
   mountinfo?: () => string | null;
   getuid?: () => number;
   writable?: () => boolean;
+  namespaces?: () => NamespaceFacts;
+  subuid?: () => string | null;
+}
+
+/** This process's and PID 1's user and mount namespaces, and its uid map, as the provenance rule reads them. */
+interface NamespaceFacts {
+  self: { user: string; mnt: string } | null;
+  init: { user: string; mnt: string } | null;
+  uidMap: string | null;
 }
 
 interface AuditRecord {
@@ -136,8 +149,12 @@ const PROVENANCE = Symbol.for("pi-kit.test.unattended-provenance");
 const mountEntry = (point: string, options: string, superOptions = options.split(",")[0]) => `${100 + point.length} 1 0:${point.length} / ${point.replace(/ /g, "\\040")} ${options} - tmpfs tmpfs ${superOptions}`;
 const baseTable = () => [mountEntry("/", "rw,relatime"), mountEntry(fs.realpathSync(contractDir), "ro,relatime", "rw")];
 let mountTable = baseTable();
+// By default the test process stands where the supervisor starts a worker: in the container's own user and
+// mount namespaces (the same as its PID 1), with no subordinate ids.
+const NS_INIT = { user: "user:[4026531837]", mnt: "mnt:[4026531841]" };
+const SAME_NS: NamespaceFacts = { self: NS_INIT, init: NS_INIT, uidMap: "         0          0 4294967295\n" };
 const presentOs = (extra: ProvenanceOs = {}) => {
-  const os: ProvenanceOs = { mountinfo: () => mountTable.join("\n"), ...extra };
+  const os: ProvenanceOs = { mountinfo: () => mountTable.join("\n"), namespaces: () => SAME_NS, subuid: () => null, ...extra };
   Reflect.set(globalThis, PROVENANCE, os);
 };
 presentOs();
@@ -617,6 +634,90 @@ try {
     mountTable = baseTable();
     presentOs();
     ok("provenance: a same-user 0444 file is refused (with and without a mount table, root included); accepted only on a read-only mount (nested, stacked, superblock, escaped mount points) or as another user's unwritable file");
+  }
+  // Namespaces. An unprivileged user can make its own user and mount namespace (and a PID namespace, so
+  // that it is PID 1 there), bind-mount a contract read-only and appear to own nothing: neither proof counts
+  // outside the initial user namespace, and a read-only mount only in PID 1's mount namespace too.
+  {
+    const refused = async (label: string, env: Env, why: RegExp) => {
+      const b = await boot({ env });
+      assert.equal(unattended().active, false, `${label}: refused`);
+      assert.match(b.stderr, why, `${label}: says why`);
+      b.close();
+    };
+    const accepted = async (label: string, env: Env) => {
+      const b = await boot({ env });
+      assert.equal(unattended().active, true, `${label}: accepted`);
+      b.close();
+    };
+    const OWN_NS: NamespaceFacts = { self: { user: "user:[4026532001]", mnt: "mnt:[4026532002]" }, init: NS_INIT, uidMap: "         0       1000          1\n" };
+    const UNKNOWN_INITIAL: NamespaceFacts = { self: NS_INIT, init: null, uidMap: SAME_NS.uidMap };
+    const UNKNOWN_NESTED: NamespaceFacts = { self: OWN_NS.self, init: null, uidMap: OWN_NS.uidMap };
+    const onRo = envFor(contract);
+    await accepted("a read-only mount in PID 1's namespaces", onRo);
+    presentOs({ namespaces: () => OWN_NS });
+    await refused("a read-only mount in a namespace other than PID 1's", onRo, /not in the initial user namespace/);
+    // With a PID namespace of its own, the agent's process is PID 1: the namespaces then match, and still count for nothing.
+    presentOs({ namespaces: () => ({ ...OWN_NS, init: OWN_NS.self }) });
+    await refused("a read-only mount in a user namespace whose PID 1 is the agent's own process", onRo, /not in the initial user namespace/);
+    // A uid map that looks like the identity map does not make a namespace the initial one, nor the reverse.
+    presentOs({ namespaces: () => ({ self: OWN_NS.self, init: OWN_NS.self, uidMap: SAME_NS.uidMap }) });
+    await refused("an identity uid map in a namespace that is not the initial one", onRo, /not in the initial user namespace/);
+    presentOs({ namespaces: () => ({ ...SAME_NS, uidMap: OWN_NS.uidMap }) });
+    await refused("the initial namespace id with a partial uid map", onRo, /not in the initial user namespace/);
+    presentOs({ namespaces: () => ({ ...SAME_NS, self: { user: NS_INIT.user, mnt: "mnt:[4026532002]" } }) });
+    await refused("the same user namespace but another mount namespace", onRo, /not in the user and mount namespaces of PID 1/);
+    presentOs({ namespaces: () => UNKNOWN_INITIAL });
+    await refused("a read-only mount when PID 1's namespaces cannot be read", onRo, /PID 1's namespaces cannot be read/);
+    // Another user's file: in PID 1's namespaces, or in the initial user namespace; never in a nested one, and
+    // never when the owner is one of this user's subordinate ids.
+    const forged = writeContract(CONTRACT, "owned.json", mk("owned"));
+    const owner = fs.statSync(forged).uid;
+    const asOther = { mountinfo: () => baseTable().slice(0, 1).join("\n"), getuid: () => owner + 1000, writable: () => false };
+    presentOs({ ...asOther, namespaces: () => UNKNOWN_INITIAL });
+    await accepted("another user's unwritable file in the initial user namespace", envFor(forged));
+    presentOs({ ...asOther, namespaces: () => UNKNOWN_NESTED });
+    await refused("another user's file seen from a nested user namespace", envFor(forged), /not in the initial user namespace/);
+    presentOs({ ...asOther, namespaces: () => OWN_NS });
+    await refused("another user's file seen from a namespace other than PID 1's", envFor(forged), /not in the initial user namespace/);
+    presentOs({ ...asOther, namespaces: () => ({ ...OWN_NS, init: OWN_NS.self }) });
+    await refused("another user's file seen from a user namespace whose PID 1 is the agent's own process", envFor(forged), /not in the initial user namespace/);
+    presentOs({ ...asOther, subuid: () => `someone:200000:65536\n${owner + 1000}:${owner}:1\n` });
+    await refused("a file owned by one of this user's subordinate ids", envFor(forged), /subordinate ids/);
+    presentOs();
+    // The real kernel: where an unprivileged user and mount namespace can be made here, make one, bind-mount a
+    // contract read-only inside it and evaluate there. The firewall must refuse it (benign: a temp directory only).
+    const probe = spawnSync("unshare", ["-Urm", "true"], { encoding: "utf8" });
+    if (probe.status === 0) {
+      const dir = fs.realpathSync(mk("ns-real"));
+      const file = writeContract(CONTRACT, "contract.json", dir);
+      const moduleUrl = pathToFileURL(path.join(REPO_ROOT, "packages/extensions/src/tool-firewall/unattended.ts")).href;
+      const script = `const m = await import(${JSON.stringify(moduleUrl)}); const fs = await import("node:fs");
+const held = m.mountHolding(${JSON.stringify(file)}, fs.readFileSync("/proc/self/mountinfo", "utf8"));
+const st = m.evaluateUnattended({ env: { PI_KIT_UNATTENDED: "1", PI_KIT_UNATTENDED_BOUNDARY: "container", PI_KIT_UNATTENDED_CONTRACT: ${JSON.stringify(file)} }, workspace: "/nonexistent-ws", cwd: "/nonexistent-ws", agentDir: "/nonexistent-agent", policy: "coding" });
+console.log(JSON.stringify({ ro: held?.ro === true, active: st.active, why: st.warnings[0] ?? "" }));`;
+      const shell = `mount --bind "$1" "$1" && mount -o remount,bind,ro "$1" && exec "$2" --input-type=module -e "$3"`;
+      // Plain user + mount namespace, and the same with a PID namespace and its own /proc, where the
+      // launched process is PID 1 and so shares "PID 1's" namespaces.
+      const variants: { flags: string[]; label: string }[] = [{ flags: ["-Urm"], label: "user + mount" }, { flags: ["-Urmpf", "--mount-proc"], label: "user + mount + PID with its own /proc" }];
+      for (const v of variants) {
+        const run = spawnSync("unshare", [...v.flags, "sh", "-c", shell, "sh", dir, process.execPath, script], { encoding: "utf8" });
+        if (run.status !== 0 && v.flags.includes("--mount-proc")) {
+          console.log(`  SKIP: ${v.label} namespace not available here (${run.stderr.trim().slice(0, 80)})`);
+          continue;
+        }
+        assert.equal(run.status, 0, `the ${v.label} namespace probe ran: ${run.stderr}`);
+        const line = run.stdout.trim().split("\n").at(-1) ?? "";
+        const seen = parseJsonAs(object({ ro: boolean(), active: boolean(), why: string() }), line);
+        assert.equal(seen.ro, true, `${v.label}: inside the namespace the contract really is on a read-only mount`);
+        assert.equal(seen.active, false, `${v.label}: a read-only mount the agent made in its own namespace is refused`);
+        assert.match(seen.why, /not in the initial user namespace/, `${v.label}: says why`);
+      }
+      ok("namespaces: a contract on a read-only bind mount inside a user + mount (+ PID, own /proc) namespace made by this user (real kernel) is refused");
+    } else {
+      console.log(`  SKIP: no unprivileged user namespaces here (unshare -Urm: ${(probe.stderr || probe.error?.message || "").trim().slice(0, 80)}); the injected cases above still ran`);
+    }
+    ok("namespaces: both proofs count only in the initial user namespace (fixed id and identity uid map); a read-only mount only in PID 1's mount namespace too; never a subordinate-id owner");
   }
 
   // 8. A changed or vanished contract turns the mode off for the rest of the process. --------------------------

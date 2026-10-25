@@ -140,6 +140,15 @@ try {
   ok("the compiled npm artefact unpacks under node_modules/ with no tests/, no node_modules and no uncompiled .ts");
 
   const pkg = parseJsonAs(ArtefactPackage, fs.readFileSync(path.join(unpacked, "package.json"), "utf8"), "package.json");
+  // The runtime dependency set is a documented fact (docs/supply-chain.md, "What installing the kit
+  // pulls in"): the artefact must ship exactly that set, each pinned to an exact version.
+  const supplyChain = fs.readFileSync(path.join(ROOT, "docs", "supply-chain.md"), "utf8");
+  const documented = /Runtime dependencies \(`dependencies` in `package\.json`\): ((?:`[^`]+`(?:, )?)+)\./.exec(supplyChain)?.[1];
+  assert.ok(documented !== undefined, "docs/supply-chain.md lists the runtime dependencies");
+  const documentedNames = [...documented.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? "").sort();
+  assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), documentedNames, "the artefact's runtime dependencies are exactly the documented ones");
+  for (const [name, range] of Object.entries(pkg.dependencies ?? {})) assert.match(range, /^\d+\.\d+\.\d+$/, `${name} is pinned to an exact version, not ${range}`);
+  ok(`the artefact's runtime dependencies are the documented set (${documentedNames.join(", ") || "none"}), pinned exactly`);
   if (Object.keys(pkg.dependencies ?? {}).length > 0) {
     const install = run(npm, ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: unpacked });
     assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}`);

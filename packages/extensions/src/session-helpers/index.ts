@@ -15,6 +15,7 @@ import {
 } from "./compaction-state.ts";
 import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
 import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
+import { KIT_PACKAGE_NAMES, isKitLocalPackageName, trustedMarkerKitRoot, type MarkerKitRoot } from "./shared/kit-source.ts";
 
 // Self-containment rule: import only node:* builtins and typebox peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -180,17 +181,10 @@ function readMarker(cwd: string = process.cwd()): Marker {
   }
 }
 
-// Resolve the kit root. PI_KIT_ROOT wins (also what tests set), then the install marker's
-// kitSource (a checkout path; npm and git sources are not paths and fall through), then the
-// package this module was loaded from: a checkout, git clone or npm install of the kit all
-// keep the monorepo layout, with this module at <kit>/packages/extensions/src/<name>/ (four
-// levels up); a legacy flat kit has it at <kit>/extensions/<name>/ (two levels up). Returns
-// null rather than guessing.
-export function findKitRoot(): string | null {
-  const override = process.env.PI_KIT_ROOT?.trim();
-  if (override) return resolveKitLayout(override) ? override : null;
-  const marker = readMarker();
-  if (marker.kitSource && resolveKitLayout(marker.kitSource)) return marker.kitSource;
+// The kit this module was loaded from: a checkout, git clone or npm install of the kit all keep
+// the monorepo layout, with this module at <kit>/packages/extensions/src/<name>/ (four levels up);
+// a legacy flat kit has it at <kit>/extensions/<name>/ (two levels up).
+function installedKitRoot(): string | null {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     for (const installed of [path.resolve(here, "..", "..", "..", ".."), path.resolve(here, "..", "..")]) {
@@ -200,6 +194,38 @@ export function findKitRoot(): string | null {
     /* import.meta.url unavailable (non-ESM loader) - fall through */
   }
   return null;
+}
+
+// A marker's kitSource names a kit checkout only when it is absolute, resolves (through links)
+// outside the workspace, has a kit layout, and its package.json carries a kit package name
+// (trustedMarkerKitRoot, ./shared/kit-source.ts). A project marker is repository content, so a
+// relative or in-workspace path would let an opened repository choose the installer /profile
+// runs. npm and git sources are not paths and are ignored silently.
+function markerKitRoot(kitSource: string, cwd: string): MarkerKitRoot {
+  return trustedMarkerKitRoot(kitSource, cwd, (dir) => resolveKitLayout(dir) !== null);
+}
+
+const kitRootWarnings = new Set<string>();
+
+// Resolve the kit root. PI_KIT_ROOT wins (also what tests set), then the install marker's
+// kitSource when markerKitRoot accepts it, then the package this module was loaded from.
+// Returns null rather than guessing. A kitSource that names a code location but is refused is
+// reported once through `warn`, and the installed package is used instead.
+export function findKitRoot(cwd: string = process.cwd(), warn?: (message: string) => void): string | null {
+  const override = process.env.PI_KIT_ROOT?.trim();
+  if (override) return resolveKitLayout(override) ? override : null;
+  const installed = installedKitRoot();
+  const marker = readMarker(cwd);
+  const fromMarker = marker.kitSource ? markerKitRoot(marker.kitSource, cwd) : null;
+  if (fromMarker && "root" in fromMarker) return fromMarker.root;
+  if (fromMarker && warn && !(installed && sameDir(installed, path.resolve(cwd, marker.kitSource ?? "")))) {
+    const message = `pi-system: ignored ${fromMarker.ignored}; using the installed kit${installed ? ` at ${installed}` : ""}. An install marker never chooses the installer that runs.`;
+    if (!kitRootWarnings.has(message)) {
+      kitRootWarnings.add(message);
+      warn(message);
+    }
+  }
+  return installed;
 }
 
 interface ProfileInfo {
@@ -271,14 +297,6 @@ function sameDir(a: string, b: string): boolean {
 
 export const KIT_PACKAGE = "@satunix/pi-system";
 
-// Keep recognition independent of the current delivery default.
-const KIT_PACKAGE_NAMES = new Set(["@satunix/pi-system", "@satunix/luna"]);
-function isKitPackageName(name: unknown): boolean {
-  return typeof name === "string" && KIT_PACKAGE_NAMES.has(name);
-}
-function isKitLocalPackageName(name: unknown): boolean {
-  return isKitPackageName(name) || name === "pi-system";
-}
 
 // True for either scoped kit identity on any channel or version.
 export function isKitNpmSource(source: string): boolean {
@@ -780,7 +798,7 @@ async function applyDefaultProfile(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   const cwd = ctx.cwd ?? process.cwd();
   const scope = unfilteredKitEntry(path.join(cwd, ".pi", "settings.json")) ? "project" : "global";
   if (scope === "global" && !unfilteredKitEntry(path.join(agentDir(), "settings.json"))) return;
-  const kitRoot = findKitRoot();
+  const kitRoot = findKitRoot(cwd, (message) => ctx.ui.notify(message, "warning"));
   const layout = kitRoot ? resolveKitLayout(kitRoot) : null;
   if (!kitRoot || !layout) return;
   const profile = setting && listProfiles(kitRoot).some((p) => p.name === setting) ? setting : "balanced";
@@ -914,7 +932,7 @@ export default function (pi: ExtensionAPI) {
     },
     handler: async (args, ctx) => {
       const c = ctx;
-      const kitRoot = findKitRoot();
+      const kitRoot = findKitRoot(c.cwd ?? process.cwd(), (message) => report(c, message, "warning"));
       const layout = kitRoot ? resolveKitLayout(kitRoot) : null;
       if (!kitRoot || !layout) {
         report(c, "profile: could not locate the kit (needs its installer and a profiles directory). Set PI_KIT_ROOT to the kit path, or reinstall it (docs/INSTALL.md)", "error");

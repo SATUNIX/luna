@@ -58,6 +58,21 @@ record_hash
 
 Use `scripts/validate-ledgers.py` to verify ledger continuity before export or report finalization.
 
+The chain detects accidental damage (a lost, reordered or edited line), not deliberate tampering:
+anything that can write the data root, the agent included, can rewrite a record and recompute every
+later hash, and the chain check still passes. To detect that, record the ledgers' heads from the
+host in a file outside the data root, and check against it later:
+
+```sh
+python3 scripts/validate-ledgers.py --data-root "$DATA_ROOT" --write-anchor "$ANCHOR_FILE"
+python3 scripts/validate-ledgers.py --data-root "$DATA_ROOT" --anchor "$ANCHOR_FILE"
+```
+
+A rewrite, truncation or deletion of anchored records then fails; an anchor path inside the data
+root is refused. Records appended after the last anchor are protected only by the chain, so write a
+new anchor at each checkpoint (before an export, at the end of a session).
+`tests/ledger-anchor-smoke.ts` pins this behaviour.
+
 ## Residual Risk
 
 Pi packages and extensions execute code with the container user's permissions. Package versions should be reviewed and pinned. MCP servers should be treated as external tools with their own trust and supply-chain risk.

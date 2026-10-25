@@ -35,8 +35,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveProfile, type ResolvedExtension } from "./lib/resolve.ts";
 import { readSources } from "./lib/sources.ts";
+import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
 import { mergePackageBlock, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
-import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, type Distribution } from "./lib/distribution.ts";
+import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, globalGateDrift, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
@@ -199,6 +200,24 @@ const defaultMode = managedKind ?? (explicitChannel || legacyGitRef ? distributi
 const mode = get("--mode", legacyGitRef ? "git" : defaultMode);
 if (mode !== "local" && mode !== "git" && mode !== "npm") {
   console.error(`[install] unknown --mode "${String(mode)}" (expected local, git or npm)`);
+  process.exit(1);
+}
+// npm delivery stays off until the package is published under a scope the project controls:
+// until then `npm:@satunix/pi-system` could resolve to whoever registers that name.
+// packages/core/distribution.json turns it on with `"npm": { "enabled": true }`; an explicit
+// --mode npm, PI_KIT_DELIVERY=npm and a copy installed under node_modules are all refused
+// without it (tests/distribution-smoke.ts).
+function npmDeliveryEnabled(): boolean {
+  try {
+    const config = parseJson(fs.readFileSync(DISTRIBUTION_PATH, "utf8"));
+    return isRecord(config) && isRecord(config.npm) && config.npm.enabled === true;
+  } catch {
+    return false;
+  }
+}
+if (mode === "npm" && !npmDeliveryEnabled()) {
+  console.error("[install] npm delivery is not enabled: the kit is not published to npm under a scope this project controls, so `--mode npm` " +
+    "(or PI_KIT_DELIVERY=npm) is refused. Install from git instead (`--mode git`), or see docs/releasing.md.");
   process.exit(1);
 }
 if (explicitChannel && !isChannel(explicitChannel)) {
@@ -367,12 +386,12 @@ function recordPackageChange(args: string[]): number {
   console.log(`[install] Package change (a rollback cannot undo it): ${shown}`);
   return packageChanges.push(shown) - 1;
 }
-function runPiCommand(args: string[]): void {
+function runPiCommand(args: string[], env?: Readonly<Record<string, string>>): void {
   console.log(`  > ${displayCommand(args)}`);
   if (dryRun) return;
   const at = recordPackageChange(args);
   try {
-    runPi(piBin, args);
+    runPi(piBin, args, env ? { env } : {});
   } catch (error) {
     packageChanges[at] = `${packageChanges[at] ?? ""} (failed part-way)`;
     throw error;
@@ -676,8 +695,27 @@ if (!noExternals) {
     markerCompanions.push(...missing.map((c) => c.source));
     if (missing.length > 0) {
       console.log(`\n[install] Installing ${missing.length} companion external(s)...`);
+      // Each companion installs with its dependencies' lifecycle scripts off (unless sources.json
+      // records a reviewed reason), and what npm installed is checked against the pinned sha512
+      // before the next one (lib/companions.ts, tests/companion-integrity-smoke.ts).
+      const npmRoot = piNpmRoot(scope, globalAgentDir(), process.cwd());
       for (const c of missing) {
-        runPiCommand(["install", c.source, ...scopeArgs]);
+        const problems = companionPinProblems(c);
+        if (problems.length > 0) {
+          console.error(`[install] Refusing to install ${c.name}: ${problems.join("; ")}`);
+          process.exit(1);
+        }
+        runPiCommand(["install", c.source, ...scopeArgs], companionInstallEnv(c));
+        if (dryRun) continue;
+        const checked = checkInstalledIntegrity(npmRoot, c);
+        if (checked.ok) continue;
+        if (checked.missing) {
+          console.warn(`[install] WARNING: ${checked.reason}.`);
+          continue;
+        }
+        console.error(`[install] ${checked.reason}. Removing it: the package is not the reviewed one.`);
+        runPiCommand(["remove", c.source, ...scopeArgs]);
+        process.exit(1);
       }
     } else if (companions.length > 0) {
       console.log(`\n[install] ${companions.length} companion external(s) already registered.`);

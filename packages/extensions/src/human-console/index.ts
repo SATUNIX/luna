@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
 
 const POLL_MS = 1000;
@@ -67,16 +68,30 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
   const id = isSafeRequestId(request.id) ? request.id : crypto.randomUUID();
   const timeoutMs = Math.max(1, Number(request.timeoutMs) || DEFAULT_TIMEOUT_MS);
   const pending = { ...request, id, createdAt: request.createdAt || new Date().toISOString(), timeoutMs };
+  // Only an answer authenticated with the console key and bound to these exact bytes counts
+  // (console-auth.ts): without a usable key no answer could be accepted, so say so at once.
+  const key = loadConsoleKey({ create: false });
+  if (!key.ok) {
+    audit(cwd, { event: "human_console_key_unusable", id, why: key.why });
+    return { resolved: false, approved: false, answer: null, timedOut: false };
+  }
   const pendingFile = path.join(pendingDir(cwd), `${id}.json`);
-  fs.writeFileSync(pendingFile, JSON.stringify(pending));
+  const pendingText = JSON.stringify(pending);
+  const digest = requestDigest(pendingText);
+  fs.writeFileSync(pendingFile, pendingText);
   const deadline = Date.now() + timeoutMs;
   const file = path.join(resolvedDir(cwd), `${id}.json`);
   try {
     while (!signal?.aborted && Date.now() < deadline) {
-      try {
-        const value: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-        if (isRecord(value) && value.id === id) return { resolved: true, approved: value.approved === true, answer: typeof value.answer === "string" ? value.answer : null, timedOut: false };
-      } catch { /* not resolved yet */ }
+      let value: unknown;
+      try { value = JSON.parse(fs.readFileSync(file, "utf8")); } catch { value = undefined; /* not resolved yet */ }
+      if (isRecord(value)) {
+        const checked = verifyAnswer(key.key, { id, requestDigest: digest }, value);
+        if (checked.ok) return { resolved: true, approved: checked.approved, answer: checked.answer, timedOut: false };
+        // A forged or foreign answer is dropped and the wait goes on: at worst this times out.
+        audit(cwd, { event: "human_console_answer_rejected", id, why: checked.why });
+        try { fs.unlinkSync(file); } catch { /* already removed */ }
+      }
       await sleep(Math.min(POLL_MS, Math.max(1, deadline - Date.now())), signal);
     }
     return { resolved: false, approved: false, answer: null, timedOut: true };
@@ -156,9 +171,23 @@ function deadlineOf(request: Pending): number {
 }
 // Write the answer for a pending request and remove the pending file. The pending file may already
 // be gone (another resolver, or a requester that gave up): a missing file is success, not an error.
-function writeAnswer(cwd: string, id: string, file: string, result: Answer): void {
-  fs.writeFileSync(path.join(resolvedDir(cwd), `${id}.json`), JSON.stringify({ id, decidedAt: new Date().toISOString(), approved: result.approved, answer: result.answer, note: result.note ?? null }));
+// The answer is signed with the console key over the request's digest (console-auth.ts); without a
+// usable key nothing is written, since the requester would refuse an unsigned answer anyway.
+function writeAnswer(cwd: string, id: string, file: string, result: Answer, digest: string): void {
+  const key = loadConsoleKey({ create: true });
+  if (!key.ok) {
+    audit(cwd, { event: "human_console_key_unusable", id, why: key.why });
+    try { console.error(`[human-console] cannot sign the answer to ${id}: ${key.why}`); } catch { /* stderr unavailable */ }
+    return;
+  }
+  const record = signedAnswer(key.key, { id, requestDigest: digest, approved: result.approved, answer: result.answer, note: result.note ?? null }, { decidedAt: new Date().toISOString() });
+  fs.writeFileSync(path.join(resolvedDir(cwd), `${id}.json`), JSON.stringify(record));
   try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
+}
+// A pending file as read: its parsed value and the digest of its exact bytes, which the answer is bound to.
+function readPending(file: string): { value: unknown; digest: string } {
+  const bytes = fs.readFileSync(file);
+  return { value: JSON.parse(bytes.toString("utf8")), digest: requestDigest(bytes) };
 }
 function stickyNote(runId: string, note?: string | null): string {
   return `denied for the rest of workflow run ${runId}${note ? `: ${note}` : ""}`;
@@ -169,10 +198,11 @@ export default function humanConsole(pi: ExtensionAPI) {
   // A grouped request takes the shown request's answer, if it is still pending and in time.
   const answerMember = (ctx: ExtensionContext, id: string, result: Answer) => {
     const file = path.join(pendingDir(ctx.cwd), `${id}.json`);
-    let parsed: unknown;
-    try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+    let read: { value: unknown; digest: string };
+    try { read = readPending(file); } catch { return; }
+    const parsed = read.value;
     if (!isRecord(parsed) || parsed.id !== id || Date.now() > deadlineOf(parsed)) return;
-    writeAnswer(ctx.cwd, id, file, result);
+    writeAnswer(ctx.cwd, id, file, result, read.digest);
   };
   const askToResume = async (ctx: ExtensionContext, runId: string, distinct: number) => {
     try {
@@ -194,7 +224,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       runBroker.pauseAnswered(runId);
     }
   };
-  const processRunApproval = async (ctx: ExtensionContext, file: string, request: Pending, run: RunRequest) => {
+  const processRunApproval = async (ctx: ExtensionContext, file: string, request: Pending, run: RunRequest, digest: string) => {
     const deadline = deadlineOf(request);
     if (Date.now() > deadline) {
       runBroker.leave(run);
@@ -204,7 +234,7 @@ export default function humanConsole(pi: ExtensionAPI) {
     const offer = runBroker.offer(run);
     if (offer.kind === "wait") return;
     if (offer.kind === "resolve") {
-      writeAnswer(ctx.cwd, run.id, file, offer.approved ? { approved: true, answer: RUN_CHOICE_ALLOW_RUN } : { approved: false, answer: null, note: stickyNote(run.runId) });
+      writeAnswer(ctx.cwd, run.id, file, offer.approved ? { approved: true, answer: RUN_CHOICE_ALLOW_RUN } : { approved: false, answer: null, note: stickyNote(run.runId) }, digest);
       audit(ctx.cwd, { event: offer.reason === "sticky_deny" ? "workflow_approval_sticky_deny" : "workflow_approval_run_grant", runId: run.runId, id: run.id, actionHash: run.hash });
       return;
     }
@@ -221,7 +251,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       const outcome = runBroker.settle(run, { approved, runGrant: result.answer === RUN_CHOICE_ALLOW_RUN });
       settled = true;
       const answer: Answer = approved ? { approved, answer: result.answer } : { approved, answer: result.answer, note: stickyNote(run.runId, result.note) };
-      writeAnswer(ctx.cwd, run.id, file, answer);
+      writeAnswer(ctx.cwd, run.id, file, answer, digest);
       for (const id of outcome.members) answerMember(ctx, id, answer);
       audit(ctx.cwd, { event: "workflow_approval_decided", runId: run.runId, id: run.id, actionHash: run.hash, approved, runGrant: approved && !run.high && result.answer === RUN_CHOICE_ALLOW_RUN, grouped: outcome.members.length, distinct: outcome.distinct });
       if (outcome.pause) await askToResume(ctx, run.runId, outcome.distinct);
@@ -235,7 +265,8 @@ export default function humanConsole(pi: ExtensionAPI) {
   const processOne = async (ctx: ExtensionContext, file: string) => {
     try {
       let parsed: unknown;
-      try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch {
+      let digest: string;
+      try { ({ value: parsed, digest } = readPending(file)); } catch {
         audit(ctx.cwd, { event: "human_console_invalid_pending_json", file: path.basename(file) });
         try { fs.renameSync(file, `${file}.invalid`); } catch { /* leave it for operator inspection */ }
         return;
@@ -254,7 +285,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       }
       const run = request.kind === "approval" ? runRequestOf(request) : null;
       if (run) {
-        await processRunApproval(ctx, file, request, run);
+        await processRunApproval(ctx, file, request, run, digest);
         return;
       }
       const timeoutMs = requestedTimeout(request, DEFAULT_TIMEOUT_MS);
@@ -271,7 +302,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       }
       // writeAnswer tolerates a pending file that is already gone: an unguarded unlinkSync
       // here is an unhandled rejection that kills pi.
-      writeAnswer(ctx.cwd, id, file, result);
+      writeAnswer(ctx.cwd, id, file, result, digest);
     } finally { processing.delete(file); }
   };
   const processPending = (ctx: ExtensionContext) => {
@@ -303,6 +334,10 @@ export default function humanConsole(pi: ExtensionAPI) {
   };
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
+    // The interactive console is the only creator of the answer key (console-auth.ts): requesters
+    // started after this find it; one started before reports that the console must start first.
+    const key = loadConsoleKey({ create: true });
+    if (!key.ok) try { console.error(`[human-console] the answer key cannot be used, so no answer can be signed: ${key.why}`); } catch { /* stderr unavailable */ }
     processPending(ctx);
     watcher = setInterval(() => { processPending(ctx); }, POLL_MS); watcher.unref?.();
   });

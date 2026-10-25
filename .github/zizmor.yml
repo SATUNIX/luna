@@ -2,6 +2,8 @@
 rules:
   self-repository:
     ignore:
-      # The release workflow runs the CI workflow of the same commit as its gate. The './' form is the one GitHub documents for a
-      # reusable workflow in the same repository.
-      - release.yml:47
+      # The release workflow runs the CI and security workflows of the same commit as its gates. The './' form is the one GitHub
+      # documents for a reusable workflow in the same repository. tests/workflow-policy-smoke.ts checks each line still holds a
+      # `uses: ./` call, so a moved line cannot leave the ignore pointing elsewhere.
+      - release.yml:48
+      - release.yml:58

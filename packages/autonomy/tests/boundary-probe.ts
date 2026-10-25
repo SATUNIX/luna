@@ -173,6 +173,10 @@ await expect("the run contract is read-only, sanitised, and matches the unattend
       if (!held || point.length >= held.point.length) held = { point, ro: (parts[5] ?? "").split(",").includes("ro") || (parts[dash + 3] ?? "").split(",").includes("ro") };
     }
     if (!held?.ro) throw new Error(`${real} is not on a read-only mount (mount ${held?.point ?? "unknown"}), so the worker's firewall would refuse the contract`);
+    // ...and only in the user and mount namespaces of the container's PID 1 (contractProvenance).
+    for (const ns of ["user", "mnt"]) {
+      if (fs.readlinkSync(`/proc/self/ns/${ns}`) !== fs.readlinkSync(`/proc/1/ns/${ns}`)) throw new Error(`the worker is not in PID 1's ${ns} namespace, so its firewall would refuse the contract`);
+    }
     if (!at(c, "permissions", "unattended", "authorised")) throw new Error("PI_KIT_UNATTENDED=1 but the contract does not authorise unattended operation");
     if (process.env.PI_KIT_UNATTENDED_BOUNDARY !== "container") throw new Error("PI_KIT_UNATTENDED_BOUNDARY is not container");
   } else if (at(c, "permissions", "unattended", "authorised")) throw new Error("the contract authorises unattended operation but PI_KIT_UNATTENDED is not set");

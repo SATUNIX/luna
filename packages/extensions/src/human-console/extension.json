@@ -11,7 +11,7 @@
   "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
-  "runtime": { "nodeBuiltins": ["node:crypto", "node:fs", "node:path"], "npm": ["typebox"], "piPeers": [], "services": [], "models": [] },
+  "runtime": { "nodeBuiltins": ["node:crypto", "node:fs", "node:os", "node:path"], "npm": ["typebox"], "piPeers": [], "services": [], "models": [] },
   "pulls": [],
   "env": ["PI_KIT_HUMAN_CONSOLE_DIR"],
   "provenance": { "origin": "custom" },

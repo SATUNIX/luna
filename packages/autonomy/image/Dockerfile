@@ -39,7 +39,15 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && npm install -g --ignore-scripts "npm@${NPM_VERSION}" \
-  && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+  && npm cache clean --force
+
+# pi: exactly the reviewed tree in tools/package-lock.json, no install scripts, owned by root. The
+# build fails when the lockfile's pi is not PI_VERSION.
+COPY image/tools/ /opt/pi-tools/
+RUN cd /opt/pi-tools \
+  && npm ci --omit=dev --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
+  && test "$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")" = "$PI_VERSION" \
+  && ln -s /opt/pi-tools/node_modules/.bin/pi /usr/local/bin/pi \
   && npm cache clean --force
 
 COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
@@ -47,8 +55,10 @@ COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/gitleaks
 # pi-lens (in the long-horizon profile) installs its linters and language servers with npm the
 # first time a file type is touched. Offline, npm retries and stalls the tool call, so the ones
 # common file types use are installed here, on PATH, where pi-lens finds them.
-# Each tool is pinned exactly. TypeScript stays on 6.x: the 7.x package ships no tsserver, which
-# typescript-language-server needs.
+# Each tool is pinned exactly, but their dependencies are not locked: a lockfile for this set
+# surfaces advisories with no upstream fix yet (bash-language-server pins zod 3.25.76;
+# markdownlint's math extension needs katex 0.16). TypeScript stays on 6.x: the 7.x package ships
+# no tsserver, which typescript-language-server needs.
 RUN npm install -g --ignore-scripts typescript@6.0.3 typescript-language-server@6.0.2 markdownlint-cli2@0.24.0 \
       bash-language-server@5.8.1 yaml-language-server@2.0.0 vscode-langservers-extracted@4.10.0 \
       @biomejs/biome@2.6.2 prettier@3.9.10 knip@6.42.1 madge@8.0.0 jscpd@5.4.2 \

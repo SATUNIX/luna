@@ -9,6 +9,7 @@ Budget for this cycle: about ${{BUDGET_USD}} of model spend (firm stop at ${{HAR
 Ground rules (read `autonomy/CHARTER.md` in full; it is the acceptance standard for this work):
 - Commit after each logical change, with a message that gives the finding, root cause, fix and verification. Run `git push origin HEAD` after every commit, because only pushed work counts.
 - Never leave the branch failing its acceptance checks. A change that cannot be made to pass is fixed or reverted before the cycle ends.
+- The merge is refused, before any review, when the cycle changes `autonomy/CHARTER.md`, a path the operator lists as a control path, or the `scripts` of any `package.json`, or when the diff (lockfiles excluded) is longer than the review reads. Keep each cycle's change small enough to be reviewed whole, and propose control changes in `autonomy/BACKLOG.md`.
 - There is no network apart from the model{{NETWORK_NOTE}}. Adding dependencies is out of scope unless the objective says so. Reference material you may read is under `/reference/` if present.
 - Work through subagents; don't do everything in this one context. Use the `subagent` tool (roles: `scout`, `planner`, `implementer`, `reviewer`) to send scouts out in parallel during review, give each separate change to an implementer, and have a `reviewer` that did not write the change check it before you accept it. Keep this session for coordinating, deciding and recording.
 

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
+import { ensureDirSafe, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 
 type Lease = {
   taskId: string;
@@ -29,13 +30,41 @@ function leasesPath(): string {
   return process.env.PI_KIT_BRANCH_LEASES_FILE || path.join(process.cwd(), ".pi", "branch-leases.json");
 }
 
+// The default lease file is workspace state, so its directories are checked from the workspace
+// root down (./shared/safe-fs.ts); an operator-set PI_KIT_BRANCH_LEASES_FILE is trusted.
+function leaseWriteOptions(): SafeWriteOptions {
+  return process.env.PI_KIT_BRANCH_LEASES_FILE ? {} : { root: process.cwd() };
+}
+
 function maxBranches(): number {
   const parsed = Number(process.env.PI_KIT_MAX_BRANCHES || DEFAULT_MAX_BRANCHES);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_BRANCHES;
 }
 
+/**
+ * The per-user parent of the worktrees: `<tmp>/pi-kit-<uid>`, mode 0700 and owned by this user.
+ * A shared, predictably named directory in the system temp directory could be created
+ * first by another local user, who could then read or replace the worktrees. One that exists as a
+ * symlink, as a non-directory or owned by someone else is refused; a group- or world-accessible
+ * one owned by this user is narrowed to 0700. tests/branch-lab-smoke.ts pins this.
+ */
+function userTmpRoot(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const dir = path.join(os.tmpdir(), `pi-kit-${uid ?? os.userInfo().username}`);
+  try {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    if (!(typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")) throw error;
+  }
+  const st = fs.lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`branch-lab: ${dir} is not a directory; refusing to use it`);
+  if (uid !== null && st.uid !== uid) throw new Error(`branch-lab: ${dir} is owned by another user; refusing to use it`);
+  if ((st.mode & 0o077) !== 0) fs.chmodSync(dir, 0o700);
+  return dir;
+}
+
 function branchRoot(): string {
-  return path.join(os.tmpdir(), "pi-branch-lab");
+  return path.join(userTmpRoot(), "pi-branch-lab");
 }
 
 function sanitizeTaskId(taskId: string): string {
@@ -106,8 +135,8 @@ async function worktreePathFor(taskId: string): Promise<string> {
 }
 
 function ensureLeaseDir(): void {
-  fs.mkdirSync(path.dirname(leasesPath()), { recursive: true });
-  fs.mkdirSync(branchRoot(), { recursive: true });
+  ensureDirSafe(path.dirname(leasesPath()), leaseWriteOptions());
+  ensureDirSafe(branchRoot(), { root: userTmpRoot() });
 }
 
 // A lease file is operator-editable and can be hand-mangled (or corrupted) into a
@@ -143,16 +172,8 @@ function readLeases(): Lease[] {
 
 function writeLeases(leases: Lease[]): void {
   ensureLeaseDir();
-  const file = leasesPath();
-  // Atomic write: temp sibling + rename so a crash mid-write cannot truncate the live
-  // file. The temp is removed on failure; after a successful rename it no longer exists.
-  const tmp = `${file}.tmp-${process.pid}`;
-  try {
-    fs.writeFileSync(tmp, `${JSON.stringify(leases, null, 2)}\n`);
-    fs.renameSync(tmp, file);
-  } finally {
-    try { fs.unlinkSync(tmp); } catch { /* renamed away or never created */ }
-  }
+  // Atomic, no-follow replacement (temp file created with O_EXCL, renamed over the target).
+  writeFileSafe(leasesPath(), `${JSON.stringify(leases, null, 2)}\n`, leaseWriteOptions());
 }
 
 function leaseFor(taskId: string): Lease | undefined {
@@ -202,7 +223,7 @@ async function createBranch(input: TaskParams & { baseBranch?: string }): Promis
   if (fs.existsSync(worktreePath)) throw new Error(`branch-lab: worktree path already exists: ${worktreePath}`);
 
   ensureLeaseDir();
-  fs.mkdirSync(path.dirname(worktreePath), { recursive: true });
+  ensureDirSafe(path.dirname(worktreePath), { root: userTmpRoot() });
   const args = ["worktree", "add", worktreePath, "-b", branch];
   if (baseBranch) args.push(baseBranch);
   await runGit(args);

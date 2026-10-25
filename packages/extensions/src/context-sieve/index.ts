@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { ensureDirSafe, writeFileSafe } from "./shared/safe-fs.ts";
 
 interface Contribution {
   id: string;
@@ -148,10 +149,10 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
-function writeBudgetEvent(dir: string, event: { totalTokens: number; budget: number; dropped: string[]; included: string[]; truncated: string[]; message?: { tokens: number; included: string[]; injected: string[]; skippedUnchanged: boolean }; contextWindow?: number | null; windowClamped?: boolean }): void {
+function writeBudgetEvent(root: string, dir: string, event: { totalTokens: number; budget: number; dropped: string[]; included: string[]; truncated: string[]; message?: { tokens: number; included: string[]; injected: string[]; skippedUnchanged: boolean }; contextWindow?: number | null; windowClamped?: boolean }): void {
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "sieve-budget.json"), JSON.stringify(event, null, 2));
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(path.join(dir, "sieve-budget.json"), JSON.stringify(event, null, 2), { root });
   } catch {
     // Telemetry must never break prompt assembly.
   }
@@ -255,6 +256,8 @@ function assembleWithBudget(
 
 export default function (pi: ExtensionAPI) {
   let contribDir = "";
+  // The workspace the contributions directory belongs to: the trusted root of its safe writes.
+  let workspace = process.cwd();
   // The text of each message-channel contribution as last injected this session, by id. A
   // contribution whose text is unchanged is not injected again: its earlier copy is already in
   // the conversation history, and repeating it would only grow the context. The comparison is
@@ -269,7 +272,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     lastInjected.clear();
     contribDir = getContribDir(ctx.cwd, resolveSessionId(ctx.sessionManager));
-    fs.mkdirSync(contribDir, { recursive: true });
+    workspace = ctx.cwd;
+    try {
+      ensureDirSafe(contribDir, { root: workspace });
+    } catch {
+      /* a refused (symlinked) directory leaves the contributions empty */
+    }
     // Never delete another session's contributions; readContributions ignores files
     // meaningfully older than SESSION_EPOCH_NS (process start minus the grace window)
     // instead of importing their directives. This is startup containment, not full
@@ -312,7 +320,7 @@ export default function (pi: ExtensionAPI) {
     for (const id of [...lastInjected.keys()]) if (!current.has(id)) lastInjected.delete(id);
     const skippedUnchanged = messageText !== "" && injected.length === 0;
 
-    writeBudgetEvent(dir, {
+    writeBudgetEvent(workspace, dir, {
       totalTokens: estimateTokens(system.assembled.join("\n\n")),
       budget: budgetTokens,
       dropped: [...system.dropped, ...message.dropped],

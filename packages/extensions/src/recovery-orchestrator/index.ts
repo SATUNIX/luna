@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { createFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 
 // recovery-orchestrator: the DEEP root-cause layer that progress-guard escalates into
 // (docs/recovery-orchestration-mode.md, §2). When assistance (nudging) hasn't broken a loop,
@@ -315,9 +316,8 @@ function isProgressWrite(tool: unknown, input: unknown, isError: unknown, cwd: s
 
 function writeContribution(cwd: string, content: string): void {
   try {
-    const p = contribPath(cwd);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify({ id: CONTRIB_ID, priority: 90, budgetTokens: 480, content }), "utf8");
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(contribPath(cwd), JSON.stringify({ id: CONTRIB_ID, priority: 90, budgetTokens: 480, content }), { root: cwd });
   } catch {
     /* best-effort */
   }
@@ -342,8 +342,7 @@ export default function (pi: ExtensionAPI) {
     pi.events?.emit("pi-kit:recovery-blocked", disposition);
     try {
       const file = path.join(cwd, ".pi", "recovery", `blocked-${safeSig(sessionId)}.json`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(disposition), "utf8");
+      writeFileSafe(file, JSON.stringify(disposition), { root: cwd });
     } catch (error) {
       ctx.ui?.notify?.(`recovery: could not persist blocked disposition: ${String(error)}`, "error");
     }
@@ -387,8 +386,7 @@ export default function (pi: ExtensionAPI) {
     attemptsBySignature.set(esc.signature, attempt);
     try {
       const reportAbs = path.join(cwd, reportRel);
-      fs.mkdirSync(path.dirname(reportAbs), { recursive: true });
-      fs.writeFileSync(reportAbs, reportScaffold(esc, attempt, cwd), { encoding: "utf8", flag: "wx" }); // created only if absent, in one step
+      createFileExclusive(reportAbs, reportScaffold(esc, attempt, cwd), { root: cwd }); // created only if absent, in one step
     } catch {
       /* report is best-effort; the steer is the important part */
     }
@@ -411,12 +409,10 @@ export default function (pi: ExtensionAPI) {
       const signature = (args ?? "").trim() || "manual";
       // Seed an escalation the same way progress-guard would, then enter immediately.
       try {
-        const file = escalationPath(dir);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(
-          file,
+        writeFileSafe(
+          escalationPath(dir),
           JSON.stringify({ signature, reason: "operator invoked /recover", count: 1, at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
-          "utf8",
+          { root: dir },
         );
       } catch {
         /* ignore */
@@ -425,9 +421,7 @@ export default function (pi: ExtensionAPI) {
       if (plan.action === "enter") {
         attemptsBySignature.set(plan.escalation.signature, plan.attempt);
         try {
-          const reportAbs = path.join(dir, plan.reportRel);
-          fs.mkdirSync(path.dirname(reportAbs), { recursive: true });
-          fs.writeFileSync(reportAbs, reportScaffold(plan.escalation, plan.attempt, dir), { encoding: "utf8", flag: "wx" }); // created only if absent, in one step
+          createFileExclusive(path.join(dir, plan.reportRel), reportScaffold(plan.escalation, plan.attempt, dir), { root: dir }); // created only if absent, in one step
         } catch { /* ignore */ }
         writeContribution(dir, recoveryContent(plan.escalation, plan.attempt, plan.reportRel));
         clearEscalation(dir);

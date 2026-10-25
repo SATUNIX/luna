@@ -7,6 +7,7 @@ import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, i
 import { getEventListeners } from "node:events";
 import { type Infer, isRecord, object, optional, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as HumanConsole from "../packages/extensions/src/human-console/index.ts";
+import { answerPending, startConsole } from "./console-answer.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
 /** The fields of a broker pending-request file this smoke reads back (a question has no body). */
@@ -20,7 +21,7 @@ async function resolvePending(ws: string, approved: boolean, answer: string | nu
     if (fs.existsSync(pending) && fs.readdirSync(pending).length) {
       const file = fs.readdirSync(pending).sort((a, b) => fs.statSync(path.join(pending, b)).mtimeMs - fs.statSync(path.join(pending, a)).mtimeMs)[0]; assert.ok(file, "a pending broker request file"); const req = parseJsonAs(BrokerRequestFile, fs.readFileSync(path.join(pending, file), "utf8"));
       fs.mkdirSync(path.join(ws, "console", "resolved"), { recursive: true });
-      fs.writeFileSync(path.join(ws, "console", "resolved", `${req.id}.json`), JSON.stringify({ id: req.id, approved, answer }));
+      answerPending(path.join(ws, "console"), req.id, { approved, answer });
       return req;
     }
     await wait();
@@ -39,6 +40,7 @@ async function run() {
   const restoreIsolation = isolateKitEnv();
   const ws = tmpWorkspace("pi-kit-human-console-");
   const restores = [restoreIsolation, setEnv("HOME", path.join(ws, "home")), setEnv("PI_CODING_AGENT_DIR", path.join(ws, "agent")), setEnv("PI_KIT_HUMAN_CONSOLE_DIR", path.join(ws, "console")), setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "40"), setEnv("PI_KIT_FIREWALL_AUDIT_LOG", path.join(ws, "audit.jsonl"))];
+  startConsole(); // the console creates the answer key; requesters never do
   // Broker poll timers are unref'd in production; keep this isolated smoke process alive
   // while it awaits a broker resolution/timeout.
   const keepAlive = setInterval(() => {}, 1000);

@@ -4,7 +4,8 @@
 // critical), a reason code and a short human detail. The action's tier is the highest finding.
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
-import { basenameOf, decoderLike, isForkBomb, normalize, parseShell, type Segment } from "./shell.ts";
+import { inlineAgentConfigWrite } from "./shared/inline-guard.ts";
+import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
 export type Effect =
@@ -91,6 +92,7 @@ export type PathClass =
   | "security_control"
   | "credential"
   | "credential_ws" // .env-style secrets inside the workspace
+  | "credential_control" // operator-authority secret: reading it is a credential read, writing it a safety-control change
   | "persistence"
   | "exec_config"
   | "git_internal"
@@ -131,6 +133,11 @@ export function resolvePath(p: string, cwd: string | null, env: ClassifyEnv, rem
   if (/^[A-Za-z]:(?:[\\/]|[^\\/:]|$)/.test(s) || s.startsWith("\\\\")) return s.replace(/\\/g, "/").replace(/^([A-Za-z]:)(?!\/)/, "$1/"); // Windows absolute (a shell may have eaten the backslash)
   s = s.replace(/^\$\{?HOME\}?(?=\/|$)/, "~").replace(/^\$\{?TMPDIR\}?(?=\/|$)/, remote ? "/tmp" : env.tmpRoots[0] ?? "/tmp");
   s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, cwd ?? "$PWD");
+  // The agent and remote-state directories the session runs with: pi sets them in the bash tool's environment.
+  if (!remote) for (const name of ["PI_CODING_AGENT_DIR", "PI_REMOTE_STATE_DIR"]) {
+    const value = process.env[name]?.trim();
+    if (value) s = s.replace(new RegExp(`^\\$\\{?${name}\\}?(?=/|$)`), value);
+  }
   if (/[`]|\$\(|\$\{?[A-Za-z_]/.test(s)) return null; // unresolved expansion
   if (s === "~" || s.startsWith("~/")) return remote ? normalize(s) : normalize(env.home + s.slice(1));
   if (/^~[A-Za-z]/.test(s)) return remote ? s : `/home/${s.slice(1)}`;
@@ -150,66 +157,104 @@ function relTo(p: string, root: string): string {
 // The project's own control directory, <workspace>/.pi and <cwd>/.pi: the firewall's audit trail, verdicts and
 // auto-mode switch live there, and so do the files pi loads into the next session (project settings, MCP servers,
 // system-prompt files, extensions, skills, prompts, themes) and the operator's goal (/goal writes GOAL.yaml).
-const PROJECT_CONTROL = /^(?:(?:GOAL\.yaml|settings\.json|mcp\.json|mcp-adapter\.json|SYSTEM\.md|APPEND_SYSTEM\.md)$|(?:extensions|skills|prompts|themes)(?:\/|$))/;
+// The kit's install marker (.pi-kit.json) names the installed profile and the web console's source, so it
+// is a control file too.
+const PROJECT_CONTROL = /^(?:(?:GOAL\.yaml|settings\.json|mcp\.json|mcp-adapter\.json|SYSTEM\.md|APPEND_SYSTEM\.md|\.pi-kit\.json)$|(?:extensions|skills|prompts|themes)(?:\/|$))/;
+
+// What pi loads from its agent directory with no trust prompt (pi 1.4.0 resource-loader, package-manager,
+// trust-manager and context-file discovery): extensions, skills, prompts and themes; installed packages
+// (npm/, git/); the system-prompt and global context files; settings, the project-trust store and the
+// kit's install marker. pi-mcp-adapter adds its global config, mcp-adapter.json (the MCP servers it starts
+// and their sampling, elicitation and install switches; the image restores it from
+// packages/container/overlays/pi/mcp-adapter.json). Writing any of them changes what the next session runs
+// or believes, so each is a safety-control path. tests/firewall-autoload-smoke.ts reads pi's own sources and fails when pi adds a
+// location this list does not cover.
+export const AGENT_AUTOLOAD = ["settings.json", "trust.json", ".pi-kit.json", "SYSTEM.md", "APPEND_SYSTEM.md", "AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD", "mcp-adapter.json", "extensions/", "skills/", "prompts/", "themes/", "npm/", "git/", "pi-kit/"] as const;
+// Skills pi loads from outside the agent directory: the user's ~/.agents/skills, and .agents/skills in the
+// project (cwd or an ancestor).
+const HOME_AUTOLOAD = [".agents/skills"];
+
+// Operator-authority files: one list of the files whose content carries the operator's authority (a
+// secret that drives sessions, approves a phone pairing or authenticates a provider) or decides what the kit
+// trusts. A `secret` entry is a credential read when read and a safety-control change when written; the
+// others are safety-control paths either way. `root` says where the name is looked up: the agent directory
+// (PI_CODING_AGENT_DIR, and the default ~/.pi/agent), the remote host's state directory (PI_REMOTE_STATE_DIR,
+// else <agent dir>/remote-control), or any directory. An empty name covers the whole directory.
+// tests/firewall-autoload-smoke.ts checks every entry against the source that writes it, and fails when kit
+// source names a new secret-looking file that is neither here nor in its reviewed exemptions. A path that could
+// reach a secret entry without naming it exactly (a glob, or a directory that holds one, read recursively or
+// archived) is classified as that secret too (authorityClass).
+export type AuthorityFile = { id: string; root: "agent" | "remote-state" | "anywhere"; name: string; secret: boolean; source: string };
+export const OPERATOR_AUTHORITY_FILES: readonly AuthorityFile[] = [
+  { id: "web-console-token", root: "anywhere", name: "console.token", secret: true, source: "packages/web-ui/server/config.ts" },
+  { id: "remote-control-secret", root: "remote-state", name: "control.json", secret: true, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "remote-host-identity", root: "remote-state", name: "identity.json", secret: true, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "remote-tls-key", root: "remote-state", name: "tls-key.pem", secret: true, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "remote-devices", root: "remote-state", name: "devices.json", secret: false, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "remote-audit", root: "remote-state", name: "audit.jsonl", secret: false, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "remote-state-dir", root: "remote-state", name: "", secret: false, source: "packages/web-ui/server/remote/store.ts" },
+  { id: "pi-auth", root: "agent", name: "auth.json", secret: true, source: "@earendil-works/pi-coding-agent dist/core/agent-session-services.js" },
+  { id: "pi-models", root: "agent", name: "models.json", secret: true, source: "@earendil-works/pi-coding-agent dist/core/agent-session-services.js" },
+  { id: "firewall-approvals", root: "agent", name: "pi-kit/firewall-approvals.json", secret: false, source: "packages/extensions/src/tool-firewall/approvals.ts" },
+];
+
+const GLOB_CHARS = /[*?[]/;
+
+// Does the unexpanded glob `pattern` match `target`, or one of its ancestor directories? Segment by segment, as
+// bash expands it (no globstar: `**` is `*`).
+function globReaches(pattern: string, target: string): boolean {
+  const pat = pattern.split("/");
+  const parts = target.split("/");
+  return pat.length <= parts.length && pat.every((seg, i) => (GLOB_CHARS.test(seg) ? globSegMatches(seg, parts[i] ?? "") : seg === parts[i]));
+}
+
+function authorityClass(trimmed: string, agentDirs: string[], home: string): PathClass | null {
+  const remoteEnv = process.env.PI_REMOTE_STATE_DIR?.trim();
+  const remoteDirs = [...new Set([...(remoteEnv ? [normalize(remoteEnv)] : []), ...agentDirs.map((d) => `${d}/remote-control`)])];
+  const base = trimmed.split("/").pop() ?? "";
+  const files = [...OPERATOR_AUTHORITY_FILES].sort((x, y) => y.name.length - x.name.length);
+  const locations = (f: AuthorityFile): string[] => (f.root === "anywhere" || !f.name ? [] : (f.root === "agent" ? agentDirs : remoteDirs).map((r) => `${r}/${f.name}`));
+  // Named files before whole directories, so control.json stays a secret inside the state directory.
+  for (const f of files) {
+    const cls: PathClass = f.secret ? "credential_control" : "security_control";
+    if (f.root === "anywhere") { if (base === f.name) return cls; continue; }
+    if (f.name && locations(f).includes(trimmed)) return cls;
+  }
+  // A path that reaches a secret without naming it exactly: a directory that holds one (`grep -r`, `tar`, `cp -r`
+  // of the state directory or the agent directory) or a glob that can expand to one or to such a directory
+  // (`remote-control/*`, `auth.js*`). Reading it is a credential read, and writing it a safety-control change.
+  // The home directory itself is not counted here (it is root-critical already).
+  const glob = GLOB_CHARS.test(trimmed);
+  for (const f of files.filter((x) => x.secret)) {
+    if (locations(f).some((loc) => (glob ? globReaches(trimmed, loc) : within(loc, trimmed) && !within(home, trimmed)))) return "credential_control";
+    // A file found by name anywhere: only a glob whose own literal text is distinctive enough (`console.tok*`,
+    // `*.token`), so `src/*` does not count as reading every possible token file.
+    if (f.root === "anywhere" && glob && GLOB_CHARS.test(base) && base.replace(/\[[^\]]*\]|[*?]/g, "").length >= 3 && globSegMatches(base, f.name)) return "credential_control";
+  }
+  for (const f of files) {
+    if (f.name || f.root === "anywhere") continue;
+    const cls: PathClass = f.secret ? "credential_control" : "security_control";
+    if ((f.root === "agent" ? agentDirs : remoteDirs).some((r) => within(trimmed, r) || (glob && globReaches(trimmed, r)))) return cls;
+  }
+  return null;
+}
+
+// The workspace, the cwd and their ancestors: pi looks for .agents/skills in each.
+function projectAutoloadRoots(env: ClassifyEnv): string[] {
+  const out = new Set<string>();
+  for (const start of [env.workspace, env.cwd].filter(Boolean)) {
+    let d = normalize(start);
+    for (let i = 0; i < 64 && d.startsWith("/"); i++) {
+      out.add(d === "/" ? "" : d);
+      if (d === "/") break;
+      d = normalize(`${d}/..`);
+    }
+  }
+  return [...out];
+}
 
 function projectControlDirs(env: ClassifyEnv): string[] {
   return [...new Set([env.workspace, env.cwd].filter(Boolean).map((d) => `${d.replace(/\/+$/, "")}/.pi`))];
-}
-
-const MAX_BRACE_EXPANSIONS = 64;
-
-// Bash brace expansion of one word: `{a,b}` alternatives (nested, several groups) and `{x..y[..step]}`
-// sequences of integers or single letters; `${...}`, `{}` and `{x}` stay literal. Returns null when the word
-// would expand to more than MAX_BRACE_EXPANSIONS words, so callers can fail closed.
-function expandBraces(word: string, max = MAX_BRACE_EXPANSIONS): string[] | null {
-  for (let i = word.indexOf("{"); i >= 0; i = word.indexOf("{", i + 1)) {
-    let depth = 0;
-    let end = -1;
-    const commas: number[] = [];
-    for (let k = i; k < word.length; k++) {
-      const ch = word[k];
-      if (ch === "{") depth++;
-      else if (ch === "}") { depth--; if (depth === 0) { end = k; break; } }
-      else if (ch === "," && depth === 1) commas.push(k);
-    }
-    if (end < 0) return [word];
-    if (word[i - 1] === "$") { i = end; continue; }
-    const prefix = word.slice(0, i);
-    const suffix = word.slice(end + 1);
-    let alts: string[];
-    if (commas.length) {
-      alts = [];
-      let from = i + 1;
-      for (const k of [...commas, end]) { alts.push(word.slice(from, k)); from = k + 1; }
-    } else {
-      const seq = braceSequence(word.slice(i + 1, end), max);
-      if (seq === undefined) continue;
-      if (seq === null) return null;
-      alts = seq;
-    }
-    const out: string[] = [];
-    for (const alt of alts) {
-      const sub = expandBraces(prefix + alt + suffix, max);
-      if (sub === null || out.length + sub.length > max) return null;
-      out.push(...sub);
-    }
-    return out;
-  }
-  return [word];
-}
-
-// `x..y[..step]` inside braces: its words, null when there are too many, undefined when it is not a sequence.
-function braceSequence(body: string, max: number): string[] | null | undefined {
-  const m = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/.exec(body);
-  if (!m) return undefined;
-  const letters = m[3] !== undefined;
-  const from = letters ? (m[3] ?? "").charCodeAt(0) : Number(m[1]);
-  const to = letters ? (m[4] ?? "").charCodeAt(0) : Number(m[2]);
-  const step = Math.abs(Number(m[5] ?? "1")) || 1;
-  if (Math.floor(Math.abs(to - from) / step) + 1 > max) return null;
-  const out: string[] = [];
-  for (let v = from; from <= to ? v <= to : v >= to; v += from <= to ? step : -step) out.push(letters ? String.fromCharCode(v) : String(v));
-  return out;
 }
 
 // The words a path operand stands for after brace expansion, normalized; null past the bound.
@@ -281,6 +326,36 @@ function holdsProjectControl(abs: string, env: ClassifyEnv): boolean {
   });
 }
 
+// The agent directories: PI_CODING_AGENT_DIR when set, and the default ~/.pi/agent (always protected too).
+function agentDirsOf(env: ClassifyEnv, remote?: string): string[] {
+  if (remote) return [];
+  const agentDirEnv = process.env.PI_CODING_AGENT_DIR?.trim();
+  return [...new Set([...(agentDirEnv ? [normalize(agentDirEnv)] : []), `${env.home}/.pi/agent`])];
+}
+
+// The human console's answer key lives in <agent dir>/human-console (console-auth.ts): whoever reads it can
+// sign approvals, whoever plants or replaces it decides which signatures count. True when `abs` is that
+// directory or inside it; the agent directory (or ~/.pi above the default one), which a recursive read or a
+// move takes the key with; or an unexpanded glob or brace list that could match any of those. Fails closed
+// on a brace list past the expansion bound.
+export function touchesConsoleKey(abs: string | null, env: ClassifyEnv, remote?: string): boolean {
+  if (abs === null || remote) return false;
+  const alts = braceAlternatives(abs);
+  if (alts === null) return true;
+  if (alts.length > 1) return alts.some((a) => touchesConsoleKey(a, env));
+  const trimmed = abs.replace(/\/+$/, "") || "/";
+  return agentDirsOf(env).some((d) => {
+    const keyDir = `${d}/human-console`;
+    const guarded = [d, keyDir, `${keyDir}/response.key`, ...(d === `${env.home}/.pi/agent` ? [`${env.home}/.pi`] : [])];
+    if (!/[*?[]/.test(trimmed)) return within(trimmed, keyDir) || guarded.includes(trimmed);
+    const pat = trimmed.split("/");
+    return guarded.some((g) => {
+      const parts = g.split("/");
+      return pat.length === parts.length && pat.every((seg, i) => (/[*?[]/.test(seg) ? globSegMatches(seg, parts[i] ?? "") : seg === parts[i]));
+    });
+  });
+}
+
 export function classifyPath(abs: string | null, env: ClassifyEnv, remote?: string): PathClass {
   if (abs === null) return "unknown";
   if (NULL_SINKS.has(abs) || /^\/dev\/fd\/|^\/proc\/self\/fd\//.test(abs)) return "null_sink";
@@ -300,20 +375,22 @@ export function classifyPath(abs: string | null, env: ClassifyEnv, remote?: stri
   // credential read (so it feeds secret → egress), writing or deleting it is high.
   // The agent directory honours PI_CODING_AGENT_DIR, like the rest of the kit's state (config.ts); the
   // default ~/.pi/agent stays protected as well.
-  const agentDirEnv = process.env.PI_CODING_AGENT_DIR?.trim();
-  const agentDirs = remote ? [] : [...new Set([...(agentDirEnv ? [normalize(agentDirEnv)] : []), `${env.home}/.pi/agent`])];
+  const agentDirs = agentDirsOf(env, remote);
   const captureDir = remote ? null : (process.env.PI_KIT_CAPTURE_DIR?.trim() || `${agentDirs[0]}/pi-kit/capture`).replace(/\/+$/, "");
   if (captureDir && within(trimmed, captureDir)) return "credential";
   // The web console's access token (`/console` writes <web-ui>/.runtime/console.token, or the operator names a file in
   // PI_CONSOLE_TOKEN_FILE): whoever holds it can drive sessions with shell access, so reading it is a credential read.
   const consoleTokenFile = remote ? "" : process.env.PI_CONSOLE_TOKEN_FILE?.trim();
-  if (base === "console.token" || (consoleTokenFile && trimmed === normalize(consoleTokenFile))) return "credential";
+  if (consoleTokenFile && trimmed === normalize(consoleTokenFile)) return "credential_control";
+  const authority = remote ? (base === "console.token" ? "credential_control" : null) : authorityClass(trimmed, agentDirs, env.home);
+  if (authority) return authority;
 
   // Security controls for this kit. A brace-expanded path is one when any of its expansions is, and so is one
   // that would expand past the bound (fail closed).
   const braceAlts = braceAlternatives(trimmed);
   if (braceAlts === null || (braceAlts.length > 1 && braceAlts.some((a) => classifyPath(a, env, remote) === "security_control"))) return "security_control";
-  if (agentDirs.some((d) => trimmed === `${d}/settings.json` || within(trimmed, `${d}/pi-kit`))) return "security_control";
+  if (agentDirs.some((d) => AGENT_AUTOLOAD.some((name) => (name.endsWith("/") ? within(trimmed, `${d}/${name.slice(0, -1)}`) : trimmed === `${d}/${name}`)))) return "security_control";
+  if (!remote && HOME_AUTOLOAD.some((d) => within(trimmed, `${env.home}/${d}`) || projectAutoloadRoots(env).some((root) => within(trimmed, `${root}/${d}`)))) return "security_control";
   // The remembered-approvals file wherever PI_KIT_FIREWALL_APPROVALS puts it: planting an entry would let an action run unasked.
   const approvalsFile = remote ? "" : process.env.PI_KIT_FIREWALL_APPROVALS?.trim();
   if (approvalsFile && (trimmed === normalize(approvalsFile) || trimmed.startsWith(`${normalize(approvalsFile)}.`))) return "security_control";
@@ -404,11 +481,15 @@ function pathOf(c: Ctx, p: string) {
   return { abs, cls, key: resourceKey(abs, cls, c.env, c.seg.remote), shown: abs ?? p };
 }
 
-const READ_CRED_TIER = (cls: PathClass): Tier | null => (cls === "credential" ? "high" : cls === "credential_ws" ? "medium" : null);
+const READ_CRED_TIER = (cls: PathClass): Tier | null => (cls === "credential" || cls === "credential_control" ? "high" : cls === "credential_ws" ? "medium" : null);
 
 function readPath(c: Ctx, p: string): void {
   const r = pathOf(c, p);
-  const t = READ_CRED_TIER(r.cls);
+  // The home directory (or a directory above it) read for content: a recursive read, an archive or a copy of it
+  // takes every credential and operator-authority file under it. The human-console answer key is a credential too.
+  const t = touchesConsoleKey(r.abs, c.env, c.seg.remote)
+    ? "high"
+    : (READ_CRED_TIER(r.cls) ?? (r.cls === "root_critical" && !c.seg.remote && r.abs !== null && within(c.env.home, r.abs.replace(/\/+$/, "") || "/") ? "high" : null));
   if (t) {
     add(c, t, "credential_read", "credential_read", `reads secret material: ${r.shown}`, `${c.exe} read ${r.key}`);
     c.a.credentialReads.push(r.shown);
@@ -428,6 +509,10 @@ function writePath(c: Ctx, p: string, how: string): void {
   }
   const r = pathOf(c, p);
   const key = `${c.exe} write ${r.key}`;
+  if (r.cls !== "null_sink" && r.cls !== "device" && touchesConsoleKey(r.abs, c.env, c.seg.remote)) {
+    add(c, "high", "security_control", "console_key_write", `${how} the human console's answer key or a directory that holds it: ${r.shown}`, key);
+    return;
+  }
   switch (r.cls) {
     case "null_sink":
       return;
@@ -439,6 +524,7 @@ function writePath(c: Ctx, p: string, how: string): void {
       add(c, "high", "write_outside", "system_write", `${how} a system path: ${r.shown}`, key);
       return;
     case "security_control":
+    case "credential_control":
       add(c, "high", "security_control", "security_control_write", `${how} a safety-control file: ${r.shown}`, key);
       return;
     case "credential":
@@ -463,11 +549,32 @@ function writePath(c: Ctx, p: string, how: string): void {
       return;
     case "unknown":
       if (c.seg.remote) return; // remote writes are covered by the remote-exec rule
+      if (runtimeTailIsControl(p, c.env)) {
+        add(c, "high", "security_control", "runtime_control_write", `${how} a path computed at runtime that ends in a safety-control file: ${p}`, `${c.exe} write ${p}`);
+        return;
+      }
       add(c, "low", "workspace_write", "unresolved_write", `${how} a path computed at runtime: ${p}`);
       return;
     default:
       add(c, "low", "workspace_write", "workspace_write", `${how} ${r.shown}`);
   }
+}
+
+// A destination built at runtime (`$DIR/.pi/auto-mode.json`, `$(pwd)/.pi/.pi-kit.json`) cannot be resolved, but
+// the literal part after the last expansion can be checked: when it has at least two segments and names a
+// safety-control or operator-authority file under the workspace, the working directory, the home directory or
+// an agent directory, the write fails closed. protected-paths applies the same rule to the same corpus
+// (tests/protected-paths-corpus-smoke.ts). A tail of one segment (`$OUT/settings.json`) stays unresolved.
+function runtimeTailIsControl(p: string, env: ClassifyEnv): boolean {
+  const tail = p.replace(/^[\s\S]*(?:\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[@*#?$!0-9])/, "").replace(/\/+$/, "");
+  if (!tail.startsWith("/") || tail.split("/").filter(Boolean).length < 2 || /[`$]/.test(tail)) return false;
+  const agentDirEnv = process.env.PI_CODING_AGENT_DIR?.trim();
+  const agentDirs = [...new Set([...(agentDirEnv ? [normalize(agentDirEnv)] : []), `${env.home}/.pi/agent`])];
+  const roots = [...new Set([env.workspace, env.cwd, env.home, `${env.home}/.pi`, ...agentDirs])];
+  return roots.some((root) => {
+    const cls = classifyPath(normalize(`${root}${tail}`), env);
+    return cls === "security_control" || cls === "credential_control";
+  });
 }
 
 function deletePath(c: Ctx, p: string, recursive: boolean): void {
@@ -486,6 +593,7 @@ function deletePath(c: Ctx, p: string, recursive: boolean): void {
       case "system":
         return ["high", "system_delete"];
       case "security_control":
+      case "credential_control":
         return ["high", "security_control_delete"];
       case "credential":
         return ["high", "credential_delete"];
@@ -611,7 +719,8 @@ function classifySegment(c: Ctx): void {
   const lower = exe.toLowerCase();
 
   if (!argv.length) {
-    // Bare redirection (`> file`) or assignment.
+    // Bare redirection (`> file`) or assignment; an assignment can still hold code the shell runs later.
+    for (const as of seg.assigns) shellCodeVar(c, as.split("=")[0] ?? "", as.slice(as.indexOf("=") + 1));
     return;
   }
   if (seg.obfuscatedName) add(c, "high", "obfuscated_exec", "obfuscated_name", `command name is obfuscated (${seg.words[0]?.raw ?? exe})`, `obfuscated ${exe}`);
@@ -630,7 +739,13 @@ function classifySegment(c: Ctx): void {
     const name = as.split("=")[0] ?? "";
     if (/^PI_KIT_(?:FIREWALL|AUTO_MODE|PROTECTED|WRITE_ALLOWLIST|INTERNAL_CHILD|HUMAN_CONSOLE|CAPTURE|UNATTENDED)/.test(name)) add(c, "high", "security_control", "safety_env_override", `overrides a safety setting via ${name}`, `env ${name}`);
     if (/^(?:LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH)$/.test(name)) add(c, "high", "obfuscated_exec", "library_injection", `injects a shared library via ${name}`, `env ${name}`);
+    shellCodeVar(c, name, as.slice(as.indexOf("=") + 1));
   }
+  // Wrappers the parser looked through that change where the command runs: a namespace, a new root or a
+  // sandbox escape (never routine: an unprivileged user's own namespace can pose as a sandbox), or a transient service.
+  const ns = seg.via.find((v) => NAMESPACE_WRAPPERS.has(v));
+  if (ns) add(c, "medium", "code_exec", "namespace_wrapper", `runs ${exe} through ${ns}, which changes its namespace, root or sandbox`, `${ns} ${exe}`);
+  if (seg.via.includes("systemd-run")) add(c, "medium", "code_exec", "systemd_run", `runs ${exe} as a transient service outside this session`, `systemd-run ${exe}`);
 
   // Redirections.
   for (const r of seg.redirects) {
@@ -642,6 +757,18 @@ function classifySegment(c: Ctx): void {
   // authorises the run's boundary and spends its budget, so from an agent's shell that is the operator's call.
   const autonomyAt = exe === "pi-autonomy" ? 0 : INTERPRETERS.has(exe) ? argv.findIndex((a, i) => i > 0 && /(?:^|\/)(?:autonomy\/cli\.(?:ts|mjs)|pi-autonomy)$/.test(a)) : -1;
   if (autonomyAt >= 0) { autonomyCli(c, argv.slice(autonomyAt + 1)); return; }
+
+  // Agent CLIs are recognised by identity (name, script path or package), not by the name typed.
+  const agent = agentIdentity(seg);
+  if (agent) { agentCli(c, agent); return; }
+  // A call to a shell function defined in the same command: its body was classified where it was defined, with
+  // its positional parameters (`$1`, `"$@"`) unresolved. The body may read or write whatever the call passes, so
+  // each path argument is checked both as a read and as a write.
+  if (seg.fnCall && !own(HANDLERS, exe)) {
+    for (const a of argPaths(argv)) if (looksLikePath(a)) { readPath(c, a); writePath(c, a, `passes to the shell function ${exe}, which may write`); }
+    if (!c.findings.length) add(c, "low", "code_exec", "function_call", `calls the shell function ${exe}`);
+    return;
+  }
 
   // Executable given by path: workspace scripts are ordinary development.
   const first = argv[0] ?? "";
@@ -658,8 +785,32 @@ function classifySegment(c: Ctx): void {
   if (READ_ONLY.has(exe)) { readOnly(c); return; }
   if (DEV_TOOLS.has(exe) || INTERPRETERS.has(exe)) { devTool(c); return; }
   if (seg.remote) add(c, "medium", "remote_exec", "remote_unknown", `runs ${exe} on ${seg.remote}`, exe);
-  else add(c, "low", "unknown_exec", "unknown_exec", `runs ${exe}`);
+  // An executable this classifier has no rule for needs judgement: it may run another command (an exec
+  // wrapper), change identity or write anywhere, and its arguments are not analysed. Only the reviewed
+  // benign names below stay routine.
+  else if (BENIGN_EXEC.has(exe)) add(c, "low", "read", "benign_exec", `runs ${exe}`);
+  else add(c, "medium", "unknown_exec", "unknown_exec", `runs ${exe}, which the firewall has no rule for`, `exec ${exe}`);
   for (const a of argPaths(argv)) if (looksLikePath(a)) readPath(c, a);
+}
+
+// Reviewed executables with no handler that stay low: they read, print or compute, and do not run another
+// command, write outside their output, or reach the network. A name is added here only after that review;
+// everything else unknown is medium (tests/firewall-shell-smoke.ts, "unknown executables").
+const BENIGN_EXEC: ReadonlySet<string> = new Set(
+  (
+    "column comm cut dircolors expand factor fmt fold getconf join look namei nl numfmt od paste pathchk pr ptx rev sha224sum sha384sum shasum sum tsort unexpand units base32 base64 basenc diff3 sdiff colordiff wdiff jo lsattr hostid"
+  ).split(/\s+/),
+);
+
+// Shell variables whose value bash later runs as code: the debug prompt (`PS4`, expanded under `set -x`),
+// the interactive prompts and PROMPT_COMMAND, and exported functions (`BASH_FUNC_name%%`). BASH_ENV and ENV
+// name a file every later non-interactive shell sources.
+function shellCodeVar(c: Ctx, name: string, value: string): void {
+  // The value itself is parsed as commands by shell.ts; this records that the variable carries code.
+  if (/^(?:PS0|PS1|PS2|PS4|PROMPT_COMMAND)$|^BASH_FUNC_/.test(name) && (/\$\(|`/.test(value) || name.startsWith("BASH_FUNC_") || name === "PROMPT_COMMAND")) {
+    add(c, "medium", "code_exec", "shell_code_var", `sets ${name}, which the shell later runs as code`, `env ${name}`);
+  }
+  if (/^(?:BASH_ENV|ENV)$/.test(name) && value.trim()) add(c, "medium", "code_exec", "shell_startup_file", `sets ${name}, a file every later non-interactive shell sources (${value})`, `env ${name}`);
 }
 
 // Listing or hashing a secret file does not put its content in front of the model.
@@ -690,6 +841,8 @@ function devTool(c: Ctx): void {
     const ci = argv.findIndex((a, i) => i > 0 && /^(?:-c|-e|--eval|-p|--print|-E|-r|--command|-x)$/.test(a));
     const code = ci > 0 ? argv[ci + 1] : undefined;
     if (code !== undefined) { inlineCode(c, code); return; }
+    // `deno eval <code>` takes the program as an operand, not after a flag.
+    if (exe === "deno" && argv[1] === "eval") { inlineCode(c, argv.slice(2).find((a) => !a.startsWith("-")) ?? ""); return; }
     if (exe === "python" || exe === "python3") {
       const mi = argv.indexOf("-m");
       if (mi > 0) {
@@ -707,7 +860,7 @@ function devTool(c: Ctx): void {
       add(c, "medium", "code_exec", "procsub_exec", `${exe} runs generated code`, `${exe} <()`); return;
     }
     const script = argv.slice(1).find((a) => !a.startsWith("-") || a === "-");
-    if (!script || script === "-") {
+    if (!script || isStdinPath(script)) {
       if (seg.pipeIn) { stdinExec(c); return; }
       if (seg.stdinBody !== undefined) { inlineCode(c, seg.stdinBody); return; }
       add(c, "low", "code_exec", "repl", exe); return;
@@ -722,6 +875,10 @@ function devTool(c: Ctx): void {
   }
   const pm = own(PACKAGE_MANAGERS, exe);
   if (pm) { pm(c); return; }
+  // A build file read from standard input (`make -f -`, `ninja -f /dev/stdin`) is a script of arbitrary commands.
+  const fi = argv.findIndex((a) => a === "-f" || a === "--file" || a === "--makefile" || a === "--justfile");
+  const buildFile = fi > 0 ? argv[fi + 1] : argv.find((a) => /^--(?:file|makefile|justfile)=/.test(a))?.replace(/^[^=]*=/, "");
+  if (/^(?:make|gmake|bmake|ninja|just)$/.test(exe) && buildFile !== undefined && isStdinPath(buildFile)) { add(c, "medium", "code_exec", "build_from_stdin", `${exe} runs a build file read from standard input`, `${exe} -f -`); return; }
   add(c, "low", "code_exec", "dev_tool", `${exe}${argv[1] ? ` ${argv[1]}` : ""}`);
   // Writes into the output flags of common formatters/builders are workspace writes; nothing to add.
 }
@@ -791,7 +948,7 @@ function inlineCode(c: Ctx, code: string): void {
     c.a.deletes++;
     flagged = true;
   }
-  if (!flagged && /os\.remove|os\.unlink|unlinkSync|fs\.unlink|\.unlink\(|File\.delete|FileUtils\.rm\b/.test(code)) {
+  if (!flagged && /os\.remove|os\.unlink|unlinkSync|fs\.unlink|\.unlink\(|File\.delete|FileUtils\.rm\b|\bunlink\b|\brmdir\b/.test(code)) {
     add(c, "medium", "delete", "inline_delete", `${exe} deletes files`, `${exe} unlink`);
     c.a.deletes++;
   }
@@ -823,15 +980,220 @@ function inlineCode(c: Ctx, code: string): void {
   } else if (/requests\.get|urlopen|fetch\s*\(|axios\.get|https?\.get|urllib/.test(code)) {
     c.a.untrusted = true;
     for (const u of urls.length ? urls : ["?"]) noteHost(c, urls.length ? urlHost(u) : "?", "read");
-    add(c, "low", "network_read", "inline_network_read", `${exe} fetches from the network`);
+    // With no literal URL the destination is built at runtime: it cannot be recorded or checked, and a GET
+    // can carry data in its URL as well as a POST can.
+    if (urls.length) add(c, "low", "network_read", "inline_network_read", `${exe} fetches from the network`);
+    else add(c, "medium", "network_send", "inline_network_dynamic", `${exe} contacts a network address built at runtime`, `${exe} net ?`);
+  }
+  // The process environment (where tokens live) and a network primitive in the same inline program is how an
+  // environment dump is sent off the host.
+  if (/os\.environ|os\.getenv|process\.env|ENV\[|\$ENV\{|getenv\s*\(/.test(code) && /requests\.|urlopen|http\.client|fetch\s*\(|axios|https?\.(?:get|request)|socket|net\.connect|XMLHttpRequest|Net::HTTP|LWP::|HTTP::Tiny|curl_exec/.test(code) && !local) {
+    add(c, "high", "network_send", "inline_env_egress", `${exe} reads environment variables and sends data over the network`, `${exe} env-egress`);
   }
   // Writes and secret files named in the code.
-  for (const m of code.matchAll(/(?:open\s*\(\s*|writeFileSync\s*\(\s*|appendFileSync\s*\(\s*|write_text\s*\(|Path\s*\(\s*)(['"`])([^'"`]+)\1(\s*,\s*['"`][wa])?/g)) {
-    if (m[3] || /writeFileSync|appendFileSync/.test(m[0])) writePath(c, m[2] ?? "", "writes");
+  // `Path('p').write_text(…)` (and the other pathlib mutators) writes p; `Path('p')` alone, or `open('p')`, reads it.
+  for (const m of code.matchAll(/(?:open\s*\(\s*|writeFileSync\s*\(\s*|appendFileSync\s*\(\s*|write_text\s*\(|Path\s*\(\s*)(['"`])([^'"`]+)\1(\s*,\s*['"`][wax])?(\s*\)\s*\.\s*(?:write_text|write_bytes|touch|mkdir|symlink_to|hardlink_to|chmod|rename|replace)\b)?/g)) {
+    if (m[3] || m[4] || /writeFileSync|appendFileSync/.test(m[0])) writePath(c, m[2] ?? "", "writes");
     else readPath(c, m[2] ?? "");
   }
-  for (const m of code.matchAll(/(['"`])((?:~|\/)[^'"`\s]*(?:id_(?:rsa|ed25519|ecdsa)|\.aws\/credentials|\.ssh\/|auth\.json|\.env|shadow)[^'"`\s]*)\1/g)) readPath(c, m[2] ?? "");
+  // Literal writers, copies, moves, links and deletes in any of the inline languages.
+  const literal = inlineLiteralMutations(code);
+  for (const t of literal.writes) writePath(c, t, "writes");
+  for (const t of literal.reads) readPath(c, t);
+  for (const t of literal.links) linkSource(c, t);
+  for (const t of literal.deletes) deletePath(c, t, false);
+  if (literal.deletes.length) flagged = true;
+  // Any literal absolute or home path the code names is checked as a read, so a credential or operator-authority
+  // secret named in the code is a credential read whatever call reads it (the same lists, through classifyPath).
+  for (const m of code.matchAll(/(['"`])((?:~|\/)[^'"`\s]*)\1/g)) if (READ_CRED_TIER(pathOf(c, m[2] ?? "").cls)) readPath(c, m[2] ?? "");
+  // A protected path named in the code, wrapped (`expanduser("~/…")`), composed (`Path.home()/".pi"/…`,
+  // `os.path.join(home, ".pi/agent", …)`) or appended to a runtime value (`os.environ["HOME"] + "/.pi/…"`), with
+  // any write-capable call in the same program: the write cannot be traced to its call, so it fails closed.
+  if (!c.findings.some((f) => f.code === "security_control_write" || f.code === "console_key_write")) {
+    const hit = inlineControlLiteral(c, code);
+    if (hit) add(c, "high", "security_control", "inline_control_write", `${exe} inline code names a safety-control file and can write files: ${hit}`, `${exe} write ${hit}`);
+  }
+  // File-system mutations whose target is not a literal (a variable, a joined or computed path): the target
+  // cannot be classified, so the program needs a look.
+  if (!flagged && (literal.dynamic || inlineDynamicMutation(code))) add(c, "medium", "write_outside", "inline_dynamic_write", `${exe} writes, moves or changes files at paths computed at runtime`, `${exe} write ?`);
   if (!c.findings.length) add(c, "low", "code_exec", "inline_code", `${exe} inline script`);
+}
+
+// Inline file-system calls by the position of the path each one changes: `dest` is written (or deleted), `src`
+// is read, and for a link `src` is what the new name points at. Names cover Node (fs), Python (os, shutil),
+// Ruby (File, FileUtils, IO), PHP and Perl. A call whose changed path is not a string literal sets `dynamic`.
+type InlineCall = { re: RegExp; dest: number; src?: number; link?: boolean; del?: boolean };
+const INLINE_CALLS: readonly InlineCall[] = [
+  { re: /\b(?:createWriteStream|mkdirSync|truncateSync|chmodSync|chownSync|utimesSync|lchmodSync|lchownSync|fs(?:\.promises)?\.(?:writeFile|appendFile|mkdir|truncate|chmod|chown|utimes)|os\.(?:makedirs|mkdir|chmod|chown|truncate|utime)|File\.(?:write|chmod|chown|truncate)|IO\.write|FileUtils\.(?:touch|mkdir_p|mkdir|chmod|chown)|file_put_contents|touch|chmod|chown|mkdir)\s*\(/g, dest: 0 },
+  { re: /\b(?:fopen|File\.open|File\.new)\s*\((?=[^)]*,\s*['"][wax+c])/g, dest: 0 },
+  { re: /\b(?:copyFileSync|cpSync|renameSync|fs(?:\.promises)?\.(?:copyFile|cp|rename)|shutil\.(?:copy|copy2|copyfile|copytree|move)|os\.(?:rename|replace|renames)|FileUtils\.(?:cp|cp_r|mv|copy|move|install)|File\.rename|copy|rename)\s*\(/g, dest: 1, src: 0 },
+  { re: /\b(?:symlinkSync|linkSync|fs(?:\.promises)?\.(?:symlink|link)|os\.(?:symlink|link)|File\.(?:symlink|link)|FileUtils\.(?:ln_s|ln_sf|ln)|symlink|link)\s*\(/g, dest: 1, src: 0, link: true },
+  { re: /\b(?:unlinkSync|fs(?:\.promises)?\.unlink|os\.(?:remove|unlink)|File\.(?:delete|unlink)|FileUtils\.rm|unlink)(?:\s*\(|\s+(?=[$'"]))/g, dest: 0, del: true },
+];
+
+// The arguments of a call from `at` (just after its name and any "("): each string literal, or null for the
+// first argument that is not one (a variable, a joined path); reading stops there.
+function literalArgs(code: string, at: number, max = 3): (string | null)[] {
+  const out: (string | null)[] = [];
+  let j = at;
+  while (out.length < max) {
+    while (/\s/.test(code.charAt(j))) j++;
+    const q = code.charAt(j);
+    if (q !== "'" && q !== '"' && q !== "`") { if (j < code.length && code.charAt(j) !== ")") out.push(null); break; }
+    const e = code.indexOf(q, j + 1);
+    if (e < 0) { out.push(null); break; }
+    out.push(code.slice(j + 1, e));
+    j = e + 1;
+    while (/\s/.test(code.charAt(j))) j++;
+    if (code.charAt(j) !== ",") break;
+    j++;
+  }
+  return out;
+}
+
+function inlineLiteralMutations(code: string): { writes: string[]; reads: string[]; links: string[]; deletes: string[]; dynamic: boolean } {
+  const r = { writes: [] as string[], reads: [] as string[], links: [] as string[], deletes: [] as string[], dynamic: false };
+  for (const call of INLINE_CALLS) {
+    for (const m of code.matchAll(call.re)) {
+      const args = literalArgs(code, (m.index ?? 0) + m[0].length);
+      const dest = args[call.dest];
+      if (dest === undefined) { if (args.includes(null)) r.dynamic = true; continue; }
+      if (dest === null) { r.dynamic = true; continue; }
+      (call.del ? r.deletes : r.writes).push(dest);
+      const src = call.src === undefined ? undefined : args[call.src];
+      if (src) (call.link ? r.links : r.reads).push(src);
+    }
+  }
+  // Perl's three-argument `open(F, ">", "path")` / `open F, '>>', $path` and two-argument `open(F, ">path")`.
+  for (const m of code.matchAll(/\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*/g)) {
+    const [mode, target] = literalArgs(code, (m.index ?? 0) + m[0].length, 2);
+    if (typeof mode !== "string") continue;
+    const twoArg = /^\s*(?:\+?>{1,2}|\+<)\s*(\S.*)$/.exec(mode);
+    if (twoArg) { r.writes.push(twoArg[1] ?? ""); continue; }
+    if (!/^\s*(?:\+?>{1,2}|\+<)\s*$/.test(mode)) continue;
+    if (typeof target === "string") r.writes.push(target);
+    else r.dynamic = true;
+  }
+  return r;
+}
+
+// A link made to `target`: a later write through the new name changes the target.
+function linkSource(c: Ctx, target: string): void {
+  const r = pathOf(c, target);
+  if (r.cls === "security_control" || r.cls === "credential_control") add(c, "high", "security_control", "control_link", `links a safety-control file: ${r.shown}`, `${c.exe} link ${r.key}`);
+  else if (r.cls === "credential") add(c, "medium", "credential_read", "credential_link", `links secret material ${r.shown}`, `${c.exe} link ${r.key}`);
+}
+
+// File-system mutation primitives (Python, Node, Ruby, Perl, PHP) whose first argument is not a string literal.
+const MUTATION_CALL = /(?:\bopen|\b(?:writeFileSync|appendFileSync|createWriteStream|renameSync|copyFileSync|cpSync|symlinkSync|linkSync|chmodSync|chownSync|mkdirSync|truncateSync|utimesSync)|\bfs(?:\.promises)?\.(?:writeFile|appendFile|rename|copyFile|cp|symlink|link|chmod|chown|mkdir|truncate|utimes)|\bos\.(?:replace|rename|renames|chmod|chown|symlink|link|makedirs|mkdir|truncate|utime)|\bshutil\.\w+|\bFile\.(?:write|open|rename|symlink|chmod)|\bIO\.write|\bFileUtils\.\w+|\bfile_put_contents|\bfopen)\s*\(\s*(?![\s'"`)])|\bPath\s*\(\s*(?![\s'"`)])[^)]*\)\s*\.(?:write_text|write_bytes|touch|rename|replace|mkdir|chmod|symlink_to)\s*\(/g;
+function inlineDynamicMutation(code: string): boolean {
+  for (const m of code.matchAll(MUTATION_CALL)) {
+    const call = m[0];
+    // `open(p)` with no mode, or an explicit read mode, only reads.
+    if (/^\s*\bopen|^open/.test(call)) {
+      const tail = code.slice((m.index ?? 0) + call.length, (m.index ?? 0) + call.length + 120);
+      if (!/^[^)]*,\s*(?:mode\s*=\s*)?['"][wax+]/.test(tail)) continue;
+    }
+    return true;
+  }
+  // Perl's `open(my $fh, '>', $path)` and `print {$fh}` forms.
+  return /open\s*\(\s*(?:my\s+)?\$\w+\s*,\s*['"](?:>|>>|\+<)['"]\s*,\s*\$/.test(code);
+}
+
+// Calls that can create, change, copy onto or move onto a file, in the inline languages (Python open/os.open/pathlib/
+// shutil/os, Node fs and streams, Deno, Bun, Ruby File/IO/FileUtils, PHP, Perl). Broad on purpose: it only decides
+// whether a protected path named in the same program is treated as written (inlineControlLiteral).
+const INLINE_WRITE_API = new RegExp([
+  String.raw`\b(?:open|openSync|fopen)\s*\([^;\n]*?,\s*(?:mode\s*=\s*|flags\s*:\s*)?['"\x60][rwaxbt+c]*[wax+c][rwaxbt+c]*['"\x60]`,
+  String.raw`\.open\s*\(\s*(?:mode\s*=\s*)?['"][rwaxbt+]*[wax+][rwaxbt+]*['"]`,
+  String.raw`\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b`,
+  String.raw`\b(?:write_text|write_bytes|symlink_to|hardlink_to)\s*\(`,
+  String.raw`\.(?:touch|rename)\s*\(`,
+  String.raw`\)\s*\.replace\s*\(\s*(?!['"/])`,
+  String.raw`\bos\.(?:rename|renames|replace|symlink|link|truncate|write)\s*\(`,
+  String.raw`\bshutil\.(?:copy\w*|move)\s*\(`,
+  String.raw`\b(?:writeFile|appendFile|copyFile|rename|cp|symlink|link|truncate|writeTextFile)(?:Sync)?\s*\(`,
+  String.raw`\bcreateWriteStream\s*\(`,
+  String.raw`\bBun\.write\s*\(`,
+  String.raw`\bDeno\.(?:create|open)(?:Sync)?\s*\(`,
+  String.raw`\b(?:File\.(?:write|rename|symlink|link)|IO\.write|FileUtils\.\w+|file_put_contents)\s*\(?`,
+  String.raw`\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*['"]\s*(?:\+?>|\+<)`,
+].join("|"));
+
+// The path fragments an inline program spells. `exact` are the absolute and `~` literals. `tails` are the
+// literal parts of a path composed at runtime: a literal appended to a runtime value with `/` or `+`
+// (`Path.home()/".pi/agent/x"`, `os.environ["HOME"] + "/.pi/…"`), the literal arguments of a join call that also
+// takes a runtime value (`os.path.join(home, ".pi", "agent")`, `path.join`, `joinpath`, `File.join`, `Path(…)`),
+// joined in order, and the text after an interpolation (`f"{home}/.pi/…"`, `"#{ENV['HOME']}/.pi/…"`). After a
+// `chdir` every literal is a tail, since the directory it is relative to is not known.
+function inlinePathFragments(code: string): { exact: string[]; tails: string[] } {
+  const lits: { s: string; at: number; end: number }[] = [];
+  for (const m of code.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) lits.push({ s: m[2] ?? "", at: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  const exact = new Set<string>();
+  const tails = new Set<string>();
+  const chdir = /\bchdir\b|\bDir\.chdir\b/.test(code);
+  for (let i = 0; i < lits.length; i++) {
+    const l = lits[i];
+    if (!l) continue;
+    if (/^~(?:\/|$)|^\//.test(l.s)) exact.add(l.s);
+    const interpolated = l.s.replace(/^[\s\S]*[})]/, "");
+    if (interpolated !== l.s) tails.add(interpolated);
+    // Glued to what precedes it: a runtime value (or a run of literals glued the same way) with `/` or `+`.
+    const before = code.slice(0, l.at);
+    if (chdir || /[/+]\s*$/.test(before)) {
+      let run = l.s;
+      for (let k = i + 1; k < lits.length; k++) {
+        const prev = lits[k - 1];
+        const next = lits[k];
+        if (!prev || !next || !/^\s*[/+]\s*$/.test(code.slice(prev.end, next.at))) break;
+        run = `${run}/${next.s}`;
+      }
+      tails.add(l.s);
+      tails.add(run);
+    }
+  }
+  for (const m of code.matchAll(/\b(?:join|joinpath|resolve|Path|PurePath|PosixPath|expand_path)\s*\(/g)) {
+    const start = (m.index ?? 0) + m[0].length;
+    let depth = 1;
+    let j = start;
+    for (; j < code.length && depth > 0; j++) {
+      const ch = code.charAt(j);
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+    }
+    const inside = lits.filter((l) => l.at >= start && l.end <= j);
+    if (!inside.length) continue;
+    let rest = code.slice(start, j - 1);
+    for (const l of [...inside].reverse()) rest = rest.slice(0, l.at - start) + rest.slice(l.end - start);
+    const joined = inside.map((l) => l.s).join("/");
+    if (/^~(?:\/|$)|^\//.test(joined)) exact.add(joined);
+    // Every run that ends at the last literal: a runtime value can stand between any two of them.
+    if (chdir || /[^\s,]/.test(rest)) for (let k = 0; k < inside.length; k++) tails.add(inside.slice(k).map((l) => l.s).join("/"));
+  }
+  const clean = (xs: Set<string>) => [...xs].map((s) => s.replace(/\/{2,}/g, "/")).filter((s) => s.length > 0 && s.length < 4096);
+  return { exact: clean(exact), tails: clean(tails) };
+}
+
+// A safety-control, operator-authority or console-key path an inline program names, when the program also has a
+// write-capable call: the first one found, or null. An absolute or `~` fragment is classified as written; a tail
+// of two or more segments is checked under the workspace, the cwd, the home directory and the agent directories
+// (as runtimeTailIsControl does for a shell destination built at runtime). protected-paths applies the same rule
+// (tests/protected-paths-corpus-smoke.ts).
+function inlineControlLiteral(c: Ctx, code: string): string | null {
+  if (c.seg.remote || !INLINE_WRITE_API.test(code)) return null;
+  const { exact, tails } = inlinePathFragments(code);
+  for (const f of exact) {
+    if (f === "/" || f === "~") continue;
+    const r = pathOf(c, f);
+    if (r.cls === "security_control" || r.cls === "credential_control" || (r.cls !== "null_sink" && r.cls !== "device" && touchesConsoleKey(r.abs, c.env))) return r.shown;
+  }
+  for (const f of tails) {
+    const rel = f.replace(/^~?\/+/, "");
+    if (rel.split("/").filter(Boolean).length < 2 || /[\s`$]/.test(rel)) continue;
+    if (runtimeTailIsControl(`$X/${rel}`, c.env)) return f;
+    if ([c.env.home, `${c.env.home}/.pi`, ...agentDirsOf(c.env)].some((d) => touchesConsoleKey(normalize(`${d}/${rel}`), c.env))) return f;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -885,11 +1247,14 @@ function mvCp(move: boolean): Handler {
       dest = paths[paths.length - 1];
       sources = paths.slice(0, -1);
     }
+    // `cp -l` / `cp -s` make hard or symbolic links instead of copies: a second name for each source.
+    const links = !move && argv.some((a) => /^-[A-Za-z]*[ls]/.test(a) && !a.startsWith("--") || a === "--link" || a === "--symbolic-link");
     for (const s of sources) {
       readPath(c, s);
+      if (links) linkSource(c, s);
       if (move) {
         const r = pathOf(c, s);
-        if (["root_critical", "system", "security_control", "persistence", "git_internal", "git_hooks", "device"].includes(r.cls)) deletePath(c, s, true);
+        if (["root_critical", "system", "security_control", "credential_control", "persistence", "git_internal", "git_hooks", "device"].includes(r.cls)) deletePath(c, s, true);
         else if (!c.seg.remote && r.abs !== null && holdsProjectControl(r.abs, c.env)) add(c, "high", "security_control", "security_control_move", `moves a directory that holds the project's .pi control directory: ${r.shown}`, `${c.exe} move ${r.key}`);
       }
     }
@@ -912,7 +1277,7 @@ function chmod(c: Ctx): void {
     if (exec) c.a.chmodExec.push(r.shown);
     if (r.cls === "root_critical" || r.cls === "device") { add(c, "critical", "destructive_system", "critical_chmod", `changes permissions on ${r.shown}${recursive ? " recursively" : ""}`, `chmod ${r.key}`); continue; }
     if (setuid) { add(c, "high", "privilege", "setuid", `sets setuid/setgid on ${r.shown}`, `chmod +s ${r.key}`); continue; }
-    if (r.cls === "security_control") { add(c, "high", "security_control", "security_control_chmod", `changes permissions on a safety-control file: ${r.shown}`, `chmod ${r.key}`); continue; }
+    if (r.cls === "security_control" || r.cls === "credential_control") { add(c, "high", "security_control", "security_control_chmod", `changes permissions on a safety-control file: ${r.shown}`, `chmod ${r.key}`); continue; }
     if (["system", "credential", "persistence"].includes(r.cls)) { add(c, "high", "write_outside", "sensitive_chmod", `changes permissions on ${r.shown}`, `chmod ${r.key}`); continue; }
     if (worldWritable) { add(c, r.cls.startsWith("workspace") || r.cls === "temp" ? "medium" : "high", "write_outside", "world_writable", `makes ${r.shown} world-writable`, `chmod o+w ${r.key}`); continue; }
     if (r.cls === "home" || r.cls === "other" || r.cls === "unknown") { add(c, "medium", "write_outside", "outside_chmod", `changes permissions outside the workspace: ${r.shown}`, `chmod ${r.key}`); continue; }
@@ -926,7 +1291,7 @@ function chown(c: Ctx): void {
   for (const t of args.slice(1)) {
     const r = pathOf(c, t);
     if (r.cls === "root_critical" || r.cls === "device") add(c, "critical", "destructive_system", "critical_chown", `changes ownership of ${r.shown}`, `chown ${r.key}`);
-    else if (r.cls === "security_control") add(c, "high", "security_control", "security_control_chown", `changes ownership of a safety-control file: ${r.shown}`, `chown ${r.key}`);
+    else if (r.cls === "security_control" || r.cls === "credential_control") add(c, "high", "security_control", "security_control_chown", `changes ownership of a safety-control file: ${r.shown}`, `chown ${r.key}`);
     else if (r.cls.startsWith("workspace") || r.cls === "temp" || r.cls === "home") add(c, "medium", "workspace_write", "chown", `changes ownership of ${r.shown}`, `chown ${r.key}`);
     else add(c, "high", "privilege", "outside_chown", `changes ownership of ${r.shown}`, `chown ${r.key}`);
   }
@@ -992,6 +1357,8 @@ function find(c: Ctx): void {
   if (!roots.length) roots.push(".");
   const filtered = argv.some((a) => /^-(?:i?name|i?path|i?regex|type|newer|mtime|mmin|size|empty)$/.test(a));
   // With a name/type filter only matching entries go, never the root itself.
+  // -exec and friends run a command on every match: a content read of the tree under each root.
+  if (argv.some((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a))) for (const r of roots) readPath(c, r);
   if (argv.includes("-delete")) for (const r of roots) deletePath(c, filtered ? `${r.replace(/\/+$/, "")}/<matches>` : r, !filtered);
   for (let i = k; i < argv.length; i++) { const out = argv[i + 1]; if (/^-f(?:print0?|printf|ls)$/.test(argv[i] ?? "") && out) writePath(c, out, "find writes"); }
   if (!c.findings.length) add(c, "low", "read", "find", "find");
@@ -1015,6 +1382,15 @@ function git(c: Ctx): void {
   }
   if (risky.length) add(c, "high", "code_exec", "git_config_exec", `git -c ${risky[0]} can run arbitrary commands`, "git -c exec");
   const sub = argv[i];
+  // A subcommand that rewrites the working tree, run in a repository that is itself a safety-control location
+  // (an extension or skill pi autoloads, cloned there earlier): the next session loads whatever it checks out.
+  if (sub !== undefined && GIT_TREE_WRITERS.has(sub) && !(sub === "stash" && /^(?:list|show)$/.test(argv[i + 1] ?? "")) && !c.seg.remote) {
+    const wt = argv.find((a) => a.startsWith("--work-tree="))?.slice("--work-tree=".length) ?? (argv.indexOf("--work-tree") > 0 ? argv[argv.indexOf("--work-tree") + 1] : undefined);
+    const ci = argv.indexOf("-C");
+    const dir = wt ?? (ci > 0 && ci < i ? argv[ci + 1] : undefined) ?? c.seg.cwd ?? undefined;
+    const r = dir === undefined ? null : pathOf(c, dir);
+    if (r && (r.cls === "security_control" || r.cls === "credential_control")) add(c, "high", "security_control", "control_repo_update", `git ${sub} rewrites files in ${r.shown}, which pi loads into the next session`, `git ${sub} ${r.key}`);
+  }
   const rest = argv.slice(i + 1);
   const has = (re: RegExp) => rest.some((a) => re.test(a));
   const k = (s: string) => `git ${s}`;
@@ -1031,6 +1407,15 @@ function git(c: Ctx): void {
     case "clone": case "pull": case "submodule":
       c.a.untrusted = c.a.untrusted || sub === "clone";
       if (sub === "clone" || sub === "pull") c.a.remotes.push({ name: has(/^--all$/) ? "--all" : rest.filter((a) => !a.startsWith("-"))[0] ?? "origin", op: "fetch" });
+      // The clone destination is a write like any other: into an autoload directory it plants code the next
+      // session loads.
+      if (sub === "clone") {
+        const ops = gitOperands(rest, GIT_CLONE_ARG_OPTS);
+        const dest = ops[1] ?? (ops[0] ? (ops[0].replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() ?? "") : "");
+        if (dest) { const before = c.findings.length; writePath(c, gitDest(c, argv, dest), "clones into"); if (c.findings.length > before && c.findings.slice(before).every((f) => f.tier === "low")) c.findings.splice(before); }
+        const sep = rest.find((a) => a.startsWith("--separate-git-dir"));
+        if (sep) writePath(c, gitDest(c, argv, sep.includes("=") ? sep.slice(sep.indexOf("=") + 1) : rest[rest.indexOf(sep) + 1] ?? ""), "puts a git directory in");
+      }
       add(c, "low", "workspace_write", "git_pull", k(sub)); return;
     case "add": case "commit": case "mv": case "init": case "apply": case "am": case "cherry-pick": case "revert": case "merge": case "switch": case "notes": case "bisect": case "format-patch": case "mergetool": case "sparse-checkout": case "maintenance": case "rerere": case "citool": case "gui": case "tag":
       if (sub === "tag" && has(/^-d$|^--delete$/)) { add(c, "medium", "history_rewrite", "git_tag_delete", "deletes a tag", k("tag -d")); return; }
@@ -1087,6 +1472,11 @@ function git(c: Ctx): void {
     }
     case "worktree":
       if (rest[0] === "remove" || rest[0] === "prune") { add(c, rest.some((a) => a === "-f" || a === "--force") ? "medium" : "low", "delete", "git_worktree_remove", `git worktree ${rest[0]}`, k(`worktree ${rest[0]}`)); return; }
+      if (rest[0] === "add" || rest[0] === "move") {
+        const ops = gitOperands(rest.slice(1), new Set(["-b", "-B", "--reason"]));
+        const dest = rest[0] === "move" ? ops[1] : ops[0];
+        if (dest) { const before = c.findings.length; writePath(c, gitDest(c, argv, dest), rest[0] === "move" ? "moves a worktree to" : "adds a worktree in"); if (c.findings.length > before && c.findings.slice(before).every((f) => f.tier === "low")) c.findings.splice(before); }
+      }
       add(c, "low", "workspace_write", "git_worktree", k("worktree")); return;
     case "filter-branch": case "filter-repo": case "replace": case "update-ref": case "gc": case "prune": case "repack":
       if ((sub === "gc" && !has(/--prune=now|--aggressive/)) || sub === "repack") { add(c, "low", "workspace_write", "git_gc", k(sub)); return; }
@@ -1098,6 +1488,31 @@ function git(c: Ctx): void {
     default:
       add(c, "low", "workspace_write", "git_other", k(sub)); return;
   }
+}
+
+// git subcommands that change files in the working tree.
+const GIT_TREE_WRITERS: ReadonlySet<string> = new Set(["pull", "checkout", "switch", "restore", "reset", "merge", "rebase", "cherry-pick", "revert", "am", "apply", "stash", "submodule", "mv", "rm", "clean", "read-tree", "checkout-index", "sparse-checkout"]);
+
+const GIT_CLONE_ARG_OPTS = new Set(["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--reference", "--reference-if-able", "--depth", "--shallow-since", "--shallow-exclude", "-c", "--config", "-j", "--jobs", "--filter", "--template", "--server-option", "--bundle-uri", "--ref-format", "--revision"]);
+
+// Operands of a git subcommand: everything that is not an option or an option's value.
+function gitOperands(args: string[], withArg: Set<string>): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (a === "--") { out.push(...args.slice(i + 1)); break; }
+    if (a.startsWith("-")) { if (withArg.has(a)) i++; continue; }
+    out.push(a);
+  }
+  return out;
+}
+
+// A path git resolves against `git -C <dir>` when that is given.
+function gitDest(c: Ctx, argv: string[], p: string): string {
+  const ci = argv.indexOf("-C");
+  const dir = ci > 0 ? argv[ci + 1] : undefined;
+  if (!dir || /^[~/$]/.test(p)) return p;
+  return `${dir.replace(/\/+$/, "")}/${p}`;
 }
 
 function curlLike(c: Ctx): void {
@@ -1172,7 +1587,16 @@ function curlLike(c: Ctx): void {
         c.a.credentialReads.push(r.shown);
       }
     }
-    for (const mm of d.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (isSecretName(mm[1] ?? "") && !local) add(c, "medium", "network_send", "secret_env_send", `sends $${mm[1]} to ${dest}`, `${exe} send $${mm[1]} ${dest}`);
+  }
+  // A secret-named variable anywhere on the command line (a header, the URL, -u, a cookie, the body) goes to
+  // the destination with the request, whether or not it is a POST.
+  if (!local) {
+    const sent = new Set<string>();
+    for (const w of c.seg.words.slice(1)) for (const mm of w.raw.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (isSecretName(mm[1] ?? "")) sent.add(mm[1] ?? "");
+    for (const d of data) for (const mm of d.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (isSecretName(mm[1] ?? "")) sent.add(mm[1] ?? "");
+    for (const name of sent) {
+      add(c, "medium", "network_send", "secret_env_send", `sends $${name} to ${dest}`, `${exe} send $${name} ${dest}`);
+    }
   }
   if (send) {
     c.a.sends.push({ dest, local });
@@ -1257,7 +1681,7 @@ function scpRsync(c: Ctx): void {
     readPath(c, s);
     if (!argv.some((a) => /^--remove-(?:source|sent)-files$/.test(a))) continue;
     const r = pathOf(c, s);
-    if (r.cls === "security_control") deletePath(c, s, true);
+    if (r.cls === "security_control" || r.cls === "credential_control") deletePath(c, s, true);
     else if (!c.seg.remote && r.abs !== null && holdsProjectControl(r.abs, c.env)) add(c, "high", "security_control", "security_control_move", `removes the source files of a directory that holds the project's .pi control directory: ${r.shown}`, `${c.exe} move ${r.key}`);
   }
   writePath(c, dest, `${c.exe} copies into`);
@@ -1347,7 +1771,7 @@ function docker(c: Ctx): void {
       const r = pathOf(c, src);
       if (/docker\.sock$/.test(src)) add(c, "high", "privilege", "docker_socket_mount", "mounts the Docker socket (host root)", `${k} docker.sock`);
       else if (r.cls === "root_critical" || r.cls === "system") add(c, "high", "privilege", "host_mount", `mounts ${r.shown} into a container`, `${k} mount ${r.key}`);
-      else if (r.cls === "credential") add(c, "high", "credential_read", "credential_mount", `mounts secret material ${r.shown} into a container`, `${k} mount ${r.key}`);
+      else if (r.cls === "credential" || r.cls === "credential_control") add(c, "high", "credential_read", "credential_mount", `mounts secret material ${r.shown} into a container`, `${k} mount ${r.key}`);
       else if (r.cls === "home" || r.cls === "other") add(c, "medium", "write_outside", "outside_mount", `mounts ${r.shown} into a container`, `${k} mount ${r.key}`);
     }
     add(c, "low", "code_exec", "container_run", k); return;
@@ -1592,6 +2016,8 @@ function envDump(c: Ctx): void {
       if (/^PI_KIT_(?:FIREWALL|AUTO_MODE|PROTECTED|WRITE_ALLOWLIST|INTERNAL_CHILD|HUMAN_CONSOLE|CAPTURE|UNATTENDED)/.test(name)) add(c, "high", "security_control", "safety_env_override", `overrides a safety setting via ${name}`, `export ${name}`);
       if (/^(?:LD_PRELOAD|DYLD_INSERT_LIBRARIES)$/.test(name)) add(c, "high", "obfuscated_exec", "library_injection", `injects a shared library via ${name}`, `export ${name}`);
       if (/^HISTFILE$/.test(name) && /=\/dev\/null$|=$/.test(a)) add(c, "medium", "security_control", "history_disable", "disables shell history", "export HISTFILE");
+      if (a.includes("=")) shellCodeVar(c, name, a.slice(a.indexOf("=") + 1));
+      if (/^(?:PI_CODING_AGENT_DIR|HOME)$/.test(name) && a.includes("=")) add(c, "medium", "security_control", "agent_dir_export", `exports ${name}, which moves every later agent's state and configuration`, `export ${name}`);
     }
     if (!c.findings.length) add(c, "low", "read", "shell_builtin", c.exe);
     return;
@@ -1605,20 +2031,91 @@ function envDump(c: Ctx): void {
   add(c, "medium", "credential_read", "env_dump", `${c.exe} dumps environment variables (may include tokens)`, `${c.exe} dump`);
 }
 
-function piCli(c: Ctx): void {
-  const argv = c.seg.argv;
-  const exe = c.exe;
-  if (exe === "pi") {
-    if (argv.some((a) => a === "--no-extensions" || a === "-ne" || a === "--no-extension")) {
-      const toolsIdx = argv.indexOf("--tools");
-      const noTools = argv.includes("--no-tools") || (toolsIdx >= 0 && (argv[toolsIdx + 1] ?? "").trim() === "");
-      if (!noTools && !argv.some((a) => /^(?:--help|-h|--version|-v|list|--list-models)$/.test(a))) { add(c, "high", "security_control", "unguarded_agent", "starts a pi agent without extensions (no firewall)", "pi --no-extensions"); return; }
-    }
-    if (/^(?:install|remove|uninstall|update|config)$/.test(argv[1] ?? "") && !argv.some((a) => a === "--help" || a === "-h")) { add(c, "medium", "package_install", "pi_package", `pi ${argv[1]} ${argv[2] ?? ""}`.trim(), `pi ${argv[1]}`); return; }
-    add(c, "low", "code_exec", "pi_cli", "pi"); return;
+// Agent CLIs by identity: the names they install, the script their package runs and the package names a
+// runner (npx, bunx, pnpm dlx, uvx, pipx run) fetches them by. A launch by script path or through a runner is
+// the same agent as one by name. `homeEnv` names the variables that move the agent's own configuration.
+type AgentCli = { id: string; bins: string[]; packages: string[]; scripts: RegExp[]; pyModule?: string; homeEnv: string[] };
+export const AGENT_CLIS: readonly AgentCli[] = [
+  { id: "pi", bins: ["pi"], packages: ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"], scripts: [/(?:^|\/)pi-coding-agent\/dist\/(?:bundle\/)?(?:cli|main|index)\.[cm]?js$/, /(?:^|\/)\.bin\/pi$/], homeEnv: ["PI_CODING_AGENT_DIR"] },
+  { id: "claude", bins: ["claude"], packages: ["@anthropic-ai/claude-code"], scripts: [/(?:^|\/)claude-code\/cli\.[cm]?js$/, /(?:^|\/)\.bin\/claude$/], homeEnv: ["CLAUDE_CONFIG_DIR"] },
+  { id: "codex", bins: ["codex"], packages: ["@openai/codex"], scripts: [/(?:^|\/)codex\/bin\/codex\.[cm]?js$/, /(?:^|\/)\.bin\/codex$/], homeEnv: ["CODEX_HOME"] },
+  { id: "gemini", bins: ["gemini"], packages: ["@google/gemini-cli"], scripts: [/(?:^|\/)gemini-cli\/dist\/index\.[cm]?js$/, /(?:^|\/)\.bin\/gemini$/], homeEnv: [] },
+  { id: "aider", bins: ["aider"], packages: ["aider-chat", "aider-install"], scripts: [], pyModule: "aider", homeEnv: [] },
+  { id: "opencode", bins: ["opencode"], packages: ["opencode-ai"], scripts: [/(?:^|\/)\.bin\/opencode$/], homeEnv: [] },
+  { id: "goose", bins: ["goose"], packages: [], scripts: [], homeEnv: [] },
+  { id: "cursor-agent", bins: ["cursor-agent"], packages: [], scripts: [], homeEnv: [] },
+  { id: "amp", bins: ["amp"], packages: ["@sourcegraph/amp"], scripts: [/(?:^|\/)\.bin\/amp$/], homeEnv: [] },
+  { id: "crush", bins: ["crush"], packages: ["@charmland/crush"], scripts: [], homeEnv: [] },
+  { id: "qwen", bins: ["qwen"], packages: ["@qwen-code/qwen-code"], scripts: [/(?:^|\/)\.bin\/qwen$/], homeEnv: [] },
+  { id: "droid", bins: ["droid"], packages: [], scripts: [], homeEnv: [] },
+];
+const SCRIPT_RUNNERS = new Set(["node", "nodejs", "bun", "deno", "tsx", "ts-node"]);
+const PACKAGE_RUNNERS: Record<string, number> = { npx: 1, bunx: 1, pnpx: 1, uvx: 1, "pnpm dlx": 2, "yarn dlx": 2, "bun x": 2, "npm exec": 2, "npm x": 2, "pipx run": 2, "uv tool": 3 };
+
+function packageName(spec: string): string {
+  return /^(@[^/@]+\/[^@]+|[^@]+)/.exec(spec)?.[1] ?? spec;
+}
+
+function agentIdentity(seg: Segment): { cli: AgentCli; args: string[] } | null {
+  const argv = seg.argv;
+  const first = argv[0] ?? "";
+  const byName = (name: string) => AGENT_CLIS.find((a) => a.bins.includes(name));
+  const byScript = (p: string) => AGENT_CLIS.find((a) => a.scripts.some((re) => re.test(p)));
+  // A launch by absolute or relative path (`/usr/local/bin/pi`, `./node_modules/.bin/claude`) is the same agent
+  // as one by name.
+  const direct = byScript(first) ?? byName(basenameOf(first));
+  if (direct) return { cli: direct, args: argv.slice(1) };
+  const exe = basenameOf(first);
+  if (SCRIPT_RUNNERS.has(exe)) {
+    const si = argv.findIndex((a, i) => i > 0 && !a.startsWith("-") && !(exe === "deno" && a === "run"));
+    const script = si > 0 ? argv[si] ?? "" : "";
+    const cli = byScript(script) ?? (script.includes("/") ? byName(basenameOf(script)) : undefined);
+    if (cli) return { cli, args: argv.slice(si + 1) };
   }
-  if (argv.some((a) => UNGUARDED_FLAGS.test(a))) { add(c, "high", "security_control", "unguarded_agent", `${exe} ${argv.find((a) => UNGUARDED_FLAGS.test(a))} runs an agent without its approval gate`, `${exe} unguarded`); return; }
-  add(c, "low", "code_exec", "agent_cli", exe);
+  if (/^python[\d.]*$/.test(exe)) {
+    const mi = argv.indexOf("-m");
+    const cli = mi > 0 ? AGENT_CLIS.find((a) => a.pyModule === argv[mi + 1]) : undefined;
+    if (cli) return { cli, args: argv.slice(mi + 2) };
+  }
+  const runner = Object.hasOwn(PACKAGE_RUNNERS, `${exe} ${argv[1] ?? ""}`) ? `${exe} ${argv[1] ?? ""}` : Object.hasOwn(PACKAGE_RUNNERS, exe) ? exe : null;
+  if (runner !== null && (runner !== "uv tool" || argv[2] === "run")) {
+    const from = PACKAGE_RUNNERS[runner] ?? 1;
+    for (let i = from; i < argv.length; i++) {
+      const a = argv[i] ?? "";
+      if (a === "--") continue;
+      // `npx -p <pkg> <bin>` / `--package=<pkg>` / `uvx --from <pkg>`: the package option names it too.
+      if (/^(?:-p|--package|--from|--spec)$/.test(a)) { const pkg = packageName(argv[i + 1] ?? ""); const cli = AGENT_CLIS.find((x) => x.packages.includes(pkg)); if (cli) return { cli, args: argv.slice(i + 3) }; i++; continue; }
+      if (/^--(?:package|from|spec)=/.test(a)) { const pkg = packageName(a.slice(a.indexOf("=") + 1)); const cli = AGENT_CLIS.find((x) => x.packages.includes(pkg)); if (cli) return { cli, args: argv.slice(i + 2) }; continue; }
+      if (a.startsWith("-")) continue;
+      const pkg = packageName(a);
+      const cli = AGENT_CLIS.find((x) => x.packages.includes(pkg) || x.bins.includes(pkg));
+      return cli ? { cli, args: argv.slice(i + 1) } : null;
+    }
+  }
+  return null;
+}
+
+// Moving HOME, the XDG config root or an agent's own configuration variable starts the agent with a
+// configuration it chose: another extension set, other approvals, no firewall.
+const AGENT_HOME_ENV = ["HOME", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR"];
+
+function agentCli(c: Ctx, id: { cli: AgentCli; args: string[] }): void {
+  const { cli, args } = id;
+  const seg = c.seg;
+  const moved = [...new Set([...AGENT_HOME_ENV, ...cli.homeEnv])].filter((name) => seg.assigns.some((a) => a.startsWith(`${name}=`)) || Object.hasOwn(seg.vars, name));
+  if (moved.length) add(c, "high", "security_control", "safety_env_override", `starts ${cli.id} with ${moved.join(", ")} moved, so it loads a configuration of its own choosing (another extension set, no firewall)`, `agent ${cli.id} ${moved.join(",")}`);
+  if (cli.id === "pi") {
+    if (args.some((a) => a === "--no-extensions" || a === "-ne" || a === "--no-extension")) {
+      const toolsIdx = args.indexOf("--tools");
+      const noTools = args.includes("--no-tools") || (toolsIdx >= 0 && (args[toolsIdx + 1] ?? "").trim() === "");
+      if (!noTools && !args.some((a) => /^(?:--help|-h|--version|-v|list|--list-models)$/.test(a))) { add(c, "high", "security_control", "unguarded_agent", "starts a pi agent without extensions (no firewall)", "pi --no-extensions"); return; }
+    }
+    if (/^(?:install|remove|uninstall|update|config)$/.test(args[0] ?? "") && !args.some((a) => a === "--help" || a === "-h")) { add(c, "medium", "package_install", "pi_package", `pi ${args[0]} ${args[1] ?? ""}`.trim(), `pi ${args[0]}`); return; }
+    if (!c.findings.length) add(c, "low", "code_exec", "pi_cli", "pi");
+    return;
+  }
+  if (args.some((a) => UNGUARDED_FLAGS.test(a))) { add(c, "high", "security_control", "unguarded_agent", `${cli.id} ${args.find((a) => UNGUARDED_FLAGS.test(a))} runs an agent without its approval gate`, `${cli.id} unguarded`); return; }
+  if (!c.findings.length) add(c, "low", "code_exec", "agent_cli", cli.id);
 }
 
 function powerState(c: Ctx): void {
@@ -1675,9 +2172,15 @@ function sourceCmd(c: Ctx): void {
     if (/\b(?:curl|wget|nc)\b/.test(sub)) { add(c, "high", "obfuscated_exec", "remote_script_exec", "sources downloaded content", "source <(curl)"); return; }
     add(c, "medium", "code_exec", "source_procsub", "sources generated shell code", "source <()"); return;
   }
+  // `source /dev/stdin`: a here-document was parsed as commands of its own (shell.ts); piped-in text is
+  // judged by what produced it.
+  if (isStdinPath(file)) {
+    if (c.seg.stdinBody !== undefined) { add(c, "low", "code_exec", "source", "source (here-document)"); return; }
+    if (c.seg.pipeIn) { stdinExec(c); return; }
+  }
   const r = pathOf(c, file);
   c.a.executes.push(r.shown);
-  if (r.cls === "credential_ws" || r.cls === "credential") { add(c, "medium", "credential_read", "source_env", `loads secrets from ${r.shown} into the shell`, `source ${r.key}`); return; }
+  if (r.cls === "credential_ws" || r.cls === "credential" || r.cls === "credential_control") { add(c, "medium", "credential_read", "source_env", `loads secrets from ${r.shown} into the shell`, `source ${r.key}`); return; }
   if (r.abs && /^\/etc\/(?:os-release|lsb-release|environment|default\/)/.test(r.abs)) { add(c, "low", "read", "source_data", `source ${r.shown}`); return; }
   if (r.cls === "home" || r.cls === "other" || r.cls === "unknown" || r.cls === "temp") { add(c, "medium", "code_exec", "source_outside", `sources ${r.shown}`, `source ${r.key}`); return; }
   add(c, "low", "code_exec", "source", `source ${r.shown}`);
@@ -1705,7 +2208,9 @@ function ln(c: Ctx): void {
   if (dest) writePath(c, dest, "links");
   for (const s of paths.slice(0, -1)) {
     const r = pathOf(c, s);
-    if (r.cls === "credential") add(c, "medium", "credential_read", "credential_link", `links secret material ${r.shown}`, `ln ${r.key}`);
+    // A second name for a control file lets a later write reach it through a path no check recognises.
+    if (r.cls === "security_control" || r.cls === "credential_control") add(c, "high", "security_control", "control_link", `links a safety-control file: ${r.shown}`, `ln ${r.key}`);
+    else if (r.cls === "credential") add(c, "medium", "credential_read", "credential_link", `links secret material ${r.shown}`, `ln ${r.key}`);
   }
   if (!c.findings.length) add(c, "low", "workspace_write", "link", "ln");
 }
@@ -1794,6 +2299,9 @@ function patchCmd(c: Ctx): void {
 }
 
 function editorLike(c: Ctx): void {
+  // vim's -c / --cmd / +cmd / -S and emacs's --eval / -l / --batch run editor commands, which can start programs.
+  const cmd = c.seg.argv.slice(1).find((a, i, all) => /^(?:-c|--cmd|-S|-s|--eval|--load|-l|--batch|-batch|--script|-x)$/.test(a) || /^--(?:eval|load|script)=/.test(a) || (/^\+./.test(a) && all[i - 1] !== "--"));
+  if (cmd) { add(c, "medium", "code_exec", "editor_command", `${c.exe} ${cmd} runs editor commands, which can start programs`, `${c.exe} ${cmd}`); return; }
   for (const a of argPaths(c.seg.argv)) readPath(c, a);
   if (!c.findings.length) add(c, "low", "workspace_write", "editor", c.exe);
 }
@@ -1873,7 +2381,6 @@ const HANDLERS: Record<string, Handler> = {
   ip: netAdmin, iptables: netAdmin, ip6tables: netAdmin, "iptables-save": netAdmin, "iptables-restore": netAdmin, nft: netAdmin, ufw: netAdmin, "firewall-cmd": netAdmin, nmcli: netAdmin, resolvectl: netAdmin, ifconfig: netAdmin, route: netAdmin, tc: netAdmin, iw: netAdmin, iwctl: netAdmin, wg: netAdmin, "wg-quick": netAdmin, tailscale: (c) => (/^(?:status|ip|netcheck|ping|version|whois|dns|exit-node-noop)$/.test(c.seg.argv[1] ?? "status") ? add(c, "low", "read", "net_read", "tailscale status") : add(c, "high", "privilege", "net_change", `tailscale ${c.seg.argv[1]}`, "tailscale change")),
   pass: secretStore, gopass: secretStore, "secret-tool": secretStore, security: secretStore, op: secretStore, bw: secretStore, vault: secretStore, keyctl: secretStore, "kwallet-query": secretStore, gpg: secretStore, gpg2: secretStore, "ssh-keygen": secretStore, "ssh-add": secretStore, "ssh-copy-id": secretStore, "ssh-agent": secretStore, "keepassxc-cli": secretStore, age: (c) => (c.seg.argv.some((a) => /^-(?:d|-decrypt)$/.test(a)) ? add(c, "medium", "credential_read", "age_decrypt", "decrypts data", "age -d") : add(c, "low", "read", "age", "age")), sops: (c) => (c.seg.argv.some((a) => /^-(?:d|-decrypt)$|^decrypt$/.test(a)) ? add(c, "high", "credential_read", "sops_decrypt", "decrypts secrets", "sops -d") : add(c, "medium", "security_control", "sops", "sops", "sops")),
   env: envDump, printenv: envDump, export: envDump, declare: envDump, typeset: envDump, set: envDump,
-  pi: piCli, claude: piCli, codex: piCli, gemini: piCli, aider: piCli, opencode: piCli, goose: piCli, "cursor-agent": piCli, amp: piCli, crush: piCli, qwen: piCli, droid: piCli,
   reboot: powerState, shutdown: powerState, poweroff: powerState, halt: powerState, init: powerState, telinit: powerState,
   useradd: accountAdmin, usermod: accountAdmin, userdel: accountAdmin, groupadd: accountAdmin, groupdel: accountAdmin, groupmod: accountAdmin, gpasswd: accountAdmin, passwd: accountAdmin, chpasswd: accountAdmin, visudo: accountAdmin, adduser: accountAdmin, deluser: accountAdmin, chsh: accountAdmin, newgrp: accountAdmin, vipw: accountAdmin,
   tar: archive, bsdtar: archive, unzip: archive, zip: archive, "7z": archive, "7za": archive, unrar: archive, gzip: archive, gunzip: archive, bzip2: archive, xz: archive, zstd: archive, unxz: archive,
@@ -1888,6 +2395,9 @@ const HANDLERS: Record<string, Handler> = {
   patch: patchCmd,
   vim: editorLike, nvim: editorLike, vi: editorLike, nano: editorLike, emacs: editorLike, code: editorLike, micro: editorLike, hx: editorLike,
   "xdg-open": xdgOpen, open: xdgOpen,
+  // `enable -f lib.so name` loads a builtin from a shared library into the shell.
+  enable: (c) => (c.seg.argv.some((a) => /^-[A-Za-z]*f/.test(a)) ? add(c, "high", "obfuscated_exec", "library_injection", "enable -f loads a shell builtin from a shared library", "enable -f") : add(c, "low", "read", "shell_builtin", "enable")),
+  ex: editorLike, view: editorLike, gvim: editorLike, vimdiff: editorLike, evim: editorLike,
   "notify-send": notifyCmd, cd: cdCmd, pushd: cdCmd, popd: cdCmd, exit: notifyCmd, return: notifyCmd, local: notifyCmd, shift: notifyCmd, unset: notifyCmd, readonly: notifyCmd, trap: notifyCmd, shopt: notifyCmd, read: notifyCmd, getopts: notifyCmd, ":": notifyCmd, true: notifyCmd, false: notifyCmd, break: notifyCmd, continue: notifyCmd, wait: notifyCmd, disown: notifyCmd, bg: notifyCmd, fg: notifyCmd, complete: notifyCmd, bind: notifyCmd, "let": notifyCmd, echo: readOnly, printf: readOnly,
   hyprctl,
   "apt-cache": (c) => add(c, "low", "read", "pm_read", "apt-cache"),
@@ -1993,6 +2503,16 @@ export function classifyCommand(command: string, env: ClassifyEnv, tool = "bash"
   if (remoteSend && a.credentialReads.length && !a.findings.some((f) => f.code === "secret_upload")) {
     a.findings.push({ tier: "critical", effect: "network_send", code: "secret_egress", detail: `reads ${a.credentialReads[0]} and sends data to ${remoteSend.dest} in the same command`, key: `egress ${remoteSend.dest}` });
   }
+  // Dumping or printing the environment (where tokens live) and sending data off the host in the same
+  // command is environment exfiltration.
+  const envRead = a.findings.find((f) => f.code === "env_dump" || f.code === "secret_env_print");
+  if (remoteSend && envRead) {
+    a.findings.push({ tier: "high", effect: "network_send", code: "env_egress", detail: `${envRead.detail} and sends data to ${remoteSend.dest} in the same command`, key: `env-egress ${remoteSend.dest}` });
+  }
+  // Coarse and fail closed (./shared/inline-guard.ts): inline interpreter code that mentions agent
+  // configuration and has a write- or exec-capable call is at least high, whatever target it builds.
+  const inline = inlineAgentConfigWrite(command);
+  if (inline) a.findings.push({ tier: "high", effect: "security_control", code: "inline_agent_config", detail: inline, key: "inline agent-config write" });
   a.tool = tool;
   a.command = command;
   a.segments = segments;
@@ -2093,7 +2613,10 @@ export function needsOperator(a: Assessment): boolean {
 // A destination field (lsp_navigation's rename_file `newFilePath`) is always assessed as a write,
 // and so is every path of a `file_write` entry (ast_grep_replace, lens_diagnostic_mark), so
 // persistence, git-hook and safety-control targets keep their findings and action families.
-const PATH_FIELDS = ["path", "file_path", "filePath", "file", "files", "paths", "cwd", "dir", "directory", "root", "analysisRoot", "newFilePath", "scriptPath"] as const;
+// skill-forge's `trace_path` names a log to read (the capture log is a credential-class file). Every
+// path-like parameter a kit tool declares must be listed here or reviewed as not naming a file:
+// tests/firewall-path-fields-smoke.ts reads the tools' schemas and fails on one that is neither.
+export const PATH_FIELDS = ["path", "file_path", "filePath", "file", "files", "paths", "cwd", "dir", "directory", "root", "analysisRoot", "newFilePath", "scriptPath", "trace_path"] as const;
 const WRITE_PATH_FIELDS: ReadonlySet<string> = new Set(["newFilePath"]);
 function pathInputs(fields: Record<string, unknown>): Array<{ target: string; write: boolean }> {
   const out: Array<{ target: string; write: boolean }> = [];

@@ -14,6 +14,10 @@ export const ExternalSourceSchema = object({
   provides: optional(array(string())),
   profiles: optional(array(string())),
   review: optional(string()),
+  /** The package's sha512 dist.integrity; the installer compares npm's record with it (lib/companions.ts). */
+  integrity: optional(string()),
+  /** Set only with the reviewed reason a companion needs its lifecycle scripts; absent means they never run. */
+  allowInstallScripts: optional(string()),
 });
 export type ExternalSource = Infer<typeof ExternalSourceSchema>;
 

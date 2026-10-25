@@ -370,6 +370,38 @@ function testBothCallSitesCapturePickProfile() {
   }
 }
 
+// 7. update-pi installs exactly the pi version the kit is tested against (package.json
+//    devDependencies), with --ignore-scripts, never "latest"; a non-exact pin refuses. The
+//    PowerShell helper carries the same rule (checked statically: no pwsh in CI).
+function testUpdatePiInstallsTheKitPin() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-helper-update-pi-"));
+  try {
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir);
+    const logPath = path.join(dir, "log.txt");
+    fs.writeFileSync(logPath, "");
+    for (const name of ["npm", "pi"]) {
+      fs.writeFileSync(path.join(binDir, name), `#!/usr/bin/env bash\nprintf '${name} %s\\n' "$*" >> "$FAKE_LOG"\n`, { mode: 0o755 });
+    }
+    const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`, FAKE_LOG: logPath, PI_CODING_AGENT_DIR: path.join(dir, "agent") };
+    const pkg: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    const devDependencies = typeof pkg === "object" && pkg !== null && "devDependencies" in pkg ? pkg.devDependencies : undefined;
+    const pinned = typeof devDependencies === "object" && devDependencies !== null && "@earendil-works/pi-coding-agent" in devDependencies ? devDependencies["@earendil-works/pi-coding-agent"] : undefined;
+    assert.equal(typeof pinned, "string", "package.json pins pi in devDependencies");
+    const r = bash([HELPER, "update-pi"], { env });
+    assert.equal(r.status, 0, `update-pi exited ${r.status}: ${r.stderr}`);
+    const invoked = fs.readFileSync(logPath, "utf8");
+    assert.match(invoked, new RegExp(`^npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${String(pinned).replace(/\./g, "\\.")}$`, "m"), `update-pi must install the kit's pin without scripts, log: ${JSON.stringify(invoked)}`);
+    const ps1 = fs.readFileSync(path.join(ROOT, "packages", "core", "helpers", "pi-kit-helper.ps1"), "utf8");
+    assert.match(ps1, /npm install -g --ignore-scripts "@earendil-works\/pi-coding-agent@\$version"/, "the PowerShell helper installs the same pin without scripts");
+    for (const [label, src] of [["sh", fs.readFileSync(HELPER, "utf8")], ["ps1", ps1]] as const) {
+      assert.doesNotMatch(src, /npm install -g @earendil-works\/pi-coding-agent\s*$/m, `the ${label} helper never installs an unpinned pi`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const tests: Array<[name: string, fn: () => void]> = [
   ["helper script is syntactically valid", testSyntax],
   [
@@ -392,6 +424,10 @@ const tests: Array<[name: string, fn: () => void]> = [
   [
     "both call sites capture pick_profile output",
     testBothCallSitesCapturePickProfile,
+  ],
+  [
+    "update-pi installs the kit's pinned pi version without install scripts",
+    testUpdatePiInstallsTheKitPin,
   ],
 ];
 

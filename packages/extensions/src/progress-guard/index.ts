@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 // progress-guard: the auto-boost / anti-loop layer. It watches for two cheap "stuck"
 // signals — the same action repeating, and many reads since the last edit — and helps the
@@ -92,12 +93,11 @@ function escalationFile(cwd: string, sessionId: string | undefined = currentSess
 
 function writeEscalation(cwd: string, signature: string, reason: string, count: number): void {
   try {
-    const file = escalationFile(cwd);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(
+      escalationFile(cwd),
       JSON.stringify({ signature, reason, count, at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     /* best-effort */
@@ -172,9 +172,7 @@ function contribPath(cwd: string): string {
 
 function writeContribution(cwd: string, content: string): void {
   try {
-    const p = contribPath(cwd);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify({ id: CONTRIB_ID, priority: 78, budgetTokens: 320, content }), "utf8");
+    writeFileSafe(contribPath(cwd), JSON.stringify({ id: CONTRIB_ID, priority: 78, budgetTokens: 320, content }), { root: cwd });
   } catch {
     /* best-effort */
   }

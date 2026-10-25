@@ -1,7 +1,7 @@
 # secret-guard
 
-Opt-in, name- and pattern-based backstop for secret files and credentials. It ships in no
-profile (see Profiles below). When loaded, its `tool_call` hook blocks the actions below; every
+Name- and pattern-based backstop for secret files and credentials, loaded by the `balanced` and
+`autonomous` profiles (see Profiles below). When loaded, its `tool_call` hook blocks the actions below; every
 item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
 
 ## What it blocks
@@ -45,12 +45,16 @@ extension in your own repo that hooks `tool_call` with your patterns.
 
 ## Profiles
 
-Shipped but **not** in any profile: its manifest is `experimental` and `enabledByDefault: false`
-(`tests/docs-smoke.ts` fails if its manifest starts naming a profile while these docs say
-otherwise). Add it deliberately, by listing it under `extensions.add` in
-`<agent dir>/pi-kit/overrides.json` (which keeps the rest of the profile) or in a profile's
-`include`, when you want a name-based backstop for `.env`, keys and similar files. The tool
-firewall's own classifier, loaded by all profiles, already refuses or asks about many of the same
-actions; this extension is the stricter, pattern-based second layer. Its manifest sets
-`childGovernance`, so when it is loaded, child sessions started by delegation load it too
-(`tests/delegation-guard-smoke.ts` pins that rule for `childGovernance` extensions).
+Loaded by the `balanced` and `autonomous` profiles. It is one of the three mandatory protections
+(with `tool-firewall` and `protected-paths`): every other shipped profile records, with a reason, why
+it goes without it in `packages/core/lib/protection-coverage.ts`, and `npm run profile:check` fails a
+profile that drops a mandatory protection without such an exemption
+(`tests/profile-protections-smoke.ts`; `tests/docs-smoke.ts` checks the manifest names the same two
+profiles). The usual reason is the write rule above: any path containing `secret` or `credentials`
+is refused, which blocks ordinary edits in a repository with such names. Add it to another profile
+deliberately, by listing it under `extensions.add` in `<agent dir>/pi-kit/overrides.json` (which
+keeps the rest of the profile). The tool firewall's own classifier, loaded by all profiles, already
+refuses or asks about many of the same actions; this extension is the stricter, pattern-based second
+layer. Its manifest sets `childGovernance`, so when it is loaded, child sessions started by
+delegation load it too (`tests/delegation-guard-smoke.ts` pins that rule for `childGovernance`
+extensions).

@@ -68,4 +68,27 @@ const chars = listed.reduce((n, s) => n + s.name.length + s.description.length +
 assert.ok(listed.length <= 6, `at most 6 skills listed in the prompt (got ${listed.length}: ${listed.map((s) => s.name).join(", ")})`);
 assert.ok(chars / 4 < 700, `listed skills cost ~${Math.round(chars / 4)} tokens; budget is 700`);
 
+// 5. A project skill's `re:` trigger is untrusted text tested against every prompt. A pattern
+// of the exponential-backtracking class (a quantified group holding a quantifier) is refused at
+// compile time, and a pattern that passes the check but is slow on a prompt (adjacent overlapping
+// runs, the polynomial class) is switched off after one timed test, not run again.
+{
+  const nested = "re:" + "(x" + "+)+" + "y";
+  assert.equal(match.triggerRegex(nested), null, "a nested-quantifier trigger does not compile");
+  assert.match(match.refusedTriggers.get(nested) ?? "", /repeated group/);
+  const slow = "re:" + "[a-z]*".repeat(6) + "!";
+  const [first] = all;
+  assert.ok(first, "the catalogue has a skill to copy");
+  const skill: Match.SkillEntry = { ...first, name: "slow-trigger-probe", triggers: [slow] };
+  const prompt = "a".repeat(4000);
+  const started = performance.now();
+  assert.deepEqual(match.matchTriggers(prompt, [skill]), [], "a slow trigger does not match");
+  assert.ok(performance.now() - started < 2000, "the timed test stops a slow trigger");
+  assert.match(match.refusedTriggers.get(slow) ?? "", /switched off/);
+  assert.equal(match.triggerRegex(slow), null, "the switched-off trigger stays off");
+  const plain = "re:" + "\\bdeploy\\b";
+  assert.ok(match.triggerRegex(plain), "an ordinary re: trigger still compiles");
+  assert.equal(match.matchTriggers("please deploy it", [{ ...skill, name: "plain-probe", triggers: [plain] }]).length, 1);
+}
+
 console.log(`[skill-routing-smoke] routing exact on all fixtures; ${all.length} skills, ${listed.length} listed (~${Math.round(chars / 4)} tokens), ${all.length - listed.length} on demand`);

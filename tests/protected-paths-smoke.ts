@@ -112,6 +112,7 @@ async function testControlSurfaceDefaults() {
     ".pi/tool-firewall-audit.jsonl.1",
     ".pi/ctx-contributions/x.json",
     ".pi/GOAL.yaml",
+    ".pi/mcp-adapter.json",
     ".pi/agents/worker.md",
     "packages/core/policies/rule.json",
     "packages/extensions/src/tool-firewall/default-policy.json",

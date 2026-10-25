@@ -56,7 +56,12 @@ flowchart LR
    instead** and type an address, the port and the code; the app then shows the fingerprint of the
    certificate it was given, which must match the one in the terminal.
 4. The phone shows a **device ID** such as `ABCD-EFGH-JKMN-PQRS`, and the terminal asks whether to
-   link that phone, with its name, address and device ID. Approve only if the two IDs match.
+   link that phone, with its name, address and the device ID with its last group hidden
+   (`ABCD-EFGH-JKMN-····`). **Approve** is still the first choice. Approving then asks you to type
+   the last four characters of the device ID from the phone's screen; the host links the phone only
+   if they match, and a wrong value rejects the request. A link request from an address outside
+   loopback, the LAN ranges and Tailscale's range carries a warning to reject it unless you know
+   why.
 
 The computer is then listed in the app. Open it to see the shared terminal session (marked
 *Terminal*), the sessions the host is running and the recent sessions on disk. `/remote pair` links
@@ -87,6 +92,13 @@ keeps them all, tries the one that worked last first and the others a quarter of
 and uses whichever answers. With Tailscale on both the computer and the phone, the same link works
 at home and away. `PI_REMOTE_BIND=tailscale` makes the host listen on its Tailscale address only,
 and `PI_REMOTE_ADVERTISE` adds names, such as a MagicDNS name, to the list.
+
+Recommended binds: `PI_REMOTE_BIND=tailscale` when the phone uses Tailscale, home and away;
+`PI_REMOTE_BIND=loopback` with an SSH or VPN forward of your own; the default `all` only when the
+phones are on a LAN you trust. While the host listens on every interface it writes a `WARNING:`
+line saying so to `host.log`, and the host's status carries it, which `/remote status` and
+`remote-cli.ts status` show (`tests/remote-host-smoke.ts` pins the log line and the status; no
+test runs `remote-cli.ts`).
 
 ### A computer without a terminal session
 
@@ -133,7 +145,11 @@ share sessions, so a phone cannot link another phone.
 | Threat | Control |
 |---|---|
 | Someone on the same network uses the host | Every `/api` route needs a bearer token. Tokens are issued only to a linked phone that signs a fresh, single-use challenge with its own key. |
-| Linking a phone you do not hold | Linking needs the one-time code from the terminal (10 characters, about 50 bits, valid for 5 minutes; 5 wrong tries burn it; one offer at a time) **and** your approval at the terminal after comparing device IDs. The device ID is derived from the phone's public key, and the phone proves it holds the private key. |
+| Linking a phone you do not hold | Linking needs the one-time code from the terminal (10 characters, about 50 bits, valid for 5 minutes; 5 wrong tries burn it; one offer at a time) **and** your approval at the terminal, where you type the last four characters of the device ID from the phone. The device ID is derived from the phone's public key, and the phone proves it holds the private key. |
+| A leaked code claimed by two phones | A second correct claim of a code that is already claimed cancels the waiting request, is refused with `offer_contested`, is audited as `pair_second_claim` and is reported at the terminal; `/remote pair` makes a new code. |
+| An agent or script approving a phone | The control secret admits any process of your account, so the host also checks who is deciding: it finds the process behind the control connection and accepts an approval only from one that has a controlling terminal, is in its foreground process group and reads its input from a terminal (an interactive `pi`, or `remote-cli.ts pair`). pi runs an agent's shell commands without a controlling terminal, and the sessions pi-console and the host start read a pipe, so their approvals are refused, audited as `pair_decide_refused` and reported at the terminal. Each `pair_approved` record names the deciding process and terminal. Rejecting works from any connection. |
+| A device record written into `devices.json` | At start the host compares `devices.json` with `audit.jsonl`. A device with no `pair_approved` record is **suspended**: it is listed (marked SUSPENDED), cannot sign in, and is reported in `host.log`, `/remote status` and `/remote devices` as `device_unaudited` until you revoke it or pair it again. |
+| Not knowing which phone answered | Each dialog a phone answers (a firewall card, a confirm, a choice) is audited as `phone_dialog_answer` with the device, the session, the card's risk tier and the choice (typed text by length only), and the terminal shows which phone answered. |
 | A machine in the middle (café Wi-Fi, a hostile router) | The host speaks TLS with its own P-256 certificate. The QR code carries the certificate's SHA-256 fingerprint, and the app pins it on every connection, whichever address it uses. The pairing proof and every sign-in signature cover the fingerprint the phone saw and the host's identity, so a relayed connection is refused. A different certificate at a known address is reported, never used. |
 | A stolen token | Tokens last an hour (`PI_REMOTE_TOKEN_TTL_MIN`) and are held in memory on both sides; the host keeps only their hashes. A host restart ends all of them, and the app signs in again by itself. |
 | A lost or stolen phone | `/remote revoke` deletes the phone, its tokens and its open streams at once. The phone's private key is created in the Android Keystore (StrongBox when the phone has one) and cannot be exported. The app can ask for a fingerprint, face or screen lock when it opens and again after 30 seconds in the background, and can hide itself from screenshots and the recent-apps view. Its data is excluded from backups. |
@@ -152,7 +168,7 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
 | `tls-key.pem`, `tls-cert.pem` | The certificate phones pin and its private key (0600) |
 | `devices.json` | Linked phones: name, device ID, public key, when linked and last seen. No secrets |
 | `control.json` | The control channel's port and secret, while the host runs (0600) |
-| `audit.jsonl` | Links, sign-ins, failures and revocations |
+| `audit.jsonl` | Links (with the address and the deciding process), sign-ins, failures, refused approvals, second claims, unaudited devices, phone answers and revocations |
 | `host.log` | The host's log |
 
 ## Settings
@@ -173,7 +189,20 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
 - **No notifications in the background.** The app receives events only while it is open. It
   closes a session's stream 30 seconds after going to the background and reconnects on return.
 - **The host listens on every interface by default.** Anyone who can reach the port can try to
-  link or sign in, within the limits above. Narrow it with `PI_REMOTE_BIND` or a firewall.
+  link or sign in, within the limits above. Narrow it with `PI_REMOTE_BIND` or a firewall; the
+  host warns while it is bound to every interface.
+- **The terminal check is about how a request arrives, not a wall between your processes.** A
+  process of your account that reads `control.json` and runs itself in the foreground of a
+  pseudo-terminal it creates can pass it. The host cannot tell whether a person is at that
+  terminal; the typed confirmation needs the phone's screen, which such a process does not see
+  unless it also controls the phone. The firewall treats reading `control.json` or `tls-key.pem`, or the state
+  directory recursively, as a credential read and writing any file there as high
+  (`tests/firewall-autoload-smoke.ts`), but a process that does not go through a tool call is not
+  seen by it. The check reads `/proc` on Linux and uses `lsof` and `ps` on macOS, where it is
+  untested; elsewhere every approval is refused.
+- **Suspension catches a device added without a pairing record, not a forged record.** Whoever can
+  write the state directory can write both files; the check stops a planted device that skipped
+  pairing, which is what an agent writing `devices.json` would do.
 - **Typed-in details are trust on first use.** Only the QR code (or link) carries the fingerprint.
   When you type the details, compare the fingerprint the app shows with the terminal's.
 - **The phone drives your agent with your permissions.** Sessions it starts run as you, with your
@@ -189,6 +218,31 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
 - The app is installed from an APK you build and sign. Updates must be signed with the same key
   (see `apps/android/README.md`).
 
+### The Yes-first decision (SEC-5)
+
+**Decision.** The pairing prompt lists *Approve* first, as the firewall's approval card lists
+*Allow once* first. This is an operator decision: the prompts stay quick to answer for the person
+who started the link. A timeout counts as a rejection.
+
+**Risk.** An operator who presses Enter without reading approves. On the pairing prompt that could
+link a phone someone else claimed with a code they saw; on a mirrored approval card it allows a
+tool call.
+
+**Compensating controls**, each pinned by the tests below:
+
+- approving a phone needs the last four characters of its device ID, typed from the phone's screen
+  (the prompt hides them), and a wrong value rejects;
+- a second claim of a claimed code cancels the request and is refused (`offer_contested`);
+- a request from outside loopback, LAN and Tailscale ranges carries a warning;
+- only a person at an interactive terminal can approve (`pair_decide_refused` otherwise), and every
+  `pair_approved` record names the deciding process and the request's address;
+- a device in `devices.json` with no `pair_approved` record is suspended at start;
+- each dialog a phone answers is audited as `phone_dialog_answer` with device, session, tier and
+  choice, and the terminal shows which phone answered.
+
+**Not compensated:** critical-tier approval cards still start on *Allow once*, and the Android app
+lock is off until you turn it on ([Future work](future-work.md#remote-control)).
+
 ## Tests that pin this
 
 `tests/remote-host-smoke.ts` (`npm run smoke:remote-host`) runs the real host with a stub pi and a
@@ -199,11 +253,23 @@ the operator and a rejection links nothing; that challenges are single use and b
 certificate; that event streams are slimmed; that a pi child's dialog can be answered from the
 phone; that the control secret never reaches a pi child; that a terminal session can be watched
 and driven; that revoking a phone, or the phone unlinking itself, ends its token and streams at
-once; and that repeated failures block the address.
+once; that repeated failures block the address; that a wrong device-ID confirmation rejects; that
+a second claim cancels the first and is refused; that an approval from a process with no
+controlling terminal is refused for real, and every approval names the deciding terminal process;
+that each phone answer is audited with its device and tier; and that a planted device is
+suspended and the all-interfaces bind warns.
+
+`tests/remote-pairing-controls-smoke.ts` (`npm run smoke:remote-pairing-controls`) pins the
+`/proc` parsing, the terminal judgement, the address scopes, the confirmation, the contest, the
+suspension and the phone-answer record as units. The smokes treat only the test process as an
+interactive terminal, through `tests/remote-terminal-preload.ts`, which the smokes load into the
+host process to set a hook there; the host's own code never reads the preload's variable.
 
 `tests/remote-control-extension-smoke.ts` (`npm run smoke:remote-control`) loads the extension
 against the real host. It checks that nothing opens until `/remote`; that a phone is linked only
-after the terminal approves its device ID; that history and live events reach the phone; that
+after the terminal approves it and types the last four characters of its device ID, which the
+prompt hides, with Approve still first; that a phone's answer to a dialog is attributed at the
+terminal and audited; that history and live events reach the phone; that
 prompts, steering, abort, model and thinking changes work from the phone and `/remote` does not;
 that an answer on either side closes the other copy of a dialog; and that rpc mode cannot link
 phones or share sessions.

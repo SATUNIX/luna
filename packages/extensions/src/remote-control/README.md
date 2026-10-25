@@ -24,7 +24,8 @@ is put together.
 ## How it works
 
 - `host.ts` finds `packages/web-ui` (as `/console` does: `PI_KIT_WEBUI_ROOT`, then relative to
-  this extension, then the checkout in the install marker), starts
+  this extension, then the install marker's `kitSource` checkout under the same trust check:
+  absolute, outside the workspace through any links, the kit by package name), starts
   `packages/web-ui/server/remote-host.ts` detached when it is not already running, and speaks the
   host's loopback control channel with the secret from `control.json`.
 - `index.ts` registers `/remote`, draws the pairing QR code as a widget, asks the operator to

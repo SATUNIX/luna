@@ -811,7 +811,9 @@ const tests = {
   },
 
   "findKitRoot falls back to the marker kitSource": async () => {
-    const root = makeKitRoot();
+    const root = fs.realpathSync(makeKitRoot());
+    // A marker's checkout is honoured only when it is a kit by package name (tests/kit-root-trust-smoke.ts).
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "pi-system" }));
     const agent = makeAgentDir("balanced", { kitSource: root });
     const restoreRoot = setEnv("PI_KIT_ROOT", undefined);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);

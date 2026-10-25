@@ -38,7 +38,7 @@ Run with no command/argument for an interactive menu.
 | `install` | Interactively installs this checkout with a chosen profile (including `lite`) and scope. It always previews with `--dry-run` first and asks for confirmation before applying. |
 | `configure` | Scaffolds `~/.pi/agent/.env` from `.env.example` if it does not already exist, and optionally appends a `PI_KIT_FIREWALL_POLICY` override. Never overwrites an existing `.env`. |
 | `update-kit` | Refuses to run if the working tree has uncommitted changes (asks you to commit or stash first). Otherwise runs `git pull`, then reinstalls with `node packages/core/install.ts --profile <chosen> --yes`. For a release install (git tag or `main`), use `/update` inside pi instead. |
-| `update-pi` | Runs `npm install -g @earendil-works/pi-coding-agent` and prints the resulting version — updates the pi core binary, independent of the kit itself. |
+| `update-pi` | Installs the pi version the kit is tested against (the exact `@earendil-works/pi-coding-agent` pin in the kit's `package.json` `devDependencies`), with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@<version>`, and prints the resulting version. It refuses when the pin is not an exact version, and never installs `latest` (`tests/helper-smoke.ts`). |
 
 ## What these scripts intentionally do not do
 

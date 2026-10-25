@@ -218,7 +218,9 @@ await check("the worker's contract and environment, as the supervisor writes the
     const file = path.join(dir, "contract.json");
     fs.writeFileSync(file, `${JSON.stringify(workerContract(deployContract, { boundaryDigest: digest }))}\n`, { mode: 0o444 });
     // The supervisor mounts /run read-only: present the file that way (the OS's mount table is the reader's real input).
-    const io = { mountinfo: () => `1 0 0:1 / ${fs.realpathSync(dir)} ro,relatime - tmpfs tmpfs ro` };
+    // ...and the worker runs in the container's own user and mount namespaces, those of its PID 1.
+    const ns = { user: "user:[4026531837]", mnt: "mnt:[4026531841]" };
+    const io = { mountinfo: () => `1 0 0:1 / ${fs.realpathSync(dir)} ro,relatime - tmpfs tmpfs ro`, namespaces: () => ({ self: ns, init: ns, uidMap: "0 0 4294967295" }) };
     const env = { ...workerEnv(deployContract, { branch: "pi/x" }), PI_KIT_UNATTENDED_CONTRACT: file };
     const evaluate = (over = {}) => evaluateUnattended({ env: { ...env, ...over }, workspace: "/work", cwd: "/work", agentDir: "/state/agent", policy: "coding", io });
     const st = evaluate();
@@ -490,6 +492,24 @@ await check("resource limits: a --memory or --cpus of 0 (no limit, to the engine
   const args = dk.agentRunArgs(cfg, rt.p, { n: 1, attempt: 1 });
   assert.doesNotThrow(() => assertRunArgs(args, { roots: rt.roots, networks: [rt.names.net], role: "worker" }), "containment alone lets it through");
   assert.throws(() => rt.checked(args, { networks: [rt.names.net], role: "worker" }), /refusing to start worker: --memory 0 is not a positive size.*--cpus 0 is not a positive number/);
+});
+
+await check("image allowlist: the last-line check refuses an image that is neither the worker image nor a contract service image", () => {
+  const good = resolveContract(implementRaw({ runtime: RUNTIME }), { effort: testEffort });
+  assert.ok(good.ok, JSON.stringify(good.problems));
+  const contract = good.contract;
+  const cfg = runtimeConfig(contract, { namePrefix: "pi-autonomy-test-images" });
+  const rt = new DockerRuntime({ contract, cfg, store: new RunStore(contract.run, { home: os.tmpdir() }), env: {} });
+  const args = dk.agentRunArgs(cfg, rt.p, { n: 1, attempt: 1 });
+  assert.equal(rt.checked(args, { networks: [rt.names.net], role: "worker" }).image, cfg.image, "the worker image is allowed");
+  const swapped = [...args];
+  const at = swapped.lastIndexOf(cfg.image);
+  assert.ok(at > 0, "the worker args name the image");
+  swapped[at] = "example.invalid/unlisted:1";
+  assert.doesNotThrow(() => assertRunArgs(swapped, { roots: rt.roots, networks: [rt.names.net], role: "worker" }), "without an allowlist containment.ts alone lets it through");
+  assert.throws(() => rt.checked(swapped, { networks: [rt.names.net], role: "worker" }), /image example\.invalid\/unlisted:1 is not one this run may start/);
+  const listed = inspectRunArgs(swapped, { roots: rt.roots, networks: [rt.names.net], role: "worker", allowedImages: [cfg.image, "example.invalid/unlisted:1"] });
+  assert.deepEqual(listed.problems, [], "a listed service image is allowed");
 });
 
 done();

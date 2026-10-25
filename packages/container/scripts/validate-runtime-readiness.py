@@ -171,6 +171,48 @@ def verify_required_files(reporter):
     return settings, mcp, models
 
 
+BAKED_ADAPTER = "/opt/pi-agent/tools/node_modules/pi-mcp-adapter"
+
+
+def verify_live_agent_config(data_root, reporter):
+    """The live agent dir must match the image: the entrypoint replaces mcp-adapter.json at every
+    start, so a difference means it was edited since; settings.json must register the baked adapter
+    and keep Pi's built-in MCP off."""
+    agent_dir = pathlib.Path(os.environ.get("PI_CODING_AGENT_DIR") or (data_root / "pi-agent"))
+    live = agent_dir / "mcp-adapter.json"
+    if not live.is_file():
+        reporter.ok(f"no live {live}; live adapter config check skipped")
+        return
+    overlay = ROOT / "overlays" / "pi" / "mcp-adapter.json"
+    try:
+        same = json.loads(live.read_text(encoding="utf-8")) == json.loads(overlay.read_text(encoding="utf-8"))
+    except Exception as exc:
+        reporter.fail(f"{live} or the overlay is not valid JSON: {exc}")
+        return
+    if same:
+        reporter.ok(f"{live} matches overlays/pi/mcp-adapter.json")
+    else:
+        reporter.fail(f"{live} differs from overlays/pi/mcp-adapter.json (edited since the container started; restart it to restore the overlay)")
+    settings_path = agent_dir / "settings.json"
+    if not settings_path.is_file():
+        return
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        reporter.fail(f"{settings_path} is not valid JSON: {exc}")
+        return
+    packages = settings.get("packages", []) if isinstance(settings, dict) else []
+    extensions = settings.get("extensions", []) if isinstance(settings, dict) else []
+    if any(isinstance(p, str) and p.startswith("npm:pi-mcp-adapter") for p in packages):
+        reporter.fail(f"{settings_path} installs pi-mcp-adapter from npm; the image's copy is {BAKED_ADAPTER}")
+    elif BAKED_ADAPTER not in packages:
+        reporter.fail(f"{settings_path} does not register {BAKED_ADAPTER}")
+    else:
+        reporter.ok(f"{settings_path} registers the image's pi-mcp-adapter")
+    if "-builtin:mcp" not in extensions:
+        reporter.fail(f"{settings_path} must keep Pi's built-in MCP off (-builtin:mcp)")
+
+
 def verify_data_dirs(data_root, reporter):
     default_runtime_root = data_root == DEFAULT_DATA_ROOT
     if data_root == DEFAULT_DATA_ROOT and not data_root.exists():
@@ -456,6 +498,7 @@ def main():
     reporter = Reporter()
     verify_data_dirs(pathlib.Path(args.data_root), reporter)
     _settings, mcp, _models = verify_required_files(reporter)
+    verify_live_agent_config(pathlib.Path(args.data_root), reporter)
     verify_mcp_config(mcp, reporter)
     verify_tool_policy(reporter)
     verify_no_committed_secrets(reporter)

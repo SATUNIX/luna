@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 // orchestrator: the autonomy layer over the `subagent` tool. It scores each user request and,
 // when a task is non-trivial, writes a high-priority ctx-contribution steering the main agent to
@@ -160,9 +161,8 @@ function implementReviewDirective(task: string): string {
 
 function writeContributionContent(cwd: string, content: string): void {
   try {
-    const dir = contribDir(cwd);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(
       contribFile(cwd),
       JSON.stringify({
         id: "orchestrator",
@@ -170,7 +170,7 @@ function writeContributionContent(cwd: string, content: string): void {
         budgetTokens: DIRECTIVE_BUDGET_TOKENS,
         content,
       }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     /* best effort */
@@ -204,12 +204,10 @@ function classificationFile(cwd: string, sessionId: string | undefined = current
 
 function writeClassification(cwd: string, score: number): void {
   try {
-    const dir = path.dirname(classificationFile(cwd));
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    writeFileSafe(
       classificationFile(cwd),
       JSON.stringify({ score, taskType: score >= DEFAULT_THRESHOLD ? "complex" : "simple", at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     /* best effort */

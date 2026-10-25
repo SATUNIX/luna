@@ -614,6 +614,40 @@ tests["snapshot/restore round-trips bytes, mode and absence"] = () => {
   } finally { rmWorkspace(dir); }
 };
 
+tests["restore writes through an exclusive 0600 temporary file and leaves none behind"] = async () => {
+  const core = await import("../packages/core/lib/profiles.ts");
+  const dir = tmp("pi-kit-txn-mode-");
+  const oldMask = process.umask(0o000); // a permissive umask: the temporary file must still start private
+  try {
+    const env = path.join(dir, ".env");
+    const loose = path.join(dir, "loose.json");
+    fs.writeFileSync(env, "EXAMPLE=1\n");
+    fs.chmodSync(env, 0o600);
+    // A snapshot whose mode was not recorded is restored private, not with the umask's 0666.
+    const unknownMode: { path: string; existed: true; bytes: Buffer; mode: null } = { path: loose, existed: true, bytes: Buffer.from("{}"), mode: null };
+    const restorers: ReadonlyArray<() => readonly string[]> = [
+      () => {
+        const snaps = [...txn.snapshotFiles([env]), unknownMode];
+        fs.writeFileSync(env, "CHANGED=1\n");
+        return txn.restoreSnapshots(snaps).errors;
+      },
+      () => {
+        const snaps = [...core.snapshotFiles([env]), unknownMode];
+        fs.writeFileSync(env, "CHANGED=1\n");
+        return core.restoreSnapshots(snaps);
+      },
+    ];
+    for (const restore of restorers) {
+      assert.deepEqual(restore(), []);
+      assert.equal(fs.readFileSync(env, "utf8"), "EXAMPLE=1\n");
+      assert.equal(fs.statSync(env).mode & 0o777, 0o600, "the restored file keeps its private mode");
+      assert.equal(fs.statSync(loose).mode & 0o777, 0o600, "an unrecorded mode restores as 0600");
+      assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith(".restore.tmp")), [], "no temporary file is left");
+      fs.rmSync(loose);
+    }
+  } finally { process.umask(oldMask); rmWorkspace(dir); }
+};
+
 // The real thing: the actual packages/core/install.ts and the shipped profiles, driven through the real
 // command, must pass the command's own verification for every profile (a verifier that rejects a good
 // switch would roll back every /profile in production).

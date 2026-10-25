@@ -110,6 +110,10 @@ python3 scripts/validate-ledgers.py --data-root /srv/data/pi-system
 
 Expected result: sequence numbers, `previous_hash`, and `record_hash` fields validate for audit and evidence ledgers.
 
+The chain alone does not detect a deliberate rewrite with recomputed hashes. Keep a ledger anchor
+outside the data root (`--write-anchor`, then `--anchor`; see `SECURITY_MODEL.md`, "Evidence
+Integrity").
+
 For compact recovery state, call the local governance MCP `state_summary` tool with a small `max_items` value. It returns counts, latest ledger hashes, recent task snapshots, and recent evidence/verification IDs without dumping raw ledgers.
 
 ## MCP-Only Verification

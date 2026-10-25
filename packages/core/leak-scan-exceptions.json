@@ -852,6 +852,72 @@
       "lineSha256": "4cc2ce76c66145d92e15181d257a8e05e39e22512bb827afddeb05bc57bdcdeb",
       "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only",
       "matchSha256": "a52469760134a12447c28268b81cdca1c9bbd0c015a77474baaff492724cbc87"
+    },
+    {
+      "path": "docs/remote-control.md",
+      "lineSha256": "96c1f3454babe3b4c834f7df25dcbc164867516e80578024efc1ccd7a73b8ad3",
+      "reason": "Audited: names the carrier-grade NAT block (100.64/10) Tailscale assigns from; a range, not a host; exact line only",
+      "matchSha256": "4b2228c26597aecab7d5894eb1ec83d915bc2e1a75d758b3b53471ce6aa2c91c"
+    },
+    {
+      "path": "packages/autonomy/lib/netaddr.ts",
+      "lineSha256": "a91e59fb031eaaa43af39b7722b0d20b9a2d55f96afb107b42bf07853fdfc391",
+      "reason": "Audited private-network rejection logic: the special-purpose IPv4 block table; exact line only",
+      "matchSha256": "4b2228c26597aecab7d5894eb1ec83d915bc2e1a75d758b3b53471ce6aa2c91c"
+    },
+    {
+      "path": "packages/web-ui/mobile/dev/mock-native.js",
+      "lineSha256": "dcf7c10ea1d64bb8dc5b766251c33db11bc9a38884587987c62d1c8af5c03842",
+      "reason": "Audited synthetic fixture: the mobile dev mock's made-up Tailscale-range address; exact line only",
+      "matchSha256": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+    },
+    {
+      "path": "packages/web-ui/src/mobile/dev/mock-native.ts",
+      "lineSha256": "4bcfd617c31688d069c33a0e7bd60fa9370ae63d84ccf1fa6e8579eab74ddb81",
+      "reason": "Audited synthetic fixture: the mobile dev mock's made-up Tailscale-range address; exact line only",
+      "matchSha256": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+    },
+    {
+      "path": "packages/web-ui/server/remote-host.ts",
+      "lineSha256": "121bc17ae620a0766b74f156187f92e5e67fbb6c7710f3ee2ba739d864f219c2",
+      "reason": "Audited: error message naming the carrier-grade NAT block Tailscale assigns from; exact line only",
+      "matchSha256": "4b2228c26597aecab7d5894eb1ec83d915bc2e1a75d758b3b53471ce6aa2c91c"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "c913ef43a42a0e134afc7bdfb93debed224a648bc58a72eb4742cc19a15decf5",
+      "reason": "Audited synthetic fixture: address-classification table the egress validator must classify; exact line only",
+      "matchSha256": "9fee1dbd126b61ad5eb62f3d8f5e212f23c9b2e198dc972306821b4b2b9df745"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "8e52cb4e661507a1d53f11152f8aaee674e732626561e9046b9137ac0738b52f",
+      "reason": "Audited synthetic fixture: IPv6 address-classification table the egress validator must classify; exact line only",
+      "matchSha256": "3513b013d2cc6165d33766b008d411319e4b0a14d9fb5e203df1651393b26a40"
+    },
+    {
+      "path": "tests/autonomy-contract-smoke.ts",
+      "lineSha256": "8e52cb4e661507a1d53f11152f8aaee674e732626561e9046b9137ac0738b52f",
+      "reason": "Audited synthetic fixture: IPv6 address-classification table the egress validator must classify; exact line only",
+      "matchSha256": "f7fad60241980e9ef49cae7be999322ab9af75d8f1d7316ed70299d64eee7ec9"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "c84eac3248bead6d893e75c353dbc9fdf902612e2290b0641f4bef127e3c3934",
+      "reason": "Audited synthetic fixture: unique-local literal the egress proxy must refuse; exact line only",
+      "matchSha256": "67cc136bdaa2389dd329c0935a275752acceffe97ba563d3319d1698d33a3a00"
+    },
+    {
+      "path": "tests/autonomy-egress-smoke.ts",
+      "lineSha256": "3ebc1f2581a7b6ba0c9889fe7e9e1fe673067faaf5573452e95874bedf57b706",
+      "reason": "Audited synthetic fixture: unique-local literal the egress proxy must refuse; exact line only",
+      "matchSha256": "67cc136bdaa2389dd329c0935a275752acceffe97ba563d3319d1698d33a3a00"
+    },
+    {
+      "path": "packages/web-ui/server/remote/pairing.ts",
+      "lineSha256": "1d0f2efd5db296e380320a2e35b31b1f9e9111288d0e8ba51d70d080d024d0b8",
+      "reason": "Audited: the public IPv6 prefix Tailscale assigns from, used to label where a pairing claim came from; exact line only",
+      "matchSha256": "6f037facf8704b94c0a4ed03d469dba31f09b98b900880ecd71a7545f2d55c2c"
     }
   ]
 }

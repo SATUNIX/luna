@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runRegistry } from "./run-model.ts";
 import type { LiveChild } from "./types.ts";
+import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
 const live = new Map<string, LiveChild>();
 
@@ -107,7 +108,8 @@ export function stopRecordedRun(pid: number | undefined): boolean {
 // will write the end record).
 export function recordStop(dir: string, runId: string): void {
   try {
-    fs.appendFileSync(path.join(dir, "runs.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), id: runId, event: "end", status: "stopped-by-operator" })}\n`);
+    const file = path.join(dir, "runs.jsonl");
+    appendFileSafe(file, `${JSON.stringify({ ts: new Date().toISOString(), id: runId, event: "end", status: "stopped-by-operator" })}\n`, piWorkspaceOptions(file));
   } catch {
     /* best effort */
   }

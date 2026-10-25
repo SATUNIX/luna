@@ -2,6 +2,7 @@ import type { AgentEndEvent, ExtensionAPI } from "@earendil-works/pi-coding-agen
 import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 export function iterationLimit(value: string | undefined): number {
   const parsed = Number(value ?? 20);
@@ -46,11 +47,11 @@ function armMarkerPath(cwd: string): string {
 
 function writeArmMarker(goal: string, cwd: string, sessionId: string): void {
   try {
-    fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
     // `at` is the freshness heartbeat: progress-guard ignores a marker older than its TTL, so a
     // marker left behind by a crashed loop cannot pin resolveMode to auto in later sessions.
     // `sessionId` records which session owns the loop for operators and future reaping.
-    fs.writeFileSync(armMarkerPath(cwd), JSON.stringify({ armed: true, goal, sessionId, at: new Date().toISOString() }), "utf8");
+    writeFileSafe(armMarkerPath(cwd), JSON.stringify({ armed: true, goal, sessionId, at: new Date().toISOString() }), { root: cwd });
   } catch {
     /* best-effort */
   }
@@ -61,9 +62,7 @@ function deleteArmMarker(cwd: string): void {
 }
 
 function writeContrib(goal: string, cwd: string): void {
-  const dir = contribDir(cwd);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
+  writeFileSafe(
     contribPath(cwd),
     JSON.stringify({
       id: "autonomous-loop",
@@ -71,7 +70,7 @@ function writeContrib(goal: string, cwd: string): void {
       budgetTokens: 500,
       content: `## Autonomous Loop Active\nGoal: ${goal}\nContinue working toward this goal. When the goal is met, call the loop_complete tool with a short reason to end the loop.`,
     }),
-    "utf8",
+    { root: cwd },
   );
 }
 

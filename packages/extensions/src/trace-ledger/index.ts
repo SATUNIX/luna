@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { appendFileSafe, rotateFileSafe } from "./shared/safe-fs.ts";
 
 // trace-ledger: append-only action records in .pi/trace.jsonl; memory windows are bounded.
 // EFF-6: before an append, a ledger over ROTATE_BYTES is renamed to trace.jsonl.1 (one old copy,
@@ -90,15 +91,13 @@ function shortTarget(t: string): string {
   return t.length > 60 ? "…" + t.slice(-57) : t;
 }
 
+// The ledger lives in the workspace, which a cloned repository controls: every directory from the
+// workspace root down and the file itself are opened without following symlinks (./shared/safe-fs.ts,
+// tests/workspace-symlink-smoke.ts). A planted link makes the append fail, never redirect.
 function appendEntry(cwd: string, entry: Entry): void {
   const p = ledgerPath(cwd);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  try {
-    if (fs.statSync(p).size > ROTATE_BYTES) fs.renameSync(p, `${p}.1`);
-  } catch {
-    /* absent, or another process rotated it first */
-  }
-  fs.appendFileSync(p, JSON.stringify(entry) + "\n");
+  rotateFileSafe(p, ROTATE_BYTES, { root: cwd });
+  appendFileSafe(p, JSON.stringify(entry) + "\n", { root: cwd });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

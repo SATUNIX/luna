@@ -32,7 +32,8 @@
     "nodeBuiltins": [
       "fs",
       "path",
-      "os"
+      "os",
+      "crypto"
     ],
     "npm": [],
     "piPeers": [

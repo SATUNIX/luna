@@ -6,6 +6,27 @@
 // executable, its arguments, where it runs (locally, remotely, privileged) and in which
 // directory. It is not a full shell: anything it cannot follow is reported in `opaque`, and
 // callers treat opaque input as needing a closer look rather than as safe.
+//
+// Coverage contract (docs/autonomy-gate.md, "Parser coverage"): every construct that makes bash run
+// a command is either modelled here, so the command appears as a segment, or reported in `opaque`.
+// Modelled: command substitution anywhere in a word (inside `$(( ))`, `(( ))`, the word operand of a
+// quoted or unquoted parameter expansion such as `${x:-…}`, and a `case` pattern), brace expansion of
+// command words, function bodies (`f() {…}`, `function f {…}`, `coproc NAME {…}`), the builtins that
+// take a command string (`trap`, `alias`, `complete -C`, `mapfile -C`, `bind -x`, `eval`), hook
+// variables (`PS0`-`PS4`, `PROMPT_COMMAND`, `BASH_FUNC_*`) set as a prefix, through `export`/`declare`
+// or as an `env NAME=value` operand, and the builtins that change what a later command name runs: a
+// name an `alias` or `hash -p` redefined earlier in the same command is replaced by the alias value or
+// hashed path where it is used. The environment a wrapper hands to the shell it starts (`env X=v bash
+// -c …`) stays on the inner commands. Reported as opaque: command text in an array subscript that bash
+// would evaluate arithmetically, history re-execution (`fc -s`, `fc -e`), an alias whose value is not a
+// simple command, `enable -f`, and wrappers whose options this file does not know.
+// tests/firewall-exec-oracle-smoke.ts runs a corpus through real bash and fails when an executed command
+// is neither a segment nor reported as opaque.
+//
+// Not modelled (see docs/autonomy-gate.md): an alias or `hash` set outside the command (a profile, a
+// sourced file), an alias value ending in a space (which makes bash alias-expand the next word too),
+// positional parameters inside a function body (the call's arguments are not bound to `$1`…; classify.ts
+// checks them as reads and writes instead), and values that only exist at run time.
 
 export type Word = {
   text: string; // value after quote removal; `$VAR`, `${…}` and substitutions are kept verbatim
@@ -44,6 +65,7 @@ export type Segment = {
   interactiveShell?: boolean; // sudo -i/-s, bare ssh host, bash with no script
   ssh?: { host: string; forwards: boolean; proxyCommand: boolean };
   evalOf?: boolean;
+  fnCall?: boolean; // the command name is a shell function defined earlier in the same script
   vars: Record<string, string>; // plain NAME=value assignments seen earlier in the script
 };
 
@@ -57,6 +79,11 @@ export type ParseEnv = {
   via?: string[];
   depth?: number;
   vars?: Record<string, string>;
+  fns?: Set<string>; // shell functions defined so far (shared by every nested parse of one command)
+  // Command names an `alias` or `hash -p` earlier in the same command redefines, and the words bash runs instead
+  // (null: the alias value is not a simple command). Shared like `fns`.
+  aliases?: Map<string, Word[] | null>;
+  assigns?: string[]; // environment a wrapper passed to the command it runs (`env NAME=v bash -c …`, `NAME=v bash -c …`)
 };
 
 const MAX_DEPTH = 6;
@@ -111,17 +138,160 @@ function scanBacktick(src: string, i: number): { body: string; end: number } | n
   return null;
 }
 
-function scanBrace(src: string, i: number): number {
-  // i points after "${"
-  let depth = 1;
+// A parameter expansion body (`${x:-word}`, `${x:=word}`, `${x/pat/rep}`) starting just after "${". Bash expands
+// the word operand, so every command substitution inside it runs; their bodies are returned for parsing.
+// Quoting inside the braces is followed as bash does: single quotes are literal, double quotes still expand.
+// Returns null when the expansion is not terminated.
+function scanParamExpansion(src: string, i: number): { end: number; subs: string[] } | null {
+  const subs: string[] = [];
+  let depth = 0;
   let j = i;
-  while (j < src.length && depth > 0) {
-    if (src[j] === "{") depth++;
-    else if (src[j] === "}") depth--;
+  // One `$…` expansion at j inside the braces or inside double quotes: the index after it, or null.
+  const expansion = (k: number): number | null => {
+    if (src[k + 1] === "(" && src[k + 2] === "(") {
+      const a = scanArith(src, k + 3);
+      if (a) { subs.push(...a.subs); return a.end; }
+    }
+    if (src[k + 1] === "(") {
+      const p = scanParen(src, k + 2);
+      if (!p) return null;
+      subs.push(p.body);
+      return p.end;
+    }
+    if (src[k + 1] === "{") {
+      const inner = scanParamExpansion(src, k + 2);
+      if (!inner) return null;
+      subs.push(...inner.subs);
+      return inner.end;
+    }
+    return k + 1;
+  };
+  while (j < src.length) {
+    const c = src[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === "'") { const e = src.indexOf("'", j + 1); if (e < 0) return null; j = e + 1; continue; }
+    if (c === '"') {
+      j++;
+      while (j < src.length && src[j] !== '"') {
+        if (src[j] === "\\") { j += 2; continue; }
+        if (src[j] === "$") { const next = expansion(j); if (next === null) return null; j = next; continue; }
+        if (src[j] === "`") { const b = scanBacktick(src, j + 1); if (!b) return null; subs.push(b.body); j = b.end; continue; }
+        j++;
+      }
+      if (j >= src.length) return null;
+      j++;
+      continue;
+    }
+    if (c === "$") { const next = expansion(j); if (next === null) return null; j = next; continue; }
+    if (c === "`") { const b = scanBacktick(src, j + 1); if (!b) return null; subs.push(b.body); j = b.end; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") { if (depth === 0) return { end: j + 1, subs }; depth--; }
     j++;
   }
-  return j;
+  return null;
 }
+
+// An arithmetic body (`$(( … ))` or `(( … ))`) starting at `i`, just after the opening "((". Bash
+// still runs every command substitution inside it, so their bodies are returned for parsing.
+// Returns null when the text is not a well-formed arithmetic body, so the caller can fall back to
+// reading it as a command substitution or subshell, as bash does.
+function scanArith(src: string, i: number): { body: string; subs: string[]; end: number } | null {
+  const subs: string[] = [];
+  let depth = 0;
+  let j = i;
+  while (j < src.length) {
+    const c = src[j];
+    if (c === "\\") { j += 2; continue; }
+    if (c === "'") { const e = src.indexOf("'", j + 1); if (e < 0) return null; j = e + 1; continue; }
+    if (c === "$" && src[j + 1] === "(" && src[j + 2] === "(") {
+      const inner = scanArith(src, j + 3);
+      if (!inner) return null;
+      subs.push(...inner.subs);
+      j = inner.end;
+      continue;
+    }
+    if (c === "$" && src[j + 1] === "(") {
+      const p = scanParen(src, j + 2);
+      if (!p) return null;
+      subs.push(p.body);
+      j = p.end;
+      continue;
+    }
+    if (c === "`") {
+      const b = scanBacktick(src, j + 1);
+      if (!b) return null;
+      subs.push(b.body);
+      j = b.end;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      if (depth > 0) depth--;
+      else return src[j + 1] === ")" ? { body: src.slice(i, j), subs, end: j + 2 } : null;
+    }
+    j++;
+  }
+  return null;
+}
+
+export const MAX_BRACE_EXPANSIONS = 64;
+
+// Bash brace expansion of one word: `{a,b}` alternatives (nested, several groups) and `{x..y[..step]}`
+// sequences of integers or single letters; `${...}`, `{}` and `{x}` stay literal. Returns null when the word
+// would expand to more than MAX_BRACE_EXPANSIONS words, so callers can fail closed.
+export function expandBraces(word: string, max = MAX_BRACE_EXPANSIONS): string[] | null {
+  for (let i = word.indexOf("{"); i >= 0; i = word.indexOf("{", i + 1)) {
+    let depth = 0;
+    let end = -1;
+    const commas: number[] = [];
+    for (let k = i; k < word.length; k++) {
+      const ch = word[k];
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) { end = k; break; } }
+      else if (ch === "," && depth === 1) commas.push(k);
+    }
+    if (end < 0) return [word];
+    if (word[i - 1] === "$") { i = end; continue; }
+    const prefix = word.slice(0, i);
+    const suffix = word.slice(end + 1);
+    let alts: string[];
+    if (commas.length) {
+      alts = [];
+      let from = i + 1;
+      for (const k of [...commas, end]) { alts.push(word.slice(from, k)); from = k + 1; }
+    } else {
+      const seq = braceSequence(word.slice(i + 1, end), max);
+      if (seq === undefined) continue;
+      if (seq === null) return null;
+      alts = seq;
+    }
+    const out: string[] = [];
+    for (const alt of alts) {
+      const sub = expandBraces(prefix + alt + suffix, max);
+      if (sub === null || out.length + sub.length > max) return null;
+      out.push(...sub);
+    }
+    return out;
+  }
+  return [word];
+}
+
+// `x..y[..step]` inside braces: its words, null when there are too many, undefined when it is not a sequence.
+function braceSequence(body: string, max: number): string[] | null | undefined {
+  const m = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/.exec(body);
+  if (!m) return undefined;
+  const letters = m[3] !== undefined;
+  const from = letters ? (m[3] ?? "").charCodeAt(0) : Number(m[1]);
+  const to = letters ? (m[4] ?? "").charCodeAt(0) : Number(m[2]);
+  const step = Math.abs(Number(m[5] ?? "1")) || 1;
+  if (Math.floor(Math.abs(to - from) / step) + 1 > max) return null;
+  const out: string[] = [];
+  for (let v = from; from <= to ? v <= to : v >= to; v += from <= to ? step : -step) out.push(letters ? String.fromCharCode(v) : String(v));
+  return out;
+}
+
+// A brace group bash would expand: `{a,b}` or `{x..y}` outside `${…}`.
+const BRACE_GROUP_RE = /(?:^|[^$])\{[^{}]*(?:,|\.\.)[^{}]*\}/;
 
 const OPS = ["&&", "||", ";;", "|&", ";", "|", "&", "\n", "(", ")"];
 
@@ -200,8 +370,19 @@ function tokenize(src: string, opaque: string[]): Tok[] {
       if (pendingHeredocs.length) readHeredocs();
       continue;
     }
+    // `(( … ))` arithmetic command at the start of a command: one word, with every command substitution
+    // inside it parsed. A body that is not arithmetic falls through to nested subshells, as in bash.
+    if (c === "(" && src[i + 1] === "(" && !cur) {
+      const a = scanArith(src, i + 2);
+      if (a) {
+        toks.push({ k: "w", w: { text: "((", raw: src.slice(i, a.end), dynamic: a.subs.length > 0, quoted: false, ansiC: false, fragmented: false, subs: a.subs, procSub: false } });
+        i = a.end;
+        continue;
+      }
+    }
+    const fnDef = c === "(" && cur !== null && !cur.quoted && /^[A-Za-z_][\w.:-]*$/.test(cur.raw) && /^\(\s*\)/.test(src.slice(i));
     const op = OPS.find((o) => src.startsWith(o, i));
-    if (op && (op !== "(" || !cur) && !(op === "&" && src[i + 1] === ">")) {
+    if (op && (op !== "(" || !cur || fnDef) && !(op === "&" && src[i + 1] === ">")) {
       // `name()` function definitions: keep "(" as an op so the parser can spot them.
       flush();
       toks.push({ k: "op", v: op });
@@ -244,7 +425,11 @@ function tokenize(src: string, opaque: string[]): Tok[] {
           i += 2;
           continue;
         }
-        if (d === "$" && src[i + 1] === "(" && src[i + 2] !== "(") {
+        if (d === "$" && src[i + 1] === "(" && src[i + 2] === "(") {
+          const a = scanArith(src, i + 3);
+          if (a) { w.subs.push(...a.subs); w.text += src.slice(i, a.end); w.dynamic = true; i = a.end; continue; }
+        }
+        if (d === "$" && src[i + 1] === "(") {
           const p = scanParen(src, i + 2);
           if (!p) { opaque.push("unbalanced $( in double quotes"); i = n; break; }
           w.subs.push(p.body); w.text += `$(${p.body})`; w.dynamic = true; i = p.end;
@@ -274,11 +459,14 @@ function tokenize(src: string, opaque: string[]): Tok[] {
       continue;
     }
     if (c === "$" && src[i + 1] === "(" && src[i + 2] === "(") {
-      const e = src.indexOf("))", i + 3);
-      const end = e < 0 ? n : e + 2;
-      w.text += src.slice(i, end); w.raw += src.slice(i, end); w.dynamic = true;
-      i = end;
-      continue;
+      // Arithmetic expansion: bash still runs the command substitutions inside it. Text that is not
+      // arithmetic is a command substitution that starts with a subshell (`$((cmd) …)`), read below.
+      const a = scanArith(src, i + 3);
+      if (a) {
+        w.subs.push(...a.subs); w.text += src.slice(i, a.end); w.raw += src.slice(i, a.end); w.dynamic = true;
+        i = a.end;
+        continue;
+      }
     }
     if (c === "$" && src[i + 1] === "(") {
       const p = scanParen(src, i + 2);
@@ -295,9 +483,11 @@ function tokenize(src: string, opaque: string[]): Tok[] {
       continue;
     }
     if (c === "$" && src[i + 1] === "{") {
-      const end = scanBrace(src, i + 2);
-      w.text += src.slice(i, end); w.raw += src.slice(i, end); w.dynamic = true;
-      i = end;
+      // `${x:-$(cmd)}`: the substitution in the word operand runs, quoted or not.
+      const pe = scanParamExpansion(src, i + 2);
+      if (!pe) { opaque.push("unterminated ${"); w.text += src.slice(i); w.raw += src.slice(i); w.dynamic = true; i = n; break; }
+      w.subs.push(...pe.subs); w.text += src.slice(i, pe.end); w.raw += src.slice(i, pe.end); w.dynamic = true;
+      i = pe.end;
       continue;
     }
     if (c === "$" && /[A-Za-z_@*#?$!0-9]/.test(src[i + 1] ?? "")) {
@@ -316,6 +506,33 @@ function tokenize(src: string, opaque: string[]): Tok[] {
 }
 
 const RESERVED_SKIP = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "time", "coproc"]);
+// Builtins whose operands bash may evaluate as arithmetic or array subscripts.
+const ARITH_CONSUMERS = new Set(["let", "declare", "typeset", "local", "export", "readonly", "unset", "printf", "read", "test", "[", "[[", "((", "mapfile", "readarray", "wait", "getopts", "shift", "return", "exit"]);
+
+// Brace expansion of the command's words, as bash does after parsing. An unquoted word expands in place;
+// a command name that mixes a brace group with quoting, or that would expand past the bound, cannot be
+// read reliably and is reported. Operands past the bound stay as written (classify.ts then fails closed).
+function expandWords(words: Word[], opaque: string[]): void {
+  for (let k = 0; k < words.length; k++) {
+    const w = words[k];
+    if (w === undefined) break;
+    if (!BRACE_GROUP_RE.test(w.raw)) continue;
+    if (w.quoted || w.raw !== w.text) {
+      if (k === 0) opaque.push("brace expansion mixed with quoting in the command name");
+      continue;
+    }
+    const alts = expandBraces(w.text);
+    if (alts === null) {
+      if (k === 0) opaque.push("brace expansion of the command name past the bound");
+      continue;
+    }
+    if (alts.length < 2) continue;
+    // Bash drops a word that expands to nothing (`{x,}` gives just `x`).
+    const kept = alts.filter((text) => text !== "");
+    words.splice(k, 1, ...kept.map((text) => ({ ...w, text, raw: text })));
+    k += kept.length - 1;
+  }
+}
 const RESERVED_END = new Set(["fi", "done", "}", "esac"]);
 const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 const DECODER_RE = /\bbase64\b[^|]*\s-(?:d|-decode|D)\b|\bxxd\b[^|]*\s-r|\bopenssl\b[^|]*\s(?:enc|base64)\b[^|]*-d\b|\bbase32\b[^|]*-d|\bgunzip\b|\bzcat\b|\brev\b|\bprintf\b[^|]*\\x/;
@@ -354,7 +571,7 @@ type Raw = { words: Word[]; redirects: Redirect[]; pipeIn: boolean; pipeOut: boo
 export function parseShell(src: string, env: ParseEnv): Parsed {
   const opaque: string[] = [];
   const segments: Segment[] = [];
-  parseInto(src, env, segments, opaque);
+  parseInto(src, { ...env, fns: env.fns ?? new Set(), aliases: env.aliases ?? new Map<string, Word[] | null>() }, segments, opaque);
   return { segments, opaque };
 }
 
@@ -404,6 +621,8 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
         // `name ()` function definition or a subshell.
         const after = toks[t + 1];
         if (raw.words.length === 1 && after?.k === "op" && after.v === ")") {
+          const name = raw.words[0];
+          if (name && !name.quoted) env.fns?.add(name.text);
           raw.words = [];
           t++;
           continue;
@@ -413,7 +632,12 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
         continue;
       }
       if (tok.v === ")") {
-        if (caseMode > 0 && raw.words.length) { raw = { ...raw, words: [], redirects: [] }; continue; }
+        if (caseMode > 0 && raw.words.length) {
+          // A case pattern (`case x in $(cmd)) …`) is expanded before it is matched: its substitutions run.
+          for (const w of raw.words) for (const s of w.subs) parseInto(s, { ...env, cwd, via: [...(env.via ?? []), "case"], depth: depth + 1 }, out, opaque);
+          raw = { ...raw, words: [], redirects: [] };
+          continue;
+        }
         finish(";");
         if (cwdStack.length) cwd = cwdStack.pop() ?? null;
         continue;
@@ -450,19 +674,48 @@ function buildSegments(r: Raw, env: ParseEnv, cwd: string | null, out: Segment[]
   // Substitutions run before the command itself.
   for (const w of words) for (const s of w.subs) parseInto(s, { ...env, cwd, via: [...(env.via ?? []), w.procSub ? "<()" : "$()"], depth: depth + 1 }, out, opaque);
   const assigns: string[] = [];
+  const assignWords: Word[] = [];
+  let coproc = false;
   while (words.length) {
     const w = words[0];
     if (w === undefined) break;
+    if (!w.quoted && w.text === "coproc") coproc = true;
     if (!w.quoted && RESERVED_SKIP.has(w.text)) { words.shift(); continue; }
     if (!w.quoted && RESERVED_END.has(w.text)) { words.shift(); continue; }
-    if (ASSIGN_RE.test(w.raw)) { assigns.push(w.text); words.shift(); continue; }
+    if (ASSIGN_RE.test(w.raw)) { assigns.push(w.text); assignWords.push(w); words.shift(); continue; }
+    // `function f {`, `function f() {`: the definition is not a command; its body is read on.
+    if (!w.quoted && w.text === "function" && words[1]) {
+      env.fns?.add(words[1].text.replace(/\(\)$/, ""));
+      words.splice(0, 2);
+      continue;
+    }
+    // `coproc NAME { … }` / `coproc NAME ( … )`: NAME labels the coprocess, the group is the command.
+    if (coproc && words[1] && !words[1].quoted && (words[1].text === "{" || words[1].text === "(")) { words.shift(); continue; }
     break;
   }
-  const lead = words[0];
-  if (lead && !lead.quoted && ["for", "select", "case", "in", "function"].includes(lead.text)) {
-    if (lead.text === "function") words.splice(0, 2);
-    else words.length = 0;
+  // A command name an earlier `alias` or `hash -p` redefined: bash runs the alias value (or the hashed path)
+  // with these arguments, so that is what is classified. An alias value that is not a simple command is opaque.
+  const aliasName = words[0] && !words[0].quoted ? words[0].text : "";
+  if (aliasName && env.aliases?.has(aliasName)) {
+    const value = env.aliases.get(aliasName);
+    if (value === null || value === undefined) opaque.push(`alias ${aliasName} expands to a compound command`);
+    else words.splice(0, 1, ...value);
   }
+  const lead = words[0];
+  if (lead && !lead.quoted && ["for", "select", "case", "in"].includes(lead.text)) words.length = 0;
+  // Words bash would read as array subscripts or arithmetic operands are evaluated, and their
+  // command substitutions run, even from a single-quoted literal (`let 'a[$(cmd)]'`). That is not
+  // modelled: report it.
+  const arithmeticText = (w: Word) => w.subs.length === 0 && /\[[^\]]*(?:\$\(|`)/.test(w.text);
+  const leadName = lead && !lead.quoted ? lead.text : "";
+  if (assignWords.some(arithmeticText) || (ARITH_CONSUMERS.has(leadName) && words.slice(1).some(arithmeticText))) {
+    opaque.push("command text inside an array subscript or arithmetic operand");
+  }
+  if (leadName !== "[[" && leadName !== "((") expandWords(words, opaque);
+  // Variables whose value the shell later runs as code (the debug prompt PS4 under `set -x`, the prompts,
+  // PROMPT_COMMAND, an exported function): the value is parsed as commands now.
+  const declared = /^(?:export|declare|typeset|local|readonly)$/.test(leadName) ? words.slice(1).map((w) => w.text) : [];
+  parseCodeVars([...assigns, ...declared], env, cwd, out, opaque, depth);
   const head = words[0];
   if (head && !head.quoted && (head.text === "[[" || head.text === "[" || head.text === "((")) {
     // Tests only read.
@@ -472,7 +725,7 @@ function buildSegments(r: Raw, env: ParseEnv, cwd: string | null, out: Segment[]
     argv: words.map((w) => w.text),
     words,
     redirects: r.redirects,
-    assigns,
+    assigns: [...(env.assigns ?? []), ...assigns],
     stdinBody: r.stdinBody,
     pipeIn: r.pipeIn,
     pipeOut: r.pipeOut,
@@ -489,6 +742,7 @@ function buildSegments(r: Raw, env: ParseEnv, cwd: string | null, out: Segment[]
     decoderInName: false,
     vars: { ...(env.vars ?? {}) },
   };
+  if (head && !head.quoted && env.fns?.has(head.text)) seg.fnCall = true;
   if (!seg.argv.length) {
     if (!assigns.length && !r.redirects.length) return null;
     seg.argv = [];
@@ -496,6 +750,16 @@ function buildSegments(r: Raw, env: ParseEnv, cwd: string | null, out: Segment[]
     return seg;
   }
   return unwrap(seg, env, out, opaque);
+}
+
+// Variables whose value the shell later runs as code (the debug prompt PS4 under `set -x`, the prompts,
+// PROMPT_COMMAND, an exported function): each value is parsed as commands now, wherever the assignment is
+// written (a prefix, `export`/`declare`, or an `env NAME=value` operand).
+function parseCodeVars(list: string[], env: ParseEnv, cwd: string | null, out: Segment[], opaque: string[], depth: number): void {
+  for (const a of list) {
+    const m = /^(PS0|PS1|PS2|PS4|PROMPT_COMMAND|BASH_FUNC_[^=]*)=([\s\S]+)$/.exec(a);
+    if (m?.[2]?.trim()) parseInto(m[1]?.startsWith("BASH_FUNC_") ? m[2].replace(/^\(\)\s*/, "") : m[2], { ...env, cwd, via: [...(env.via ?? []), m[1] ?? ""], depth: depth + 1 }, out, opaque);
+  }
 }
 
 function takeOptions(argv: string[], start: number, withArg: Set<string>, longWithArg: Set<string> = new Set()): number {
@@ -518,6 +782,128 @@ function takeOptions(argv: string[], start: number, withArg: Set<string>, longWi
 }
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "busybox"]);
+// A script operand that is really standard input.
+const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/;
+export function isStdinPath(p: string): boolean {
+  return STDIN_PATH.test(p);
+}
+
+// Programs that run another program given on their command line (exec wrappers). Each entry names the
+// options it knows: short flags, short options that take a value, long flags and long options that take a
+// value (`--x=v` or `--x v`). An option not listed makes the inner command unreadable, which is reported as
+// opaque rather than guessed (a guess could hand the classifier an option value as the command name).
+// `sub` names the subcommand that runs the command (`uv run`), `positional` the operands before it
+// (`chroot NEWROOT`), `priv` marks a change of user, `ns` a namespace or root-directory launcher, and
+// `dashdash` a wrapper whose command only follows `--`.
+type WrapSpec = { flags?: string; withArg?: string; long?: string[]; longArg?: string[]; sub?: string; positional?: number; priv?: boolean; ns?: boolean; dashdash?: boolean; longEq?: boolean };
+const WRAPPERS: Record<string, WrapSpec> = {
+  pkexec: { long: ["--disable-internal-agent", "--keep-cwd"], longArg: ["--user"], priv: true },
+  run0: { withArg: "ugD", long: ["--no-ask-password", "--slice-inherit", "--empty-environment", "--pty", "--pipe", "--lightweight"], longArg: ["--user", "--group", "--nice", "--chdir", "--setenv", "--property", "--description", "--slice", "--unit", "--machine", "--background", "--shell-prompt-prefix", "--area"], priv: true },
+  gosu: { positional: 1, priv: true },
+  "su-exec": { positional: 1, priv: true },
+  setuidgid: { positional: 1, priv: true },
+  chroot: { long: ["--skip-chdir"], longArg: ["--userspec", "--groups"], positional: 1, ns: true },
+  unshare: { flags: "muinpUCTfrc", withArg: "SGRwl", long: ["--mount", "--uts", "--ipc", "--net", "--pid", "--user", "--cgroup", "--time", "--fork", "--map-root-user", "--map-current-user", "--map-auto", "--mount-proc", "--mount-binfmt", "--kill-child", "--keep-caps"], longArg: ["--setuid", "--setgid", "--root", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic", "--boottime", "--load-interp"], ns: true },
+  nsenter: { flags: "amuinpCUTFZ", withArg: "tSGNrw", long: ["--all", "--mount", "--uts", "--ipc", "--net", "--pid", "--cgroup", "--user", "--time", "--no-fork", "--preserve-credentials", "--follow-context", "--user-parent", "--keep-caps", "--join-cgroup"], longArg: ["--target", "--setuid", "--setgid", "--net-socket", "--root", "--wd", "--env"], ns: true },
+  setpriv: { flags: "d", long: ["--dump", "--nnp", "--no-new-privs", "--clear-groups", "--keep-groups", "--init-groups", "--reset-env"], longArg: ["--ruid", "--euid", "--rgid", "--egid", "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps", "--bounding-set", "--securebits", "--pdeathsig", "--selinux-label", "--apparmor-profile", "--landlock-access", "--landlock-rule", "--seccomp-filter"], ns: true },
+  "flatpak-spawn": { long: ["--host", "--clear-env", "--watch-bus", "--expose-pids", "--share-pids", "--no-network", "--sandbox", "--latest-version", "--verbose"], longArg: ["--env", "--unset-env", "--directory", "--forward-fd", "--sandbox-expose", "--sandbox-expose-ro", "--sandbox-expose-path", "--sandbox-expose-path-ro", "--sandbox-flag", "--app-path", "--usr-path"], ns: true },
+  "systemd-run": { flags: "qGPSrt", withArg: "pEuHMd", long: ["--user", "--system", "--scope", "--wait", "--pipe", "--pty", "--quiet", "--collect", "--no-block", "--no-ask-password", "--same-dir", "--shell", "--remain-after-exit", "--send-sighup", "--service-type", "--expand-environment"], longArg: ["--unit", "--property", "--description", "--slice", "--setenv", "--host", "--machine", "--uid", "--gid", "--nice", "--working-directory", "--on-active", "--on-boot", "--on-startup", "--on-unit-active", "--on-unit-inactive", "--on-calendar", "--on-timezone-change", "--on-clock-change", "--timer-property", "--path-property", "--socket-property", "--service-type", "--wait-for"] },
+  fakeroot: { flags: "uhv", withArg: "lsib", long: ["--unknown-is-real"], longArg: ["--lib", "--faked"] },
+  faketime: { flags: "mf", withArg: "p", long: ["--exclude-monotonic"], longArg: ["--date-prog"], positional: 1 },
+  "dbus-launch": { long: ["--exit-with-session", "--exit-with-x11", "--sh-syntax", "--csh-syntax", "--binary-syntax", "--close-stderr", "--autolaunch"], longArg: ["--config-file"] },
+  "ssh-agent": { flags: "cDdsk", withArg: "aEtPO" },
+  chpst: { flags: "vP012", withArg: "uUbe/nlLmdofpcrt" },
+  prlimit: { withArg: "po", long: ["--noheadings", "--raw", "--verbose", "--as", "--core", "--cpu", "--data", "--fsize", "--locks", "--memlock", "--msgqueue", "--nice", "--nofile", "--nproc", "--rss", "--rtprio", "--rttime", "--sigpending", "--stack"], longArg: ["--pid", "--output"] },
+  cgexec: { withArg: "g", long: ["--sticky"] },
+  cpulimit: { flags: "fqkiv", withArg: "lpPe", long: ["--foreground", "--quiet", "--kill", "--restore", "--verbose", "--include-children"], longArg: ["--limit", "--pid", "--path", "--exe"] },
+  envdir: { positional: 1 },
+  ifne: { flags: "n" },
+  valgrind: { flags: "qvh", longEq: true },
+  rlwrap: { flags: "AcEhimNnorRUvWXt", withArg: "abCDefFgHlOpPqsSwz" },
+  entr: { flags: "acdnprz" },
+  "uv run": { sub: "run", flags: "qvnmsU", withArg: "wpfP", long: ["--module", "--script", "--gui-script", "--no-sync", "--locked", "--frozen", "--isolated", "--active", "--no-active", "--no-project", "--all-extras", "--no-dev", "--dev", "--all-packages", "--all-groups", "--no-default-groups", "--only-dev", "--no-editable", "--exact", "--inexact", "--upgrade", "--reinstall", "--no-build", "--no-binary", "--no-build-isolation", "--compile-bytecode", "--offline", "--no-cache", "--quiet", "--verbose", "--no-progress", "--native-tls", "--no-config", "--no-python-downloads", "--managed-python", "--no-managed-python", "--no-env-file", "--no-index", "--preview", "--no-install-project", "--no-install-workspace", "--no-install-local", "--refresh"], longArg: ["--with", "--with-editable", "--with-requirements", "--python", "--package", "--extra", "--no-extra", "--group", "--no-group", "--only-group", "--env-file", "--directory", "--project", "--index", "--default-index", "--index-url", "--extra-index-url", "--find-links", "--cache-dir", "--config-file", "--color", "--prerelease", "--resolution", "--exclude-newer", "--refresh-package", "--reinstall-package", "--upgrade-package", "--python-preference", "--index-strategy", "--keyring-provider", "--link-mode", "--config-setting", "--allow-insecure-host"] },
+  "poetry run": { sub: "run", flags: "qvnhV", withArg: "CP", long: ["--quiet", "--verbose", "--no-ansi", "--ansi", "--no-interaction", "--no-plugins", "--no-cache"], longArg: ["--directory", "--project"] },
+  "pdm run": { sub: "run", flags: "vqgsl", withArg: "p", long: ["--verbose", "--quiet", "--global", "--site-packages", "--list", "--json", "--recreate"], longArg: ["--project", "--venv"] },
+  "pipenv run": { sub: "run" },
+  "hatch run": { sub: "run" },
+  "rye run": { sub: "run", flags: "l", long: ["--list"], longArg: ["--pyproject"] },
+  "pixi run": { sub: "run", flags: "vq", withArg: "e", long: ["--frozen", "--locked", "--clean-env", "--force-activate", "--no-install", "--verbose", "--quiet"], longArg: ["--manifest-path", "--environment", "--color"] },
+  "conda run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
+  "mamba run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
+  "micromamba run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--attach", "--detach", "--clean-env"], longArg: ["--name", "--prefix", "--cwd", "--env"] },
+  "bundle exec": { sub: "exec", long: ["--keep-file-descriptors"], longArg: ["--gemfile"] },
+  "bundler exec": { sub: "exec", long: ["--keep-file-descriptors"], longArg: ["--gemfile"] },
+  "asdf exec": { sub: "exec" },
+  "direnv exec": { sub: "exec", positional: 1 },
+  "toolbox run": { sub: "run", withArg: "cdr", longArg: ["--container", "--distro", "--release"] },
+  "devbox run": { sub: "run", withArg: "ce", longArg: ["--config", "--env", "--env-file"] },
+  "mise exec": { sub: "exec", dashdash: true },
+  "mise x": { sub: "x", dashdash: true },
+  "distrobox enter": { sub: "enter", dashdash: true },
+  "wezterm start": { sub: "start", dashdash: true },
+  watchexec: { dashdash: true },
+};
+// Wrappers that launch their command in a namespace, a changed root or a sandbox escape: the inner
+// command is classified, and the launch itself is never routine (see classify.ts).
+export const NAMESPACE_WRAPPERS: ReadonlySet<string> = new Set([...Object.entries(WRAPPERS).filter(([, w]) => w.ns).map(([k]) => k), "bwrap", "systemd-nspawn", "machinectl"]);
+
+// Where the wrapped command starts, or null when an option is not one the spec knows.
+function wrapperStart(argv: string[], from: number, spec: WrapSpec): number | null {
+  const long = new Set(spec.long ?? []);
+  const longArg = new Set(spec.longArg ?? []);
+  const flags = spec.flags ?? "";
+  const withArg = spec.withArg ?? "";
+  let i = from;
+  while (i < argv.length) {
+    const a = argv[i] ?? "";
+    if (a === "--") { i++; return i + (spec.positional ?? 0); }
+    if (spec.dashdash) { i++; continue; }
+    if (!a.startsWith("-") || a === "-") break;
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const name = eq < 0 ? a : a.slice(0, eq);
+      if (long.has(name) || (spec.longEq && eq > 0)) { i++; continue; }
+      if (longArg.has(name)) { i += eq < 0 ? 2 : 1; continue; }
+      if (spec.longEq && /^--(?:help|version)$/.test(a)) { i++; continue; }
+      return null;
+    }
+    let consumed = 1;
+    for (let k = 1; k < a.length; k++) {
+      const ch = a.charAt(k);
+      if (withArg.includes(ch)) { consumed = k === a.length - 1 ? 2 : 1; break; }
+      if (!flags.includes(ch)) return null;
+    }
+    i += consumed;
+  }
+  if (spec.dashdash) return null; // no `--`: the command cannot be told from the wrapper's own operands
+  return i + (spec.positional ?? 0);
+}
+
+// bwrap's options and how many operands each takes; anything else (including --args, which reads more
+// options from a file descriptor) leaves the command unreadable.
+const BWRAP_ARGS: Record<string, number> = Object.fromEntries<number>([
+  ...["--unshare-all", "--share-net", "--unshare-user", "--unshare-user-try", "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts", "--unshare-cgroup", "--unshare-cgroup-try", "--clearenv", "--new-session", "--die-with-parent", "--as-pid-1", "--disable-userns", "--assert-userns-disabled", "--level-prefix"].map((o): [string, number] => [o, 0]),
+  ...["--argv0", "--userns", "--userns2", "--pidns", "--info-fd", "--json-status-fd", "--sync-fd", "--block-fd", "--userns-block-fd", "--seccomp", "--add-seccomp-fd", "--lock-file", "--remount-ro", "--exec-label", "--file-label", "--proc", "--dev", "--tmpfs", "--mqueue", "--dir", "--chdir", "--unsetenv", "--hostname", "--uid", "--gid", "--cap-add", "--cap-drop", "--perms", "--size", "--overlay-src", "--tmp-overlay", "--ro-overlay"].map((o): [string, number] => [o, 1]),
+  ...["--bind", "--bind-try", "--dev-bind", "--dev-bind-try", "--ro-bind", "--ro-bind-try", "--symlink", "--setenv", "--file", "--bind-data", "--ro-bind-data", "--chmod", "--bind-fd", "--ro-bind-fd"].map((o): [string, number] => [o, 2]),
+  ["--overlay", 3] as [string, number],
+]);
+function bwrapStart(argv: string[]): number | null {
+  let i = 1;
+  while (i < argv.length) {
+    const a = argv[i] ?? "";
+    if (a === "--") return i + 1;
+    if (!a.startsWith("--")) return i;
+    const n = Object.hasOwn(BWRAP_ARGS, a) ? BWRAP_ARGS[a] : undefined;
+    if (n === undefined) return null;
+    i += 1 + n;
+  }
+  return i;
+}
+
+// Terminal emulators that start a program: the command follows -e / -x / --command / -- .
+const TERMINALS = new Set(["xterm", "uxterm", "urxvt", "rxvt", "st", "alacritty", "konsole", "terminator", "xfce4-terminal", "tilix", "ghostty", "kitty", "foot", "gnome-terminal", "lxterminal", "mate-terminal", "qterminal", "sakura", "wezterm"]);
+// Tools whose operands are shell command strings (each one is run through a shell).
+const COMMAND_STRING_TOOLS = new Set(["concurrently", "hyperfine", "pee"]);
 const SSH_ARG_OPTS = new Set("BbcDEeFIiJLlmOoPpQRSWw".split(""));
 const SUDO_ARG_OPTS = new Set("CDghpRrtTUu".split(""));
 
@@ -569,14 +955,14 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
           if (a === undefined) break;
           if (a === "-u" || a === "--unset" || a === "-C" || a === "--chdir" || a === "-S" || a === "--split-string") {
             if ((a === "-S" || a === "--split-string") && seg.argv[i + 1]) {
-              parseInto(seg.argv.slice(i + 1).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "env -S"], depth: seg.depth + 1 }, out, opaque);
+              parseInto(seg.argv.slice(i + 1).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "env -S"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
               return null;
             }
             i += 2;
             continue;
           }
           if (a.startsWith("-")) { i++; continue; }
-          if (ASSIGN_RE.test(a)) { seg.assigns.push(a); i++; continue; }
+          if (ASSIGN_RE.test(a)) { seg.assigns.push(a); parseCodeVars([a], env, seg.cwd, out, opaque, seg.depth); i++; continue; }
           break;
         }
         if (i >= seg.argv.length) { seg.argv = ["env"]; seg.words = seg.words.slice(0, 1); out.push(seg); return seg; }
@@ -642,7 +1028,7 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
         const ci = seg.argv.findIndex((a) => a === "-c" || a === "--command");
         const command = seg.argv[ci + 1];
         if (ci >= 0 && command) {
-          parseInto(command, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "flock"], depth: seg.depth + 1 }, out, opaque);
+          parseInto(command, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "flock"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
           return null;
         }
         if (i + 1 >= seg.argv.length) break;
@@ -652,7 +1038,7 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
       case "watch": {
         const i = takeOptions(seg.argv, 1, new Set(["n", "d", "g"]), new Set(["--interval", "--differences"]));
         if (i >= seg.argv.length) break;
-        parseInto(seg.argv.slice(i).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "watch"], depth: seg.depth + 1 }, out, opaque);
+        parseInto(seg.argv.slice(i).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "watch"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
         return null;
       }
       case "xargs":
@@ -710,6 +1096,178 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
       default:
         break;
     }
+    const inner = (script: string, via: string, cwd: string | null = seg.cwd) =>
+      parseInto(script, { ...env, cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, via], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
+    const unread = (what: string) => { opaque.push(what); out.push(seg); return seg; };
+    // Builtins that take a command string: bash runs it later (a trap, an alias, a completion or
+    // key binding, a mapfile callback), so it is parsed now, alongside the builtin itself.
+    {
+      if (exe === "trap" && seg.argv.length > 2 && !/^-[lp]*$/.test(seg.argv[1] ?? "") && seg.argv[1] !== "-") {
+        const action = seg.argv[seg.argv[1] === "--" ? 2 : 1];
+        if (action?.trim()) inner(action, "trap");
+        out.push(seg);
+        return seg;
+      }
+      if (exe === "alias") {
+        for (const a of rest) {
+          const eq = a.indexOf("=");
+          if (eq <= 0) continue;
+          const name = a.slice(0, eq);
+          const value = a.slice(eq + 1);
+          // Later uses of the name run the value with their own arguments appended, which cannot be seen here.
+          const before = out.length;
+          if (value.trim()) inner(value, "alias");
+          for (const s of out.slice(before)) s.unknownArgs = true;
+          const valueOpaque: string[] = [];
+          const toks = tokenize(value, valueOpaque);
+          env.aliases?.set(name, valueOpaque.length || toks.some((t) => t.k !== "w") ? null : toks.flatMap((t) => (t.k === "w" ? [t.w] : [])));
+        }
+        out.push(seg);
+        return seg;
+      }
+      // `hash -p FILE NAME…`: later uses of NAME run FILE.
+      if (exe === "hash") {
+        const pi = seg.argv.indexOf("-p");
+        const file = pi > 0 ? seg.argv[pi + 1] : undefined;
+        if (file) for (const name of seg.argv.slice(pi + 2).filter((a) => !a.startsWith("-"))) env.aliases?.set(name, [{ text: file, raw: file, dynamic: false, quoted: false, ansiC: false, fragmented: false, subs: [], procSub: false }]);
+        out.push(seg);
+        return seg;
+      }
+      // `enable -f FILE NAME` loads a builtin from a shared object: what NAME then does is not readable.
+      if (exe === "enable" && rest.some((a) => /^-[A-Za-z]*f/.test(a))) return unread("enable -f loads a builtin from a shared object");
+      if (exe === "complete" || exe === "compgen" || exe === "mapfile" || exe === "readarray") {
+        const ci = seg.argv.indexOf("-C");
+        const cmd = ci > 0 ? seg.argv[ci + 1] : undefined;
+        const before = out.length;
+        if (cmd?.trim()) inner(cmd, `${exe} -C`);
+        // The shell appends its own arguments to a callback.
+        for (const cb of out.slice(before)) cb.unknownArgs = true;
+        out.push(seg);
+        return seg;
+      }
+      if (exe === "bind" && seg.argv.includes("-x")) {
+        for (const a of rest) { const colon = a.indexOf(":"); if (colon >= 0) inner(a.slice(colon + 1).trim().replace(/^["']|["']$/g, ""), "bind -x"); }
+        out.push(seg);
+        return seg;
+      }
+      if (exe === "fc" && !rest.some((a) => /^-[A-Za-z]*l/.test(a))) return unread("fc re-runs commands from history");
+      // `source /dev/stdin <<<…` runs the here-document as shell code.
+      if ((exe === "source" || exe === ".") && rest[0] !== undefined && STDIN_PATH.test(rest[0]) && seg.stdinBody !== undefined) {
+        inner(seg.stdinBody, "source <<");
+        out.push(seg);
+        return seg;
+      }
+    }
+    // Exec wrappers: the command they run is what gets classified.
+    if (exe === "su" || exe === "runuser" || exe === "sg") {
+      const ci = seg.argv.findIndex((a, k) => k > 0 && (/^-[A-Za-z]*c$/.test(a) || a === "--command" || a.startsWith("--command=")));
+      const cmd = ci < 0 ? undefined : seg.argv[ci]?.startsWith("--command=") ? seg.argv[ci]?.slice(10) : seg.argv[ci + 1];
+      seg.sudo = { nonInteractive: seg.sudo?.nonInteractive ?? false, user: undefined };
+      seg.via = [...seg.via, exe];
+      if (cmd?.trim()) { inner(cmd, exe); return null; }
+      if (exe === "runuser" && rest.some((a) => a === "-u" || a === "--user")) {
+        const at = wrapperStart(seg.argv, 1, { flags: "lmpfP", withArg: "ugGsw", long: ["--login", "--preserve-environment", "--fast", "--pty"], longArg: ["--user", "--group", "--supp-group", "--shell", "--whitelist-environment"] });
+        if (at === null) return unread("runuser options this parser does not know");
+        if (at < seg.argv.length) { setArgv(at); continue; }
+      }
+      if (exe === "sg") {
+        const args = seg.argv.slice(1).filter((a) => a !== "-");
+        if (args.length > 1) { inner(args.slice(1).join(" "), "sg"); return null; }
+      }
+      seg.interactiveShell = true;
+      seg.argv = ["sudo-shell"];
+      seg.words = [];
+      out.push(seg);
+      return seg;
+    }
+    if (exe === "bwrap") {
+      const at = bwrapStart(seg.argv);
+      if (at === null) return unread("bwrap options this parser does not know");
+      seg.via = [...seg.via, "bwrap"];
+      if (at >= seg.argv.length) { out.push(seg); return seg; }
+      setArgv(at);
+      continue;
+    }
+    if (exe === "systemd-nspawn" || exe === "machinectl") return unread(`${exe}: the command it runs is not read`);
+    if (exe === "script") {
+      const ci = seg.argv.findIndex((a, k) => k > 0 && (/^-[A-Za-z]*c$/.test(a) || a === "--command" || a.startsWith("--command=")));
+      const cmd = ci < 0 ? undefined : seg.argv[ci]?.startsWith("--command=") ? seg.argv[ci]?.slice(10) : seg.argv[ci + 1];
+      if (cmd?.trim()) { inner(cmd, "script -c"); return null; }
+      out.push(seg);
+      return seg;
+    }
+    if (exe === "expect" && seg.argv.includes("-c")) return unread("expect -c runs Tcl commands");
+    if (exe === "nix-shell") {
+      const ci = seg.argv.findIndex((a) => a === "--run" || a === "--command");
+      const cmd = ci > 0 ? seg.argv[ci + 1] : undefined;
+      if (cmd?.trim()) { inner(cmd, "nix-shell --run"); return null; }
+      out.push(seg);
+      return seg;
+    }
+    if (exe === "nix" && (seg.argv[1] === "develop" || seg.argv[1] === "shell")) {
+      const ci = seg.argv.findIndex((a) => a === "-c" || a === "--command");
+      if (ci > 0 && ci + 1 < seg.argv.length) { seg.via = [...seg.via, `nix ${seg.argv[1]}`]; setArgv(ci + 1); continue; }
+      out.push(seg);
+      return seg;
+    }
+    if (exe === "pnpm" && seg.argv[1] === "exec") {
+      if (seg.argv.some((a) => a === "-c" || a === "--shell-mode")) { inner(seg.argv.slice(2).filter((a) => !a.startsWith("-")).join(" "), "pnpm exec -c"); return null; }
+      const at = wrapperStart(seg.argv, 2, { flags: "r", long: ["--recursive", "--parallel", "--no-bail", "--report-summary", "--workspace-root"], longArg: ["--filter", "--resume-from"] });
+      if (at === null) return unread("pnpm exec options this parser does not know");
+      if (at < seg.argv.length) { seg.via = [...seg.via, "pnpm exec"]; setArgv(at); continue; }
+    }
+    if (exe === "nodemon") {
+      const xi = seg.argv.findIndex((a) => a === "--exec" || a === "-x");
+      const cmd = xi > 0 ? seg.argv[xi + 1] : undefined;
+      if (cmd?.trim()) { inner(cmd, "nodemon --exec"); out.push(seg); return seg; }
+    }
+    if (exe === "entr" && /^-[acdnprz]*s/.test(seg.argv.find((a) => a.startsWith("-")) ?? "")) {
+      const cmd = seg.argv.slice(1).find((a) => !a.startsWith("-"));
+      if (cmd?.trim()) { inner(cmd, "entr -s"); return null; }
+    }
+    if (exe === "gdb" || exe === "lldb") {
+      if (seg.argv.some((a) => /^(?:-ex|--eval-command|-x|--command|-o|--one-line|-s|--source|-batch|--batch)(?:=|$)/.test(a))) return unread(`${exe} runs debugger commands, which can start programs`);
+      const ai = seg.argv.findIndex((a) => a === "--args" || a === "--");
+      if (ai > 0 && ai + 1 < seg.argv.length) { seg.via = [...seg.via, exe]; setArgv(ai + 1); continue; }
+    }
+    if (exe === "perf" && /^(?:record|stat|trace)$/.test(seg.argv[1] ?? "")) {
+      const di = seg.argv.indexOf("--");
+      if (di > 0 && di + 1 < seg.argv.length) { seg.via = [...seg.via, "perf"]; setArgv(di + 1); continue; }
+      if (seg.argv.slice(2).some((a) => !a.startsWith("-"))) return unread("perf runs a command its options leave unclear");
+    }
+    if (COMMAND_STRING_TOOLS.has(exe)) {
+      for (const a of rest) if (!a.startsWith("-") && /\s/.test(a)) inner(a, exe);
+      out.push(seg);
+      return seg;
+    }
+    if (TERMINALS.has(exe)) {
+      const ei = seg.argv.findIndex((a, k) => k > 0 && (a === "-e" || a === "-x" || a === "--command" || a === "--execute" || a === "--"));
+      const cmd = ei > 0 ? seg.argv.slice(ei + 1) : [];
+      if (cmd.length === 1 && /\s/.test(cmd[0] ?? "")) { inner(cmd[0] ?? "", exe); return null; }
+      if (cmd.length) { seg.via = [...seg.via, exe]; setArgv(ei + 1); continue; }
+      if ((exe === "kitty" || exe === "foot" || exe === "ghostty" || exe === "wezterm") && rest.some((a) => !a.startsWith("-"))) return unread(`${exe}: the command it starts is not read`);
+      out.push(seg);
+      return seg;
+    }
+    {
+      const subKey = `${exe} ${seg.argv[1] ?? ""}`;
+      const key = Object.hasOwn(WRAPPERS, subKey) ? subKey : Object.hasOwn(WRAPPERS, exe) ? exe : null;
+      const spec = key === null ? undefined : WRAPPERS[key];
+      if (key !== null && spec) {
+        const at = wrapperStart(seg.argv, spec.sub ? 2 : 1, spec);
+        if (at === null) {
+          // A wrapper given no command at all (`uv run --help`, `mise exec`) is classified as itself.
+          if (!seg.argv.slice(spec.sub ? 2 : 1).some((a) => !a.startsWith("-"))) { out.push(seg); return seg; }
+          return unread(`${key}: options this parser does not know`);
+        }
+        if (at < seg.argv.length) {
+          if (spec.priv) seg.sudo = { nonInteractive: seg.sudo?.nonInteractive ?? false, user: undefined };
+          seg.via = [...seg.via, key];
+          setArgv(at);
+          continue;
+        }
+      }
+    }
     if (SHELLS.has(exe) || exe === "pwsh" || exe === "powershell") {
       const ps = exe === "pwsh" || exe === "powershell";
       const ci = seg.argv.findIndex((a, k) => k > 0 && (ps ? /^-(?:c|command)$/i.test(a) : /^-[A-Za-z]*c[A-Za-z]*$/.test(a)));
@@ -717,12 +1275,14 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
       const inline = seg.argv[ci + 1];
       if (ci >= 0 && inline !== undefined) {
         const script = ps ? seg.argv.slice(ci + 1).join(" ") : inline;
-        parseInto(script, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, `${exe} -c`], depth: seg.depth + 1 }, out, opaque);
+        parseInto(script, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, `${exe} -c`], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
         return null;
       }
-      const script = seg.argv.slice(1).find((a) => !a.startsWith("-"));
+      const scriptArg = seg.argv.slice(1).find((a) => !a.startsWith("-"));
+      // `bash /dev/stdin <<<…` reads its script from standard input, like `bash -s`.
+      const script = scriptArg !== undefined && STDIN_PATH.test(scriptArg) ? undefined : scriptArg;
       if (!script && seg.stdinBody !== undefined) {
-        parseInto(seg.stdinBody, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, `${exe} <<`], depth: seg.depth + 1 }, out, opaque);
+        parseInto(seg.stdinBody, { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, `${exe} <<`], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
         return null;
       }
       if (!script && !seg.pipeIn) seg.interactiveShell = true;

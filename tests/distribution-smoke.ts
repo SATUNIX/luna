@@ -185,6 +185,30 @@ const tests = {
     } finally { fs.rmSync(agent, { recursive: true, force: true }); }
   },
 
+  "installer: npm delivery works once distribution.json enables it": () => {
+    const agent = scratch("pi-kit-dist-npm-");
+    const fixture = path.join(agent, "fixture");
+    try {
+      for (const part of ["core", "extensions", "kit"]) {
+        fs.cpSync(path.join(ROOT, "packages", part), path.join(fixture, "packages", part), { recursive: true });
+      }
+      fs.copyFileSync(path.join(ROOT, "package.json"), path.join(fixture, "package.json"));
+      const installer = path.join(fixture, "packages", "core", "install.ts");
+      const config = (enabled: unknown): void => writeJson(path.join(fixture, "packages", "core", "distribution.json"), { delivery: "git", requiredProfileExtensions: readRequiredProfileExtensions(), npm: { package: "@satunix/pi-system", enabled } });
+      for (const notTrue of [false, "true", 1]) {
+        config(notTrue);
+        const refused = dryRun(installer, ["--channel", "next", "--mode", "npm", "--profile", "lite"], { agent });
+        assert.notEqual(refused.status, 0, `enabled: ${JSON.stringify(notTrue)} is not true`);
+        assert.match(refused.out, /npm delivery is not enabled/);
+      }
+      config(true);
+      const npm = dryRun(installer, ["--channel", "next", "--profile", "lite"], { agent, env: { PI_KIT_DELIVERY: "npm" } });
+      assert.equal(npm.status, 0, npm.out);
+      assert.equal(npm.mode, "npm (channel next)", npm.out);
+      assert.equal(npm.source, "npm:@satunix/pi-system@next");
+    } finally { fs.rmSync(agent, { recursive: true, force: true }); }
+  },
+
   "installer from a checkout: local by default, the configured delivery with --channel": () => {
     const agent = scratch("pi-kit-dist-agent-");
     const installer = path.join(ROOT, "packages", "core", "install.ts");
@@ -198,9 +222,13 @@ const tests = {
       assert.equal(next.source, GIT);
       const pinned = dryRun(installer, ["--channel", "0.2.1-beta.0"], { agent });
       assert.equal(pinned.source, `${GIT}@v0.2.1-beta.0`);
-      const npm = dryRun(installer, ["--channel", "next"], { agent, env: { PI_KIT_DELIVERY: "npm" } });
-      assert.equal(npm.mode, "npm (channel next)", npm.out);
-      assert.equal(npm.source, "npm:@satunix/pi-system@next");
+      // npm delivery is refused until distribution.json enables it, however it is asked for.
+      const npmEnv = dryRun(installer, ["--channel", "next"], { agent, env: { PI_KIT_DELIVERY: "npm" } });
+      assert.notEqual(npmEnv.status, 0, npmEnv.out);
+      assert.match(npmEnv.out, /npm delivery is not enabled/);
+      const npmFlag = dryRun(installer, ["--mode", "npm", "--profile", "lite"], { agent });
+      assert.notEqual(npmFlag.status, 0, npmFlag.out);
+      assert.match(npmFlag.out, /npm delivery is not enabled/);
       const bad = dryRun(installer, ["--channel", "main"], { agent });
       assert.notEqual(bad.status, 0);
       assert.match(bad.out, /invalid --channel/);

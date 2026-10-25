@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createFileExclusive, openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 import {
 	resolveSessionId,
 	todoFilePath,
@@ -218,10 +219,10 @@ function setVerifyPending(cwd: string): string {
 		`${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`,
 	);
 	try {
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		fs.writeFileSync(
+		createFileExclusive(
 			file,
 			JSON.stringify({ startedAt: new Date().toISOString() }),
+			{ root: cwd },
 		);
 	} catch {
 		/* best effort */
@@ -246,12 +247,11 @@ function pruneStalePending(cwd: string): void {
 }
 
 // Atomic write: temp file + rename, so a concurrent reader never observes a
-// partially-written board (M-04: writes were previously a direct writeFileSync).
-function writeFileAtomic(file: string, content: string): void {
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-	fs.writeFileSync(tmp, content, "utf8");
-	fs.renameSync(tmp, file);
+// partially-written board (writes were previously a direct writeFileSync). The board is
+// workspace state, so nothing on the way is followed through a committed symlink
+// (./shared/safe-fs.ts).
+function writeFileAtomic(file: string, content: string, root: string): void {
+	writeFileSafe(file, content, { root });
 }
 
 // The board as read from disk: verdicts other writers recorded (verifier-board, conductor's
@@ -283,17 +283,15 @@ const BOARD_LOCK_RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 320, 640];
 function sleepSync(ms: number): void {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function acquireBoardLock(lock: string): number | undefined {
+function acquireBoardLock(lock: string, root: string): number | undefined {
 	for (let attempt = 0; ; attempt++) {
+		const fd = openFileExclusive(lock, { root });
+		if (fd !== null) return fd;
 		try {
-			return fs.openSync(lock, "wx");
+			if (Date.now() - fs.lstatSync(lock).mtimeMs > BOARD_LOCK_STALE_MS)
+				fs.rmSync(lock, { force: true });
 		} catch {
-			try {
-				if (Date.now() - fs.statSync(lock).mtimeMs > BOARD_LOCK_STALE_MS)
-					fs.rmSync(lock, { force: true });
-			} catch {
-				/* retry below */
-			}
+			/* retry below */
 		}
 		const delay = BOARD_LOCK_RETRY_DELAYS_MS[attempt];
 		if (delay === undefined) return undefined;
@@ -307,8 +305,7 @@ function withBoardLock<T>(
 	const lock = path.join(cwd, ".pi", "verdicts.lock");
 	let fd: number | undefined;
 	try {
-		fs.mkdirSync(path.dirname(lock), { recursive: true });
-		fd = acquireBoardLock(lock);
+		fd = acquireBoardLock(lock, cwd);
 		if (fd === undefined)
 			return { ok: false, reason: "verifier board is busy or unreadable" };
 		try {
@@ -346,7 +343,7 @@ function updateBoard(cwd: string, mutate: (board: BoardFile) => void): void {
 	// restarts the count: `"7" + 1` would concatenate to "71".
 	board.generation =
 		(typeof board.generation === "number" ? board.generation : 0) + 1;
-	writeFileAtomic(file, JSON.stringify(board, null, 2));
+	writeFileAtomic(file, JSON.stringify(board, null, 2), cwd);
 }
 
 // Auto-wire record_verdict (Epic 4 Sprint 4.1): verify-gate writes its own result to the
@@ -376,7 +373,7 @@ export function recordVerifyVerdict(
 		if (!locked.ok) throw new Error(locked.reason);
 		return null;
 	} catch (error) {
-		// M-04: never let verdict bookkeeping crash verify itself, but don't go fully
+		// Never let verdict bookkeeping crash verify itself, but don't go fully
 		// silent either — a swallowed write failure here is exactly how a verdict silently
 		// fails to persist.
 		const message = `failed to record verdict for '${source}' (${pass ? "PASS" : "FAIL"}): ${error instanceof Error ? error.message : String(error)}`;
@@ -771,11 +768,8 @@ export const runReviewerProcess: ReviewRunner = async (
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-verify-reviewer-"));
 		const promptFile = path.join(tmpDir, "reviewer.md");
 		const taskFile = path.join(tmpDir, "task.md");
-		fs.writeFileSync(promptFile, REVIEWER_PROMPT, {
-			encoding: "utf8",
-			mode: 0o600,
-		});
-		fs.writeFileSync(taskFile, task, { encoding: "utf8", mode: 0o600 });
+		createFileExclusive(promptFile, REVIEWER_PROMPT, { root: tmpDir, mode: 0o600 });
+		createFileExclusive(taskFile, task, { root: tmpDir, mode: 0o600 });
 		const args = [
 			"--mode",
 			"json",
@@ -1128,7 +1122,7 @@ export async function runVerification(
 		const reportFile = path.join(cwd, ".pi", "verify-report.md");
 		const report = renderReport(base, at);
 		try {
-			writeFileAtomic(reportFile, report);
+			writeFileAtomic(reportFile, report, cwd);
 		} catch {
 			/* the board still carries the verdicts */
 		}

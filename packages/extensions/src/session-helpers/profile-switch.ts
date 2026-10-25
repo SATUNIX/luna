@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -77,10 +78,17 @@ export function transientPaths(snaps: FileSnapshot[]): Set<string> {
 
 function writeAtomic(file: string, bytes: Buffer, mode: number | null): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.restore.tmp`;
-  fs.writeFileSync(tmp, bytes, mode === null ? undefined : { mode });
-  if (mode !== null) fs.chmodSync(tmp, mode);
-  fs.renameSync(tmp, file);
+  // Created 0600 and exclusively (O_EXCL: a planted name is refused, not followed), then given the
+  // snapshot's mode, so a restored .env is never world-readable, even briefly.
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.restore.tmp`;
+  try {
+    fs.writeFileSync(tmp, bytes, { mode: 0o600, flag: "wx" });
+    if (mode !== null) fs.chmodSync(tmp, mode);
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    fs.rmSync(tmp, { force: true });
+    throw error;
+  }
 }
 
 export interface RestoreResult {

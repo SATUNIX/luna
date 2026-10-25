@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { feedbackPath, isRecord } from "./config.ts";
 import type { Assessment, Tier } from "./classify.ts";
+import { redactSecrets } from "./shared/redact.ts";
 
 export type FeedbackRecord = {
   ts: string;
@@ -36,34 +37,10 @@ export const LEARN_WINDOW_MS = 30 * 86_400_000;
 const NEVER_LEARN_EFFECTS = new Set(["security_control", "destructive_system", "obfuscated_exec"]);
 const NEVER_LEARN_CODES = new Set(["secret_egress", "secret_upload", "shell_over_network", "unguarded_agent", "safety_env_override"]);
 
-// Secrets must not land in the feedback log.
-const SECRET_PATTERNS: RegExp[] = [
-  // An unterminated key is redacted to the end, so the first BEGIN consumes the rest of the text
-  // instead of every BEGIN re-scanning it for an END that is not there.
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
-  /\bsk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  // KEY=value, including a prefixed or suffixed key (DB_PASSWORD, GITLAB_TOKEN, AWS_SECRET_ACCESS_KEY,
-  // x-api-key). The keyword must start the key or follow an `_`-separated segment, and every run is
-  // bounded, so this stays linear on long identifier runs.
-  /(?<![A-Za-z0-9_])((?=(?:[A-Za-z0-9-]{0,32}_){0,4}(?:api[_-]?key|secret|token|password|passwd|pwd|auth)(?![a-z]))[A-Za-z0-9_-]{1,128}["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
-  // mysql/mariadb -p<password> (a bare -p prompts instead). Case-sensitive: -P is the port.
-  /(\b(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n|;&]{0,256}?\s-p)[^\s"',;|&]+/g,
-  // curl -u / --user / -U / --proxy-user user:password: the user is kept, the password redacted.
-  /(\bcurl\b[^\n|;&]{0,512}?\s(?:-u|--user|-U|--proxy-user)(?:\s+|=)?["']?[^\s"':]{1,256}:)[^\s"']+/g,
-  /\b((?:Authorization|Bearer)[:\s]+(?:Bearer\s+|token\s+|Basic\s+)?)[A-Za-z0-9._~+/=-]{12,}/gi,
-];
-
+// Secrets must not land in the feedback log, the audit log or the judge's records: the kit's
+// canonical table (./shared/redact.ts; tests/firewall-gate-smoke.ts, tests/redaction-corpus-smoke.ts).
 export function redact(text: string): string {
-  let out = text;
-  for (const re of SECRET_PATTERNS) out = out.replace(re, (m, prefix) => (typeof prefix === "string" && m.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]"));
-  return out;
+  return redactSecrets(text).text;
 }
 
 export function learnable(a: Assessment, tier: Tier): boolean {

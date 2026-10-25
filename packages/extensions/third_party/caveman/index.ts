@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 type Level = "off" | "lite" | "full" | "ultra" | "micro";
 
@@ -119,9 +120,8 @@ function buildDirective(level: Exclude<Level, "off">): string {
 
 function writeContribution(cwd: string, level: Exclude<Level, "off">): void {
   try {
-    const dir = contribDir(cwd);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
+    // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+    writeFileSafe(
       contribFile(cwd),
       JSON.stringify({
         id: CONTRIB_ID,
@@ -129,7 +129,7 @@ function writeContribution(cwd: string, level: Exclude<Level, "off">): void {
         budgetTokens: 512,
         content: buildDirective(level),
       }),
-      "utf8",
+      { root: cwd },
     );
   } catch {
     // Style is best-effort; never break the session.

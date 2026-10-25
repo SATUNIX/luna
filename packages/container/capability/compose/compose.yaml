@@ -27,12 +27,22 @@ services:
       PI_TELEMETRY: "0"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       PI_KIT_PROFILE: ${PI_KIT_PROFILE:-balanced}
+    # Loopback only: the health endpoint is unauthenticated (tests/compose-policy-smoke.ts).
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
     volumes:
       - type: bind
         source: ${PI_AGENT_DATA_ROOT:-/srv/data/pi-system}
         target: /srv/data/pi-system
+      # Engagement authority (scope, rules of engagement, tool policy) comes from a host-owned
+      # directory outside the data root, read-only, at the path pentest-governance-domain reads
+      # (<cwd>/engagement). An empty directory means "no engagement".
+      - type: bind
+        source: ${PI_ENGAGEMENT_DIR:-/srv/data/pi-system-engagement}
+        target: /workspace/engagement
+        read_only: true
+        bind:
+          create_host_path: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

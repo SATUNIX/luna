@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 
 import os from "node:os";
+import { inlineAgentConfigWrite } from "./shared/inline-guard.ts";
 
 // Protected paths depend on the firewall policy (the same `policy` tool-firewall reads):
 //   coding  — secrets, key files and the agent-control/audit surfaces. `.git/`,
@@ -24,6 +25,11 @@ const CODING_PROTECTED = [
   // The operator's goal: the firewall judge and the system prompt read it as operator intent, so only
   // the /goal command (goal-core, not a tool call) writes it.
   ".pi/GOAL.yaml",
+  // The kit's install marker: it names the installed profile (Memento eligibility) and the web console's source.
+  ".pi/.pi-kit.json",
+  // pi-mcp-adapter's project config: the MCP servers the next session in this workspace starts (and
+  // their sampling, elicitation and install switches). The firewall already rates a write here high.
+  ".pi/mcp-adapter.json",
   "packages/core/policies/",
   "packages/extensions/src/tool-firewall/default-policy.json",
 ];
@@ -74,6 +80,26 @@ function firewallStatePaths(): string[] {
     path.join(dir, "autonomy.json"),
     // The tool I/O capture log (tool-capture): the agent must not rewrite its own record.
     process.env.PI_KIT_CAPTURE_DIR?.trim() || path.join(dir, "capture"),
+  ].map(normalizeSlashes);
+}
+
+// What pi loads from the agent directory at the next start with no trust prompt (extensions, skills, prompts,
+// themes, installed packages, the system-prompt and global context files, settings, models, project trust, the
+// kit's install marker, pi-mcp-adapter's global mcp-adapter.json), the user's ~/.agents/skills, and the remote
+// host's state directory (the control secret and the device registry). A write to any of them plants code or authority for a later session.
+// tool-firewall classifies the same locations (classify.ts AGENT_AUTOLOAD, OPERATOR_AUTHORITY_FILES);
+// tests/protected-paths-corpus-smoke.ts runs one corpus against both hooks.
+const AGENT_AUTOLOAD = ["settings.json", "models.json", "auth.json", "trust.json", ".pi-kit.json", "SYSTEM.md", "APPEND_SYSTEM.md", "AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD", "mcp-adapter.json", "extensions", "skills", "prompts", "themes", "npm", "git"];
+function autoloadPaths(): string[] {
+  const agent = agentDir();
+  const defaultAgent = path.join(os.homedir(), ".pi", "agent");
+  const dirs = [...new Set([agent, defaultAgent])];
+  const remote = process.env.PI_REMOTE_STATE_DIR?.trim();
+  return [
+    ...dirs.flatMap((d) => AGENT_AUTOLOAD.map((name) => path.join(d, name))),
+    ...dirs.map((d) => path.join(d, "remote-control")),
+    ...(remote ? [remote] : []),
+    path.join(os.homedir(), ".agents", "skills"),
   ].map(normalizeSlashes);
 }
 
@@ -162,7 +188,7 @@ function getProtectedPaths(cwd: string): string[] {
   // whether or not the firewall accepted it.
   const contract = process.env.PI_KIT_UNATTENDED_CONTRACT?.trim();
   const contractPaths = contract ? [normalizeSlashes(path.resolve(cwd, normalizeSlashes(contract)))] : [];
-  return [...base, ...firewallStatePaths(), ".pi/human-console/", ".pi/human-console-audit.jsonl", ...dynamic, ...contractPaths];
+  return [...base, ...firewallStatePaths(), ...autoloadPaths(), ".pi/human-console/", ".pi/human-console-audit.jsonl", ...dynamic, ...contractPaths];
 }
 
 // Optional ALLOWLIST mode (Epic 6 Sprint 6.3, dream mode): when PI_KIT_WRITE_ALLOWLIST is
@@ -249,9 +275,9 @@ function isProtected(filePath: string, protectedList: string[], cwd: string): bo
 // Over-extraction is safe: every candidate is still checked against the real path
 // boundary in `isProtected`/`isAllowlisted`, and these patterns only fire on commands
 // that write, so plain reads are never matched.
-function bashWriteTargets(command: string): string[] {
+function directWriteTargets(command: string): string[] {
   const targets: string[] = [];
-  const stripQuotes = (t: string) => t.replace(/^["']|["']$/g, "");
+  const stripQuotes = (t: string) => expandHome(t.replace(/^["']|["']$/g, ""));
   const push = (value: string | undefined) => {
     const stripped = value ? stripQuotes(value) : "";
     if (stripped) targets.push(stripped);
@@ -261,6 +287,20 @@ function bashWriteTargets(command: string): string[] {
   for (const m of command.matchAll(/\btee\b(?:\s+-a)?\s+([^\s|;&]+)/g)) push(m[1]);
   // cp/mv: last argument is the destination that gets created/overwritten.
   for (const m of command.matchAll(/\b(?:cp|mv)\b(?:\s+-\S+)*\s+\S+\s+([^\s|;&]+)/g)) push(m[1]);
+  // touch/truncate/rm/unlink/chmod/chown/chgrp: every file operand is created, emptied, deleted or re-permissioned
+  // (tool-firewall rates these on a control path high). The mode/owner operand and a `truncate -s`/`-r` value are
+  // skipped, so allowlist mode does not mistake them for paths.
+  for (const m of command.matchAll(/(?<![\w.-])(touch|truncate|rm|unlink|chmod|chown|chgrp)\b((?:[ \t]+[^\s|;&<>()`]+)*)/g)) {
+    const words = (m[2] ?? "").trim().split(/\s+/).filter(Boolean);
+    let skipMode = /^ch/.test(m[1] ?? "") && !words.some((w) => w.startsWith("--reference"));
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i] ?? "";
+      if (m[1] === "truncate" && /^(?:-[sr]|--size|--reference)$/.test(w)) { i++; continue; }
+      if (w.startsWith("-") && !(skipMode && /^-[rwxXst]+$/.test(w))) continue;
+      if (skipMode) { skipMode = false; continue; }
+      push(w);
+    }
+  }
   // `dd of=<file>` (the output operand).
   for (const m of command.matchAll(/\bdd\b[^\n|;&]*?\bof=([^\s|;&]+)/g)) push(m[1]);
   // `sed -i`/`perl -i` rewrite every file operand in place. Scan all operands after the
@@ -282,7 +322,198 @@ function bashWriteTargets(command: string): string[] {
   for (const m of command.matchAll(/\bsponge\b(?:\s+-\S+)*\s+([^\s|;&]+)/g)) push(m[1]);
   // `python -c "open('file','w')..."` (w/a/x and binary/plus variants).
   for (const m of command.matchAll(/\bopen\s*\(\s*["']([^"']+)["']\s*,\s*["'][wax][bt+]*["']/g)) push(m[1]);
+  // Node, Python and Ruby writers with a literal target, and the destination of a literal copy or rename.
+  for (const m of command.matchAll(/\b(?:writeFileSync|appendFileSync|createWriteStream|writeFile|appendFile|write_text|write_bytes|file_put_contents|File\.write|IO\.write)\s*\(\s*["'`]([^"'`]+)["'`]/g)) push(m[1]);
+  for (const m of command.matchAll(/\bPath\s*\(\s*["']([^"']+)["']\s*\)\s*\.(?:write_text|write_bytes|touch|symlink_to|mkdir)/g)) push(m[1]);
+  for (const m of command.matchAll(/\b(?:copyFileSync|renameSync|cpSync|symlinkSync|copyFile|rename|copy2?|copyfile|copytree|move|replace|symlink)\s*\(\s*["'`][^"'`]+["'`]\s*,\s*["'`]([^"'`]+)["'`]/g)) push(m[1]);
+  // An inline program that names a protected path through a wrapper or a composition
+  // (`open(os.path.expanduser("~/.pi/agent/…"), "w")`, `Path.home()/".pi/agent/…"`).
+  targets.push(...inlineProgramTargets(command));
+  // Perl's `open(F, ">", "file")`, `open F, '>>', "file"` and two-argument `open(F, ">file")`.
+  for (const m of command.matchAll(/\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*["'](?:\+?>{1,2}|\+<)["']\s*,\s*["']([^"']+)["']/g)) push(m[1]);
+  for (const m of command.matchAll(/\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*["'](?:\+?>{1,2}|\+<)\s*([^"'\s][^"']*)["']/g)) push(m[1]);
+  // `ln <target> <link>` (hard or symbolic) and `cp -l`/`cp -s`: a link made to a protected path gives a second
+  // name for it, and a later write through that name changes the protected file.
+  for (const m of command.matchAll(/\bln\b((?:\s+-\S+)*)\s+([^\s|;&]+)\s+([^\s|;&]+)/g)) push(m[2]);
+  for (const m of command.matchAll(/\bcp\b((?:\s+-\S+)*)((?:\s+[^\s|;&-][^\s|;&]*)+)/g)) {
+    if (!/\s-[A-Za-z]*[ls]|\s--(?:link|symbolic-link)\b/.test(m[1] ?? "")) continue;
+    for (const source of (m[2] ?? "").trim().split(/\s+/).slice(0, -1)) push(source);
+  }
+  // Extraction and sync destinations: `tar -x … -C <dir>`, `unzip … -d <dir>`, `7z x -o<dir>`, and the last
+  // operand of `rsync`.
+  for (const m of command.matchAll(/\btar\b([^\n|;&]*)/g)) {
+    const args = m[1] ?? "";
+    if (!/(?:^|\s)-?[A-Za-z]*x[A-Za-z]*(?:\s|$)|--extract|--get/.test(args)) continue;
+    const dir = /(?:\s-C\s*|\s--directory[=\s]\s*)([^\s|;&]+)/.exec(args);
+    push(dir?.[1]);
+  }
+  for (const m of command.matchAll(/\bunzip\b[^\n|;&]*?\s-d\s*([^\s|;&]+)/g)) push(m[1]);
+  for (const m of command.matchAll(/\b7za?\b[^\n|;&]*?\s-o([^\s|;&]+)/g)) push(m[1]);
+  for (const m of command.matchAll(/\brsync\b[^\n|;&]*\s([^\s|;&-][^\s|;&]*)\s*(?:[|;&]|$)/gm)) push(m[1]);
+  // git: a clone destination, and the repository a working-tree command rewrites when it is named with -C (an
+  // extension cloned into an autoload directory and later pulled or checked out changes what pi loads).
+  for (const m of command.matchAll(/\bgit\b((?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*)\s+clone\b([^\n|;&]*)/g)) {
+    const ops: string[] = [];
+    const words = (m[2] ?? "").trim().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i] ?? "";
+      if (/^(?:-[obucj]|--(?:origin|branch|upload-pack|reference|reference-if-able|depth|shallow-since|shallow-exclude|config|jobs|filter|template|server-option|bundle-uri|ref-format|revision|separate-git-dir))$/.test(w)) { i++; continue; }
+      if (!w.startsWith("-")) ops.push(w);
+    }
+    const dir = /\s-C\s+(\S+)/.exec(m[1] ?? "")?.[1];
+    const dest = ops[1];
+    if (dest) push(dir && !/^[~/$]/.test(stripQuotes(dest)) ? `${stripQuotes(dir)}/${stripQuotes(dest)}` : dest);
+  }
+  for (const m of command.matchAll(new RegExp(`\\bgit\\b((?:\\s+-[Cc]\\s+\\S+|\\s+--[\\w-]+(?:=\\S+)?)*)\\s+(?:${GIT_TREE_WRITERS})\\b`, "g"))) {
+    const dir = /\s-C\s+(\S+)/.exec(m[1] ?? "")?.[1] ?? /\s--work-tree[=\s](\S+)/.exec(m[1] ?? "")?.[1];
+    push(dir);
+  }
   return targets.filter(Boolean);
+}
+
+// Calls that can create, change, copy onto or move onto a file in the inline languages (Python open/os.open/pathlib/
+// shutil/os, Node fs and streams, Deno, Bun, Ruby, PHP, Perl). tool-firewall keeps the same list (classify.ts
+// INLINE_WRITE_API).
+const INLINE_INTERPRETER = /\b(?:python[0-9.]*|pypy3?|node(?:js)?|deno|bun|perl|ruby|php)\b/;
+const INLINE_WRITE_API = new RegExp([
+  String.raw`\b(?:open|openSync|fopen)\s*\([^;\n]*?,\s*(?:mode\s*=\s*|flags\s*:\s*)?['"\x60][rwaxbt+c]*[wax+c][rwaxbt+c]*['"\x60]`,
+  String.raw`\.open\s*\(\s*(?:mode\s*=\s*)?['"][rwaxbt+]*[wax+][rwaxbt+]*['"]`,
+  String.raw`\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b`,
+  String.raw`\b(?:write_text|write_bytes|symlink_to|hardlink_to)\s*\(`,
+  String.raw`\.(?:touch|rename)\s*\(`,
+  String.raw`\)\s*\.replace\s*\(\s*(?!['"/])`,
+  String.raw`\bos\.(?:rename|renames|replace|symlink|link|truncate|write)\s*\(`,
+  String.raw`\bshutil\.(?:copy\w*|move)\s*\(`,
+  String.raw`\b(?:writeFile|appendFile|copyFile|rename|cp|symlink|link|truncate|writeTextFile)(?:Sync)?\s*\(`,
+  String.raw`\bcreateWriteStream\s*\(`,
+  String.raw`\bBun\.write\s*\(`,
+  String.raw`\bDeno\.(?:create|open)(?:Sync)?\s*\(`,
+  String.raw`\b(?:File\.(?:write|rename|symlink|link)|IO\.write|FileUtils\.\w+|file_put_contents)\s*\(?`,
+  String.raw`\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*['"]\s*(?:\+?>|\+<)`,
+].join("|"));
+
+// When a command runs an inline interpreter whose program has a write-capable call, every path the program
+// spells is a write target (fail closed: the write cannot be traced to the call that makes it). An absolute or
+// `~` literal is a target as written. The literal parts of a path composed at runtime (a literal appended to a
+// runtime value with `/` or `+`, the literal arguments of a join call that also takes a runtime value, the text
+// after an interpolation, and every literal after a `chdir`) are targets under the home directory, ~/.pi, the
+// agent directories and, through dynamicMayBeProtected, any protected entry they end in.
+// tool-firewall applies the same rule (classify.ts inlineControlLiteral).
+function inlineProgramTargets(command: string): string[] {
+  if (!INLINE_INTERPRETER.test(command) || !INLINE_WRITE_API.test(command)) return [];
+  // The program is usually one quoted shell word (`python3 -c '…'`): read its body as well as the raw text.
+  const programs = [command, ...[...command.matchAll(/'([^']*)'/g)].map((m) => m[1] ?? ""), ...[...command.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => (m[1] ?? "").replace(/\\(.)/g, "$1"))];
+  return [...new Set(programs.flatMap((p) => inlineTargetsOf(p)))];
+}
+
+function inlineTargetsOf(command: string): string[] {
+  const lits: { s: string; at: number; end: number }[] = [];
+  for (const m of command.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) lits.push({ s: m[2] ?? "", at: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  const exact = new Set<string>();
+  const tails = new Set<string>();
+  const chdir = /\bchdir\b/.test(command);
+  for (let i = 0; i < lits.length; i++) {
+    const l = lits[i];
+    if (!l) continue;
+    if (/^~(?:\/|$)|^\//.test(l.s)) exact.add(l.s);
+    const interpolated = l.s.replace(/^[\s\S]*[})]/, "");
+    if (interpolated !== l.s) tails.add(interpolated);
+    if (chdir || /[/+]\s*$/.test(command.slice(0, l.at))) {
+      let run = l.s;
+      for (let k = i + 1; k < lits.length; k++) {
+        const prev = lits[k - 1];
+        const next = lits[k];
+        if (!prev || !next || !/^\s*[/+]\s*$/.test(command.slice(prev.end, next.at))) break;
+        run = `${run}/${next.s}`;
+      }
+      tails.add(l.s);
+      tails.add(run);
+    }
+  }
+  for (const m of command.matchAll(/\b(?:join|joinpath|resolve|Path|PurePath|PosixPath|expand_path)\s*\(/g)) {
+    const start = (m.index ?? 0) + m[0].length;
+    let depth = 1;
+    let j = start;
+    for (; j < command.length && depth > 0; j++) {
+      const ch = command.charAt(j);
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+    }
+    const inside = lits.filter((l) => l.at >= start && l.end <= j);
+    if (!inside.length) continue;
+    let rest = command.slice(start, j - 1);
+    for (const l of [...inside].reverse()) rest = rest.slice(0, l.at - start) + rest.slice(l.end - start);
+    const joined = inside.map((l) => l.s).join("/");
+    if (/^~(?:\/|$)|^\//.test(joined)) exact.add(joined);
+    if (chdir || /[^\s,]/.test(rest)) for (let k = 0; k < inside.length; k++) tails.add(inside.slice(k).map((l) => l.s).join("/"));
+  }
+  const out = [...exact].map((t) => expandHome(t));
+  const roots = [...new Set([os.homedir(), path.join(os.homedir(), ".pi"), agentDir(), path.join(os.homedir(), ".pi", "agent")])];
+  for (const t of tails) {
+    const rel = t.replace(/^~?\/+/, "").replace(/\/{2,}/g, "/");
+    if (rel.split("/").filter(Boolean).length < 2 || /[\s`$]/.test(rel)) continue;
+    for (const root of roots) out.push(path.join(root, rel));
+    out.push(`$X/${rel}`);
+  }
+  return out.filter((t) => t.length > 0 && t.length < 4096);
+}
+
+// git subcommands that rewrite files in the working tree.
+const GIT_TREE_WRITERS = "pull|checkout|switch|restore|reset|merge|rebase|cherry-pick|revert|am|apply|stash|submodule|mv|rm|clean|read-tree|checkout-index|sparse-checkout";
+
+// bash write targets, with `cd`/`pushd` followed: a relative target after `cd <dir> &&` is under <dir>, and a
+// working-tree git command there (`cd <repo> && git pull`) rewrites <dir>. The split on list operators is
+// textual; over-extraction is safe because every candidate is still checked against the protected list.
+function bashWriteTargets(command: string): string[] {
+  const targets = directWriteTargets(command);
+  if (!/\b(?:cd|pushd)\b/.test(command)) return targets;
+  let dir: string | undefined;
+  for (const piece of command.split(/&&|\|\||;|\n/)) {
+    const cd = /^\s*(?:cd|pushd)\s+([^\s|&;]+)\s*$/.exec(piece);
+    if (cd?.[1]) {
+      const to = expandHome(cd[1].replace(/^["']|["']$/g, ""));
+      dir = path.isAbsolute(to) || dir === undefined ? to : path.join(dir, to);
+      continue;
+    }
+    if (dir === undefined) continue;
+    const base = dir;
+    for (const t of directWriteTargets(piece)) targets.push(path.isAbsolute(t) ? t : path.join(base, t));
+    if (new RegExp(`\\bgit\\b(?![^\\n]*\\s-C\\s)[^\\n]*?\\s(?:${GIT_TREE_WRITERS})\\b`).test(piece)) targets.push(base);
+  }
+  return targets;
+}
+
+// `~`, `$HOME`, `${HOME}` and the agent-directory variables are expanded the way the shell would expand
+// them, so `echo x > ~/.pi/agent/...` names the same file as the absolute path.
+function expandHome(target: string): string {
+  const agent = process.env.PI_CODING_AGENT_DIR?.trim();
+  let t = target.replace(/^~(?=\/|$)/, os.homedir()).replace(/^\$\{?HOME\}?(?=\/|$)/, os.homedir());
+  if (agent) t = t.replace(/^\$\{?PI_CODING_AGENT_DIR\}?(?=\/|$)/, agent);
+  return t;
+}
+
+// A target built at runtime (`$DIR/firewall.json`, `$(dirname x)/.pi/auto-mode.json`) cannot be resolved
+// here. When the literal part after the last expansion ends with a protected entry, it is treated as that
+// entry (fail closed); tool-firewall applies the same rule (runtime_control_write). Any other dynamic
+// target is not resolved here.
+function dynamicTail(target: string): string | null {
+  if (!/\$|`/.test(target)) return null;
+  const tail = target.replace(/^[\s\S]*(?:\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[@*#?$!0-9])/, "");
+  return tail.startsWith("/") ? tail.replace(/\/+$/, "") : null;
+}
+
+function dynamicMayBeProtected(target: string, protectedList: string[]): boolean {
+  const tail = dynamicTail(target);
+  if (!tail) return false;
+  const base = tail.split("/").pop() ?? "";
+  if (base === ".env.example" || base === ".env.sample") return false;
+  return protectedList.some((entry) => {
+    const e = normalizeSlashes(entry).replace(/\/+$/, "").replace(/^\.\//, "");
+    if (!e.includes("/")) return tail.split("/").includes(e) || (tail.split("/").pop() ?? "").startsWith(`${e}.`);
+    // Relative entries match as a suffix; absolute ones by their last two segments (`pi-kit/firewall.json`).
+    const rel = path.isAbsolute(e) ? e.split("/").slice(-2).join("/") : e;
+    return tail.endsWith(`/${rel}`) || tail.includes(`/${rel}/`);
+  });
 }
 
 // sed/perl inline programs (`s/…/…/`, `y/…/…/`, a quoted one-liner) are code, not file
@@ -362,7 +593,16 @@ export default function (pi: ExtensionAPI) {
       if (ctx.hasUI) ctx.ui.notify(msg, "warning");
       return { block: true, reason: msg };
     }
-    if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value) : [field.value];
+    // Coarse and fail closed: inline interpreter code that mentions agent configuration and can write or
+    // exec is blocked even when no literal target is visible (./shared/inline-guard.ts).
+    const inline = toolName === "bash" && field?.value ? inlineAgentConfigWrite(field.value) : null;
+    if (inline) {
+      const msg = `protected-paths: blocked ${toolName}: ${inline}`;
+      if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+      return { block: true, reason: msg };
+    }
+    // The shell deletes a backslash-newline before splitting words; read the command as it will run.
+    if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value.replace(/\\\r?\n/g, "")) : [field.value];
     if (candidatePaths.length === 0) return undefined;
 
     const git = trustedGitControl(cwd);
@@ -376,7 +616,7 @@ export default function (pi: ExtensionAPI) {
     for (const filePath of candidatePaths) {
       // Denylist always applies.
       const candidateAbs = canonicalPath(path.resolve(cwd, normalizeSlashes(filePath)));
-      if (isProtected(filePath, protectedList, cwd) || git.links.some((link) => canonicalPath(link) === candidateAbs)) {
+      if (isProtected(filePath, protectedList, cwd) || dynamicMayBeProtected(filePath, protectedList) || git.links.some((link) => canonicalPath(link) === candidateAbs)) {
         const msg = `protected-paths: blocked ${toolName} to protected path: ${filePath}`;
         if (ctx.hasUI) ctx.ui.notify(msg, "warning");
         return { block: true, reason: msg };

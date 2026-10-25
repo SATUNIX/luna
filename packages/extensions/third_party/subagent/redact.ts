@@ -7,12 +7,17 @@
  *     src/trace-ledger/index.ts, in the same order and with the same replacements;
  *   - SECRET_GUARD_CONTENT_PATTERNS are SECRET_CONTENT_PATTERNS in src/secret-guard/index.ts.
  * tests/workflow-redaction-smoke.ts fails when either copy stops being byte-identical to its source.
+ * After those rules, the kit's canonical table runs too (./shared/redact.ts, generated from
+ * packages/core/shared/redact.ts), so a run file masks every shape the memory vault and the
+ * firewall's records mask (tests/redaction-corpus-smoke.ts).
  *
  * The work is linear in the text length. One copied rule (the URL user:password rule) backtracks
  * quadratically when run over a long colon-filled run with no "@", so it is only ever run on a
  * slice that ends at that "@" (redactUrlCredentials), where it matches in one pass. A private key
  * header with no END line redacts everything after it.
  */
+
+import { redact as redactKitSecrets } from "./shared/redact.ts";
 
 // Copied from src/trace-ledger/index.ts targetOf(); keep byte-identical.
 export const TRACE_LEDGER_RULES: ReadonlyArray<readonly [RegExp, string]> = [
@@ -92,6 +97,7 @@ export function redactText(text: string): { text: string; redacted: boolean } {
     // An "aws_secret_access_key =" match is the key name only, so the value after it goes too.
     out = label === "AWS secret access key" ? out.replace(new RegExp(`(${re.source}\\s*["']?)[^\\s"']+`, `${re.flags}g`), `$1${MARK}`) : out.replace(global(re), MARK);
   }
+  out = redactKitSecrets(out);
   return { text: out, redacted: out !== text };
 }
 

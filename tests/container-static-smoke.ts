@@ -48,6 +48,20 @@ try {
   assert.match(badPin.stderr, /PI_CODING_AGENT_VERSION/);
   fs.writeFileSync(dockerfile, original);
 
+  const tools = path.join(cdir, "tools", "package.json");
+  const toolsOriginal = fs.readFileSync(tools, "utf8");
+  fs.writeFileSync(tools, toolsOriginal.replace('"pi-mcp-adapter": "6.0.0"', '"pi-mcp-adapter": "^6.0.0"'));
+  const badTools = validate();
+  assert.notEqual(badTools.status, 0, "a tools manifest that stops pinning the adapter exactly (or drifts from its lockfile) must fail");
+  assert.match(badTools.stderr, /pi-mcp-adapter/);
+  fs.writeFileSync(tools, toolsOriginal);
+  const settingsOverlay = path.join(cdir, "overlays", "pi", "settings.json");
+  const settingsOriginal = fs.readFileSync(settingsOverlay, "utf8");
+  fs.writeFileSync(settingsOverlay, settingsOriginal.replace('"/opt/pi-agent/tools/node_modules/pi-mcp-adapter"', '"npm:pi-mcp-adapter@6.0.0"'));
+  const npmAdapter = validate();
+  assert.notEqual(npmAdapter.status, 0, "registering the adapter from npm (fetched at start, unlocked) must fail");
+  fs.writeFileSync(settingsOverlay, settingsOriginal);
+
   const mcp = path.join(cdir, "overlays", "pi", "mcp-adapter.json");
   const mcpOriginal = fs.readFileSync(mcp, "utf8");
   fs.writeFileSync(mcp, mcpOriginal.replace('"autoAuth": false', '"autoAuth": true'));
@@ -101,6 +115,39 @@ try {
   }
   assert.ok(!fs.existsSync(path.join(home, ".pi", "agent")), "entrypoint must not seed $HOME/.pi/agent, which pi does not read when PI_CODING_AGENT_DIR is set");
 
+  // mcp-adapter.json is replaced from the image at every start (an agent edit never becomes the
+  // baseline), a settings.json from an older image is pointed at the baked adapter, and the
+  // readiness check fails while the live config differs from the overlay.
+  const agentDir = path.join(rt, "agent");
+  const liveAdapter = path.join(agentDir, "mcp-adapter.json");
+  const overlayAdapter = fs.readFileSync(path.join(dir, "overlays", "pi", "mcp-adapter.json"), "utf8");
+  const readiness = () => spawnSync("python3", [path.join(scripts, "validate-runtime-readiness.py")], { cwd: dir, encoding: "utf8", env: { ...process.env, PI_AGENT_DATA_ROOT: data, PI_CODING_AGENT_DIR: agentDir } });
+  assert.equal(readiness().status, 0, `readiness passes on a freshly seeded agent dir:\n${readiness().stderr}`);
+  fs.writeFileSync(liveAdapter, overlayAdapter.replace('"autoAuth": false', '"autoAuth": true'));
+  const drifted = readiness();
+  assert.notEqual(drifted.status, 0, "readiness fails while the live mcp-adapter.json differs from the overlay");
+  assert.match(drifted.stdout + drifted.stderr, /differs from overlays\/pi\/mcp-adapter\.json/);
+  fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultModel: "kept", packages: ["npm:pi-mcp-adapter@6.0.0", "/opt/pi-system"], extensions: [] }));
+  const again = spawnSync("bash", [path.join(scripts, "entrypoint.sh"), "true"], { encoding: "utf8", env: { ...baseEnv, PI_AGENT_DATA_ROOT: data, PI_AGENT_OVERLAY_DIR: path.join(dir, "overlays", "pi") } });
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(fs.readFileSync(liveAdapter, "utf8"), overlayAdapter, "the entrypoint restores mcp-adapter.json from the image at every start");
+  assert.match(fs.readFileSync(`${liveAdapter}.replaced`, "utf8"), /"autoAuth": true/, "the edited copy is kept beside it for the operator");
+  assert.match(again.stdout, /WARN: .*mcp-adapter\.json differed/);
+  const migrated: unknown = JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"));
+  // The image installs jq; a host without it (GitLab CI's node image) gets the warning instead.
+  if (spawnSync("sh", ["-c", "command -v jq"]).status === 0) {
+    assert.deepEqual(migrated, { defaultModel: "kept", packages: ["/opt/pi-system", "/opt/pi-agent/tools/node_modules/pi-mcp-adapter"], extensions: ["-builtin:mcp"] }, "an npm adapter entry is replaced by the baked path; other settings are kept");
+  } else {
+    assert.match(again.stdout, /WARN: jq not found; .*settings\.json was not checked/, "without jq the entrypoint says the settings migration did not run");
+    assert.deepEqual(migrated, { defaultModel: "kept", packages: ["npm:pi-mcp-adapter@6.0.0", "/opt/pi-system"], extensions: [] }, "without jq settings.json is left as it was");
+    const unmigrated = readiness();
+    assert.notEqual(unmigrated.status, 0, "readiness fails while settings.json still installs the adapter from npm");
+    assert.match(unmigrated.stdout + unmigrated.stderr, /installs pi-mcp-adapter from npm/);
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultModel: "kept", packages: ["/opt/pi-system", "/opt/pi-agent/tools/node_modules/pi-mcp-adapter"], extensions: ["-builtin:mcp"] }));
+    console.log("  NOTE: jq not on PATH, so the settings.json migration was checked only for its warning and the readiness refusal");
+  }
+  assert.equal(readiness().status, 0, `readiness passes again after a restart:\n${readiness().stderr}`);
+
   const health = (root: string) => spawnSync("python3", [path.join(scripts, "healthcheck.py"), "--check"], { encoding: "utf8", env: { ...process.env, PI_AGENT_DATA_ROOT: root, PI_AGENT_HEALTH_PORT: "1" } });
   const healthy = health(data);
   assert.equal(healthy.status, 0, `--check on a writable data root must pass without a server:\n${healthy.stderr}`);
@@ -114,4 +161,4 @@ try {
   fs.rmSync(rt, { recursive: true, force: true });
 }
 
-console.log("[container-static-smoke] OK (preflight passes; a drifted pin and a loosened MCP flag are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR, and --check needs no server)");
+console.log("[container-static-smoke] OK (preflight passes; a drifted pin and a loosened MCP flag are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR and restores mcp-adapter.json each start, readiness fails on a drifted live config, and --check needs no server)");

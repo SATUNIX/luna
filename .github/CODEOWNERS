@@ -1,6 +1,10 @@
-# Owner review for CI/CD, release tooling, delivery, the installer and the security layer.
-# With "Require review from Code Owners" enabled in the main branch rules, a change to any path
-# below needs the owner's approval; the one required approval on main covers everything else.
+# Owner review for CI/CD, release tooling, delivery, the installer, the security layer and the
+# checks that gate them. The main branch ruleset declared in .github/expected-settings.json
+# requires code owner review (with one approval and approval of the last push), so a change to any
+# path below needs the owner's approval. GitHub enforces the ruleset; this file only names the
+# owners. The maintainers' read-only drift check (docs/ci-security.md, "Repository settings")
+# reports when the live rules differ from the declared ones.
+# tests/codeowners-coverage-smoke.ts fails when a control path is not owned here.
 /.github/                                        @SATUNIX
 /.gitleaks.toml                                  @SATUNIX
 /SECURITY.md                                     @SATUNIX
@@ -13,6 +17,33 @@
 /docs/autonomy-gate.md                           @SATUNIX
 /docs/releasing.md                               @SATUNIX
 /docs/repository-topology.md                     @SATUNIX
+/docs/security-standard.md                       @SATUNIX
+/docs/security-controls.md                       @SATUNIX
+/docs/threat-model.md                            @SATUNIX
+/docs/vulnerability-management.md                @SATUNIX
+/docs/incident-response.md                       @SATUNIX
+/docs/operator-checklist.md                      @SATUNIX
+/.semgrepignore                                  @SATUNIX
+/.gitattributes                                  @SATUNIX
+/AGENTS.md                                       @SATUNIX
+/CLAUDE.md                                       @SATUNIX
+/eslint.config.ts                                @SATUNIX
+/tsconfig*.json                                  @SATUNIX
+/mkdocs.yml                                      @SATUNIX
+/requirements-docs.*                             @SATUNIX
+/tests/                                          @SATUNIX
+/apps/android/gradle/                            @SATUNIX
+/apps/android/gradlew                            @SATUNIX
+/apps/android/gradlew.bat                        @SATUNIX
+/packages/core/check-all.ts                      @SATUNIX
+/packages/core/verify.ts                         @SATUNIX
+/packages/core/pack-check.ts                     @SATUNIX
+/packages/core/build-npm.ts                      @SATUNIX
+/packages/core/release-notes.ts                  @SATUNIX
+/packages/core/gitlab-release.ts                 @SATUNIX
+/packages/core/profile-check.ts                  @SATUNIX
+/packages/core/lib/wiring.ts                     @SATUNIX
+/packages/core/scan-suppressions.json            @SATUNIX
 /packages/core/distribution.json                 @SATUNIX
 /packages/core/sources.json                      @SATUNIX
 /packages/core/policies/                         @SATUNIX

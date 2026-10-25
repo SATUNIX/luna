@@ -18,7 +18,7 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.7
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
 pi
 ```
 
@@ -27,8 +27,8 @@ interactive start the kit applies the `balanced` profile and asks for a `/reload
 `PI_KIT_AUTO_PROFILE=<name>` to pick another profile, or `0` to leave the package unfiltered.
 
 The repository is public, so no credentials are involved. pi runs `npm install --omit=dev` in
-its copy of the kit, as it does for every git package; the kit has no runtime dependencies of
-its own, so that step fetches nothing from the npm registry.
+its copy of the kit, as it does for every git package; that step fetches the kit's one runtime
+dependency from the npm registry ([Supply chain](supply-chain.md)).
 
 ## The scripted installer
 
@@ -159,12 +159,31 @@ The same precedence is used by the runtime readers that resolve install state (`
 ## Memory backends (`self-improving` profile — experimental)
 
 `packages/container/mcp-servers/memory-mcp/docker-compose.yml` starts a Qdrant vector store
-(`qdrant/qdrant` v1.20.0, pinned by digest) on port 6333, or `QDRANT_PORT`, with its data in the
-`qdrant-data` volume:
+(`qdrant/qdrant` v1.20.0, the unprivileged image, pinned by digest) with its data in the
+`qdrant-data` volume. The store holds memories a mem0 server later puts into prompts, so the compose
+file never publishes it unauthenticated:
+
+- the port binds `127.0.0.1` only (6333, or `QDRANT_PORT`); nothing on the network can reach it;
+- `QDRANT_API_KEY` is required: `docker compose` refuses to start without it, and Qdrant answers
+  `401` to any request that does not send the key in an `api-key` header. Give your mem0 server the
+  same key;
+- the container runs as a non-root user (uid 1000) with every capability dropped and
+  `no-new-privileges`.
+
+`tests/compose-policy-smoke.ts` checks the loopback bind, the required key and the hardening options
+in this file. It does not run Qdrant; the `401` was checked by hand against the pinned image.
 
 ```sh
+export QDRANT_API_KEY="$(openssl rand -hex 32)"
 docker compose -f packages/container/mcp-servers/memory-mcp/docker-compose.yml up -d
 ```
+
+To reach the store from another machine, put an authenticated, TLS-terminating proxy in front of it
+rather than widening the bind.
+
+**A volume first created by the root-run image** is owned by root, which the unprivileged image
+cannot write. Give it to uid 1000 once before starting:
+`docker run --rm -v pi-kit-memory-mcp_qdrant-data:/data alpine chown -R 1000:1000 /data`.
 
 No kit code talks to it. The memory MCP server keeps its records in SQLite and JSONL files under
 `PI_KIT_MEMORY_MCP_DATA_ROOT` and does not use Qdrant; the store is there for a mem0 server you run

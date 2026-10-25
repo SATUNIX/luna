@@ -57,15 +57,20 @@ An unreachable endpoint is a warning by default. For deployment gates that must 
 
 ## Engagement Files
 
-Pi System overlays should provide live versions of:
+Put the live versions of these files in a host directory, `PI_ENGAGEMENT_DIR`
+(`/srv/data/pi-system-engagement` by default, outside the data root):
 
 ```text
-engagement/scope.yaml
-engagement/roe.yaml
-engagement/tool-policy.json
+scope.yaml
+roe.yaml
+tool-policy.json
 ```
 
-The committed `*.example.yaml` files are examples only.
+The compose files mount that directory **read-only** at `/workspace/engagement`, where
+`pentest-governance-domain` reads it, so the agent cannot widen its own scope or tool policy from
+inside the container; edit the files on the host. An empty directory means no engagement. The
+mount is checked by `tests/compose-policy-smoke.ts`. The committed `*.example.yaml` files are
+examples only.
 
 Validate overlay shape before a session:
 

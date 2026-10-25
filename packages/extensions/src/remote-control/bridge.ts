@@ -119,6 +119,7 @@ type DialogAnswer = string | boolean | undefined;
 
 interface OpenDialog {
   method: DialogMethod;
+  title: string;
   options?: string[] | undefined;
   answer: (value: DialogAnswer) => void;
 }
@@ -631,6 +632,17 @@ export class SessionBridge {
         }
         dialog.answer(value);
         reply({ answered: true });
+        // The host names the phone that answered: say so at the terminal, so an approval given from
+        // a phone is never silent here (the host audits it with the device ID too).
+        if (isRecord(msg.by) && typeof msg.by.name === "string" && typeof msg.by.display === "string") {
+          const shown = typeof value === "string" ? (dialog.method === "select" ? value : "typed text") : value === true ? "yes" : value === false ? "no" : "cancelled";
+          try {
+            const ui = ctx?.ui;
+            if (ui) terminalUi(ui).notify(`remote: "${msg.by.name.slice(0, 64)}" (${msg.by.display.slice(0, 24)}) answered "${dialog.title.split("\n")[0]?.slice(0, 80) ?? ""}" from the phone: ${shown.slice(0, 80)}`, "info");
+          } catch {
+            /* session ended */
+          }
+        }
         return;
       }
       default:
@@ -715,6 +727,7 @@ export class SessionBridge {
       };
       this.dialogs.set(id, {
         method,
+        title: fields.title,
         options: fields.options,
         answer: (value) => {
           if (settled) return;

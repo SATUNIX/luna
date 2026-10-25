@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveSessionId, todoFilePath, readTodos as readTodoFile } from "./todo-read.ts";
+import { openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 
 // verifier-board: the definition-of-done gate. Checks, reviewers, and validators record
 // verdicts here. The orchestrator flow must not report a mission complete until the board
@@ -60,16 +61,12 @@ function load(cwd: string): Board {
 }
 
 // Atomic write: temp file + rename, so a concurrent reader (e.g. orchestrator's
-// missionCompleteBlocked) never observes a partially-written board (M-04).
+// missionCompleteBlocked) never observes a partially-written board.
 function save(cwd: string, b: Board): void {
-  const dir = path.join(cwd, ".pi");
-  fs.mkdirSync(dir, { recursive: true });
   // Monotonic generation counter (AG-04: "atomically persist verdict generations").
   b.generation = (b.generation ?? 0) + 1;
-  const file = boardPath(cwd);
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(b, null, 2), "utf8");
-  fs.renameSync(tmp, file);
+  // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+  writeFileSafe(boardPath(cwd), JSON.stringify(b, null, 2), { root: cwd });
 }
 
 // Cross-process advisory lock around board mutations (O_EXCL lockfile + stale takeover, the
@@ -81,10 +78,11 @@ function withBoardLock<T>(cwd: string, operation: () => T): { ok: true; value: T
   const lock = path.join(cwd, ".pi", "verdicts.lock");
   let fd: number | undefined;
   try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    try { fd = fs.openSync(lock, "wx"); } catch {
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
-      try { fd = fs.openSync(lock, "wx"); } catch { return { ok: false, reason: "verifier board is busy or unreadable" }; }
+    fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+    if (fd === undefined) {
+      try { if (Date.now() - fs.lstatSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
+      fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+      if (fd === undefined) return { ok: false, reason: "verifier board is busy or unreadable" };
     }
     try { return { ok: true, value: operation() }; } finally {
       try { if (fd !== undefined) fs.closeSync(fd); } catch { /* release best effort */ }

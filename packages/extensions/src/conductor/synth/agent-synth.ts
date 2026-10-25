@@ -2,6 +2,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
+import { appendFileSafe, writeFileSafe } from "../shared/safe-fs.ts";
 
 // Skills live in the kit (packages/kit/skills), the operator's ~/.pi/agent/skills, or the
 // project (.pi/skills, legacy ./skills). Only cwd/skills was checked before, which exists in
@@ -61,9 +62,7 @@ function shortHash(value: string): string {
 // Kept local to preserve conductor's self-containment without changing Phase 1 exports.
 function appendTrace(cwd: string, entry: TraceEntry): void {
   try {
-    const file = path.join(cwd, ".pi", "trace.jsonl");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf8");
+    appendFileSafe(path.join(cwd, ".pi", "trace.jsonl"), JSON.stringify(entry) + "\n", { root: cwd });
   } catch {
     /* best effort: audit logging never breaks synthesis */
   }
@@ -88,11 +87,9 @@ function auditSynthesis(cwd: string, input: SynthesisInput, target: string, stat
   });
 }
 
-function writeAtomically(file: string, content: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temp, content, "utf8");
-  fs.renameSync(temp, file);
+// Workspace state is written without following committed symlinks (../shared/safe-fs.ts).
+function writeAtomically(cwd: string, file: string, content: string): void {
+  writeFileSafe(file, content, { root: cwd });
 }
 
 export function synthesizeAgent(cwd: string, input: SynthesisInput): SynthesisResult {
@@ -162,7 +159,7 @@ export function writeSynthesizedAgent(cwd: string, input: SynthesisInput): Synth
   }
 
   try {
-    writeAtomically(path.join(cwd, ".pi", "agents", `${result.name}.md`), result.markdown);
+    writeAtomically(cwd, path.join(cwd, ".pi", "agents", `${result.name}.md`), result.markdown);
   } catch (error) {
     const reason = `failed to write synthesized agent ${result.name}: ${error instanceof Error ? error.message : String(error)}`;
     auditSynthesis(cwd, input, reason, "error");

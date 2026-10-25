@@ -21,7 +21,8 @@ import * as gm from "../gitmirror.ts";
 import type { RunState, SelfImproveState } from "../lifecycle.ts";
 import { decide } from "../manager.ts";
 import { promotionTargets } from "../promotion.ts";
-import { type CycleReview, reviewCycle } from "../review.ts";
+import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, reviewCriticalPaths, reviewCycle, scriptTargets } from "../review.ts";
+import { globProblem } from "../glob.ts";
 import type { RunConfig } from "../runcfg.ts";
 import { type ReportMode, type ReportOutcome, nothingFoundInARow, reportOutcome } from "../triggers.ts";
 import { isPlainObject, writeJsonAtomic } from "../fsutil.ts";
@@ -125,6 +126,15 @@ function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
     if (memory !== undefined && !(typeof memory === "string" && isPositiveSize(memory))) err("templateOptions.gate.memory", 'must be a size above zero, like "6g": the container engines read 0 as no limit');
     if (cpus !== undefined && !(typeof cpus === "string" ? isPositiveCpus(cpus) : typeof cpus === "number" && cpus > 0)) err("templateOptions.gate.cpus", 'must be a number above zero, like "4": the container engines read 0 as no limit');
   }
+  const integration = isPlainObject(t["integration"]) ? t["integration"] : {};
+  const controlPaths = integration["controlPaths"];
+  if (controlPaths !== undefined) {
+    if (!Array.isArray(controlPaths) || controlPaths.length > 100) err("templateOptions.integration.controlPaths", "must be an array of at most 100 repository path globs");
+    else for (const [i, glob] of controlPaths.entries()) { const problem = globProblem(glob); if (problem) err(`templateOptions.integration.controlPaths[${i}]`, problem); }
+  }
+  const allowControl = integration["allowControlChanges"];
+  if (allowControl !== undefined && typeof allowControl !== "boolean") err("templateOptions.integration.allowControlChanges", "must be true or false");
+  if (allowControl === true) warn("templateOptions.integration.allowControlChanges", `cycles may change ${CHARTER_PATH}, the controlPaths and package.json scripts; the merge review is then the only check on them`);
   if (typeof ib !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$/.test(ib) || ib.includes("..") || ib.endsWith("/") || ib.endsWith(".lock")) err("templateOptions.integration.branch", "must be a valid branch name");
   else if (["main", "master", "head", "trunk", "develop", "development", "production", "prod", "stable"].includes(ib.toLowerCase()) || /^(release|releases|hotfix|refs)(\/|$)/i.test(ib) || ib === repo?.ref) err("templateOptions.integration.branch", `"${ib}" is a protected name or the base ref; the integration branch is a separate branch a person reviews and merges from`);
   const l = isPlainObject(t["limits"]) ? t["limits"] : {};
@@ -378,6 +388,26 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult): Pro
   log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}cycle-${pad(n)}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
 }
 
+/** templateOptions.integration's review-input options (validated in validate()). */
+function integrationOptions(contract: RunContract): { controlPaths: string[]; allowControlChanges: boolean } {
+  const integration = contract.templateOptions["integration"];
+  const o = isPlainObject(integration) ? integration : {};
+  const paths = o["controlPaths"];
+  return {
+    controlPaths: Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [],
+    allowControlChanges: o["allowControlChanges"] === true,
+  };
+}
+
+/** The files the root package.json and every changed package.json name in their scripts, on either side of the cycle. */
+function gateEntries(files: readonly string[], before: (f: string) => string | null, after: (f: string) => string | null): string[] {
+  const manifests = new Set(["package.json", ...files.filter((f) => f.endsWith("/package.json"))]);
+  return [...manifests].flatMap((f) => {
+    const dir = f === "package.json" ? "" : f.slice(0, -"/package.json".length);
+    return [...scriptTargets(before(f), dir), ...scriptTargets(after(f), dir)];
+  });
+}
+
 /** Only a completed cycle with commits and a green gate is reviewed; only a MERGE verdict merges. */
 async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, changed, gate }: { result: CycleResult; sha: string; start: string; changed: boolean; gate: CycleGate }): Promise<MergeDecision> {
   const { rt, repo, log } = ctx;
@@ -385,13 +415,27 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   if (!changed) return { merge: false, reason: "no commits" };
   if (result.outcome !== "completed") return { merge: false, reason: `cycle ${result.outcome} (${result.reason})` };
   if (!gate.green) return { merge: false, reason: "acceptance checks failed" };
+  // Review inputs are never worker-authored (lib/review.ts): control-path changes and an
+  // over-budget diff are refused by the host before any model is asked, even with review off.
+  const options = integrationOptions(ctx.contract);
+  const files = repo.changedPaths(start, sha);
+  const control = controlChanges({ files, before: (f) => repo.fileAt(start, f), after: (f) => repo.fileAt(sha, f), controlPaths: options.controlPaths });
+  if (control.length && !options.allowControlChanges) return { merge: false, reason: `changes a control path the cycle may not merge (templateOptions.integration.allowControlChanges is off): ${control.slice(0, 10).join("; ")}` };
+  // Read whole or not at all: an over-budget or unreadable diff (git failure, timeout, output cap)
+  // is a REJECT, never an empty or clipped diff that looks under budget.
+  const read = repo.reviewDiff(start, sha, REVIEW_DIFF_BUDGET);
+  if (!read.ok && read.reason === "over-budget") return { merge: false, reason: `the diff without lockfiles (${read.detail}) exceeds the merge review's budget of ${REVIEW_DIFF_BUDGET} characters; a larger change is never reviewed in part. Split the work across cycles` };
+  if (!read.ok) return { merge: false, reason: `the diff could not be read in full (${read.detail}); a cycle whose diff the host cannot read is never merged` };
+  const diff = read.text;
   if (!cfg.integration.review) return { merge: true, reason: "checks passed (review disabled)" };
   const at = (file: string): string | null => repo.fileAt(sha, file);
   const dir = cycleDir(cfg, n);
   log(`cycle ${pad(n)} merge review (${cfg.reviewModel})`);
   const review = await reviewCycle({
     run: cfg.run, cycle: n, outcome: result.outcome, integrationBranch: cfg.integrationBranch, gateSteps: gate.results.map((r) => ({ name: r.id })),
-    charter: at("autonomy/CHARTER.md"), report: at(`${dir}/report.md`), verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha), diff: repo.diffText(start, sha, 120_000),
+    // The charter is the host-held integration head's (the cycle's start), never the cycle's own.
+    charter: repo.fileAt(start, CHARTER_PATH), report: at(`${dir}/report.md`), verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha), diff,
+    criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
   }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms) });
   await ctx.engine.refreshUsage();
   writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: cfg.reviewModel, ...review });

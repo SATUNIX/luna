@@ -38,6 +38,7 @@ const DeviceViewSchema = object({
 	display: string(),
 	online: optional(boolean()),
 	lastSeenAt: optional(nullable(string())),
+	suspended: optional(boolean()),
 });
 type DeviceView = Infer<typeof DeviceViewSchema>;
 
@@ -60,6 +61,7 @@ const StatusSchema = object({
 	runningSessions: number(),
 	streams: number(),
 	devices: array(DeviceViewSchema),
+	warnings: optional(array(string())),
 });
 
 const OfferSchema = object({
@@ -77,9 +79,10 @@ const PairRequestSchema = object({
 	platform: string(),
 	address: optional(nullable(string())),
 	deviceIdDisplay: string(),
+	addressScope: optional(string()),
 });
 
-const DecisionSchema = object({ state: string(), name: string(), deviceIdDisplay: string() });
+const DecisionSchema = object({ state: string(), name: string(), deviceIdDisplay: string(), reason: optional(nullable(string())) });
 const DevicesSchema = object({ devices: array(DeviceViewSchema) });
 const NamedDeviceSchema = object({ name: string(), display: string() });
 const RevokedSchema = object({ revoked: NamedDeviceSchema });
@@ -195,7 +198,7 @@ function hostLine(s: Reach): string {
 
 function deviceLines(devices: readonly DeviceView[]): string[] {
 	if (!devices.length) return ["  (no phones linked)"];
-	return devices.map((d) => `  ${d.online ? "●" : "○"} ${d.name}  ${d.display}  ${d.lastSeenAt ? `last seen ${d.lastSeenAt.slice(0, 16).replace("T", " ")}` : "never seen"}`);
+	return devices.map((d) => `  ${d.online ? "●" : "○"} ${d.name}  ${d.display}  ${d.lastSeenAt ? `last seen ${d.lastSeenAt.slice(0, 16).replace("T", " ")}` : "never seen"}${d.suspended === true ? "  (SUSPENDED: no pairing approval on record; revoke it or pair it again)" : ""}`);
 }
 
 function ask(question: string): Promise<string> {
@@ -248,6 +251,7 @@ async function status(): Promise<void> {
 	out(`  Reach it at  ${hostLine(s)}`);
 	out(`  Certificate  ${s.fingerprintDisplay}`);
 	out(`  Shared terminal sessions ${s.terminalSessions.length}; sessions started from phones ${s.runningSessions}; open streams ${s.streams}`);
+	for (const w of s.warnings ?? []) out(`  WARNING: ${w}`);
 	out("Linked phones:");
 	for (const line of deviceLines(s.devices)) out(line);
 }
@@ -306,16 +310,21 @@ async function pair(): Promise<void> {
 		process.off("SIGINT", onSigintEvent);
 		out();
 		out(`Link request from "${request.name}" (${request.platform}) at ${request.address || "an unknown address"}`);
-		out(`  Device ID    ${request.deviceIdDisplay}`);
-		out("Approve only if the phone in your hand shows exactly this device ID.");
+		if (request.addressScope === "other") out("WARNING: that address is outside the LAN and Tailscale ranges. Reject unless you know why.");
+		// The last group is hidden: approving needs it typed from the phone's screen (remote/pairing.ts).
+		const groups = request.deviceIdDisplay.split("-");
+		out(`  Device ID    ${[...groups.slice(0, -1), "····"].join("-")}`);
+		out("Approve only if the phone in your hand shows this device ID; you will type its last four characters.");
 		const answer = (await ask("Approve? [y/N] ")).trim().toLowerCase();
-		const result = await link.request("pair.decide", DecisionSchema, { requestId: request.requestId, approve: answer === "y" || answer === "yes" });
+		const approve = answer === "y" || answer === "yes";
+		const confirm = approve ? (await ask("Last four characters of the device ID on the phone: ")).trim() : "";
+		const result = await link.request("pair.decide", DecisionSchema, { requestId: request.requestId, approve: approve && confirm !== "", ...(approve && confirm ? { confirm } : {}) });
 		link.close();
 		if (result.state === "approved") {
 			out(`remote: linked "${result.name}" (${result.deviceIdDisplay}).`);
 			return;
 		}
-		return die(`${result.state} "${request.name}"`);
+		return die(`${result.state} "${request.name}"${result.reason ? ` (${result.reason})` : ""}`);
 	}
 }
 

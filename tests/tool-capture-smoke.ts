@@ -379,6 +379,21 @@ try {
     ok("track() of a rejected promise: no unhandledRejection, removed from pending, flush() drains it");
   }
 
+  // 12b. A "__proto__" key survives encoding as an own key (a null-prototype record), so the
+  //      "lossless" log keeps the subtree and nothing is assigned to a prototype.
+  {
+    const { CaptureStore } = await loadModule<typeof Store>("extensions/tool-capture/store.ts");
+    const store = new CaptureStore({ dir: path.join(ws, "capture-proto"), inlineBytes: 1024, segmentBytes: 1024 ** 2, budgetBytes: 200 * 1024, minFreeBytes: 1, maxBlobBytes: 1024 ** 2 });
+    const input: unknown = JSON.parse('{"a":1,"__proto__":{"polluted":true,"nested":{"k":"v"}}}');
+    const encoded = store.encode(input);
+    const round: unknown = JSON.parse(JSON.stringify(encoded));
+    assert.deepEqual(round, input, "the __proto__ subtree round-trips");
+    assert.ok(typeof round === "object" && round !== null && Object.hasOwn(round, "__proto__"), "__proto__ is an own key after the round trip");
+    assert.equal(Reflect.get(Object.prototype, "polluted"), undefined, "nothing was assigned to Object.prototype");
+    assert.equal(Reflect.get({}, "polluted"), undefined);
+    ok("capture encode keeps a __proto__ key as data (null-prototype records)");
+  }
+
   // 13. Secret scanning is linear: 200 KB adversarial runs finish under 200 ms (EFF-1).
   {
     const { scanSecrets } = await loadModule<typeof Capture>("extensions/tool-capture/index.ts");

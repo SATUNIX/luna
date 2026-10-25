@@ -83,7 +83,10 @@ The matching variables are `PI_KIT_VAULT`, `PI_KIT_RECAPS`, `PI_KIT_RECAP_MODEL`
 `PI_KIT_MEMORY_AUTOPROMOTE`, `PI_KIT_MEMORY_RECALL_LIMIT` and `PI_KIT_MEMORY_MIN_SCORE`.
 `recapModel` should be a cheap, fast model. The default is the session's model.
 
-Secrets (tokens, keys, `password=`-style values) are redacted before anything is written.
+Secrets in the shapes the kit's shared redaction table knows (tokens, keys, `password=`-style
+values) are redacted before anything is written; a shape it does not know is kept, so this is
+best-effort (see [Redaction](security.md#redaction); `tests/memory-vault-smoke.ts`,
+`tests/redaction-corpus-smoke.ts`).
 `/save --project <p>` also writes into the vault's project folder when the vault exists.
 
 The older `memory-local` store (`~/.pi/agent/memory-local/memories.json`) is imported

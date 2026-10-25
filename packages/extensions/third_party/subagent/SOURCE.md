@@ -147,3 +147,9 @@
     `runner.ts` loads with `-e`; `schema.ts` is a byte-identical copy of
     `packages/role-runner/src/schema.ts`. The host re-validates the child's submitted arguments,
     retries once, then returns `null`. See `docs/structured-output.md`.
+  - **Safe writes and shared redaction (2026-10-24):** run files, logs, the live state and the
+    worktree journal are written through the generated `shared/safe-fs.ts` (no symbolic link
+    followed under the workspace; temporary prompt files are created exclusively), `redact.ts`
+    applies the kit's shared table (`shared/redact.ts`) after its own rules, and workflow gate
+    patterns and structured-output patterns use the shared `shared/safe-regex.ts` check
+    (`tests/workspace-symlink-smoke.ts`, `tests/redaction-corpus-smoke.ts`, `tests/workflow-smoke.ts`).

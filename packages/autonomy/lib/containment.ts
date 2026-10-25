@@ -61,6 +61,11 @@ export interface InspectOptions {
   readonly allowRoot?: boolean | undefined;
   /** Environment variable NAMES that may be passed without a value (inherited from the supervisor, for run services). */
   readonly secretEnvNames?: readonly string[] | undefined;
+  /**
+   * The exact image references this run may start (the worker image plus the contract's
+   * permissions.network.serviceImages). When given, any other image is refused here, at the last
+   * check before the engine runs, not only when the contract was parsed.
+   */
   readonly allowedImages?: readonly string[] | undefined;
 }
 
@@ -120,7 +125,7 @@ export function limitProblems(facts: Pick<RunFacts, "memory" | "cpus">): string[
 }
 
 /** Check `args`, the full argument list after the engine binary (`run ...`), against the boundary. */
-export function inspectRunArgs(args: readonly string[], { roots = [], networks = [], role = "container", allowRoot = false, secretEnvNames = [] }: InspectOptions = {}): { problems: string[]; facts: RunFacts } {
+export function inspectRunArgs(args: readonly string[], { roots = [], networks = [], role = "container", allowRoot = false, secretEnvNames = [], allowedImages }: InspectOptions = {}): { problems: string[]; facts: RunFacts } {
   const problems: string[] = [];
   const facts: RunFacts = { role, user: null, networks: [], mounts: [], tmpfs: [], env: [], caps: { drop: [], add: [] }, securityOpt: [], readOnly: false, pids: null, memory: null, cpus: null, image: null, command: [], privileged: false };
   const bad = (msg: string): void => { problems.push(msg); };
@@ -196,6 +201,7 @@ export function inspectRunArgs(args: readonly string[], { roots = [], networks =
   facts.image = args[i] ?? null;
   facts.command = args.slice(i + 1);
   if (!facts.image) bad("no image");
+  else if (allowedImages !== undefined && !allowedImages.includes(facts.image)) bad(`image ${facts.image} is not one this run may start (${allowedImages.join(", ") || "none"})`);
   if (!facts.readOnly) bad("missing --read-only (the root filesystem must be read-only)");
   if (!facts.caps.drop.some((c) => c.toUpperCase() === "ALL")) bad("missing --cap-drop ALL");
   if (!facts.securityOpt.includes("no-new-privileges:true") && !facts.securityOpt.includes("no-new-privileges")) bad("missing --security-opt no-new-privileges:true");

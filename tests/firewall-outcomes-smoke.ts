@@ -15,6 +15,7 @@ import path from "node:path";
 import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv, textOf, type FakeToolResult } from "../packages/core/eval/harness.ts";
 import { isRecord, number, object, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as Approvals from "../packages/extensions/src/tool-firewall/approvals.ts";
+import { answerPending, startConsole } from "./console-answer.ts";
 
 const root = tmpWorkspace("pi-kit-fw-out-");
 const ws = path.join(root, "ws");
@@ -36,6 +37,7 @@ const restores = [
   setEnv("PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS", "150"),
   setEnv("PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS", "150"),
 ];
+startConsole(); // the console creates the answer key; requesters never do
 const keepAlive = setInterval(() => {}, 1000);
 let checks = 0;
 const ok = (label: string): void => {
@@ -323,8 +325,7 @@ try {
         if (f) req = parseJsonAs(ConsoleRequest, fs.readFileSync(path.join(pendingDir, f), "utf8"), f);
       }
       assert.ok(req?.timeoutMs === 3000);
-      fs.mkdirSync(path.join(consoleDir, "resolved"), { recursive: true });
-      fs.writeFileSync(path.join(consoleDir, "resolved", `${req.id}.json`), JSON.stringify({ id: req.id, approved: false, answer: "Deny and tell the agent why…", note: "not on this host" }));
+      answerPending(consoleDir, req.id, { approved: false, answer: "Deny and tell the agent why…", note: "not on this host" });
       const denied = await answered;
       assert.deepEqual(tagsIn(denied.reason), ["OPERATOR DECISION"]);
       assert.match(denied.reason, /not on this host/);
@@ -346,7 +347,7 @@ try {
       assert.ok(req, "the escalation reaches the human console");
       assert.match(req.body, /^UNCERTAIN · MEDIUM/);
       assert.match(req.body, /unsure whether to block \(medium confidence\)/);
-      fs.writeFileSync(path.join(consoleDir, "resolved", `${req.id}.json`), JSON.stringify({ id: req.id, approved: true, answer: "Allow once" }));
+      answerPending(consoleDir, req.id, { approved: true, answer: "Allow once" });
       assert.equal(await escalated, undefined);
     } finally {
       restoreT2();

@@ -107,7 +107,7 @@ function render(): string {
   const knownCategories = new Set(CATEGORY_ORDER.map(([cat]) => cat));
   const byCategory = new Map<string, SkillSummary[]>();
   for (const s of skills) {
-    // M-06 fix: previously the render loop below only walked the FIXED CATEGORY_ORDER
+    // Previously the render loop below only walked the FIXED CATEGORY_ORDER
     // list, so a skill with an unrecognized/misspelled category (present, but not one
     // of the known values - unlike a missing category, which already fell back to
     // "uncategorised") was silently absent from byCategory's iteration entirely: it

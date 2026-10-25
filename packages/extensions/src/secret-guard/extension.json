@@ -1,15 +1,15 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "secret-guard",
-  "summary": "Opt-in secrets/protected-path backstop (ships in no profile). Blocks reads of credential files, writes/edits to secret files, protected engagement/repo paths, or secret content (key material, tokens), and bash commands that leak or exfiltrate them (cat/cp/mv/base64/curl). Protected-path list kept in parity with pentest-governance-domain via verify.ts.",
+  "summary": "Secrets/protected-path backstop (in the balanced and autonomous profiles). Blocks reads of credential files, writes/edits to secret files, protected engagement/repo paths, or secret content (key material, tokens), and bash commands that leak or exfiltrate them (cat/cp/mv/base64/curl). Protected-path list kept in parity with pentest-governance-domain via verify.ts.",
   "category": "safety",
   "tier": "T0",
   "layer": 1,
   "entry": "index.ts",
   "hooks": ["tool_call"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": [],
-  "enabledByDefault": false,
+  "profiles": ["balanced", "autonomous"],
+  "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
     "nodeBuiltins": ["node:fs", "node:path"],
@@ -22,6 +22,6 @@
   "env": ["PI_KIT_FIREWALL_POLICY", "PI_KIT_FIREWALL_AUDIT_LOG", "PI_KIT_FIREWALL_APPROVALS", "PI_KIT_UNATTENDED_CONTRACT"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
-  "status": "experimental",
+  "status": "beta",
   "childGovernance": true
 }

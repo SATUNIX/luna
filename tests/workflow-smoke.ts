@@ -214,6 +214,25 @@ steps:
     ok("gates loop back with the review attached and stop at max_loops");
   }
 
+  // 4a. A project workflow is repository content, so a gate pattern of the exponential-
+  // backtracking class (a quantified group holding a quantifier) is refused by the shared
+  // safe-regex check and fails the gate, even on output it would match.
+  {
+    const refused = `
+name: refused-gate
+steps:
+  - id: review
+    agent: reviewer
+    task: "review"
+    gate: { pass: "/(x+)+y/", retry: review, max_loops: 1 }
+`;
+    const { final } = await run(refused, {}, () => "xxy");
+    assert.equal(final.status, "failed", "a refused gate pattern never passes");
+    const plain = refused.replace("/(x+)+y/", "/x+y/");
+    assert.equal((await run(plain, {}, () => "xxy")).final.status, "passed", "an ordinary pattern still gates");
+    ok("a gate pattern the safe-regex check refuses fails the gate");
+  }
+
   // 4b. The shipped review gates pass only on a final "VERDICT: PASS" line (PRO-6).
   {
     const shipped = W.discoverWorkflows(ws).workflows.filter((w: WorkflowDef) => w.name === "feature" || w.name === "bugfix");

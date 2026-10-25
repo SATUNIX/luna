@@ -3,6 +3,10 @@ name: scorecard
 # OpenSSF Scorecard: grades the repository's supply-chain posture (branch protection, pinned
 # dependencies, token permissions, signed releases, ...) and publishes the result to the
 # Security tab. Needs a public repository.
+#
+# This workflow only reports: Scorecard exits 0 whatever the score, and Security-tab alerts block
+# nothing. scorecard-thresholds.yml is the gate on the scores. It is a separate workflow because
+# publish_results: true restricts what may sit next to the Scorecard step.
 
 on:
   push:
@@ -11,15 +15,21 @@ on:
     - cron: "41 5 * * 1"
   workflow_dispatch:
 
-permissions: read-all
+permissions: {}
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      security-events: write
-      id-token: write
+      contents: read # read the repository
+      actions: read # read workflow runs for the CI-Tests and Dangerous-Workflow checks
+      security-events: write # upload the SARIF to code scanning
+      id-token: write # sign the published result (publish_results)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

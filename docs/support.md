@@ -61,11 +61,14 @@ There is no automatic stable promotion or promise of production readiness during
 
 Releases move forward. Security fixes use a reviewed patch/prerelease and an advisory with
 affected versions and mitigation. Consumed tags must not silently change. During beta there
-is no guaranteed maintenance window or response SLA; report vulnerabilities via `SECURITY.md`.
+is no guaranteed maintenance window; report vulnerabilities via `SECURITY.md`, which states the
+response targets (targets, not a contractual service level) and the supported versions.
 Breaking migrations and removals must explain affected profiles, preserved user state,
 replacement and rollback; deprecate before removing when a safe overlap is possible.
 
 Before updating, preserve the current tag and back up the agent directory. Configuration
 rollback is narrower than restoring package contents or a whole interrupted update. Follow
 [Updates](updates.md) for verified steps, uninstall retry and current concurrency/recovery
-limits. [Releasing](releasing.md) owns promotion, incidents and operator-only publication.
+limits. [Releasing](releasing.md) owns promotion and operator-only publication, and
+[Incident response](incident-response.md) what to do when a secret, credential, dependency or
+release is compromised.

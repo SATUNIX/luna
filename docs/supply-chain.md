@@ -1,25 +1,32 @@
 # Supply chain
 
-How the kit sources third-party code, what installing it pulls in, and the current `npm audit`
-status. The CI checks that enforce this are listed in [CI security](ci-security.md).
+How the kit sources third-party code, what installing it pulls in, and how dependencies are
+updated. The CI checks that enforce this are listed in [CI security](ci-security.md), and how a
+vulnerability in a dependency is rated, fixed or accepted is in
+[Vulnerability management](vulnerability-management.md).
 
 ## What installing the kit pulls in
 
-The kit has **no runtime dependencies of its own**: `@earendil-works/pi-coding-agent`,
-`@earendil-works/pi-ai`, `@earendil-works/pi-tui` and `typebox` are peer dependencies that pi
-itself provides, and everything else is dev-only (`tests/clean-install-smoke.ts` installs the
-packed artefact and confirms there is nothing to install). Every pi package that an extension or a
+Runtime dependencies (`dependencies` in `package.json`): `quickjs-wasi`. It is pinned to an
+exact version, resolved through `package-lock.json`, and the workflow sandbox checks the digest
+of its WebAssembly module before every run ([Workflow sandbox](workflow-sandbox.md)).
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui` and `typebox`
+are peer dependencies that pi itself provides, and everything else is dev-only.
+`tests/clean-install-smoke.ts` installs the packed artefact and fails when its `dependencies` are
+not exactly the list above, each pinned to an exact version. Every pi package that an extension or a
 test imports must be a peer dependency, and each `@earendil-works/*` peer is also a dev dependency
 pinned to the tested pi version, so the suite resolves it by declaration and not because pi happens
 to depend on it (`tests/pi-host-peers-smoke.ts`).
 
-A release is a `vX.Y.Z` tag of the public repository, created only after the full check suite
-and security scans pass. pi clones it and runs `npm install --omit=dev` in the clone (as for every
-git package). Because npm installs peer dependencies, that can place an extra copy of pi, its
-packages and `typebox` inside the clone. The running pi never loads that copy: its extension loader
-resolves `@earendil-works/pi-coding-agent`, `pi-ai`, `pi-tui` and `typebox` imports in extensions
-to its own copies. That mapping is pi's; no test in this repository pins it. Everything comes from the
-public npm registry at the lockfile's pinned, integrity-checked versions.
+A release is a `vX.Y.Z` tag of the public repository, pushed by an operator; the release
+workflow's gate runs the whole of `ci.yml` and `security.yml` for the release commit
+(`tests/release-workflow-smoke.ts`), but a tag is the release whether or not that workflow is run
+([Releasing](releasing.md)). pi clones the tag and runs `npm install --omit=dev --legacy-peer-deps`
+in the clone (as for every git package; pi 1.4.0's package manager), so npm installs the runtime
+dependency and does not install peer dependencies there. pi's extension loader resolves
+`@earendil-works/pi-coding-agent`, `pi-ai`, `pi-tui` and `typebox` imports in extensions to its
+own copies. Both behaviours are pi's; no test in this repository pins them. Everything comes from
+the public npm registry at the lockfile's pinned, integrity-checked versions.
 
 If npm delivery is switched on, every version will also carry npm provenance, so
 `npm audit signatures` can verify where it was built.
@@ -46,8 +53,10 @@ were not adopted.
 | `pi-readseek` | 0.4.26 | long-horizon, autonomous, self-improving, pentest, lite | `@jarkkojs/readseek` native CLI and xxhash-wasm | MIT. Hash-anchored reads and edits. 0.12.0 replaces the tool surface with 16 new tools beside the built-ins, takes `@path` rule files the firewall's path checks do not see, and was not adopted. |
 | `pi-lean-ctx` | 3.11.4 | **none (opt-in)** | The external `lean-ctx` Rust CLI, not bundled | Apache-2.0. Registers extra shell, read and edit tools that the firewall does not classify as shell and `secret-guard` does not inspect. Installed by `install.ts --all` only when its CLI is on `PATH`. Its vendored MCP client bundle is built from `@modelcontextprotocol/sdk` 1.32, which audit tools cannot see. |
 
-The container overlay (`packages/container/overlays/pi/settings.json`) pins `pi-mcp-adapter@6.0.0`,
-checked by `validate-pentest-env.sh`. See the review below.
+The container image installs `pi-mcp-adapter@6.0.0` (and pi) at build time with `npm ci
+--ignore-scripts` from `packages/container/tools/package-lock.json`, and the overlay
+(`packages/container/overlays/pi/settings.json`) registers that baked copy by path, so nothing is
+fetched from npm at start; `validate-pentest-env.sh` checks the pins agree. See the review below.
 
 ### pi-mcp-adapter review
 
@@ -205,43 +214,53 @@ peer ranges, dependencies, scripts and licence). If it loads into pi, install it
 it registers and whether it degrades cleanly. Record the result in `review`. Do not adopt a
 version on the strength of its changelog.
 
-## `npm audit` status (2026-09-30, npm 10.9)
+## Audit status
 
-`npm audit` reports **0 vulnerabilities** for the full dependency tree, including dev
-dependencies, and `npm audit signatures` verifies every registry signature and 84 attestations
-(385 locked packages). CI blocks on high or critical advisories (`npm audit --audit-level=high`),
-on OSV-Scanner findings and, for pull requests, on dependency review.
-
+CI fails on a high or critical `npm audit` advisory in any lockfile, on an invalid registry
+signature or attestation (`npm audit signatures`), on any OSV-Scanner finding in the tree and, for
+pull requests, on a new dependency with a high-severity advisory ([CI security](ci-security.md#gating)).
 The dev tree includes `mermaid` and `jsdom`, used only by `npm run docs:mermaid` to check that the
-documentation's diagrams parse. They are never installed by a user of the kit.
+documentation's diagrams parse; they are never installed by a user of the kit.
 
-## Known residual findings
+Findings that no available update clears (the autonomy image's Debian packages, the upstream
+gitleaks binary CI runs, vendored bundles audit tools cannot see) are recorded, with their owner,
+mitigation and review trigger, in the
+[risk-acceptance register](vulnerability-management.md#risk-acceptance-register).
 
-These are findings the scanners report that no available update clears. Each is re-checked when
-the component it is in moves.
+## Update policy
 
-- **The autonomy image's Debian 13 packages.** Trivy reports high-severity findings, and one
-  critical one, in Debian 13 packages of the `node:26-trixie-slim` base and the packages the
-  image installs, for which Debian has published no fixed version (status `affected`, or
-  `fix_deferred` for perl): util-linux (CVE-2026-76642, CVE-2026-78408, CVE-2026-78409,
-  CVE-2026-78410), curl (CVE-2026-12064, CVE-2026-8458), brotli (CVE-2026-111497, critical),
-  python3.13 (CVE-2026-7210, CVE-2026-15308, CVE-2026-19445, CVE-2026-19553, CVE-2026-82049),
-  perl (CVE-2026-9538), ncurses (CVE-2025-69720), systemd's libraries (CVE-2026-16742), acl
-  (CVE-2026-54369) and the setuptools wheel (CVE-2026-23949). Two npm tools the image installs for
-  pi-lens, `bash-language-server` and `markdownlint-cli2`, carry braces 3.0.3 (CVE-2026-93687),
-  which also has no fixed release. The image installs every package from the current Debian
-  archive when it is built, so rebuilding it picks up each fix once Debian ships one; nothing is
-  held back. The workers that run in it have no network apart from the inference relay and the
-  egress proxy ([Autonomous runs](autonomy.md)). The container and role-runner images (Alpine)
-  have no such findings.
-- **The gitleaks binary CI runs.** `security.yml` and the GitLab mirror's `gitleaks` and
-  `secrets-public` jobs run the upstream gitleaks v8.30.1 release (the release archive by
-  checksum, or the upstream image by digest), which was built with Go 1.24.13 and carries Go
-  standard-library, `golang.org/x/crypto`, `golang.org/x/text` and `klauspost/compress`
-  advisories. The autonomy image builds the same release from source with a current Go instead;
-  doing that in CI would add a Go toolchain build to every secret-scanning job, so CI keeps the
-  upstream binary until gitleaks publishes a release built with a current Go. In CI it reads
-  only the checked-out repository or the public export.
+One policy covers every dependency the repository pins.
+
+- **Lockfiles everywhere.** Every npm tree has a committed lockfile installed with
+  `npm ci --ignore-scripts`: the root, the MCP servers under `packages/container/mcp-servers/`,
+  and the pi tool trees the autonomy and container images install from
+  (`packages/autonomy/image/tools/`, `packages/container/tools/`). The docs toolchain is
+  `requirements-docs.txt`, compiled with hashes and installed with `--require-hashes`. Base
+  images are pinned by digest in their `FROM` lines, CI scanner images by digest and downloaded
+  binaries by SHA-256. The Android build's Gradle wrapper is validated against the checksum
+  Gradle publishes. A new manifest without Dependabot and OSV coverage fails
+  `tests/scan-coverage-smoke.ts`; a lockfile entry outside the registry, without a sha512 hash or
+  with an unreviewed install script fails `npm run security:lockfile`.
+- **Not locked:** the autonomy image's language tools are pinned global installs (locking them
+  surfaces advisories with no upstream fix), and a companion's own dependency tree is resolved by
+  npm at install time ([Companion installs](#companion-installs)).
+- **Cadence and cooldown.** Dependabot proposes grouped updates weekly for actions, npm, pip,
+  Docker and Gradle, and waits 7 days after a release before proposing it
+  (`.github/dependabot.yml`): most malicious versions are found and pulled within days. A
+  security update for an advisory is proposed without waiting for the weekly run when
+  Dependabot security updates are on ([Repository settings](ci-security.md#repository-settings)).
+- **Every update is a reviewed pull request** gated like any other change; an action bump also
+  follows the [allowed-actions procedure](ci-security.md#allowed-actions).
+- **Held by hand, not by Dependabot:** pi minor and major releases (the `pi-compat` lanes look at a
+  new pi first, and moving the pin or the floor is a reviewed change with the whole suite's
+  evidence; [pi versions](#pi-versions)), and TypeScript majors. TypeScript 7 is not adopted: it
+  has no stable compiler API for `packages/core/eval/harness.ts` and ships no `tsserver`.
+- **The pi peer floor** (`peerDependencies`) moves only with a whole-suite run at the new floor.
+- **Companions** in `packages/core/sources.json` change only through a review of the candidate's
+  tarball, recorded in its `review` entry with the integrity pin
+  ([Evaluating a candidate](#evaluating-a-candidate)).
+- **A runtime dependency** is added only together with the list at the top of this page
+  (`tests/clean-install-smoke.ts`).
 
 ## Lockfile integrity
 
@@ -249,6 +268,23 @@ the component it is in moves.
 in `package-lock.json` resolves from anywhere but `https://registry.npmjs.org`, lacks a sha512
 `integrity` hash, or declares an install script that is not on its reviewed allowlist. CI installs
 with `--ignore-scripts`, so even allowlisted scripts never run there.
+
+## Companion installs
+
+`install.ts` installs each companion in `packages/core/sources.json` with `pi install`, which runs
+`npm install` in pi's npm root (`<agent dir>/npm`, or `<project>/.pi/npm` for a project install).
+Each entry names an exact version and the package's sha512 `integrity`; the companion's install
+runs with `npm_config_ignore_scripts=true`, so no lifecycle script in its dependency tree runs,
+unless the entry records a reviewed `allowInstallScripts` reason (none does). After each install
+the installer compares the integrity npm recorded for the companion in that root's
+`package-lock.json` with the pin; a difference removes the package again and fails the install.
+`tests/companion-integrity-smoke.ts` pins each rule.
+
+Not covered: the pin is the companion's own tarball, not its dependency tree, which npm resolves
+at install time; a root with no lockfile entry for the companion is a warning, not a failure; and
+`pi update` or a manual `pi install` bypasses these checks. pi-lens's `@ast-grep/cli` dependency
+has an install step that is skipped as a result; its launcher script falls back without it and
+prints a warning (seen in a static review of the package; no kit test runs it).
 
 ## pi versions
 

@@ -1,0 +1,12 @@
+{
+  "name": "pi-autonomy-tools",
+  "private": true,
+  "description": "The autonomy image's pi, installed with npm ci from the committed lockfile (image/Dockerfile).",
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  },
+  "overrides": {
+    "undici": "8.12.3"
+  }
+}

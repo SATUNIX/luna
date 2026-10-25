@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { appendFileSafe, createFileExclusive, ensureDirSafe, writeFileSafe } from "./shared/safe-fs.ts";
 
 // skill-forge (Epic 6 Sprint 6.1): mine the trace-ledger and DETERMINISTICALLY synthesise a
 // candidate SKILL.md, score a skill against the eval harness, and archive superseded skills.
@@ -227,10 +228,9 @@ export default function (pi: ExtensionAPI) {
       }
       const mined = mineTrace(entries);
       const md = synthesiseSkillMd(name, category, mined);
-      const dir = proposalDir(cwd, name);
-      fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, "SKILL.md");
-      fs.writeFileSync(file, md, "utf8");
+      // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+      const file = path.join(proposalDir(cwd, name), "SKILL.md");
+      writeFileSafe(file, md, { root: cwd });
       return text(
         `skill-forge: wrote candidate skill to ${path.relative(cwd, file)} (mined ${mined.totalCalls} calls, ` +
           `${mined.topSequences.length} sequences). Review, then move into skills/<name>/ and run 'npm run catalog'.`,
@@ -253,9 +253,7 @@ export default function (pi: ExtensionAPI) {
       }
       // Persist a score record so scores are auditable over time.
       try {
-        const p = path.join(cwd, ".pi", "skill-scores.jsonl");
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.appendFileSync(p, JSON.stringify({ skill: params.skill_name, ...result, at: new Date().toISOString() }) + "\n");
+        appendFileSafe(path.join(cwd, ".pi", "skill-scores.jsonl"), JSON.stringify({ skill: params.skill_name, ...result, at: new Date().toISOString() }) + "\n");
       } catch {
         /* best-effort */
       }
@@ -301,10 +299,14 @@ export default function (pi: ExtensionAPI) {
       if (!isContained(dest, archiveBase)) {
         return text(`skill-forge: refusing to archive '${name}' — resolved destination escapes .pi/skill-archive/.`);
       }
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      try {
+        ensureDirSafe(path.dirname(dest), { root: cwd });
+      } catch (error) {
+        return text(`skill-forge: refusing to archive '${name}' — ${error instanceof Error ? error.message : String(error)}.`);
+      }
       fs.renameSync(src, dest);
       try {
-        fs.writeFileSync(path.join(dest, "ARCHIVE_REASON.txt"), `${params.reason || "superseded"} (${new Date().toISOString()})\n`);
+        createFileExclusive(path.join(dest, "ARCHIVE_REASON.txt"), `${params.reason || "superseded"} (${new Date().toISOString()})\n`, { root: cwd });
       } catch {
         /* best-effort */
       }

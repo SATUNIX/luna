@@ -3,6 +3,8 @@ import { buildSessionContext, generateSummary } from "@earendil-works/pi-coding-
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { redactSecrets } from "./shared/redact.ts";
+import { isInside, writeFileSafe } from "./shared/safe-fs.ts";
 
 // Self-containment rule: import only node:* builtins, typebox, and pi peers.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -43,7 +45,8 @@ export const SAVE_INSTRUCTIONS = [
 
 export type SnapshotKind = "save" | "compact" | "compress";
 
-export type Target = { dir: string; project?: string };
+/** Where a snapshot goes. `root`, when set, is the trusted directory every write is checked from (the workspace). */
+export type Target = { dir: string; project?: string; root?: string };
 
 export type SaveDeps = {
   summarize: (ctx: ExtensionContext, instructions: string, signal: AbortSignal) => Promise<string>;
@@ -124,36 +127,20 @@ export function resolveTarget(cwd: string, project?: string): Target {
   }
   if (project && !projectsDir) throw new Error("--project needs PI_KIT_SAVE_VAULT to be set");
   const custom = process.env.PI_KIT_SAVE_DIR?.trim();
-  return { dir: custom ? path.resolve(cwd, custom) : path.join(cwd, ".pi", "snapshots") };
+  const dir = custom ? path.resolve(cwd, custom) : path.join(cwd, ".pi", "snapshots");
+  // A directory inside the workspace is written without following a committed symlink
+  // (./shared/safe-fs.ts); one the operator pointed elsewhere is trusted.
+  return isInside(cwd, dir) ? { dir, root: cwd } : { dir };
 }
 
 // --- document -----------------------------------------------------------------
 
-// The vault must never hold a secret. The summarizer is told to omit them, but
-// a model can still copy one from a tool result, so mask the common shapes.
-// The github_pat_, bearer and URL-credential entries are copied verbatim from
-// tool-capture's SECRET_PATTERNS (extensions are standalone, so no shared import);
-// tests/save-smoke.ts checks save masks every sample tool-capture flags for them, and that
-// redact stays linear on a long run of scheme characters.
-const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
-  /(authorization\s*[:=]\s*["']?(?:bearer|basic|token)\s+)[^\s"']{8,}/gi,
-  /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
-  /\bsk-[A-Za-z0-9_-]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /((?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*)["']?[^\s"']{6,}/gi,
-];
-
+// The vault must never hold a secret. The summarizer is told to omit them, but a model can still
+// copy one from a tool result, so mask the kit's secret shapes (the canonical table,
+// ./shared/redact.ts, which includes tool-capture's bearer, github_pat_ and URL-credential shapes;
+// tests/save-smoke.ts and tests/redaction-corpus-smoke.ts).
 export function redact(text: string): string {
-  let out = text;
-  for (const re of SECRET_PATTERNS) {
-    out = out.replace(re, (match, prefix) => (typeof prefix === "string" && match.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]"));
-  }
-  return out;
+  return redactSecrets(text).text;
 }
 
 function yamlValue(value: string): string {
@@ -200,11 +187,8 @@ export function renderSnapshot(summary: string, meta: SnapshotMeta): string {
   return redact(lines.join("\n"));
 }
 
-function writeAtomic(file: string, content: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, content, "utf8");
-  fs.renameSync(tmp, file);
+function writeAtomic(file: string, content: string, root: string | undefined): void {
+  writeFileSafe(file, content, root === undefined ? {} : { root });
 }
 
 /** Write the latest file and one log file. Returns both paths. */
@@ -212,8 +196,8 @@ export function writeSnapshot(target: Target, content: string, kind: SnapshotKin
   const latest = path.join(target.dir, LATEST_FILE);
   let log = path.join(target.dir, LOG_DIR, `${stamp(when).file} - ${kind}.md`);
   for (let n = 2; fs.existsSync(log); n++) log = path.join(target.dir, LOG_DIR, `${stamp(when).file} - ${kind} ${n}.md`);
-  writeAtomic(log, content);
-  writeAtomic(latest, content);
+  writeAtomic(log, content, target.root);
+  writeAtomic(latest, content, target.root);
   return { latest, log };
 }
 

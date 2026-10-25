@@ -39,7 +39,8 @@
     "nodeBuiltins": [
       "node:fs",
       "node:path",
-      "node:url"
+      "node:url",
+      "node:crypto"
     ],
     "npm": [],
     "piPeers": [],

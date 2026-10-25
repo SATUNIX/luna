@@ -116,6 +116,20 @@ export class HostRepo {
     return text.length <= max ? text : `${text.slice(0, max / 2)}\n...[${text.length - max} characters cut]...\n${text.slice(-max / 2)}`;
   }
 
+  /**
+   * The whole diff the merge review judges (lockfiles excluded), or why it cannot be had. Never
+   * clipped and never empty-on-failure: a diff over `budget` characters is `over-budget` (git's
+   * output is capped at 4 bytes per character, so a huge diff is refused without being read
+   * whole), and a git failure or timeout is `unreadable`. Callers reject both
+   * (tests/autonomy-review-inputs-smoke.ts).
+   */
+  reviewDiff(from: string, to: string, budget: number): { ok: true; text: string } | { ok: false; reason: "over-budget" | "unreadable"; detail: string } {
+    const read = gm.gitBounded(this.git(), ["diff", "--no-color", "--no-ext-diff", from, to, "--", ".", ":(exclude)package-lock.json"], budget * 4 + 4096);
+    if (!read.ok) return { ok: false, reason: read.overflow ? "over-budget" : "unreadable", detail: read.detail };
+    if (read.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${read.stdout.length} characters` };
+    return { ok: true, text: read.stdout };
+  }
+
   logSince(from: string, to: string): string { return gm.logSince(this.git(), from, to); }
 
   logOneline(from: string | null | undefined, to: string, n = 15): string { return this.git()(["log", `-${n}`, "--format=%h %s", from ? `${from}..${to}` : to], { allowFail: true }) ?? ""; }

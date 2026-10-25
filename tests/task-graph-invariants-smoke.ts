@@ -75,7 +75,7 @@ async function testUpdateRejectsInvalidStatus() {
   }
 }
 
-// M-05: missing and self-referential dependencies must both be rejected at creation
+// Missing and self-referential dependencies must both be rejected at creation
 // (a task cannot be given an id-dependency on itself, and cannot depend on a task that
 // does not exist yet).
 async function testDependencyValidation() {

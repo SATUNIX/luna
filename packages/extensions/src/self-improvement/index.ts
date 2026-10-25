@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { UnsafePathError, writeFileSafe } from "./shared/safe-fs.ts";
 
 // self-improvement (Epic 6 Sprint 6.2): the /improve cycle — mine -> synthesise -> score ->
 // PROPOSE. It never calls a model and never auto-commits: it writes a reviewable proposal
@@ -225,14 +226,13 @@ function proposalDir(cwd: string): string {
 // so `/improve arm` can apply what was reviewed instead of mining again. Returns the proposal id.
 export function writeProposal(cwd: string, proposal: Proposal, id: string): string {
   const dir = proposalDir(cwd);
-  fs.mkdirSync(dir, { recursive: true });
   const hash = notesHash(proposal.notes);
-  fs.writeFileSync(
+  writeFileSafe(
     path.join(dir, `${id}.md`),
     [`# Self-improvement proposal`, "", `Id: ${id}`, `Notes hash: ${hash}`, "", proposal.summary, "", "## Proposed AGENTS.md diff", "", "```diff", proposal.diff, "```", ""].join("\n"),
-    "utf8",
+    { root: cwd },
   );
-  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, hash, notes: proposal.notes }, null, 2) + "\n", "utf8");
+  writeFileSafe(path.join(dir, `${id}.json`), JSON.stringify({ id, hash, notes: proposal.notes }, null, 2) + "\n", { root: cwd });
   return id;
 }
 
@@ -283,15 +283,17 @@ function parseArm(args: string): { armed: boolean; id?: string } {
 
 // Apply the proposal by merging the notes into the AGENTS.md "Learned notes" section
 // (allowlisted path). The write goes through the same mergeNotes model the preview uses.
+// AGENTS.md is repository content and may be a committed symlink (to a shell rc file, say): a
+// symlink or non-regular file is refused before it is read, and the write never follows one
+// (./shared/safe-fs.ts; tests/workspace-symlink-smoke.ts).
 export function applyProposal(cwd: string, proposal: Proposal): string {
   const agents = path.join(cwd, "AGENTS.md");
-  let body: string;
-  try {
-    body = fs.readFileSync(agents, "utf8");
-  } catch {
-    body = "# AGENTS.md\n";
-  }
-  fs.writeFileSync(agents, mergeNotes(body, proposal.notes), "utf8");
+  let body = "# AGENTS.md\n";
+  let st: fs.Stats | null;
+  try { st = fs.lstatSync(agents); } catch { st = null; }
+  if (st && !st.isFile()) throw new UnsafePathError(agents, st.isSymbolicLink() ? "the file is a symbolic link" : "not a regular file");
+  if (st) body = fs.readFileSync(agents, "utf8");
+  writeFileSafe(agents, mergeNotes(body, proposal.notes), { root: cwd });
   return agents;
 }
 
@@ -310,14 +312,26 @@ export default function (pi: ExtensionAPI) {
           if (c.hasUI) c.ui.notify(`self-improvement: not applied — ${loaded.reason}.`, "warning");
           return;
         }
-        const applied = applyProposal(cwd, { hasSignal: loaded.notes.length > 0, notes: loaded.notes, summary: "", diff: "" });
+        let applied: string;
+        try {
+          applied = applyProposal(cwd, { hasSignal: loaded.notes.length > 0, notes: loaded.notes, summary: "", diff: "" });
+        } catch (error) {
+          if (c.hasUI) c.ui.notify(`self-improvement: not applied — ${error instanceof Error ? error.message : String(error)}.`, "warning");
+          return;
+        }
         if (c.hasUI) c.ui.notify(`self-improvement: ARMED — applied ${loaded.notes.length} note(s) from ${loaded.id} to ${path.relative(cwd, applied)}. Review the diff and commit.`, "warning");
         return;
       }
 
       const proposal = buildProposal(cwd);
       // Always write the reviewable proposal artifact (summary + diff preview + notes record).
-      const id = writeProposal(cwd, proposal, `proposal-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      let id: string;
+      try {
+        id = writeProposal(cwd, proposal, `proposal-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      } catch (error) {
+        if (c.hasUI) c.ui.notify(`self-improvement: could not write the proposal — ${error instanceof Error ? error.message : String(error)}.`, "warning");
+        return;
+      }
       const proposalFile = path.relative(cwd, path.join(proposalDir(cwd), `${id}.md`));
       if (!proposal.hasSignal) {
         if (c.hasUI) c.ui.notify(`self-improvement: ${proposal.summary} (see ${proposalFile})`, "info");

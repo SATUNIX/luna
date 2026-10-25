@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.7-blue" alt="version 0.2.4-beta.7"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.9-blue" alt="version 0.2.4-beta.9"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a>
@@ -28,7 +28,7 @@ Requirements: Node.js 22.19 or newer, git, and pi.
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.7
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
 pi
 ```
 

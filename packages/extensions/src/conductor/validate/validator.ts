@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendFileSafe, createFileExclusive, openFileExclusive, writeFileSafe } from "../shared/safe-fs.ts";
 
 // The narrow bundle is the structural independence boundary: finder reasoning never enters it.
 export interface ValidatorBundleInput { evidence: string; requirement: string; }
@@ -28,9 +29,10 @@ const VALIDATOR_TERMINATE_GRACE_MS = 5000;
 const VALIDATOR_IDLE_TIMEOUT_MS = (() => { const raw = Number(process.env.PI_KIT_VALIDATOR_IDLE_TIMEOUT_MS); return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 15 * 60 * 1000; })();
 
 function shortHash(value: string): string { let hash = 2166136261; for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619); return (hash >>> 0).toString(16).padStart(8, "0"); }
-function appendTrace(cwd: string, entry: TraceEntry): void { try { const file = path.join(cwd, ".pi", "trace.jsonl"); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf8"); } catch { /* audit is best effort */ } }
+// Workspace state is written without following committed symlinks (../shared/safe-fs.ts).
+function appendTrace(cwd: string, entry: TraceEntry): void { try { appendFileSafe(path.join(cwd, ".pi", "trace.jsonl"), JSON.stringify(entry) + "\n", { root: cwd }); } catch { /* audit is best effort */ } }
 function audit(cwd: string, tool: string, target: string, value: unknown, status: "ok" | "error"): void { let argsHash = "unhashable"; try { argsHash = shortHash(JSON.stringify(value)); } catch { /* pathological input */ } appendTrace(cwd, { ts: new Date().toISOString(), turn: 0, kind: "result", tool, target, argsHash, status }); }
-function writeAtomically(file: string, content: string): void { fs.mkdirSync(path.dirname(file), { recursive: true }); const temp = `${file}.${process.pid}.${Date.now()}.tmp`; fs.writeFileSync(temp, content, "utf8"); fs.renameSync(temp, file); }
+function writeAtomically(cwd: string, file: string, content: string): void { writeFileSafe(file, content, { root: cwd }); }
 function findingDirectory(cwd: string, id: string): string { return path.join(cwd, ".pi", "engagement", "findings", id); }
 function verdictFile(cwd: string, id: string): string { return path.join(findingDirectory(cwd, id), "verdict.json"); }
 function pendingFile(cwd: string, id: string): string { return path.join(findingDirectory(cwd, id), "pending-validation.json"); }
@@ -40,7 +42,7 @@ function validQuestion(value: unknown): value is ValidatorQuestion { return isRe
 function validVerdict(value: unknown): value is ValidatorVerdict { const v = value; return isRecord(v) && typeof v.evidence === "string" && v.evidence.trim().length > 0 && typeof v.requirement === "string" && v.requirement.trim().length > 0 && typeof v.pass === "boolean" && typeof v.at === "string" && validQuestion(v.real) && validQuestion(v.matters) && validQuestion(v.inScope); }
 function loadBoard(cwd: string): Board | null { const file = path.join(cwd, ".pi", "verdicts.json"); if (!fs.existsSync(file)) return { verdicts: {} }; try { const board: unknown = JSON.parse(fs.readFileSync(file, "utf8")); return isRecord(board) && isRecord(board.verdicts) ? { ...board, verdicts: board.verdicts } : null; } catch { return null; } }
 // A non-numeric generation (a hand-edited board) restarts the count: `"7" + 1` would concatenate to "71".
-function saveBoard(cwd: string, board: Board): void { board.generation = (typeof board.generation === "number" ? board.generation : 0) + 1; writeAtomically(path.join(cwd, ".pi", "verdicts.json"), JSON.stringify(board, null, 2)); }
+function saveBoard(cwd: string, board: Board): void { board.generation = (typeof board.generation === "number" ? board.generation : 0) + 1; writeAtomically(cwd, path.join(cwd, ".pi", "verdicts.json"), JSON.stringify(board, null, 2)); }
 // Cross-process advisory lock for board mutations (same O_EXCL + stale-takeover pattern as
 // task-graph and verifier-board): a read-modify-write under a lock cannot lose a concurrent
 // verdict. Lock name is shared with verifier-board so both writers serialize on one file.
@@ -49,10 +51,11 @@ function withBoardLock<T>(cwd: string, operation: () => T): { ok: true; value: T
   const lock = path.join(cwd, ".pi", "verdicts.lock");
   let fd: number | undefined;
   try {
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    try { fd = fs.openSync(lock, "wx"); } catch {
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > BOARD_LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
-      try { fd = fs.openSync(lock, "wx"); } catch { return { ok: false, reason: "verifier board is busy or unreadable" }; }
+    fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+    if (fd === undefined) {
+      try { if (Date.now() - fs.lstatSync(lock).mtimeMs > BOARD_LOCK_STALE_MS) fs.rmSync(lock, { force: true }); } catch { /* fail closed below */ }
+      fd = openFileExclusive(lock, { root: cwd }) ?? undefined;
+      if (fd === undefined) return { ok: false, reason: "verifier board is busy or unreadable" };
     }
     try { return { ok: true, value: operation() }; } finally {
       try { if (fd !== undefined) fs.closeSync(fd); } catch { /* release best effort */ }
@@ -67,7 +70,7 @@ export function buildValidatorBundle(input: ValidatorBundleInput): ValidatorBund
   return { ok: true, task: `## Evidence\n\n${input.evidence}\n\n## Requirement\n\n${input.requirement}\n\n## Questions\n\n1. Is it real? Can it be reproduced from the evidence alone?\n2. Does it matter? Judge significance or severity independently.\n3. Does it match the requirement / stay in scope?\n` };
 }
 
-function markPending(cwd: string, id: string): void { writeAtomically(pendingFile(cwd, id), JSON.stringify({ at: new Date().toISOString() }, null, 2)); }
+function markPending(cwd: string, id: string): void { writeAtomically(cwd, pendingFile(cwd, id), JSON.stringify({ at: new Date().toISOString() }, null, 2)); }
 function clearPending(cwd: string, id: string): void { try { fs.rmSync(pendingFile(cwd, id), { force: true }); } catch { /* a lingering marker safely blocks */ } }
 export function pendingValidatorFindings(cwd: string): string[] {
   const root = path.join(cwd, ".pi", "engagement", "findings");
@@ -107,7 +110,7 @@ export function finalAssistantOutput(messages: readonly unknown[]): string {
   }
   return "";
 }
-function writePromptTempFile(prompt: string): { dir: string; file: string } { const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-conductor-validator-")); const file = path.join(dir, "validator-system-prompt.md"); fs.writeFileSync(file, prompt, { encoding: "utf8", mode: 0o600 }); return { dir, file }; }
+function writePromptTempFile(prompt: string): { dir: string; file: string } { const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-conductor-validator-")); const file = path.join(dir, "validator-system-prompt.md"); createFileExclusive(file, prompt, { root: dir, mode: 0o600 }); return { dir, file }; }
 
 // pi (checked through 0.87) exposes no first-class registered-tool invocation from ExtensionAPI or ctx.
 // The validator's prompt is the extension's own shipped role, never a project file: a repository (or
@@ -170,7 +173,7 @@ export function recordValidatorVerdict(cwd: string, id: string, input: Validator
   const locked = withBoardLock(cwd, () => {
     try {
       const board = loadBoard(cwd); if (!board) return { ok: false as const, reason: "verifier board unreadable or malformed" };
-      writeAtomically(verdictFile(cwd, id), JSON.stringify(verdict, null, 2)); board.verdicts[`validator:${id}`] = { pass: verdict.pass, summary: `real=${verdict.real.pass}; matters=${verdict.matters.pass}; inScope=${verdict.inScope.pass}`, at }; saveBoard(cwd, board); clearPending(cwd, id);
+      writeAtomically(cwd, verdictFile(cwd, id), JSON.stringify(verdict, null, 2)); board.verdicts[`validator:${id}`] = { pass: verdict.pass, summary: `real=${verdict.real.pass}; matters=${verdict.matters.pass}; inScope=${verdict.inScope.pass}`, at }; saveBoard(cwd, board); clearPending(cwd, id);
       return { ok: true as const };
     } catch (error) { return { ok: false as const, reason: `failed to record validator verdict: ${error instanceof Error ? error.message : String(error)}` }; }
   });

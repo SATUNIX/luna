@@ -125,7 +125,9 @@ export class CaptureStore {
       if (Array.isArray(value)) return value.map((v) => this.encode(v, seen, depth + 1));
       if (value instanceof Map) return { $map: [...value.entries()].map(([k, v]) => [this.encode(k, seen, depth + 1), this.encode(v, seen, depth + 1)]) };
       if (value instanceof Set) return { $set: [...value].map((v) => this.encode(v, seen, depth + 1)) };
-      const out: Record<string, unknown> = {};
+      // A null-prototype record: assigning "__proto__" onto {} would set the prototype instead of
+      // keeping the key, and the subtree would vanish from the lossless log.
+      const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       for (const k of Object.keys(value)) {
         let v: unknown;
         try {

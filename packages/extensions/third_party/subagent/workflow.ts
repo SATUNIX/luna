@@ -26,6 +26,8 @@ import { redact, REDACTION_POLICY } from "./redact.ts";
 import { RunControl } from "./control.ts";
 import { parseScriptMeta, type ScriptPhase } from "./wf-meta.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
+import { ensureDirSafe, piWorkspaceOptions, writeFileSafe } from "./shared/safe-fs.ts";
+import { compileCheckedRegex } from "./shared/safe-regex.ts";
 
 const SUBAGENT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -319,14 +321,15 @@ const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops inc
 // Run files hold prompts and agent output, so the run directory is 0700 and its files 0600. The
 // modes are set explicitly as well, because mkdir/write modes are masked by the umask and are not
 // applied to a directory or file that already exists.
+// Run directories live under <workspace>/.pi/, so nothing on the way is followed through a
+// committed symlink (./shared/safe-fs.ts; tests/workspace-symlink-smoke.ts).
 function ensurePrivateDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureDirSafe(dir, { ...piWorkspaceOptions(dir), dirMode: 0o700 });
   fs.chmodSync(dir, 0o700);
 }
 
 function writePrivate(file: string, text: string): void {
-  fs.writeFileSync(file, text, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  writeFileSafe(file, text, piWorkspaceOptions(file, 0o600));
 }
 
 /** A step answer as it is written to steps/<id>.md: secrets redacted (redact.ts). */
@@ -355,10 +358,8 @@ function redactedState(state: RunState): RunState {
 function saveState(dir: string, state: RunState): void {
   state.updatedAt = new Date().toISOString();
   ensurePrivateDir(dir);
-  const file = path.join(dir, "state.json");
-  const tmp = `${file}.${process.pid}.tmp`;
-  writePrivate(tmp, JSON.stringify(redactedState(state), null, 2));
-  fs.renameSync(tmp, file);
+  // writeFileSafe replaces the file through its own exclusive temporary file and a rename.
+  writePrivate(path.join(dir, "state.json"), JSON.stringify(redactedState(state), null, 2));
 }
 
 const RUN_STATES: ReadonlySet<string> = new Set(["running", "passed", "failed", "interrupted"]);
@@ -482,7 +483,10 @@ function gatePasses(pattern: string, output: string): boolean {
   if (re) {
     const [, source = "", flags = ""] = re;
     try {
-      return new RegExp(source, flags.includes("i") ? flags : `${flags}i`).test(output);
+      // A project workflow is repository content, so its gate pattern goes through the shared
+      // safe-regex check (./shared/safe-regex.ts); a refused pattern fails the gate.
+      const checked = compileCheckedRegex(source, flags.includes("i") ? flags : `${flags}i`);
+      return checked.ok && checked.re.test(output);
     } catch {
       return false;
     }

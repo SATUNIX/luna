@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "./shared/safe-fs.ts";
 
 // AGENTS.md is deliberately not a candidate: pi already loads the first of AGENTS.md or
 // CLAUDE.md in each directory into the system prompt as project context (not both), so
@@ -51,17 +52,16 @@ export default function (_pi: ExtensionAPI) {
     // guidelines handler runs before or after context-sieve's session_start.
     const guidelinesText = readGuidelines(ctx.cwd);
     if (guidelinesText) {
-      const dir = contribDir(ctx.cwd);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "guidelines.json"),
+      // Workspace state: never written through a committed symlink (./shared/safe-fs.ts).
+      writeFileSafe(
+        path.join(contribDir(ctx.cwd), "guidelines.json"),
         JSON.stringify({
           id: "guidelines",
           priority: 10,
           budgetTokens: 2000,
           content: `## Project Guidelines\n\n${guidelinesText.trim()}`,
         }),
-        "utf8",
+        { root: ctx.cwd },
       );
     }
   });

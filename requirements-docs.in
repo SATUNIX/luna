@@ -1,0 +1,4 @@
+# The docs toolchain, top level only. requirements-docs.txt is generated from this file with
+# hashes for every package (CI installs it with --require-hashes):
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras requirements-docs.in
+mkdocs==1.6.1

@@ -42,7 +42,8 @@ check to pass in a trusted evaluation **and** the independent review to approve.
 Every container the supervisor starts has these properties, and they cannot be configured away.
 The supervisor also re-checks the finished `run` argument list against them before it executes
 (`packages/autonomy/lib/containment.ts`), so a bug in an argument builder cannot start a
-privileged container or one holding the engine socket:
+privileged container, one holding the engine socket, or an image other than the worker image and
+the contract's `permissions.network.serviceImages` (`tests/autonomy-boundary-smoke.ts`):
 
 - non-root, read-only root filesystem, all capabilities dropped, `no-new-privileges`, and pids,
   memory and CPU limits;
@@ -76,7 +77,12 @@ instead.
 
 The firewall trusts the supervisor's statement that the boundary is a container. It cannot verify
 it, which is why the boundary probe runs before every start and resume, and why the host-side
-containment check exists.
+containment check exists. What the firewall does check is that the contract's provenance is seen
+from the initial user namespace, so the user and mount (and PID) namespaces a user can create
+without root count for nothing (`tests/firewall-unattended-smoke.ts`). A consequence: a worker
+under a rootless engine, including the default rootless Podman, is in such a namespace and is not
+unattended; it runs under the normal headless rules. The boundary probe also reports whether the
+worker shares PID 1's namespaces (`packages/autonomy/tests/boundary-probe.ts`).
 
 ### Authorisation is bound to the boundary
 
@@ -257,6 +263,24 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   charter, the report, the commits and the diff. A malformed answer, or none after three attempts,
   counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
   can salvage what is sound.
+- **Review inputs are never worker-authored.** The worker can write wherever its write areas allow,
+  so the host decides what the review sees and what no review may pass
+  (`tests/autonomy-review-inputs-smoke.ts`):
+  - the charter comes from the integration head the cycle started from, never from the cycle's own
+    commit;
+  - a cycle that changes `autonomy/CHARTER.md`, package-manager configuration, a path in
+    `templateOptions.integration.controlPaths` (globs, for example the scripts your checks run) or
+    the `scripts` of any `package.json` is not merged, and no model is asked, unless
+    `templateOptions.integration.allowControlChanges` is `true` (which `plan` warns about). This
+    applies with the review turned off too. Package-manager configuration is `.npmrc`, `.yarnrc`,
+    `.yarnrc.yml`, `.yarn/plugins/`, `.yarn/releases/`, `.pnpmfile.*`, `pnpm-workspace.yaml` and
+    `bunfig.toml` at any depth: it can change what every `npm run` executes;
+  - a diff longer than 60,000 characters (lockfiles excluded) is not merged; it is never cut down
+    to its start and end for the review. A diff the host cannot read in full (a git failure, a
+    timeout, or output over its cap) is not merged either, with the review on or off;
+  - the review prompt lists the changed tests, check definitions, package-manager configuration,
+    `package.json` files and the files their scripts name, says the charter is the host's copy, and
+    treats the report, commits and diff as data, never instructions.
 - **The manager** is a separate model call, made only when a trigger fires (20 minutes without
   events, 90 minutes without a push, the 3-hour soft limit, the per-cycle budget, a crash, two red
   gates in a row, repeated stall escalations, or a session that ended without a report). It answers
@@ -293,8 +317,10 @@ The charter, backlog and handoff a repository is seeded with are in `packages/au
    packages/autonomy/build-image.sh --kit-ref v<version> --base-ref origin/main
    ```
 
-   `--kit-ref` is the kit release the worker runs (before the release tag exists, pass a branch such as
-   `origin/main`). `--base-ref` optionally prebakes that repository's dependencies for offline
+   `--kit-ref` is the kit release the worker runs. Without it the script uses the release tag of the
+   checkout's `package.json` version (`v<version>`), so a build never quietly bakes an older kit, and it
+   stops before building when that tag is not in the clone (`tests/autonomy-build-image-smoke.ts`).
+   Before the release tag exists, pass a branch such as `origin/main`. `--base-ref` optionally prebakes that repository's dependencies for offline
    installs. Add toolchains your tasks need in a derived image and name it in `runtime.image`.
 4. Run the supervisor from a checkout of `main`, not from the branch a worker is changing.
 
@@ -491,6 +517,9 @@ start with a small budget, before trusting a long run.
 
 ## Limits
 
+The worker is attacker A-7 in the [threat model](threat-model.md); the controls on it are C-31 to
+C-34 in [Security controls](security-controls.md).
+
 - **Consent is by whoever holds the terminal, and a shell is a terminal.** `plan --authorise --yes`,
   `start`, `promote` and `reconfigure` accept `--yes` without a screen, and the authorisation record
   is a consent and integrity record, not a signature. A model with a shell tool could therefore run
@@ -510,7 +539,14 @@ start with a small budget, before trusting a long run.
   Anything the worker can read (the repository, references) can go to the model provider: do not add
   references that hold secrets.
 - **Acceptance checks are quality evidence, not a security boundary.** They run the worker's own code
-  in a clean container; the container's limits are what contain them.
+  in a clean container; the container's limits are what contain them. When the checks come from the
+  worker's tree (the default overlay is empty), a cycle can weaken a test or a check file the host does
+  not list as a control path, and the merge review is then the only independent control on it. List
+  the files your checks run in `templateOptions.integration.controlPaths`, or hold them out with
+  `acceptance.overlay`.
+- **An allowlisted egress host is an opaque channel.** The egress proxy checks the destination of a
+  `CONNECT` tunnel, never what passes through it, so anything the worker can read can be sent to any
+  host in `permissions.network.egress`.
 - **One run per integration branch at a time.** Two runs merging into the same branch would diverge;
   a diverged branch stops the run as `integration_diverged`.
 - **Dependencies are prebaked** from the base ref's lockfile. A change to dependencies fails the

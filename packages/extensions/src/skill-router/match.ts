@@ -11,6 +11,11 @@
  *    reads the results and chooses.
  */
 
+// node:vm is not a sandbox here: it runs only the fixed script "re.test(s)", for its timeout
+// (eslint.config.ts allows node:vm in this file and the schema validators only).
+import { Script, createContext } from "node:vm";
+import { compileCheckedRegex } from "./shared/safe-regex.ts";
+
 export interface SkillEntry {
   name: string;
   description: string;
@@ -27,14 +32,44 @@ export interface TriggerHit {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * A project skill's `re:` trigger is text from the opened repository, tested against every prompt,
+ * so it is untrusted. It is compiled only when the shared safe-regex check accepts it
+ * (./shared/safe-regex.ts: no nested quantifiers, no backreferences, a length and choice cap), and
+ * each test runs under a time limit; a trigger that hits the limit is switched off for the
+ * session. tests/skill-routing-smoke.ts pins both.
+ */
+export const TRIGGER_TEST_MS = 50;
+const triggerScript = new Script("re.test(s)");
+const triggerContext = createContext({ re: /(?:)/, s: "" });
+/** `re:` triggers refused or switched off, with the reason (for diagnostics and tests). */
+export const refusedTriggers = new Map<string, string>();
+
+function timedTest(re: RegExp, text: string): boolean | "slow" {
+  triggerContext.re = re;
+  triggerContext.s = text;
+  try {
+    return triggerScript.runInContext(triggerContext, { timeout: TRIGGER_TEST_MS }) === true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return "slow";
+    throw error;
+  } finally {
+    triggerContext.re = /(?:)/;
+    triggerContext.s = "";
+  }
+}
+
 const compiled = new Map<string, RegExp | null>();
 export function triggerRegex(trigger: string): RegExp | null {
   const cached = compiled.get(trigger);
   if (cached !== undefined) return cached;
   let re: RegExp | null = null;
   try {
-    if (trigger.startsWith("re:")) re = new RegExp(trigger.slice(3), "i");
-    else {
+    if (trigger.startsWith("re:")) {
+      const checked = compileCheckedRegex(trigger.slice(3), "i");
+      if (checked.ok) re = checked.re;
+      else refusedTriggers.set(trigger, checked.problem);
+    } else {
       const phrase = trigger.trim().toLowerCase();
       if (phrase) re = new RegExp(`(?<![\\w/-])${escapeRe(phrase).replace(/\s+/g, "\\s+")}(?![\\w-])`, "i");
     }
@@ -54,7 +89,16 @@ export function matchTriggers(prompt: string, skills: SkillEntry[], exclude: Set
     let best: { trigger: string; weight: number } | null = null;
     for (const t of s.triggers) {
       const re = triggerRegex(t);
-      if (!re?.test(text)) continue;
+      if (!re) continue;
+      if (t.startsWith("re:")) {
+        const hit = timedTest(re, text);
+        if (hit === "slow") {
+          compiled.set(t, null);
+          refusedTriggers.set(t, `took longer than ${TRIGGER_TEST_MS} ms on a prompt; switched off for this session`);
+          continue;
+        }
+        if (!hit) continue;
+      } else if (!re.test(text)) continue;
       const weight = t.startsWith("re:") ? 40 : t.length;
       if (!best || weight > best.weight) best = { trigger: t, weight };
     }

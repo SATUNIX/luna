@@ -95,9 +95,22 @@ cmd_install() {
   fi
 }
 
+# The pi version this kit is tested against: the exact devDependencies pin in the kit's package.json.
+kit_pi_version() {
+  node -p 'require(process.argv[1]).devDependencies["@earendil-works/pi-coding-agent"] || ""' "$ROOT/../../package.json" 2>/dev/null
+}
+
 cmd_update_pi() {
   c_bold "Updating pi core (@earendil-works/pi-coding-agent)"
-  npm install -g @earendil-works/pi-coding-agent
+  local version
+  version=$(kit_pi_version)
+  if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+    c_err "Could not read an exact pi version from the kit's package.json (got '${version}'); not installing."
+    return 1
+  fi
+  # The version the kit is tested against, never "latest", and without install scripts.
+  echo "Running: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@$version"
+  npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@$version" || return 1
   pi --version
 }
 

@@ -113,7 +113,7 @@ export function buildRegistryEntries(): RegistryEntry[] {
  * file against this so a hand-edited summary cannot pass with green CI (B-098).
  */
 export function extensionsCatalogueContent(entries: readonly RegistryEntry[] = buildRegistryEntries()): string {
-  // M-07 fix: the table previously had no Status column, so a quarantined stub (e.g.
+  // The table previously had no Status column, so a quarantined stub (e.g.
   // mcp-router, profiles: []) looked like every other extension except for a blank
   // Profiles cell - nothing told a reader *why*. Surface each extension's manifest
   // `status` (stable/beta/experimental/stub) directly.

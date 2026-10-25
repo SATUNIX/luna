@@ -105,10 +105,27 @@ const tests: Record<string, () => void> = {
     };
     assert.match(jobs.get("gate") ?? "", /uses:\s*\.\/\.github\/workflows\/ci\.yml/, "the gate is the same CI workflow every pull request runs, by local path (the same commit)");
     assert.deepEqual(needs("gate"), [], "the gate depends on nothing");
-    assert.deepEqual(needs("plan"), ["gate"], "the plan (dry run) waits for the gate");
+    assert.match(jobs.get("security") ?? "", /uses:\s*\.\/\.github\/workflows\/security\.yml/, "the security workflow of the same commit is a gate too");
+    assert.deepEqual(needs("security"), [], "the security gate depends on nothing");
+    assert.deepEqual(needs("plan").sort(), ["gate", "security"], "the plan (dry run) waits for both gates");
     assert.deepEqual(needs("github-release"), ["plan"], "creating the release waits for the plan");
     assert.deepEqual(needs("npm-publish"), ["plan"], "publishing waits for the plan");
     // plan needs gate, so both release jobs transitively need it.
+  },
+
+  "npm receives the tarball the plan job built and inspected, never a rebuild": () => {
+    const jobs = parseJobs(read("release.yml"));
+    const plan = jobs.get("plan") ?? "";
+    const publish = jobs.get("npm-publish") ?? "";
+    assert.match(plan, /^ {6}tarball: \$\{\{ steps\.pack\.outputs\.tarball \}\}$/m, "plan outputs the tarball's name");
+    assert.match(plan, /^ {6}integrity: \$\{\{ steps\.pack\.outputs\.integrity \}\}$/m, "plan outputs the tarball's sha512");
+    assert.match(plan, /uses: actions\/upload-artifact@[0-9a-f]{40}[\s\S]*?name: npm-tarball/, "plan uploads the tarball it inspected");
+    assert.match(publish, /uses: actions\/download-artifact@[0-9a-f]{40}[\s\S]*?name: npm-tarball/, "npm-publish downloads that tarball");
+    assert.match(publish, /INTEGRITY: \$\{\{ needs\.plan\.outputs\.integrity \}\}[\s\S]*openssl dgst -sha512[\s\S]*"\$actual" != "\$INTEGRITY"/, "npm-publish checks its sha512 against plan's before publishing");
+    const publishes = publish.split(/\r?\n/).filter((l) => isCode(l) && /\bnpm publish\b/.test(l));
+    assert.equal(publishes.length, 1);
+    assert.match(publishes[0] ?? "", /npm publish "\.\/tarball\/\$\{TARBALL\}"/, "the published file is the downloaded tarball");
+    for (const rebuild of [/npm ci\b/, /build-npm\.ts/, /npm pack\b/, /actions\/checkout@/]) assert.ok(!rebuild.test(publish), `npm-publish must not rebuild (${rebuild})`);
   },
 
   "no job releases or publishes through a third-party action (the side-effect scan reads commands, not actions)": () => {
@@ -179,9 +196,21 @@ const tests: Record<string, () => void> = {
         if (image !== undefined) assert.match(image, /@sha256:[0-9a-f]{64}$/, `${file}: image ${image} is a mutable tag; pin it by digest`);
       }
     }
-    const req = fs.readFileSync(path.join(ROOT, "requirements-docs.txt"), "utf8").split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("#"));
-    assert.ok(req.length > 0, "requirements-docs.txt names the docs toolchain");
-    for (const line of req) assert.match(line, /^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.+-]*$/, `requirements-docs.txt: "${line}" must be an exact version (the docs build is part of the release gate)`);
+    // requirements-docs.txt is a pip-compile lock: one logical requirement per package (continued
+    // with backslashes), each an exact version with at least one sha256 hash, and every install of
+    // it in CI says --require-hashes.
+    const logical = fs.readFileSync(path.join(ROOT, "requirements-docs.txt"), "utf8").replace(/\\\r?\n/g, " ").split(/\r?\n/).map((l) => l.replace(/#.*$/, "").trim()).filter(Boolean);
+    assert.ok(logical.length > 1, "requirements-docs.txt locks the docs toolchain and its dependencies");
+    for (const line of logical) {
+      assert.match(line, /^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.+-]*(?:\s+--hash=sha256:[0-9a-f]{64})+$/, `requirements-docs.txt: "${line.slice(0, 60)}" must be an exact version with sha256 hashes (the docs build is part of the release gate)`);
+    }
+    const direct = fs.readFileSync(path.join(ROOT, "requirements-docs.in"), "utf8").split(/\r?\n/).map((l) => l.replace(/#.*$/, "").trim()).filter(Boolean);
+    for (const line of direct) assert.ok(logical.some((l) => l.toLowerCase().startsWith(`${line.toLowerCase()} `)), `requirements-docs.in's ${line} is locked in requirements-docs.txt`);
+    for (const file of fs.readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml"))) {
+      for (const line of read(file).split(/\r?\n/)) {
+        if (isCode(line) && /pip install\b.*requirements-docs\.txt/.test(line)) assert.match(line, /--require-hashes/, `${file}: \`${line.trim()}\` must install with --require-hashes`);
+      }
+    }
   },
 };
 

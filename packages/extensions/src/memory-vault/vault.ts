@@ -19,6 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { bm25, jaccard, passesFloor, termFrequencies, tokenize, type Doc } from "./search.ts";
+import { redactSecrets } from "./shared/redact.ts";
 
 export const MEMORY_TYPES = ["fact", "decision", "preference", "gotcha", "reference"] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
@@ -196,24 +197,10 @@ const indexDir = (root: string) => path.join(root, ".pi-index");
 
 // --- redaction ---------------------------------------------------------------
 // The vault must never hold a secret. Models are told to omit them, but a recap or saved
-// memory can still copy one from a tool result, so mask the common shapes before writing.
-const SECRET_PATTERNS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{40,}/g,
-  /\bsk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{20,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{35}\b/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /\b((?:api[_-]?key|secret|token|password|passwd|pwd|auth)["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
-];
-
+// memory can still copy one from a tool result, so mask the kit's secret shapes before writing
+// (the canonical table, ./shared/redact.ts; tests/redaction-corpus-smoke.ts).
 export function redact(text: string): string {
-  let out = text;
-  for (const re of SECRET_PATTERNS) out = out.replace(re, (m, prefix) => (typeof prefix === "string" && m.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]"));
-  return out;
+  return redactSecrets(text).text;
 }
 
 // --- notes -------------------------------------------------------------------

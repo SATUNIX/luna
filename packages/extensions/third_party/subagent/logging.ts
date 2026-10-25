@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_MAX_RUN_LOGS, isRecord, MAX_LOG_BYTES, MAX_REGISTRY_RUNS, SUBAGENT_STATE_DIRNAME, toText } from "./config.ts";
 import type { RunLog } from "./types.ts";
+import { appendFileSafe, ensureDirSafe, piWorkspaceOptions, writeFileSafe } from "./shared/safe-fs.ts";
 
 export function subagentStateDir(cwd: string): string {
   const override = process.env.PI_KIT_SUBAGENT_STATE_DIR;
@@ -71,9 +72,7 @@ export function compactRegistry(dir: string, keepRuns: number = MAX_REGISTRY_RUN
     if (order.length <= keepRuns) return;
     const keep = new Set(order.slice(-keepRuns));
     const kept = lines.filter((_line, i) => keep.has(ids[i] ?? ""));
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, `${kept.join("\n")}\n`);
-    fs.renameSync(tmp, file);
+    writeFileSafe(file, `${kept.join("\n")}\n`, piWorkspaceOptions(file));
   } catch {
     /* best effort */
   }
@@ -92,8 +91,11 @@ export function createRunLog(cwd: string, agentName: string, task: string, depth
   let bytes = 0;
   let truncated = false;
   let closed = false;
+  // The state directory is <workspace>/.pi/subagent by default: written without following a
+  // committed symlink (./shared/safe-fs.ts).
+  const io = piWorkspaceOptions(logPath);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    ensureDirSafe(dir, io);
     pruneRunLogs(dir);
   } catch {
     /* best effort */
@@ -105,17 +107,17 @@ export function createRunLog(cwd: string, agentName: string, task: string, depth
       bytes += Buffer.byteLength(text, "utf8");
       if (bytes > MAX_LOG_BYTES) {
         truncated = true;
-        fs.appendFileSync(logPath, "[log truncated: MAX_LOG_BYTES reached]\n");
+        appendFileSafe(logPath, "[log truncated: MAX_LOG_BYTES reached]\n", io);
         return;
       }
-      fs.appendFileSync(logPath, text);
+      appendFileSafe(logPath, text, io);
     } catch {
       /* best effort */
     }
   };
   const record = (event: string, detail?: Record<string, unknown>) => {
     try {
-      fs.appendFileSync(registryPath, `${JSON.stringify({ ts: nowIso(), id, event, agent: agentName, depth, log: logPath, ...detail })}\n`);
+      appendFileSafe(registryPath, `${JSON.stringify({ ts: nowIso(), id, event, agent: agentName, depth, log: logPath, ...detail })}\n`, io);
     } catch {
       /* best effort */
     }
@@ -132,7 +134,7 @@ export function createRunLog(cwd: string, agentName: string, task: string, depth
       if (!pid) return;
       write(`# pid=${pid}`);
       try {
-        fs.appendFileSync(registryPath, `${JSON.stringify({ ts: nowIso(), id, event: "spawn", pid, agent: agentName })}\n`);
+        appendFileSafe(registryPath, `${JSON.stringify({ ts: nowIso(), id, event: "spawn", pid, agent: agentName })}\n`, io);
       } catch {
         /* best effort */
       }

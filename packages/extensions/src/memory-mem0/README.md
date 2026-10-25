@@ -29,3 +29,14 @@ An HTTP response with status `>= 400` is treated as a failure, not as a successf
 
 See `tests/memory-mem0-smoke.ts` for the hermetic regression coverage (local `node:http`
 server; no Docker/Qdrant).
+
+## What is sent
+
+`mem0_add` passes the memory text through the kit's secret-redaction table (`shared/redact.ts`,
+see the "Redaction" section of `docs/security.md`) before either transport stores it, so a
+secret-shaped value is stored as `[REDACTED]`. On the REST path `MEM0_API_KEY` is sent only over
+`https://` or to a loopback host (`localhost`, `127.x.x.x`, `[::1]`); plain `http://` to any other
+host is refused unless `MEM0_ALLOW_INSECURE_HTTP=1` is set. A response larger than 4 MiB is
+refused instead of being buffered. `tests/memory-mem0-smoke.ts` pins the REST path's redaction,
+the key rule and the size limit; nothing tests the MCP path's redaction separately (it stores the
+same redacted text).

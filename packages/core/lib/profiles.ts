@@ -16,6 +16,7 @@
  *     "prompts":    { "exclude": ["name"], "include": ["name"] }
  *   }
  */
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { array, boolean, isRecord, object, optional, parseJson, string, unknownValue, ValidationError, type Infer } from "./guard.ts";
@@ -573,10 +574,18 @@ export function restoreSnapshots(snaps: readonly FileSnapshot[]): string[] {
     try {
       if (s.existed) {
         fs.mkdirSync(path.dirname(s.path), { recursive: true });
-        const tmp = `${s.path}.${process.pid}.restore.tmp`;
-        fs.writeFileSync(tmp, s.bytes);
-        if (s.mode !== null) fs.chmodSync(tmp, s.mode);
-        fs.renameSync(tmp, s.path);
+        // Created 0600 and exclusively (O_EXCL, so a planted name is refused, not followed), then
+        // given the snapshot's mode: a restored .env never exists world-readable, even briefly
+        // (tests/profile-transaction-smoke.ts).
+        const tmp = `${s.path}.${process.pid}.${randomBytes(6).toString("hex")}.restore.tmp`;
+        try {
+          fs.writeFileSync(tmp, s.bytes, { mode: 0o600, flag: "wx" });
+          if (s.mode !== null) fs.chmodSync(tmp, s.mode);
+          fs.renameSync(tmp, s.path);
+        } catch (error) {
+          fs.rmSync(tmp, { force: true });
+          throw error;
+        }
       } else {
         fs.rmSync(s.path, { force: true });
       }

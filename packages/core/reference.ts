@@ -164,8 +164,8 @@ function scan(ext: Extension): { commands: Map<string, string>; tools: Map<strin
   return { commands, tools };
 }
 
-/** Markdown table cell: one line, pipes escaped. */
-const cell = (s: string): string => s.replace(/\s+/g, " ").replace(/\|/g, "\\|").trim();
+/** Markdown table cell: one line, backslashes and pipes escaped. */
+const cell = (s: string): string => s.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").trim();
 
 /** Hand-written docs pages, read once. */
 function docsPages(): Array<{ file: string; text: string }> {

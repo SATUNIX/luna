@@ -54,7 +54,7 @@ try {
   const stub = ((command: string, args: readonly string[], options: SpawnSyncOptions): Pick<SpawnSyncReturns<Buffer>, "status"> => { calls.push({ command, args, options }); return { status: 0 }; }) as typeof spawnSync;
   for (const bad of ['a"b', "a&b", "a|b", "a<b", "a>b", "a^b", "a%PATH%b", "a!b", "a`b"]) assert.throws(() => runPi("pi", ["install", bad], { platform: "win32", spawn: stub }), /shell metacharacter/, bad);
   assert.equal(calls.length, 0, "a refused argument starts nothing");
-  runPi("C:\\Program Files\\nodejs\\pi.cmd", ["install", "git:github.com/SATUNIX/pi-system@v0.2.4-beta.0"], { platform: "win32", spawn: stub });
+  runPi("C:\\Program Files\\nodejs\\pi.cmd", ["install", "git:github.com/SATUNIX/luna@v0.2.4-beta.0"], { platform: "win32", spawn: stub });
   const [windowsCall] = calls;
   assert.ok(windowsCall, "the Windows call reached spawn");
   assert.equal(windowsCall.command, '"C:\\Program Files\\nodejs\\pi.cmd"', "a Windows path with spaces is quoted");
@@ -74,7 +74,7 @@ try {
   }
 
   // 4. The display form is for reading only and quotes what needs it.
-  assert.equal(displayCommand(["install", "git:github.com/SATUNIX/pi-system@v0.2.4-beta.0"]), "pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.0");
+  assert.equal(displayCommand(["install", "git:github.com/SATUNIX/luna@v0.2.4-beta.0"]), "pi install git:github.com/SATUNIX/luna@v0.2.4-beta.0");
   assert.equal(displayCommand(["remove", "/tmp/a b", "-l"]), 'pi remove "/tmp/a b" -l');
   ok("the printed command quotes arguments that contain spaces");
 

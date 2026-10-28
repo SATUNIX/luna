@@ -601,6 +601,10 @@ socket.on("data", (chunk) => {
 			p.port = second.port;
 			p.fingerprint = second.fingerprint;
 			p.deviceId = record.id;
+			// control.json, which startRemoteHost waits for, is written before the startup log
+			// lines, so wait for the last of them (the bind warning) rather than read at once.
+			const host = second;
+			await waitUntil(() => /WARNING: bound to every interface/.test(host.output()), 5000, "the startup bind warning");
 			const out = second.output();
 			assert.match(out, /WARNING: linked device "Planted Phone" .* has no pairing approval in audit\.jsonl/);
 			assert.match(out, /WARNING: bound to every interface .* PI_REMOTE_BIND=tailscale, or loopback/);

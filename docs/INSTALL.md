@@ -5,7 +5,7 @@
 
 pi-system is one pi package. A **profile** chooses which of its extensions, skills and prompts
 load; there are no separate packages per profile. It is delivered from its public git repository,
-`github.com/SATUNIX/pi-system` (set in `packages/core/distribution.json`). This is a beta; see
+`github.com/SATUNIX/luna` (set in `packages/core/distribution.json`). This is a beta; see
 [Beta status](beta.md).
 
 ## Requirements
@@ -18,11 +18,11 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
+pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 pi
 ```
 
-pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/pi-system`. On the first
+pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna`. On the first
 interactive start the kit applies the `balanced` profile and asks for a `/reload`. Set
 `PI_KIT_AUTO_PROFILE=<name>` to pick another profile, or `0` to leave the package unfiltered.
 
@@ -36,8 +36,8 @@ Use the installer when you want a specific profile chosen up front, a non-intera
 project scope. It wraps `pi install` and pi's settings, and is idempotent:
 
 ```sh
-git clone https://github.com/SATUNIX/pi-system.git
-cd pi-system
+git clone https://github.com/SATUNIX/luna.git
+cd luna
 node packages/core/install.ts --channel latest --profile balanced
 ```
 
@@ -105,7 +105,7 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 
 | Mode | Command | When |
 | --- | --- | --- |
-| Release from pi | `pi install git:github.com/SATUNIX/pi-system@vX.Y.Z` | Normal use; the profile is applied on first start |
+| Release from pi | `pi install git:github.com/SATUNIX/luna@vX.Y.Z` | Normal use; the profile is applied on first start |
 | Release from the installer | `node packages/core/install.ts --channel <latest\|next\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
 | Local checkout (editable) | `node packages/core/install.ts --profile <name> --yes` | Developing the kit: pi loads the checkout in place, edit and `/reload` |
 | Project auto-install | Ship `.pi/settings.json` in a repository | pi auto-installs on first trusted start |
@@ -114,7 +114,7 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 ### From a checkout
 
 ```sh
-git clone https://github.com/SATUNIX/pi-system.git && cd pi-system
+git clone https://github.com/SATUNIX/luna.git && cd luna
 npm ci --ignore-scripts
 node packages/core/install.ts --profile balanced --yes
 

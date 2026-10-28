@@ -1,6 +1,6 @@
 # Releasing
 
-pi-system is delivered from its public git repository, `github.com/SATUNIX/pi-system`. pi
+pi-system is delivered from its public git repository, `github.com/SATUNIX/luna`. pi
 installs it straight from there, so **a pushed `vX.Y.Z` tag is the release**: there is no package
 registry in between.
 
@@ -167,7 +167,7 @@ delivery is the supported path. To enable npm as well, an operator needs to:
 3. Publish the first version by hand (`npm login`, then `npm publish --access public`), because
    npm only lets you attach a trusted publisher to a package that exists.
 4. On npmjs.com, package settings, Trusted Publisher, GitHub Actions: organisation `SATUNIX`,
-   repository `pi-system`, workflow `release.yml`, environment `npm`. Then set publishing access
+   repository `luna`, workflow `release.yml`, environment `npm`. Then set publishing access
    to "Require two-factor authentication and disallow tokens".
 5. Set `"delivery": "npm"` in `packages/core/distribution.json` **only if** npm should replace
    git as the default; git delivery keeps working without it.
@@ -185,42 +185,27 @@ node packages/core/release-notes.ts 0.2.4-beta.0   # preview the notes for a rel
 
 ## Where releases come from
 
-Releases are cut on GitHub, the authoritative repository: the release branch, its pull request
-and the tag all live there. The GitLab mirror only follows GitHub and is never released from.
-A release whose content is exported from the private development lineage arrives as a draft pull
-request on a `release/<tag>` branch and is reviewed like any other
-([Repository topology](repository-topology.md#how-a-release-reaches-this-repository)).
+GitHub `SATUNIX/luna` is the only repository: the release branch, its pull request and the
+operator's tag all live here, following `release.ts` (`tests/release-plan-smoke.ts`). The GitLab
+mirror and private-lineage export pipeline are archived; releases no longer arrive as exported
+draft pull requests. Earlier development happened in a private GitLab project, now archived
+([Repository topology](repository-topology.md#history)).
 
 ## Releases that change scan exceptions
 
 The `leak-scan` pull-request check reads `packages/core/leak-scan-exceptions.json` from `main`,
-never from the pull request, and fails any pull request that changes that file together with other
-files ([CI security](ci-security.md#gating)). A new exception is therefore reviewed on its own
-and lands before the content it admits. A release pull request gets no exemption: the publication
-job's bot is not a bypass actor, and the check is not relaxed for `release/*` branches.
+never from the pull request, and fails any pull request that changes that file together with
+other files (`tests/prepush-scan-smoke.ts`; [CI security](ci-security.md#gating)). A release pull
+request gets no exemption.
 
-When an exported release changes the exceptions file, the publication job opens two draft pull
-requests instead of one:
+If a release needs a new exception:
 
-1. **`release/<tag>-exceptions`**: `main` plus only the exceptions change. Its `leak-scan` passes.
-2. **`release/<tag>`**: the release, stacked on that exceptions commit. Its body says
-   **Blocked by** and links the exceptions pull request. Its `leak-scan` fails with
-   `changed together with other files` for as long as the exceptions commit is not on `main`.
+1. Open a pull request containing only the exceptions change. Review every entry against the
+   content it admits, then merge that pull request first.
+2. Update the release branch from `main`. Its changes must now exclude the exceptions file, and
+   `leak-scan` must pass with the exceptions read from `main`.
+3. Merge the release pull request after review and every required check, then let the operator
+   tag the release as described above.
 
-The owner then:
-
-1. Reviews every changed entry in the exceptions pull request against the content it admits in
-   the release pull request, and merges it with **a merge commit**, not squash or rebase, so the
-   exceptions commit reaches `main` unchanged.
-2. Updates the release branch from `main` (GitHub's "Update branch"; the strict required-checks
-   policy asks for it anyway). That push re-runs `leak-scan`, which now reads the new exceptions
-   from `main` and no longer sees an exceptions change in the release pull request.
-3. Marks the release pull request ready and merges it once every required check passes.
-
-The publication job never overwrites a branch. Re-running it reuses both branches and both pull
-requests when they hold exactly what it would push, and refuses otherwise. If the exceptions pull
-request was squashed or rebased by mistake, the release branch still carries the original
-exceptions commit and keeps failing `leak-scan`: delete the `release/<tag>` branch (which closes
-its pull request) and re-run the publication job, which rebuilds the release on `main` without an
-exceptions change. A release that leaves the exceptions file alone opens only `release/<tag>`, on
-`main`.
+There is no export job or release bot preparing these pull requests. Contributors prepare them
+here under the same review and leak-scan rules as every other change.

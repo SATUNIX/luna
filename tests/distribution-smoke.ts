@@ -21,7 +21,8 @@ import { parseJsonAs } from "../packages/core/lib/guard.ts";
 
 const restoreKitEnv = isolateKitEnv();
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const GIT = "git:github.com/SATUNIX/pi-system";
+const GIT = "git:github.com/SATUNIX/luna";
+const PREVIOUS = "git:github.com/SATUNIX/pi-system";
 const LEGACY = "git:legacy.example.invalid/lab/pi-system";
 
 function writeJson(file: string, value: unknown): void {
@@ -65,17 +66,17 @@ const tests = {
     const dir = scratch("pi-kit-previous-");
     try {
       const file = path.join(dir, "distribution.json");
-      for (const previousSources of [null, "git:github.com/SATUNIX/pi-system", [42], [""], ["npm:luna"], ["not a source"]]) {
+      for (const previousSources of [null, "git:github.com/SATUNIX/luna", [42], [""], ["npm:luna"], ["not a source"]]) {
         writeJson(file, { git: { previousSources } });
         assert.throws(() => readDistribution(file, {}), /git.previousSources/);
       }
-      writeJson(file, { git: { source: "git:github.com/SATUNIX/luna", previousSources: [GIT] } });
+      writeJson(file, { git: { source: "git:github.com/SATUNIX/luna", previousSources: [PREVIOUS] } });
       const d = readDistribution(file, {});
-      assert.deepEqual(d.git.previousSources, [GIT]);
+      assert.deepEqual(d.git.previousSources, [PREVIOUS]);
       assert.equal(isPreviousGitSource("ssh://git@GITHUB.COM/satunix/pi-system.git@feature/test", d.git.previousSources), true);
       assert.equal(isLegacyGitSource(GIT, d.git.legacySources), false);
       assert.equal(d.git.source, "git:github.com/SATUNIX/luna");
-      assert.deepEqual(readDistribution(undefined, {}).git.previousSources, []);
+      assert.deepEqual(readDistribution(undefined, {}).git.previousSources, [PREVIOUS]);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   },
   "distribution.json selects git delivery from the public GitHub repository": () => {
@@ -116,13 +117,13 @@ const tests = {
   },
 
   "git sources parse to pi's identity (host/path, ref ignored)": () => {
-    assert.deepEqual(parseGitSource(`${GIT}@v0.2.1-beta.0`), { repo: "https://github.com/SATUNIX/pi-system", ref: "v0.2.1-beta.0", key: "github.com/satunix/pi-system" });
-    const ssh = parseGitSource("git:git@github.com:SATUNIX/pi-system");
+    assert.deepEqual(parseGitSource(`${GIT}@v0.2.1-beta.0`), { repo: "https://github.com/SATUNIX/luna", ref: "v0.2.1-beta.0", key: "github.com/satunix/luna" });
+    const ssh = parseGitSource("git:git@github.com:SATUNIX/luna");
     assert.ok(ssh);
-    assert.equal(ssh.key, "github.com/satunix/pi-system");
-    const https = parseGitSource("https://github.com/SATUNIX/pi-system.git");
+    assert.equal(ssh.key, "github.com/satunix/luna");
+    const https = parseGitSource("https://github.com/SATUNIX/luna.git");
     assert.ok(https);
-    assert.equal(https.repo, "https://github.com/SATUNIX/pi-system");
+    assert.equal(https.repo, "https://github.com/SATUNIX/luna");
     assert.equal(parseGitSource("npm:@satunix/pi-system"), null);
     assert.equal(parseGitSource("/home/me/pi-system"), null);
     assert.equal(gitSourceFor(`${GIT}@v1.0.0`, "v1.1.0"), `${GIT}@v1.1.0`);
@@ -149,7 +150,7 @@ const tests = {
       writeJson(settingsPath, { packages: [`${GIT}@v0.2.1-beta.0`, "git:github.com/example/other-tool", "npm:pi-lens@3.8.63"] });
       const settings = parseJsonAs(SettingsSchema, fs.readFileSync(settingsPath, "utf8"), settingsPath);
       assert.equal(findPackageEntry(settings, GIT, settingsPath), 0, "next and a release tag are the same package");
-      assert.equal(findPackageEntry(settings, "git:git@github.com:SATUNIX/pi-system@v9.0.0", settingsPath), 0, "ssh and https forms are the same package");
+      assert.equal(findPackageEntry(settings, "git:git@github.com:SATUNIX/luna@v9.0.0", settingsPath), 0, "ssh and https forms are the same package");
       writeJson(settingsPath, { packages: [`${GIT}@v0.2.1-beta.0`, "npm:@satunix/pi-system@next", "git:github.com/example/other-tool"] });
       assert.equal(removeOtherKitEntries(settingsPath, `${GIT}@v0.2.1-beta.1`), 1, "the npm copy of the kit is removed");
       assert.deepEqual(parseJsonAs(SettingsSchema, fs.readFileSync(settingsPath, "utf8"), settingsPath).packages, [`${GIT}@v0.2.1-beta.0`, "git:github.com/example/other-tool"]);
@@ -167,10 +168,10 @@ const tests = {
       }
       fs.copyFileSync(path.join(ROOT, "package.json"), path.join(fixture, "package.json"));
       const current = "git:github.com/SATUNIX/luna";
-      writeJson(path.join(fixture, "packages", "core", "distribution.json"), { delivery: "git", requiredProfileExtensions: readRequiredProfileExtensions(), git: { source: current, previousSources: [GIT] } });
+      writeJson(path.join(fixture, "packages", "core", "distribution.json"), { delivery: "git", requiredProfileExtensions: readRequiredProfileExtensions(), git: { source: current, previousSources: [PREVIOUS] } });
       const installer = path.join(fixture, "packages", "core", "install.ts");
       for (const channel of ["next", "0.2.1-beta.0"]) {
-        const source = channel === "next" ? GIT : `${GIT}@v${channel}`;
+        const source = channel === "next" ? PREVIOUS : `${PREVIOUS}@v${channel}`;
         writeJson(path.join(agent, "settings.json"), { packages: [source] });
         writeJson(path.join(agent, ".pi-kit.json"), { kitSource: source, channel, profile: "lite" });
         const keep = dryRun(installer, ["--profile", "lite", "--settings-only", "--mode", "git"], { agent });
@@ -344,7 +345,7 @@ const tests = {
 
   "installer from pi's git clone keeps the registered git source and channel": () => {
     const agent = scratch("pi-kit-dist-agent-");
-    const clone = path.join(agent, "git", "github.com", "SATUNIX", "pi-system");
+    const clone = path.join(agent, "git", "github.com", "SATUNIX", "luna");
     try {
       // A copy of the tracked kit where pi clones git packages (a .git dir, like a real clone).
       fs.mkdirSync(clone, { recursive: true });

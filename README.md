@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/pi-system/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.9-blue" alt="version 0.2.4-beta.9"></a>
+  <a href="https://github.com/SATUNIX/luna/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/luna/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.11-blue" alt="version 0.2.4-beta.11"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a>
@@ -19,7 +19,7 @@ one pi package, installed once.
 
 > **Beta.** This is a public beta. It is tested, but it is not a stable release: expect rough
 > edges, read [Beta status](docs/beta.md) for what is and is not covered, and report problems in
-> the issue tracker. The tool firewall is a guard rail, not a sandbox
+> the [issue tracker](https://github.com/SATUNIX/luna/issues/new/choose). The tool firewall is a guard rail, not a sandbox
 > ([Security model](docs/security.md)).
 
 ## Install
@@ -28,7 +28,7 @@ Requirements: Node.js 22.19 or newer, git, and pi.
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
+pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 pi
 ```
 
@@ -94,16 +94,27 @@ The workspace layout is for development; users install the kit as one pi package
 npm ci --ignore-scripts
 npm run verify          # schema, type-check, self-containment lint, policy and docs drift
 npm run test:security   # firewall, delegation, secret-guard and web-console security suites
-npm run check:all       # everything CI runs
+npm test                # everything CI runs (the same as npm run check:all)
+npm run coverage        # the same, with line and branch coverage measured
 ```
 
 `AGENTS.md` is what the shipped agent reads about using the kit; `CLAUDE.md` is for people and
 agents developing this repository. Start the documentation at [`docs/index.md`](docs/index.md) and
 see [`CONTRIBUTING.md`](CONTRIBUTING.md) to add an extension. Security reports: [`SECURITY.md`](SECURITY.md).
 
+## Feedback and contributing
+
+- **Bugs and feature requests:** open an issue from the templates at
+  [GitHub](https://github.com/SATUNIX/luna/issues/new/choose).
+- **Vulnerabilities:** report privately; see [`SECURITY.md`](SECURITY.md).
+- **Code and documentation:** pull requests against `main`, following
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md).
+- **Reference:** commands, tools, environment variables and configuration schemas are in the
+  [interface reference](docs/reference.md).
+
 Licence: MIT, © SATUNIX. Vendored third-party code is credited in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 This GitHub repository is where pi-system is developed and released; pull requests are welcome
-(see [`CONTRIBUTING.md`](CONTRIBUTING.md)). A read-only GitLab mirror is kept as a backup.
+(see [`CONTRIBUTING.md`](CONTRIBUTING.md)). The GitLab mirror and private-lineage export pipeline are archived.
 See [repository topology](docs/repository-topology.md) for the release and contribution flow.

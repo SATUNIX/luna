@@ -1,5 +1,5 @@
 // The version references a release moves: the README's version badge (a static shields.io
-// badge) with its alt text, and the install pins (`git:github.com/SATUNIX/pi-system@vX.Y.Z`) in
+// badge) with its alt text, and the install pins (`git:github.com/SATUNIX/luna@vX.Y.Z`) in
 // the README, AGENTS.md and docs/. release.ts rewrites them with the version bump, and the docs
 // smoke test fails if any of them disagrees with package.json.
 import fs from "node:fs";
@@ -7,7 +7,7 @@ import path from "node:path";
 
 const BADGE = /(https:\/\/img\.shields\.io\/badge\/version-)((?:[^-_?)\s]|--|__)+)(-[0-9A-Za-z]+)/;
 const BADGE_ALT = /(<img src="https:\/\/img\.shields\.io\/badge\/version-[^"]*" alt="version )([^"]*)(")/;
-const INSTALL_PIN = /(git:github\.com\/SATUNIX\/pi-system@v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)/g;
+const INSTALL_PIN = /(git:github\.com\/SATUNIX\/luna@v)(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)/g;
 
 // shields.io static badges use `-` as the field separator: a literal `-` is `--`, `_` is `__`.
 const escapeField = (text: string): string => text.replace(/-/g, "--").replace(/_/g, "__");

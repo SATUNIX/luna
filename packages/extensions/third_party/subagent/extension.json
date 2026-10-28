@@ -20,6 +20,7 @@
   },
   "pulls": [],
   "env": [
+    "PI_KIT_NODE",
     "PI_KIT_TRUSTED_PROJECT_ROLES",
     "PI_KIT_SUBAGENT_INHERIT_MODEL",
     "PI_KIT_SUBAGENT_CONCURRENCY",

@@ -183,6 +183,7 @@ The host keeps its state in `~/.pi/agent/remote-control/` (or `PI_REMOTE_STATE_D
 | `PI_REMOTE_STATE_DIR` | `~/.pi/agent/remote-control` | State directory |
 | `PI_REMOTE_AUTO_ATTACH` | unset | `1` shares each terminal session that starts while a host is running |
 | `PI_KIT_WEBUI_ROOT` | found as for `/console` | Path to `packages/web-ui`, where the host ships |
+| `PI_KIT_NODE` | pi's own runtime when it is node or bun, else `node` on `PATH` | Absolute path to the Node.js that runs the host. A compiled pi binary cannot run it, so without node `/remote` refuses to start the host and says so (`tests/node-runtime-smoke.ts`) |
 
 ## Limits and residual risks
 

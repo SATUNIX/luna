@@ -56,7 +56,7 @@ for credentials). When something can be updated you get one notice, and the stat
 | `PI_KIT_UPDATE_CHECK=0` | Turn off the background check (`/update` still works) |
 | `PI_KIT_UPDATE_CHECK_HOURS` | Hours between background checks (default 24) |
 | `PI_KIT_DELIVERY` | `git` or `npm`: override the kit's delivery on this machine |
-| `PI_SYSTEM_GIT_SOURCE` | Git source of the kit, e.g. `git:git@github.com:SATUNIX/pi-system` for SSH; a value that names a retired private source is ignored and reported |
+| `PI_SYSTEM_GIT_SOURCE` | Git source of the kit, e.g. `git:git@github.com:SATUNIX/luna` for SSH; a value that names a retired private source is ignored and reported |
 | `PI_KIT_NPM_REGISTRY` | Registry to query (default `https://registry.npmjs.org`) |
 | `PI_OFFLINE` | pi's offline switch: no background check |
 

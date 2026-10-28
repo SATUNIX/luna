@@ -8,6 +8,46 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.2.4-beta.11]
+
+### Fixed
+
+- **Publishing to GitHub works again after the repository rename.** The repository is now
+  `SATUNIX/luna`. GitHub redirects clones and reads of the old `SATUNIX/pi-system` name, but
+  `publish.ts` asked for an installation token scoped to the repository `pi-system`, which GitHub
+  refuses with 422 because no repository has that name any more. The v0.2.4-beta.10 tag could
+  not be published for this reason. `publish.ts` now targets `SATUNIX/luna` and scopes the token
+  to `luna`; `.github/expected-settings.json` names the new repository for the settings drift
+  check. Install commands that name `github.com/SATUNIX/pi-system` keep working through GitHub's
+  redirect.
+
+## [0.2.4-beta.10]
+
+### Fixed
+
+- **The web console survives a pi child that exits before reading its input.** A write to the
+  child's stdin after it had gone failed with EPIPE, and with no listener on stdin that was an
+  unhandled `error` event that stopped the whole server. `createSession` writes `get_state` straight
+  after spawning, so a child that exits at once raced it; this failed `smoke:web-ui-spawn` once on
+  GitHub CI. The waiting commands now fail with a 502 and the `exit` handler cleans up as before.
+  `smoke:web-ui-spawn` emits the EPIPE and checks it is handled.
+- **`/remote`, `/console`, autonomy runs and the workflow sandbox work under a compiled pi.**
+  Each started a Node script with `process.execPath`, which under the compiled pi binary is pi
+  itself: pi read the script path as a prompt and ran an agent turn (`/remote` never started its
+  host, and `host.log` held a model answer), and the sandbox failed on node-only flags. They now
+  resolve a JavaScript runtime through `packages/core/shared/node-runtime.ts`: `PI_KIT_NODE` when
+  set (absolute and executable, or a clear error), then `process.execPath` only when it is node or
+  bun, then `node` on `PATH`. It never returns pi. The sandbox needs a real `node` binary, which
+  also rejects version-manager shims that cannot run inside its jail. Each command refuses with the
+  reason when no runtime is found. `smoke:node-runtime` covers the resolver and drives `/console`,
+  the remote host start and the autonomy CLI with a fake compiled pi.
+
+### Changed
+
+- **`release.yml` uses `actions/upload-artifact` 7.0.2 and `actions/download-artifact` 8.0.2**,
+  pinned by commit SHA (each checked against its release tag), from Dependabot's GitHub pull
+  request #22.
+
 ## [0.2.4-beta.9]
 
 ### Changed

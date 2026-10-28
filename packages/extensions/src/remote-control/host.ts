@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { trustedMarkerKitRoot } from "./shared/kit-source.ts";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 const HELLO_TIMEOUT_MS = 3_000;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -305,6 +306,10 @@ export async function ensureHost(): Promise<EnsureResult> {
       "start_failed",
     );
   }
+  // The host is a Node script. Under a compiled pi, process.execPath is pi itself, and
+  // `pi remote-host.ts` would run an agent turn with the path as its prompt (./shared/node-runtime.ts).
+  const runtime = nodeRuntime();
+  if (!runtime.ok) throw new HostError(`the remote host needs Node.js to run: ${runtime.reason}.`, "start_failed");
   const dir = stateDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
@@ -319,16 +324,21 @@ export async function ensureHost(): Promise<EnsureResult> {
     /* no log yet */
   }
   const out = fs.openSync(logFile, "a", 0o600);
-  let exited: { code: number | null } | null = null;
+  let exited: { code: number | null; error?: string } | null = null;
   try {
-    const child = spawn(process.execPath, [webUiEntry(root, "remote-host") ?? path.join(root, "server", "remote-host.ts")], {
+    const child = spawn(runtime.command, [webUiEntry(root, "remote-host") ?? path.join(root, "server", "remote-host.ts")], {
       cwd: root,
       detached: true,
       stdio: ["ignore", out, out],
       env: process.env,
+      windowsHide: true,
     });
     child.once("exit", (code) => {
       exited = { code };
+    });
+    // A runtime that cannot be started emits "error" (and "close"), never "exit".
+    child.once("error", (error) => {
+      exited = { code: null, error: `${runtime.command}: ${error.message}` };
     });
     child.unref();
   } finally {
@@ -340,7 +350,8 @@ export async function ensureHost(): Promise<EnsureResult> {
     const status = await hostStatus().catch(() => null);
     if (status) return { started: true, status };
     // Exit code 3 means another host won a start race; keep polling for it.
-    const ended = exited as { code: number | null } | null;
+    const ended = exited as { code: number | null; error?: string } | null;
+    if (ended?.error) throw new HostError(`the remote host could not be started: ${ended.error}`, "start_failed");
     if (ended && ended.code !== 3) {
       const tail = tailLog();
       throw new HostError(`the remote host exited (code ${ended.code})${tail ? `:\n${tail}` : ""}`, "start_failed");

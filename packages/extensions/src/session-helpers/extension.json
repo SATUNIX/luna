@@ -17,7 +17,7 @@
     "models": []
   },
   "pulls": [],
-  "env": ["PI_KIT_ROOT", "PI_KIT_AUTO_PROFILE"],
+  "env": ["PI_KIT_NODE", "PI_KIT_ROOT", "PI_KIT_AUTO_PROFILE"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
   "status": "beta"

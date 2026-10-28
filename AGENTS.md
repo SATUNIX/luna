@@ -18,7 +18,7 @@ vendored `third_party/`), `packages/kit/` (skills, prompts, profiles, themes, ag
 Users install a release from the public repository (see `docs/INSTALL.md`):
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11
 ```
 
 The first interactive start applies the `balanced` profile and asks for `/reload`. To choose a

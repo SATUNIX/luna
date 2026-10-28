@@ -19,7 +19,7 @@
     "models": []
   },
   "pulls": [],
-  "env": ["PI_AUTONOMY_CLI", "PI_AUTONOMY_HOME"],
+  "env": ["PI_KIT_NODE", "PI_AUTONOMY_CLI", "PI_AUTONOMY_HOME"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
   "status": "beta"

@@ -10,6 +10,10 @@
  * The script and its arguments travel over stdin; every hook call is a JSON line the host checks
  * against a schema before it acts. `node:vm` is never used. Without bwrap the sandbox refuses
  * unless the operator picks reduced mode (the last three layers) in a No-first select.
+ *
+ * The runner needs real Node.js (its permission model is a layer). It is never process.execPath
+ * when that is not node: under a compiled pi it is pi itself, which takes none of node's flags.
+ * Without a node binary (./shared/node-runtime.ts) both modes refuse.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -19,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 /** sha256 of quickjs-wasi 3.6.3's `quickjs.wasm` (unchanged since 3.6.2). A different binary is refused. */
 export const QUICKJS_WASM_SHA256 = "d4c9375f2b1ca4dc95f72c8aa2982a7a9951ac8011490d79c6582df732b4bbd9";
@@ -74,6 +79,10 @@ export interface QuickjsLocation {
 export interface SandboxSupport {
   bwrap: string | null;
   prlimit: string | null;
+  /** The real node binary the runner runs under (absolute, through links), or null. */
+  node: string | null;
+  /** Why there is no node binary, when there is none. */
+  nodeReason?: string;
   /** Why full mode is unavailable, when it is. */
   reason?: string;
 }
@@ -132,19 +141,21 @@ export function findExecutable(name: string): string | null {
   return null;
 }
 
-/** Whether this host can run the full sandbox: bwrap that can create namespaces, and prlimit. */
+/** Whether this host can run the full sandbox: bwrap that can create namespaces, and prlimit; and the node binary for either mode. */
 export function detectSupport(): SandboxSupport {
   const prlimit = findExecutable("prlimit");
   const bwrap = findExecutable("bwrap");
-  if (process.platform !== "linux") return { bwrap: null, prlimit, reason: "the sandbox needs Linux" };
-  if (!bwrap) return { bwrap: null, prlimit, reason: "bwrap (bubblewrap) is not installed" };
-  if (!prlimit) return { bwrap: null, prlimit, reason: "prlimit (util-linux) is not installed" };
+  const runtime = nodeRuntime({ require: "node" });
+  const node = runtime.ok ? { node: runtime.command } : { node: null, nodeReason: runtime.reason };
+  if (process.platform !== "linux") return { bwrap: null, prlimit, ...node, reason: "the sandbox needs Linux" };
+  if (!bwrap) return { bwrap: null, prlimit, ...node, reason: "bwrap (bubblewrap) is not installed" };
+  if (!prlimit) return { bwrap: null, prlimit, ...node, reason: "prlimit (util-linux) is not installed" };
   const probe = spawnSync(bwrap, ["--ro-bind", "/", "/", "--unshare-all", "--die-with-parent", "--", prlimit, "--version"], { env: {}, encoding: "utf8", timeout: 5000 });
   if (probe.status !== 0) {
     const why = (probe.stderr || probe.error?.message || `exit ${String(probe.status)}`).trim().split("\n")[0] ?? "";
-    return { bwrap: null, prlimit, reason: `bwrap cannot create a sandbox here (${why})` };
+    return { bwrap: null, prlimit, ...node, reason: `bwrap cannot create a sandbox here (${why})` };
   }
-  return { bwrap, prlimit };
+  return { bwrap, prlimit, ...node };
 }
 
 export interface JailSpec {
@@ -163,6 +174,8 @@ export interface JailSpec {
 export function jailCommand(spec: JailSpec): { command: string; args: string[] } {
   const { support, limits } = spec;
   if (!support.prlimit) throw new Error("prlimit is required");
+  const node = support.node;
+  if (!node) throw new Error(`a node binary is required: ${support.nodeReason ?? "none was found"}`);
   const prlimitArgs = [
     // Soft limit sends SIGXCPU (reported as kind "cpu"); the hard limit 5 s later is SIGKILL.
     `--cpu=${String(limits.cpuSeconds)}:${String(limits.cpuSeconds + 5)}`,
@@ -185,7 +198,7 @@ export function jailCommand(spec: JailSpec): { command: string; args: string[] }
     const visible = (name: string): string => spec.readDirs.find((d) => d.name === name)?.host ?? name;
     return {
       command: support.prlimit,
-      args: [...prlimitArgs, process.execPath, ...nodeFlags(spec.entry, spec.readDirs.map((d) => d.host)), ...spec.entryArgs(visible)],
+      args: [...prlimitArgs, node, ...nodeFlags(spec.entry, spec.readDirs.map((d) => d.host)), ...spec.entryArgs(visible)],
     };
   }
   if (!support.bwrap) throw new Error("bwrap is required for the full sandbox");
@@ -202,7 +215,7 @@ export function jailCommand(spec: JailSpec): { command: string; args: string[] }
   if (fs.existsSync("/etc/ld.so.cache")) binds.push("--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache");
   const inside = (name: string): string => `${JAIL}/${name}`;
   const entry = `${JAIL}/${path.basename(spec.entry)}`;
-  binds.push("--ro-bind", process.execPath, `${JAIL}/bin/node`, "--ro-bind", support.prlimit, `${JAIL}/bin/prlimit`, "--ro-bind", spec.entry, entry);
+  binds.push("--ro-bind", node, `${JAIL}/bin/node`, "--ro-bind", support.prlimit, `${JAIL}/bin/prlimit`, "--ro-bind", spec.entry, entry);
   // bwrap always sets PWD, even after --clearenv; `env -i` inside the jail starts prlimit with nothing.
   const env = findExecutable("env");
   if (env) binds.push("--ro-bind", env, `${JAIL}/bin/env`);
@@ -341,6 +354,7 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
   const support = opts.support ?? detectSupport();
   if (opts.mode === "full" && !support.bwrap) return fail("unavailable", `full sandbox unavailable: ${support.reason ?? "bwrap missing"}`);
   if (!support.prlimit) return fail("unavailable", "prlimit (util-linux) is not installed");
+  if (!support.node) return fail("unavailable", `the sandbox needs a node binary: ${support.nodeReason ?? "none was found"}`);
 
   const { command, args } = jailCommand({
     mode: opts.mode,
@@ -578,6 +592,7 @@ export class SandboxSession {
   /** Full mode when bwrap works; otherwise reduced mode only after the operator says yes, once per session. */
   async mode(ui: ModeUi): Promise<ModeDecision> {
     const support = this.support;
+    if (!support.node) return { ok: false, error: `Refused: workflow scripts run under node's permission model, and ${support.nodeReason ?? "no node binary was found"}.` };
     if (support.bwrap) return { ok: true, mode: "full" };
     const refused = `Refused: workflow scripts need the bwrap sandbox, and ${support.reason ?? "bwrap is unavailable"}.`;
     if (!support.prlimit) return { ok: false, error: `${refused} Reduced mode also needs prlimit (util-linux).` };

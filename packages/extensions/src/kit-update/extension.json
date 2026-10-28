@@ -46,6 +46,7 @@
   },
   "pulls": [],
   "env": [
+    "PI_KIT_NODE",
     "PI_KIT_UPDATE_CHECK",
     "PI_KIT_UPDATE_CHECK_HOURS",
     "PI_KIT_DELIVERY",

@@ -55,6 +55,7 @@ guessing.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PI_KIT_WEBUI_ROOT` | auto | explicit path to `packages/web-ui` |
+| `PI_KIT_NODE` | pi's runtime when it is node or bun, else `node` on `PATH` | absolute path to the Node.js that runs the server; a compiled pi binary cannot, so without node `/console start` refuses before writing a token |
 | `PI_CONSOLE_HOST` | `127.0.0.1` | server bind address; a non-loopback value is refused without `PI_CONSOLE_ALLOW_REMOTE=1` |
 | `PI_CONSOLE_PORT` | `8123` | server port |
 | `PI_CONSOLE_TOKEN` | generated per start | operator-supplied access token (32-256 characters of `A-Za-z0-9._~-`) |

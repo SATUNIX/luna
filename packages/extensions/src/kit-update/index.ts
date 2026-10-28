@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -789,9 +790,11 @@ function piBinary(): string {
   return exe === "pi" ? process.execPath : "pi";
 }
 
+// The installer is a Node script; never pi itself (./shared/node-runtime.ts). With none found,
+// bare `node` keeps the old behaviour: the step reports that it cannot be run.
 function nodeBinary(): string {
-  const exe = (process.execPath || "").replace(/\\/g, "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
-  return exe === "node" || exe === "nodejs" ? process.execPath : "node";
+  const runtime = nodeRuntime();
+  return runtime.ok ? runtime.command : "node";
 }
 
 /** The install marker fields kit-update reads; each is a string or absent. */

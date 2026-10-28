@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type CheckEvidence, runAcceptance, summariseEvaluation } from "../acceptance.ts";
+import { type AcceptanceEvaluation, type CheckEvidence, runAcceptance, summariseEvaluation } from "../acceptance.ts";
 import type { ContractDraft, ProblemSink, RunContract } from "../contract.ts";
 import { type CycleDecision, type CycleOutcome, type CycleResult, type CycleRuntime, runCycle } from "../cycle.ts";
 import { isPositiveCpus, isPositiveSize } from "../containment.ts";
@@ -25,14 +25,14 @@ import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, rev
 import { globProblem } from "../glob.ts";
 import type { RunConfig } from "../runcfg.ts";
 import { type ReportMode, type ReportOutcome, nothingFoundInARow, reportOutcome } from "../triggers.ts";
-import { isPlainObject, writeJsonAtomic } from "../fsutil.ts";
+import { isPlainObject, readJson, writeJsonAtomic } from "../fsutil.ts";
 import type { StepContext } from "../engine.ts";
 import { type Template, type TemplateDescription, checkLines } from "./common.ts";
 
 const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pad = (n: number): string => String(n).padStart(2, "0");
 
-export const SELF_IMPROVE_LIMITS = { softMinutes: 180, hardMinutes: 300, idleMinutes: 20, noCommitMinutes: 90, managerCallsPerCycle: 3, redGatesInARow: 2, guardEscalations: 3, nothingFoundToStop: 3 };
+export const SELF_IMPROVE_LIMITS = { softMinutes: 180, hardMinutes: 300, idleMinutes: 20, noCommitMinutes: 90, managerCallsPerCycle: 3, autoRestartsPerCycle: 3, redGatesInARow: 2, guardEscalations: 3, nothingFoundToStop: 3 };
 
 /** One finished cycle, as state.selfImprove.history and steps/NN/cycle.json record it. */
 export interface CycleEntry {
@@ -143,6 +143,7 @@ function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
   const [idleMinutes, noCommitMinutes, softMinutes, hardMinutes, nothingFoundToStop] = [limit("idleMinutes"), limit("noCommitMinutes"), limit("softMinutes"), limit("hardMinutes"), limit("nothingFoundToStop")];
   if (!(idleMinutes > 0 && noCommitMinutes > 0 && softMinutes > 0 && hardMinutes > softMinutes)) err("templateOptions.limits", "must be positive, with hardMinutes > softMinutes");
   if (!Number.isInteger(nothingFoundToStop) || nothingFoundToStop < 1) err("templateOptions.limits.nothingFoundToStop", "must be an integer >= 1");
+  if (!Number.isInteger(limit("autoRestartsPerCycle")) || limit("autoRestartsPerCycle") < 0) err("templateOptions.limits.autoRestartsPerCycle", "must be an integer >= 0");
   const perStepUsd = contract.budget.perStepUsd ?? NaN;
   const totalUsd = contract.budget.totalUsd ?? NaN;
   const hardOption = t["perStepHardUsd"] ?? 2 * perStepUsd;
@@ -188,16 +189,17 @@ async function seed(ctx: StepContext): Promise<void> {
 function publishNow(ctx: StepContext): void {
   const { repo, contract, state, log } = ctx;
   const p = contract.promotion;
-  if (p.policy === "none" || p.requiresOperatorApproval) return;
+  if (ctx.engine.stopRequested || p.policy === "none" || p.requiresOperatorApproval) return;
   const si = siState(state);
   try {
     const r = gm.publish(repo.git(), siConfig(ctx.cfg), si.lastPushed);
     si.lastPushed = r.state;
-    if (si.publishError) { log("publish recovered"); si.publishError = null; }
+    if (si.publishError) { log("publish recovered"); si.publishError = null; si.publishBlocker = null; }
   } catch (e) {
     const message = errorMessage(e);
     if (message !== si.publishError) log(`publish failed (will retry): ${message}`);
     si.publishError = message;
+    si.publishBlocker = e instanceof gm.PublishBlocked ? message : null;
   }
 }
 
@@ -214,7 +216,7 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
     if (last.merged) {
-      previous += `merged into ${cfg.integrationBranch}. Its report is ${dir(last.n)}/report.md.`;
+      previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
       if (last.mode === "improve") previous += " It was an improve cycle, so this cycle starts with a consolidation pass over what it changed (bugs, edge cases, missing tests, docs drift, leftover complexity) before anything else.";
       if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider improve mode.`;
     } else if (last.gate === "skipped") previous += last.outcome === "reset" ? `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(last.n)}).` : "it made no commits.";
@@ -226,12 +228,15 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     BUDGET_USD: b.perStepUsd, HARD_BUDGET_USD: contract.templateOptions["perStepHardUsd"] ?? 2 * b.perStepUsd, SOFT_HOURS: +(cfg.limits.softMinutes / 60).toFixed(1), HARD_HOURS: +(cfg.limits.hardMinutes / 60).toFixed(1), PREVIOUS: previous,
     NETWORK_NOTE: egress.length ? ` and the hosts the run lists (${egress.join(", ")}, through a proxy)` : "" };
   const text = fs.readFileSync(path.join(PKG, "prompts", "cycle.md"), "utf8").replace(/\{\{([A-Z_]+)\}\}/g, (m, k: string) => (Object.hasOwn(vars, k) ? String(vars[k]) : m));
+  const queued = (state.backlog ?? []).filter((item) => item.deliveredCycle === undefined || item.deliveredCycle === n);
+  const backlog = queued.length ? `\n\n## Steward backlog for this cycle\n${queued.map((item) => `- ${item.message}`).join("\n")}` : "";
+  ctx.save(() => { for (const item of queued) item.deliveredCycle = n; });
   const feedback = ctx.engine.pendingFeedback.splice(0);
-  return feedback.length ? `${text}\n\nNotes from the operator:\n${feedback.map((f) => `- ${f}`).join("\n")}` : text;
+  return feedback.length ? `${text}${backlog}\n\nNotes from the operator:\n${feedback.map((f) => `- ${f}`).join("\n")}` : `${text}${backlog}`;
 }
 
 /** Adapt the engine's runtime to what lib/cycle.ts expects. */
-function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir }: { n: number; resume: boolean; startSha: string; dir: string }): CycleRuntime {
+function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }: { n: number; resume: boolean; startSha: string; dir: string; onSalvage: (ev: AcceptanceEvaluation) => void }): CycleRuntime {
   const { engine, rt, repo, contract, state, store } = ctx;
   const cfg = siConfig(ctx.cfg);
   const si = siState(state);
@@ -264,7 +269,24 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir }: { n: numbe
     reportExists: async () => repo.fileAt(branchRef, `${dir}/report.md`) !== null,
     meterUsd: async () => { await engine.refreshUsage(); return state.usage.usd; },
     totalUsd: async () => { await engine.refreshUsage(); return state.usage.usd; },
-    stopRequested: () => engine.signalled || pendingControl(),
+    stopRequested: () => engine.stopRequested || !engine.active || pendingControl() || engine.limitReached() !== null,
+    onAutoRestart: (used) => { ctx.save(() => { if (si.current) si.current.autoRestarts = used; }); },
+    salvageReport: async () => {
+      const sha = repo.head();
+      if (sha === startSha) return false;
+      state.phase = "acceptance";
+      engine.tick();
+      const ev = await runAcceptance({ rt, contract, sha, step: n, dir: path.join(engine.stepDir(n), "salvage-checks"), runRoot: store.p.root, log: ctx.log });
+      state.phase = "work";
+      engine.tick();
+      if (!ev.allRequiredPass || engine.stopRequested || pendingControl()) return false;
+      const report = `Outcome: partial\n\nHost close-out: the worker exited before recording report.md. Required acceptance checks passed at ${sha}. This is committed work only; completion and mode are unknown. Independent merge review is required.\n\n${repo.logSince(startSha, sha)}`;
+      writeJsonAtomic(path.join(engine.stepDir(n), "salvaged-report.json"), { sha, report });
+      onSalvage(ev);
+      ctx.save((s) => { s.artefacts.push({ kind: "salvaged-report", path: path.join("steps", pad(n), "salvaged-report.json"), step: n, at: new Date(rt.now()).toISOString() }); });
+      ctx.log(`cycle ${pad(n)} report synthesised from committed work at ${sha.slice(0, 12)}`);
+      return true;
+    },
     manager: async (bundle) => {
       const d = await decide(bundle, rt.complete(cfg.managerModel));
       const file = path.join(engine.stepDir(n), "decisions.jsonl");
@@ -313,31 +335,34 @@ async function runStep(ctx: StepContext): Promise<void> {
     log(`cycle ${pad(n)} branch set to ${cfg.integrationBranch} ${head.slice(0, 12)}`);
   }
   const startSha = si.current?.startSha ?? repo.head();
-  si.current = { n, startedAt: si.current?.startedAt ?? new Date(rt.now()).toISOString(), startSha };
+  si.current = { n, autoRestarts: si.current?.autoRestarts ?? 0, startedAt: si.current?.startedAt ?? new Date(rt.now()).toISOString(), startSha };
   state.step = n;
   state.phase = "work";
   ctx.save();
   log(`cycle ${pad(n)}/${state.limits.budget.maxSteps} ${resume ? "resuming" : "starting"}; spent $${state.usage.usd.toFixed(2)} of $${state.limits.budget.totalUsd}`);
+  await engine.applyControl({ only: ["backlog"] });
+  if (!engine.active) return;
   const prompt = cyclePrompt(ctx, n);
   const restartBriefing = resume ? `The previous session of this cycle was interrupted. Re-read autonomy/HANDOFF.md and this cycle's files under ${dir}/, check \`git status\` and \`git log\`, then continue the cycle from where it stopped.${state.pendingAnswer ? `\n\n${await engine.briefing("answer")}` : ""}` : undefined;
   const runCfg = { ...cfg, budget: { ...cfg.budget, totalUsd: state.limits.budget.totalUsd, perCycleUsd: state.limits.budget.perStepUsd }, cycles: state.limits.budget.maxSteps };
-  const result = await runCycle({ n, cfg: runCfg, rt: cycleRuntime(ctx, { n, resume, startSha, dir }), prompt, cycleDir: dir, restartBriefing });
+  let salvagedEvaluation: AcceptanceEvaluation | undefined;
+  const result = await runCycle({ n, cfg: runCfg, rt: cycleRuntime(ctx, { n, resume, startSha, dir, onSalvage: (ev) => { salvagedEvaluation = ev; } }), prompt, cycleDir: dir, restartBriefing, autoRestartsUsed: si.current.autoRestarts ?? 0 });
   await engine.refreshUsage();
   if (result.outcome === "blocked") { // the cycle stays current; the answer resumes it
     if (!result.blocker) throw new Error(`cycle ${pad(n)} ended blocked without a blocker`);
     await engine.enterBlocked(result.blocker);
     return;
   }
-  const control = engine.signalled || engine.store.pending().some((m) => m.kind === "cancel" || m.kind === "pause");
+  const control = engine.stopRequested || !engine.active || engine.store.pending().some((m) => m.kind === "cancel" || m.kind === "pause");
   if (result.outcome === "aborted" && control) return; // interrupted by a command or a signal: the cycle stays current for resume
-  await closeCycle(ctx, n, result);
+  await closeCycle(ctx, n, result, salvagedEvaluation);
   if (result.outcome === "aborted" && /^manager:/.test(result.reason)) {
     engine.go("blocked", { reason: "external", blocker: { kind: "external", id: `manager-${n}`, method: "manager", question: `The manager model stopped the run for a person to look at: ${result.reason.replace(/^manager:\s*/, "")}. Resume with --answer "<what to do>" to continue, or cancel.`, options: [] } });
   }
 }
 
 /** Acceptance checks on the cycle head, tag, merge decision and integration; port of the v0 close-out. */
-async function closeCycle(ctx: StepContext, n: number, result: CycleResult): Promise<void> {
+async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salvagedEvaluation?: AcceptanceEvaluation): Promise<void> {
   const { engine, rt, repo, contract, state, log } = ctx;
   const cfg = siConfig(ctx.cfg);
   const si = siState(state);
@@ -348,8 +373,10 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult): Pro
   const changed = sha !== start;
   let gate: CycleGate = { skipped: true, green: false, results: [] };
   if (changed) {
+    state.phase = "acceptance";
+    engine.tick();
     log(`cycle ${pad(n)} acceptance on ${sha.slice(0, 12)}`);
-    const ev = await runAcceptance({ rt, contract, sha, step: n, dir: path.join(engine.stepDir(n), "checks"), runRoot: ctx.store.p.root, log });
+    const ev = salvagedEvaluation?.sha === sha ? salvagedEvaluation : await runAcceptance({ rt, contract, sha, step: n, dir: path.join(engine.stepDir(n), "checks"), runRoot: ctx.store.p.root, log });
     gate = { skipped: false, green: ev.allRequiredPass, results: ev.results };
     ctx.save((s) => {
       s.acceptance.latest = summariseEvaluation(ev);
@@ -357,12 +384,18 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult): Pro
       for (const r of ev.results) s.artefacts.push({ kind: "check-evidence", path: r.evidence, step: n, at: r.at });
     });
   }
+  if (engine.stopRequested) return;
   const failing = gate.results.flatMap((r) => (r.steps?.length ? r.steps.filter((x) => x.code !== 0).map((x) => x.name) : r.pass ? [] : [r.id]));
+  const salvaged = result.reason === "host close-out after session exit";
   const declared = result.outcome === "completed" ? reportOutcome(repo.fileAt(sha, `${cycleDir(cfg, n)}/report.md`)) : { outcome: null, mode: null };
   const current = si.current;
   if (!current) throw new Error(`cycle ${pad(n)} is closing but no cycle is current`);
   repo.tag(`cycle-${pad(n)}`, sha);
-  const merge = await mergeDecision(ctx, n, { result, sha, start, changed, gate });
+  const recovered = salvaged ? readJson(path.join(engine.stepDir(n), "salvaged-report.json")) : null;
+  const salvage = isPlainObject(recovered) && recovered.sha === sha && typeof recovered.report === "string" ? recovered.report : undefined;
+  if (salvaged && !salvage) throw new Error(`cycle ${pad(n)} host report is missing or does not match ${sha}`);
+  const merge = await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage });
+  if (engine.stopRequested) return;
   if (merge.merge) {
     const r = gm.integrate(g, cfg, sha);
     merge.merged = r.merged;
@@ -383,7 +416,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult): Pro
     s.phase = null;
     s.artefacts.push({ kind: "cycle", path: path.join("steps", pad(n), "cycle.json"), step: n, at: entry.endedAt });
   });
-  engine.writeStepSummary(n, { action: "cycle", outcome: entry.outcome, gate: entry.gate, merged: entry.merged });
+  engine.writeStepSummary(n, { action: "cycle", outcome: entry.outcome, gate: entry.gate, merged: entry.merged, ...(salvaged ? { report: path.join("steps", pad(n), "salvaged-report.json") } : {}) });
   ctx.save();
   log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}cycle-${pad(n)}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
 }
@@ -409,7 +442,7 @@ function gateEntries(files: readonly string[], before: (f: string) => string | n
 }
 
 /** Only a completed cycle with commits and a green gate is reviewed; only a MERGE verdict merges. */
-async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, changed, gate }: { result: CycleResult; sha: string; start: string; changed: boolean; gate: CycleGate }): Promise<MergeDecision> {
+async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, changed, gate, salvage }: { salvage?: string | undefined; result: CycleResult; sha: string; start: string; changed: boolean; gate: CycleGate }): Promise<MergeDecision> {
   const { rt, repo, log } = ctx;
   const cfg = siConfig(ctx.cfg);
   if (!changed) return { merge: false, reason: "no commits" };
@@ -427,14 +460,16 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   if (!read.ok && read.reason === "over-budget") return { merge: false, reason: `the diff without lockfiles (${read.detail}) exceeds the merge review's budget of ${REVIEW_DIFF_BUDGET} characters; a larger change is never reviewed in part. Split the work across cycles` };
   if (!read.ok) return { merge: false, reason: `the diff could not be read in full (${read.detail}); a cycle whose diff the host cannot read is never merged` };
   const diff = read.text;
-  if (!cfg.integration.review) return { merge: true, reason: "checks passed (review disabled)" };
+  if (!cfg.integration.review && !salvage) return { merge: true, reason: "checks passed (review disabled)" };
   const at = (file: string): string | null => repo.fileAt(sha, file);
   const dir = cycleDir(cfg, n);
+  ctx.state.phase = "review";
+  ctx.engine.tick();
   log(`cycle ${pad(n)} merge review (${cfg.reviewModel})`);
   const review = await reviewCycle({
     run: cfg.run, cycle: n, outcome: result.outcome, integrationBranch: cfg.integrationBranch, gateSteps: gate.results.map((r) => ({ name: r.id })),
     // The charter is the host-held integration head's (the cycle's start), never the cycle's own.
-    charter: repo.fileAt(start, CHARTER_PATH), report: at(`${dir}/report.md`), verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha), diff,
+    charter: repo.fileAt(start, CHARTER_PATH), report: salvage ?? at(`${dir}/report.md`), verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha), diff,
     criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
   }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms) });
   await ctx.engine.refreshUsage();
@@ -451,10 +486,13 @@ async function finalize(ctx: StepContext, reason: string): Promise<void> {
   await engine.stopWorker("run complete");
   const before = state.acceptance.latest;
   if (before?.sha !== head || !before.allRequiredPass) {
+    state.phase = "acceptance";
+    engine.tick();
     const step = state.step || state.usage.steps;
     const ev = await runAcceptance({ rt, contract, sha: head, step, dir: path.join(engine.stepDir(step), "final-checks"), runRoot: ctx.store.p.root, log });
     ctx.save((s) => { s.acceptance.latest = summariseEvaluation(ev); for (const r of ev.results) s.artefacts.push({ kind: "check-evidence", path: r.evidence, step, at: r.at }); });
   }
+  if (engine.stopRequested) { await engine.applyControl(); return; }
   ctx.save((s) => { s.acceptance.review = { required: false, status: "skipped", note: "self-improve reviews every merged cycle instead" }; });
   if (!state.acceptance.latest?.allRequiredPass) { engine.go("failed", { reason: "final_gate_red", detail: `${reason}: the acceptance checks do not pass on ${cfg.integrationBranch} ${head.slice(0, 12)}` }); return; }
   engine.go("succeeded", { reason, detail: `${siState(state).merged} cycle(s) merged into ${cfg.integrationBranch} at ${head.slice(0, 12)}` });

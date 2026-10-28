@@ -16,6 +16,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { exceptionsAt, scanCommits } from "../../core/prepush-scan.ts";
 import { publishRefspecs, type PublishConfig } from "./mirror.ts";
 
 export interface GitRunOptions {
@@ -284,8 +285,51 @@ export function publish(g: HostGit, cfg: MirrorConfig, lastPushed: string | null
   const remoteUrl = integrationRemote(cfg);
   if (!remoteUrl || state === lastPushed) return { pushed: false, state };
   const specs = publishRefspecs(state, cfg);
+  if (specs.length) scanPush(g, remoteUrl, specs, `refs/base/${cfg.baseRef}`);
   if (specs.length) g(["push", "--quiet", "--porcelain", remoteUrl, ...specs]);
   return { pushed: true, state };
+}
+
+/** A publication blocker, containing locations only, never the matched values. */
+export class PublishBlocked extends Error {}
+
+/** Scan every commit any pushed ref would expose, including unmerged cycle/abandoned tags.
+ * The source base is supervisor-held; worker edits cannot grant scan exceptions.
+ * Fresh destination refs define the range, excluding history already on main/master.
+ * With no known destination history, scan the entire history.
+ */
+export function scanPush(g: HostGit, url: string, specs: readonly string[], trustedBase?: string): void {
+  try {
+    const refs = specs.map((spec) => spec.split(":")).map(([source, remote]) => {
+      if (!source || !remote) throw new Error("invalid publish refspec");
+      return { source, remote };
+    });
+    const advertised = g(["ls-remote", "--refs", url, ...refs.map((r) => r.remote), "refs/heads/main", "refs/heads/master"]);
+    const remoteRefs = new Map(advertised.split("\n").filter(Boolean).map((line) => {
+      const [sha, ref] = line.split(/\s+/);
+      if (!sha || !ref) throw new Error("invalid remote advertisement");
+      return [ref, sha];
+    }));
+    const localHeads: string[] = [];
+    const remoteHeads: string[] = [];
+    for (const ref of refs) localHeads.push(g(["rev-parse", "--verify", `${ref.source}^{commit}`]));
+    const destinations = [...remoteRefs];
+    if (destinations.length) g(["fetch", "--quiet", "--no-tags", url, ...destinations.map(([ref], i) => `+${ref}:refs/publish-scan/${i}`)]);
+    for (const [i, [, before]] of destinations.entries()) {
+      const tracking = `refs/publish-scan/${i}`;
+      if (g(["rev-parse", tracking]) !== before) throw new Error("destination moved during scan; retry later");
+      remoteHeads.push(g(["rev-parse", `${tracking}^{commit}`]));
+    }
+    const result = scanCommits(g.gitDir, [...localHeads, ...(remoteHeads.length ? ["--not", ...remoteHeads] : [])], trustedBase ? exceptionsAt(g.gitDir, trustedBase) : []);
+    const finding = result.findings[0];
+    if (finding || (result.exceptionsChanged && result.otherChanged)) {
+      throw new PublishBlocked(`publication blocked by pre-push leak scan: ${finding ? `${finding.commit} ${finding.where}: ${finding.problem}` : "scan exceptions changed together with other files"}`);
+    }
+  } catch (error) {
+    if (error instanceof PublishBlocked) throw error;
+    // Git/model/file errors can contain untrusted content: do not echo it into a blocker.
+    throw new PublishBlocked("publication blocked: pre-push leak scan could not complete; inspect the host mirror and destination");
+  }
 }
 
 /** Create a run tag at sha; an existing tag is left alone (tags are never moved). */

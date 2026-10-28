@@ -8,6 +8,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unattended self-improve cycles recover dead workers without manager calls.** Three automatic restarts by default, persisted across resumes; next-tick exit detection, green-gate host report salvage with independent merge review, STOP parking, and an engine heartbeat for external stewards (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **Host publication and promotion scan every outgoing commit before pushing**, including unmerged attempt tags, using the repository pre-push leak scanner; findings or scan failures record a publication blocker and keep work local (`tests/autonomy-selfimprove-smoke.ts`, `tests/prepush-scan-smoke.ts`).
+
+### Added
+
+- **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+
 ## [0.2.4-beta.11]
 
 ### Fixed

@@ -156,7 +156,7 @@ closed choice (no egress, no services, no unattended approval, no promotion), ne
 | `model`, `providerSettings` | Provider, worker, manager and review models, upstream and key name. The key value is never in the contract. |
 | `effort` | An [effort](effort.md) tier and cap for the run (default E3). It is fixed at start. |
 | `budget` | `totalUsd`, `perStepUsd`, `maxSteps`, `maxMinutes` (active time). Every run is bounded by money, steps and time; none may be omitted. |
-| `recovery` | `softNudges` (default 2), `hardRestarts` (default 1), `maxAttemptsPerStep` (default 8). |
+| `recovery` | `softNudges` (default 2), `hardRestarts` (default 1), `maxAttemptsPerStep` (default 8); finite templates only (see Recovery and budgets). |
 | `generations` | Memento mode, off by default; see [Generations](#generations). |
 | `promotion` | `policy` (`none`, `local-branch`, `push`), `destinations`, `requiresOperatorApproval` (default true). |
 | `runtime` | Engine (`podman` or `docker`), image, memory, CPUs, pids and the git identity for commits. |
@@ -214,13 +214,17 @@ automatically, because two supervisors on one run would repeat side effects.
 
 ## Recovery and budgets
 
-**Recovery is bounded.** When a run stops making verified progress (no check newly passing and the
+**Recovery is bounded for `implement` and `deploy`** (`tests/autonomy-run-smoke.ts`). When a run stops making verified progress (no check newly passing and the
 accepted head not moving inside the write areas), it climbs a ladder: soft nudges (a steering message
 in the same session), then hard restarts (a fresh session on the same workspace, briefed from verified
 state), then the run **fails** as `recovery_exhausted`. Counters persist across a supervisor crash and
 reset only on verified progress; `maxAttemptsPerStep` bounds the turns spent on one target for the
 life of the run. Recovery never resets spending, extends a budget or widens scope, and the hard
-limits are not decided by it.
+limits are not decided by it. The generic `recovery.softNudges`, `hardRestarts` and
+`maxAttemptsPerStep` settings, including changes through `reconfigure`, do **not** apply to
+`self-improve`; it uses `templateOptions.limits` and the cycle manager instead.
+`tests/autonomy-selfimprove-smoke.ts` pins the independent restart allowance with generic recovery
+set to zero.
 
 **Budgets are hard.** The relay meters the provider's reported cost for every response, the
 manager's and reviewer's calls included; the run stops as `budget_exhausted` at the money, step or
@@ -254,11 +258,25 @@ fresh pi session that reviews, plans, improves and verifies, and every cycle tha
 the acceptance checks and passes a merge review is fast-forwarded into one integration branch
 (`pi-autonomy/integration` by default, never `main`), from which the next cycle starts. Nothing is
 force-pushed, and by default nothing leaves the machine: promotion is `local-branch` unless you choose
-`push`.
+`push` (`tests/autonomy-selfimprove-smoke.ts`).
 
-- **A cycle ends** once its report is on the branch. If the worker stops without writing it, it gets
-  two reminders, and then the manager decides. The **acceptance checks** run on the accepted head, in
-  a clean clone with no network, and the head is tagged whatever happens next.
+- **A cycle ends** once its report is on the branch. A live session that settles without one gets
+  two reminders, then a manager decision (`tests/autonomy-smoke.ts`). Acceptance runs on the
+  accepted head in a clean clone with no network; the head is tagged (`tests/autonomy-selfimprove-smoke.ts`).
+- **Dead sessions recover on the next tick**, whether the exit code is zero, non-zero or unknown.
+  Up to `templateOptions.limits.autoRestartsPerCycle` automatic restarts (default 3; 0 disables)
+  continue the same workspace with a briefing, without spending manager calls. The allowance
+  persists across pause/resume and supervisor restart; exhaustion closes the cycle as partial with
+  `auto_restarts_exhausted`. Live sessions retain the idle/no-commit triggers. Hard cycle time,
+  spend and run stops take priority (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **Close-out salvage** avoids another model session just to write a report. On worker exit with
+  accepted commits and no report, the host runs the acceptance gate. A green gate produces
+  `steps/NN/salvaged-report.json` with the head and a minimal partial report from the git log;
+  it makes no claim about the worker's mode or completion. The report is host evidence, outside
+  the worker branch, and is exported with the step artefacts. It never counts as "nothing found".
+  The full diff still passes control-path/size checks and an independent merge review, even if
+  ordinary cycle review is disabled. Red or empty work is not salvaged and uses the bounded restart
+  path (`tests/autonomy-selfimprove-smoke.ts`).
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
   charter, the report, the commits and the diff. A malformed answer, or none after three attempts,
   counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
@@ -282,12 +300,13 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
     `package.json` files and the files their scripts name, says the charter is the host's copy, and
     treats the report, commits and diff as data, never instructions.
 - **The manager** is a separate model call, made only when a trigger fires (20 minutes without
-  events, 90 minutes without a push, the 3-hour soft limit, the per-cycle budget, a crash, two red
-  gates in a row, repeated stall escalations, or a session that ended without a report). It answers
+  events from a live session, 90 minutes without a push, the 3-hour soft limit, the per-cycle budget,
+  two red gates in a row, repeated stall escalations, or a live session that settled without a report). It answers
   with exactly one of `CONTINUE`, `NUDGE`, `RESTART_SESSION`, `NEW_CYCLE`, `RESET_TO_LAST_GOOD` or
   `ABORT_RUN`, which the supervisor validates and carries out; at most 3 calls per cycle, and the hard
   limits (a 5-hour cycle ceiling, and the run's budget) never consult it. These limits are the
-  template's defaults and can be changed in `templateOptions.limits`.
+  template's defaults and can be changed in `templateOptions.limits` (`tests/autonomy-smoke.ts`,
+  `tests/autonomy-selfimprove-smoke.ts`).
 - **Modes.** Cycles work in *fix* mode while there is something to fix, in *improve* mode only when a
   review finds nothing (and the need must be evidenced), and in *consolidate* mode for the cycle after
   a merged improvement. A run whose reviews find nothing three times in a row (`nothingFoundToStop`)
@@ -296,6 +315,80 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   as `final_gate_red`. The same final check ends a run that reaches its cycle limit.
 
 The charter, backlog and handoff a repository is seeded with are in `packages/autonomy/seed/`.
+
+## Steward interface
+
+A steward is an external, scheduled operator session: for example, inspect after roughly 25 cycles
+and queue the next priorities. No scheduler is built into pi-autonomy and no test covers an actual
+25-cycle steward schedule. Use the host CLI and its file inbox; do not edit `state.json` or the
+held contract while the supervisor owns them (`tests/autonomy-cli-smoke.ts`,
+`tests/autonomy-selfimprove-smoke.ts`).
+
+Read these files under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-autonomy/<run>`):
+
+| File | What to inspect | Test |
+|---|---|---|
+| `state.json` | Status, current cycle, history, acceptance, usage and publication blockers | `tests/autonomy-selfimprove-smoke.ts` |
+| `heartbeat.json` | `at` (UTC timestamp), `phase`, `cycle`, `status`; updated on engine ticks and phase boundaries, with a final parked/terminal status | `tests/autonomy-selfimprove-smoke.ts` |
+| `supervisor.log` | Session restarts, merge decisions, stop reason and push failures | `tests/autonomy-selfimprove-smoke.ts` |
+| `meter/*.jsonl` | Inference usage and spend | `tests/autonomy-run-smoke.ts` |
+| `steps/NN/summary.json`, `cycle.json`, `review.json`, check evidence | Per-step outcome, committed head, gate and independent review | `tests/autonomy-selfimprove-smoke.ts` |
+| `steps/NN/salvaged-report.json` | Host close-out when the worker died before its report | `tests/autonomy-selfimprove-smoke.ts` |
+
+Suggested monitoring policy: flag a work heartbeat older than **2 minutes or four ticks**, whichever
+is longer (`runtime.mirrorSeconds` sets the tick interval). This is an investigation threshold, not
+a kill or takeover instruction, and no test pins a real-time watchdog. Acceptance and host git
+operations can legitimately run without ticks: allow the sum of the check timeouts during
+acceptance, and up to three five-minute review calls plus retry delays during merge review. The
+lock's timer heartbeat proves lock ownership only; it does not prove the engine is advancing.
+A stale engine heartbeat with a fresh lock heartbeat can identify a hung-but-alive supervisor.
+There is no automatic phase watchdog or self-parking deadline. Stop the old supervisor before
+resuming a wedged run; the lock refuses concurrent ownership (`tests/autonomy-lifecycle-smoke.ts`).
+
+Commands (`node packages/autonomy/cli.ts` is equivalent to the `pi-autonomy` executable):
+
+```sh
+pi-autonomy status --run <run> --json
+pi-autonomy export --run <run> --out <directory> --json
+pi-autonomy steer --run <run> --message "Focus the current work on recovery"
+pi-autonomy backlog --run <run> --message "Check compaction recovery with evidence"
+pi-autonomy reconfigure --run <run> --budget-usd 100
+pi-autonomy pause --run <run>
+pi-autonomy cancel --run <run> --reason "End the experiment"
+pi-autonomy resume --run <run> --detach
+```
+
+`status --json`, `export`, `steer`, `reconfigure`, `pause/cancel` and `resume` are pinned by
+`tests/autonomy-cli-smoke.ts` (the top-level help lists the available flags). `backlog --message` enqueues a file-based control online or offline; items appear
+under **Steward backlog for this cycle** in the next cycle prompt, are retained with their delivered
+cycle in state, and are replayed when that cycle resumes. It does not interrupt the current worker
+and is available only for self-improve (`tests/autonomy-cli-smoke.ts`,
+`tests/autonomy-selfimprove-smoke.ts`). Backlog text is operator authority: keep the run directory
+host-owned and out of worker mounts.
+
+For a file-only stop, create **`STOP`** in the run directory. At the next control checkpoint the
+worker is stopped, committed work is synced, the current cycle is retained, status becomes
+`paused`, and the supervisor tears down and exits; a queued unpause cannot override STOP. A STOP
+already present before setup cancels without launching the run. Remove STOP before `resume`.
+Acceptance or review already in progress reaches its next safe checkpoint first. Signals also
+park active runs; unexpected supervisor exceptions record the error and park before exiting
+(`tests/autonomy-selfimprove-smoke.ts`). This cannot interrupt a blocked host call; use the stale
+heartbeat policy to investigate such a supervisor.
+
+For unattended publication, explicitly authorise a `push` destination on an experimental integration
+branch (for example `integration/luna`), with `requiresOperatorApproval: false`. Every host
+publication/promotion push first calls the repository's `packages/core/prepush-scan.ts` library on
+commits the destination does not already hold, including all tags about to be published. It fetches
+fresh destination refs, excludes known published main/master history, and reads exceptions from the
+supervisor-held source base, never worker changes. Findings (locations only), mixed exception/content
+changes, or scan errors refuse the push; automatic cycles continue locally with
+`state.selfImprove.publishBlocker`/`publishError`, and explicit promotion records `promotion.error`.
+The worker has no push credentials and never performs host promotion; host pushes stay fast-forward
+only (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-smoke.ts`; scanner rules:
+`tests/prepush-scan-smoke.ts`). Approval-gated publication remains held for `promote`. Disabling tag
+publication avoids publishing rejected attempts, but the integration branch is still public as soon
+as it is pushed (`tests/autonomy-selfimprove-smoke.ts`). Exports and run logs are local operator
+evidence and are not made safe for public posting by the commit scan.
 
 ## Setting up
 

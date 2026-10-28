@@ -187,6 +187,7 @@ export class HostRepo {
     g(["update-ref", "refs/promote/head", sha]);
     const specs = [`refs/promote/head:refs/heads/${branch}`];
     if (tags) for (const t of (g(["for-each-ref", "--format=%(refname)", `refs/tags/${cfg.tagPrefix}`], { allowFail: true }) ?? "").split("\n").filter(Boolean)) specs.push(`${t}:${t}`);
+    gm.scanPush(g, url, specs, `refs/base/${cfg.baseRef}`);
     g(["push", "--quiet", "--porcelain", url, ...specs]);
     return { status: "pushed", to: sha };
   }

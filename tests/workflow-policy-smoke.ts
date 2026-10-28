@@ -134,7 +134,7 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["|| true on a scan", "security.yml", security.replace("./gitleaks git --redact --verbose --exit-code 1 .", "./gitleaks git --redact --verbose --exit-code 1 . || true"), /gitleaks: "\|\| true"/],
   ...FAIL_OPEN_SAMPLES.map((sample): [string, string, string, RegExp] => [`a fail-open "${sample}"`, "security.yml", security.replace("./gitleaks git --redact --verbose --exit-code 1 .", `./gitleaks git --redact --verbose --exit-code 1 .\n      - run: ${sample}`), /gitleaks: "(?:\|\| true|\|\| exit 0|\|\| echo|set \+e)"/]),
   ["an unlisted environment", "ci.yml", ci.replace(/(\n {2}verify:\n)/, "$1    environment: staging\n"), /environment staging is not in/],
-  ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
+  ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
   ["a checkout that keeps credentials", "ci.yml", ci.replace("persist-credentials: false", "persist-credentials: true"), /persists credentials/],
   ["pull_request_target", "ci.yml", ci.replace("  pull_request:\n", "  pull_request_target:\n"), /pull_request_target/],
   ["a job without a timeout", "ci.yml", ci.replace(/(\n {2}docs-build:\n {4}runs-on: ubuntu-latest\n) {4}timeout-minutes: \d+\n/, "$1"), /docs-build: no timeout-minutes/],

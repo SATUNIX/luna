@@ -160,6 +160,35 @@ jobs:
             echo "::endgroup::"
           done
 
+  # Property-based fuzzing, long form. check:all runs the same tests on every change with a fixed
+  # seed and a few hundred cases each; the weekly run uses a fresh random seed and many more cases,
+  # so it explores inputs no earlier run tried. A failure prints the seed that reproduces it
+  # (docs/ci-security.md, "Property-based fuzzing").
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run -s smoke:fuzz-firewall-classifier
+        env:
+          FUZZ_SEED: random
+          FUZZ_RUNS: "200000"
+      - run: npm run -s smoke:fuzz-redaction
+        env:
+          FUZZ_SEED: random
+          FUZZ_RUNS: "200000"
+      - run: npm run -s smoke:fuzz-workspace-paths
+        env:
+          FUZZ_SEED: random
+          FUZZ_RUNS: "20000"
+
   # Every manifest in the tree, not only the root lockfile: the MCP server lockfiles under
   # packages/container/mcp-servers and requirements-docs.txt are scanned too, and a lockfile
   # added later is picked up without editing this job.
@@ -207,9 +236,8 @@ jobs:
   # --no-verify, is still checked before merge). A match admitted only by an exception this pull
   # request adds fails, and so does a change to packages/core/leak-scan-exceptions.json mixed with
   # other files: new exceptions land in their own pull request first. There is no bypass for
-  # the release bot: a release whose export changes the exceptions arrives as an exceptions-only
-  # pull request plus a release pull request stacked on it, and this job fails on the release one
-  # until the exceptions one has merged (docs/releasing.md, "Releases that change scan exceptions").
+  # release branches: any change to exceptions lands in an exceptions-only pull request first,
+  # then the release branch updates from main (docs/releasing.md, "Releases that change scan exceptions").
   leak-scan:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

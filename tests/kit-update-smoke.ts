@@ -135,7 +135,7 @@ function makeWorld({ kitSource = "npm:@satunix/pi-system", kitVersion = "0.2.1-b
   };
 }
 
-const GIT_SOURCE = "git:github.com/SATUNIX/pi-system";
+const GIT_SOURCE = "git:github.com/SATUNIX/luna";
 const SHA_OLD = "1".repeat(40);
 const SHA_MAIN = "2".repeat(40);
 
@@ -143,7 +143,7 @@ const SHA_MAIN = "2".repeat(40);
 function makeGitWorld({ kitSource = `${GIT_SOURCE}@v0.2.1-beta.0`, kitVersion = "0.2.1-beta.0", delivery = "git", marker = { profile: "balanced", scope: "global" } }: GitWorldOptions = {}): World {
   const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-update-agent-"));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-update-cwd-"));
-  const kitRoot = path.join(agent, "git", "github.com", "SATUNIX", "pi-system");
+  const kitRoot = path.join(agent, "git", "github.com", "SATUNIX", "luna");
   writeJson(path.join(kitRoot, "package.json"), { name: "@satunix/pi-system", version: kitVersion });
   fs.mkdirSync(path.join(kitRoot, "packages", "core"), { recursive: true });
   fs.writeFileSync(path.join(kitRoot, "packages", "core", "install.ts"), "// stub\n");
@@ -255,8 +255,8 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   "previous public sources move to the current source in both directions, preserving channel and profile": async () => {
-    const luna = "git:github.com/SATUNIX/luna";
-    for (const [previous, current] of [[GIT_SOURCE, luna], [luna, GIT_SOURCE]]) {
+    const previousSource = "git:github.com/SATUNIX/pi-system";
+    for (const [previous, current] of [[previousSource, GIT_SOURCE], [GIT_SOURCE, previousSource]]) {
       assert.ok(previous && current);
       for (const channel of ["latest", "next", "0.2.1-beta.0"]) {
         const source = channel === "next" ? previous : `${previous}@v0.2.1-beta.0`;
@@ -283,6 +283,13 @@ const tests: Record<string, () => void | Promise<void>> = {
           assert.ok(step.verify);
           assert.notEqual(await step.verify(), null, "the move must be verified");
           const target = channel === "next" ? current : `${current}@v0.2.1-beta.0`;
+          // Model pi having installed the destination checkout, including its own distribution metadata.
+          const destination = parseGitSource(target);
+          assert.ok(destination);
+          const destinationRoot = path.join(w.agent, "git", destination.host, ...destination.path.split("/"));
+          writeJson(path.join(destinationRoot, "package.json"), { name: "@satunix/pi-system", version: "0.2.4" });
+          writeJson(path.join(destinationRoot, "packages", "core", "install.ts"), {});
+          writeJson(path.join(destinationRoot, "packages", "core", "distribution.json"), { delivery: "git", git: { source: current, previousSources: [previous] } });
           writeJson(path.join(w.agent, "settings.json"), { packages: [target] });
           writeJson(path.join(w.agent, ".pi-kit.json"), { profile: "lite", channel, kitSource: target });
           assert.equal(await step.verify(), null);
@@ -638,7 +645,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(d.gitSource, null, "no source is invented from the retired override");
       assert.equal(d.ignoredEnvSource, "git:git@legacy.example.invalid:lab/pi-system");
       assert.ok(mod.isLegacyGitSource("https://legacy.example.invalid/root/pi-system.git"));
-      assert.ok(!mod.isLegacyGitSource("git:github.com/SATUNIX/pi-system"));
+      assert.ok(!mod.isLegacyGitSource("git:github.com/SATUNIX/luna"));
       assert.ok(!mod.isLegacyGitSource("git:github.com/example/pi-system"));
       process.env.PI_SYSTEM_GIT_SOURCE = "git:github.com/example/pi-system";
       const fork = mod.readDistribution(null);
@@ -701,8 +708,8 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   "parses git sources the way pi identifies them": () => {
-    assert.deepEqual(parseGitSource("git:github.com/SATUNIX/pi-system@v0.2.1-beta.0"), { repo: "https://github.com/SATUNIX/pi-system", host: "github.com", path: "SATUNIX/pi-system", ref: "v0.2.1-beta.0" });
-    assert.deepEqual(parseGitSource("git:git@github.com:SATUNIX/pi-system"), { repo: "git@github.com:SATUNIX/pi-system", host: "github.com", path: "SATUNIX/pi-system", ref: null });
+    assert.deepEqual(parseGitSource("git:github.com/SATUNIX/luna@v0.2.1-beta.0"), { repo: "https://github.com/SATUNIX/luna", host: "github.com", path: "SATUNIX/luna", ref: "v0.2.1-beta.0" });
+    assert.deepEqual(parseGitSource("git:git@github.com:SATUNIX/luna"), { repo: "git@github.com:SATUNIX/luna", host: "github.com", path: "SATUNIX/luna", ref: null });
     assert.equal(parseGitSource("npm:x"), null);
     assert.equal(gitSourceWithRef(`${GIT_SOURCE}@v1.0.0`, "v1.1.0"), `${GIT_SOURCE}@v1.1.0`);
     assert.equal(gitSourceWithRef(`${GIT_SOURCE}@v1.0.0`, null), GIT_SOURCE);
@@ -836,7 +843,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       const report = await checkForUpdates(w.cwd, fakeRegistry(TAGS).fetchImpl, "0.87.1", fakeGit({ reachable: false }).git);
       assert.equal(report.offline, true);
       assert.equal(report.kit.available, false);
-      assert.match(report.kit.note ?? "", /could not reach https:\/\/github\.com\/SATUNIX\/pi-system/);
+      assert.match(report.kit.note ?? "", /could not reach https:\/\/github\.com\/SATUNIX\/luna/);
     } finally {
       w.cleanup();
     }
@@ -1014,7 +1021,7 @@ const tests: Record<string, () => void | Promise<void>> = {
         }
       }
       // A public origin is looked up as before.
-      const pub = fakeGit({ head: SHA_OLD, upstream: SHA_MAIN, contains: false, origin: "https://github.com/SATUNIX/pi-system.git" });
+      const pub = fakeGit({ head: SHA_OLD, upstream: SHA_MAIN, contains: false, origin: "https://github.com/SATUNIX/luna.git" });
       const report = await checkForUpdates(w.cwd, fakeRegistry(TAGS).fetchImpl, "0.87.1", pub.git);
       assert.equal(report.kit.legacyOrigin, undefined);
       assert.equal(pub.calls.some((c) => c.includes("ls-remote")), true);

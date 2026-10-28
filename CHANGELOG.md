@@ -8,6 +8,28 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- Repository URLs now point to `SATUNIX/luna`; the former public source remains in
+  `git.previousSources` so existing installs retain their channel and profile during migration
+  (`tests/distribution-smoke.ts`, `tests/distribution-contract-smoke.ts`, `tests/kit-update-smoke.ts`).
+- Repository and release documentation now describes development directly on GitHub, with the
+  GitLab mirror and private-lineage export pipeline archived. Releases use a branch, reviewed
+  pull request and operator tag (`tests/release-plan-smoke.ts`, `tests/docs-smoke.ts`).
+
+### Added
+
+- Seeded property-based fuzz tests for firewall classification, redaction and workspace writes,
+  run by `check:all` and in longer weekly security runs (`tests/fuzz-firewall-classifier-smoke.ts`,
+  `tests/fuzz-redaction-smoke.ts`, `tests/fuzz-workspace-paths-smoke.ts`). Coverage reporting and
+  a generated interface reference accompany the security and contributor documentation fixes.
+
+### Fixed
+
+- Malformed ANSI-C escapes no longer crash the shell classifier (`tests/firewall-shell-smoke.ts`).
+  Firewall cache and rejected-file digests use SHA-256, with a lint rule refusing weak hashes
+  (`tests/auto-mode-smoke.ts`, `npm run test:lint`).
+
 ## [0.2.4-beta.11]
 
 ### Fixed

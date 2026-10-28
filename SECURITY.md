@@ -47,8 +47,14 @@ is missed, the report stays open and you are told why.
 | Triage: reproduce, decide whether it is in scope, assign a severity | 14 days |
 | Fix released, **critical** | 7 days after triage |
 | Fix released, **high** | 30 days after triage |
-| Fix released, **medium** | 90 days after triage |
+| Fix released, **medium** | 60 days after the report (triage included) |
 | Fix released, **low** | The next planned release, or recorded as an accepted risk |
+
+So no confirmed vulnerability of medium or higher severity stays unfixed for more than 60 days
+after it is reported. The same targets apply to a medium or higher finding that the project's own
+tools confirm (CodeQL, Semgrep, zizmor, the dependency scanners and the property-based fuzz
+tests), counted from the day the finding is confirmed
+([Vulnerability management](docs/vulnerability-management.md)).
 
 Severity follows the rubric in
 [`docs/vulnerability-management.md`](docs/vulnerability-management.md). A fix ships as a new

@@ -22,7 +22,7 @@ The kit supports pi **0.85.1 and newer**; the version it is tested against is pi
 ## 2. Install the kit
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9
+pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/pi-system` and runs

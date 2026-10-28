@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-system",
-  "version": "0.2.4-beta.9",
+  "version": "0.2.4-beta.11",
   "description": "Safety-first kit for the pi coding agent: tool firewall, secret guard, checkpoints, verification, memory, orchestration, skills and themes. One package; pick a profile with /profile.",
   "type": "module",
   "keywords": [
@@ -239,6 +239,7 @@
     "smoke:tool-capture": "node tests/tool-capture-smoke.ts",
     "smoke:untrusted-input-guards": "node tests/untrusted-input-guards-smoke.ts",
     "smoke:kit-root-trust": "node tests/kit-root-trust-smoke.ts",
+    "smoke:node-runtime": "node tests/node-runtime-smoke.ts",
     "smoke:kit-update": "node tests/kit-update-smoke.ts",
     "distribution:inspect": "node packages/core/distribution-contract.ts",
     "smoke:distribution-contract": "node tests/distribution-contract-smoke.ts",

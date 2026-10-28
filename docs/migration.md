@@ -22,7 +22,7 @@ node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs \
   --profile <your profile> --yes --settings-only --capture-overrides
 ```
 
-(Once a release is tagged, `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9` pins it.) The
+(Once a release is tagged, `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11` pins it.) The
 installer sees the retired registration and:
 
 - **registers the public source and removes the retired one**, so the kit is not loaded twice

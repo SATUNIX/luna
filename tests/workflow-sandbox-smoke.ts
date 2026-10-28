@@ -232,7 +232,7 @@ try {
   ok("a tampered quickjs.wasm or another quickjs-wasi version is refused, and the session's self-test fails closed");
 
   // 8. Without bwrap.
-  const noBwrap = (): { bwrap: null; prlimit: string | null; reason: string } => ({ bwrap: null, prlimit: support.prlimit, reason: "bwrap (bubblewrap) is not installed" });
+  const noBwrap = (): { bwrap: null; prlimit: string | null; node: string | null; reason: string } => ({ bwrap: null, prlimit: support.prlimit, node: support.node, reason: "bwrap (bubblewrap) is not installed" });
   const headless = await new SandboxSession({ detect: noBwrap }).prepare({ hasUI: false });
   assert.ok(!headless.ok && /needs an interactive yes/.test(headless.error), JSON.stringify(headless));
   const asked: string[][] = [];
@@ -256,7 +256,7 @@ try {
   assert.deepEqual(await accepted.prepare(answer((o) => o[1])), { ok: true, mode: "reduced" });
   assert.deepEqual(await accepted.prepare(answer((o) => o[0])), { ok: true, mode: "reduced" });
   assert.equal(asked.length, 1, "asked once per session");
-  const noPrlimit = await new SandboxSession({ detect: () => ({ bwrap: null, prlimit: null, reason: "x" }) }).prepare(answer((o) => o[1]));
+  const noPrlimit = await new SandboxSession({ detect: () => ({ bwrap: null, prlimit: null, node: support.node, reason: "x" }) }).prepare(answer((o) => o[1]));
   assert.ok(!noPrlimit.ok && /prlimit/.test(noPrlimit.error));
   expectError(await run("full", "return 1", { support: noBwrap() }), "unavailable", /full sandbox unavailable/, "full mode without bwrap");
   if (support.bwrap) {

@@ -41,6 +41,9 @@ export interface CycleRuntime {
   startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void }): CycleAgent;
   headSha(): Promise<string>;
   reportExists(): Promise<boolean>;
+  /** Host-only close-out from accepted commits; true only after a green gate. */
+  salvageReport?(): Promise<boolean>;
+  onAutoRestart?(used: number): void;
   meterUsd(): Promise<number>;
   totalUsd(): Promise<number>;
   stopRequested(): boolean;
@@ -69,6 +72,7 @@ export interface RunCycleOptions {
   restartBriefing?: string | undefined;
   /** Where the cycle's files go on the branch (default autonomy/cycles/<NN>). */
   cycleDir?: string | undefined;
+  autoRestartsUsed?: number;
 }
 
 export type CycleOutcome = "completed" | "partial" | "reset" | "aborted" | "blocked";
@@ -92,7 +96,7 @@ const FOLLOW_UP = [
   "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update HANDOFF.md, commit and `git push origin HEAD`.",
 ];
 
-export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }: RunCycleOptions): Promise<CycleResult> {
+export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0 }: RunCycleOptions): Promise<CycleResult> {
   const NN = String(n).padStart(2, "0");
   const DIR = cycleDir ?? `autonomy/cycles/${NN}`;
   const startMeter = await rt.meterUsd();
@@ -108,6 +112,8 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }
   // Assigned by launch(), so declared wide: control flow would otherwise keep it at null.
   let agent = null as CycleAgent | null;
   let settled = false;
+  let dead = false;
+  let autoRestarts = autoRestartsUsed;
   let followUps = 0;
   let pendingTrigger: string | null = null;
   let blocker: Blocker | null = null;
@@ -136,9 +142,12 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }
     attempt++;
     settled = false;
     s.exited = null;
+    dead = false;
+    s.lastEventAt = rt.now();
+    followUps = 0;
     const started = rt.startAgent({ attempt, onEvent });
     agent = started;
-    void started.exited.then((e) => { s.exited = e; settled = true; });
+    void started.exited.then((e) => { if (agent === started) { s.exited = e; dead = true; settled = true; } });
     started.send({ type: "prompt", message: text });
   };
   // A message from the "operator": steer a running agent, or prompt an idle one.
@@ -161,11 +170,29 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }
     if (sha !== head) { head = sha; s.lastCommitAt = now; }
     s.costUsd = (await rt.meterUsd()) - startMeter;
 
-    if (blocker) return close("blocked", "a question needs a person");
     if (rt.stopRequested() || (await rt.totalUsd()) >= cfg.budget.totalUsd) return close("aborted", "run stop (a control command, a signal or the total budget)");
+    if (blocker) return close("blocked", "a question needs a person");
 
+    // Hard bounds apply before either mechanical recovery or a judgement call.
+    const { stop, triggers } = evaluate({ ...s, exited: null }, now, cfg);
+    if (stop === "hard_limit" || stop === "cycle_budget_hard") return close("partial", stop);
+    if (dead) {
+      if (await rt.reportExists()) return close("completed", "report recorded");
+      const salvaged = await rt.salvageReport?.();
+      if (rt.stopRequested()) return close("aborted", "run stop during close-out");
+      const afterGate = evaluate({ ...s, exited: null }, rt.now(), cfg).stop;
+      if (afterGate === "hard_limit" || afterGate === "cycle_budget_hard") return close("partial", afterGate);
+      if (salvaged) return close("completed", "host close-out after session exit");
+      if (autoRestarts >= (cfg.limits.autoRestartsPerCycle ?? 3)) return close("partial", "auto_restarts_exhausted");
+      autoRestarts++;
+      rt.onAutoRestart?.(autoRestarts);
+      rt.log(`cycle ${NN} automatic restart ${autoRestarts} after session exit (${s.exited?.code ?? "unknown"})`);
+      await agent?.stop();
+      launch(`The previous worker process exited. Re-read autonomy/HANDOFF.md, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
+      continue;
+    }
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
-    if (settled && !s.exited && !pendingTrigger) {
+    if (settled && !dead && !pendingTrigger) {
       if (await rt.reportExists()) return close("completed", "report recorded");
       const followUp = FOLLOW_UP[followUps];
       if (followUp !== undefined) {
@@ -176,15 +203,10 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }
       }
       pendingTrigger = "settled_without_report";
     }
-    if (s.exited?.code === 0) {
-      if (await rt.reportExists()) return close("completed", "report recorded");
-      if (!pendingTrigger) pendingTrigger = `exited_without_report:${attempt}`;
-    }
-
-    const { stop, triggers } = evaluate(s, now, cfg);
     if (stop) return close("partial", stop);
     if (pendingTrigger && !s.handled.has(pendingTrigger)) triggers.push(pendingTrigger);
     if (!triggers.length) continue;
+    if (s.managerCalls >= cfg.limits.managerCallsPerCycle) return close("partial", "manager_calls_exhausted");
 
     // Ask the manager once for everything that fired, then execute its single decision.
     s.managerCalls++;
@@ -204,9 +226,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir }
     } catch (error) {
       // No usable decision: the least disruptive safe default, recorded like any other.
       const why = error instanceof Error ? error.message : String(error);
-      d = triggers.some((t) => t.startsWith("crash")) && attempt < 3
-        ? { decision: "RESTART_SESSION", reason: `manager unavailable (${why}); default after a crash`, message: "The previous session ended unexpectedly. Re-read autonomy/HANDOFF.md and the cycle files, then continue the cycle." }
-        : { decision: "CONTINUE", reason: `manager unavailable (${why}); default`, extendMinutes: 15 };
+      d = { decision: "CONTINUE", reason: `manager unavailable (${why}); default`, extendMinutes: 15 };
     }
     decisions.push({ at: new Date(now).toISOString(), triggers, ...d });
     rt.log(`cycle ${NN} manager: ${d.decision} (${d.reason}) on ${triggers.join(",")}`);

@@ -331,7 +331,7 @@ function save(view: ApprovalsView, approvals: Approval[], floors: Floors, now: n
   if (view.problems.length) {
     try {
       const text = fs.readFileSync(file);
-      const copy = `${file}.rejected-${crypto.createHash("sha1").update(text).digest("hex").slice(0, 8)}`;
+      const copy = `${file}.rejected-${crypto.createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
       fs.writeFileSync(copy, text, { mode: 0o600, flag: "wx" }); // "wx": created only if it is not there already, in one step
     } catch {
       /* best effort (including: the copy already exists) */

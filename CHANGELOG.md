@@ -8,6 +8,71 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- Repository URLs now point to `SATUNIX/luna`; the former public source remains in
+  `git.previousSources` so existing installs retain their channel and profile during migration
+  (`tests/distribution-smoke.ts`, `tests/distribution-contract-smoke.ts`, `tests/kit-update-smoke.ts`).
+- Repository and release documentation now describes development directly on GitHub, with the
+  GitLab mirror and private-lineage export pipeline archived. Releases use a branch, reviewed
+  pull request and operator tag (`tests/release-plan-smoke.ts`, `tests/docs-smoke.ts`).
+
+### Added
+
+- Seeded property-based fuzz tests for firewall classification, redaction and workspace writes,
+  run by `check:all` and in longer weekly security runs (`tests/fuzz-firewall-classifier-smoke.ts`,
+  `tests/fuzz-redaction-smoke.ts`, `tests/fuzz-workspace-paths-smoke.ts`). Coverage reporting and
+  a generated interface reference accompany the security and contributor documentation fixes.
+- **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+
+### Fixed
+
+- Malformed ANSI-C escapes no longer crash the shell classifier (`tests/firewall-shell-smoke.ts`).
+  Firewall cache and rejected-file digests use SHA-256, with a lint rule refusing weak hashes
+  (`tests/auto-mode-smoke.ts`, `npm run test:lint`).
+- **Unattended self-improve cycles recover dead workers without manager calls.** Three automatic restarts by default, persisted across resumes; next-tick exit detection, green-gate host report salvage with independent merge review, STOP parking, and an engine heartbeat for external stewards (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **Host publication and promotion scan every outgoing commit before pushing**, including unmerged attempt tags, using the repository pre-push leak scanner; findings or scan failures record a publication blocker and keep work local (`tests/autonomy-selfimprove-smoke.ts`, `tests/prepush-scan-smoke.ts`).
+
+## [0.2.4-beta.11]
+
+### Fixed
+
+- **Publishing to GitHub works again after the repository rename.** The repository is now
+  `SATUNIX/luna`. GitHub redirects clones and reads of the old `SATUNIX/pi-system` name, but
+  `publish.ts` asked for an installation token scoped to the repository `pi-system`, which GitHub
+  refuses with 422 because no repository has that name any more. The v0.2.4-beta.10 tag could
+  not be published for this reason. `publish.ts` now targets `SATUNIX/luna` and scopes the token
+  to `luna`; `.github/expected-settings.json` names the new repository for the settings drift
+  check. Install commands that name `github.com/SATUNIX/pi-system` keep working through GitHub's
+  redirect.
+
+## [0.2.4-beta.10]
+
+### Fixed
+
+- **The web console survives a pi child that exits before reading its input.** A write to the
+  child's stdin after it had gone failed with EPIPE, and with no listener on stdin that was an
+  unhandled `error` event that stopped the whole server. `createSession` writes `get_state` straight
+  after spawning, so a child that exits at once raced it; this failed `smoke:web-ui-spawn` once on
+  GitHub CI. The waiting commands now fail with a 502 and the `exit` handler cleans up as before.
+  `smoke:web-ui-spawn` emits the EPIPE and checks it is handled.
+- **`/remote`, `/console`, autonomy runs and the workflow sandbox work under a compiled pi.**
+  Each started a Node script with `process.execPath`, which under the compiled pi binary is pi
+  itself: pi read the script path as a prompt and ran an agent turn (`/remote` never started its
+  host, and `host.log` held a model answer), and the sandbox failed on node-only flags. They now
+  resolve a JavaScript runtime through `packages/core/shared/node-runtime.ts`: `PI_KIT_NODE` when
+  set (absolute and executable, or a clear error), then `process.execPath` only when it is node or
+  bun, then `node` on `PATH`. It never returns pi. The sandbox needs a real `node` binary, which
+  also rejects version-manager shims that cannot run inside its jail. Each command refuses with the
+  reason when no runtime is found. `smoke:node-runtime` covers the resolver and drives `/console`,
+  the remote host start and the autonomy CLI with a fake compiled pi.
+
+### Changed
+
+- **`release.yml` uses `actions/upload-artifact` 7.0.2 and `actions/download-artifact` 8.0.2**,
+  pinned by commit SHA (each checked against its release tag), from Dependabot's GitHub pull
+  request #22.
+
 ## [0.2.4-beta.9]
 
 ### Changed

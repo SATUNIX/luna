@@ -84,6 +84,19 @@ The kit's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, 
 `record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools) are exempt
 from MCP-only mode: they do not touch a pentest target and are already gated by `tool-firewall`.
 
+### Pentest commands
+
+`pentest-governance-domain` registers three operator commands, none of which takes arguments:
+
+| Command | What it does |
+|---|---|
+| `/pentest:status` | Creates the data directories if they are missing, then prints the pentest data root (`PENTEST_DATA_ROOT`, default `.pi/pentest` in the working directory) and any scope or rules-of-engagement errors (`scope_errors=none` when both files are valid). |
+| `/pentest:actions` | Prints the path of the audit log that records every action-card approval (`<data root>/audit/audit.jsonl`). |
+| `/pentest:reload-policy` | Clears the cached policy metadata and scope and rules of engagement, so the next action reads `engagement/scope.yaml`, `engagement/roe.yaml` and the tool policy from disk again: an edited engagement takes effect without a restart. |
+
+Nothing tests these three commands directly; the scope and rules-of-engagement checks they report
+are pinned by `tests/governance-smoke.ts`.
+
 ## What the boundary guarantees
 
 1. **No silent allow-all.** A fresh session loads the shipped starter policy

@@ -52,6 +52,9 @@ const rows: Row[] = [
   ["rm -rf /tmp/pi-kit-test-123/cache", "low"],
   ["chmod +x scripts/release.sh && ./scripts/release.sh --dry-run", "low"],
   ["echo $PATH; printenv HOME", "low"],
+  // ANSI-C escapes with no hex digits, or past U+10FFFF, stay literal as in bash instead of throwing (fuzz counterexample).
+  ["echo $'\\x' $'\\uZZ' $'\\UFFFFFFFF'", "low"],
+  ["rm -rf $'/\\x'", "high"],
   ["ls -la ~/.ssh", "low"],
   ["\\rm -f build.log", "low"],
   ["eval \"$(mise activate bash)\"", "low"],

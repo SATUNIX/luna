@@ -26,7 +26,7 @@ Use this guide if you want to:
 
 ## Plain terms
 
-- The **kit** is the one package, installed from `github.com/SATUNIX/pi-system`.
+- The **kit** is the one package, installed from `github.com/SATUNIX/luna`.
 - A **profile** chooses which of the kit's extensions, skills and prompts load. Switch with `/profile`.
 - A **channel** is what you follow: `latest` (release tags), `next` (`main`), or a pinned version.
 - **Effort** is a per-task dial (E1 to E5) for depth of work and delegation. It is not a
@@ -36,6 +36,7 @@ Use this guide if you want to:
 ## Start here
 
 1. [Getting started](getting-started.md), then [Installation](INSTALL.md) for the reference.
+   Every command, tool, environment variable and schema is in the [interface reference](reference.md).
 2. Pick a profile in [Profiles](profiles.md); see [Concepts](concepts.md) for the vocabulary.
 3. Read the [Security model](security.md), especially what it does not claim.
 4. Something wrong? [Troubleshooting](troubleshooting.md).

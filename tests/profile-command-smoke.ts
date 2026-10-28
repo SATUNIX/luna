@@ -390,6 +390,7 @@ const tests = {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-profile-git-"));
     const settings = path.join(dir, "settings.json");
     try {
+      // A pre-rename registration must still support profile changes, in both HTTPS and SSH forms.
       fs.writeFileSync(settings, JSON.stringify({ packages: [{ source: "git:github.com/SATUNIX/pi-system@v0.2.1-beta.0", extensions: ["packages/extensions/third_party/todo/index.ts"] }] }));
       assert.deepEqual(loadedKitExtensions(settings, root), ["todo"]);
       assert.equal(unfilteredKitEntry(settings), false);

@@ -1026,7 +1026,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     if (tier === "high" && similar.length && !highJudge) judgeNote = trustAuto ? "similar to a session allow, but this kind always needs you" : undefined;
     if (judgeAllowed) {
       const request = latestRequest(ctx, lastRequest);
-      const turn = crypto.createHash("sha1").update(`${revision}|${request}|${sessionList.map((g) => g.id).sort().join(",")}`).digest("hex").slice(0, 12);
+      const turn = crypto.createHash("sha256").update(`${revision}|${request}|${sessionList.map((g) => g.id).sort().join(",")}`).digest("hex").slice(0, 32);
       const cached = s.judgeCache[hash];
       let verdict: Verdict | null = cached?.turn === turn ? { verdict: cached.verdict, reason: cached.reason, ...(cached.confidence ? { confidence: cached.confidence } : {}), ...(cached.differs ? { differs: cached.differs } : {}) } : null;
       if (!verdict) {

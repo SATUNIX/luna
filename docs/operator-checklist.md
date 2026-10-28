@@ -45,32 +45,24 @@ with the release.
 
 ## Release credentials and publication
 
-Public releases are exported from a private development lineage
-([Repository topology](repository-topology.md#how-a-release-reaches-this-repository)). Its
-operator steps are kept with that lineage; the rules every operator follows are:
+Releases are prepared directly in GitHub `SATUNIX/luna`, the only repository
+([Releasing](releasing.md#cutting-a-release)). The GitLab mirror and private-lineage export
+pipeline are archived.
 
-- [ ] **The publication key is never a CI variable.** Hold it as a root-owned file readable only
-  by the release job, on the release runner's host, mounted read-only into that job alone.
-  Rotate it at once if it was ever readable by anything else.
-- [ ] **Agent forge credentials are least privilege**: read and push scopes only, no
-  administration, API-wide or runner scopes, and never an administrator's token. Administrators
+- [ ] **Agent forge credentials are least privilege**: contents and pull-request write access
+  only, no administration or runner scopes, and never an administrator's token. Administrators
   use two-factor authentication.
-- [ ] **No privileged runner takes untagged or unprotected jobs**, and none runs on the forge's
-  own host. The release runner is project-scoped, locked, protected refs only, tagged for the
-  release job alone, and allows exactly one pinned image; change that image and the runner's
-  allowed images together.
-- [ ] **Capture settings evidence before each release** with the read-only audit of variables,
-  runners, token scopes and project features, and keep its JSON output with the release.
-- [ ] **Check the first tag pipeline after any publication change** reaches the publish job and
-  that job refuses nothing it should accept.
+- [ ] **Only the operator tags and publishes.** Review the release branch through a pull request,
+  then run the manual release workflow first as a dry run
+  (`tests/release-plan-smoke.ts`, `tests/release-workflow-smoke.ts`).
 
 ## Each release
 
 The release steps are in [Releasing](releasing.md#cutting-a-release). In addition:
 
 - [ ] The release pull request had a human approval and every required check passed.
-- [ ] If the release changes the scan exceptions, its `release/<tag>-exceptions` pull request was
-  reviewed entry by entry and merged first, with a merge commit (not squash or rebase); the release
+- [ ] If the release changes the scan exceptions, an exceptions-only pull request was
+  reviewed entry by entry and merged first; the release
   branch was then updated from `main` and its `leak-scan` re-ran and passed. `leak-scan` is never
   bypassed or made optional for a release
   ([Releasing](releasing.md#releases-that-change-scan-exceptions)).

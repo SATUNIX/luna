@@ -10,7 +10,7 @@ import { isPlainObject } from "./fsutil.ts";
 import { type RunState, STATE_SCHEMA_VERSION, type TransitionInfo, isRunState, transition } from "./lifecycle.ts";
 import { type RunPaths, runPaths, stateHome } from "./paths.ts";
 
-export const CONTROL_KINDS = ["pause", "unpause", "cancel", "steer", "answer", "reconfigure"] as const;
+export const CONTROL_KINDS = ["pause", "unpause", "cancel", "steer", "backlog", "answer", "reconfigure"] as const;
 export type ControlKind = (typeof CONTROL_KINDS)[number];
 const isControlKind = (v: unknown): v is ControlKind => (CONTROL_KINDS as readonly unknown[]).includes(v);
 

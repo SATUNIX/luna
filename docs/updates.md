@@ -5,7 +5,7 @@ A pi setup has three parts that update separately:
 | Part | What it is | Where it comes from |
 |---|---|---|
 | **pi** | The agent binary, TUI and session model | `@earendil-works/pi-coding-agent` on npm |
-| **pi-system** | This kit: extensions, skills, prompts, profiles, themes | Its public git repository, `github.com/SATUNIX/pi-system`, on a channel |
+| **pi-system** | This kit: extensions, skills, prompts, profiles, themes | Its public git repository, `github.com/SATUNIX/luna`, on a channel |
 | **Linked packages** | Other pi packages in your settings, including the kit's companions (`pi-lens`, `pi-readseek`, ...) | npm |
 
 A **profile** is not a part: it is a setting that chooses what loads from the kit (see
@@ -94,9 +94,9 @@ changes nothing. `smoke:install-marker` checks partial failure, marker preservat
 
 | Channel | Registered in pi as | Gets |
 |---|---|---|
-| `latest` | `git:github.com/SATUNIX/pi-system@v<newest release>` | The newest release tag. Betas count until the first stable release; after that, only stable releases |
-| `next` | `git:github.com/SATUNIX/pi-system` (no tag) | Every commit on `main` |
-| pinned | `git:github.com/SATUNIX/pi-system@v<version>` | Exactly that release, never moved automatically |
+| `latest` | `git:github.com/SATUNIX/luna@v<newest release>` | The newest release tag. Betas count until the first stable release; after that, only stable releases |
+| `next` | `git:github.com/SATUNIX/luna` (no tag) | Every commit on `main` |
+| pinned | `git:github.com/SATUNIX/luna@v<version>` | Exactly that release, never moved automatically |
 
 `latest` and a pin look the same in pi's settings (a tag). The installer records which one you
 chose in `~/.pi/agent/.pi-kit.json`, and `/update` follows that record.
@@ -112,7 +112,7 @@ release is tagged, `/update channel latest` fails with a message saying so.
 |---|---|
 | `PI_KIT_UPDATE_CHECK=0` | No background check (`/update` still works) |
 | `PI_KIT_UPDATE_CHECK_HOURS` | Hours between background checks (default 24) |
-| `PI_SYSTEM_GIT_SOURCE` | Git source of the kit, for example `git:git@github.com:SATUNIX/pi-system` to use SSH. A value that still names a retired private source is ignored and reported |
+| `PI_SYSTEM_GIT_SOURCE` | Git source of the kit, for example `git:git@github.com:SATUNIX/luna` to use SSH. A value that still names a retired private source is ignored and reported |
 | `PI_KIT_DELIVERY` | `git` or `npm`: override the kit's delivery on this machine |
 | `PI_KIT_NPM_REGISTRY` | Registry to query for pi and linked packages (default `https://registry.npmjs.org`) |
 | `PI_OFFLINE` | pi's offline mode: no background check |
@@ -123,14 +123,14 @@ The same updates from a shell:
 
 ```sh
 pi update --self                                                    # pi
-pi install git:github.com/SATUNIX/pi-system@v<version>             # the kit, to a new release (latest or a pin)
-pi update git:github.com/SATUNIX/pi-system                         # the kit, on next
+pi install git:github.com/SATUNIX/luna@v<version>             # the kit, to a new release (latest or a pin)
+pi update git:github.com/SATUNIX/luna                         # the kit, on next
 pi update --extensions                                              # every unpinned package
-node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs --profile balanced --yes --settings-only
+node ~/.pi/agent/git/github.com/SATUNIX/luna/packages/core/install.mjs --profile balanced --yes --settings-only
                                                                     # re-apply a profile (and companion pins)
 ```
 
-To find the newest release tag: `git ls-remote --tags https://github.com/SATUNIX/pi-system.git`.
+To find the newest release tag: `git ls-remote --tags https://github.com/SATUNIX/luna.git`.
 
 ## Checkouts
 
@@ -155,7 +155,7 @@ repositories are recognised as the kit, ignoring transport and ref. When one dif
 current `git.source`, `/update kit` offers to move it using the installer, keeping its channel,
 profile and project scope. An exact version remains an exact version. This list is separate from
 `git.legacySources`, whose retired private sources must never be contacted. Malformed
-`previousSources` metadata is refused. The list is empty in the shipped configuration
+`previousSources` metadata is refused. The shipped list retains the former public repository location
 (`tests/kit-update-smoke.ts`, `tests/distribution-smoke.ts` and
 `tests/distribution-contract-smoke.ts`).
 

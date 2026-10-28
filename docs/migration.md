@@ -1,12 +1,22 @@
 # Migration
 
+## From the former public repository name
+
+The public repository is now `github.com/SATUNIX/luna`. `git.previousSources` in
+`packages/core/distribution.json` retains the previous public location. An existing registration
+moves to the current source with `/update kit`, keeping its `latest`, `next` or pinned channel and
+profile. Profile-only switches retain the existing registration; an explicit installer channel
+moves it to the current source. These paths are pinned by `tests/distribution-smoke.ts` and
+`tests/kit-update-smoke.ts`; `tests/distribution-contract-smoke.ts` checks the shipped metadata.
+The npm package name remains `@satunix/pi-system`.
+
 ## From the private GitLab source
 
 Before the public beta the kit was delivered from a private GitLab project
 (recognised by source fingerprints, so private hostnames are not shipped).
 Those are **retired sources**. They are listed in `packages/core/distribution.json` under
 `git.legacySources`, and an install still registered from one is migrated to
-`github.com/SATUNIX/pi-system`.
+`github.com/SATUNIX/luna`.
 
 ### How an existing install moves
 
@@ -17,12 +27,12 @@ starts from the public kit. Neither route contacts the retired host.
 **Route 1: install the public kit, then run its installer (works from any install).**
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system          # follows main until the first release tag exists
-node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs \
+pi install git:github.com/SATUNIX/luna          # follows main until the first release tag exists
+node ~/.pi/agent/git/github.com/SATUNIX/luna/packages/core/install.mjs \
   --profile <your profile> --yes --settings-only --capture-overrides
 ```
 
-(Once a release is tagged, `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11` pins it.) The
+(Once a release is tagged, `pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11` pins it.) The
 installer sees the retired registration and:
 
 - **registers the public source and removes the retired one**, so the kit is not loaded twice
@@ -45,7 +55,7 @@ been brought forward. That is the old code.
 
 A `PI_SYSTEM_GIT_SOURCE` that still names a retired source (the earlier SSH instructions told you to
 export one) is **ignored with a warning** by this release's code. Unset it. To use SSH with the
-public repository, set `PI_SYSTEM_GIT_SOURCE=git:git@github.com:SATUNIX/pi-system`.
+public repository, set `PI_SYSTEM_GIT_SOURCE=git:git@github.com:SATUNIX/luna`.
 
 Pinned by `tests/kit-update-smoke.ts` (detection, no contact with the retired host, no pull) and
 `tests/distribution-smoke.ts` (the installer's source selection, channel and hand-edit capture).
@@ -67,7 +77,7 @@ registered. `/update status` shows the source and channel the kit follows.
 
 ## Breaking changes in 0.2.4-beta.0
 
-- **Source**: the kit installs from `github.com/SATUNIX/pi-system`. Scripts that hard-coded the
+- **Source**: the kit installs from `github.com/SATUNIX/luna`. Scripts that hard-coded the
   private GitLab URL need updating.
 - **Node and pi**: Node.js 22.19 or newer and pi 0.85.1 or newer (the peer range moved from
   `>=0.76.0`). Older pi versions are not tested.

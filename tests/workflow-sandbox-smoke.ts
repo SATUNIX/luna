@@ -205,7 +205,9 @@ try {
     const out: unknown = JSON.parse(r.stdout);
     assert.ok(typeof out === "object" && out !== null);
     const field = (k: string): string => String(Reflect.get(out, k));
-    assert.equal(field("env"), "", `${mode}: environment is empty`);
+    // Node re-adds its coverage variable to children even when the spawner clears the environment.
+    const leaked = field("env").split(",").filter((k) => k !== "" && !(k === "NODE_V8_COVERAGE" && process.env.NODE_V8_COVERAGE !== undefined));
+    assert.deepEqual(leaked, [], `${mode}: environment is empty`);
     for (const k of ["read", "write", "spawn", "worker", "wasi", "addon", "net"]) assert.match(field(k), /^blocked/, `${mode}: ${k} -> ${field(k)}`);
     assert.equal(fs.existsSync(target), false, `${mode}: no file written`);
     if (mode === "full") assert.equal(field("kill"), "blocked ESRCH", "full: the host's pid is not visible");

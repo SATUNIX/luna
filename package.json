@@ -12,13 +12,13 @@
   ],
   "license": "MIT",
   "author": "SATUNIX",
-  "homepage": "https://github.com/SATUNIX/pi-system#readme",
+  "homepage": "https://github.com/SATUNIX/luna#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SATUNIX/pi-system.git"
+    "url": "git+https://github.com/SATUNIX/luna.git"
   },
   "bugs": {
-    "url": "https://github.com/SATUNIX/pi-system/issues"
+    "url": "https://github.com/SATUNIX/luna/issues"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -100,6 +100,8 @@
     "verify": "node packages/core/verify.ts",
     "gen:shared": "node packages/core/gen-shared.ts",
     "check:all": "node packages/core/check-all.ts",
+    "test": "node packages/core/check-all.ts",
+    "coverage": "node packages/core/coverage.ts",
     "test:typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.config.json && tsc -p packages/core/tsconfig.json && tsc -p packages/autonomy/tsconfig.json && tsc -p packages/web-ui/tsconfig.json && tsc -p packages/web-ui/src/tsconfig.json && tsc -p packages/container/mcp-servers/tsconfig.json && tsc -p tests/tsconfig.json",
     "test:lint": "eslint --flag unstable_native_nodejs_ts_config --max-warnings 0 .",
     "test:security": "node tests/security-level-smoke.ts && node tests/tool-firewall-smoke.ts && node tests/firewall-shell-smoke.ts && node tests/firewall-exec-oracle-smoke.ts && node tests/firewall-autoload-smoke.ts && node tests/firewall-path-fields-smoke.ts && node tests/protected-paths-corpus-smoke.ts && node tests/firewall-gate-smoke.ts && node tests/secret-guard-smoke.ts && node tests/firewall-preauth-smoke.ts && node tests/firewall-noeffect-smoke.ts && node tests/firewall-approvals-smoke.ts && node tests/firewall-workflow-approvals-smoke.ts && node tests/firewall-outcomes-smoke.ts && node tests/firewall-unattended-smoke.ts && node tests/human-console-auth-smoke.ts && node tests/protections-registry-smoke.ts && node tests/untrusted-input-guards-smoke.ts && node tests/delegation-guard-smoke.ts && node tests/web-ui-security-smoke.ts && node tests/web-ui-bind-policy-smoke.ts && node tests/web-ui-rpc-smoke.ts && node tests/remote-host-smoke.ts && node tests/remote-control-extension-smoke.ts && node tests/profile-protections-smoke.ts && node tests/autonomy-review-inputs-smoke.ts && node tests/compose-policy-smoke.ts && node tests/companion-integrity-smoke.ts && node tests/ledger-anchor-smoke.ts && node tests/workspace-symlink-smoke.ts && node tests/redaction-corpus-smoke.ts && node tests/autonomy-gate-overlay-smoke.ts && node tests/remote-pairing-controls-smoke.ts && node tests/web-ui-spawn-validate-smoke.ts && node tests/kit-root-trust-smoke.ts",
@@ -128,6 +130,9 @@
     "smoke:extensions-catalogue": "node tests/extensions-catalogue-smoke.ts",
     "smoke:registry-parse": "node tests/registry-parse-smoke.ts",
     "smoke:check-all-npm": "node tests/check-all-npm-smoke.ts",
+    "smoke:fuzz-firewall-classifier": "node tests/fuzz-firewall-classifier-smoke.ts",
+    "smoke:fuzz-redaction": "node tests/fuzz-redaction-smoke.ts",
+    "smoke:fuzz-workspace-paths": "node tests/fuzz-workspace-paths-smoke.ts",
     "smoke:command-contract": "node tests/command-contract-smoke.ts",
     "smoke:command-menu": "node tests/command-menu-smoke.ts",
     "smoke:extract-extension": "node tests/extract-extension-smoke.ts",
@@ -291,7 +296,7 @@
     "install:web": "node packages/web-ui/install.ts",
     "docs:serve": "python -m mkdocs serve",
     "docs:build": "python -m mkdocs build",
-    "catalog": "node packages/core/registry.ts --write-docs && node packages/core/skills-catalogue.ts && node packages/core/capability-matrix.ts",
+    "catalog": "node packages/core/registry.ts --write-docs && node packages/core/skills-catalogue.ts && node packages/core/capability-matrix.ts && node packages/core/reference.ts",
     "docs:check": "node packages/core/docs-nav-check.ts",
     "docs:mermaid": "node packages/core/check-mermaid.ts",
     "profile:check": "node packages/core/profile-check.ts",

@@ -18,7 +18,7 @@ vendored `third_party/`), `packages/kit/` (skills, prompts, profiles, themes, ag
 Users install a release from the public repository (see `docs/INSTALL.md`):
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 ```
 
 The first interactive start applies the `balanced` profile and asks for `/reload`. To choose a
@@ -80,9 +80,9 @@ files apply only with `agentScope: "project"` or `"both"`. Saved multi-step flow
 - Never write or commit secrets, and never commit on another agent's behalf or push to a
   protected branch.
 - **This repository is public, and every pushed branch is published at once.** Work on a branch
-  and open a pull request on GitHub (`SATUNIX/pi-system`, the authoritative repository; the
-  GitLab copy is a read-only mirror). Install the leak scan in your clone before the first push
-  (`node packages/core/prepush-scan.ts install`) and never bypass it with `--no-verify`. Never
+  and open a pull request on GitHub (`SATUNIX/luna`, the only repository; the
+  GitLab mirror and private-lineage export pipeline are archived). Install the leak scan in
+  your clone before the first push (`node packages/core/prepush-scan.ts install`) and never bypass it with `--no-verify`. Never
   approve or merge your own pull request. Private notes and scratch work stay out of the repository.
 - **Releasing is an operator action.** An agent may prepare a release branch and a draft pull
   request. It must not create or push a tag, publish a package, image or release, merge a pull

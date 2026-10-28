@@ -19,7 +19,7 @@
 
 ## Checks
 
-`npm run check:all` is the single definition of "the checks". It enumerates them from
+`npm run check:all` is the single definition of "the checks"; `npm test` runs the same command. It enumerates them from
 `package.json` — every `smoke:*` and `test:*` script, plus `verify`, `eval`, `docs:check`
 and a `profile:check` pass per profile — and fails with a summary of every
 failure rather than stopping at the first. Run it before proposing a change; CI runs the
@@ -30,6 +30,9 @@ Smoke tests must be hermetic. Call `isolateKitEnv()` from
 variables that test needs; the gate must pass with the operator's `PI_KIT_*` environment
 present (an ambient `PI_KIT_FIREWALL_POLICY`, for example, otherwise overrides the shipped
 policy and changes the decision under test).
+
+`npm run coverage` runs the same checks with line, branch and function coverage measured and
+prints a summary ([CI security](docs/ci-security.md#test-coverage)).
 
 Faster loops while working: `npm run verify` (structure, catalogues, parity, nav),
 `npm run eval` (offline fixtures), and the single `npm run smoke:<name>` for the area you
@@ -43,10 +46,10 @@ Every source file is strict TypeScript, and `check:all` keeps it that way
 
 - **How it runs.** Node (>=22.18) strips the types and runs `.ts` directly: in a checkout, a
   git-delivered install and the containers. Only the npm artefact is compiled
-  (`npm run build:npm`, `internal/docs/adr/0001-typescript-runtime-and-npm-artefact.md`), and the
-  browser code is compiled into the committed `packages/web-ui/public/js` and `mobile/` by
-  `npm run build:web` (`internal/docs/adr/0002-browser-code-compiled-with-tsc.md`; edit
-  `packages/web-ui/src/`, never the generated `.js`).
+  (`npm run build:npm`), because Node does not strip types under `node_modules`, and the browser
+  code is compiled into the committed `packages/web-ui/public/js` and `mobile/` by
+  `npm run build:web`, because browsers do not run TypeScript (edit `packages/web-ui/src/`, never
+  the generated `.js`).
 - **Erasable syntax only** outside the extensions: no `enum`, `namespace`, parameter properties or
   `import =`. Use `import type` for type-only imports, and name the `.ts` file in relative imports.
 - **Type projects.** Each package has a `tsconfig.json` with `strict`, `noUncheckedIndexedAccess`,
@@ -68,6 +71,24 @@ Every source file is strict TypeScript, and `check:all` keeps it that way
   type in a test uses `@ts-expect-error` with a comment saying what runtime check it proves.
 - Shared shapes are defined once next to their schema and imported, never redeclared.
 
+## Tests
+
+Every change that adds or changes behaviour adds or extends an automated test in `tests/`, in the
+same pull request:
+
+- **New functionality** gets a test that exercises it through its real entry point (the
+  extension's event handler, command, tool or exported function), wired as a `smoke:*` or `test:*`
+  script in `package.json` so `check:all` runs it. `check:all` fails on a test file no script
+  runs or that asserts nothing (`smoke:wiring`).
+- **A bug fix** gets a regression test that fails before the fix and passes after it.
+- **A security fix** follows the stricter rule under "Security standard" below.
+- Name the test in the pull request description (the template asks for it). A pull request that
+  changes behaviour without a test is not merged; documentation-only and test-only changes are
+  exempt.
+
+Where an input space is too large to list, add a property to one of the fuzz tests
+(`tests/fuzz-*-smoke.ts`, [CI security](docs/ci-security.md#property-based-fuzzing)).
+
 ## Security standard
 
 Every change also follows the [secure development standard](docs/security-standard.md): file
@@ -87,7 +108,11 @@ problem, not only the instance reported.
 4. **Self-containment (hard rule):** import only `node:*` built-ins and the `typebox` peer. No
    sibling imports, no `packages/core/lib` imports. Cross-extension contracts go through a
    registry on `globalThis` (`Symbol.for("pi-kit.*")`). `npm run verify` enforces this mechanically.
-5. `README.md` per extension explaining what it does and what it needs.
+5. `README.md` per extension explaining what it does and what it needs. The extensions that
+   predate this rule are listed in `packages/core/verify.ts` (`EXTENSIONS_WITHOUT_README`); verify
+   fails for any other extension without one, and the list only shrinks. Until an older extension
+   has its README, its summary is in [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md) and its commands,
+   tools and environment variables are in [`docs/reference.md`](docs/reference.md).
 
 ## Avenues
 
@@ -111,21 +136,22 @@ npm run extract -- <name>
 npm run catalog
 ```
 
-`docs/EXTENSIONS.md`, `docs/skills-catalogue.md`, and `docs/capability-matrix.md` are generated;
-do not hand-edit them.
+`docs/EXTENSIONS.md`, `docs/skills-catalogue.md`, `docs/capability-matrix.md` and
+`docs/reference.md` are generated; do not hand-edit them. `npm run verify` fails when one is stale.
 
 ## Pull requests
 
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
-GitHub (`SATUNIX/pi-system`) is the authoritative repository: fork or branch, then open a pull
+GitHub (`SATUNIX/luna`) is the only repository: fork or branch, then open a pull
 request against `main`. The `main` ruleset declared in `.github/expected-settings.json` requires
 one approving review, the owner's review for the paths in `.github/CODEOWNERS` (CI, release
 tooling, the installer, profiles, policies, the firewall and the other security extensions, the
 tests and the security documents), approval of the last push, resolved review threads and every
 required check; GitHub enforces it ([CI security](docs/ci-security.md#repository-settings)). The
-author of a pull request, person or agent, never approves it. The GitLab copy is a read-only
-mirror; do not open merge requests there. See [repository topology](docs/repository-topology.md).
+author of a pull request, person or agent, never approves it. The GitLab mirror and private-lineage
+export pipeline are archived; do not open merge requests there. See
+[repository topology](docs/repository-topology.md).
 
 Every pushed branch is public at once. Before your first push, install the leak scan:
 

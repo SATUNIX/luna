@@ -4,7 +4,7 @@ name: release
 # starts it from the Actions tab (workflow_dispatch), and the default is a DRY RUN.
 #
 # The primary public delivery is git: a pushed `vX.Y.Z[-pre.N]` tag IS the release for
-# `pi install git:github.com/SATUNIX/pi-system@vX.Y.Z` and the `latest` channel
+# `pi install git:github.com/SATUNIX/luna@vX.Y.Z` and the `latest` channel
 # (packages/core/distribution.json). This workflow adds two optional, explicitly authorised
 # extras on top of a tag:
 #   - a GitHub Release with the CHANGELOG notes, and

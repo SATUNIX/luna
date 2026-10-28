@@ -1,7 +1,7 @@
 # Getting started
 
 pi-system is one pi package. You install it once, then a **profile** chooses which of its
-extensions load. It is delivered from its public git repository, `github.com/SATUNIX/pi-system`:
+extensions load. It is delivered from its public git repository, `github.com/SATUNIX/luna`:
 releases are `vX.Y.Z` tags and the `next` channel follows `main`.
 
 This is a **beta**. See [Beta status](beta.md) for what that means.
@@ -22,15 +22,15 @@ The kit supports pi **0.85.1 and newer**; the version it is tested against is pi
 ## 2. Install the kit
 
 ```sh
-pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 ```
 
-pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/pi-system` and runs
+pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna` and runs
 `npm install --omit=dev` there, as it does for every git package. The kit has no runtime npm
 dependencies of its own, so this reads nothing beyond git.
 
 To follow `main` instead of a release, leave the tag off:
-`pi install git:github.com/SATUNIX/pi-system`. Switching channels later is
+`pi install git:github.com/SATUNIX/luna`. Switching channels later is
 `/update channel latest|next|X.Y.Z`.
 
 ### Choosing the profile up front
@@ -39,8 +39,8 @@ The first interactive start applies the `balanced` profile and asks for `/reload
 profile before starting, or to script the install, use the installer from a clone:
 
 ```sh
-git clone https://github.com/SATUNIX/pi-system.git
-cd pi-system
+git clone https://github.com/SATUNIX/luna.git
+cd luna
 node packages/core/install.ts --channel latest --profile lite
 ```
 
@@ -93,7 +93,7 @@ failed step is reported as failed. See [Updates](updates.md).
 Register a checkout in place instead: edits take effect on `/reload`.
 
 ```sh
-git clone https://github.com/SATUNIX/pi-system.git && cd pi-system
+git clone https://github.com/SATUNIX/luna.git && cd luna
 npm ci --ignore-scripts
 node packages/core/install.ts --profile balanced --yes
 ```

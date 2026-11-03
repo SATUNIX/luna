@@ -15,7 +15,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import type * as UnattendedModule from "../packages/extensions/src/tool-firewall/unattended.ts";
+import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { boolean, isRecord, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
@@ -597,9 +598,15 @@ try {
     assert.equal(fs.statSync(forged).mode & 0o222, 0, "the forged file is read-only by mode");
     await refused("a same-user 0444 file outside the workspace", envFor(forged));
     // Without the test's mount table the real /proc/self/mountinfo decides: an ordinary file is refused on any machine.
+    // Outside the initial user namespace (a rootless container such as the autonomy gate) the real kernel's
+    // user-namespace check refuses it first, with its own reason: still refused, for the stricter cause.
+    const { currentNamespaceStanding } = await loadModule<typeof UnattendedModule>("extensions/tool-firewall/unattended.ts");
+    const hostNs = currentNamespaceStanding().initialUser;
+    const realWhy = hostNs ? /neither on a read-only mount nor owned by another user/ : /not in the initial user namespace/;
+    if (!hostNs) console.log("  NOTE: this process is in a non-initial user namespace, so the real-mount-table cases were checked as refusals for that reason");
     Reflect.deleteProperty(globalThis, PROVENANCE);
-    await refused("a same-user file, real mount table", envFor(forged));
-    await refused("even one in the directory the tests call read-only", envFor(contract));
+    await refused("a same-user file, real mount table", envFor(forged), realWhy);
+    await refused("even one in the directory the tests call read-only", envFor(contract), realWhy);
     presentOs();
     // A read-only mount holds it: accepted. A mount stacked over that one, listed later, wins.
     const point = fs.realpathSync(elsewhere);

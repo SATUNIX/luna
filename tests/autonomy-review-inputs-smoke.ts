@@ -109,6 +109,14 @@ await check("unit: package-manager configuration is a built-in control path; gat
   );
 });
 
+await check("unit: a resuming supervisor's HostRepo opens the existing mirror (ensureOpen), and is unusable before it", () => {
+  const src = sourceRepo();
+  const head = sh(src, "rev-parse", "HEAD");
+  const repo = new HostRepo({ gitDir: path.join(src, ".git"), cfg: { run: "r", branch: "b", tagPrefix: "exp/r/", baseRef: "main", gitIdentity: { name: "t", email: "t@example.invalid" } } });
+  assert.throws(() => repo.git(), /is not open/, "a fresh instance has no git runner: what a resumed run hit before DockerRuntime.bringUp() opened it");
+  assert.equal(repo.ensureOpen().ensureOpen().git()(["rev-parse", "HEAD"]).trim(), head, "ensureOpen() opens once and is idempotent");
+});
+
 await check("unit: the review diff is read whole or not at all", () => {
   const src = sourceRepo();
   const base = sh(src, "rev-parse", "HEAD");

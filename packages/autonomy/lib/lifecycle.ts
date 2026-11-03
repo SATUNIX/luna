@@ -210,10 +210,11 @@ export interface SelfImproveState {
   merged: number;
   lastGoodSha: string;
   seedSha: string;
-  current: { n: number; startedAt: string; startSha: string } | null;
+  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number } | null;
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */
   lastPushed: string | null;
   publishError?: string | null;
+  publishBlocker?: string | null;
   lastSyncError?: string | null;
 }
 
@@ -245,6 +246,7 @@ export interface RunState {
   createdAt: string;
   updatedAt: string;
   sessions?: number;
+  backlog?: Array<{ at: string; message: string; deliveredCycle?: number }>;
   steers?: Array<{ at: string; message: string }>;
   setup?: SetupState;
   ui?: { autoAnswered: number; blocked: number };

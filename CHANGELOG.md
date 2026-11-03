@@ -23,12 +23,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   run by `check:all` and in longer weekly security runs (`tests/fuzz-firewall-classifier-smoke.ts`,
   `tests/fuzz-redaction-smoke.ts`, `tests/fuzz-workspace-paths-smoke.ts`). Coverage reporting and
   a generated interface reference accompany the security and contributor documentation fixes.
+- **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
 ### Fixed
 
 - Malformed ANSI-C escapes no longer crash the shell classifier (`tests/firewall-shell-smoke.ts`).
   Firewall cache and rejected-file digests use SHA-256, with a lint rule refusing weak hashes
   (`tests/auto-mode-smoke.ts`, `npm run test:lint`).
+- **Unattended self-improve cycles recover dead workers without manager calls.** Three automatic restarts by default, persisted across resumes; next-tick exit detection, green-gate host report salvage with independent merge review, STOP parking, and an engine heartbeat for external stewards (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **Host publication and promotion scan every outgoing commit before pushing**, including unmerged attempt tags, using the repository pre-push leak scanner; findings or scan failures record a publication blocker and keep work local (`tests/autonomy-selfimprove-smoke.ts`, `tests/prepush-scan-smoke.ts`).
 
 ## [0.2.4-beta.11]
 

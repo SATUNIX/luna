@@ -51,11 +51,11 @@ type TurnMessage = Extract<WorkerMessage, { type: "prompt" | "steer" }>;
 
 /** A fake worker session: the WorkerSession the engine sees, plus what the fake keeps about it. */
 export interface FakeAgent extends WorkerAgent {
-  readonly exited: Promise<{ code: number }>;
+  readonly exited: Promise<{ code: number } | undefined>;
   alive: boolean;
   queue: TurnMessage[];
   onEvent: (msg: RpcFrame) => void;
-  resolveExit: (result: { code: number }) => void;
+  resolveExit: (result: { code: number } | undefined) => void;
   prompts: TurnMessage[];
   effort: StartWorkerOptions["effort"];
   attempt: number;
@@ -231,8 +231,8 @@ export class FakeRuntime implements Runtime {
   // --- the worker ---------------------------------------------------------------------------------
   startWorker({ step, attempt, effort, onEvent, resetWorkspace }: StartWorkerOptions): FakeAgent {
     const name = `${this.cfg.namePrefix}-agent-${String(step).padStart(2, "0")}-${attempt}`;
-    let resolveExit: (result: { code: number }) => void = () => {};
-    const exited = new Promise<{ code: number }>((r) => { resolveExit = r; });
+    let resolveExit: (result: { code: number } | undefined) => void = () => {};
+    const exited = new Promise<{ code: number } | undefined>((r) => { resolveExit = r; });
     const agent: FakeAgent = {
       name, alive: true, queue: [], onEvent, exited, resolveExit, prompts: [], effort, attempt, step, resetWorkspace, aborted: false, openDialogs: new Set(),
       send: (msg) => {

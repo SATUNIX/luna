@@ -309,15 +309,23 @@ export class Engine {
   }
 
   get status(): RunStatus { return this.state.status; }
+  get stopFile(): boolean { return fs.existsSync(path.join(this.store.p.root, "STOP")); }
+  get stopRequested(): boolean { return this.signalled || this.stopFile; }
   get active(): boolean { return this.state.status === "running" || this.state.status === "recovering"; }
   stepDir(n: number = this.state.step): string { return path.join(this.store.p.steps, String(n).padStart(2, "0")); }
 
   /** Accrue active minutes and check the contract has not changed under the run. */
   tick(): void {
+    if (this.lockLost) throw new LockLost();
     const now = this.rt.now();
     if (this.lastTickAt !== null && this.active) this.state.usage.minutes += (now - this.lastTickAt) / 60_000;
     this.lastTickAt = now;
     this.verifyContractIntact();
+    this.writeHeartbeat();
+  }
+
+  writeHeartbeat(): void {
+    writeJsonAtomic(path.join(this.store.p.root, "heartbeat.json"), { at: new Date(this.rt.now()).toISOString(), phase: this.state.phase ?? this.status, cycle: this.state.selfImprove?.current?.n ?? this.state.step, status: this.status });
   }
 
   /** Spend only ever goes up: the higher of what state recorded and what the meters show now. */
@@ -357,11 +365,17 @@ export class Engine {
     try {
       if (this.lock) this.lock.start(() => { this.lockLost = true; });
       this.verifyContractIntact();
+      this.writeHeartbeat();
       if (takeover) {
         const removed = await this.rt.cleanupOrphans();
         if (removed.length) this.log(`removed ${removed.length} orphaned container(s) left by the previous supervisor: ${removed.join(", ")}`);
         this.save((s) => { s.worker = null; });
         this.startReason = "supervisor_restart";
+      }
+      if (this.stopRequested) {
+        if (this.status === "setup") this.go("cancelled", { reason: this.signalled ? "signal" : "stop_file" });
+        else await this.applyControl();
+        return this.state;
       }
       if (this.status === "setup") await this.setup();
       else if (!["succeeded", "failed", "cancelled"].includes(this.status) && !(this.status === "budget_exhausted" && !this.store.pending().some((m) => m.kind === "reconfigure"))) await this.bringUp(); // the probe runs again on every resume
@@ -375,7 +389,7 @@ export class Engine {
       if (!crashed && !this.lockLost) {
         try { await this.stopWorker("supervisor exit"); } catch { /* best effort */ }
         try { await this.rt.tearDown(); } catch (e) { this.log(`teardown: ${errorText(e)}`); }
-        try { this.save(); } catch { /* ignore */ }
+        try { this.save(); this.writeHeartbeat(); } catch { /* ignore */ }
         this.lock?.release();
       }
     }
@@ -393,7 +407,8 @@ export class Engine {
     }
     this.log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     try { this.save((s) => { s.lastError = errorText(error).slice(0, 1000); }); } catch { /* ignore */ }
-    throw error; // the run stays in its state and can be resumed
+    if (this.active) this.go("paused", { reason: "supervisor_error", detail: errorText(error).slice(0, 1000) });
+    throw error; // parked with the error recorded; can be resumed
   }
 
   async setup(): Promise<void> {
@@ -432,7 +447,7 @@ export class Engine {
       this.tick();
       if (this.lockLost) throw new LockLost();
       await this.applyControl();
-      if (this.signalled) { this.log("signal: stopping; the run stays resumable"); return; }
+      if (this.stopRequested) { this.log("stop requested: the run stays resumable"); return; }
       const st = this.status;
       if (TERMINAL.includes(st)) return;
       if (st === "budget_exhausted") return;
@@ -465,6 +480,17 @@ export class Engine {
 
   // --- control commands -------------------------------------------------------------------------
   async applyControl({ only }: { only?: readonly string[] } = {}): Promise<void> {
+    // A STOP sentinel or a signal parks an active run; a blocked run keeps its question and stays
+    // blocked. A queued unpause must not override a persistent STOP sentinel.
+    if (this.stopRequested) {
+      if (this.active || this.status === "ready") {
+        await this.stopWorker("STOP or signal");
+        await this.syncFromWorker({ silent: true }).catch(() => {});
+        this.go("paused", { reason: this.signalled ? "signal" : "stop_file", by: "operator" });
+        this.writeHeartbeat();
+      }
+      return;
+    }
     for (const msg of this.store.pending()) {
       if (only && !only.includes(msg.kind)) continue;
       // The payload is whoever wrote the control file's: each field is checked where it is used.
@@ -482,6 +508,11 @@ export class Engine {
           case "unpause":
             if (this.status === "paused") { this.startReason = "resumed"; this.go("running", { reason: "resumed", by: "operator" }); }
             break;
+          case "backlog": {
+            const message = (textField(p["message"]) ?? "").trim().slice(0, 2000);
+            if (message) this.state.backlog = [...(this.state.backlog ?? []), { at: new Date(this.rt.now()).toISOString(), message }];
+            break;
+          }
           case "steer": this.steer((textField(p["message"]) ?? "").slice(0, 2000)); break;
           case "answer": this.answer(p); break;
           case "reconfigure": this.reconfigure(p); break;
@@ -601,7 +632,7 @@ export class Engine {
       if (this.lockLost) throw new LockLost();
       await this.refreshUsage();
       await this.applyControl();
-      if (!this.active || this.signalled) return { end: "interrupted" };
+      if (!this.active || this.stopRequested) return { end: "interrupted" };
       const limit = this.limitReached();
       if (limit) return { end: "limit", limit };
       if (session.blocker) return { end: "blocked", blocker: session.blocker };
@@ -730,6 +761,7 @@ export class Engine {
 
     // Acceptance: judged by the supervisor on the accepted head, from definitions outside the worker's reach.
     s.phase = "acceptance";
+    this.tick();
     let ev: StepEvaluation;
     const latest = s.acceptance.latest;
     if (latest?.sha !== head) {
@@ -755,6 +787,7 @@ export class Engine {
     const alreadyRejected = s.acceptance.review.status === "rejected" && s.acceptance.review.sha === head;
     if (ev.allRequiredPass && !violation && !alreadyRejected) {
       s.phase = "review";
+      this.tick();
       if (await this.completeIfApproved({ head, ev, n })) return;
     }
 
@@ -857,7 +890,7 @@ export class Engine {
       if (this.lockLost) throw new LockLost();
       await this.refreshUsage();
       await this.applyControl();
-      if (!this.active || this.signalled) { this.save(); return; }
+      if (!this.active || this.stopRequested) { this.save(); return; }
       const limit = this.limitReached();
       if (limit) { await this.stopWorker(`limit ${limit}`); this.save(); return; } // the loop ends the run with the limit's outcome
       if (this.state.usage.usd - stepStartUsd >= this.state.limits.budget.perStepUsd) { session.agent.send({ type: "abort" }); this.log("the per-step budget ran out during the grace period"); break; }
@@ -942,6 +975,7 @@ export class Engine {
         return false;
       }
     }
+    if (this.stopRequested) { await this.applyControl(); return true; }
     this.save((st) => { st.tasks = applyResultsToBoard(st.tasks, ev.results, { step: n, complete: true }); });
     await this.stopWorker("acceptance passed");
     this.writeStepSummary(n, { action: "complete", reason: "acceptance passed" });
@@ -953,7 +987,9 @@ export class Engine {
 
   /** Promotion (when the contract lets the supervisor do it unasked) and automatic outputs. Failures are recorded, not fatal: the run did succeed. */
   async afterSuccess(head: string): Promise<void> {
+    if (this.stopRequested) return;
     this.save((s) => { s.phase = "promotion"; });
+    this.tick();
     try { await this.promote({ sha: head, approved: false }); } catch (e) { this.log(`promotion: ${errorText(e)}`); }
     const { exportRun } = this.deps;
     if (exportRun) {

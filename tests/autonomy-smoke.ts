@@ -17,6 +17,7 @@ import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseReview, reviewCycle, buildReviewBundle } from "../packages/autonomy/lib/review.ts";
 import { route, withUsage, screen, usageFrom, meteredUsd } from "../packages/autonomy/relay.ts";
 import { runCycle } from "../packages/autonomy/lib/cycle.ts";
+import { HostRepo } from "../packages/autonomy/lib/hostrepo.ts";
 import * as gm from "../packages/autonomy/lib/gitmirror.ts";
 import * as dk from "../packages/autonomy/lib/docker.ts";
 import { modelEntries, agentModelsJson } from "../packages/autonomy/lib/models.ts";
@@ -301,6 +302,48 @@ await check("docker: agent on the internal network only, no credentials or host 
   assert.equal(dk.userSpec({ container: { user: "0:0" } }), "0:0");
 });
 
+await check("cycle: mechanical exit recovery is immediate, bounded and does not consume judgement calls", async () => {
+  for (const code of [0, 137]) {
+    const { rt } = fakeRuntime({ manager: new Error("must not be called"), script: ({ exit }) => exit(code) });
+    const r = await runCycle({ n: 1, cfg: { ...cfg, limits: { ...cfg.limits, autoRestartsPerCycle: 3 } }, rt, prompt: "continue" });
+    assert.equal(r.reason, "auto_restarts_exhausted");
+    assert.equal(r.attempts, 4);
+    assert.equal(rt.now(), 4 * rt.tickMs);
+    assert.equal(rt.managerCalls.length, 0);
+  }
+  const { rt } = fakeRuntime({ manager: new Error("must not be called"), script: ({ exit }) => exit(1) });
+  const r = await runCycle({ n: 1, cfg, rt, prompt: "resume", autoRestartsUsed: 3 });
+  assert.equal(r.attempts, 1, "a persisted allowance is not replenished");
+});
+
+await check("cycle: hard budgets and STOP take priority over recovery; a dead process with a recorded report completes", async () => {
+  for (const which of ["budget", "stop", "report"]) {
+    const { rt } = fakeRuntime({ manager: new Error("must not be called"), script: ({ exit, spend, report }) => { if (which === "budget") spend(100); if (which === "report") report(); exit(137); } });
+    if (which === "stop") rt.stopRequested = () => true;
+    const r = await runCycle({ n: 1, cfg, rt, prompt: "p" });
+    assert.equal(r.attempts, 1);
+    assert.equal(r.outcome, which === "report" ? "completed" : "aborted");
+  }
+  const { rt } = fakeRuntime({ manager: new Error("must not be called"), script: ({ exit, spend }) => { spend(cfg.budget.perCycleHardUsd); exit(137); } });
+  const r = await runCycle({ n: 1, cfg, rt, prompt: "p" });
+  assert.equal(r.reason, "cycle_budget_hard");
+});
+
+await check("publication and promotion refuse a push when the host leak scan cannot complete", () => {
+  const calls: string[] = [];
+  const sha = "a".repeat(40);
+  const g: gm.HostGit = Object.assign((args: readonly string[]): string => {
+    calls.push(args[0] ?? "");
+    if (args[0] === "for-each-ref") return `${sha} refs/heads/${cfg.integrationBranch}`;
+    if (args[0] === "ls-remote") throw new Error("synthetic remote lookup failure");
+    return "";
+  }, { gitDir: "unused-host-mirror" });
+  assert.throws(() => gm.publish(g, { ...cfg, gitRemote: "https://git.example.org/team/repo.git" }, null), gm.PublishBlocked);
+  const repo = new HostRepo({ gitDir: g.gitDir, cfg }); repo.g = g;
+  assert.throws(() => repo.promotePush("https://git.example.org/team/repo.git", cfg.integrationBranch, sha), gm.PublishBlocked);
+  assert.equal(calls.includes("push"), false, "no push after a failed scan, even on promotion");
+});
+
 await check("git mirror: integration branch seeded and continued, fast-forward only, tags never move, nothing forced", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-git-"));
   try {
@@ -493,12 +536,14 @@ function fakeRuntime({ script, manager, gates = [], tickMin = 1 }: FakeRuntimeOp
       rt.starts++;
       let resolveExit: (v: { code: number }) => void = () => {};
       const exited = new Promise<{ code: number }>((r) => { resolveExit = r; });
-      const agent: FakeAgent = { send: (m) => sent.push({ attempt, ...m }), stop: async () => resolveExit({ code: 143 }), exited };
+      let live = true;
+      const agent: FakeAgent = { send: (m) => sent.push({ attempt, ...m }), stop: async () => { live = false; resolveExit({ code: 143 }); }, exited };
       // The script runs on each tick with helpers to emit events and change the world.
       const origSleep = rt.sleep;
       rt.sleep = async (ms) => {
         await origSleep(ms);
-        script({ minute: clock / MIN, attempt, emit: onEvent, commit: () => { head = `h${clock}`; }, report: () => { report = true; }, spend: (usd) => { meter += usd; }, exit: (code) => resolveExit({ code }) });
+        if (!live) return;
+        script({ minute: clock / MIN, attempt, emit: onEvent, commit: () => { head = `h${clock}`; }, report: () => { report = true; }, spend: (usd) => { meter += usd; }, exit: (code) => { live = false; resolveExit({ code }); } });
       };
       return agent;
     },
@@ -541,7 +586,7 @@ await check("cycle: dialogs from extensions are answered immediately", async () 
   assert.ok(sent.some((m) => m.type === "extension_ui_response" && m.id === "q1" && m.confirmed === true));
 });
 
-await check("cycle: a crash with no manager available restarts the session with a briefing", async () => {
+await check("cycle: a crash automatically restarts without a manager call", async () => {
   const { rt } = fakeRuntime({ manager: new Error("HTTP 503"), script: ({ minute, attempt, emit, exit, report }) => {
     if (attempt === 1 && minute === 5) exit(1);
     if (attempt === 2) { emit({ type: "turn_start" }); if (minute >= 8) { report(); emit({ type: "agent_settled" }); } }
@@ -549,10 +594,8 @@ await check("cycle: a crash with no manager available restarts the session with 
   const r = await runCycle({ n: 4, cfg, rt, prompt: "p", restartBriefing: undefined, cycleDir: undefined });
   assert.equal(r.outcome, "completed");
   assert.equal(r.attempts, 2);
-  const [decision] = r.decisions;
-  assert.ok(decision, "the restart was decided");
-  assert.equal(decision.decision, "RESTART_SESSION");
-  assert.match(decision.reason, /manager unavailable/);
+  assert.equal(rt.managerCalls.length, 0);
+  assert.deepEqual(r.decisions, []);
 });
 
 await check("cycle: the hard limit closes a busy cycle as partial without the manager", async () => {

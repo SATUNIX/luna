@@ -159,6 +159,30 @@ const taskFile = (dir: string, over: RawContract = {}): string => {
 };
 const authorised = async (w: World, file: string): Promise<CliJson> => { const r = await w.run("plan", "--config", file, "--authorise", "--by", "alice", "--yes", "--json"); assert.equal(r.code, 0, r.stdout + r.stderr); return r.json(); };
 
+await check("backlog CLI queues file-based items for self-improve, online or offline, and rejects invalid requests", async () => {
+  const w = world();
+  const src = scratch();
+  assert.equal(spawnSync("git", ["init", "--quiet", src]).status, 0);
+  const file = taskFile(scratch(), { template: "self-improve", inputs: { repository: { path: src, ref: "main" } }, acceptance: { checks: [{ id: "unit", run: ["true"] }] } });
+  await authorised(w, file);
+  const start = await w.run("start", "--config", file, "--detach", "--json");
+  assert.equal(start.code, 0, start.stdout + start.stderr);
+  const store = new RunStore("todo-api-1", { home: w.home });
+  for (const live of [false, true]) {
+    const lock = createRunLock({ file: store.p.lock, pid: 42000, host: "test-host", now: () => w.clock.now, isAlive: () => true, startTimeOf: () => "start-42000" });
+    if (live) assert.equal(lock.acquire().acquired, true);
+    const queued = await w.run("backlog", "--run", "todo-api-1", "--message", "Investigate recovery", "--json");
+    assert.equal(queued.code, 0, queued.stdout + queued.stderr);
+    assert.equal(queued.json().delivered, "inbox");
+    if (live) lock.release();
+  }
+  assert.equal(store.pending().filter((m) => m.kind === "backlog").length, 2);
+  assert.deepEqual(store.pending()[0]?.payload, { message: "Investigate recovery" });
+  assert.equal((await w.run("backlog", "--run", "todo-api-1", "--message", "  ", "--json")).code, 2);
+  store.transition("cancelled", { reason: "test" });
+  assert.equal((await w.run("backlog", "--run", "todo-api-1", "--message", "late", "--json")).code, 3);
+});
+
 await check("templates: every template is described, with what it needs and its closed defaults", async () => {
   const w = world();
   const r = await w.run("templates", "--json");

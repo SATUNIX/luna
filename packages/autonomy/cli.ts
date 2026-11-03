@@ -548,6 +548,18 @@ const commands: Record<string, Command> = {
     return { data: { run: after.run, resumed: true, status: after.status, outcome: after.outcome }, text: `run ${after.run}: ${after.status}${after.outcome ? ` (${after.outcome.reason})` : ""}`, exit: exitFor(after.status) };
   },
 
+  async backlog(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run", "message"], flags: ["json"] });
+    const message = opts.message?.trim();
+    if (!message) throw new CliError("usage", "--message <text> is required");
+    const store = openStore(opts.run, deps);
+    const state = readState(store);
+    if (isTerminal(state.status)) throw new CliError("refused", `run ${state.run} is ${state.status}`);
+    if (state.template !== "self-improve") throw new CliError("refused", "backlog is for self-improve cycles");
+    store.enqueue("backlog", { message: message.slice(0, 2000) });
+    return { data: { run: state.run, delivered: "inbox" }, text: "backlog item queued for the next cycle prompt" };
+  },
+
   async steer(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["run", "message"], flags: ["json"] });
     const message = opts.message;
@@ -681,7 +693,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
-  pause | steer --message <text> | cancel --run <id>
+  pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   resume --run <id> [--answer <text> | --approve | --deny]
   promote --run <id> [--yes]             carry out an approval-gated promotion
   export --run <id> [--out <dir>]        results, evidence, usage, decisions, the work

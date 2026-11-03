@@ -8,6 +8,7 @@ export interface CycleLimits {
   readonly idleMinutes: number;
   readonly noCommitMinutes: number;
   readonly managerCallsPerCycle: number;
+  readonly autoRestartsPerCycle?: number;
   readonly redGatesInARow: number;
   readonly guardEscalations: number;
   readonly nothingFoundToStop: number;

@@ -23,13 +23,18 @@
  *   node packages/core/check-all.ts --check-wiring   # only report unwired / empty tests
  *   node packages/core/check-all.ts --shard=1/4 # run one deterministic quarter of the checks
  *   node packages/core/check-all.ts --jobs=4    # run up to four checks at once
+ *   node packages/core/check-all.ts --check-timeout=600   # fail a check still running after 600s
  *
  * `--shard=<i>/<n>` splits the selected runs by round-robin over their sorted order, so
  * every run lands in exactly one shard and the shards stay balanced; a CI matrix can run
  * them in parallel. `--jobs=<n>` runs up to n checks at once, buffering each check's output
  * and printing it whole when it finishes; the exit status and summary are the same as a
  * sequential run. Checks that cannot share a machine with another check are listed in
- * `SERIAL` and always run alone after the parallel batch.
+ * `SERIAL` and always run alone after the parallel batch. Because a buffered check prints nothing
+ * until it ends, `--jobs` above 1 also prints a `... <label> started` line as each check starts,
+ * so a log cut short by a job timeout still names the checks that were running.
+ * `--check-timeout=<s>` stops a check still running after s seconds (SIGTERM, then SIGKILL) and
+ * reports it as `FAILED (timed out after <s>s)` with whatever it printed so far.
  *
  * Exits non-zero if any check fails, printing a summary of all failures (checks are run
  * to completion so one CI run reports every problem, not just the first).
@@ -91,6 +96,8 @@ interface CheckAllOptions {
   skip: Set<string>;
   shard: Shard | null;
   jobs: number;
+  /** Seconds a single check may run before it is stopped and failed; null means no limit. */
+  checkTimeout: number | null;
 }
 
 /** One `npm run <name> [-- args]` invocation. */
@@ -125,7 +132,7 @@ function positiveInteger(text: string): number | null {
 }
 
 function parseArgs(argv: readonly string[]): CheckAllOptions {
-  const options: CheckAllOptions = { list: false, wiring: false, skip: new Set(), shard: null, jobs: 1 };
+  const options: CheckAllOptions = { list: false, wiring: false, skip: new Set(), shard: null, jobs: 1, checkTimeout: null };
   for (const arg of argv) {
     if (arg === "--list") options.list = true;
     else if (arg === "--check-wiring") options.wiring = true;
@@ -151,8 +158,16 @@ function parseArgs(argv: readonly string[]): CheckAllOptions {
         process.exit(2);
       }
       options.jobs = jobs;
+    } else if (arg.startsWith("--check-timeout=")) {
+      const value = arg.slice("--check-timeout=".length);
+      const seconds = positiveInteger(value);
+      if (seconds === null) {
+        console.error(`check-all: --check-timeout must be a positive integer of seconds, not "${value}"`);
+        process.exit(2);
+      }
+      options.checkTimeout = seconds;
     } else if (arg === "--help" || arg === "-h") {
-      console.log("usage: node packages/core/check-all.ts [--list] [--check-wiring] [--skip=a,b] [--shard=<i>/<n>] [--jobs=<n>]");
+      console.log("usage: node packages/core/check-all.ts [--list] [--check-wiring] [--skip=a,b] [--shard=<i>/<n>] [--jobs=<n>] [--check-timeout=<s>]");
       process.exit(0);
     } else {
       console.error(`check-all: unknown argument "${arg}" (try --help)`);
@@ -274,10 +289,26 @@ function buildRuns(options: CheckAllOptions, root: string): CheckRun[] {
   return runs;
 }
 
-/** Start one `npm run` and resolve with its buffered output and status once it exits. */
-function runBuffered(run: CheckRun, cwd: string, env: NodeJS.ProcessEnv): Promise<RunResult> {
+/** How long a timed-out check gets to exit after SIGTERM before it is sent SIGKILL. */
+const KILL_GRACE_MS = 5000;
+
+/** The block header printed before a check's output. */
+function header(label: string): string {
+  return `\n=== ${label} ${"-".repeat(Math.max(1, 60 - label.length))}`;
+}
+
+/**
+ * Start one `npm run` and resolve with its buffered output and status once it exits. A start line
+ * is printed at once, so a log cut short (a CI job timeout) still names every check that was
+ * running. With `timeoutSeconds`, a check still running then is sent SIGTERM (SIGKILL after a
+ * grace period) and resolves at once as failed with its partial output, without waiting for
+ * grandchildren that may hold its pipes open.
+ */
+function runBuffered(run: CheckRun, cwd: string, env: NodeJS.ProcessEnv, timeoutSeconds: number | null): Promise<RunResult> {
+  console.log(`... ${run.label} started`);
   return new Promise((resolve) => {
     const began = Date.now();
+    const elapsed = (): string => ((Date.now() - began) / 1000).toFixed(1);
     const npm = resolveNpmCommand();
     const child = spawn(npm.command, ["run", "-s", run.name, ...(run.args.length ? ["--", ...run.args] : [])], {
       cwd,
@@ -289,16 +320,28 @@ function runBuffered(run: CheckRun, cwd: string, env: NodeJS.ProcessEnv): Promis
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    let timer: NodeJS.Timeout | undefined;
+    if (timeoutSeconds !== null) {
+      timer = setTimeout(() => {
+        child.kill("SIGTERM");
+        setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }, KILL_GRACE_MS).unref();
+        // A grandchild can keep the pipes open after npm exits; stop reading so they cannot hold
+        // the run open.
+        child.stdout.destroy();
+        child.stderr.destroy();
+        resolve({ ok: false, detail: `timed out after ${timeoutSeconds}s`, seconds: elapsed(), output: stdout + stderr });
+      }, timeoutSeconds * 1000);
+    }
     child.on("error", (error) => {
-      const seconds = ((Date.now() - began) / 1000).toFixed(1);
-      resolve({ ok: false, detail: `spawn error: ${error.message}`, seconds, output: stdout + stderr });
+      clearTimeout(timer);
+      resolve({ ok: false, detail: `spawn error: ${error.message}`, seconds: elapsed(), output: stdout + stderr });
     });
     child.on("close", (code, signal) => {
-      const seconds = ((Date.now() - began) / 1000).toFixed(1);
+      clearTimeout(timer);
       // A missing binary or a killed process has status null; report it rather than
       // treating it as success.
       const detail = code === null ? `signal ${String(signal)}` : `exit ${code}`;
-      resolve({ ok: code === 0, detail, seconds, output: stdout + stderr });
+      resolve({ ok: code === 0, detail, seconds: elapsed(), output: stdout + stderr });
     });
   });
 }
@@ -309,7 +352,7 @@ function runBuffered(run: CheckRun, cwd: string, env: NodeJS.ProcessEnv): Promis
  * at once.
  */
 function report(run: CheckRun, result: RunResult): string | null {
-  console.log(`\n=== ${run.label} ${"-".repeat(Math.max(1, 60 - run.label.length))}`);
+  console.log(header(run.label));
   process.stdout.write(result.output);
   if (result.output !== "" && !result.output.endsWith("\n")) process.stdout.write("\n");
   if (result.ok) {
@@ -379,11 +422,11 @@ export async function runAll(options: CheckAllOptions, root: string = ROOT): Pro
       // Failures are keyed by run and reported in list order below, so the summary does not
       // depend on which concurrent check happened to finish first.
       const failed = new Map<CheckRun, string>();
-      await runPool(parallel, options.jobs, root, workerEnv, failed);
+      await runPool(parallel, options.jobs, root, workerEnv, options.checkTimeout, failed);
       // Serial checks run alone: the parallel batch has finished, so they use the shared cache
       // exactly as a sequential run would.
       for (const run of serial) {
-        const failure = report(run, await runBuffered(run, root, process.env));
+        const failure = report(run, await runBuffered(run, root, process.env, options.checkTimeout));
         if (failure !== null) failed.set(run, failure);
       }
       for (const run of selected) {
@@ -396,19 +439,21 @@ export async function runAll(options: CheckAllOptions, root: string = ROOT): Pro
   } else {
     for (const run of selected) {
       const began = Date.now();
-      console.log(`\n=== ${run.label} ${"-".repeat(Math.max(1, 60 - run.label.length))}`);
+      console.log(header(run.label));
       const npm = resolveNpmCommand();
       const result = spawnSync(npm.command, ["run", "-s", run.name, ...(run.args.length ? ["--", ...run.args] : [])], {
         cwd: root,
         stdio: "inherit",
         env: process.env,
         shell: npm.shell,
+        ...(options.checkTimeout === null ? {} : { timeout: options.checkTimeout * 1000, killSignal: "SIGTERM" as const }),
       });
       const seconds = ((Date.now() - began) / 1000).toFixed(1);
       if (result.status === 0) {
         console.log(`--- ${run.label}: OK (${seconds}s)`);
       } else {
-        const detail = result.status === null ? `signal ${String(result.signal)}` : `exit ${result.status}`;
+        const timedOut = options.checkTimeout !== null && (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+        const detail = timedOut ? `timed out after ${String(options.checkTimeout)}s` : result.status === null ? `signal ${String(result.signal)}` : `exit ${result.status}`;
         console.log(`--- ${run.label}: FAILED (${detail}, ${seconds}s)`);
         failures.push(`${run.label} (${detail})`);
       }
@@ -434,6 +479,7 @@ async function runPool(
   jobs: number,
   cwd: string,
   envFor: (slot: number) => NodeJS.ProcessEnv,
+  timeoutSeconds: number | null,
   failed: Map<CheckRun, string>,
 ): Promise<void> {
   let next = 0;
@@ -442,7 +488,7 @@ async function runPool(
       const slot = next++;
       const run = runs[slot];
       if (run === undefined) return;
-      const failure = report(run, await runBuffered(run, cwd, envFor(slot)));
+      const failure = report(run, await runBuffered(run, cwd, envFor(slot), timeoutSeconds));
       if (failure !== null) failed.set(run, failure);
     }
   };

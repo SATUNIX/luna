@@ -45,8 +45,10 @@ jobs:
       # so a green run cannot hide an unwired suite. The suite is split into
       # four deterministic shards, each running two checks at once; the shards
       # are disjoint and together cover every check, and ci-complete waits for
-      # all of them.
-      - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2
+      # all of them. Each check announces itself when it starts and is stopped after
+      # ten minutes, so a hung check is named in the log (with what it printed) instead
+      # of the job dying at its own timeout without a trace.
+      - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2 --check-timeout=600
 
   # Test coverage of the same suite: check:all again with NODE_V8_COVERAGE set, summarised by
   # packages/core/coverage.ts (no coverage dependency). The line, branch and function figures are

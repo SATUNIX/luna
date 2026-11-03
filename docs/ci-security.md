@@ -28,8 +28,12 @@ runs, so the shards are disjoint and together cover every check) and `--jobs=<n>
 at once, buffering each check's output and listing failures in run order, so the summary matches a
 sequential run. Checks that share fixed state (the web console runtime, npm
 pack and clean install, the container engine) are listed as serial and always run alone after the
-parallel batch (`tests/check-all-npm-smoke.ts`). The `verify` job in `ci.yml` runs four shards with
-`--jobs=2`; `ci-complete` waits for all of them. `npm run coverage` refuses `--jobs` above 1: the
+parallel batch (`tests/check-all-npm-smoke.ts`). Under `--jobs` each check prints a
+`... <label> started` line when it starts, and `--check-timeout=<s>` stops a check still running
+after s seconds and fails it as `timed out` with the output it printed so far, so a hung check is
+named in the log. The `verify` job in `ci.yml` runs four shards with `--jobs=2 --check-timeout=600`;
+`ci-complete` waits for all of them (`tests/workflow-policy-smoke.ts` checks the shard matrix, the
+command and the `integration/**` pull request filters). `npm run coverage` refuses `--jobs` above 1: the
 concurrent checks transpile into per-run caches that `check:all` removes, so coverage could not
 attribute those modules.
 

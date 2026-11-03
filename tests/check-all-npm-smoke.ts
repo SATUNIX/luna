@@ -97,13 +97,13 @@ assert.equal(new Set(realShards).size, fullList.length, "the real shards are dis
 assert.ok(realShards.every((label) => fullList.includes(label)), "a shard never invents a check");
 
 // Bad shard and job arguments exit 2, like every other bad argument.
-for (const bad of ["--shard=0/4", "--shard=5/4", "--shard=1/0", "--shard=abc", "--shard=1", "--shard=1/4/2", "--jobs=0", "--jobs=abc", "--jobs=-1", "--jobs=1.5"]) {
+for (const bad of ["--shard=0/4", "--shard=5/4", "--shard=1/0", "--shard=abc", "--shard=1", "--shard=1/4/2", "--jobs=0", "--jobs=abc", "--jobs=-1", "--jobs=1.5", "--check-timeout=0", "--check-timeout=abc", "--check-timeout=1.5"]) {
   const result = spawnSync(process.execPath, [checkAll, "--list", bad], { encoding: "utf8" });
   assert.equal(result.status, 2, `check-all --list ${bad} exits 2, got ${result.status}`);
-  assert.match(result.stderr, /check-all: --(?:shard|jobs)/, `${bad} is reported`);
+  assert.match(result.stderr, /check-all: --(?:shard|jobs|check-timeout)/, `${bad} is reported`);
   assert.doesNotMatch(result.stdout, /would run/, `${bad} lists nothing`);
 }
-for (const ok of ["--shard=1/4", "--shard=4/4", "--jobs=1", "--jobs=8"]) {
+for (const ok of ["--shard=1/4", "--shard=4/4", "--jobs=1", "--jobs=8", "--check-timeout=600"]) {
   assert.equal(spawnSync(process.execPath, [checkAll, "--list", ok], { encoding: "utf8" }).status, 0, `check-all --list ${ok} exits 0`);
 }
 
@@ -136,14 +136,18 @@ try {
       "smoke:slow": logged("slow", 200, 0),
       "smoke:z-fail-fast": logged("z-fail-fast", 0, 3),
       [serialName]: logged("serial", 50, 0),
+      // Prints, then never exits: only --check-timeout ends it. Skipped unless a run asks for it.
+      "smoke:m-hang": `node -e "console.log('hang-partial-output');setInterval(()=>{},1000)"`,
     },
   }, null, 2)}\n`);
   const wrapper = path.join(fakeRoot, "run.mjs");
-  fs.writeFileSync(wrapper, `import { runAll } from ${JSON.stringify(pathToFileURL(checkAll).href)};\nprocess.exitCode = await runAll({ list: false, wiring: false, skip: new Set((process.env.SKIP ?? "").split(",").filter(Boolean)), shard: null, jobs: Number(process.env.JOBS) }, process.env.FAKE_ROOT);\n`);
-  const runFake = (jobs: number, skip = "") => {
-    const log = path.join(fakeRoot, `log-${jobs}-${skip || "all"}.txt`);
+  fs.writeFileSync(wrapper, `import { runAll } from ${JSON.stringify(pathToFileURL(checkAll).href)};\nprocess.exitCode = await runAll({ list: false, wiring: false, skip: new Set((process.env.SKIP ?? "").split(",").filter(Boolean)), shard: null, jobs: Number(process.env.JOBS), checkTimeout: process.env.TIMEOUT ? Number(process.env.TIMEOUT) : null }, process.env.FAKE_ROOT);\n`);
+  const runFake = (jobs: number, skip = "", { hang = false, timeout = "" } = {}) => {
+    const skips = [skip, hang ? "" : "smoke:m-hang"].filter(Boolean).join(",");
+    const log = path.join(fakeRoot, `log-${jobs}-${skips}-${String(hang)}.txt`);
     fs.writeFileSync(log, "");
-    const result = spawnSync(process.execPath, [wrapper], { encoding: "utf8", env: { ...process.env, JOBS: String(jobs), SKIP: skip, FAKE_ROOT: fakeRoot, CHECK_LOG: log } });
+    // The outer timeout only stops a regression from hanging this smoke; the runs below finish in seconds.
+    const result = spawnSync(process.execPath, [wrapper], { encoding: "utf8", timeout: 60_000, env: { ...process.env, JOBS: String(jobs), SKIP: skips, TIMEOUT: timeout, FAKE_ROOT: fakeRoot, CHECK_LOG: log } });
     return { ...result, log: fs.readFileSync(log, "utf8") };
   };
   // The failure summary without its timing: the count line and the failed checks, in order.
@@ -187,6 +191,28 @@ try {
   assert.equal(passThree.status, 0, `--jobs=3 passes when the failures are skipped (stderr: ${passThree.stderr})`);
   assert.match(passOne.stdout, /check-all: all 3 check run\(s\) passed/);
   assert.match(passThree.stdout, /check-all: all 3 check run\(s\) passed/);
+
+  // Under --jobs every check announces itself when it starts, before its block, so a log cut
+  // short by a CI job timeout still names what was running.
+  for (const name of ["smoke:a-fail-slow", "smoke:ok", "smoke:slow", "smoke:z-fail-fast", serialName]) {
+    const startAt = three.stdout.indexOf(`... ${name} started`);
+    assert.ok(startAt >= 0, `--jobs=3 prints a start line for ${name} (stdout: ${three.stdout})`);
+    assert.ok(startAt < three.stdout.indexOf(`\n=== ${name} `), `${name} is announced before its block`);
+  }
+  assert.ok(three.stdout.indexOf("... smoke:ok started") < three.stdout.indexOf("\n=== smoke:a-fail-slow "), "a check is announced while another is still running");
+
+  // --check-timeout stops a hung check, prints what it wrote so far and fails it by name, in the
+  // buffered and the sequential path alike; the other checks still run and report.
+  for (const jobs of [1, 2]) {
+    const hung = runFake(jobs, "smoke:a-fail-slow,smoke:z-fail-fast", { hang: true, timeout: "2" });
+    assert.equal(hung.error, undefined, `--jobs=${jobs} with a hung check finishes (it did not: ${String(hung.error)})`);
+    assert.equal(hung.status, 1, `--jobs=${jobs} fails the hung check (stdout: ${hung.stdout})`);
+    assert.match(hung.stdout, /hang-partial-output/, `--jobs=${jobs} keeps the hung check's partial output`);
+    assert.match(hung.stdout, /--- smoke:m-hang: FAILED \(timed out after 2s/, `--jobs=${jobs} names the timeout`);
+    assert.deepEqual(summaryOf(hung.stderr), ["check-all: 1/4 FAILED", "  - smoke:m-hang (timed out after 2s)"], hung.stderr);
+    for (const name of ["ok", "slow", serialName]) assert.match(hung.stdout, new RegExp(`--- ${name.startsWith("smoke:") ? name : `smoke:${name}`}: OK`));
+    if (jobs > 1) assert.match(hung.stdout, /\.\.\. smoke:m-hang started/, "the hung check was announced when it started");
+  }
 } finally {
   fs.rmSync(fakeRoot, { recursive: true, force: true });
 }

@@ -44,6 +44,23 @@ function run(command: string, args: string[], options: RunOptions = {}) {
   return result;
 }
 
+/** The root lockfile's entries for `manifest.dependencies` and everything they pull in, as a lockfile of its own. */
+function runtimeLock(manifest: { name: string; dependencies: Record<string, string> }): Record<string, unknown> {
+  const lock: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+  const all = isRecord(lock) && isRecord(lock.packages) ? lock.packages : {};
+  const packages: Record<string, unknown> = { "": { name: manifest.name, dependencies: manifest.dependencies } };
+  const queue = Object.keys(manifest.dependencies);
+  while (queue.length > 0) {
+    const name = queue.shift() ?? "";
+    const key = `node_modules/${name}`;
+    const entry = all[key];
+    if (key in packages || !isRecord(entry)) continue;
+    packages[key] = entry;
+    if (isRecord(entry.dependencies)) queue.push(...Object.keys(entry.dependencies));
+  }
+  return { name: manifest.name, lockfileVersion: 3, requires: true, packages };
+}
+
 const RpcCommand = object({ name: string(), source: optional(string()), sourceInfo: optional(object({ path: optional(string()) })) });
 type RpcCommand = Infer<typeof RpcCommand>;
 /** The data of a successful get_commands response. */
@@ -166,8 +183,12 @@ try {
     // versions; the timeout turns a network stall into a failure instead of eating the gate's budget.
     const depsDir = path.join(tmp, "runtime-deps");
     fs.mkdirSync(depsDir, { recursive: true });
-    fs.writeFileSync(path.join(depsDir, "package.json"), `${JSON.stringify({ name: "runtime-deps", private: true, dependencies: pkg.dependencies }, null, 2)}\n`);
-    const install = run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300_000 });
+    // A lockfile cut from the repository's own (same resolved URL and integrity) lets `npm ci` install from
+    // the cache alone: `npm install` would also need registry metadata, which an offline cache may lack.
+    const manifest = { name: "runtime-deps", private: true, dependencies: pkg.dependencies ?? {} };
+    fs.writeFileSync(path.join(depsDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.writeFileSync(path.join(depsDir, "package-lock.json"), `${JSON.stringify(runtimeLock(manifest), null, 2)}\n`);
+    const install = run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300_000 });
     assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}${install.error ? `\n${String(install.error)}` : ""}`);
     fs.cpSync(path.join(depsDir, "node_modules"), path.join(unpacked, "node_modules"), { recursive: true });
     ok("the artefact's runtime dependencies install");

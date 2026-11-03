@@ -54,8 +54,14 @@ export function validateBoard(raw: unknown): StewardBoard {
 
 /** Missing boards are compatible with existing runs; malformed boards are never silently ignored. */
 export function readBoardFile(file: string): StewardBoard {
-  if (fs.statSync(file).size > MAX_BYTES) throw new Error("board file exceeds 2 MiB");
-  return validateBoard(parseJson(fs.readFileSync(file, "utf8")));
+  // One descriptor for the size check and the read, so the file cannot change in between.
+  const fd = fs.openSync(file, "r");
+  try {
+    if (fs.fstatSync(fd).size > MAX_BYTES) throw new Error("board file exceeds 2 MiB");
+    return validateBoard(parseJson(fs.readFileSync(fd, "utf8")));
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 export function readBoard(control: string): StewardBoard {
   const file = path.join(control, "board.json");

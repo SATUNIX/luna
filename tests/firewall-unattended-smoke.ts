@@ -15,8 +15,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { loadModule, loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { boolean, isRecord, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import type * as UnattendedModule from "../packages/extensions/src/tool-firewall/unattended.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
@@ -598,8 +599,11 @@ try {
     await refused("a same-user 0444 file outside the workspace", envFor(forged));
     // Without the test's mount table the real /proc/self/mountinfo decides: an ordinary file is refused on any machine.
     Reflect.deleteProperty(globalThis, PROVENANCE);
-    await refused("a same-user file, real mount table", envFor(forged));
-    await refused("even one in the directory the tests call read-only", envFor(contract));
+    const realStanding = (await loadModule<typeof UnattendedModule>("extensions/tool-firewall/unattended.ts")).currentNamespaceStanding();
+    const realWhy = realStanding.initialUser ? /neither on a read-only mount nor owned by another user/ : /not in the initial user namespace/;
+    if (!realStanding.initialUser) console.log("NOTE: this process is not in the initial user namespace; the two real-mount-table provenance cases expect the not-in-initial-user-namespace refusal");
+    await refused("a same-user file, real mount table", envFor(forged), realWhy);
+    await refused("even one in the directory the tests call read-only", envFor(contract), realWhy);
     presentOs();
     // A read-only mount holds it: accepted. A mount stacked over that one, listed later, wins.
     const point = fs.realpathSync(elsewhere);

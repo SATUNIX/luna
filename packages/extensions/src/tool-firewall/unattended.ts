@@ -197,6 +197,11 @@ export function namespaceStanding(facts: NamespaceFacts, platform: string = proc
   return { kind, initialUser };
 }
 
+/** Where THIS process stands, read from the real /proc (no test override). */
+export function currentNamespaceStanding(): { kind: "same" | "different" | "unknown"; initialUser: boolean } {
+  return namespaceStanding(readNamespaces());
+}
+
 // Is `uid` one of this user's subordinate ids (/etc/subuid: `name-or-uid:start:count`)? A user can
 // create files owned by those ids without root (newuidmap), so such an owner is not "another user".
 export function isSubordinateId(uid: number, subuid: string | null, self: { uid: number; name: string }): boolean {

@@ -14,7 +14,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildNpm } from "../packages/core/build-npm.ts";
+import { buildNpm, packReports } from "../packages/core/build-npm.ts";
 import { ROOT } from "../packages/core/eval/harness.ts";
 import { array, isRecord, object, optional, parseJson, parseJsonAs, record, string, union, type Infer } from "../packages/core/lib/guard.ts";
 
@@ -65,8 +65,6 @@ const PackageEntry = object({ extensions: optional(array(string())) });
 type PackageEntry = Infer<typeof PackageEntry>;
 /** settings.json as far as this test reads it. */
 const AgentSettings = object({ packages: optional(array(union(string(), PackageEntry))) });
-/** `npm pack --json` output. */
-const PackOutput = array(object({ filename: string() }));
 const ArtefactPackage = object({ dependencies: optional(record(string())) });
 
 /** Talk to `pi --mode rpc`: send one command, wait for its response, return it with the events seen. */
@@ -115,6 +113,17 @@ function rpc(agentDir: string, home: string, cwd: string, command: { id: string;
   });
 }
 
+// npm <=11 prints an array of package reports, npm >=12 an object keyed by package name; packReports
+// folds both to the same list. This runs before the heavy build so a parser regression fails fast.
+{
+  const entry = { name: "@satunix/pi-system", version: "1.2.3", filename: "satunix-pi-system-1.2.3.tgz", size: 10, unpackedSize: 100, files: [{ path: "package.json" }] };
+  const fromArray = packReports(JSON.stringify([entry]));
+  const fromObject = packReports(JSON.stringify({ [entry.name]: entry }));
+  assert.deepEqual(fromObject.map((p) => p.filename), fromArray.map((p) => p.filename), "packReports normalises the object shape like the array shape");
+  assert.deepEqual(fromArray.map((p) => p.filename), [entry.filename], "packReports reads the array shape");
+  ok("packReports reads both npm pack --json shapes (array <=11, object >=12)");
+}
+
 try {
   // 1. Build, pack and unpack the real artefact. It is the compiled stage (build-npm.ts, ADR 0001),
   // unpacked under node_modules/ as an npm install would put it: Node refuses to strip types
@@ -125,7 +134,7 @@ try {
   fs.mkdirSync(packDir);
   const pack = run(npm, ["pack", stage, "--json", "--ignore-scripts", "--pack-destination", packDir], { cwd: ROOT });
   assert.equal(pack.status, 0, `npm pack failed:\n${pack.stdout}\n${pack.stderr}`);
-  const packed = parseJsonAs(PackOutput, pack.stdout, "npm pack --json")[0];
+  const packed = packReports(pack.stdout, "npm pack --json")[0];
   assert.ok(packed, "npm pack reported a tarball");
   const tarball = path.join(packDir, packed.filename);
   const unpacked = path.join(tmp, "project", "node_modules", "@satunix", "pi-system");

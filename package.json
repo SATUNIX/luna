@@ -316,6 +316,7 @@
     "smoke:security-docs": "node tests/security-docs-smoke.ts"
   },
   "overrides": {
-    "undici": "8.12.3"
+    "undici": "8.12.3",
+    "minimatch": "11.0.1"
   }
 }

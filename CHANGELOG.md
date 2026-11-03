@@ -27,6 +27,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `minimatch` is pinned to 11.0.1 through `overrides` in the root, autonomy-image and container
+  tool lockfiles, fixing GHSA-g3hv-75wg-m249 (denial of service through globparts amplification,
+  medium) in the copies pulled in by pi, ESLint and typescript-eslint (`osv-scanner`, `check:all`).
 - Malformed ANSI-C escapes no longer crash the shell classifier (`tests/firewall-shell-smoke.ts`).
   Firewall cache and rejected-file digests use SHA-256, with a lint rule refusing weak hashes
   (`tests/auto-mode-smoke.ts`, `npm run test:lint`).

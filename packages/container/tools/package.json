@@ -9,7 +9,8 @@
   },
   "overrides": {
     "@earendil-works/pi-coding-agent": {
-      "undici": "8.12.3"
+      "undici": "8.12.3",
+      "minimatch": "11.0.1"
     }
   }
 }

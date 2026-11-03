@@ -41,6 +41,7 @@ import {
 	type ObservedMessage,
 } from "./tailer.ts";
 import { DEFAULT_CWD } from "./config.ts";
+import { kitVersion } from "./remote-version.ts";
 import { mediaType, type RequestLike } from "./security.ts";
 import {
 	ENTRY_ID_RE,
@@ -52,8 +53,6 @@ import {
 	requireObject,
 	type ThinkingLevel,
 } from "./validate.ts";
-
-const VERSION = "0.1.0";
 
 /** Largest JSON request body accepted, in bytes. */
 export const MAX_BODY_BYTES = 1_000_000;
@@ -422,7 +421,7 @@ export async function handleApi(
 			return (
 				sendJson(res, 200, {
 					ok: true,
-					version: VERSION,
+					version: kitVersion(),
 					uptimeSec: Math.round(process.uptime()),
 					// Tells the page whether to ask for a token: "token" unless the operator
 					// explicitly started the server with PI_CONSOLE_AUTH=off.

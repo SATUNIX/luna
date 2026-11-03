@@ -22,8 +22,7 @@ import { listAgents, parseFrontmatter } from "./agents.ts";
 import { KNOWN_TOOLS } from "./agentstore.ts";
 import { listModels, readConsoleSettings, type ProviderInfo } from "./models.ts";
 import { lensStatus, LENS_DIR, type LensStatus } from "./lens.ts";
-
-const VERSION = "0.1.0";
+import { kitVersion } from "./remote-version.ts";
 
 /** What /api/config returns: how this installation is configured. */
 export interface ConfigInfo {
@@ -77,7 +76,7 @@ export function configInfo(): ConfigInfo {
 	const models = listModels();
 	return {
 		app: {
-			version: VERSION,
+			version: kitVersion(),
 			node: process.version,
 			platform: process.platform,
 			host: HOST,

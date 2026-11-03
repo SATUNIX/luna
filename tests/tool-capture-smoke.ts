@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
-import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, ROOT, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { evalCacheDir, loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import type * as Store from "../packages/extensions/src/tool-capture/store.ts";
 import type * as Classify from "../packages/extensions/src/tool-firewall/classify.ts";
@@ -246,7 +246,7 @@ try {
     const d3 = path.join(ws, "capture-concurrent");
     // Children import the copy the parent already compiled: four harness compiles at once would
     // race on the shared cache file.
-    const compiled = path.join(ROOT, "node_modules", ".cache", "pi-kit-eval", "packages_extensions_src_tool-capture_index.mjs");
+    const compiled = path.join(evalCacheDir(), "packages_extensions_src_tool-capture_index.mjs");
     assert.ok(fs.existsSync(compiled), compiled);
     const child = `
       const { default: register } = await import(${JSON.stringify(pathToFileURL(compiled).href)});

@@ -32,7 +32,18 @@ import type {
 import { WORKSPACE_ROOT } from "../lib/paths.ts";
 
 export const ROOT = WORKSPACE_ROOT;
-const CACHE_DIR = path.join(ROOT, "node_modules", ".cache", "pi-kit-eval");
+// `check-all --jobs` gives each concurrent worker its own cache directory through this variable,
+// so two checks never rewrite (or import) the same cached module. A sequential run keeps the
+// shared checkout cache. The name is deliberately not `PI_KIT_*`: isolateKitEnv() strips those
+// before a test loads an extension, and the cache is infrastructure, not kit configuration.
+const CACHE_DIR = process.env.PI_EVAL_CACHE_DIR
+  ? path.resolve(process.env.PI_EVAL_CACHE_DIR)
+  : path.join(ROOT, "node_modules", ".cache", "pi-kit-eval");
+
+/** The directory this process transpiles modules into (per-worker under `check-all --jobs`). */
+export function evalCacheDir(): string {
+  return CACHE_DIR;
+}
 
 const TS_COMPILER_OPTIONS = {
   module: ts.ModuleKind.ES2022,

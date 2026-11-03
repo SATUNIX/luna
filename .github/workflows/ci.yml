@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, "integration/**"]
   workflow_call:
 
 permissions:
@@ -22,6 +22,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,8 +42,11 @@ jobs:
       # smoke:clean-install, which installs that tarball and starts the real pi) and
       # profile:check per profile from package.json, so a new check is picked up without
       # editing this workflow. It also fails on a test file no script runs (smoke:wiring),
-      # so a green run cannot hide an unwired suite.
-      - run: npm run -s check:all
+      # so a green run cannot hide an unwired suite. The suite is split into
+      # four deterministic shards, each running two checks at once; the shards
+      # are disjoint and together cover every check, and ci-complete waits for
+      # all of them.
+      - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2
 
   # Test coverage of the same suite: check:all again with NODE_V8_COVERAGE set, summarised by
   # packages/core/coverage.ts (no coverage dependency). The line, branch and function figures are

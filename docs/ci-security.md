@@ -10,8 +10,8 @@ operator actions ([Releasing](releasing.md)).
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, pull requests, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job did (`tests/workflow-policy-smoke.ts` checks it needs them all) |
-| `security.yml` | push to `main`, pull requests, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
+| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job did (`tests/workflow-policy-smoke.ts` checks it needs them all) |
+| `security.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
 | `scorecard.yml` | push to `main`, weekly | OpenSSF Scorecard supply-chain rating, published; it fails nothing |
 | `scorecard-thresholds.yml` | weekly, manual | Runs Scorecard again without publishing and fails when a gating check scores below its floor in `.github/scorecard-thresholds.json` |
 | `release.yml` | manual (`workflow_dispatch`) only | Dry-run plan by default; creates a GitHub Release, and optionally publishes to npm, only when an operator unticks `dry-run` from a `v*` tag. See [Releasing](releasing.md) |
@@ -22,6 +22,16 @@ script in `package.json`, plus `verify`, `eval`, `docs:check`, `docs:mermaid` an
 run per profile. It also fails on a test file that no script runs or that asserts nothing
 (`smoke:wiring`), so a green run cannot hide a suite that is not running. `npm test` is the same
 command.
+
+`check:all -- --shard=<i>/<n>` runs one deterministic slice of the list (round-robin over the sorted
+runs, so the shards are disjoint and together cover every check) and `--jobs=<n>` runs up to n checks
+at once, buffering each check's output and listing failures in run order, so the summary matches a
+sequential run. Checks that share fixed state (the web console runtime, npm
+pack and clean install, the container engine) are listed as serial and always run alone after the
+parallel batch (`tests/check-all-npm-smoke.ts`). The `verify` job in `ci.yml` runs four shards with
+`--jobs=2`; `ci-complete` waits for all of them. `npm run coverage` refuses `--jobs` above 1: the
+concurrent checks transpile into per-run caches that `check:all` removes, so coverage could not
+attribute those modules.
 
 ## Test coverage
 

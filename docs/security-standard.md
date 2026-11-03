@@ -51,6 +51,15 @@ lists it.
 | Corpus entries are synthetic, stored in parts so no scanner sees a whole value, and marked `"fixture": "synthetic"` | `tests/redaction-corpus-smoke.ts`; gitleaks and the leak scan report nothing on the corpus |
 | Redaction is hygiene, not a boundary: never rely on it to make a log safe to publish | Documentation ([Security model](security.md#redaction)) |
 
+## Cryptography
+
+| Rule | Enforced by |
+|---|---|
+| No hash algorithm with a known serious weakness (MD5, MD4, SHA-1, RIPEMD-160) in `createHash` or `createHmac`, even for a cache key or a file name; use SHA-256 or SHA-512 | ESLint (`no-restricted-syntax`, every linted file) |
+| Never write a cipher, signature scheme or key derivation of our own: use `node:crypto` on the host and the Android keystore on the phone | Review |
+| Bearer tokens, pairing codes, keys and nonces come from `crypto.randomBytes` (or `randomUUID`), never `Math.random` (still used for some non-secret identifiers and temporary-file suffixes) | Review |
+| A TLS server the kit runs refuses anything below TLS 1.2; the remote host uses an EC P-256 certificate whose SHA-256 fingerprint the app pins ([Remote control](remote-control.md)) | Review (`minVersion` in `packages/web-ui/server/remote-host.ts`) |
+
 ## Network clients
 
 | Rule | Enforced by |

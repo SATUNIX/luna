@@ -6,7 +6,6 @@
 npm run new -- my-extension     # also runs npm run catalog
 # implement packages/extensions/src/my-extension/index.ts
 # fill packages/extensions/src/my-extension/extension.json
-# if the checkout has internal/public-release/manifest.json, add the new files to its "public" list
 npm run catalog
 npm run verify
 ```

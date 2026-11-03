@@ -127,9 +127,6 @@ check is not one `.github/expected-settings.json` declares.
   `.github/expected-settings.json` declares them; an administrator applies them, and a maintainer
   drift check compares the live settings with that file using read-only requests. No test in the
   public tree can read the live settings.
-- **The publication pipeline.** Public releases are exported from a private development lineage
-  ([Repository topology](repository-topology.md#how-a-release-reaches-this-repository)). That
-  pipeline's controls and their tests live with that lineage and are not part of the public tree.
 - **Controls that need a container engine or a real device.** The autonomy boundary probe, the
   container capability scripts and the Android app are run by the operator
   ([CI security](ci-security.md#not-run-in-ci)).

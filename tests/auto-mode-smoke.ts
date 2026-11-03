@@ -186,6 +186,10 @@ async function run() {
     // Cached for the same action in the same turn.
     assert.equal(await pi.handlers.get("tool_call")({ toolName: "bash", input: { command: "npm install lodash" } }, view.ctx), undefined);
     assert.equal(calls.length, 1, "the verdict is cached per action and turn");
+    // A new request is a new turn: the turn key (a SHA-256 digest) changes and the action is judged again.
+    await pi.handlers.get("before_agent_start")({ prompt: "next request: add the lodash types too" }, {});
+    assert.equal(await pi.handlers.get("tool_call")({ toolName: "bash", input: { command: "npm install lodash" } }, view.ctx), undefined);
+    assert.equal(calls.length, 2, "a cached verdict is not reused in a later turn");
     const audit = fs.readFileSync(path.join(ws, "audit.jsonl"), "utf8");
     assert.match(audit, /"event":"auto_mode_check_start"[^\n]*"model":"acme\/model-x"/);
 

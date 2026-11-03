@@ -39,6 +39,7 @@
   },
   "pulls": [],
   "env": [
+    "PI_KIT_NODE",
     "PI_KIT_WEBUI_ROOT",
     "PI_REMOTE_STATE_DIR",
     "PI_REMOTE_BIND",

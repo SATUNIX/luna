@@ -13,6 +13,7 @@ import { extensionsCatalogueDrift, type ExtensionManifest } from "./registry.ts"
 import { noticesContent } from "./gen-notices.ts";
 import { checkDocsNav } from "./docs-nav-check.ts";
 import { checkSharedCopies, SHARED_COPIES } from "./gen-shared.ts";
+import { referenceContent } from "./reference.ts";
 import { skillsCatalogueContent } from "./skills-catalogue.ts";
 import { buildDistributionContract, distributionContractProblems } from "./distribution-contract.ts";
 import { buildCommandContractInput, commandContractProblems } from "./lib/command-contract.ts";
@@ -695,6 +696,41 @@ if (fs.existsSync(sourcesPath)) {
     } catch {
       fail("docs/capability-matrix.md is stale — run 'npm run catalog'");
     }
+  }
+
+  // 8f-quater. Interface reference drift: docs/reference.md lists every command, tool,
+  // environment variable and schema, generated from the manifests and the registration calls.
+  console.log("\n[verify] interface reference");
+  try {
+    const current = fs.existsSync(path.join(ROOT, "docs", "reference.md")) ? fs.readFileSync(path.join(ROOT, "docs", "reference.md"), "utf8") : "";
+    if (current !== referenceContent()) throw new Error("interface reference is stale");
+    console.log("  OK: docs/reference.md matches the manifests and registration calls");
+  } catch {
+    fail("docs/reference.md is stale — run 'npm run catalog'");
+  }
+
+  // 8f-quinquies. Extension READMEs (CONTRIBUTING.md, "Per-extension contract", rule 5). Every
+  // extension has one except the ones listed here, which predate the rule; the list only shrinks:
+  // an extension added without a README fails, and a listed one that gains a README must leave it.
+  console.log("\n[verify] extension READMEs");
+  {
+    const EXTENSIONS_WITHOUT_README = new Set([
+      "autonomous-loop", "conductor", "context-sieve", "control-center", "custom-compaction", "delegation-guard", "dual-review",
+      "effort", "finish-reason-retry", "memory-local", "memory-vault", "orchestrator", "skill-router",
+      "auto-commit-on-exit", "caveman", "custom-footer", "dirty-repo-guard", "git-checkpoint", "handoff", "notify", "plan-mode",
+      "protected-paths", "subagent", "todo", "trigger-compact",
+    ]);
+    const before = errors;
+    for (const base of [FIRST_PARTY_DIR, THIRD_PARTY_DIR]) {
+      if (!fs.existsSync(base)) continue;
+      for (const name of fs.readdirSync(base).sort()) {
+        if (name.startsWith("_") || !fs.existsSync(path.join(base, name, "extension.json"))) continue;
+        const has = fs.existsSync(path.join(base, name, "README.md"));
+        if (!has && !EXTENSIONS_WITHOUT_README.has(name)) fail(`extension ${name} has no README.md (CONTRIBUTING.md, per-extension contract)`);
+        if (has && EXTENSIONS_WITHOUT_README.has(name)) fail(`extension ${name} now has a README.md: remove it from EXTENSIONS_WITHOUT_README in packages/core/verify.ts`);
+      }
+    }
+    if (errors === before) console.log(`  OK: every extension has a README.md (${EXTENSIONS_WITHOUT_README.size} older ones listed as exceptions)`);
   }
 
   // 8f-ter. Extensions catalogue drift (B-098): registry.ts --write-docs output was

@@ -10,8 +10,8 @@ operator actions ([Releasing](releasing.md)).
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, pull requests, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), and the Android build with Gradle wrapper validation; `ci-complete` succeeds only when every other job did (`tests/workflow-policy-smoke.ts` checks it needs them all) |
-| `security.yml` | push to `main`, pull requests, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor |
+| `ci.yml` | push to `main`, pull requests, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job did (`tests/workflow-policy-smoke.ts` checks it needs them all) |
+| `security.yml` | push to `main`, pull requests, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
 | `scorecard.yml` | push to `main`, weekly | OpenSSF Scorecard supply-chain rating, published; it fails nothing |
 | `scorecard-thresholds.yml` | weekly, manual | Runs Scorecard again without publishing and fails when a gating check scores below its floor in `.github/scorecard-thresholds.json` |
 | `release.yml` | manual (`workflow_dispatch`) only | Dry-run plan by default; creates a GitHub Release, and optionally publishes to npm, only when an operator unticks `dry-run` from a `v*` tag. See [Releasing](releasing.md) |
@@ -20,7 +20,45 @@ operator actions ([Releasing](releasing.md)).
 `check:all` is the single definition of "the checks": it enumerates every `smoke:*` and `test:*`
 script in `package.json`, plus `verify`, `eval`, `docs:check`, `docs:mermaid` and a `profile:check`
 run per profile. It also fails on a test file that no script runs or that asserts nothing
-(`smoke:wiring`), so a green run cannot hide a suite that is not running.
+(`smoke:wiring`), so a green run cannot hide a suite that is not running. `npm test` is the same
+command.
+
+## Test coverage
+
+The `coverage` job in `ci.yml` runs `npm run coverage`: `check:all` once more with
+`NODE_V8_COVERAGE` set, so every Node process the suite starts records V8's precise block
+coverage, summarised by `packages/core/coverage.ts` (no coverage dependency). It reports line,
+branch and function coverage of the code under `packages/` that the suite loads, with the
+least-covered files, in the job log and the run summary, and writes `coverage/summary.md` and
+`coverage/summary.json` locally. A module the eval harness transpiles is measured as transpiled
+and attributed to its source. Test infrastructure (`packages/core/eval/`, every `tests/` folder)
+and the compiled browser code are not counted. Files no check loads are not in the main totals; a
+separate row counts them as uncovered. The job measures and does not gate on a threshold; it fails
+only when `check:all` fails.
+
+## Property-based fuzzing
+
+Three smoke tests generate their inputs instead of listing them, with the small harness in
+`packages/core/eval/fuzz.ts` (a seeded generator, no dependency):
+
+| Test | Target | Properties |
+|---|---|---|
+| `tests/fuzz-firewall-classifier-smoke.ts` | The tool-firewall shell classifier | A write to a persistence, system, git-hook or agent-control file is never rated below high, whatever construct, wrapper, quoting or path spelling carries it; a recursive delete of `/` or the home directory is always critical; any string of shell syntax yields a tier without throwing |
+| `tests/fuzz-redaction-smoke.ts` | The redaction table | A newly generated secret of every corpus shape never survives redaction wherever it sits; redaction is idempotent; clean text is unchanged |
+| `tests/fuzz-workspace-paths-smoke.ts` | The safe-write helper | A write through generated paths of links, `..` and `.` is refused or lands inside the workspace, and nothing outside it changes |
+
+In `check:all` each runs a few hundred cases per property from a fixed seed, so every run is
+reproducible. The weekly `fuzz` job in `security.yml` runs them with `FUZZ_SEED=random` and many
+more cases (`FUZZ_RUNS`), so each week tries inputs no earlier run did. A failure prints the input
+and the seed that reproduces it alone:
+
+```sh
+FUZZ_SEED=<seed> FUZZ_RUNS=1 npm run smoke:fuzz-firewall-classifier
+```
+
+A counterexample is triaged like any other finding ([Vulnerability management](vulnerability-management.md)),
+and the fix adds it as a fixed case to the matching example-based suite, as
+`tests/firewall-shell-smoke.ts` did for the classifier crash on an ANSI-C escape with no hex digits.
 
 ## Checks
 
@@ -37,7 +75,7 @@ run per profile. It also fails on a test file that no script runs or that assert
 | Dependencies | Dependency review (pull requests) | A new dependency with a high-severity advisory | `security.yml` |
 | Lockfile | `packages/core/lockfile-check.ts` | A package resolved from anywhere but the npm registry, a missing sha512 hash, or an unreviewed install script; `--list`, which the per-lockfile audit loops walk, fails when it finds no lockfile (`tests/lockfile-check-smoke.ts`) | allowlist in the script |
 | Workflows | zizmor | Template injection, over-broad permissions, credential persistence, cache poisoning, unpinned actions | |
-| Workflows | `tests/workflow-policy-smoke.ts`, in `check:all` (the private lineage's pipeline has its own structure test from the same list) | A gate that fails open: `continue-on-error` (one reviewed advisory flag), `allow_failure` in any form but `false` (including `exit_codes:`), or a shell idiom that hides a failure (a command or-ed with `true`, `:`, `exit 0` or `echo`, or `set +e`) | `tests/ci-fail-open.ts` |
+| Workflows | `tests/workflow-policy-smoke.ts`, in `check:all` | A gate that fails open: `continue-on-error` (one reviewed advisory flag), `allow_failure` in any form but `false` (including `exit_codes:`), or a shell idiom that hides a failure (a command or-ed with `true`, `:`, `exit 0` or `echo`, or `set +e`) | `tests/ci-fail-open.ts` |
 | Package | `packages/core/pack-check.ts` | A missing required file, a leaked private file, an oversize tarball, a profile that does not resolve from the tarball | |
 | Install | `tests/clean-install-smoke.ts` | The packed tarball failing to install for a profile, or the real pi failing to load it | |
 | Release | `tests/release-workflow-smoke.ts` | A release workflow that could publish or create a release on a dry run | |
@@ -211,7 +249,8 @@ without it), code scanning (the SARIF uploads), and private vulnerability report
 ## Running the checks locally
 
 ```sh
-npm run check:all
+npm run check:all                                # or npm test
+npm run coverage                                 # the same, with coverage measured
 npm run security:lockfile
 npm audit signatures && npm audit --audit-level=high
 gitleaks git --redact .                          # https://github.com/gitleaks/gitleaks

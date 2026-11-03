@@ -47,6 +47,12 @@ const SECURITY_SYNTAX = [
     selector: "CallExpression[callee.property.name=/^(insertAdjacentHTML|write|writeln)$/][callee.object.name=/^(document|el|element|node)$/]",
     message: "Build DOM with text nodes; HTML string sinks are banned.",
   },
+  {
+    // docs/security-standard.md, "Cryptography": no algorithm with a known serious weakness, even
+    // for a cache key or a file name, so no security decision can come to depend on one.
+    selector: "CallExpression[callee.property.name=/^(createHash|createHmac)$/][arguments.0.value=/^(md4|md5|sha1|sha-1|ripemd160|rmd160)$/i]",
+    message: "Weak hash algorithm: use sha256 (or sha512) instead of MD5, SHA-1 or RIPEMD-160.",
+  },
 ];
 
 /**

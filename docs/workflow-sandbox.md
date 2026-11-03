@@ -97,6 +97,14 @@ The suite tries Function-constructor escapes through hook promises and results, 
 `fetch`, `setTimeout`, `WebAssembly` and similar host globals. If any probe gets through, the
 session refuses to run scripts.
 
+## The node binary
+
+The runner needs Node.js itself, for its permission model. The sandbox uses pi's own runtime when
+that is node, otherwise `PI_KIT_NODE` (an absolute path) or the first `node` on `PATH` whose real
+file is node: a compiled pi binary, bun, or a version-manager shim that resolves to another program
+is never bound into the jail. Without such a binary both modes refuse with the reason
+(`tests/node-runtime-smoke.ts`).
+
 ## Hosts without bwrap
 
 If bwrap is missing or cannot create namespaces, which happens where unprivileged user namespaces

@@ -98,7 +98,12 @@ const ANSI_C_ESCAPES: Record<string, string> = { n: "\n", t: "\t", r: "\r", a: "
 function decodeAnsiC(body: string): string {
   return body.replace(/\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g, (_m, e: string) => {
     const c = e.charAt(0);
-    if (c === "x" || c === "u" || c === "U") return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (c === "x" || c === "u" || c === "U") {
+      // bash keeps `\x`, `\u` or `\U` with no hex digits as written; a value past U+10FFFF is not
+      // a character. Either is kept literal rather than thrown on (found by tests/fuzz-firewall-classifier-smoke.ts).
+      const code = e.length > 1 ? parseInt(e.slice(1), 16) : Number.NaN;
+      return Number.isInteger(code) && code <= 0x10ffff ? String.fromCodePoint(code) : `\\${e}`;
+    }
     if (/[0-7]/.test(c)) return String.fromCharCode(parseInt(e, 8));
     if (c === "c") return String.fromCharCode(e.charCodeAt(1) & 31);
     return ANSI_C_ESCAPES[c] ?? `\\${e}`;

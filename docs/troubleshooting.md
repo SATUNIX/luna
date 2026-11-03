@@ -13,7 +13,7 @@ resolves to the newest `vX.Y.Z` tag on the public repository and none has been c
 `--channel next` (it follows `main`), or a branch or tag with `--git-ref`.
 
 **"could not list release tags" or "Check network access to the repository".** The lookup did not
-happen; nothing was changed. Check `git ls-remote https://github.com/SATUNIX/pi-system.git` works
+happen; nothing was changed. Check `git ls-remote https://github.com/SATUNIX/luna.git` works
 from the same shell, then retry. Behind a proxy, configure git's proxy settings: pi and `/update`
 use your git configuration.
 

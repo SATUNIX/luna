@@ -144,6 +144,13 @@ export class PiRpcProcess {
 		this.child.stderr.on("data", (chunk: string) => {
 			this.stderrBuf = (this.stderrBuf + chunk).slice(-4000);
 		});
+		// A write to a child that has already gone (it exited before reading, or between our
+		// `exited` check and the write) fails asynchronously with EPIPE on stdin. Without a
+		// listener that is an unhandled 'error' event and takes the whole server down; with
+		// one, the commands still waiting fail and the `exit` handler does the rest.
+		this.child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+			this._failPending(new HttpError(502, `the pi process is not accepting input (${err.code ?? "write error"})`));
+		});
 		this.child.on("error", (err) => {
 			this._emit({
 				type: "lifecycle",

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -124,7 +125,7 @@ export function compareVersions(a: string, b: string): number {
 // --- delivery (packages/core/distribution.json) ----------------------------------
 
 /** The public source of the kit: what an install migrates to when its registered source is retired. */
-export const PUBLIC_KIT_SOURCE = "git:github.com/SATUNIX/pi-system";
+export const PUBLIC_KIT_SOURCE = "git:github.com/SATUNIX/luna";
 
 /** Retired private sources (host/path keys). distribution.json may list more; these are always treated as retired. */
 const BUILTIN_LEGACY_SOURCES = ["sha256:1bbc2f0c5eb44c5382561c9a9d60d688210cd833bb6f3e996010062adb26661e", "sha256:030059d98cf655b13e2e1e0e9c8cbf9f399b37295682f59f65a95b8f5f5e05a9", "sha256:435873f62f8eae368718d4365b76952caaa67ff4136de5301f6b92a653ed638a", "sha256:89ee5220340d2687c6a3bcebb6dcb08a2209218833807a4aa1589897f82cc140"];
@@ -789,9 +790,11 @@ function piBinary(): string {
   return exe === "pi" ? process.execPath : "pi";
 }
 
+// The installer is a Node script; never pi itself (./shared/node-runtime.ts). With none found,
+// bare `node` keeps the old behaviour: the step reports that it cannot be run.
 function nodeBinary(): string {
-  const exe = (process.execPath || "").replace(/\\/g, "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
-  return exe === "node" || exe === "nodejs" ? process.execPath : "node";
+  const runtime = nodeRuntime();
+  return runtime.ok ? runtime.command : "node";
 }
 
 /** The install marker fields kit-update reads; each is a string or absent. */

@@ -58,6 +58,7 @@ nav:
       - Incident Response: incident-response.md
       - Operator Checklist: operator-checklist.md
   - Reference:
+      - Interface Reference: reference.md
       - Capability Matrix: capability-matrix.md
       - Supply Chain: supply-chain.md
       - Skills Catalogue: skills-catalogue.md

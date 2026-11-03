@@ -40,7 +40,7 @@ From a shell:
 
 ```sh
 # A release install: run the installer of pi's own copy of the kit
-node ~/.pi/agent/git/github.com/SATUNIX/pi-system/packages/core/install.mjs --profile lite --yes --settings-only
+node ~/.pi/agent/git/github.com/SATUNIX/luna/packages/core/install.mjs --profile lite --yes --settings-only
 # A checkout registered in place
 node packages/core/install.ts --profile lite --yes
 ```

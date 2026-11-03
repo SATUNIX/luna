@@ -24,10 +24,10 @@ working here never sees this file unless it reads it: the safety rules below are
 - Keep patches scoped. Do not run a repo-wide formatter, and do not "tidy" files you were not
   asked to change: whitespace churn over unrelated files makes the real diff unreviewable.
 - Never commit on another agent's behalf, and never push to a protected branch.
-- **GitHub (`SATUNIX/pi-system`) is the authoritative repository, and it is public**: every
+- **GitHub (`SATUNIX/luna`) is the only repository, and it is public**: every
   pushed branch is published at once. Develop on a branch and open a pull request there; the
-  GitLab copy is a read-only mirror. Install the pre-push leak scan in every clone you push from
-  (`node packages/core/prepush-scan.ts install`, `docs/repository-topology.md`) and never skip it
+  GitLab mirror and private-lineage export pipeline are archived. Install the pre-push leak scan
+  in every clone you push from (`node packages/core/prepush-scan.ts install`, `docs/repository-topology.md`) and never skip it
   with `--no-verify`. An agent never approves or merges its own pull request (the review rule is
   declared in `.github/expected-settings.json` and enforced by GitHub). Keep private notes,
   review evidence and scratch work out of the repository.
@@ -53,7 +53,7 @@ Documentation here describes **what the code does now**. These rules keep it tha
    `docs/future-work.md`; history belongs in git and `CHANGELOG.md`.
 2. **One home per fact.** Link to it instead of restating it. Generated pages
    (`docs/EXTENSIONS.md`, `docs/skills-catalogue.md`, `docs/capability-matrix.md`,
-   `THIRD_PARTY_NOTICES.md`) are never hand-edited: run `npm run catalog` and
+   `docs/reference.md`, `THIRD_PARTY_NOTICES.md`) are never hand-edited: run `npm run catalog` and
    `node packages/core/gen-notices.ts`.
 3. **A claim about behaviour names the test that pins it**, or says plainly that nothing does.
 4. **Diagrams are Mermaid** in fenced blocks, and `npm run docs:mermaid` must pass.

@@ -61,6 +61,14 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/session-helpers/shared/kit-source.ts",
     "packages/extensions/src/web-console/shared/kit-source.ts",
   ],
+  "node-runtime.ts": [
+    "packages/extensions/src/autonomy-run/shared/node-runtime.ts",
+    "packages/extensions/src/kit-update/shared/node-runtime.ts",
+    "packages/extensions/src/remote-control/shared/node-runtime.ts",
+    "packages/extensions/src/session-helpers/shared/node-runtime.ts",
+    "packages/extensions/src/web-console/shared/node-runtime.ts",
+    "packages/extensions/third_party/subagent/shared/node-runtime.ts",
+  ],
   "inline-guard.ts": [
     "packages/extensions/src/tool-firewall/shared/inline-guard.ts",
     "packages/extensions/third_party/protected-paths/shared/inline-guard.ts",

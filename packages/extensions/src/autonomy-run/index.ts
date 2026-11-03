@@ -4,8 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
-// Self-containment rule: only node:* builtins and the pi peer. The extension does not import the
+// Self-containment rule: only node:* builtins, the pi peer and the generated ./shared/ copy. The extension does not import the
 // autonomy package: it runs its operator CLI (packages/autonomy/cli.ts) as a child process and
 // speaks its `--json` protocol, exactly as an operator at a shell would.
 //
@@ -59,7 +60,14 @@ export function runCli(args: string[], { json = true, cwd, timeoutMs = 120_000, 
       resolve({ code: null, json: null, stdout: "", stderr: `the autonomy CLI is not installed at ${cli} (a git install of the kit includes packages/autonomy; the npm package does not ship the runner)` });
       return;
     }
-    const child = spawn(process.execPath, [cli, ...args, ...(json ? ["--json"] : [])], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    // The CLI is a Node script. Under a compiled pi, process.execPath is pi itself, and
+    // `pi cli.ts list` would run an agent turn with the path as its prompt (./shared/node-runtime.ts).
+    const runtime = nodeRuntime({ env });
+    if (!runtime.ok) {
+      resolve({ code: null, json: null, stdout: "", stderr: `the autonomy CLI needs Node.js to run: ${runtime.reason}` });
+      return;
+    }
+    const child = spawn(runtime.command, [cli, ...args, ...(json ? ["--json"] : [])], { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     let settled = false;

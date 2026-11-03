@@ -22,7 +22,7 @@ plainly.
 | Node.js | 22.19 or newer | pi's own minimum; CI runs the suite on Node 26 and the pi-compat lanes on Node 22 |
 | pi | 0.85.1 to 1.4.0 | The suite is pinned to 1.4.0; 0.85.1 (the floor) and 0.99.2 (the last 0.x release) run the whole suite in CI |
 | Operating system | Linux | Every profile is also install-checked on Windows in CI; the full suite and interactive use are not. macOS has not been tested |
-| Delivery | `git` | `pi install git:github.com/SATUNIX/pi-system@v0.2.4-beta.9`. The npm package is not published |
+| Delivery | `git` | `pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11`. The npm package is not published |
 
 ## What has been verified, and how
 

@@ -1,7 +1,7 @@
 {
   "$comment": "The GitHub repository settings this repository's controls depend on, as the drift check compares them (internal/scripts/github-settings-check.ts, read-only: GET requests through `gh api`). Workflows cannot set these and nothing here changes them: an administrator applies a change in the GitHub settings first, then updates this file in the same reviewed pull request. tests/pin-allowlist-smoke.ts keeps actions.patterns_allowed equal to the third-party actions the workflows use, and tests/workflow-policy-smoke.ts keeps the required checks and environments in step with the workflows.",
   "schemaVersion": 1,
-  "repository": "SATUNIX/pi-system",
+  "repository": "SATUNIX/luna",
   "rulesets": [
     {
       "name": "main",

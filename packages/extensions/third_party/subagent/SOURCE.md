@@ -139,7 +139,8 @@
     `docs/script-workflows.md` ("Approvals from workflow agents").
   - **Workflow-script sandbox (Luna, kit-original):** `wf-sandbox.ts` and `wf-runner.mjs` run one
     untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.3` dependency) under
-    `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. Nothing in
+    `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. The node
+    binary comes from the generated `shared/node-runtime.ts`, never a compiled pi's `process.execPath`. Nothing in
     the extension calls it yet. See `docs/workflow-sandbox.md`; pinned by
     `tests/workflow-sandbox-smoke.ts`.
   - **Structured results (E5 S3):** `runAgent` takes `schema`. `structured-output/check.ts` checks it

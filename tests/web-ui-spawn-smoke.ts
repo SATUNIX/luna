@@ -4,6 +4,9 @@
 //          --append-system-prompt, but PiRpcProcess never unlinked it.
 //   B-101: the child `exit` handler never removed the proc from the module-level
 //          registry, so dead procs (each with up to 500 replay events) accumulated.
+// Also: a write to the child's stdin after it has gone fails with EPIPE; with no listener on
+// stdin that was an unhandled 'error' event that killed the server (createSession writes
+// get_state straight after spawning, so this child raced it).
 // PI_BIN is set to node itself, which exits immediately on the unknown `--mode`
 // argv, so the child dies fast and no network or pi install is needed.
 import assert from "node:assert/strict";
@@ -89,6 +92,26 @@ try {
 
   check("getSession returns null for the exited proc (B-101)", () => {
     assert.equal(getSession(proc.publicId), null);
+  });
+
+  // EPIPE on stdin: emit it the way a failed write does. An unhandled 'error' event would throw
+  // here; with the listener the waiting command is rejected and nothing escapes.
+  const waiting = new Promise<unknown>((resolve, reject) => {
+    proc.pending.set("epipe", { resolve, reject, timer: setTimeout(() => {}, 0), command: "get_state" });
+  });
+  const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE", errno: -32, syscall: "write" });
+  let thrown: unknown = null;
+  try {
+    proc.child.stdin.emit("error", epipe);
+  } catch (error) {
+    thrown = error;
+  }
+  const outcome = await waiting.then(() => "resolved", (error: unknown) => (error instanceof Error ? error.message : String(error)));
+  check("an EPIPE on the child's stdin is handled, not thrown", () => {
+    assert.equal(thrown, null);
+  });
+  check("an EPIPE on the child's stdin rejects the waiting commands", () => {
+    assert.match(outcome, /not accepting input \(EPIPE\)/);
   });
 } finally {
   if (runtimeDir) {

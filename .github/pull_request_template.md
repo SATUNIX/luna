@@ -6,6 +6,7 @@
 
 <!-- The commands you ran and their result. A behaviour change names the test that pins it. -->
 
+- [ ] New or changed behaviour has an automated test in `tests/` (named above); a bug fix has a regression test
 - [ ] `npm run verify`
 - [ ] `npm run test:typecheck` and `npm run test:lint`
 - [ ] `npm run test:security` (for changes to `packages/core/`, `packages/extensions/` or `packages/kit/`)

@@ -16,6 +16,7 @@ import {
 import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
 import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
 import { KIT_PACKAGE_NAMES, isKitLocalPackageName, trustedMarkerKitRoot, type MarkerKitRoot } from "./shared/kit-source.ts";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 // Self-containment rule: import only node:* builtins and typebox peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -436,11 +437,12 @@ export function matchProfile(kitRoot: string, loaded: string[], profiles: string
 }
 
 // The installer is a Node script. Under a compiled `pi` binary process.execPath is pi itself,
-// and `pi install.ts ...` would read the script path as a prompt — so only use execPath when
-// it is a JS runtime, else the `node` on PATH.
+// and `pi install.ts ...` would read the script path as a prompt, so the runtime comes from
+// ./shared/node-runtime.ts. With none found, bare `node` keeps the old behaviour: pi.exec
+// reports that it cannot be run.
 function nodeBinary(): string {
-  const exe = (process.execPath || "").replace(/\\/g, "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
-  return exe === "node" || exe === "nodejs" ? process.execPath : "node";
+  const runtime = nodeRuntime();
+  return runtime.ok ? runtime.command : "node";
 }
 
 // --- compaction status/toggle -------------------------------------------------

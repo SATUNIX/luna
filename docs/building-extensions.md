@@ -37,12 +37,6 @@ npm run profile:check -- --profile lite
 npm run smoke:package
 ```
 
-## Classify the New Files
-
-A checkout that contains `internal/public-release/manifest.json` classifies every file: add each
-new file to its sorted `public` list (the scaffolder prints the paths when the manifest exists).
-The public repository has no manifest, so there is nothing to classify there.
-
 ## Update the Catalogue
 
 After editing `extension.json`, regenerate the catalogue:

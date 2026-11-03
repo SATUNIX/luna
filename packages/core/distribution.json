@@ -3,8 +3,8 @@
   "delivery": "git",
   "requiredProfileExtensions": ["tool-firewall", "protected-paths", "delegation-guard", "effort", "session-helpers"],
   "git": {
-    "source": "git:github.com/SATUNIX/pi-system",
-    "previousSources": [],
+    "source": "git:github.com/SATUNIX/luna",
+    "previousSources": ["git:github.com/SATUNIX/pi-system"],
     "branch": "main",
     "tagPrefix": "v",
     "legacySources": [

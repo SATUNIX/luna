@@ -11,11 +11,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "../packages/core/lib/guard.ts";
 import { buildDistributionContract, distributionContractProblems, readDistributionMetadata } from "../packages/core/distribution-contract.ts";
 
 const contract = buildDistributionContract();
 assert.deepEqual(distributionContractProblems(contract), [], "every shipped profile must compose its declared contracts");
 assert.equal(contract.profiles.length, 7);
+assert.ok(isRecord(contract.distribution.git));
+assert.equal(contract.distribution.git.source, "git:github.com/SATUNIX/luna");
+assert.deepEqual(contract.distribution.git.previousSources, ["git:github.com/SATUNIX/pi-system"]);
 assert.deepEqual(buildDistributionContract(), contract, "derivation is deterministic");
 
 // The same validation is used by verify and distribution:inspect, including file reads.

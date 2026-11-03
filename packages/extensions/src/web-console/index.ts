@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { trustedMarkerKitRoot } from "./shared/kit-source.ts";
+import { nodeRuntime } from "./shared/node-runtime.ts";
 
 // web-console adds `/console` (alias `/webui`): start, stop, and check the bundled
 // Pi Console web UI that ships in packages/web-ui of this repo.
@@ -354,6 +355,12 @@ async function startServer(webUiRoot: string): Promise<StartResult> {
     return { started: false, alreadyRunning: true, pid: existing, url, healthy: false, token: null, tokenAccepted: null, exited: null };
   }
 
+  // The server is a Node script. Under a compiled pi, process.execPath is pi itself, and
+  // `pi server.ts` would run an agent turn with the path as its prompt (./shared/node-runtime.ts).
+  // Refused before any token or pid file is written.
+  const runtime = nodeRuntime();
+  if (!runtime.ok) throw new Error(`the web UI server needs Node.js to run: ${runtime.reason}.`);
+
   fs.mkdirSync(runtimeDir(webUiRoot), { recursive: true, mode: 0o700 });
 
   // Decide the access token. An operator-supplied one (PI_CONSOLE_TOKEN / _FILE) is passed
@@ -375,21 +382,31 @@ async function startServer(webUiRoot: string): Promise<StartResult> {
   }
 
   const out = fs.openSync(logFile(webUiRoot), "a");
+  // The cast stops TypeScript narrowing this to `null`: it is assigned from the exit callback.
+  let exitedWith = null as { code: number | null } | null;
   let child;
   try {
-    child = spawn(process.execPath, [webUiEntry(webUiRoot, "server") ?? path.join(webUiRoot, "server", "server.ts")], {
+    child = spawn(runtime.command, [webUiEntry(webUiRoot, "server") ?? path.join(webUiRoot, "server", "server.ts")], {
       cwd: webUiRoot,
       detached: true,
       stdio: ["ignore", out, out],
       env: childEnv,
+      windowsHide: true,
+    });
+    // A runtime that cannot be started emits "error" (and "close"), never "exit".
+    child.once("error", (error) => {
+      exitedWith = { code: null };
+      try {
+        fs.appendFileSync(logFile(webUiRoot), `\n${runtime.command}: ${error.message}\n`);
+      } catch {
+        /* the log is a convenience */
+      }
     });
     child.unref();
   } finally {
     fs.closeSync(out);
   }
 
-  // The cast stops TypeScript narrowing this to `null`: it is assigned from the exit callback.
-  let exitedWith = null as { code: number | null } | null;
   child.once("exit", (code) => {
     exitedWith = { code };
   });

@@ -13,3 +13,4 @@ __pycache__/
 # Written by the opt-in handoff extension into whichever directory it runs in.
 HANDOFF.md
 /public-build/
+coverage/

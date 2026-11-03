@@ -1,10 +1,10 @@
 # Development and public releases
 
-The public GitHub repository, `github.com/SATUNIX/pi-system`, is the authoritative source.
-Development happens there: every change, from a person or an agent, is a branch and a pull
-request against `main`, and releases are tags on that repository. GitLab holds a read-only
-mirror kept as a backup. Nothing is developed or merged there, and nothing flows from it back to
-GitHub.
+GitHub `github.com/SATUNIX/luna` is the only repository. Development happens here: every change,
+from a person or an agent, is a branch and a pull request against `main`. Releases are prepared
+here with a release branch and pull request, then tagged by the operator using the existing
+`release.ts` flow ([Releasing](releasing.md); `tests/release-plan-smoke.ts`). The GitLab mirror
+and private-lineage export pipeline are archived and no longer feed this repository.
 
 ```mermaid
 flowchart TD
@@ -16,16 +16,14 @@ flowchart TD
     R --> M
     M --> T[Operator tags vX.Y.Z: the latest channel]
     T --> W[Optional release workflow]
-    M --> G[Read-only GitLab mirror]
 ```
 
 | What | Where |
 |---|---|
-| Code, issues, pull requests, releases | GitHub `SATUNIX/pi-system` |
+| Code, issues, pull requests, releases | GitHub `SATUNIX/luna` |
 | `next` channel | every commit on `main` |
 | `latest` and pinned channels | the `vX.Y.Z` tags ([Releasing](releasing.md)) |
-| Backup | a read-only GitLab mirror of the GitHub repository |
-| Private planning notes, review evidence and engagement examples | a separate private repository, never this one |
+| Private planning notes, review evidence and engagement examples | outside this public repository |
 
 ## Every pushed branch is public
 
@@ -79,36 +77,12 @@ live settings.
 
 ## Contributions
 
-Open a pull request on GitHub; see `CONTRIBUTING.md` in the repository root. Do not push changes
-to the GitLab mirror: it follows GitHub and nothing is read back from it.
-
-## How a release reaches this repository
-
-Development of the kit also happens in a private lineage, which holds material that is never
-published (planning notes, review evidence, engagement examples). Public content leaves it only
-as an export:
-
-1. The export is an exact-file allowlist: every tracked file is listed as public or private, and
-   an unlisted file stops the export. It is read from the tagged commit's Git objects, not from a
-   working tree, and refuses symbolic links and submodules.
-2. The exported bytes are scanned for secrets and private identifiers, and the public checks and
-   the strict docs build run inside the export before anything is published.
-3. A protected, manual publication job re-derives the export from the tag, refuses unless it
-   matches what was checked, and pushes it to a `release/<tag>` branch here with a short-lived,
-   repository-scoped GitHub App token, opening a **draft** pull request whose body records the
-   export's tree hash and digest. When the release changes the scan exceptions, it first opens an
-   exceptions-only `release/<tag>-exceptions` pull request and stacks the release on it, so the
-   `leak-scan` check passes on the release only after the exceptions have merged
-   ([Releasing](releasing.md#releases-that-change-scan-exceptions)). It never overwrites a
-   differing branch, merges, tags or changes settings.
-4. That pull request is reviewed and merged here like any other; the operator then tags the merge.
-
-The tooling and tests for steps 1 to 3 live with the private lineage and are not part of this
-tree. Within this repository, the same leak scan (`packages/core/prepush-scan.ts`), gitleaks and
-`check:all` run on the pull request.
+Open a pull request on GitHub; see `CONTRIBUTING.md` in the repository root. The archived GitLab
+projects and export pipeline take no contributions and publish no releases here.
 
 ## History
 
-The public history is this repository's own. Earlier development happened in a private GitLab
-project; its public changes arrived here as reviewed release commits, and its private history,
-branches and agent identities were never published.
+Earlier development happened in a private GitLab project, now archived. Its public changes
+arrived here as reviewed release commits; its private history, branches and agent identities
+were never published. The former GitLab mirror and private-lineage export pipeline are also
+archived.

@@ -36,11 +36,34 @@ const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
 interface RunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  readonly timeout?: number;
 }
 
 function run(command: string, args: string[], options: RunOptions = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", shell, ...options });
   return result;
+}
+
+/**
+ * A lockfile for the artefact's runtime dependencies, copied entry by entry from the repo root
+ * package-lock.json (the artefact is packed without one). The set is closed transitively through
+ * each copied entry's own `dependencies`, so `npm ci` can run offline.
+ */
+function runtimeLock(deps: Record<string, string>): Record<string, unknown> {
+  const lock = parseJson(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+  if (!isRecord(lock) || !isRecord(lock.packages)) throw new Error("package-lock.json has no packages record");
+  const source = lock.packages;
+  const copied: Record<string, unknown> = {};
+  const pending = Object.keys(deps);
+  for (let i = 0; i < pending.length; i += 1) {
+    const name = pending[i];
+    if (name === undefined || copied[`node_modules/${name}`] !== undefined) continue;
+    const entry = source[`node_modules/${name}`];
+    if (!isRecord(entry)) throw new Error(`package-lock.json has no entry for ${name}`);
+    copied[`node_modules/${name}`] = entry;
+    if (isRecord(entry.dependencies)) pending.push(...Object.keys(entry.dependencies));
+  }
+  return { lockfileVersion: 3, requires: true, packages: { "": { name: "runtime-deps", dependencies: deps }, ...copied } };
 }
 
 const RpcCommand = object({ name: string(), source: optional(string()), sourceInfo: optional(object({ path: optional(string()) })) });
@@ -158,9 +181,15 @@ try {
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), documentedNames, "the artefact's runtime dependencies are exactly the documented ones");
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) assert.match(range, /^\d+\.\d+\.\d+$/, `${name} is pinned to an exact version, not ${range}`);
   ok(`the artefact's runtime dependencies are the documented set (${documentedNames.join(", ") || "none"}), pinned exactly`);
-  if (Object.keys(pkg.dependencies ?? {}).length > 0) {
-    const install = run(npm, ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: unpacked });
-    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}`);
+  const deps = pkg.dependencies ?? {};
+  if (Object.keys(deps).length > 0) {
+    const depsDir = path.join(tmp, "runtime-deps");
+    fs.mkdirSync(depsDir, { recursive: true });
+    fs.writeFileSync(path.join(depsDir, "package.json"), JSON.stringify({ name: "runtime-deps", private: true, dependencies: deps }, null, 2));
+    fs.writeFileSync(path.join(depsDir, "package-lock.json"), JSON.stringify(runtimeLock(deps), null, 2));
+    const install = run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300000 });
+    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}\n${install.error ?? ""}`);
+    fs.cpSync(path.join(depsDir, "node_modules"), path.join(unpacked, "node_modules"), { recursive: true });
     ok("the artefact's runtime dependencies install");
   } else {
     ok("the artefact has no runtime dependencies to install");

@@ -31,6 +31,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Autonomous runs' acceptance gate no longer runs out of processes: every helper container starts
+  node under tini, so orphaned children are reaped instead of filling `--pids-limit`
+  (`tests/autonomy-smoke.ts`). The gate's checks also pass inside its rootless, offline container:
+  npm 12's `npm pack --json` shape is read (here and in `release.yml`), the clean-install smoke
+  installs runtime dependencies without the network, and the unattended-firewall provenance checks
+  expect the user-namespace refusal there (`tests/clean-install-smoke.ts`,
+  `tests/firewall-unattended-smoke.ts`, `tests/release-workflow-smoke.ts`).
 - `minimatch` is pinned to 11.0.1 through `overrides` in the root, autonomy-image and container
   tool lockfiles, fixing GHSA-g3hv-75wg-m249 (denial of service through globparts amplification,
   medium) in the copies pulled in by pi, ESLint and typescript-eslint (`osv-scanner`, `check:all`).

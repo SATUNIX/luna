@@ -133,9 +133,9 @@ jobs:
           {
             echo "### Release candidate ${VERSION}"
             echo
-            node -e 'const p=require("./pack.json")[0]; console.log(`- tarball: \`${p.filename}\`, ${p.files.length} files, ${p.size} bytes packed, ${p.unpackedSize} unpacked`); console.log(`- sha512: \`${p.integrity}\``)'
+            node -e 'const j=require("./pack.json"); const p=Array.isArray(j)?j[0]:Object.values(j)[0]; console.log(`- tarball: \`${p.filename}\`, ${p.files.length} files, ${p.size} bytes packed, ${p.unpackedSize} unpacked`); console.log(`- sha512: \`${p.integrity}\``)'
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          node -e 'const p=require("./pack.json")[0]; console.log(`tarball=${p.filename}`); console.log(`integrity=${p.integrity}`)' >> "$GITHUB_OUTPUT"
+          node -e 'const j=require("./pack.json"); const p=Array.isArray(j)?j[0]:Object.values(j)[0]; console.log(`tarball=${p.filename}`); console.log(`integrity=${p.integrity}`)' >> "$GITHUB_OUTPUT"
 
       # `--dry-run` uploads nothing. This is the only npm command in this job.
       - name: npm publish (dry run only)

@@ -27,8 +27,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildNpm, compileSet, jsPath } from "./build-npm.ts";
-import { array, isRecord, number, object, optional, parseJsonAs, record, string, unknownValue } from "./lib/guard.ts";
+import { buildNpm, compileSet, jsPath, packReports } from "./build-npm.ts";
+import { array, isRecord, object, optional, parseJsonAs, record, string, unknownValue } from "./lib/guard.ts";
 import { WORKSPACE_ROOT } from "./lib/paths.ts";
 import { readDistribution } from "./lib/distribution.ts";
 import type * as PathsModule from "./lib/paths.ts";
@@ -61,17 +61,6 @@ const ManifestSchema = object({
   pi: optional(record(array(string()))),
   bin: optional(record(string())),
 });
-// What `npm pack --json` prints for each packed package (the fields read here).
-const PackInfoSchema = array(
-  object({
-    name: string(),
-    version: string(),
-    filename: string(),
-    size: number(),
-    unpackedSize: number(),
-    files: array(object({ path: string() })),
-  }),
-);
 
 /** A property of an unknown value, or undefined. */
 const prop = (value: unknown, key: string): unknown => (isRecord(value) ? value[key] : undefined);
@@ -108,7 +97,7 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
   });
-  const [info] = parseJsonAs(PackInfoSchema, out, "npm pack --json");
+  const [info] = packReports(out, "npm pack --json");
   if (!info) throw new Error("npm pack --json reported no package");
   const files = info.files.map((f) => f.path.replace(/\\/g, "/"));
   const fileSet = new Set(files);

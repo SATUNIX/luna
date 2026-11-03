@@ -109,13 +109,20 @@ export function hardened(cfg: DockerConfig, { memory = cfg.container.memory, cpu
   ];
 }
 
+/**
+ * Start `node` in the image under tini, never as PID 1 itself. Node does not reap orphans, so
+ * every short-lived grandchild a test or a docker exec leaves behind would stay a zombie and count
+ * against --pids-limit until the container is out of process slots ("Cannot fork", EAGAIN).
+ */
+export const nodeEntrypoint = (image: string, ...args: string[]): string[] => ["--entrypoint", "/usr/bin/tini", image, "--", "node", ...args];
+
 const bind = (src: string, dest: string, readOnly = false): string[] => ["--mount", `type=bind,source=${src},target=${dest}${readOnly ? ",readonly" : ""}`];
 
 /** The relay idles in its container; the server is started by `docker exec -i` (config on stdin). */
 export function relayRunArgs(cfg: DockerConfig, p: Pick<RunPaths, "meter">, relayScript: string): string[] {
   return ["run", "-d", "--name", names(cfg).relay, ...hardened(cfg, { memory: "256m", cpus: "1", tmpSize: "16m", role: "relay" }),
     "--network", names(cfg).egress, ...bind(relayScript, "/relay.ts", true), ...bind(p.meter, "/meter"),
-    "--entrypoint", "node", cfg.image, "-e", "setInterval(() => {}, 1 << 30)"];
+    ...nodeEntrypoint(cfg.image, "-e", "setInterval(() => {}, 1 << 30)")];
 }
 
 export function relayExecArgs(cfg: DockerConfig): string[] {
@@ -126,7 +133,7 @@ export function relayExecArgs(cfg: DockerConfig): string[] {
 export function proxyRunArgs(cfg: DockerConfig, p: Pick<RunPaths, "egress">, { script, netaddr }: { script: string; netaddr: string }): string[] {
   return ["run", "-d", "--name", names(cfg).proxy, ...hardened(cfg, { memory: "256m", cpus: "1", tmpSize: "16m", role: "proxy" }),
     "--network", names(cfg).egress, ...bind(script, "/proxy/egress-proxy.ts", true), ...bind(netaddr, "/proxy/netaddr.ts", true), ...bind(p.egress, "/audit"),
-    "--entrypoint", "node", cfg.image, "-e", "setInterval(() => {}, 1 << 30)"];
+    ...nodeEntrypoint(cfg.image, "-e", "setInterval(() => {}, 1 << 30)")];
 }
 
 export function proxyExecArgs(cfg: DockerConfig): string[] {
@@ -190,14 +197,14 @@ export function checkRunArgs(cfg: DockerConfig, p: Pick<RunPaths, "checks" | "ga
     ...bind(bundleFile, "/in/branch.bundle", true), ...bind(p.checks, "/run/checks.json", true), ...bind(p.gateWork, "/gate"), ...bind(runnerScript, "/check-runner.ts", true),
     ...(hasOverlay ? bind(p.overlay, "/overlay", true) : []),
     "--env", `CHECK_ID=${checkId}`, "--env", `CHECK_SHA=${sha}`, "--env", `CHECK_BRANCH=${cfg.branch}`, "--env", "CI=1",
-    "--entrypoint", "node", cfg.image, "/check-runner.ts"];
+    ...nodeEntrypoint(cfg.image, "/check-runner.ts")];
 }
 
 /** Probe a run service's HTTP endpoint from inside the run network, from a throwaway container. */
 export function healthProbeRunArgs(cfg: DockerConfig, _p: unknown, { url, expectStatus, timeoutSeconds = 5 }: { url: string; expectStatus: number; timeoutSeconds?: number | undefined }): string[] {
   const script = "const [url, want, secs] = process.argv.slice(1); fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(Number(secs) * 1000) }).then((r) => { console.log(r.status); process.exit(r.status === Number(want) ? 0 : 1); }, (e) => { console.log(String(e.cause?.code ?? e.message)); process.exit(2); });";
   return ["run", "--rm", "--name", names(cfg).helper("probe"), ...hardened(cfg, { memory: "128m", cpus: "0.5", tmpSize: "8m", role: "probe" }), "--network", names(cfg).net,
-    "--entrypoint", "node", cfg.image, "-e", script, url, String(expectStatus), String(timeoutSeconds)];
+    ...nodeEntrypoint(cfg.image, "-e", script, url, String(expectStatus), String(timeoutSeconds))];
 }
 
 /** Where a service's workspace mount is staged on the host (host-owned, never the worker's own directory). */

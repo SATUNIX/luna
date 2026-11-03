@@ -448,7 +448,7 @@ export class DockerRuntime implements Runtime {
     const canaryPort = address.port;
     const hostTargets = this.zoneHostAddresses().map((ip) => `${ip}:${canaryPort}`).join(",");
     const probeArgs = [...args.slice(0, at), "--env", `AUTONOMY_KEY_SHA256=${keyHash}`, "--env", `AUTONOMY_KEY_REGEX=${keyRegex}`, "--env", `AUTONOMY_EGRESS_ALLOW=${allow}`, "--env", `AUTONOMY_SERVICES=${services}`, "--env", `AUTONOMY_HOST_CANARY=${hostTargets}`,
-      "--mount", `type=bind,source=${path.join(PKG, "tests", "boundary-probe.ts")},target=/probe.ts,readonly`, "--entrypoint", "node", cfg.image, "/probe.ts"];
+      "--mount", `type=bind,source=${path.join(PKG, "tests", "boundary-probe.ts")},target=/probe.ts,readonly`, ...dk.nodeEntrypoint(cfg.image, "/probe.ts")];
     let r: HelperResult;
     try { r = await this.helper(probeArgs, { role: "worker", networks: [this.names.net], timeoutMs: 180_000 }); } finally { canary.close(); }
     let report: BoundaryReport;

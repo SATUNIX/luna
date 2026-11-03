@@ -14,7 +14,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildNpm } from "../packages/core/build-npm.ts";
+import { buildNpm, packReports } from "../packages/core/build-npm.ts";
 import { ROOT } from "../packages/core/eval/harness.ts";
 import { array, isRecord, object, optional, parseJson, parseJsonAs, record, string, union, type Infer } from "../packages/core/lib/guard.ts";
 
@@ -36,11 +36,29 @@ const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
 interface RunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  timeout?: number;
 }
 
 function run(command: string, args: string[], options: RunOptions = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", shell, ...options });
   return result;
+}
+
+/** The root lockfile's entries for `manifest.dependencies` and everything they pull in, as a lockfile of its own. */
+function runtimeLock(manifest: { name: string; dependencies: Record<string, string> }): Record<string, unknown> {
+  const lock: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+  const all = isRecord(lock) && isRecord(lock.packages) ? lock.packages : {};
+  const packages: Record<string, unknown> = { "": { name: manifest.name, dependencies: manifest.dependencies } };
+  const queue = Object.keys(manifest.dependencies);
+  while (queue.length > 0) {
+    const name = queue.shift() ?? "";
+    const key = `node_modules/${name}`;
+    const entry = all[key];
+    if (key in packages || !isRecord(entry)) continue;
+    packages[key] = entry;
+    if (isRecord(entry.dependencies)) queue.push(...Object.keys(entry.dependencies));
+  }
+  return { name: manifest.name, lockfileVersion: 3, requires: true, packages };
 }
 
 const RpcCommand = object({ name: string(), source: optional(string()), sourceInfo: optional(object({ path: optional(string()) })) });
@@ -65,8 +83,6 @@ const PackageEntry = object({ extensions: optional(array(string())) });
 type PackageEntry = Infer<typeof PackageEntry>;
 /** settings.json as far as this test reads it. */
 const AgentSettings = object({ packages: optional(array(union(string(), PackageEntry))) });
-/** `npm pack --json` output. */
-const PackOutput = array(object({ filename: string() }));
 const ArtefactPackage = object({ dependencies: optional(record(string())) });
 
 /** Talk to `pi --mode rpc`: send one command, wait for its response, return it with the events seen. */
@@ -115,6 +131,17 @@ function rpc(agentDir: string, home: string, cwd: string, command: { id: string;
   });
 }
 
+// npm <=11 prints an array of package reports, npm >=12 an object keyed by package name; packReports
+// folds both to the same list. This runs before the heavy build so a parser regression fails fast.
+{
+  const entry = { name: "@satunix/pi-system", version: "1.2.3", filename: "satunix-pi-system-1.2.3.tgz", size: 10, unpackedSize: 100, files: [{ path: "package.json" }] };
+  const fromArray = packReports(JSON.stringify([entry]));
+  const fromObject = packReports(JSON.stringify({ [entry.name]: entry }));
+  assert.deepEqual(fromObject.map((p) => p.filename), fromArray.map((p) => p.filename), "packReports normalises the object shape like the array shape");
+  assert.deepEqual(fromArray.map((p) => p.filename), [entry.filename], "packReports reads the array shape");
+  ok("packReports reads both npm pack --json shapes (array <=11, object >=12)");
+}
+
 try {
   // 1. Build, pack and unpack the real artefact. It is the compiled stage (build-npm.ts, ADR 0001),
   // unpacked under node_modules/ as an npm install would put it: Node refuses to strip types
@@ -125,7 +152,7 @@ try {
   fs.mkdirSync(packDir);
   const pack = run(npm, ["pack", stage, "--json", "--ignore-scripts", "--pack-destination", packDir], { cwd: ROOT });
   assert.equal(pack.status, 0, `npm pack failed:\n${pack.stdout}\n${pack.stderr}`);
-  const packed = parseJsonAs(PackOutput, pack.stdout, "npm pack --json")[0];
+  const packed = packReports(pack.stdout, "npm pack --json")[0];
   assert.ok(packed, "npm pack reported a tarball");
   const tarball = path.join(packDir, packed.filename);
   const unpacked = path.join(tmp, "project", "node_modules", "@satunix", "pi-system");
@@ -150,8 +177,20 @@ try {
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) assert.match(range, /^\d+\.\d+\.\d+$/, `${name} is pinned to an exact version, not ${range}`);
   ok(`the artefact's runtime dependencies are the documented set (${documentedNames.join(", ") || "none"}), pinned exactly`);
   if (Object.keys(pkg.dependencies ?? {}).length > 0) {
-    const install = run(npm, ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: unpacked });
-    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}`);
+    // Install exactly the declared runtime set in a scratch project, then place it in the artefact. Installing
+    // in the unpacked tree itself makes npm resolve its dev and peer dependencies too (there is no lockfile),
+    // which needs the network: the autonomy gate has none. --prefer-offline uses the npm cache when it has the
+    // versions; the timeout turns a network stall into a failure instead of eating the gate's budget.
+    const depsDir = path.join(tmp, "runtime-deps");
+    fs.mkdirSync(depsDir, { recursive: true });
+    // A lockfile cut from the repository's own (same resolved URL and integrity) lets `npm ci` install from
+    // the cache alone: `npm install` would also need registry metadata, which an offline cache may lack.
+    const manifest = { name: "runtime-deps", private: true, dependencies: pkg.dependencies ?? {} };
+    fs.writeFileSync(path.join(depsDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.writeFileSync(path.join(depsDir, "package-lock.json"), `${JSON.stringify(runtimeLock(manifest), null, 2)}\n`);
+    const install = run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300_000 });
+    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}${install.error ? `\n${String(install.error)}` : ""}`);
+    fs.cpSync(path.join(depsDir, "node_modules"), path.join(unpacked, "node_modules"), { recursive: true });
     ok("the artefact's runtime dependencies install");
   } else {
     ok("the artefact has no runtime dependencies to install");

@@ -22,7 +22,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { array, isRecord, object, parseJson, parseJsonAs, string } from "./lib/guard.ts";
+import { array, isRecord, number, object, parseJson, parseJsonAs, record, string, union, type Infer } from "./lib/guard.ts";
 import { WORKSPACE_ROOT } from "./lib/paths.ts";
 
 const ROOT = WORKSPACE_ROOT;
@@ -31,14 +31,31 @@ const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 /** Code pi loads itself (from node_modules too), so it ships as TypeScript. */
 const PI_LOADED = /^packages\/extensions\//;
 
-const PackDryRun = array(object({ files: array(object({ path: string() })) }));
+/** One package report from `npm pack --json` (npm <=11 prints an array of these; npm >=12 a map by name). */
+export const PackReportEntry = object({
+  name: string(),
+  version: string(),
+  filename: string(),
+  size: number(),
+  unpackedSize: number(),
+  files: array(object({ path: string() })),
+});
+export type PackReportEntry = Infer<typeof PackReportEntry>;
+
+const PackReport = union(array(PackReportEntry), record(PackReportEntry));
+
+/** `npm pack --json` output, normalised across npm versions to a flat list of package reports. */
+export function packReports(text: string, path = "npm pack --json"): PackReportEntry[] {
+  const parsed = parseJsonAs(PackReport, text, path);
+  return Array.isArray(parsed) ? parsed : Object.values(parsed);
+}
 
 /** The repository-relative paths `npm pack` would publish. */
 export function packedFiles(root: string): string[] {
   const out = execFileSync(npmCmd, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32",
   });
-  const [pack] = parseJsonAs(PackDryRun, out, "npm pack --dry-run");
+  const [pack] = packReports(out, "npm pack --dry-run");
   if (!pack) throw new Error("npm pack --dry-run reported no package");
   return pack.files.map((file) => file.path).sort();
 }

@@ -31,7 +31,7 @@ import type { BoundedGitRead } from "./gitmirror.ts";
 
 /** The charter's path in the integration branch. */
 export const CHARTER_PATH = "autonomy/CHARTER.md";
-/** The largest diff (characters, lockfiles and this run's records excluded); larger is rejected. */
+/** The largest diff (characters, lockfiles and this run's record files excluded); larger is rejected. */
 export const REVIEW_DIFF_BUDGET = 60_000;
 /** Report context retains this many characters (head + tail), plus the clipping marker. */
 export const REVIEW_REPORT_BUDGET = 6_000;
@@ -48,27 +48,80 @@ export function reviewRecordDirectories(scope: ReviewRecordScope): string[] {
   return [`autonomy/cycles/${scope.run}/`, ...(scope.integrationUpstream ? [`autonomy/runs/${scope.run}/`] : [])];
 }
 
+/** Record-shaped files: prose and logs, never code, data a program imports, or configuration. */
+const RECORD_FILE = /\.(?:md|txt|log|jsonl)$/;
+
+/**
+ * A changed path the review leaves out of the budgeted patch: a record-shaped file (RECORD_FILE)
+ * under this run's own record directories. Anything else there (a .ts helper, a test file a
+ * runner's glob picks up, a .json a program imports) stays in the patch the reviewer reads.
+ */
+export function isReviewRecord(file: string, scope: ReviewRecordScope): boolean {
+  return RECORD_FILE.test(file) && reviewRecordDirectories(scope).some((dir) => file.startsWith(dir));
+}
+
+/** The record stat retains this many characters (head + tail) in the reviewer's input. */
+export const REVIEW_RECORD_STAT_BUDGET = 4_000;
+/** Pathspec arguments beyond this many characters are not passed to git; the read fails closed. */
+const PATHSPEC_MAX_CHARS = 256 * 1024;
+
 export type ReviewDiffRead =
   | { ok: true; text: string; recordStat: string }
   | { ok: false; reason: "over-budget" | "unreadable"; detail: string };
 
 /**
- * Exclude records BEFORE the bounded Git read, rather than parsing/clipping a full patch.
+ * The patch the merge review judges and the stat of the records left out of it.
+ * `files` is the complete changed-path list between `from` and `to` (HostRepo.changedPaths).
+ * Records (isReviewRecord) are excluded BEFORE the bounded Git read, rather than parsing or
+ * clipping a full patch. With `restrict`, only `files` are diffed (the paths a conflict-resolving
+ * cycle itself changed, judged against the upstream head); otherwise every changed path is.
  * The injected reader keeps path selection, read failures and budgeting testable without Git.
  * Control-path and critical-path checks still use the complete changed-path list.
  */
-export function readReviewDiff(from: string, to: string, budget: number, read: (args: readonly string[], maxBytes: number) => BoundedGitRead, scope?: ReviewRecordScope): ReviewDiffRead {
-  const dirs = scope ? reviewRecordDirectories(scope) : [];
-  const diff = read(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", from, to, "--", ".", ":(exclude)package-lock.json", ...dirs.map((dir) => `:(top,exclude,literal)${dir}`)], budget * 4 + 4096);
-  if (!diff.ok) return { ok: false, reason: diff.overflow ? "over-budget" : "unreadable", detail: diff.detail };
-  if (diff.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${diff.stdout.length} characters` };
+export function readReviewDiff(from: string, to: string, budget: number, read: (args: readonly string[], maxBytes: number) => BoundedGitRead, files: readonly string[], scope?: ReviewRecordScope, { restrict = false }: { restrict?: boolean } = {}): ReviewDiffRead {
+  const records = scope ? files.filter((f) => isReviewRecord(f, scope)) : [];
+  const recordSet = new Set(records);
+  const code = files.filter((f) => !recordSet.has(f) && f !== "package-lock.json");
+  // Every diffed path prints at least `diff --git a/<path> b/<path>`: a list that long is over budget unread.
+  const floor = code.reduce((n, f) => n + 2 * f.length + 14, 0);
+  if (floor > budget) return { ok: false, reason: "over-budget", detail: `${code.length} changed paths need at least ${floor} characters` };
+  if (records.reduce((n, f) => n + f.length + 16, 0) > PATHSPEC_MAX_CHARS) return { ok: false, reason: "unreadable", detail: "too many excluded record paths to read" };
+  const base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"];
+  let text = "";
+  if (restrict ? code.length > 0 : files.length > 0) {
+    const pathspec = restrict ? code.map((f) => `:(top,literal)${f}`) : [".", ":(exclude)package-lock.json", ...records.map((f) => `:(top,exclude,literal)${f}`)];
+    const diff = read([...base, from, to, "--", ...pathspec], budget * 4 + 4096);
+    if (!diff.ok) return { ok: false, reason: diff.overflow ? "over-budget" : "unreadable", detail: diff.detail };
+    if (diff.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${diff.stdout.length} characters` };
+    text = diff.stdout;
+  }
   let recordStat = "";
-  if (dirs.length) {
-    const stat = read(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--stat", "--stat-width=4096", "--stat-name-width=4000", "--stat-graph-width=40", from, to, "--", ...dirs.map((dir) => `:(top,literal)${dir}`)], REVIEW_RECORD_STAT_MAX_BYTES);
+  if (records.length) {
+    const stat = read([...base, "--stat", "--stat-width=4096", "--stat-name-width=4000", "--stat-graph-width=40", from, to, "--", ...records.map((f) => `:(top,literal)${f}`)], REVIEW_RECORD_STAT_MAX_BYTES);
     if (!stat.ok) return { ok: false, reason: "unreadable", detail: `excluded record stat: ${stat.detail}` };
     recordStat = stat.stdout;
   }
-  return { ok: true, text: diff.stdout, recordStat };
+  return { ok: true, text, recordStat };
+}
+
+/**
+ * What a cycle that merged refs/upstream/trunk itself (after the host's merge conflicted) adds,
+ * judged against BOTH parents rather than the pre-merge integration head, from changed-path lists:
+ *   - `own`: paths where the cycle head differs from the integration head (`start`) AND from the
+ *     upstream head: the conflict resolution and the cycle's own work. Paths taken unchanged
+ *     from upstream are upstream's, already integrated there, and are not the cycle's work.
+ *   - `dropped`: paths upstream changed since the merge base where the cycle head kept the
+ *     integration side (`git merge -s ours`, or hunks dropped in a resolution that equals ours).
+ *     These would vanish from the judged diff, so the host refuses them.
+ */
+export function upstreamMergeScope({ startToHead, upstreamToHead, baseToUpstream, startToUpstream }: { startToHead: readonly string[]; upstreamToHead: readonly string[]; baseToUpstream: readonly string[]; startToUpstream: readonly string[] }): { own: string[]; dropped: string[] } {
+  const fromStart = new Set(startToHead);
+  const fromUpstream = new Set(upstreamToHead);
+  const sides = new Set(startToUpstream);
+  return {
+    own: startToHead.filter((f) => fromUpstream.has(f)),
+    dropped: baseToUpstream.filter((f) => sides.has(f) && !fromStart.has(f)),
+  };
 }
 
 /**
@@ -284,7 +337,7 @@ export function buildReviewBundle(b: CycleReviewBundle): string {
     clip(b.gitLog || "(none)", 8000),
     "",
     "## Own run records excluded from the diff budget (host git diff --stat)",
-    b.recordStat || "(none)",
+    clip(b.recordStat || "(none)", REVIEW_RECORD_STAT_BUDGET),
     "Record contents are omitted from the patch; the bounded report, verification and handoff above remain context.",
     "",
     "## Diff",

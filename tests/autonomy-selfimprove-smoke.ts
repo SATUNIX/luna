@@ -95,6 +95,9 @@ await check("upstream validates branch syntax and must differ from the integrati
     assert.equal(resolved.ok, false, String(upstream));
     assert.ok(resolved.problems.some((p) => p.path === "templateOptions.integration.upstream"));
   }
+  const none = resolveContract(improveRaw(sourceRepo(), { promotion: { policy: "none", destinations: [] }, templateOptions: { integration: { upstream: "integration/trunk" } } }), { effort: testEffort });
+  assert.equal(none.ok, false, "an upstream with no promotion remote could never be fetched");
+  assert.ok(none.problems.some((p) => p.path === "templateOptions.integration.upstream" && /policy "none"/.test(p.message)));
 });
 
 await check("Board: parsing accepts only exact bounded lines and one entry per id", () => {
@@ -652,6 +655,100 @@ await check("upstream conflict leaves integration unchanged and travels by bundl
   assert.equal(state.selfImprove?.history[1]?.merged, true);
 });
 
+/** A trunk that conflicts on README.md and also brings a charter, package.json scripts, 70K characters of code and another run's records. */
+function heavyTrunk(src: string): void {
+  sh(src, "checkout", "--quiet", "integration/trunk");
+  fs.writeFileSync(path.join(src, "README.md"), "trunk intent\n");
+  fs.mkdirSync(path.join(src, "autonomy", "cycles", "other-run", "01"), { recursive: true });
+  fs.mkdirSync(path.join(src, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(src, "autonomy", "CHARTER.md"), "# Trunk charter\n\nShared policy from the trunk.\n");
+  fs.writeFileSync(path.join(src, "package.json"), JSON.stringify({ name: "x", scripts: { test: "node lib/big.ts" } }));
+  fs.writeFileSync(path.join(src, "lib", "big.ts"), "export const TRUNK_BULK = 1;\n".repeat(2500));
+  fs.writeFileSync(path.join(src, "autonomy", "cycles", "other-run", "01", "review.md"), "other run records\n".repeat(4000));
+  sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk work from other streams");
+  sh(src, "checkout", "--quiet", "main");
+}
+
+await check("a conflict-resolving cycle is judged on what it adds over both parents: trunk's charter, scripts, bulk, records and paths outside writeAreas do not count", async () => {
+  const src = sourceRepo();
+  sh(src, "branch", "integration/trunk");
+  const calls: ManagerCall[] = [];
+  const h = harness(improveRaw(src, {
+    budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 },
+    permissions: { unattended: { authorised: true, autoApprove: true }, writeAreas: ["README.md", "AUDIT_OK", "autonomy/cycles/**", "autonomy/runs/**", "autonomy/proposals/**"] },
+    templateOptions: { integration: { upstream: "integration/trunk" } },
+  }), {
+    manager: manager(calls),
+    script: async (t) => {
+      assert.match(nth(t.prompts, 0), /\*\*Improve mode\*\* is for assigned improvements/, "streams take improvements from the steward");
+      if (t.step === 1) {
+        t.write("README.md", "stream intent\n"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream edit");
+        heavyTrunk(src);
+      } else if (t.prompts.length > 1) {
+        t.elapse(301); t.hang(); // a refused push brings a continuation turn: let the cycle end
+      } else {
+        assert.match(t.message, /## P0: upstream merge conflict/);
+        assert.equal(t.git(["merge", "refs/upstream/trunk"]).status, 1);
+        assert.equal(t.git(["checkout", "--theirs", "--", "autonomy/CHARTER.md"]).status, 0);
+        t.write("README.md", "stream intent\ntrunk intent\n"); report(t, "successful"); t.commit("resolve both intents");
+      }
+    },
+  });
+  const { state } = await runOnce(h);
+  const entry = state.selfImprove?.history[1];
+  assert.equal(entry?.upstream?.outcome, "conflict");
+  assert.equal(entry?.merged, true, entry?.mergeReason ?? "");
+  const review = nth(calls.filter((c) => /You review one cycle/.test(c.system)), 1).user;
+  const diff = review.split("## Diff\n")[1] ?? "";
+  assert.match(diff, /\+stream intent/, "the resolution is judged against the upstream head");
+  assert.doesNotMatch(diff, /TRUNK_BULK|other run records|Trunk charter/, "trunk's own changes are not the cycle's diff");
+  assert.doesNotMatch(review.split("## Commits (git log --stat)")[1]?.split("## Own run records")[0] ?? "", /trunk work from other streams/, "trunk's commits are not listed as the cycle's");
+});
+
+await check("a conflict-resolving cycle's own control-path change is still refused", async () => {
+  const src = sourceRepo();
+  sh(src, "branch", "integration/trunk");
+  const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "integration/trunk" } } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) {
+        t.write("README.md", "stream intent\n"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream edit");
+        heavyTrunk(src);
+      } else {
+        assert.equal(t.git(["merge", "refs/upstream/trunk"]).status, 1);
+        t.write("autonomy/CHARTER.md", "# A charter neither side wrote\n");
+        t.write("README.md", "stream intent\ntrunk intent\n"); report(t, "successful"); t.commit("resolve and rewrite the charter");
+      }
+    },
+  });
+  const { state } = await runOnce(h);
+  const entry = state.selfImprove?.history[1];
+  assert.equal(entry?.merged, false);
+  assert.match(entry?.mergeReason ?? "", /control path .*autonomy\/CHARTER\.md/);
+  assert.doesNotMatch(entry?.mergeReason ?? "", /package\.json/, "trunk's scripts are upstream's, not the cycle's");
+});
+
+await check("a conflict resolution that keeps the integration side of an upstream change (merge -s ours) is refused", async () => {
+  const src = sourceRepo();
+  sh(src, "branch", "integration/trunk");
+  const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "integration/trunk" } } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) {
+        t.write("README.md", "stream intent\n"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream edit");
+        heavyTrunk(src);
+      } else {
+        assert.equal(t.git(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "--quiet", "-s", "ours", "-m", "keep ours", "refs/upstream/trunk"]).status, 0);
+        report(t, "successful"); t.commit("record");
+      }
+    },
+  });
+  const { state } = await runOnce(h);
+  const entry = state.selfImprove?.history[1];
+  assert.equal(entry?.merged, false);
+  assert.match(entry?.mergeReason ?? "", /drops upstream changes .*README\.md/);
+});
+
 await check("an upstream fetch failure is logged and the cycle still runs and merges", async () => {
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "missing/trunk" } } }), {
     manager: manager([]),
@@ -733,6 +830,40 @@ await check("partial green committed work goes through independent review; red a
       else assert.equal(entry?.gate, kind === "red" ? "red" : "skipped");
     }
   }
+});
+
+await check("a resumed cycle keeps its board snapshot: claims against the board it started with still reach review", async () => {
+  const calls: ManagerCall[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => { t.write("partial.txt", "1"); t.commit("checkpoint"); fs.writeFileSync(path.join(t.store.p.root, "STOP"), ""); t.hang(); },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-02", title: "started item", priority: "P1", acceptance: "Started acceptance" }] }));
+  await runOnce(h);
+  assert.equal(h.state().status, "paused");
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-05", title: "steward's next item", priority: "P0" }] }));
+  fs.rmSync(path.join(h.store.p.root, "STOP")); h.store.enqueue("unpause");
+  const resumed = await runOnce(h, { rt: h.runtime(async (t) => { t.write("AUDIT_OK", "1"); report(t, "successful", "fix", "Board: V-02 done - Finished the started item with tests."); t.commit("finish started item"); }) });
+  const entry = resumed.state.selfImprove?.history[0];
+  assert.equal(entry?.merged, true, entry?.mergeReason ?? "");
+  assert.match(nth(calls.filter((c) => /You review one cycle/.test(c.system)), 0).user, /Started acceptance/);
+});
+
+await check("without a board, Board: lines are recorded but never refuse the merge, and legacy prompts keep choosing their own improvements", async () => {
+  const calls: ManagerCall[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => {
+      assert.match(t.message, /\*\*Improve mode\*\* is for when the review finds nothing worth fixing\. Make an existing system/);
+      assert.doesNotMatch(t.message, /Board: <ID>|## Assigned work|steward to assign|Own new ideas go into/);
+      t.write("AUDIT_OK", "1"); report(t, "successful", "fix", "Board: B-003 done - Worked a backlog item."); t.commit("backlog work");
+    },
+  });
+  const { state } = await runOnce(h);
+  const entry = state.selfImprove?.history[0];
+  assert.equal(entry?.merged, true, entry?.mergeReason ?? "");
+  assert.deepEqual(entry?.board, [{ id: "B-003", status: "done", note: "Worked a backlog item." }]);
+  assert.equal(calls.filter((c) => /You review one cycle/.test(c.system)).length, 1);
 });
 
 await check("an existing paused cycle with no board or upstream fields loads and resumes", async () => {

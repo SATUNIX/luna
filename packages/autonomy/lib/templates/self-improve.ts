@@ -23,7 +23,7 @@ import * as gm from "../gitmirror.ts";
 import type { RunState, SelfImproveState } from "../lifecycle.ts";
 import { decide } from "../manager.ts";
 import { promotionTargets } from "../promotion.ts";
-import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, reviewCriticalPaths, reviewCycle, scriptTargets } from "../review.ts";
+import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, reviewCriticalPaths, reviewCycle, scriptTargets, upstreamMergeScope } from "../review.ts";
 import { globProblem } from "../glob.ts";
 import type { RunConfig } from "../runcfg.ts";
 import { type ReportMode, type ReportOutcome, nothingFoundInARow, reportOutcome } from "../triggers.ts";
@@ -156,6 +156,8 @@ function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
   const hard = typeof hardOption === "number" ? hardOption : NaN;
   if (!(hard >= perStepUsd) || !(totalUsd >= hard)) err("templateOptions.perStepHardUsd", "must satisfy budget.perStepUsd <= perStepHardUsd <= budget.totalUsd");
   const p = contract.promotion;
+  // The upstream is fetched from the integration remote (runcfg.ts integrationRemote): without one the sync could never run.
+  if (typeof upstream === "string" && (p.policy === "none" || (p.policy === "push" && !p.destinations.some((d) => d.kind === "git-remote")))) err("templateOptions.integration.upstream", `the upstream is fetched from the promotion destination, and policy "${p.policy}" names none: set a local-branch or push destination, or remove the upstream`);
   if (p.policy === "none") warn("promotion.policy", 'policy "none": merged cycles stay in the run\'s own mirror; use `export` to take them out. A later run cannot continue this run\'s integration branch.');
   if (p.policy === "local-branch") for (const d of p.destinations) if (d.branch !== ib) err("promotion.destinations", `a self-improve local-branch destination must be the integration branch "${String(ib)}"`);
   if (p.policy === "push") for (const d of p.destinations) if (d.branch !== ib) err("promotion.destinations", `a self-improve push destination must be the integration branch "${String(ib)}" (the working branch is never published)`);
@@ -225,19 +227,28 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const last = si.history.at(-1);
   const paths = bookkeepingPaths(cfg, n);
   const dir = (k: number): string => cycleDir(cfg, k);
+  // One board snapshot per cycle: a resumed cycle keeps the board it started with, so its claims
+  // are judged against the assignments it was given, whatever the steward has written since.
+  const board = si.current?.board ?? readBoard(ctx.store.p.control);
+  ctx.save(() => { if (si.current && !si.current.board) si.current.board = board; });
+  // Streams and runs with a steward board take improvements from the board; other runs choose their own.
+  const stewarded = Boolean(cfg.integrationUpstream) || board.items.length > 0;
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
     if (last.merged) {
       previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
-      if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider any assigned improvements.`;
+      if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider ${stewarded ? "any assigned improvements" : "improve mode"}.`;
     } else if (last.gate === "skipped") previous += last.outcome === "reset" ? `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(last.n)}).` : "it made no commits.";
     else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits, report and handoff are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: read its ${dir(last.n)}/report.md and ${paths.handoff} there and bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
   }
   const b = state.limits.budget;
   const egress = contract.permissions.network.egress.map((e) => e.host);
   const vars: Record<string, unknown> = { NN: pad(n), CYCLE: n, CYCLES: b.maxSteps, RUN: cfg.run, BRANCH: cfg.branch, INTEGRATION: cfg.integrationBranch, CYCLE_DIR: dir(n), BASE_REF: cfg.baseRef, HANDOFF_PATH: paths.handoff, PROPOSALS_PATH: paths.proposals,
+    IMPROVE_MODE: stewarded ? `is for assigned improvements; board items outrank cleanup. Propose your own new improvements at \`${paths.proposals}\` for the steward to assign. Make the assigned system` : "is for when the review finds nothing worth fixing. Make an existing system",
+    OWN_IDEAS: stewarded ? ` Own new ideas go into \`${paths.proposals}\` as proposals, not into this cycle, unless they block the assigned item.` : "",
+    BOARD_RECORD: board.items.length ? " For each board item worked on, add exactly one line `Board: <ID> done|progress|blocked - <one sentence>`." : "",
     REVIEW_BOOKKEEPING: cfg.integrationUpstream ? `These stream bookkeeping paths take precedence over older shared charter references. Read the steward board, this run's proposals under autonomy/proposals/${cfg.run}-*.md and ${paths.handoff}. Do not edit the shared autonomy/BACKLOG.md.` : "Read `autonomy/BACKLOG.md`, `autonomy/HANDOFF.md`.",
     RECORD_BOOKKEEPING: cfg.integrationUpstream ? `Write each new proposal to its own new file at ${paths.proposals}, choosing a short descriptive slug; never edit the shared autonomy/BACKLOG.md. Update ${paths.handoff} (the current state in a few lines).` : "Update `autonomy/BACKLOG.md` (statuses, new items with evidence) and `autonomy/HANDOFF.md` (the current state in a few lines).",
     BUDGET_USD: b.perStepUsd, HARD_BUDGET_USD: contract.templateOptions["perStepHardUsd"] ?? 2 * b.perStepUsd, SOFT_HOURS: +(cfg.limits.softMinutes / 60).toFixed(1), HARD_HOURS: +(cfg.limits.hardMinutes / 60).toFixed(1), PREVIOUS: previous,
@@ -247,11 +258,9 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const backlog = queued.length ? `\n\n## Steward backlog for this cycle\n${queued.map((item) => `- ${item.message}`).join("\n")}` : "";
   ctx.save(() => { for (const item of queued) item.deliveredCycle = n; });
   const feedback = ctx.engine.pendingFeedback.splice(0);
-  const board = readBoard(ctx.store.p.control);
-  ctx.save(() => { if (si.current) si.current.board = board; });
   const upstream = si.current?.upstream;
   const conflict = upstream?.outcome === "conflict" ? `\n\n## P0: upstream merge conflict\nThe host could not merge ${upstream.upstream} (${upstream.head}) cleanly. Before any assigned work, run \`git merge refs/upstream/trunk\`, resolve the conflicts preserving both sides' intent, and re-verify. Repair any red gate / broken branch first. The ref is supplied offline; no network is needed.` : "";
-  const full = `${text}${conflict}${boardPrompt(board, paths.proposals)}${backlog}`;
+  const full = `${text}${conflict}${stewarded ? boardPrompt(board, paths.proposals) : ""}${backlog}`;
   return feedback.length ? `${full}\n\nNotes from the operator:\n${feedback.map((f) => `- ${f}`).join("\n")}` : full;
 }
 
@@ -484,24 +493,41 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   if (result.outcome !== "completed" && result.outcome !== "partial") return { merge: false, reason: `cycle ${result.outcome} (${result.reason})` };
   if (!gate.green) return { merge: false, reason: "acceptance checks failed" };
   const upstream = siState(ctx.state).current?.upstream;
-  if (upstream?.outcome === "conflict" && repo.git()(["merge-base", "--is-ancestor", upstream.head, sha], { allowFail: true }) === null) return { merge: false, reason: "upstream merge conflict was not resolved by merging refs/upstream/trunk" };
+  const g = repo.git();
+  const resolves = upstream?.outcome === "conflict" ? upstream.head : null;
+  if (resolves && g(["merge-base", "--is-ancestor", resolves, sha], { allowFail: true }) === null) return { merge: false, reason: "upstream merge conflict was not resolved by merging refs/upstream/trunk" };
   // Review inputs are never worker-authored (lib/review.ts): control-path changes and an
   // over-budget diff are refused by the host before any model is asked, even with review off.
+  // A cycle that merged the upstream head itself is judged on what it adds over BOTH parents
+  // (review.ts upstreamMergeScope): upstream's own changes are not this cycle's work.
   const options = integrationOptions(ctx.contract);
-  const files = repo.changedPaths(start, sha);
-  const control = controlChanges({ files, before: (f) => repo.fileAt(start, f), after: (f) => repo.fileAt(sha, f), controlPaths: options.controlPaths });
+  let files = repo.changedPaths(start, sha);
+  if (resolves) {
+    const base = g(["merge-base", start, resolves], { allowFail: true });
+    if (!base) return { merge: false, reason: `no merge base between ${cfg.integrationBranch} and the upstream head ${resolves.slice(0, 12)}` };
+    const scope = upstreamMergeScope({ startToHead: files, upstreamToHead: repo.changedPaths(resolves, sha), baseToUpstream: repo.changedPaths(base, resolves), startToUpstream: repo.changedPaths(start, resolves) });
+    if (scope.dropped.length) return { merge: false, reason: `the upstream merge drops upstream changes (the cycle keeps the integration side of ${scope.dropped.length} path(s) upstream changed: ${scope.dropped.slice(0, 10).join(", ")}); resolve the conflict preserving both sides` };
+    files = scope.own;
+  }
+  // A control path counts when the cycle head differs from every parent it is judged against.
+  const parents = resolves ? [start, resolves] : [start];
+  const control = files.flatMap((file) => {
+    const hits = parents.map((p) => controlChanges({ files: [file], before: (f) => repo.fileAt(p, f), after: (f) => repo.fileAt(sha, f), controlPaths: options.controlPaths }));
+    return hits.every((h) => h.length) ? hits[0] ?? [] : [];
+  });
   if (control.length && !options.allowControlChanges) return { merge: false, reason: `changes a control path the cycle may not merge (templateOptions.integration.allowControlChanges is off): ${control.slice(0, 10).join("; ")}` };
   // Read whole or not at all: an over-budget or unreadable diff (git failure, timeout, output cap)
   // is a REJECT, never an empty or clipped diff that looks under budget.
-  const read = repo.reviewDiff(start, sha, REVIEW_DIFF_BUDGET, cfg);
-  if (!read.ok && read.reason === "over-budget") return { merge: false, reason: `the diff without lockfiles and this run's records (${read.detail}) exceeds the merge review's budget of ${REVIEW_DIFF_BUDGET} characters; a larger change is never reviewed in part. Split the work across cycles` };
+  const read = resolves ? repo.reviewDiff(resolves, sha, REVIEW_DIFF_BUDGET, cfg, { files, restrict: true }) : repo.reviewDiff(start, sha, REVIEW_DIFF_BUDGET, cfg, { files });
+  if (!read.ok && read.reason === "over-budget") return { merge: false, reason: `the diff without lockfiles and this run's record files (${read.detail}) exceeds the merge review's budget of ${REVIEW_DIFF_BUDGET} characters; a larger change is never reviewed in part. Split the work across cycles` };
   if (!read.ok) return { merge: false, reason: `the diff could not be read in full (${read.detail}); a cycle whose diff the host cannot read is never merged` };
   const diff = read.text;
   const at = (file: string): string | null => repo.fileAt(sha, file);
   const dir = cycleDir(cfg, n);
   const board = siState(ctx.state).current?.board ?? { items: [] };
   const claims = parseBoardReport(at(`${dir}/report.md`));
-  if (claims.some((c) => !board.items.some((i) => i.id === c.id))) return { merge: false, reason: "report claims an unknown steward board item" };
+  // With no board there is nothing to claim against: Board: lines are recorded (closeCycle) and ignored here.
+  if (board.items.length && claims.some((c) => !board.items.some((i) => i.id === c.id))) return { merge: false, reason: "report claims an unknown steward board item" };
   const claimedItems = claims.length ? claims.flatMap((c) => board.items.filter((i) => i.id === c.id)) : assignedItems(board);
   if (!cfg.integration.review && !salvage && result.outcome !== "partial") return { merge: true, reason: "checks passed (review disabled)" };
   ctx.state.phase = "review";
@@ -515,7 +541,7 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
     board: claimedItems,
     assignedBoard: assignedItems(board),
     // The charter is the host-held integration head's (the cycle's start), never the cycle's own.
-    charter: repo.fileAt(start, CHARTER_PATH), report: reviewReport, verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha), diff, recordStat: read.recordStat,
+    charter: repo.fileAt(start, CHARTER_PATH), report: reviewReport, verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha, resolves ? [resolves] : []), diff, recordStat: read.recordStat,
     criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
   }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms) });
   await ctx.engine.refreshUsage();

@@ -101,18 +101,46 @@ export class HostRepo {
     if (agent === accepted) return { head: accepted, moved: false, diverged: false };
     if (g(["merge-base", "--is-ancestor", accepted, agent], { allowFail: true }) === null) return { head: accepted, moved: false, diverged: true, agent };
     if (areas) {
-      const outside = pathsOutsideAreas(this.changedPaths(accepted, agent), areas);
+      const outside = pathsOutsideAreas(this.ownChangedPaths(accepted, agent), areas);
       if (outside.length) return { head: accepted, moved: false, diverged: false, agent, violation: outside };
     }
     g(["update-ref", `refs/heads/${cfg.branch}`, agent, accepted]);
     return { head: agent, moved: true, diverged: false };
   }
 
-  /** Paths whose content differs between two commits (renames count as delete + add). */
+  /**
+   * Paths whose content differs between two commits (renames count as delete + add). Read as
+   * `--raw -z` records (`:<modes and ids>\0<path>\0`) so that the runner's output trim can never
+   * cut a path: a --name-only list would lose the leading spaces of its first path.
+   */
   changedPaths(from: string | null | undefined, to: string): string[] {
     if (!from || from === to) return [];
-    const out = this.git()(["diff", "--name-only", "--no-renames", "-z", from, to]);
-    return out ? out.split("\0").filter(Boolean) : [];
+    const out = this.git()(["diff", "--raw", "--no-renames", "--no-abbrev", "-z", from, to]);
+    const fields = out ? out.split("\0") : [];
+    const paths: string[] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const meta = fields[i] ?? "";
+      const file = fields[i + 1];
+      if (!meta.startsWith(":") || file === undefined) throw new Error(`unexpected git diff --raw output near ${JSON.stringify(meta.slice(0, 80))}`);
+      paths.push(file);
+    }
+    return paths;
+  }
+
+  /**
+   * The paths a worker's push itself changes. When it merges refs/upstream/trunk (the host's
+   * upstream merge conflicted, lib/gitmirror.ts syncUpstream) a path counts only when the new
+   * head differs from BOTH parents: what came unchanged from upstream is upstream's work, not
+   * the worker's (review.ts upstreamMergeScope). Otherwise every changed path counts.
+   */
+  ownChangedPaths(from: string, to: string): string[] {
+    const g = this.git();
+    const upstream = g(["rev-parse", "--verify", "--quiet", "refs/upstream/trunk^{commit}"], { allowFail: true });
+    const merges = upstream && g(["merge-base", "--is-ancestor", upstream, to], { allowFail: true }) !== null && g(["merge-base", "--is-ancestor", upstream, from], { allowFail: true }) === null;
+    const changed = this.changedPaths(from, to);
+    if (!merges) return changed;
+    const fromUpstream = new Set(this.changedPaths(upstream, to));
+    return changed.filter((f) => fromUpstream.has(f));
   }
 
   /** Changed paths that permissions.writeAreas does not allow. */
@@ -131,11 +159,13 @@ export class HostRepo {
    * whole), and a git failure or timeout is `unreadable`. Callers reject both
    * (tests/autonomy-review-inputs-smoke.ts).
    */
-  reviewDiff(from: string, to: string, budget: number, scope?: ReviewRecordScope): ReviewDiffRead {
-    return readReviewDiff(from, to, budget, (args, maxBytes) => gm.gitBounded(this.git(), args, maxBytes), scope);
+  reviewDiff(from: string, to: string, budget: number, scope?: ReviewRecordScope, { files, restrict = false }: { files?: readonly string[]; restrict?: boolean } = {}): ReviewDiffRead {
+    let paths: readonly string[];
+    try { paths = files ?? this.changedPaths(from, to); } catch (e) { return { ok: false, reason: "unreadable", detail: e instanceof Error ? e.message : String(e) }; }
+    return readReviewDiff(from, to, budget, (args, maxBytes) => gm.gitBounded(this.git(), args, maxBytes), paths, scope, { restrict });
   }
 
-  logSince(from: string, to: string): string { return gm.logSince(this.git(), from, to); }
+  logSince(from: string, to: string, also: readonly string[] = []): string { return gm.logSince(this.git(), from, to, also); }
 
   logOneline(from: string | null | undefined, to: string, n = 15): string { return this.git()(["log", `-${n}`, "--format=%h %s", from ? `${from}..${to}` : to], { allowFail: true }) ?? ""; }
 

@@ -387,9 +387,12 @@ runs. `board --json` returns the current board (an empty items list for older ru
 statuses are `ready`, `in_progress` or `blocked`. Unknown keys, duplicate ids, ids outside
 `^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and detail/acceptance over
 2000 characters are rejected. Stream names are limited to 200 characters, ids to 64 characters,
-and input files to 2 MiB. Each cycle prompt reads the host-owned board afresh and shows the top
-two nonblocked items by priority, preserving file order for ties. The worker cannot write this file;
-its exact `Board: <ID> done|progress|blocked - <one sentence>` report lines become
+and input files to 2 MiB. Each new cycle reads the host-owned board afresh and shows the top
+two nonblocked items by priority, preserving file order for ties. The cycle keeps that snapshot
+until it closes: a cycle resumed after a pause or a blocking question shows and is judged against
+the board it started with, whatever the steward has written since; the new board applies from the
+next cycle. The worker cannot write this file. When the board has items, the prompt asks for one
+line per item worked on, and its exact `Board: <ID> done|progress|blocked - <one sentence>` report lines become
 `selfImprove.history[].board` in `status --json`, without changing board statuses. The steward
 verifies completion and updates the board; the host ignores malformed report lines and bounds
 notes to 500 characters (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
@@ -400,8 +403,12 @@ items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (
 individual proposal files described below) unless they block an
 assigned item. The merge reviewer receives the claimed board items (or the two assigned items
 when no claim is present), their acceptance, the assigned order and this precedence from the
-prompt's host-held board snapshot. It judges actual progress, churn and lower-priority detours. Unknown claimed ids refuse
-merge. Green partial cycles with new commits also receive independent review, even with normal
+prompt's host-held board snapshot. It judges actual progress, churn and lower-priority detours. When the board has
+items, claimed ids that are not on it refuse merge. Without a board (no `control/board.json`, or
+no items), the prompt asks for no `Board:` lines, and any it gets are recorded in the history but
+never refuse merge. The board section, and improve mode taken from assigned items with own ideas
+filed as proposals, apply to streams and to runs with board items; other runs keep the original
+improve mode, chosen by the worker when the review finds nothing to fix. Green partial cycles with new commits also receive independent review, even with normal
 cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
 for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
 
@@ -410,11 +417,22 @@ Set `templateOptions.integration.upstream` to a branch such as `integration/luna
 creates a merge commit on the run's integration branch when clean, then starts the cycle there.
 A conflict leaves integration unchanged and supplies `refs/upstream/trunk` through the offline
 bundle, with a P0 instruction to merge it, preserve both sides' intent and re-verify. The host
-refuses merging a cycle that omits that upstream ancestry. A failed fetch is logged and the cycle
+refuses merging a cycle that omits that upstream ancestry. A cycle that merges the upstream head is
+judged on what it adds over both parents: only the paths where its head differs from the
+integration head and from the upstream head count for the control-path refusal, the review
+budget, the reviewed patch (taken against the upstream head), the listed commits (those in
+neither parent) and the worker's write areas. Upstream's own changes (its charter, scripts, bulk
+and other runs' records) are not the cycle's work. A resolution that keeps the integration side
+of a path upstream changed since the merge base, as `git merge -s ours` does, refuses merge. A failed fetch is logged and the cycle
 continues from its local integration head; `cycle.json`, state history and supervisor logs record
-`merged` (with sha), `conflict`, `up_to_date` or `fetch_failed`. Without the option, existing runs
-retain their behaviour and need no new state fields. New upstream ref transport requires a rebuilt
-autonomy worker image (`tests/autonomy-selfimprove-smoke.ts`).
+`merged` (with sha), `conflict`, `up_to_date` or `fetch_failed`. The upstream is fetched from
+the promotion destination, so a contract that sets it under promotion policy `none` (or `push`
+without a git remote) is refused. Without the option, existing runs retain their behaviour and
+need no new state fields (`tests/autonomy-selfimprove-smoke.ts`). New upstream ref transport
+requires a rebuilt autonomy worker image. `tests/autonomy-container-smoke.ts` checks the image's
+`setref` role carries `refs/upstream/trunk` into the worker's remote and that the clone-side
+refresh commands bring it into the clone; the agent role itself is not run there, since the test
+image has no pi.
 
 Parallel streams use separate integration branches, each following a shared upstream trunk. A
 steward supplies a board slice to each run; an external integrator can combine reviewed stream
@@ -440,12 +458,14 @@ from the contract; existing state files need no migration. These behaviours are 
 restart checks in `tests/autonomy-smoke.ts`. Enabling upstream on a previously shared-path run
 does not migrate its old handoff; start a new stream run or carry its context over explicitly.
 
-The self-improve merge review's 60,000-character diff budget excludes only this run's cycle
-records at `autonomy/cycles/<run>/` and, with upstream set, `autonomy/runs/<run>/`, alongside
-the existing lockfile exclusion. Other runs' records, proposals and other `autonomy/` files
-remain budgeted. The reviewer gets a separate host `git diff --stat` of all excluded records
-(a failed read or output over 256 KiB refuses merge), plus the current report clipped to
-6,000 characters of head and tail with a cut marker. The complete changed-path list still
+The self-improve merge review's 60,000-character diff budget excludes only this run's
+record-shaped files (`.md`, `.txt`, `.log` and `.jsonl`) under `autonomy/cycles/<run>/` and,
+with upstream set, `autonomy/runs/<run>/`, alongside the existing lockfile exclusion. Any other
+file there (code, a test a runner's glob would pick up, JSON a program could import) stays in the
+reviewed patch. Other runs' records, proposals and other `autonomy/` files remain budgeted. The
+reviewer gets a separate host `git diff --stat` of the excluded records (a failed read or output
+over 256 KiB refuses merge), clipped to 4,000 characters of head and tail like the other
+worker-influenced sections, plus the current report clipped to 6,000 characters with a cut marker. The complete changed-path list still
 drives control-path checks. Real code over budget and unreadable diffs still refuse merge,
 including with review disabled (`tests/autonomy-review-inputs-smoke.ts`).
 

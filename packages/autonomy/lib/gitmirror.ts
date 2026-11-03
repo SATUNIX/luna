@@ -403,6 +403,7 @@ export function fileAt(g: HostGit, ref: string, file: string): string | null {
   return g(["show", `${ref}:${file}`], { allowFail: true });
 }
 
-export function logSince(g: HostGit, from: string, to: string): string {
-  return g(["log", "--stat", "--format=%h %s", `${from}..${to}`], { allowFail: true }) ?? "";
+/** Commits in `to` and not in `from` (nor in any of `also`, such as a merged upstream head). */
+export function logSince(g: HostGit, from: string, to: string, also: readonly string[] = []): string {
+  return g(["log", "--stat", "--format=%h %s", `${from}..${to}`, ...also.map((r) => `^${r}`)], { allowFail: true }) ?? "";
 }

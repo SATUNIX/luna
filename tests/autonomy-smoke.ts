@@ -286,6 +286,10 @@ await check("docker: agent on the internal network only, no credentials or host 
   assert.equal(egress.at(-1), "pi-exp-perpetual-test-egress");
   assert.deepEqual(flag(dk.relayRunArgs(dcfg, p, "/k/relay.ts"), "--network"), ["pi-exp-perpetual-test-egress"], "relay joins the run network only by alias, after start");
   const checkArgs = dk.checkRunArgs(dcfg, p, { bundleFile: "/b", sha: "a".repeat(40), checkId: "gate", runnerScript: "/k/check-runner.ts", hasOverlay: false });
+  for (const helper of [checkArgs, dk.relayRunArgs(dcfg, p, "/k/relay.ts"), dk.proxyRunArgs(dcfg, p, { script: "/k/p.ts", netaddr: "/k/n.ts" }), dk.healthProbeRunArgs(dcfg, p, { url: "http://svc/", expectStatus: 200 })]) {
+    assert.deepEqual(flag(helper, "--entrypoint"), ["/usr/bin/tini"], "node never runs as PID 1: tini reaps orphans so zombies cannot exhaust --pids-limit");
+    assert.deepEqual(helper.slice(helper.indexOf(dcfg.image) + 1, helper.indexOf(dcfg.image) + 3), ["--", "node"]);
+  }
   for (const helper of [dk.bundleRunArgs(dcfg, p), checkArgs, dk.setAgentRefRunArgs(dcfg, p, { bundleFile: "/b", sha: "a".repeat(40) }), dk.snapshotRunArgs(dcfg, p, { message: "m" })]) {
     assert.deepEqual(flag(helper, "--network"), ["none"]);
   }

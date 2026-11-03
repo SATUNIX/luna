@@ -414,7 +414,9 @@ evidence and are not made safe for public posting by the commit scan.
    checkout's `package.json` version (`v<version>`), so a build never quietly bakes an older kit, and it
    stops before building when that tag is not in the clone (`tests/autonomy-build-image-smoke.ts`).
    Before the release tag exists, pass a branch such as `origin/main`. `--base-ref` optionally prebakes that repository's dependencies for offline
-   installs. Add toolchains your tasks need in a derived image and name it in `runtime.image`.
+   installs. Add toolchains your tasks need in a derived image and name it in `runtime.image`; keep
+   `/usr/bin/tini` in it, because every helper container starts node under tini so short-lived child
+   processes are reaped instead of filling `--pids-limit` (`tests/autonomy-smoke.ts`).
 4. Run the supervisor from a checkout of `main`, not from the branch a worker is changing.
 
 ## Generations

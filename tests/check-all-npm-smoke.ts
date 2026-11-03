@@ -136,8 +136,11 @@ try {
       "smoke:slow": logged("slow", 200, 0),
       "smoke:z-fail-fast": logged("z-fail-fast", 0, 3),
       [serialName]: logged("serial", 50, 0),
-      // Prints, then never exits: only --check-timeout ends it. Skipped unless a run asks for it.
-      "smoke:m-hang": `node -e "console.log('hang-partial-output');setInterval(()=>{},1000)"`,
+      // Prints, records its pid, ignores SIGTERM and never exits: only --check-timeout ends it.
+      // The trailing `; true` keeps the shell from exec'ing node (as dash, Ubuntu's /bin/sh,
+      // does not), so the hung process is npm's grandchild, holding the inherited stdout pipe.
+      // Skipped unless a run asks for it.
+      "smoke:m-hang": `node -e "require('fs').writeFileSync(process.env.HANG_PID,String(process.pid));process.on('SIGTERM',()=>{});console.log('hang-partial-output');setInterval(()=>{},1000)"; true`,
     },
   }, null, 2)}\n`);
   const wrapper = path.join(fakeRoot, "run.mjs");
@@ -147,7 +150,7 @@ try {
     const log = path.join(fakeRoot, `log-${jobs}-${skips}-${String(hang)}.txt`);
     fs.writeFileSync(log, "");
     // The outer timeout only stops a regression from hanging this smoke; the runs below finish in seconds.
-    const result = spawnSync(process.execPath, [wrapper], { encoding: "utf8", timeout: 60_000, env: { ...process.env, JOBS: String(jobs), SKIP: skips, TIMEOUT: timeout, FAKE_ROOT: fakeRoot, CHECK_LOG: log } });
+    const result = spawnSync(process.execPath, [wrapper], { encoding: "utf8", timeout: 60_000, env: { ...process.env, JOBS: String(jobs), SKIP: skips, TIMEOUT: timeout, FAKE_ROOT: fakeRoot, CHECK_LOG: log, HANG_PID: path.join(fakeRoot, "hang.pid") } });
     return { ...result, log: fs.readFileSync(log, "utf8") };
   };
   // The failure summary without its timing: the count line and the failed checks, in order.
@@ -212,6 +215,17 @@ try {
     assert.deepEqual(summaryOf(hung.stderr), ["check-all: 1/4 FAILED", "  - smoke:m-hang (timed out after 2s)"], hung.stderr);
     for (const name of ["ok", "slow", serialName]) assert.match(hung.stdout, new RegExp(`--- ${name.startsWith("smoke:") ? name : `smoke:${name}`}: OK`));
     if (jobs > 1) assert.match(hung.stdout, /\.\.\. smoke:m-hang started/, "the hung check was announced when it started");
+    // The hung grandchild (which ignored SIGTERM) did not outlive the run: its group was killed.
+    if (process.platform !== "win32") {
+      const pid = Number(fs.readFileSync(path.join(fakeRoot, "hang.pid"), "utf8"));
+      // A killed orphan is reaped by init a moment later, and answers signal 0 until then.
+      const isAlive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      const deadline = Date.now() + 3000;
+      while (isAlive() && Date.now() < deadline) spawnSync(process.execPath, ["-e", "setTimeout(()=>{},100)"]);
+      const alive = isAlive();
+      if (alive) process.kill(pid, "SIGKILL");
+      assert.equal(alive, false, `--jobs=${jobs} leaves no process of the hung check running (pid ${pid})`);
+    }
   }
 } finally {
   fs.rmSync(fakeRoot, { recursive: true, force: true });

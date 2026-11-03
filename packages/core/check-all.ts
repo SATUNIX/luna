@@ -33,13 +33,14 @@
  * `SERIAL` and always run alone after the parallel batch. Because a buffered check prints nothing
  * until it ends, `--jobs` above 1 also prints a `... <label> started` line as each check starts,
  * so a log cut short by a job timeout still names the checks that were running.
- * `--check-timeout=<s>` stops a check still running after s seconds (SIGTERM, then SIGKILL) and
- * reports it as `FAILED (timed out after <s>s)` with whatever it printed so far.
+ * `--check-timeout=<s>` stops a check still running after s seconds, with every process its
+ * script started (its process group on POSIX: SIGTERM, then SIGKILL), and reports it as
+ * `FAILED (timed out after <s>s)` with whatever it printed so far.
  *
  * Exits non-zero if any check fails, printing a summary of all failures (checks are run
  * to completion so one CI run reports every problem, not just the first).
  */
-import { spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -298,50 +299,146 @@ function header(label: string): string {
 }
 
 /**
+ * Process groups of the checks running under `--check-timeout`. Each such check runs as the
+ * leader of its own group (POSIX `detached`), so a timeout can stop the shell and every
+ * process the script started, not only npm: `/bin/sh -c` (dash, on Ubuntu runners) does not
+ * exec the script's last command, so killing npm alone left the script running and holding the
+ * inherited stdout pipe open. A group of its own no longer receives the terminal's Ctrl-C, so
+ * the signals below are forwarded to every live group before check-all exits.
+ */
+const liveGroups = new Set<number>();
+let forwardingSignals = false;
+
+function forwardStopSignals(): void {
+  if (forwardingSignals) return;
+  forwardingSignals = true;
+  const codes: Record<string, number> = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+  for (const [signal, code] of Object.entries(codes)) {
+    process.on(signal, () => {
+      reapGroups();
+      process.exit(code);
+    });
+  }
+}
+
+/** SIGKILL every group still listed, so nothing a stopped check started outlives the run. */
+function reapGroups(): void {
+  for (const pid of liveGroups) signalGroup(pid, "SIGKILL");
+  liveGroups.clear();
+}
+
+/** Send `signal` to the process group led by `pid`; a group that has already gone is fine. */
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+/**
+ * Start one `npm run` for `run`. With `timeoutSeconds`, the check is stopped once it has run that
+ * long: on POSIX its whole process group gets SIGTERM, then SIGKILL after a grace period; on
+ * Windows `taskkill /T /F` ends the process tree. `onTimeout` is called once, at the deadline.
+ */
+function startCheck(
+  run: CheckRun,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  stdio: "inherit" | "pipe",
+  timeoutSeconds: number | null,
+  onTimeout: () => void,
+): { child: ChildProcess; settle: () => void } {
+  const npm = resolveNpmCommand();
+  const group = timeoutSeconds !== null && process.platform !== "win32";
+  if (group) forwardStopSignals();
+  const child = spawn(npm.command, ["run", "-s", run.name, ...(run.args.length ? ["--", ...run.args] : [])], {
+    cwd,
+    env,
+    shell: npm.shell,
+    stdio: ["ignore", stdio, stdio],
+    detached: group,
+  });
+  const pid = child.pid;
+  if (group && pid !== undefined) liveGroups.add(pid);
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  if (timeoutSeconds !== null && pid !== undefined) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      if (group) {
+        signalGroup(pid, "SIGTERM");
+        // The group is killed even after its leader exits: a script that ignores SIGTERM must
+        // not outlive the run.
+        setTimeout(() => { signalGroup(pid, "SIGKILL"); liveGroups.delete(pid); }, KILL_GRACE_MS).unref();
+      } else {
+        spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      }
+      onTimeout();
+    }, timeoutSeconds * 1000);
+  }
+  const settle = (): void => {
+    clearTimeout(timer);
+    // A timed-out group stays listed until it is sent SIGKILL (by the grace timer or by
+    // `reapGroups` when the run ends), even though its leader has exited.
+    if (pid !== undefined && !timedOut) liveGroups.delete(pid);
+  };
+  return { child, settle };
+}
+
+/**
  * Start one `npm run` and resolve with its buffered output and status once it exits. A start line
  * is printed at once, so a log cut short (a CI job timeout) still names every check that was
- * running. With `timeoutSeconds`, a check still running then is sent SIGTERM (SIGKILL after a
- * grace period) and resolves at once as failed with its partial output, without waiting for
- * grandchildren that may hold its pipes open.
+ * running. With `timeoutSeconds`, a check still running then is stopped with every process it
+ * started (`startCheck`) and resolves at once as failed with its partial output, without waiting
+ * for a process that escaped its group and still holds the pipes open.
  */
 function runBuffered(run: CheckRun, cwd: string, env: NodeJS.ProcessEnv, timeoutSeconds: number | null): Promise<RunResult> {
   console.log(`... ${run.label} started`);
   return new Promise((resolve) => {
     const began = Date.now();
     const elapsed = (): string => ((Date.now() - began) / 1000).toFixed(1);
-    const npm = resolveNpmCommand();
-    const child = spawn(npm.command, ["run", "-s", run.name, ...(run.args.length ? ["--", ...run.args] : [])], {
-      cwd,
-      env,
-      shell: npm.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    let timer: NodeJS.Timeout | undefined;
-    if (timeoutSeconds !== null) {
-      timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }, KILL_GRACE_MS).unref();
-        // A grandchild can keep the pipes open after npm exits; stop reading so they cannot hold
-        // the run open.
-        child.stdout.destroy();
-        child.stderr.destroy();
-        resolve({ ok: false, detail: `timed out after ${timeoutSeconds}s`, seconds: elapsed(), output: stdout + stderr });
-      }, timeoutSeconds * 1000);
-    }
+    const { child, settle } = startCheck(run, cwd, env, "pipe", timeoutSeconds, () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve({ ok: false, detail: `timed out after ${String(timeoutSeconds)}s`, seconds: elapsed(), output: stdout + stderr });
+    });
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on("error", (error) => {
-      clearTimeout(timer);
+      settle();
       resolve({ ok: false, detail: `spawn error: ${error.message}`, seconds: elapsed(), output: stdout + stderr });
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      settle();
       // A missing binary or a killed process has status null; report it rather than
       // treating it as success.
       const detail = code === null ? `signal ${String(signal)}` : `exit ${code}`;
       resolve({ ok: code === 0, detail, seconds: elapsed(), output: stdout + stderr });
+    });
+  });
+}
+
+/**
+ * Run one check with its output streamed straight to this process (the sequential path) under a
+ * timeout, and resolve with its status. The output is already printed, so `output` is empty.
+ */
+function runInherited(run: CheckRun, cwd: string, timeoutSeconds: number): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const began = Date.now();
+    const elapsed = (): string => ((Date.now() - began) / 1000).toFixed(1);
+    const { child, settle } = startCheck(run, cwd, process.env, "inherit", timeoutSeconds, () => {
+      resolve({ ok: false, detail: `timed out after ${String(timeoutSeconds)}s`, seconds: elapsed(), output: "" });
+    });
+    child.on("error", (error) => {
+      settle();
+      resolve({ ok: false, detail: `spawn error: ${error.message}`, seconds: elapsed(), output: "" });
+    });
+    child.on("exit", (code, signal) => {
+      settle();
+      resolve({ ok: code === 0, detail: code === null ? `signal ${String(signal)}` : `exit ${code}`, seconds: elapsed(), output: "" });
     });
   });
 }
@@ -440,26 +537,36 @@ export async function runAll(options: CheckAllOptions, root: string = ROOT): Pro
     for (const run of selected) {
       const began = Date.now();
       console.log(header(run.label));
+      if (options.checkTimeout !== null) {
+        // A Promise resolves once, so a timeout reports before any late exit of the stopped check.
+        const result = await runInherited(run, root, options.checkTimeout);
+        if (result.ok) {
+          console.log(`--- ${run.label}: OK (${result.seconds}s)`);
+        } else {
+          console.log(`--- ${run.label}: FAILED (${result.detail}, ${result.seconds}s)`);
+          failures.push(`${run.label} (${result.detail})`);
+        }
+        continue;
+      }
       const npm = resolveNpmCommand();
       const result = spawnSync(npm.command, ["run", "-s", run.name, ...(run.args.length ? ["--", ...run.args] : [])], {
         cwd: root,
         stdio: "inherit",
         env: process.env,
         shell: npm.shell,
-        ...(options.checkTimeout === null ? {} : { timeout: options.checkTimeout * 1000, killSignal: "SIGTERM" as const }),
       });
       const seconds = ((Date.now() - began) / 1000).toFixed(1);
       if (result.status === 0) {
         console.log(`--- ${run.label}: OK (${seconds}s)`);
       } else {
-        const timedOut = options.checkTimeout !== null && (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-        const detail = timedOut ? `timed out after ${String(options.checkTimeout)}s` : result.status === null ? `signal ${String(result.signal)}` : `exit ${result.status}`;
+        const detail = result.status === null ? `signal ${String(result.signal)}` : `exit ${result.status}`;
         console.log(`--- ${run.label}: FAILED (${detail}, ${seconds}s)`);
         failures.push(`${run.label} (${detail})`);
       }
     }
   }
 
+  reapGroups();
   const total = ((Date.now() - started) / 1000).toFixed(1);
   if (failures.length > 0) {
     console.error(`\ncheck-all: ${failures.length}/${selected.length} FAILED in ${total}s`);

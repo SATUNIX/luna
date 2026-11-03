@@ -18,6 +18,7 @@ export interface RunConfig {
   branch: string;
   tagPrefix: string;
   integrationBranch: string | null;
+  integrationUpstream?: string | null;
   baseRef: string;
   baseSource: string | null;
   integrationRemote: string | null;
@@ -85,6 +86,7 @@ export function runtimeConfig(contract: RunContract, opts: RuntimeConfigOptions 
     branch: `pi/${contract.run}`,
     tagPrefix: `pi/${contract.run}/`,
     integrationBranch,
+    integrationUpstream: stringOr(option(integration, "upstream"), null),
     baseRef: repo?.ref ?? "HEAD",
     baseSource: repo?.path ?? repo?.url ?? null,
     integrationRemote,

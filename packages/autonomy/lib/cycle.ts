@@ -10,6 +10,7 @@
 //   resetToLastGood(abandonedSha) -> Promise, publish() -> Promise, log(line),
 //   uiPolicy? -> permissions.unattended: dialogs are then answered per the contract and a question ends the cycle as "blocked"
 // }
+import type { BookkeepingPaths } from "./bookkeeping.ts";
 import { type TriggerConfig, evaluate } from "./triggers.ts";
 import { type Blocker, type RpcFrame, type UiRequest, type UiResponse, type UnattendedPolicy, uiResponse, activityLine, isGuardEscalation, operatorDecision } from "./rpc.ts";
 import type { ManagerBundle, ManagerDecision } from "./manager.ts";
@@ -28,6 +29,7 @@ export interface CycleAgent {
 
 /** What extras() adds to the manager's bundle. */
 export interface CycleExtras {
+  handoffPath?: string;
   gitLog?: string | null | undefined;
   plan?: string | null | undefined;
   handoff?: string | null | undefined;
@@ -73,6 +75,7 @@ export interface RunCycleOptions {
   /** Where the cycle's files go on the branch (default autonomy/cycles/<NN>). */
   cycleDir?: string | undefined;
   autoRestartsUsed?: number;
+  bookkeeping?: BookkeepingPaths;
 }
 
 export type CycleOutcome = "completed" | "partial" | "reset" | "aborted" | "blocked";
@@ -92,13 +95,15 @@ export interface CycleResult {
 }
 
 const FOLLOW_UP = [
-  "You stopped before the cycle was recorded. Continue from where you are: finish the remaining phases (verify, then record {{DIR}}/report.md, update BACKLOG.md and HANDOFF.md), commit and push.",
-  "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update HANDOFF.md, commit and `git push origin HEAD`.",
+  "You stopped before the cycle was recorded. Continue from where you are: finish the remaining phases (verify, then record {{DIR}}/report.md, {{BOOKKEEPING}}), commit and push.",
+  "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update {{HANDOFF}}, commit and `git push origin HEAD`.",
 ];
 
-export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0 }: RunCycleOptions): Promise<CycleResult> {
+export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0, bookkeeping }: RunCycleOptions): Promise<CycleResult> {
   const NN = String(n).padStart(2, "0");
   const DIR = cycleDir ?? `autonomy/cycles/${NN}`;
+  const handoff = bookkeeping?.handoff ?? "autonomy/HANDOFF.md";
+  const record = bookkeeping && bookkeeping.proposals !== "autonomy/BACKLOG.md" ? `write each proposal to a new file at ${bookkeeping.proposals} and update ${handoff}` : "update BACKLOG.md and HANDOFF.md";
   const startMeter = await rt.meterUsd();
   const s = {
     startedAt: rt.now(), lastEventAt: rt.now(), lastCommitAt: null as number | null, costUsd: 0, extendedMinutes: 0,
@@ -188,7 +193,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       rt.onAutoRestart?.(autoRestarts);
       rt.log(`cycle ${NN} automatic restart ${autoRestarts} after session exit (${s.exited?.code ?? "unknown"})`);
       await agent?.stop();
-      launch(`The previous worker process exited. Re-read autonomy/HANDOFF.md, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
+      launch(`The previous worker process exited. Re-read ${handoff}, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
       continue;
     }
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
@@ -197,7 +202,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       const followUp = FOLLOW_UP[followUps];
       if (followUp !== undefined) {
         followUps++;
-        say(followUp.replaceAll("{{DIR}}", DIR));
+        say(followUp.replaceAll("{{DIR}}", DIR).replaceAll("{{HANDOFF}}", bookkeeping?.handoff ?? "HANDOFF.md").replaceAll("{{BOOKKEEPING}}", record));
         settled = false;
         continue;
       }

@@ -10,6 +10,24 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- Self-improve merge review excludes the run's own cycle records and stream handoff directory
+  from its diff budget, lists them in a separate host stat and retains bounded report context.
+  Other runs' records and proposals remain budgeted; oversized code still refuses merge
+  (`tests/autonomy-review-inputs-smoke.ts`).
+
+- Parallel self-improve streams keep handoffs under `autonomy/runs/<run>/` and write separate
+  proposal files instead of editing the shared backlog. Stream seeds preserve existing charters;
+  resume, restart and review inputs follow the run's paths. Changelog additions use union merging,
+  with committed attributes selected explicitly in bare host merges
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts`,
+  `tests/autonomy-smoke.ts`).
+
+- Self-improve streams can sync an upstream branch before every cycle and receive ranked,
+  host-owned assignments with `board --run <id> --file <path.json>`. Cycle history records sync
+  outcomes and board progress; merge review judges claimed acceptance and priority. Green partial
+  work with commits is reviewed instead of discarded, and workers leave the full gate to the host
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-cli-smoke.ts`).
+
 - Repository URLs now point to `SATUNIX/luna`; the former public source remains in
   `git.previousSources` so existing installs retain their channel and profile during migration
   (`tests/distribution-smoke.ts`, `tests/distribution-contract-smoke.ts`, `tests/kit-update-smoke.ts`).

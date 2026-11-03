@@ -32,7 +32,8 @@ case "$role" in
     fi
     exit 0 ;;
   setref)
-    git_ -C /git/remote.git fetch --quiet --no-tags /in/branch.bundle "+refs/heads/$1:refs/autonomy/reset" "+${3:-refs/tags/pi/*}:${4:-refs/heads/attempts/*}"
+    git_ -C /git/remote.git update-ref -d refs/upstream/trunk
+    git_ -C /git/remote.git fetch --quiet --no-tags /in/branch.bundle "+refs/heads/$1:refs/autonomy/reset" "+${3:-refs/tags/pi/*}:${4:-refs/heads/attempts/*}" "+refs/upstream/*:refs/upstream/*"
     git_ -C /git/remote.git update-ref "refs/heads/$1" "$2"
     exit 0 ;;
   agent) ;;
@@ -87,6 +88,8 @@ if [ ! -d /work/.git ]; then
   git clone --quiet --branch "$RUN_BRANCH" /git/remote.git /work
 fi
 cd /work
+git_ update-ref -d refs/upstream/trunk
+git_ fetch --quiet --no-tags origin "+refs/upstream/*:refs/upstream/*"
 if [ "${CYCLE_RESET:-0}" = 1 ]; then
   # A new cycle starts from the pushed branch: uncommitted or unpushed work from an earlier
   # cycle is discarded (ignored files such as node_modules are kept).

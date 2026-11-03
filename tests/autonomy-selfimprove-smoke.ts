@@ -17,7 +17,9 @@ import { assert, makeChecker, testEffort, type RawContract } from "./autonomy-he
 import { cleanup, fakeAlive, harness, runOnce, scratch, NODE_EXIT, type Harness, type HarnessRuntime, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
+import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
+import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
 
 const { check, done } = makeChecker("autonomy-selfimprove-smoke");
 /** One host-side model call the scripted manager saw. */
@@ -87,6 +89,126 @@ const manager = (calls: ManagerCall[], decide?: ManagerScript): ManagerFn => asy
   return decide?.manager ? JSON.stringify(decide.manager) : JSON.stringify({ decision: "CONTINUE", reason: "fine", extendMinutes: 10 });
 };
 
+await check("upstream validates branch syntax and must differ from the integration branch", () => {
+  for (const upstream of ["../bad", "bad.lock", "bad/", "pi-autonomy/integration", 2, "-option"]) {
+    const resolved = resolveContract(improveRaw(sourceRepo(), { templateOptions: { integration: { upstream } } }), { effort: testEffort });
+    assert.equal(resolved.ok, false, String(upstream));
+    assert.ok(resolved.problems.some((p) => p.path === "templateOptions.integration.upstream"));
+  }
+});
+
+await check("Board: parsing accepts only exact bounded lines and one entry per id", () => {
+  assert.deepEqual(parseBoardReport([
+    "Board: V-01 done - Finished with tests.", "Board: V-02 progress - One part remains.", "Board: V-03 blocked - Needs a decision.",
+    " Board: V-04 done - indented", "Board: bad done - invalid", "Board: V-05 complete - invalid", "Board: V-06 done", "Board: V-07 done - ",
+    "Board: V-08 done - " + "x".repeat(501), "Board: V-01 blocked - duplicate", "prose Board: V-09 done - ignored",
+  ].join("\r\n")), [
+    { id: "V-01", status: "done", note: "Finished with tests." }, { id: "V-02", status: "progress", note: "One part remains." }, { id: "V-03", status: "blocked", note: "Needs a decision." },
+  ]);
+  assert.deepEqual(parseBoardReport(null), []);
+});
+
+await check("stream bookkeeping seeds per-run files, preserves the charter, and follows resume, restart, manager and merge review; legacy paths stay shared", async () => {
+  for (const stream of [false, true]) {
+    const src = sourceRepo();
+    const charter = "# Existing operator charter\nKeep this exact charter.\n";
+    fs.mkdirSync(path.join(src, "autonomy"));
+    fs.writeFileSync(path.join(src, "autonomy", "CHARTER.md"), charter);
+    fs.writeFileSync(path.join(src, "autonomy", "BACKLOG.md"), "Shared backlog\n");
+    fs.writeFileSync(path.join(src, "autonomy", "HANDOFF.md"), "Another run's shared handoff\n");
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "existing shared records");
+    sh(src, "branch", "integration/trunk");
+    const paths = bookkeepingPaths({ run: "improve-test-1", integrationUpstream: stream ? "integration/trunk" : null }, 1);
+    let phase = 0;
+    const calls: ManagerCall[] = [];
+    const script = async (t: ScriptContext): Promise<void> => {
+      phase++;
+      assert.ok(t.message.includes(paths.handoff), t.message);
+      assert.ok(t.message.includes(paths.proposals), t.message);
+      assert.doesNotMatch(t.message, /\{\{[A-Z_]+\}\}/);
+      if (phase === 1) {
+        assert.match(t.read(paths.handoff) ?? "", /first run: improve-test-1/);
+        if (stream) {
+          assert.equal(t.read("autonomy/CHARTER.md"), charter);
+          assert.equal(t.read("autonomy/BACKLOG.md"), "Shared backlog\n");
+          assert.equal(t.read("autonomy/HANDOFF.md"), "Another run's shared handoff\n");
+          assert.match(t.read("autonomy/proposals/improve-test-1-00-1-b-1-add-the-audit-marker.md") ?? "", /Status: proposal[\s\S]*A file called AUDIT_OK/);
+          assert.match(t.message, /never edit the shared autonomy\/BACKLOG.md/);
+        } else {
+          assert.match(t.read("autonomy/BACKLOG.md") ?? "", /\| B-1 \| open/);
+          assert.equal(t.read("autonomy/runs/improve-test-1/HANDOFF.md"), null);
+        }
+        t.write(paths.handoff, "Run-specific carry-over evidence\n");
+        t.write(paths.proposals.replace("<slug>", "follow-up"), "New proposal with evidence\n");
+        t.commit("checkpoint bookkeeping");
+        fs.writeFileSync(path.join(t.store.p.root, "STOP"), ""); t.hang();
+      } else if (phase === 2) {
+        assert.match(t.message, /previous session of this cycle was interrupted/);
+        t.crash();
+      } else if (phase === 3) {
+        assert.match(t.message, /previous worker process exited/);
+        t.elapse(181); t.hang();
+      } else {
+        assert.match(t.message, /Manager restart with carry-over/);
+        t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("finish bookkeeping cycle");
+      }
+    };
+    const h = harness(improveRaw(src, {
+      budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 },
+      templateOptions: { integration: { ...(stream ? { upstream: "integration/trunk" } : {}) } },
+    }), {
+      script,
+      manager: async (system, user, model) => {
+        calls.push({ system, user, model });
+        if (/You review one cycle/.test(system)) return mergeReview();
+        assert.ok(user.includes(`## Handoff (${paths.handoff})`));
+        assert.match(user, /Run-specific carry-over evidence/);
+        assert.doesNotMatch(user, /Another run's shared handoff/);
+        return JSON.stringify({ decision: "RESTART_SESSION", reason: "test restart", message: "Manager restart with carry-over" });
+      },
+    });
+    await runOnce(h);
+    assert.equal(h.state().status, "paused");
+    fs.rmSync(path.join(h.store.p.root, "STOP")); h.store.enqueue("unpause");
+    const resumed = await runOnce(h, { rt: h.runtime(script) });
+    assert.equal(phase, 4);
+    assert.equal(resumed.state.selfImprove?.history[0]?.merged, true);
+    const review = nth(calls.filter((c) => /You review one cycle/.test(c.system)), 0);
+    assert.ok(review.system.includes(paths.proposals));
+    assert.ok(review.user.includes(`## Handoff (${paths.handoff})`));
+    assert.match(review.user, /Run-specific carry-over evidence/);
+    if (stream) assert.equal(resumed.rt.repo.fileAt(resumed.rt.repo.head(), "autonomy/CHARTER.md"), charter.trim());
+  }
+});
+
+await check("an adopted stream branch gets its own handoff even with an existing charter; a missing charter uses stream proposal paths", async () => {
+  for (const existing of [false, true]) {
+    const src = sourceRepo();
+    if (existing) {
+      fs.mkdirSync(path.join(src, "autonomy"));
+      fs.writeFileSync(path.join(src, "autonomy", "CHARTER.md"), "# Preserve adopted charter\n");
+      sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "charter");
+    }
+    sh(src, "branch", "pi-autonomy/integration"); sh(src, "branch", "integration/trunk");
+    const h = harness(improveRaw(src, {
+      budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 },
+      templateOptions: { integration: { upstream: "integration/trunk" } },
+    }), { manager: manager([]), script: async (t) => {
+      assert.match(t.read("autonomy/runs/improve-test-1/HANDOFF.md") ?? "", /first run: improve-test-1/);
+      assert.equal(t.read("autonomy/HANDOFF.md"), null);
+      assert.equal(t.read("autonomy/BACKLOG.md"), null);
+      if (existing) assert.equal(t.read("autonomy/CHARTER.md"), "# Preserve adopted charter\n");
+      else {
+        assert.match(t.read("autonomy/CHARTER.md") ?? "", /autonomy\/proposals\/<run>-<NN>-<slug>\.md/);
+        assert.doesNotMatch(t.read("autonomy/CHARTER.md") ?? "", /autonomy\/BACKLOG.md/);
+      }
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream ready");
+    } });
+    const { state } = await runOnce(h);
+    assert.equal(state.selfImprove?.merged, 1);
+  }
+});
+
 await check("heartbeat follows engine ticks independently of the lock timer; STOP before setup cancels without starting workers", async () => {
   const h = harness(improveRaw(sourceRepo()));
   const made = h.engine();
@@ -138,7 +260,8 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
   const charter = rt.repo.fileAt(integration, "autonomy/CHARTER.md") ?? "";
   assert.match(charter, /Fix what is broken, and add the audit marker\./);
   assert.match(charter, /- gate \(required\)/, "the checks are listed, without their definitions' source");
-  assert.doesNotMatch(charter, /pi-system|check:all|mkdocs|gitleaks|home\.internal/i, "the seed is general, not specific to one repository");
+  assert.doesNotMatch(charter, /pi-system|mkdocs|gitleaks|home\.internal/i, "the seed is general, not specific to one repository");
+  assert.match(charter, /yourself: the host gate runs it/, "the host owns the full gate");
   assert.match(rt.repo.fileAt(integration, "autonomy/BACKLOG.md") ?? "", /\| B-1 \| open \| P2 \| \*\*Add the audit marker\.\*\* A file called AUDIT_OK must exist\./);
   assert.match(rt.repo.fileAt(integration, "autonomy/HANDOFF.md") ?? "", /first run: improve-test-1/);
   assert.match(nth(prompts, 0), /You are working on the repository in \/work, on branch `pi\/improve-test-1`/);
@@ -472,6 +595,165 @@ await check("the deprecated v0 shape maps onto this template: same limits and bu
   assert.equal(none.integrationRemote, null, "promotion none: no destination at all");
   const local = runtimeConfig(contractOf(resolveContract({ ...v0, gitRemote: "/srv/repo.git", promotion: "local-branch" }, { effort: testEffort })));
   assert.deepEqual([local.integrationRemote, local.publishTags], ["/srv/repo.git", false]);
+});
+
+await check("upstream is merged at every cycle start, published, then recorded up to date", async () => {
+  const src = sourceRepo();
+  sh(src, "checkout", "--quiet", "-b", "integration/trunk");
+  fs.writeFileSync(path.join(src, "shared.txt"), "first\n");
+  sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk first");
+  let upstream = sh(src, "rev-parse", "HEAD");
+  const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "integration/trunk" } } }), {
+    manager: manager([]),
+    script: async (t) => {
+      assert.equal(t.git(["merge-base", "--is-ancestor", upstream, "HEAD"]).status, 0);
+      assert.equal(t.read("shared.txt"), t.step === 1 ? "first\n" : "second\n");
+      const parents = t.git(["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(" ");
+      if (t.step <= 2) assert.equal(parents.length, 3, "host creates a two-parent merge");
+      assert.equal(sh(src, "rev-parse", "pi-autonomy/integration"), t.git(["rev-parse", "HEAD"]).stdout.trim(), "cycle-start merge is published as usual");
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit(`stream cycle ${t.step}`);
+      if (t.step === 1) {
+        fs.writeFileSync(path.join(src, "shared.txt"), "second\n");
+        sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk second");
+        upstream = sh(src, "rev-parse", "HEAD");
+      }
+    },
+  });
+  const { state } = await runOnce(h);
+  assert.deepEqual(state.selfImprove?.history.map((c) => c.upstream?.outcome), ["merged", "merged", "up_to_date"]);
+  assert.match(fs.readFileSync(h.store.p.log, "utf8"), /upstream integration\/trunk: merged [a-f0-9]{40}/);
+});
+
+await check("upstream conflict leaves integration unchanged and travels by bundle as refs/upstream/trunk with a P0 instruction", async () => {
+  const src = sourceRepo();
+  sh(src, "branch", "integration/trunk");
+  const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "integration/trunk" } } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) {
+        t.write("README.md", "stream intent\n"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream edit");
+        sh(src, "checkout", "--quiet", "integration/trunk");
+        fs.writeFileSync(path.join(src, "README.md"), "trunk intent\n");
+        sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk conflict");
+      } else {
+        const prev = t.store.readState()?.selfImprove?.history[0];
+        assert.equal(t.git(["rev-parse", "HEAD"]).stdout.trim(), prev?.head, "host did not merge the conflict");
+        assert.equal(t.git(["rev-parse", "refs/upstream/trunk"]).stdout.trim(), sh(src, "rev-parse", "integration/trunk"));
+        assert.match(t.message, /## P0: upstream merge conflict/);
+        assert.match(t.message, /git merge refs\/upstream\/trunk/);
+        assert.match(t.message, /preserving both sides' intent, and re-verify/);
+        assert.equal(t.git(["merge", "refs/upstream/trunk"]).status, 1);
+        t.write("README.md", "stream intent\ntrunk intent\n"); report(t, "successful"); t.commit("resolve both intents");
+      }
+    },
+  });
+  const { state } = await runOnce(h);
+  assert.deepEqual(state.selfImprove?.history.map((c) => c.upstream?.outcome), ["up_to_date", "conflict"]);
+  assert.equal(state.selfImprove?.history[1]?.merged, true);
+});
+
+await check("an upstream fetch failure is logged and the cycle still runs and merges", async () => {
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, templateOptions: { integration: { upstream: "missing/trunk" } } }), {
+    manager: manager([]),
+    script: async (t) => {
+      assert.doesNotMatch(t.message, /## P0: upstream merge conflict/);
+      assert.notEqual(t.git(["rev-parse", "--verify", "refs/upstream/trunk"]).status, 0);
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("green without upstream");
+    },
+  });
+  const { state } = await runOnce(h);
+  assert.equal(state.selfImprove?.history[0]?.upstream?.outcome, "fetch_failed");
+  assert.equal(state.selfImprove?.history[0]?.merged, true);
+  assert.match(fs.readFileSync(h.store.p.log, "utf8"), /upstream missing\/trunk: fetch_failed/);
+});
+
+
+await check("board prompt ranks two nonblocked items, refreshes each cycle, and review uses claimed acceptance from the prompt snapshot", async () => {
+  const calls: ManagerCall[] = [];
+  const board = { items: [
+    { id: "V-01", title: "cleanup", priority: "P3" },
+    { id: "V-02", title: "first assigned", priority: "P1", acceptance: "First acceptance" },
+    { id: "V-03", title: "urgent blocked", priority: "P0", status: "blocked" },
+    { id: "V-04", title: "second assigned", priority: "P1", acceptance: "Second acceptance" },
+  ] };
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => {
+      assert.match(t.message, /## Assigned work \(steward board\)/);
+      assert.ok(t.message.includes(WORK_PRECEDENCE));
+      if (t.step === 1) {
+        assert.ok(t.message.indexOf("V-02 [P1]") < t.message.indexOf("V-04 [P1]"));
+        assert.doesNotMatch(t.message, /V-01|V-03/);
+        assert.match(t.message, /First acceptance/);
+        assert.match(t.message, /Do not run the whole `npm run check:all`/);
+        assert.match(t.message, /Own new ideas go into autonomy\/BACKLOG.md as proposals/);
+        fs.writeFileSync(path.join(t.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-05", title: "next cycle assignment", priority: "P0", acceptance: "Next acceptance" }] }));
+      } else {
+        assert.match(t.message, /V-05 \[P0\]/);
+        assert.doesNotMatch(t.message, /V-02|V-04/);
+      }
+      t.write("AUDIT_OK", "1"); report(t, "successful", "fix", t.step === 1 ? "Board: V-04 progress - Added the tested first part." : "No explicit claim; review assigned item."); t.commit("board progress");
+    },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify(board));
+  const { state } = await runOnce(h);
+  assert.deepEqual(state.selfImprove?.history[0]?.board, [{ id: "V-04", status: "progress", note: "Added the tested first part." }]);
+  const reviews = calls.filter((c) => /You review one cycle/.test(c.system));
+  assert.match(nth(reviews, 0).user, /"id": "V-04"/);
+  assert.match(nth(reviews, 0).user, /Second acceptance/);
+  const claimed = nth(reviews, 0).user.split("## Claimed steward board items")[1]?.split("## Charter")[0] ?? "";
+  assert.doesNotMatch(claimed, /First acceptance|Next acceptance/);
+  assert.match(nth(reviews, 0).user, /## Assigned steward board items/);
+  assert.match(nth(reviews, 0).user, /First acceptance/);
+  assert.match(nth(reviews, 0).system, /lower-priority detour/);
+  assert.match(nth(reviews, 1).user, /Next acceptance/);
+  assert.equal(state.selfImprove?.merged, 2);
+});
+
+
+await check("partial green committed work goes through independent review; red and empty partial cycles never do", async () => {
+  for (const kind of ["green", "red", "empty"] as const) {
+    for (const verdict of kind === "green" ? ["MERGE", "REJECT"] : ["MERGE"]) {
+      const calls: ManagerCall[] = [];
+      const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, templateOptions: { integration: { review: false } } }), {
+        manager: manager(calls, { review: verdict }),
+        script: async (t) => {
+          if (kind !== "empty") { t.write(kind === "green" ? "AUDIT_OK" : "unfinished.txt", "1"); report(t, "partial"); t.commit("checkpoint"); }
+          t.elapse(301); t.hang();
+        },
+      });
+      const { state } = await runOnce(h);
+      const entry = state.selfImprove?.history[0];
+      assert.equal(entry?.outcome, "partial");
+      assert.equal(entry?.reason, "hard_limit");
+      assert.equal(entry?.merged, kind === "green" && verdict === "MERGE");
+      const reviews = calls.filter((c) => /You review one cycle/.test(c.system));
+      assert.equal(reviews.length, kind === "green" ? 1 : 0);
+      if (kind === "green") assert.match(nth(reviews, 0).user, /cycle 1: partial/);
+      else assert.equal(entry?.gate, kind === "red" ? "red" : "skipped");
+    }
+  }
+});
+
+await check("an existing paused cycle with no board or upstream fields loads and resumes", async () => {
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) { t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("first cycle"); }
+      else { fs.writeFileSync(path.join(t.store.p.root, "STOP"), ""); t.hang(); }
+    },
+  });
+  await runOnce(h);
+  const old = h.state();
+  assert.ok(old.selfImprove?.current);
+  delete old.selfImprove.current.board;
+  delete old.selfImprove.current.upstream;
+  for (const c of old.selfImprove.history) { delete c.board; delete c.upstream; }
+  h.store.writeState(old);
+  assert.equal(h.store.readState()?.selfImprove?.history.length, 1);
+  fs.rmSync(path.join(h.store.p.root, "STOP")); h.store.enqueue("unpause");
+  const resumed = await runOnce(h, { rt: h.runtime(async (t) => { report(t, "successful"); t.commit("finish old cycle"); }) });
+  assert.equal(resumed.state.selfImprove?.history[1]?.merged, true);
 });
 
 cleanup();

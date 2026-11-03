@@ -399,14 +399,17 @@ export class FakeRuntime implements Runtime {
   /** Point the worker's repository and workspace at the mirror's working branch (a new cycle, or a reset); unmerged cycles' tags become attempts/<run>/cycle-NN. */
   async setWorkerBranch(_sha: string, extraRefs: readonly string[] = []): Promise<void> {
     const { branch, run } = this.cfg;
-    spawnSync("git", ["--git-dir", this.p.remote, "fetch", "--quiet", "--no-tags", this.p.mirror, `+refs/heads/${branch}:refs/heads/${branch}`], { encoding: "utf8" });
-    for (const ref of extraRefs) spawnSync("git", ["--git-dir", this.p.remote, "fetch", "--quiet", "--no-tags", this.p.mirror, `+${ref}:refs/heads/attempts/${run}/${ref.split("/").pop()}`], { encoding: "utf8" });
+    const bundle = this.repo.bundleBranch(path.join(this.p.bundles, "setref.bundle"), extraRefs);
+    git(this.p.remote, ["update-ref", "-d", "refs/upstream/trunk"]);
+    git(this.p.remote, ["fetch", "--quiet", "--no-tags", bundle, `+refs/heads/${branch}:refs/heads/${branch}`, `+refs/tags/${this.cfg.tagPrefix}*:refs/heads/attempts/${run}/*`, "+refs/upstream/*:refs/upstream/*"]);
     this.resetWork();
   }
 
   resetWork(): void {
     const { branch } = this.cfg;
     git(this.p.work, ["fetch", "--quiet", "origin"]);
+    git(this.p.work, ["update-ref", "-d", "refs/upstream/trunk"]);
+    git(this.p.work, ["fetch", "--quiet", "--no-tags", "origin", "+refs/upstream/*:refs/upstream/*"]);
     git(this.p.work, ["checkout", "--quiet", "-B", branch, `origin/${branch}`]);
     git(this.p.work, ["reset", "--quiet", "--hard", `origin/${branch}`]);
     git(this.p.work, ["clean", "-fdq"]);

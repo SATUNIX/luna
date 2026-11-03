@@ -16,6 +16,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { ensureDirSafe, writeFileSafe } from "../../core/shared/safe-fs.ts";
+import { bookkeepingPaths } from "./bookkeeping.ts";
 import { exceptionsAt, scanCommits } from "../../core/prepush-scan.ts";
 import { publishRefspecs, type PublishConfig } from "./mirror.ts";
 
@@ -45,6 +47,7 @@ export interface MirrorConfig extends PublishConfig {
   readonly gitRemote?: string | null | undefined;
   /** Where the integration branch is synchronised and published; null means nowhere. */
   readonly integrationRemote?: string | null | undefined;
+  readonly integrationUpstream?: string | null | undefined;
   readonly gitIdentity: { readonly name: string; readonly email: string };
 }
 
@@ -176,9 +179,11 @@ export interface SeedOptions {
   readonly vars: Readonly<Record<string, string | number>>;
   readonly tmpDir: string;
   readonly parent?: string | null | undefined;
+  /** Additional repository-relative seed files (one file per operator proposal on streams). */
+  readonly files?: Readonly<Record<string, string>>;
 }
 
-export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDir, parent }: SeedOptions): string {
+export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDir, parent, files = {} }: SeedOptions): string {
   const base = g(["rev-parse", `refs/base/${cfg.baseRef}`]);
   const from = parent ?? base;
   const wt = path.join(tmpDir, `seed-${process.pid}`);
@@ -190,12 +195,25 @@ export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDi
       return r.stdout.trim();
     };
     const dest = path.join(wt, "autonomy");
-    fs.mkdirSync(path.join(dest, "cycles"), { recursive: true });
+    ensureDirSafe(path.join(dest, "cycles"), { root: wt });
+    const seeds: Record<string, string> = { ...files };
     for (const name of fs.readdirSync(seedDir)) {
-      fs.writeFileSync(path.join(dest, name), fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars));
+      if (cfg.integrationUpstream && name === "BACKLOG.md") continue;
+      const file = name === "HANDOFF.md" ? bookkeepingPaths(cfg, 0).handoff : `autonomy/${name}`;
+      seeds[file] = fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars);
     }
-    fs.writeFileSync(path.join(dest, "cycles", ".gitkeep"), "");
+    seeds["autonomy/cycles/.gitkeep"] = "";
+    for (const [file, content] of Object.entries(seeds)) {
+      // A stream never rewrites shared policy or another run's records. In particular an
+      // existing charter survives even when it arrived on the base of a brand-new branch.
+      if (cfg.integrationUpstream && fileAt(g, from, file) !== null) continue;
+      writeFileSafe(path.join(wt, file), content, { root: wt, mode: 0o644 });
+    }
     wg(["add", "autonomy"]);
+    if (!wg(["diff", "--cached", "--name-only"])) {
+      g(["update-ref", `refs/heads/${cfg.integrationBranch}`, from, parent ?? ""]);
+      return from;
+    }
     wg(["commit", "--quiet", "-m", `chore(autonomy): seed ${cfg.integrationBranch}\n\nCharter, backlog and handoff for autonomous improvement runs, first used by run\n${cfg.run} and cut from ${cfg.baseRef} at ${base.slice(0, 12)}. See docs/autonomy.md.`]);
     const sha = wg(["rev-parse", "HEAD"]);
     g(["update-ref", `refs/heads/${cfg.integrationBranch}`, sha, parent ?? ""]);
@@ -216,12 +234,42 @@ export function mergeBaseIntoIntegration(g: HostGit, cfg: MirrorConfig): { merge
   const head = g(["rev-parse", ref]);
   const base = g(["rev-parse", `refs/base/${cfg.baseRef}`]);
   if (isAncestor(g, base, head)) return { merged: false };
-  const tree = g(["merge-tree", "--write-tree", "--no-messages", head, base], { allowFail: true });
+  const tree = mergeTree(g, head, base);
   if (tree === null) return { merged: false, conflict: true };
   const msg = `chore(autonomy): merge ${cfg.baseRef} into ${cfg.integrationBranch}\n\nBrings ${cfg.baseRef} at ${base.slice(0, 12)} into the integration branch before run ${cfg.run}.`;
   const sha = g([...identity(cfg), "commit-tree", tree.split("\n")[0] ?? "", "-p", head, "-p", base, "-m", msg]);
   g(["update-ref", ref, sha, head]);
   return { merged: true, sha };
+}
+
+export type UpstreamSync =
+  | { outcome: "merged"; upstream: string; head: string; sha: string }
+  | { outcome: "conflict" | "up_to_date"; upstream: string; head: string }
+  | { outcome: "fetch_failed"; upstream: string };
+
+/** Host-only fetch and merge at EVERY cycle start. A failed fetch never reuses a stale ref. */
+export function syncUpstream(g: HostGit, cfg: MirrorConfig): UpstreamSync | undefined {
+  const upstream = cfg.integrationUpstream;
+  if (!upstream) return undefined;
+  const target = "refs/upstream/trunk";
+  g(["update-ref", "-d", target]);
+  const remote = integrationRemote(cfg);
+  if (!remote || g(["fetch", "--quiet", "--no-tags", remote, `+refs/heads/${upstream}:${target}`], { allowFail: true }) === null) return { outcome: "fetch_failed", upstream };
+  const head = g(["rev-parse", target]);
+  const ref = `refs/heads/${cfg.integrationBranch}`;
+  const integration = g(["rev-parse", ref]);
+  if (isAncestor(g, head, integration)) return { outcome: "up_to_date", upstream, head };
+  const tree = mergeTree(g, integration, head);
+  if (tree === null) return { outcome: "conflict", upstream, head };
+  const sha = g([...identity(cfg), "commit-tree", tree.split("\n")[0] ?? "", "-p", integration, "-p", head, "-m", `chore(autonomy): merge ${upstream} into ${cfg.integrationBranch}\n\nHost upstream sync before a cycle of run ${cfg.run}.`]);
+  g(["update-ref", ref, sha, integration]);
+  return { outcome: "merged", upstream, head, sha };
+}
+
+/** Bare mirrors have no index/worktree attributes. Read .gitattributes from our integration
+ * commit explicitly; never install repository-supplied custom driver commands. */
+function mergeTree(g: HostGit, ours: string, theirs: string): string | null {
+  return g(["-c", `attr.tree=${ours}`, "merge-tree", "--write-tree", "--no-messages", ours, theirs], { allowFail: true });
 }
 
 /** A cycle starts from the integration head: the (local) working branch is moved there. */

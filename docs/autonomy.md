@@ -168,7 +168,7 @@ closed choice (no egress, no services, no unattended approval, no promotion), ne
 |---|---|---|
 | `implement` | finite | Build or change something to a specification until the acceptance checks pass and the independent review approves. |
 | `deploy` | finite | Like `implement`, plus run-scoped services the supervisor starts on the run's internal network, so the worker can build, deploy and test against them. Nothing leaves the zone. |
-| `self-improve` | cycling | Repeated review, plan, improve and verify cycles on a repository, each merged into one integration branch only when it completes, passes the checks and passes a merge review (see below). Optional: one template among several. |
+| `self-improve` | cycling | Repeated review, plan, improve and verify cycles on a repository, each merged into one integration branch when it has commits, passes the checks and passes a merge review (see below). Optional: one template among several. |
 
 A template supplies prompts and defaults; everything that must not vary (lifecycle, lock,
 boundary, budgets, acceptance, recovery, promotion, evidence) belongs to the engine.
@@ -254,7 +254,7 @@ Public deployment, production changes and anything outside the zone are never do
 ## The `self-improve` template
 
 The original behaviour of this package, now one template: repeated cycles on a repository, each a
-fresh pi session that reviews, plans, improves and verifies, and every cycle that completes, passes
+fresh pi session that reviews, plans, improves and verifies, and every cycle with commits that passes
 the acceptance checks and passes a merge review is fast-forwarded into one integration branch
 (`pi-autonomy/integration` by default, never `main`), from which the next cycle starts. Nothing is
 force-pushed, and by default nothing leaves the machine: promotion is `local-branch` unless you choose
@@ -307,9 +307,8 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   limits (a 5-hour cycle ceiling, and the run's budget) never consult it. These limits are the
   template's defaults and can be changed in `templateOptions.limits` (`tests/autonomy-smoke.ts`,
   `tests/autonomy-selfimprove-smoke.ts`).
-- **Modes.** Cycles work in *fix* mode while there is something to fix, in *improve* mode only when a
-  review finds nothing (and the need must be evidenced), and in *consolidate* mode for the cycle after
-  a merged improvement. A run whose reviews find nothing three times in a row (`nothingFoundToStop`)
+- **Modes.** Cycles work in *fix* mode for repairs and *improve* mode for evidenced board improvements. Consolidation of a previous improvement follows higher-priority
+  gate, upstream conflict and board work. A run whose reviews find nothing three times in a row (`nothingFoundToStop`)
   stops rather than inventing work: the acceptance checks run once more on the integration branch,
   and if they pass the run **succeeds** with the reason `backlog_exhausted`; if they are red it fails
   as `final_gate_red`. The same final check ends a run that reaches its cycle limit.
@@ -352,6 +351,8 @@ pi-autonomy status --run <run> --json
 pi-autonomy export --run <run> --out <directory> --json
 pi-autonomy steer --run <run> --message "Focus the current work on recovery"
 pi-autonomy backlog --run <run> --message "Check compaction recovery with evidence"
+pi-autonomy board --run <run> --file board.json
+pi-autonomy board --run <run> --json
 pi-autonomy reconfigure --run <run> --budget-usd 100
 pi-autonomy pause --run <run>
 pi-autonomy cancel --run <run> --reason "End the experiment"
@@ -365,6 +366,107 @@ cycle in state, and are replayed when that cycle resumes. It does not interrupt 
 and is available only for self-improve (`tests/autonomy-cli-smoke.ts`,
 `tests/autonomy-selfimprove-smoke.ts`). Backlog text is operator authority: keep the run directory
 host-owned and out of worker mounts.
+
+`board --file` validates and atomically replaces `control/board.json`, exclusively for self-improve
+runs. `board --json` returns the current board (an empty items list for older runs). The format is:
+
+```json
+{
+  "stream": "ux",
+  "items": [{
+    "id": "V-01",
+    "title": "Improve the menu",
+    "priority": "P1",
+    "acceptance": "A tested keyboard workflow",
+    "status": "ready"
+  }]
+}
+```
+
+`stream`, item `detail`, `acceptance` and `status` are optional. Priorities are `P0`–`P3`;
+statuses are `ready`, `in_progress` or `blocked`. Unknown keys, duplicate ids, ids outside
+`^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and detail/acceptance over
+2000 characters are rejected. Stream names are limited to 200 characters, ids to 64 characters,
+and input files to 2 MiB. Each cycle prompt reads the host-owned board afresh and shows the top
+two nonblocked items by priority, preserving file order for ties. The worker cannot write this file;
+its exact `Board: <ID> done|progress|blocked - <one sentence>` report lines become
+`selfImprove.history[].board` in `status --json`, without changing board statuses. The steward
+verifies completion and updates the board; the host ignores malformed report lines and bounds
+notes to 500 characters (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+
+The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
+items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (6) tests/docs,
+(7) cleanup. New worker ideas belong in `autonomy/BACKLOG.md` as proposals (on streams, in the
+individual proposal files described below) unless they block an
+assigned item. The merge reviewer receives the claimed board items (or the two assigned items
+when no claim is present), their acceptance, the assigned order and this precedence from the
+prompt's host-held board snapshot. It judges actual progress, churn and lower-priority detours. Unknown claimed ids refuse
+merge. Green partial cycles with new commits also receive independent review, even with normal
+cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
+for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
+
+Set `templateOptions.integration.upstream` to a branch such as `integration/luna`, different from
+`integration.branch`. Before every new cycle the host fetches it from the promotion remote and
+creates a merge commit on the run's integration branch when clean, then starts the cycle there.
+A conflict leaves integration unchanged and supplies `refs/upstream/trunk` through the offline
+bundle, with a P0 instruction to merge it, preserve both sides' intent and re-verify. The host
+refuses merging a cycle that omits that upstream ancestry. A failed fetch is logged and the cycle
+continues from its local integration head; `cycle.json`, state history and supervisor logs record
+`merged` (with sha), `conflict`, `up_to_date` or `fetch_failed`. Without the option, existing runs
+retain their behaviour and need no new state fields. New upstream ref transport requires a rebuilt
+autonomy worker image (`tests/autonomy-selfimprove-smoke.ts`).
+
+Parallel streams use separate integration branches, each following a shared upstream trunk. A
+steward supplies a board slice to each run; an external integrator can combine reviewed stream
+branches into the trunk, which flows back at the next cycle. The CLI does not supply an integrator
+or schedule board updates; the tests above cover individual streams, not a live multi-stream run.
+
+When `templateOptions.integration.upstream` is set, bookkeeping is isolated by run:
+
+- Handoffs use `autonomy/runs/<run>/HANDOFF.md`, including supervisor resume briefings,
+  automatic worker restarts, manager inputs and merge review inputs.
+- Each new proposal uses a separate `autonomy/proposals/<run>-<NN>-<slug>.md` file. `NN` is the
+  cycle number, padded to two digits; seeded operator brief items use `00`. Choose a different,
+  descriptive slug for each proposal. The stream never seeds or is instructed to edit the shared
+  `autonomy/BACKLOG.md`.
+- `autonomy/CHARTER.md` remains shared. Stream seeding creates it only when missing, including
+  when adopting an existing integration branch. Existing charters and bookkeeping files are
+  preserved. The cycle prompt supplies the current run's paths even when an older charter names
+  the shared handoff or backlog. Cycle directories remain `autonomy/cycles/<run>/<NN>/`.
+
+Runs without upstream retain `autonomy/HANDOFF.md` and `autonomy/BACKLOG.md`. Paths are derived
+from the contract; existing state files need no migration. These behaviours are pinned by
+`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts` and the reminder and
+restart checks in `tests/autonomy-smoke.ts`. Enabling upstream on a previously shared-path run
+does not migrate its old handoff; start a new stream run or carry its context over explicitly.
+
+The self-improve merge review's 60,000-character diff budget excludes only this run's cycle
+records at `autonomy/cycles/<run>/` and, with upstream set, `autonomy/runs/<run>/`, alongside
+the existing lockfile exclusion. Other runs' records, proposals and other `autonomy/` files
+remain budgeted. The reviewer gets a separate host `git diff --stat` of all excluded records
+(a failed read or output over 256 KiB refuses merge), plus the current report clipped to
+6,000 characters of head and tail with a cut marker. The complete changed-path list still
+drives control-path checks. Real code over budget and unreadable diffs still refuse merge,
+including with review disabled (`tests/autonomy-review-inputs-smoke.ts`).
+
+The repository's `.gitattributes` uses `CHANGELOG.md merge=union`, retaining both sides of
+overlapping changelog additions. Host upstream and base merges use
+`git -c attr.tree=<integration-head> merge-tree --write-tree`, so a bare mirror reads committed
+attributes without a worktree or index. The attributes must already be committed on the
+integration side, and host Git must support `attr.tree`; older Git can still report a conflict.
+Cycle integration itself is a fast-forward and performs no content merge. The two host content
+merge paths and the fast-forward are covered by `tests/autonomy-smoke.ts`. Union merging does
+not validate changelog wording, ordering or duplicates; review the resulting text. There is no
+additional shared journal: cycle reports and individual proposals already have separate paths.
+
+```mermaid
+flowchart LR
+    board[Steward board slices] --> streams[Separate stream runs]
+    trunk[Shared upstream trunk] -->|cycle-start host merge| streams
+    streams -->|gate and review| branches[Stream branches]
+    branches --> integrator[External integrator]
+    integrator --> trunk
+```
 
 For a file-only stop, create **`STOP`** in the run directory. At the next control checkpoint the
 worker is stopped, committed work is synced, the current cycle is retained, status becomes

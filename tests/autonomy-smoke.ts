@@ -348,6 +348,77 @@ await check("publication and promotion refuse a push when the host leak scan can
   assert.equal(calls.includes("push"), false, "no push after a failed scan, even on promotion");
 });
 
+await check("cycle reminders and automatic restart briefings use stream bookkeeping paths and preserve legacy defaults", async () => {
+  for (const stream of [false, true]) {
+    const bookkeeping = stream ? { handoff: "autonomy/runs/ux/HANDOFF.md", proposals: "autonomy/proposals/ux-01-<slug>.md" } : undefined;
+    const follow = fakeRuntime({ manager: new Error("unexpected manager"), script: ({ minute, emit, report }) => {
+      if (minute === 3) report();
+      emit({ type: "agent_settled" });
+    } });
+    assert.equal((await runCycle({ n: 1, cfg, rt: follow.rt, prompt: "begin", ...(bookkeeping ? { bookkeeping } : {}) })).outcome, "completed");
+    assert.equal(follow.sent.length, 3);
+    assert.ok(follow.sent[1]?.message?.includes(bookkeeping?.proposals ?? "BACKLOG.md"));
+    assert.ok(follow.sent[1]?.message?.includes(bookkeeping?.handoff ?? "HANDOFF.md"));
+    assert.ok(follow.sent[2]?.message?.includes(bookkeeping?.handoff ?? "HANDOFF.md"));
+    const restarted = fakeRuntime({ manager: new Error("unexpected manager"), script: ({ attempt, emit, exit, report }) => {
+      if (attempt === 1) exit(137);
+      else { report(); emit({ type: "agent_settled" }); }
+    } });
+    assert.equal((await runCycle({ n: 1, cfg, rt: restarted.rt, prompt: "begin", ...(bookkeeping ? { bookkeeping } : {}) })).outcome, "completed");
+    assert.ok(restarted.sent[1]?.message?.includes(`Re-read ${bookkeeping?.handoff ?? "autonomy/HANDOFF.md"}`));
+    if (stream) for (const message of [...follow.sent.slice(1), ...restarted.sent.slice(1)]) assert.doesNotMatch(message.message ?? "", /autonomy\/HANDOFF.md|autonomy\/BACKLOG.md/);
+  }
+});
+
+await check("bare host merges honour union attributes for upstream sync and base adoption; cycle integration stays fast-forward only", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-union-"));
+  try {
+    const sh = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    const src = path.join(tmp, "source"); fs.mkdirSync(src);
+    sh(src, "init", "--quiet", "-b", "main");
+    const attributes = fs.readFileSync(new URL("../.gitattributes", import.meta.url), "utf8");
+    assert.match(attributes, /^CHANGELOG\.md merge=union$/m);
+    fs.writeFileSync(path.join(src, ".gitattributes"), attributes);
+    const initial = "# Changelog\n\n## Unreleased\n\n## Released\n";
+    fs.writeFileSync(path.join(src, "CHANGELOG.md"), initial);
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "base with union attributes");
+    const base = sh(src, "rev-parse", "HEAD");
+    sh(src, "checkout", "--quiet", "-b", "stream/core");
+    fs.writeFileSync(path.join(src, "CHANGELOG.md"), initial.replace("## Unreleased", "## Unreleased\n\n- Core stream entry"));
+    sh(src, "commit", "--quiet", "-am", "core changelog");
+    const ours = sh(src, "rev-parse", "HEAD");
+    sh(src, "checkout", "--quiet", "-b", "integration/trunk", base);
+    fs.writeFileSync(path.join(src, "CHANGELOG.md"), initial.replace("## Unreleased", "## Unreleased\n\n- UX stream entry"));
+    sh(src, "commit", "--quiet", "-am", "ux changelog");
+    const theirs = sh(src, "rev-parse", "HEAD");
+    const cfg = { ...resolveConfig({ run: "union-test", gitRemote: src }), integrationBranch: "stream/core", integrationUpstream: "integration/trunk" };
+    const g = gm.initMirror(path.join(tmp, "mirror.git"));
+    g(["fetch", "--quiet", src, "+refs/heads/*:refs/heads/*"]);
+    // No useful HEAD, index, worktree or info/attributes in this bare mirror.
+    assert.equal(g(["rev-parse", "--is-bare-repository"]), "true");
+    const assertMerged = (sha: string): void => {
+      assert.equal(gm.fileAt(g, sha, "CHANGELOG.md"), initial.replace("## Unreleased", "## Unreleased\n\n- Core stream entry\n- UX stream entry").trim());
+      assert.deepEqual(g(["rev-list", "--parents", "-n", "1", sha]).split(" ").slice(1), [ours, theirs]);
+    };
+    const upstream = gm.syncUpstream(g, cfg);
+    assert.ok(upstream?.outcome === "merged");
+    assertMerged(upstream.sha);
+    g(["update-ref", "refs/heads/stream/core", ours]);
+    g(["update-ref", "refs/base/main", theirs]);
+    const adopted = gm.mergeBaseIntoIntegration(g, cfg);
+    assert.ok(adopted.merged); assertMerged(adopted.sha);
+    // Integration adopts a reviewed descendant tree without doing a content merge.
+    g(["update-ref", "refs/heads/stream/core", ours]);
+    assert.deepEqual(gm.integrate(g, cfg, adopted.sha), { merged: true, from: ours });
+    assertMerged(g(["rev-parse", "refs/heads/stream/core"]));
+    assert.equal(gm.integrate(g, cfg, theirs).merged, false);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 await check("git mirror: integration branch seeded and continued, fast-forward only, tags never move, nothing forced", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-git-"));
   try {
@@ -486,13 +557,16 @@ await check("merge review: only MERGE or REJECT with a reason; retried, then fai
   assert.ok(text.length < 100_000, "the diff is clipped");
   assert.match(text, /## Verification record\n\(missing\)/);
   let calls = 0;
+  const huge = await reviewCycle(bundle, async () => { calls++; return '{"verdict":"MERGE","reason":"x"}'; });
+  assert.deepEqual([huge.verdict, huge.failed, calls], ["REJECT", true, 0], "an over-budget diff is refused before any model call");
+  const small = { ...bundle, diff: "x".repeat(2_000) };
   const flaky = async () => { calls++; if (calls === 1) throw new Error("HTTP 502"); return '{"verdict":"REJECT","reason":"no test for the change"}'; };
   const pauses: number[] = [];
   const sleep = async (ms: number): Promise<void> => { pauses.push(ms); };
-  assert.equal((await reviewCycle(bundle, flaky, { sleep })).verdict, "REJECT");
+  assert.equal((await reviewCycle(small, flaky, { sleep })).verdict, "REJECT");
   assert.equal(calls, 2, "a failed call is retried");
   calls = 0;
-  const down = await reviewCycle(bundle, async () => { calls++; return "not json"; }, { sleep });
+  const down = await reviewCycle(small, async () => { calls++; return "not json"; }, { sleep });
   assert.equal(calls, 3, "three attempts");
   assert.deepEqual(pauses, [30_000, 30_000, 60_000], "with growing pauses");
   assert.deepEqual([down.verdict, down.failed], ["REJECT", true], "no usable review: not merged");

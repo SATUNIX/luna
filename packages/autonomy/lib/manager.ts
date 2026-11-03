@@ -98,6 +98,7 @@ export interface ManagerBundle {
   activity?: string | null | undefined;
   plan?: string | null | undefined;
   handoff?: string | null | undefined;
+  handoffPath?: string;
 }
 
 /** The manager's user prompt: everything it may know about the cycle, bounded in size. */
@@ -119,7 +120,7 @@ export function buildBundle(b: ManagerBundle): string {
     "## Cycle plan",
     clip(b.plan || "(not written yet)", 3000),
     "",
-    "## Handoff (autonomy/HANDOFF.md)",
+    `## Handoff (${b.handoffPath ?? "autonomy/HANDOFF.md"})`,
     clip(b.handoff || "(none)", 2000),
   ].join("\n");
 }

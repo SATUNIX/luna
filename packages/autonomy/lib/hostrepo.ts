@@ -9,6 +9,7 @@ import fs from "node:fs";
 import * as gm from "./gitmirror.ts";
 import type { HostGit, IngestResult } from "./gitmirror.ts";
 import { pathsOutsideAreas } from "./glob.ts";
+import { readReviewDiff, type ReviewDiffRead, type ReviewRecordScope } from "./review.ts";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -123,17 +124,15 @@ export class HostRepo {
   }
 
   /**
-   * The whole diff the merge review judges (lockfiles excluded), or why it cannot be had. Never
+   * The whole diff the merge review judges (lockfiles and optional own-run records excluded),
+   * plus the excluded records' stat, or why it cannot be had. Never
    * clipped and never empty-on-failure: a diff over `budget` characters is `over-budget` (git's
    * output is capped at 4 bytes per character, so a huge diff is refused without being read
    * whole), and a git failure or timeout is `unreadable`. Callers reject both
    * (tests/autonomy-review-inputs-smoke.ts).
    */
-  reviewDiff(from: string, to: string, budget: number): { ok: true; text: string } | { ok: false; reason: "over-budget" | "unreadable"; detail: string } {
-    const read = gm.gitBounded(this.git(), ["diff", "--no-color", "--no-ext-diff", from, to, "--", ".", ":(exclude)package-lock.json"], budget * 4 + 4096);
-    if (!read.ok) return { ok: false, reason: read.overflow ? "over-budget" : "unreadable", detail: read.detail };
-    if (read.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${read.stdout.length} characters` };
-    return { ok: true, text: read.stdout };
+  reviewDiff(from: string, to: string, budget: number, scope?: ReviewRecordScope): ReviewDiffRead {
+    return readReviewDiff(from, to, budget, (args, maxBytes) => gm.gitBounded(this.git(), args, maxBytes), scope);
   }
 
   logSince(from: string, to: string): string { return gm.logSince(this.git(), from, to); }

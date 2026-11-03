@@ -9,7 +9,7 @@
  * supervisor, resume with an answer, reconfigure, promote, export, boundary, and the JSON shapes
  * the pi extension consumes. A last check runs the real script as a subprocess.
  */
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -598,6 +598,25 @@ await check("the real script works as a subprocess: templates, init, plan (the p
   assert.equal(cliJson(start.stdout).refusal, "authorisation_required");
   assert.equal(run().status, 2);
   assert.match(run("--help").stdout, /usage: pi-autonomy/);
+});
+
+await check("a detached supervisor's log line is written exactly once", () => {
+  const dir = scratch();
+  const logPath = path.join(dir, "supervisor.log");
+  const enginePath = path.join(HERE, "..", "packages", "autonomy", "lib", "engine.ts");
+  const script = [
+    `import fs from "node:fs";`,
+    `import { defaultEngineLog } from ${JSON.stringify(enginePath)};`,
+    `const store = { p: { log: ${JSON.stringify(logPath)} }, log: (line) => fs.appendFileSync(${JSON.stringify(logPath)}, line + "\\n") };`,
+    `const rt = { log: (line) => console.log(line) };`,
+    `defaultEngineLog(store, rt)("state running");`,
+  ].join("\n");
+  const fd = fs.openSync(logPath, "a");
+  let r: SpawnSyncReturns<string>;
+  try { r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", fd, fd], encoding: "utf8" }); } finally { fs.closeSync(fd); }
+  assert.equal(r.status, 0, `the child failed: ${r.stderr}`);
+  const lines = fs.readFileSync(logPath, "utf8").split("\n").filter((line) => line !== "");
+  assert.deepEqual(lines, ["state running"], "the detached log holds the line once");
 });
 
 for (const d of dirs) rm(d);

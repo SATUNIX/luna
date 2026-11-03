@@ -28,7 +28,7 @@ import { planReconfigure } from "./reconfigure.ts";
 import { type Measured, type TakenNotebook, HIDDEN_CHARS, WORKER_NOTEBOOK, appendGeneration, readNotebook, renderNotebook, takeWorkerNotebook } from "./notebook.ts";
 import { clip } from "./templates/common.ts";
 import { BoundaryError, LockLost } from "./errors.ts";
-import { writeJsonAtomic } from "./fsutil.ts";
+import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
 
 export const IDLE_MINUTES = 20; // a worker session that emits nothing for this long is treated as stalled
 export const MAX_ACTIVITY_LINES = 60;
@@ -253,6 +253,18 @@ const isCompleteBudget = (b: Budget | Budget<undefined>): b is Budget => [b.tota
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const textField = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
+/**
+ * The engine's default log: append to the canonical run log once, then echo to the console only when
+ * stdout is not that same file. A detached supervisor redirects stdout into supervisor.log, so
+ * echoing unconditionally would write every line twice.
+ */
+export function defaultEngineLog(store: RunStore, rt: Runtime): (line: string) => void {
+  return (line) => {
+    store.log(line);
+    if (!stdoutIsFile(store.p.log)) rt.log?.(line);
+  };
+}
+
 export class Engine {
   contract: RunContract;
   cfg: RunConfig;
@@ -285,7 +297,7 @@ export class Engine {
     this.effortApi = effortApi;
     this.deps = deps;
     this.repo = rt.repo;
-    this.log = log ?? ((line) => { store.log(line); rt.log?.(line); });
+    this.log = log ?? defaultEngineLog(store, rt);
   }
 
   /** The live run state; set by run() (or by a caller that drives promote() itself). */

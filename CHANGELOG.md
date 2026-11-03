@@ -31,6 +31,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `pi-autonomy resume` brings a run back up after its supervisor stopped: the new supervisor runs
+  preflight (engine, image and inference key) before the boundary probe, instead of failing with
+  "the inference key has not been read" (`tests/autonomy-run-smoke.ts`).
 - Autonomous runs' acceptance gate no longer runs out of processes: every helper container starts
   node under tini, so orphaned children are reaped instead of filling `--pids-limit`
   (`tests/autonomy-smoke.ts`). The gate's checks also pass inside its rootless, offline container:

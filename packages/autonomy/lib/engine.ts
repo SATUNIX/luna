@@ -378,7 +378,7 @@ export class Engine {
         return this.state;
       }
       if (this.status === "setup") await this.setup();
-      else if (!["succeeded", "failed", "cancelled"].includes(this.status) && !(this.status === "budget_exhausted" && !this.store.pending().some((m) => m.kind === "reconfigure"))) await this.bringUp(); // the probe runs again on every resume
+      else if (!["succeeded", "failed", "cancelled"].includes(this.status) && !(this.status === "budget_exhausted" && !this.store.pending().some((m) => m.kind === "reconfigure"))) { await this.rt.preflight(this.contract); await this.bringUp(); } // preflight (engine, image, inference key) and the probe run again on every resume
       if (this.status === "ready") this.go("running", { reason: "starting" });
       await this.loop();
     } catch (error) {

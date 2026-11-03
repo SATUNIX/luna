@@ -132,6 +132,8 @@
     "smoke:check-all-npm": "node tests/check-all-npm-smoke.ts",
     "smoke:fuzz-firewall-classifier": "node tests/fuzz-firewall-classifier-smoke.ts",
     "smoke:fuzz-redaction": "node tests/fuzz-redaction-smoke.ts",
+    "smoke:github-settings-check": "node tests/github-settings-check-smoke.ts",
+    "settings:check": "node packages/core/github-settings-check.ts",
     "smoke:fuzz-workspace-paths": "node tests/fuzz-workspace-paths-smoke.ts",
     "smoke:command-contract": "node tests/command-contract-smoke.ts",
     "smoke:command-menu": "node tests/command-menu-smoke.ts",

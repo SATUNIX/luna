@@ -222,7 +222,7 @@ Dependabot proposes action bumps weekly with a 7-day cooldown; its pull request 
 Workflows cannot change repository settings, and nothing in this repository does.
 `.github/expected-settings.json` is the declared policy; an administrator applies it in GitHub,
 which is where it is enforced, and then changes the file in a reviewed pull request. A maintainer
-drift check compares the live settings with the file using read-only requests; it needs an
+drift check (`npm run settings:check`) compares the live settings with the file using read-only requests; it needs an
 administrator's login, because several settings are visible only to administrators. The
 [Operator checklist](operator-checklist.md) lists the steps.
 

@@ -40,7 +40,7 @@ round.
 - [ ] **Stray branches**: review and delete branches nobody owns.
 
 Before each release, compare the live settings with `.github/expected-settings.json` using the
-maintainers' read-only drift check, run with an administrator's login, and keep its JSON output
+maintainers' read-only drift check (`npm run settings:check -- --json`), run with an administrator's login, and keep its JSON output
 with the release.
 
 ## Release credentials and publication

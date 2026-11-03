@@ -23,6 +23,10 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   run by `check:all` and in longer weekly security runs (`tests/fuzz-firewall-classifier-smoke.ts`,
   `tests/fuzz-redaction-smoke.ts`, `tests/fuzz-workspace-paths-smoke.ts`). Coverage reporting and
   a generated interface reference accompany the security and contributor documentation fixes.
+- The read-only repository settings drift check now ships in the public tree as
+  `npm run settings:check` (`packages/core/github-settings-check.ts`, GET requests only, needs an
+  administrator's `gh` login), and the README shows the OpenSSF Best Practices badge
+  (`tests/github-settings-check-smoke.ts`).
 - **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
 ### Fixed

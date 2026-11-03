@@ -151,6 +151,7 @@ await check("a finite task: starts, fails acceptance (a tampered check does not 
   const second = h.engine({ rt: rtB, pid: 222, lock: h.lock(222, (pid) => pid !== 111) });
   assert.match((second.acquired.acquired ? second.acquired.tookOver?.why : undefined) ?? "", /no longer exists/);
   await second.engine.run({ takeover: true });
+  assert.equal(rtB.calls.preflight, 1, "a resuming supervisor runs preflight (and so reads the inference key) before bringing the zone up");
   s = h.state();
   assert.equal(s.status, "succeeded", JSON.stringify(s.outcome));
   assert.deepEqual([s.outcome?.status, s.outcome?.reason], ["succeeded", "acceptance_passed"]);

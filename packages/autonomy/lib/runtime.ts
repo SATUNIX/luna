@@ -281,6 +281,8 @@ export class DockerRuntime implements Runtime {
 
   // --- bring up the zone: networks, relay, proxy, services, probe -------------------------------------
   async bringUp({ log }: ZoneContext): Promise<BoundaryReport> {
+    // A supervisor resuming a prepared run never ran prepare(), which is what opened the mirror.
+    if (fs.existsSync(this.p.mirror)) this.repo.ensureOpen();
     this.networks();
     await this.writeModelSpecs(log);
     await this.startRelay(log);

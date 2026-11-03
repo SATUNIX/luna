@@ -51,6 +51,12 @@ export class HostRepo {
     return this;
   }
 
+  /** Open the existing mirror unless this instance already has (a supervisor resuming a prepared run). */
+  ensureOpen(): this {
+    if (!this.g) this.open();
+    return this;
+  }
+
   /** The git runner, once init() or open() has run. */
   git(): HostGit {
     if (!this.g) throw new Error(`the host repository ${this.gitDir} is not open (call init() or open() first)`);

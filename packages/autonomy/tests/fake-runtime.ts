@@ -213,6 +213,8 @@ export class FakeRuntime implements Runtime {
   }
 
   async bringUp(): Promise<BoundaryReport> {
+    // As the real runtime: the relay needs the inference key, which only preflight() reads.
+    if (this.calls.preflight === 0) throw new Error("the inference key has not been read (preflight has not run)");
     this.calls.bringUp++;
     if (!this.repo.g) this.repo.open();
     return this.boundaryReport;

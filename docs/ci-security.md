@@ -222,7 +222,7 @@ Dependabot proposes action bumps weekly with a 7-day cooldown; its pull request 
 Workflows cannot change repository settings, and nothing in this repository does.
 `.github/expected-settings.json` is the declared policy; an administrator applies it in GitHub,
 which is where it is enforced, and then changes the file in a reviewed pull request. A maintainer
-drift check compares the live settings with the file using read-only requests; it needs an
+drift check (`npm run settings:check`) compares the live settings with the file using read-only requests; it needs an
 administrator's login, because several settings are visible only to administrators. The
 [Operator checklist](operator-checklist.md) lists the steps.
 
@@ -237,7 +237,7 @@ administrator's login, because several settings are visible only to administrato
 | Allowed actions, SHA pinning required | `actions` | [Allowed actions](#allowed-actions) |
 | Read-only default token; Actions cannot approve pull requests | `workflow_permissions` | Least privilege for every job |
 | Approval for fork pull-request workflows | `fork_pr_approval_policy` | Untrusted workflows do not run unreviewed |
-| Secret scanning, push protection, non-provider patterns, validity checks | `security_and_analysis` | The push-protection row in [Gating](#gating) |
+| Secret scanning and push protection (non-provider patterns and validity checks are off: they need GitHub Secret Protection, which this repository does not have) | `security_and_analysis` | The push-protection row in [Gating](#gating) |
 | Dependabot alerts and security updates | `vulnerability_alerts`, `security_and_analysis` | Alerts on `main` ([Vulnerability management](vulnerability-management.md)) |
 | The `npm` environment: required reviewer, `v*` tags only | `environments.npm` | The optional npm publish in `release.yml` |
 

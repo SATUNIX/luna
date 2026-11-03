@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/SATUNIX/luna/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/luna/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.bestpractices.dev/projects/15949"><img src="https://www.bestpractices.dev/projects/15949/badge" alt="OpenSSF Best Practices"></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.2.4--beta.11-blue" alt="version 0.2.4-beta.11"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>

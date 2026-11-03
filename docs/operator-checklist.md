@@ -29,9 +29,10 @@ round.
   [CI security](ci-security.md#allowed-actions).
 - [ ] **Fork pull requests** need approval to run workflows for all external contributors
   (`fork_pr_approval_policy`).
-- [ ] **Security and analysis**: secret scanning, push protection, non-provider patterns, validity
-  checks, Dependabot alerts and Dependabot security updates (`security_and_analysis`,
-  `vulnerability_alerts`), and private vulnerability reporting for `SECURITY.md`.
+- [ ] **Security and analysis**: secret scanning, push protection, Dependabot alerts and Dependabot
+  security updates (`security_and_analysis`, `vulnerability_alerts`), and private vulnerability
+  reporting for `SECURITY.md`. Non-provider patterns and validity checks stay off: they need GitHub
+  Secret Protection, which this repository does not have, and GitHub ignores a request to enable them.
 - [ ] **The `npm` environment**, before any npm publication: a required reviewer and a deployment
   policy for `v*` tags (`environments.npm`). Bind the npm trusted publisher to it
   ([Releasing](releasing.md#npm-publication-optional)).
@@ -40,7 +41,7 @@ round.
 - [ ] **Stray branches**: review and delete branches nobody owns.
 
 Before each release, compare the live settings with `.github/expected-settings.json` using the
-maintainers' read-only drift check, run with an administrator's login, and keep its JSON output
+maintainers' read-only drift check (`npm run settings:check -- --json`), run with an administrator's login, and keep its JSON output
 with the release.
 
 ## Release credentials and publication

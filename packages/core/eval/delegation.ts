@@ -74,6 +74,8 @@ export async function installDelegation({ tier = "exhaustive", limits = { maxCon
       Reflect.deleteProperty(globalThis, EFFORT_KEY);
       Reflect.deleteProperty(globalThis, DELEGATION_KEY);
       Reflect.deleteProperty(globalThis, PROTECTIONS_KEY);
+      delete process.env.PI_CODING_AGENT_DIR;
+      delete process.env.PI_KIT_EFFORT;
       restoreEnv();
       rmWorkspace(agentDir);
     },

@@ -237,7 +237,7 @@ administrator's login, because several settings are visible only to administrato
 | Allowed actions, SHA pinning required | `actions` | [Allowed actions](#allowed-actions) |
 | Read-only default token; Actions cannot approve pull requests | `workflow_permissions` | Least privilege for every job |
 | Approval for fork pull-request workflows | `fork_pr_approval_policy` | Untrusted workflows do not run unreviewed |
-| Secret scanning, push protection, non-provider patterns, validity checks | `security_and_analysis` | The push-protection row in [Gating](#gating) |
+| Secret scanning and push protection (non-provider patterns and validity checks are off: they need GitHub Secret Protection, which this repository does not have) | `security_and_analysis` | The push-protection row in [Gating](#gating) |
 | Dependabot alerts and security updates | `vulnerability_alerts`, `security_and_analysis` | Alerts on `main` ([Vulnerability management](vulnerability-management.md)) |
 | The `npm` environment: required reviewer, `v*` tags only | `environments.npm` | The optional npm publish in `release.yml` |
 

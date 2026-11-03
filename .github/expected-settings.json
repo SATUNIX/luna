@@ -87,8 +87,8 @@
   "security_and_analysis": {
     "secret_scanning": "enabled",
     "secret_scanning_push_protection": "enabled",
-    "secret_scanning_non_provider_patterns": "enabled",
-    "secret_scanning_validity_checks": "enabled",
+    "secret_scanning_non_provider_patterns": "disabled",
+    "secret_scanning_validity_checks": "disabled",
     "dependabot_security_updates": "enabled"
   },
   "vulnerability_alerts": true,

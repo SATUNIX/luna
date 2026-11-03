@@ -36,6 +36,7 @@ const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
 interface RunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  timeout?: number;
 }
 
 function run(command: string, args: string[], options: RunOptions = {}) {
@@ -159,8 +160,16 @@ try {
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) assert.match(range, /^\d+\.\d+\.\d+$/, `${name} is pinned to an exact version, not ${range}`);
   ok(`the artefact's runtime dependencies are the documented set (${documentedNames.join(", ") || "none"}), pinned exactly`);
   if (Object.keys(pkg.dependencies ?? {}).length > 0) {
-    const install = run(npm, ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: unpacked });
-    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}`);
+    // Install exactly the declared runtime set in a scratch project, then place it in the artefact. Installing
+    // in the unpacked tree itself makes npm resolve its dev and peer dependencies too (there is no lockfile),
+    // which needs the network: the autonomy gate has none. --prefer-offline uses the npm cache when it has the
+    // versions; the timeout turns a network stall into a failure instead of eating the gate's budget.
+    const depsDir = path.join(tmp, "runtime-deps");
+    fs.mkdirSync(depsDir, { recursive: true });
+    fs.writeFileSync(path.join(depsDir, "package.json"), `${JSON.stringify({ name: "runtime-deps", private: true, dependencies: pkg.dependencies }, null, 2)}\n`);
+    const install = run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300_000 });
+    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}${install.error ? `\n${String(install.error)}` : ""}`);
+    fs.cpSync(path.join(depsDir, "node_modules"), path.join(unpacked, "node_modules"), { recursive: true });
     ok("the artefact's runtime dependencies install");
   } else {
     ok("the artefact has no runtime dependencies to install");

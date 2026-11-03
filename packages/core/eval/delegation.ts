@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fakePi, loadModule, rmWorkspace } from "./harness.ts";
+import { fakePi, isolateKitEnv, loadModule, rmWorkspace } from "./harness.ts";
 import { call, callMethod } from "./dynamic.ts";
 
 /** Per-tier delegation limits, as written to the effort config. */
@@ -46,7 +46,7 @@ const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
 
 export async function installDelegation({ tier = "exhaustive", limits = { maxConcurrent: 8, maxTotal: 64, maxScouts: 8 }, protections = ["tool-firewall", "protected-paths"] }: DelegationOptions = {}): Promise<InstalledDelegation> {
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-test-delegation-"));
-  const saved = { agent: process.env.PI_CODING_AGENT_DIR, effort: process.env.PI_KIT_EFFORT, config: process.env.PI_KIT_EFFORT_CONFIG };
+  const restoreEnv = isolateKitEnv();
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.PI_KIT_EFFORT = tier;
   fs.mkdirSync(path.join(agentDir, "pi-kit"), { recursive: true });
@@ -71,13 +71,10 @@ export async function installDelegation({ tier = "exhaustive", limits = { maxCon
     registry: (): unknown => Reflect.get(globalThis, EFFORT_KEY),
     newTurn: beforeAgentStart,
     cleanup() {
-      for (const [key, value] of [["PI_CODING_AGENT_DIR", saved.agent], ["PI_KIT_EFFORT", saved.effort]] as const) {
-        if (value === undefined) Reflect.deleteProperty(process.env, key);
-        else process.env[key] = value;
-      }
       Reflect.deleteProperty(globalThis, EFFORT_KEY);
       Reflect.deleteProperty(globalThis, DELEGATION_KEY);
       Reflect.deleteProperty(globalThis, PROTECTIONS_KEY);
+      restoreEnv();
       rmWorkspace(agentDir);
     },
   };

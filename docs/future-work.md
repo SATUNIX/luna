@@ -124,8 +124,7 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
 
 ## Web console
 
-- Two version constants still read `0.1.0` (`routes.ts`, `configinfo.ts`); the session panel shows an
-  unknown context percentage as 0%.
+- The session panel shows an unknown context percentage as 0%.
 - The login link is passed to `xdg-open` as an argument, and the token file is readable by the agent
   the console drives (both are documented in [Web console](web-console.md); the firewall classifies
   reading the token file as a credential read, which asks you but is not a lock). Moving the token

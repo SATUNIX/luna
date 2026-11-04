@@ -47,21 +47,37 @@ function run(command: string, args: string[], options: RunOptions = {}) {
 /**
  * A lockfile for the artefact's runtime dependencies, copied entry by entry from the repo root
  * package-lock.json (the artefact is packed without one). The set is closed transitively through
- * each copied entry's own `dependencies`, so `npm ci` can run offline.
+ * each copied entry's three edge fields — `dependencies`, `optionalDependencies` and
+ * `peerDependencies` — so `npm ci` can run offline. A root dependency (a key of `deps`) must have
+ * an entry in the source lock, or this throws; a transitive, optional or peer name with no entry
+ * is skipped silently because that name is not installable from this lock. Pass `source` to use a
+ * synthetic `packages` map instead of reading the root package-lock.json (for tests).
  */
-function runtimeLock(deps: Record<string, string>): Record<string, unknown> {
-  const lock = parseJson(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
-  if (!isRecord(lock) || !isRecord(lock.packages)) throw new Error("package-lock.json has no packages record");
-  const source = lock.packages;
+export function runtimeLock(deps: Record<string, string>, source?: Record<string, unknown>): Record<string, unknown> {
+  let packages: Record<string, unknown>;
+  if (source !== undefined) {
+    packages = source;
+  } else {
+    const lock = parseJson(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+    if (!isRecord(lock) || !isRecord(lock.packages)) throw new Error("package-lock.json has no packages record");
+    packages = lock.packages;
+  }
+  const roots = new Set(Object.keys(deps));
   const copied: Record<string, unknown> = {};
-  const pending = Object.keys(deps);
+  const pending = [...roots];
   for (let i = 0; i < pending.length; i += 1) {
     const name = pending[i];
     if (name === undefined || copied[`node_modules/${name}`] !== undefined) continue;
-    const entry = source[`node_modules/${name}`];
-    if (!isRecord(entry)) throw new Error(`package-lock.json has no entry for ${name}`);
+    const entry = packages[`node_modules/${name}`];
+    if (!isRecord(entry)) {
+      if (roots.has(name)) throw new Error(`package-lock.json has no entry for ${name}`);
+      continue;
+    }
     copied[`node_modules/${name}`] = entry;
-    if (isRecord(entry.dependencies)) pending.push(...Object.keys(entry.dependencies));
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
+      const edges = entry[field];
+      if (isRecord(edges)) pending.push(...Object.keys(edges));
+    }
   }
   return { lockfileVersion: 3, requires: true, packages: { "": { name: "runtime-deps", dependencies: deps }, ...copied } };
 }
@@ -145,6 +161,30 @@ function rpc(agentDir: string, home: string, cwd: string, command: { id: string;
   assert.deepEqual(fromObject.map((p) => p.filename), fromArray.map((p) => p.filename), "packReports normalises the object shape like the array shape");
   assert.deepEqual(fromArray.map((p) => p.filename), [entry.filename], "packReports reads the array shape");
   ok("packReports reads both npm pack --json shapes (array <=11, object >=12)");
+}
+
+// runtimeLock() must close the copied set over all three edge fields. quickjs-wasi (the only
+// runtime dependency today) has no edge lists, so the transitive loop never runs on the real
+// lock; this synthetic source exercises `dependencies`, `optionalDependencies` and
+// `peerDependencies`, skips a peer name with no source entry, and still throws for a missing root.
+{
+  const syntheticSource: Record<string, unknown> = {
+    "node_modules/a": { version: "1.0.0", dependencies: { b: "^1.0.0" }, optionalDependencies: { c: "^1.0.0" }, peerDependencies: { d: "^1.0.0", f: "^1.0.0" } },
+    "node_modules/b": { version: "1.0.0" },
+    "node_modules/c": { version: "1.0.0", dependencies: { e: "^1.0.0" } },
+    "node_modules/d": { version: "1.0.0" },
+    "node_modules/e": { version: "1.0.0" },
+  };
+  const lock = runtimeLock({ a: "1.0.0" }, syntheticSource);
+  const packages = lock.packages;
+  assert.ok(isRecord(packages), "runtimeLock returns a packages record");
+  assert.deepEqual(
+    Object.keys(packages).sort(),
+    ["", "node_modules/a", "node_modules/b", "node_modules/c", "node_modules/d", "node_modules/e"],
+    "runtimeLock copies dependencies, optionalDependencies and peerDependencies, and skips a peer with no entry",
+  );
+  assert.throws(() => runtimeLock({ missing: "1.0.0" }, syntheticSource), /no entry for missing/, "runtimeLock still throws for a root dependency missing from the source lock");
+  ok("runtimeLock closes over dependencies, optionalDependencies and peerDependencies, skips uninstallable names, and throws for a missing root");
 }
 
 try {

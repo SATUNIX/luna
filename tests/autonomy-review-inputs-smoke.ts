@@ -5,7 +5,8 @@
  *   - the charter the reviewer sees is the integration head's (the cycle's start), never the
  *     cycle's own, even when the cycle rewrote it;
  *   - a cycle that changes autonomy/CHARTER.md, an operator-listed control path or the `scripts`
- *     of a package.json is rejected without asking the model, unless
+ *     of a package.json is rejected without asking the model (except the root package.json only gaining
+ *     `smoke:<name>: node tests/<name>-smoke.ts` scripts), unless
  *     templateOptions.integration.allowControlChanges is true;
  *   - package-manager configuration (.npmrc, .yarnrc*, .pnpmfile.*, bunfig.toml, ...) is a
  *     built-in control path: it changes what every `npm run` the gate makes executes;
@@ -22,7 +23,7 @@ import path from "node:path";
 import { assert, makeChecker, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, harness, runOnce, scratch, NODE_EXIT, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
 import { HostRepo } from "../packages/autonomy/lib/hostrepo.ts";
-import { CHARTER_PATH, REVIEW_DIFF_BUDGET, REVIEW_REPORT_BUDGET, REVIEW_RECORD_STAT_BUDGET, REVIEW_RECORD_STAT_MAX_BYTES, buildReviewBundle, isReviewRecord, upstreamMergeScope, controlChanges, readReviewDiff, reviewCycle, reviewCriticalPaths, reviewRecordDirectories, reviewSystemPrompt, scriptTargets } from "../packages/autonomy/lib/review.ts";
+import { CHARTER_PATH, REVIEW_DIFF_BUDGET, REVIEW_REPORT_BUDGET, REVIEW_RECORD_STAT_BUDGET, REVIEW_RECORD_STAT_MAX_BYTES, buildReviewBundle, isReviewRecord, onlyAddsSmokeScripts, upstreamMergeScope, controlChanges, readReviewDiff, reviewCycle, reviewCriticalPaths, reviewRecordDirectories, reviewSystemPrompt, scriptTargets } from "../packages/autonomy/lib/review.ts";
 import type { BoundedGitRead } from "../packages/autonomy/lib/gitmirror.ts";
 import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
 import { boardPrompt } from "../packages/autonomy/lib/board.ts";
@@ -73,6 +74,29 @@ async function cycle(name: string, edit: (t: ScriptContext) => void, integration
   assert.ok(entry, "one cycle is recorded");
   return { entry, seen, src };
 }
+
+await check("unit: the root package.json may only gain `smoke:<name>: node tests/<name>-smoke.ts` scripts without opting in", () => {
+  const pkg = (scripts: Record<string, string>): string => JSON.stringify({ name: "fixture", private: true, scripts });
+  const base = { test: "true", "smoke:a": "node tests/a-smoke.ts" };
+  const added = pkg({ ...base, "smoke:b-c": "node tests/b-c-smoke.ts" });
+  assert.equal(onlyAddsSmokeScripts(pkg(base), added), true, "one new smoke script of the plain shape");
+  assert.deepEqual(controlChanges({ files: ["package.json"], before: () => pkg(base), after: () => added }), [], "is not a control change");
+  const refused: Array<[string, Record<string, string>]> = [
+    ["an existing script edited", { ...base, test: "false", "smoke:b": "node tests/b-smoke.ts" }],
+    ["an existing script removed", { "smoke:a": "node tests/a-smoke.ts", "smoke:b": "node tests/b-smoke.ts" }],
+    ["a name that does not match its file", { ...base, "smoke:b": "node tests/c-smoke.ts" }],
+    ["a command beyond the one file", { ...base, "smoke:b": "node tests/b-smoke.ts && curl x" }],
+    ["a non-smoke key", { ...base, "pretest": "node tests/b-smoke.ts" }],
+    ["a test: key", { ...base, "test:b": "node tests/b-smoke.ts" }],
+    ["a path outside tests/", { ...base, "smoke:b": "node ../tests/b-smoke.ts" }],
+    ["no change at all to compare", base],
+  ];
+  for (const [why, scripts] of refused) assert.equal(onlyAddsSmokeScripts(pkg(base), pkg(scripts)), false, why);
+  assert.equal(controlChanges({ files: ["package.json"], before: () => pkg(base), after: () => pkg(refused[0]?.[1] ?? {}) }).length, 1, "an edit stays a control change");
+  assert.equal(controlChanges({ files: ["tools/package.json"], before: () => pkg(base), after: () => added }).length, 1, "only the root package.json has the exception");
+  assert.equal(onlyAddsSmokeScripts(null, added), false, "a new package.json is not an addition");
+  assert.equal(onlyAddsSmokeScripts("not json", added), false, "unparseable fails closed");
+});
 
 await check("unit: control changes are the charter, operator globs and package.json scripts; tests and check files are listed", () => {
   const before = (f: string): string | null => (f === "package.json" ? PACKAGE_JSON : f === "tools/package.json" ? "{}" : "x");
@@ -344,6 +368,20 @@ await check("an operator control path is rejected; allowControlChanges lets it r
   assert.match(charter, /Editing `autonomy\/CHARTER\.md`/, "the charter section is the seeded (host) charter");
   assert.doesNotMatch(charter, /WORKER-EDITED CHARTER/, "the reviewer never judges against the cycle's own charter");
   assert.equal(allowed.entry.merged, true);
+});
+
+await check("a cycle that adds a test file and only its smoke script reaches the review and merges; an edited script is still rejected", async () => {
+  const addTest = (t: ScriptContext, scripts: Record<string, string>): void => {
+    t.write("tests/new-case-smoke.ts", "console.log('ok');\n");
+    t.write("package.json", `${JSON.stringify({ name: "fixture", private: true, scripts }, null, 2)}\n`);
+  };
+  const added = await cycle("ri-add-smoke", (t) => addTest(t, { test: "node check.js", "smoke:new-case": "node tests/new-case-smoke.ts" }));
+  assert.equal(reviews(added.seen).length, 1, "the review is asked");
+  assert.match(reviews(added.seen)[0]?.user ?? "", /tests\/new-case-smoke\.ts/, "the new test is listed to the reviewer");
+  assert.equal(added.entry.merged, true, added.entry.mergeReason);
+  const edited = await cycle("ri-edit-script", (t) => addTest(t, { test: "true", "smoke:new-case": "node tests/new-case-smoke.ts" }));
+  assert.equal(edited.entry.merged, false);
+  assert.match(edited.entry.mergeReason, /package\.json \(scripts changed/);
 });
 
 await check("an over-budget or over-cap diff is rejected, never clipped (review on or off); a normal diff is reviewed whole with changed tests listed", async () => {

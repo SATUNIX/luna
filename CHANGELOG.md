@@ -10,6 +10,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- Self-improve cycles can add a test without `allowControlChanges`: a root `package.json` change that
+  only adds `smoke:<name>` scripts running exactly `node tests/<name>-smoke.ts`, leaving every existing
+  script as it was, is no longer a control change (`tests/autonomy-review-inputs-smoke.ts`). Any other
+  scripts edit, the charter and package-manager configuration are still refused before review.
+
 - Self-improve cycles close the gaps the first live stream run showed. The merge review starts
   from a host ledger (the cycle's commits and shortstat), which outranks the worker's prose, plus
   host context on the upstream sync and the previous cycle; a report whose `Item:` lines leave a

@@ -55,6 +55,10 @@ export interface SandboxLimits {
   /** prlimit --as, in bytes. WebAssembly reserves address space well beyond what it uses. */
   addressSpaceBytes: number;
 }
+
+/** How long the host waits for the runner's pipes to close once the jail's launcher has exited. */
+const EXIT_GRACE_MS = 2000;
+
 export const DEFAULT_LIMITS: SandboxLimits = {
   memoryBytes: 64 * 1024 * 1024,
   sliceMs: 2000,
@@ -367,21 +371,46 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
   if (opts.signal?.aborted) return fail("aborted", "the run was aborted before it started");
 
   return new Promise<SandboxResult>((resolve) => {
-    const child = spawn(command, args, { env: {}, stdio: ["pipe", "pipe", "pipe"] });
+    // detached: the jail gets its own process group, so end() can kill every process in it. bwrap's
+    // first child holds the stdio pipes but has no --die-with-parent until its setup is done, and
+    // waits on an eventfd for the launcher; a launcher killed in that window (the idle watchdog or an
+    // abort right after spawn) leaves it blocked forever, so a kill of the launcher alone never ends the run.
+    const child = spawn(command, args, { env: {}, stdio: ["pipe", "pipe", "pipe"], detached: true });
     const controller = new AbortController();
     let settled: SandboxResult | null = null;
+    let exited = false;
+    let resolved = false;
+    let grace: NodeJS.Timeout | undefined;
     let outstanding = 0;
     let idle: NodeJS.Timeout | undefined;
     let stderr = "";
     let buffer = "";
 
+    const finish = (): void => {
+      if (resolved || !settled) return;
+      resolved = true;
+      clearTimeout(grace);
+      resolve(settled);
+    };
     const end = (result: SandboxResult): void => {
       if (settled) return;
       settled = result;
       clearTimeout(idle);
       controller.abort();
       opts.signal?.removeEventListener("abort", onAbort);
-      child.kill("SIGKILL");
+      if (!exited && child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+      // A process that left the group (bwrap's --new-session) and outlived the kill must not hold the run
+      // open: closing stdin ends the runner (it exits when stdin closes), and the run settles on exit, not on close.
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      if (exited) finish();
     };
     const onAbort = (): void => { end(fail("aborted", "the run was aborted")); };
     opts.signal?.addEventListener("abort", onAbort, { once: true });
@@ -481,17 +510,30 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
     });
     child.stdin.on("error", () => undefined);
     child.on("error", (e) => {
+      exited = true;
       end(fail("crash", `the sandbox did not start: ${e.message}`));
-      if (settled) resolve(settled);
+      finish();
+    });
+    const exitResult = (code: number | null, sig: NodeJS.Signals | null): SandboxResult => {
+      const xcpu = sig === "SIGXCPU" || code === 128 + 24;
+      return xcpu
+        ? fail("cpu", `the run used more than ${String(limits.cpuSeconds)} CPU seconds`)
+        : fail("crash", `the runner exited (${sig ?? `code ${String(code)}`}) without a result${stderr ? `: ${stderr.trim().split("\n").slice(-3).join(" | ")}` : ""}`);
+    };
+    child.on("exit", (code, sig) => {
+      exited = true;
+      if (settled) {
+        finish();
+        return;
+      }
+      // Normally "close" follows once the pipes drain the runner's last lines. If something outside
+      // the group still holds them, end the run after a grace period instead of waiting on them forever.
+      grace = setTimeout(() => { end(exitResult(code, sig)); finish(); }, EXIT_GRACE_MS);
     });
     child.on("close", (code, sig) => {
-      if (!settled) {
-        const xcpu = sig === "SIGXCPU" || code === 128 + 24;
-        end(xcpu
-          ? fail("cpu", `the run used more than ${String(limits.cpuSeconds)} CPU seconds`)
-          : fail("crash", `the runner exited (${sig ?? `code ${String(code)}`}) without a result${stderr ? `: ${stderr.trim().split("\n").slice(-3).join(" | ")}` : ""}`));
-      }
-      if (settled) resolve(settled);
+      exited = true;
+      if (!settled) end(exitResult(code, sig));
+      finish();
     });
 
     write({

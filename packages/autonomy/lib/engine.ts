@@ -204,7 +204,14 @@ export interface EngineOptions {
   log?: ((line: string) => void) | undefined;
 }
 
-/** The engine's view of one worker session. `say` is null for a session a template drives itself. */
+/** One queued feedback line for the next prompt; a steer records the step (and whether it was in work) it was sent during. */
+export interface PendingFeedback {
+  text: string;
+  step?: number;
+  inStep?: boolean;
+}
+
+/** The engine's view of one worker session. `say` is null for a session a template drives itself without passing one. */
 export interface WorkerSession {
   attempt: number;
   agent: WorkerAgent;
@@ -281,7 +288,11 @@ export class Engine {
   lastTickAt: number | null = null;
   lockLost = false;
   signalled = false;
-  pendingFeedback: string[] = [];
+  /**
+   * Feedback for the next prompt. `step` and `inStep` record when a steer was queued, so a
+   * template can tell a steer meant for a cycle that has since ended (self-improve cyclePrompt).
+   */
+  pendingFeedback: PendingFeedback[] = [];
   startReason: StartReason = "first";
   lastEvaluation: AcceptanceEvaluation | null = null;
   lastActivity: string[] = [];
@@ -390,7 +401,7 @@ export class Engine {
         return this.state;
       }
       if (this.status === "setup") await this.setup();
-      else if (!["succeeded", "failed", "cancelled"].includes(this.status) && !(this.status === "budget_exhausted" && !this.store.pending().some((m) => m.kind === "reconfigure"))) await this.bringUp(); // the probe runs again on every resume
+      else if (!["succeeded", "failed", "cancelled"].includes(this.status) && !(this.status === "budget_exhausted" && !this.store.pending().some((m) => m.kind === "reconfigure"))) { await this.rt.preflight(this.contract); await this.bringUp(); } // preflight (engine, image, inference key) and the probe run again on every resume
       if (this.status === "ready") this.go("running", { reason: "starting" });
       await this.loop();
     } catch (error) {
@@ -546,7 +557,7 @@ export class Engine {
     if (!message.trim()) return;
     this.state.steers = [...(this.state.steers ?? []), { at: new Date(this.rt.now()).toISOString(), message }].slice(-50);
     if (this.session && !this.session.dead && this.active && this.session.say) this.session.say(`Operator steering (authoritative): ${message}`);
-    else this.pendingFeedback.push(`Operator steering (authoritative): ${message}`);
+    else this.pendingFeedback.push({ text: `Operator steering (authoritative): ${message}`, step: this.state.step, inStep: this.state.phase === "work" });
     this.log(`steer recorded (${message.length} characters)`);
   }
 
@@ -616,9 +627,12 @@ export class Engine {
     return live;
   }
 
-  /** Register a session that a template drives itself (self-improve's cycle loop), so pause, cancel and exit can stop it. */
-  adoptAgent(agent: WorkerAgent): WorkerSession {
-    this.session = { attempt: this.state.sessions ?? 0, agent, settled: false, exited: null, blocker: null, dead: false, lastEventAt: this.rt.now(), activity: [], say: null };
+  /**
+   * Register a session that a template drives itself (self-improve's cycle loop), so pause, cancel
+   * and exit can stop it. With `say` (the cycle loop's own), operator steers reach the live session.
+   */
+  adoptAgent(agent: WorkerAgent, say: ((message: string) => void) | null = null): WorkerSession {
+    this.session = { attempt: this.state.sessions ?? 0, agent, settled: false, exited: null, blocker: null, dead: false, lastEventAt: this.rt.now(), activity: [], say };
     void agent.exited.then(() => { if (this.session?.agent === agent) this.session.dead = true; });
     this.save((s) => { s.worker = { container: agent.name, attempt: s.sessions ?? 0, step: s.step, startedAt: new Date(this.rt.now()).toISOString() }; });
     return this.session;
@@ -699,7 +713,7 @@ export class Engine {
     }
     const { stepPrompt } = this.template;
     if (!stepPrompt) throw new Error(`template ${this.contract.template} has neither runStep nor stepPrompt`);
-    const feedback = this.pendingFeedback.splice(0);
+    const feedback = this.pendingFeedback.splice(0).map((f) => f.text);
     const message = stepPrompt({ contract: this.contract, state: this.state, step: n, fresh, briefing, evaluation: this.lastEvaluation, feedback });
     if (fresh) session.agent.send({ type: "prompt", message });
     else session.say?.(message);
@@ -721,8 +735,8 @@ export class Engine {
       this.lastActivity = session.activity; this.session = null; s.worker = null;
       this.startReason = crashed ? "crash" : "session_ended";
     }
-    if (res.end === "step_budget") this.pendingFeedback.push(`The per-step budget of $${s.limits.budget.perStepUsd} was reached, so your turn was stopped. Commit what works.`);
-    if (res.end === "idle") this.pendingFeedback.push(`No activity for ${IDLE_MINUTES} minutes; your turn was treated as stalled.`);
+    if (res.end === "step_budget") this.pendingFeedback.push({ text: `The per-step budget of $${s.limits.budget.perStepUsd} was reached, so your turn was stopped. Commit what works.` });
+    if (res.end === "idle") this.pendingFeedback.push({ text: `No activity for ${IDLE_MINUTES} minutes; your turn was treated as stalled.` });
     this.save();
     await this.evaluateStep({ n, crashed });
   }
@@ -792,7 +806,7 @@ export class Engine {
       this.log("no new accepted commits since the last evaluation; the previous results stand");
     }
     const violation = sync.violation?.length ? sync.violation : null;
-    if (violation) this.pendingFeedback.push(`Your changes were NOT accepted: they touch paths outside the allowed write areas (${contract.permissions.writeAreas.join(", ")}): ${violation.slice(0, 10).join(", ")}. Revert those paths (a revert commit is fine) and keep your work inside the allowed areas.`);
+    if (violation) this.pendingFeedback.push({ text: `Your changes were NOT accepted: they touch paths outside the allowed write areas (${contract.permissions.writeAreas.join(", ")}): ${violation.slice(0, 10).join(", ")}. Revert those paths (a revert commit is fine) and keep your work inside the allowed areas.` });
 
     if (!violation) s.recovery.violations = 0; // consecutive means consecutive: a clean step ends the streak
     // Complete? All required checks pass on an accepted head, then the review (if required) approves.
@@ -824,7 +838,7 @@ export class Engine {
     }
     if (d.action === "nudge") {
       this.log(`recovery: ${d.reason}`);
-      this.pendingFeedback.push(nudgeText(ev, { moved, violation }));
+      this.pendingFeedback.push({ text: nudgeText(ev, { moved, violation }) });
     } else if (d.action === "restart") {
       this.log(`recovery: ${d.reason}`);
       await this.stopWorker("hard restart");
@@ -978,7 +992,7 @@ export class Engine {
       this.save((st) => { st.acceptance.review = { ...st.acceptance.review, required: true, status: approved ? "approved" : "rejected", verdict: verdict.verdict, reason: verdict.reason, concerns: verdict.concerns, sha: head, at: new Date(this.rt.now()).toISOString(), attempts }; });
       this.store.event(n, { type: "review", verdict: verdict.verdict, reason: verdict.reason });
       if (!approved) {
-        this.pendingFeedback.push(`The independent review did not approve the change: ${clip(verdict.reason, 600)}${verdict.concerns.length ? ` Concerns: ${verdict.concerns.join("; ")}` : ""} Address these against the ORIGINAL specification, then stop.`);
+        this.pendingFeedback.push({ text: `The independent review did not approve the change: ${clip(verdict.reason, 600)}${verdict.concerns.length ? ` Concerns: ${verdict.concerns.join("; ")}` : ""} Address these against the ORIGINAL specification, then stop.` });
         if (attempts >= s.limits.recovery.maxAttemptsPerStep) {
           await this.stopWorker("review rejected");
           this.go("failed", { reason: "review_rejected", detail: `${attempts} reviews did not approve: ${verdict.reason}` });

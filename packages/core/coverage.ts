@@ -19,6 +19,9 @@
  * Files no test loads are not listed (V8 reports only what a process loaded), so the totals cover
  * the code the suite reaches; the summary also counts the `.ts` files under packages/ it never saw.
  *
+ * `--jobs=<n>` (n > 1) is refused with exit 2: concurrent checks transpile into per-run caches
+ * that check-all removes, so their modules could not be attributed.
+ *
  * Exit status is check-all's. The summary is printed, written to `coverage/summary.md` and
  * `coverage/summary.json`, and appended to $GITHUB_STEP_SUMMARY when that is set.
  *
@@ -279,6 +282,14 @@ function main(argv: readonly string[]): number {
     }
     report(dir);
     return 0;
+  }
+  // check-all --jobs gives each concurrent check its own transpile cache and deletes it when the run
+  // ends, so the transpiled modules this report attributes by their cache path would be gone and
+  // uncounted. Coverage measures the sequential run only.
+  const jobs = argv.find((arg) => arg.startsWith("--jobs="));
+  if (jobs !== undefined && jobs !== "--jobs=1") {
+    console.error(`coverage: ${jobs} is not supported; coverage runs check-all one check at a time`);
+    return 2;
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-"));
   try {

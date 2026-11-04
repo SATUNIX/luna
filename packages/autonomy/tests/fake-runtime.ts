@@ -114,7 +114,7 @@ export interface FakeRuntimeCalls {
   deploy: string[];
   checks: Array<{ id: string; sha: string; definition: string | string[] }>;
   reviews: TaskReviewBundle[];
-  workers: Array<{ name: string; step: number; attempt: number; effort: StartWorkerOptions["effort"] }>;
+  workers: Array<{ name: string; step: number; attempt: number; effort: StartWorkerOptions["effort"]; resetWorkspace: boolean }>;
 }
 
 export interface FakeRuntimeHooks {
@@ -160,6 +160,8 @@ export class FakeRuntime implements Runtime {
   turnCount: number;
   scriptError: unknown;
   sleeps?: number;
+  /** The next this-many sessions exit with code 1 before emitting any frame. */
+  dieOnStart = 0;
 
   constructor({ store, cfg, contract, script = async () => {}, engine = new FakeEngine(), clock = { now: Date.parse("2026-09-30T00:00:00Z") }, review, boundary, tickMs = 60_000, manager, checkTimeoutMs = 20_000, hooks = {} }: FakeRuntimeOptions) {
     this.store = store;
@@ -213,6 +215,8 @@ export class FakeRuntime implements Runtime {
   }
 
   async bringUp(): Promise<BoundaryReport> {
+    // As the real runtime: the relay needs the inference key, which only preflight() reads.
+    if (this.calls.preflight === 0) throw new Error("the inference key has not been read (preflight has not run)");
     this.calls.bringUp++;
     if (!this.repo.g) this.repo.open();
     return this.boundaryReport;
@@ -246,7 +250,9 @@ export class FakeRuntime implements Runtime {
     if (resetWorkspace) this.resetWork();
     this.agents.set(name, agent);
     this.engine.containers.add(name);
-    this.calls.workers.push({ name, step, attempt, effort });
+    this.calls.workers.push({ name, step, attempt, effort, resetWorkspace });
+    // A session that dies in its entrypoint (for example on a dirty tree): it exits before emitting any frame.
+    if (this.dieOnStart > 0) { this.dieOnStart--; agent.alive = false; this.engine.containers.delete(name); resolveExit({ code: 1 }); }
     return agent;
   }
 
@@ -397,14 +403,17 @@ export class FakeRuntime implements Runtime {
   /** Point the worker's repository and workspace at the mirror's working branch (a new cycle, or a reset); unmerged cycles' tags become attempts/<run>/cycle-NN. */
   async setWorkerBranch(_sha: string, extraRefs: readonly string[] = []): Promise<void> {
     const { branch, run } = this.cfg;
-    spawnSync("git", ["--git-dir", this.p.remote, "fetch", "--quiet", "--no-tags", this.p.mirror, `+refs/heads/${branch}:refs/heads/${branch}`], { encoding: "utf8" });
-    for (const ref of extraRefs) spawnSync("git", ["--git-dir", this.p.remote, "fetch", "--quiet", "--no-tags", this.p.mirror, `+${ref}:refs/heads/attempts/${run}/${ref.split("/").pop()}`], { encoding: "utf8" });
+    const bundle = this.repo.bundleBranch(path.join(this.p.bundles, "setref.bundle"), extraRefs);
+    git(this.p.remote, ["update-ref", "-d", "refs/upstream/trunk"]);
+    git(this.p.remote, ["fetch", "--quiet", "--no-tags", bundle, `+refs/heads/${branch}:refs/heads/${branch}`, `+refs/tags/${this.cfg.tagPrefix}*:refs/heads/attempts/${run}/*`, "+refs/upstream/*:refs/upstream/*"]);
     this.resetWork();
   }
 
   resetWork(): void {
     const { branch } = this.cfg;
     git(this.p.work, ["fetch", "--quiet", "origin"]);
+    git(this.p.work, ["update-ref", "-d", "refs/upstream/trunk"]);
+    git(this.p.work, ["fetch", "--quiet", "--no-tags", "origin", "+refs/upstream/*:refs/upstream/*"]);
     git(this.p.work, ["checkout", "--quiet", "-B", branch, `origin/${branch}`]);
     git(this.p.work, ["reset", "--quiet", "--hard", `origin/${branch}`]);
     git(this.p.work, ["clean", "-fdq"]);

@@ -10,6 +10,59 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- Self-improve cycles close the gaps the first live stream run showed. The merge review starts
+  from a host ledger (the cycle's commits and shortstat), which outranks the worker's prose, plus
+  host context on the upstream sync and the previous cycle; a report whose `Item:` lines leave a
+  code commit unnamed gets one follow-up while the session is alive. The cycle prompt gives the
+  start sha, the diff budget and its measure command, the stream's focus and a ban on running the
+  full suite (also told to the manager), with the assigned items right after the budget. Operator
+  steers reach the running session, and a steer queued during an ended cycle is marked stale.
+  Guard notices count as episodes, `CONTINUE` no longer spends the per-cycle manager cap, and a
+  cap reached with a live worker gets one wrap-up steer and 15 minutes. An unknown `Board:` claim
+  is a review concern, not a refusal; streams are judged against the current stream charter. The
+  cycle-start reset survives a dirty tree and is retried when a session dies starting. Upstream
+  sync fast-forwards a stream the trunk already contains instead of writing empty merges. The
+  gate defaults to 8 CPUs and 8 GB, runs `check:all --jobs` when the tree supports it, names failed
+  checks, and skips a `test:security` that `check:all` already covers
+  (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`,
+  `tests/autonomy-image-scripts-smoke.ts`, `tests/autonomy-contract-smoke.ts`,
+  `tests/autonomy-review-inputs-smoke.ts`).
+
+- Self-improve merge review excludes the run's own cycle records and stream handoff directory
+  from its diff budget, lists them in a separate host stat and retains bounded report context.
+  Other runs' records and proposals remain budgeted; oversized code still refuses merge
+  (`tests/autonomy-review-inputs-smoke.ts`).
+
+- Parallel self-improve streams keep handoffs under `autonomy/runs/<run>/` and write separate
+  proposal files instead of editing the shared backlog. Stream seeds preserve existing charters;
+  resume, restart and review inputs follow the run's paths. Changelog additions use union merging,
+  with committed attributes selected explicitly in bare host merges
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts`,
+  `tests/autonomy-smoke.ts`).
+
+- Self-improve streams can sync an upstream branch before every cycle and receive ranked,
+  host-owned assignments with `board --run <id> --file <path.json>`. Cycle history records sync
+  outcomes and board progress; merge review judges claimed acceptance and priority. Green partial
+  work with commits is reviewed instead of discarded, and workers leave the full gate to the host
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-cli-smoke.ts`).
+- **`check:all` can shard and parallelise its run list.** `--shard=<i>/<n>` selects one deterministic
+  slice (round-robin over the sorted runs, so the shards are disjoint and together cover every
+  check) and `--jobs=<n>` runs up to n checks at once, buffering each check's output and printing it
+  whole; the exit status and summary are unchanged. Checks that share fixed state (the web console
+  runtime, npm pack and clean install, the container engine) are listed as serial and run alone
+  after the parallel batch, and each concurrent worker gets its own eval transpile cache
+  (`packages/core/check-all.ts`, `packages/core/eval/harness.ts`, `tests/check-all-npm-smoke.ts`).
+  The failure summary lists failures in run order whatever finishes first. Under `--jobs` each
+  check prints a `... <label> started` line as it starts, and `--check-timeout=<s>` stops a check
+  still running after s seconds, with every process its script started (its own process group on
+  POSIX), and fails it as `timed out` with its partial output, so a hung check is named in the log
+  rather than lost when the CI job times out.
+- CI's `verify` job now runs four `check:all` shards with `--jobs=2 --check-timeout=600`, and `ci.yml` and `security.yml`
+  also run on pull requests to `integration/**`; `ci-complete` still waits for every shard
+  (`tests/workflow-policy-smoke.ts` checks the shard matrix against the `--shard` command and the
+  `integration/**` pull request filters). `npm run coverage` refuses `--jobs` above 1, since the
+  per-run transpile caches are removed before it could attribute them (`tests/check-all-npm-smoke.ts`).
+
 - Repository URLs now point to `SATUNIX/luna`; the former public source remains in
   `git.previousSources` so existing installs retain their channel and profile during migration
   (`tests/distribution-smoke.ts`, `tests/distribution-contract-smoke.ts`, `tests/kit-update-smoke.ts`).
@@ -31,6 +84,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `pi-autonomy resume` brings a run back up after its supervisor stopped: the new supervisor runs
+  preflight (engine, image and inference key) before the boundary probe, instead of failing with
+  "the inference key has not been read" (`tests/autonomy-run-smoke.ts`).
+- Autonomous runs' acceptance gate no longer runs out of processes: every helper container starts
+  node under tini, so orphaned children are reaped instead of filling `--pids-limit`
+  (`tests/autonomy-smoke.ts`). The gate's checks also pass inside its rootless, offline container:
+  npm 12's `npm pack --json` shape is read (here and in `release.yml`), the clean-install smoke
+  installs runtime dependencies without the network, and the unattended-firewall provenance checks
+  expect the user-namespace refusal there (`tests/clean-install-smoke.ts`,
+  `tests/firewall-unattended-smoke.ts`, `tests/release-workflow-smoke.ts`).
 - `minimatch` is pinned to 11.0.1 through `overrides` in the root, autonomy-image and container
   tool lockfiles, fixing GHSA-g3hv-75wg-m249 (denial of service through globparts amplification,
   medium) in the copies pulled in by pi, ESLint and typescript-eslint (`osv-scanner`, `check:all`).

@@ -4,7 +4,8 @@
 # baked in: pi, the kit at a release tag with the long-horizon profile, and, when a base ref is
 # given, that repository's npm dependencies (as an npm cache) plus mkdocs and gitleaks.
 # Add the toolchains your tasks need (a compiler, python packages, ...) in a derived image and
-# name it in the contract's runtime.image.
+# name it in the contract's runtime.image. A derived image must keep /usr/bin/tini: every helper
+# container (check, relay, proxy, probes) starts node under it so orphans are reaped.
 #
 # Build context (assembled by build-image.sh):
 #   kit/    `git archive` of the kit release tag the harness runs (read-only at runtime)

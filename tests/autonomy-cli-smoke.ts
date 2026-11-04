@@ -183,6 +183,54 @@ await check("backlog CLI queues file-based items for self-improve, online or off
   assert.equal((await w.run("backlog", "--run", "todo-api-1", "--message", "late", "--json")).code, 3);
 });
 
+await check("board CLI validates and atomically replaces host assignments, refuses other templates and exposes cycle claims in status", async () => {
+  const w = world();
+  const src = scratch();
+  assert.equal(spawnSync("git", ["init", "--quiet", src]).status, 0);
+  const file = taskFile(scratch(), { template: "self-improve", inputs: { repository: { path: src, ref: "main" } }, acceptance: { checks: [{ id: "unit", run: ["true"] }] } });
+  await authorised(w, file);
+  assert.equal((await w.run("start", "--config", file, "--detach", "--json")).code, 0);
+  const store = new RunStore("todo-api-1", { home: w.home });
+  const boardFile = path.join(scratch(), "board.json");
+  const board = { stream: "ux", items: [{ id: "V-01", title: "Improve the menu", priority: "P1", acceptance: "A tested keyboard workflow" }] };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  assert.equal((await w.run("board", "--run", "todo-api-1", "--file", boardFile, "--json")).code, 0);
+  assert.deepEqual(at((await w.run("board", "--run", "todo-api-1", "--json")).json(), "board"), board);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(store.p.control, "board.json"), "utf8")), board);
+  assert.equal(fs.readdirSync(store.p.control).filter((f) => f.endsWith(".tmp")).length, 0);
+  for (const bad of [
+    { items: [{ id: "bad", title: "x", priority: "P0" }] },
+    { items: Array.from({ length: 51 }, (_, i) => ({ id: `V-${i}`, title: "x", priority: "P0" })) },
+    { ...board, unexpected: true }, { items: [{ ...board.items[0], unexpected: true }] },
+    { items: [{ ...board.items[0], title: "x".repeat(201) }] },
+    { items: [{ ...board.items[0], detail: "x".repeat(2001) }] },
+    { items: [{ ...board.items[0], acceptance: "x".repeat(2001) }] },
+    { items: [{ ...board.items[0], status: "done" }] },
+    { items: [board.items[0], board.items[0]] },
+  ]) {
+    fs.writeFileSync(boardFile, JSON.stringify(bad));
+    assert.equal((await w.run("board", "--run", "todo-api-1", "--file", boardFile, "--json")).code, 2);
+    assert.deepEqual(at((await w.run("board", "--run", "todo-api-1", "--json")).json(), "board"), board, "invalid files leave the previous board intact");
+  }
+  const state = store.readState();
+  assert.ok(state);
+  state.selfImprove = { history: [], merged: 0, lastGoodSha: "a".repeat(40), seedSha: "a".repeat(40), current: null, lastPushed: null };
+  store.writeState(state);
+  assert.deepEqual(at((await w.run("status", "--run", state.run, "--json")).json(), "selfImprove", "history"), []);
+  state.selfImprove.history.push({ n: 1, outcome: "partial", reason: "hard_limit", attempts: 1, start: "a".repeat(40), head: "b".repeat(40), gate: "green", gateFailing: [], reportOutcome: null, mode: null, merged: true, mergeReason: "review MERGE", review: "MERGE", costUsd: 1, decisions: [], startedAt: "2026-09-30T00:00:00Z", endedAt: "2026-09-30T01:00:00Z", board: [{ id: "V-01", status: "progress", note: "Keyboard support added." }] });
+  store.writeState(state);
+  assert.deepEqual(at((await w.run("status", "--run", state.run, "--json")).json(), "selfImprove", "history"), state.selfImprove.history);
+  delete state.selfImprove.history[0]?.board;
+  store.writeState(state);
+  assert.equal((await w.run("status", "--run", state.run, "--json")).code, 0, "old cycle records without new fields still load");
+  const other = world();
+  const otherFile = taskFile(scratch());
+  await authorised(other, otherFile);
+  assert.equal((await other.run("start", "--config", otherFile, "--detach", "--json")).code, 0);
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  assert.equal((await other.run("board", "--run", "todo-api-1", "--file", boardFile, "--json")).code, 3);
+});
+
 await check("templates: every template is described, with what it needs and its closed defaults", async () => {
   const w = world();
   const r = await w.run("templates", "--json");

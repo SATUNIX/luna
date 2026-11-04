@@ -197,7 +197,8 @@ export function namespaceStanding(facts: NamespaceFacts, platform: string = proc
   return { kind, initialUser };
 }
 
-/** Where THIS process stands, read from the real /proc (no test override). */
+// Where this process really stands, read from /proc (no test override): what the provenance rule decides
+// with when nothing presents other facts. Tests use it to know which refusal reason the real kernel gives.
 export function currentNamespaceStanding(): { kind: "same" | "different" | "unknown"; initialUser: boolean } {
   return namespaceStanding(readNamespaces());
 }

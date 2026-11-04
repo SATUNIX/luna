@@ -91,7 +91,7 @@ export const DEFAULTS: V0Defaults = {
   // theirs (with podman, through --userns=keep-id). Rootless Docker wants "0:0", which maps
   // to the operator.
   container: { memory: "6g", cpus: "4", pids: 1024, tmpSize: "4g", user: "host" },
-  gate: { timeoutMinutes: 60, memory: "6g", cpus: "4" },
+  gate: { timeoutMinutes: 60, memory: "8g", cpus: "8" },
 };
 
 const RUN_ID = /^[a-z0-9][a-z0-9-]{2,40}$/;

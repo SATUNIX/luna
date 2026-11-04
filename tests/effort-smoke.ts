@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv } from "../packages/core/eval/harness.ts";
+import { evalCacheDir, fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv } from "../packages/core/eval/harness.ts";
 import { array, object, parseJsonAs, record, string, unknownValue } from "../packages/core/lib/guard.ts";
 import { clampTier, loadEffortPolicy, mementoGenerations, normalizeTier, tierLimits, renderEffortPrompt, validateEffortPolicy, workflowLimits } from "../packages/core/lib/effort.ts";
 import type * as EffortModule from "../packages/extensions/src/effort/index.ts";
@@ -58,7 +58,7 @@ const ledgerMod: LedgerView = await loadModule("extensions/effort/ledger.ts");
 const { default: effort, REGISTRY_KEY, readConfig, resolveEffective, saveDefault } = mod;
 const corePolicy: EffortPolicy = loadEffortPolicy();
 const rtPolicy = policyMod.loadPolicy();
-const CACHE = path.resolve("node_modules/.cache/pi-kit-eval");
+const CACHE = evalCacheDir();
 
 /**
  * Race `count` real processes, each making 12 reservations against one ledger file, and return what

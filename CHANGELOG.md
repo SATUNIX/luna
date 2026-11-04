@@ -10,6 +10,24 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **`check:all` can shard and parallelise its run list.** `--shard=<i>/<n>` selects one deterministic
+  slice (round-robin over the sorted runs, so the shards are disjoint and together cover every
+  check) and `--jobs=<n>` runs up to n checks at once, buffering each check's output and printing it
+  whole; the exit status and summary are unchanged. Checks that share fixed state (the web console
+  runtime, npm pack and clean install, the container engine) are listed as serial and run alone
+  after the parallel batch, and each concurrent worker gets its own eval transpile cache
+  (`packages/core/check-all.ts`, `packages/core/eval/harness.ts`, `tests/check-all-npm-smoke.ts`).
+  The failure summary lists failures in run order whatever finishes first. Under `--jobs` each
+  check prints a `... <label> started` line as it starts, and `--check-timeout=<s>` stops a check
+  still running after s seconds, with every process its script started (its own process group on
+  POSIX), and fails it as `timed out` with its partial output, so a hung check is named in the log
+  rather than lost when the CI job times out.
+- CI's `verify` job now runs four `check:all` shards with `--jobs=2 --check-timeout=600`, and `ci.yml` and `security.yml`
+  also run on pull requests to `integration/**`; `ci-complete` still waits for every shard
+  (`tests/workflow-policy-smoke.ts` checks the shard matrix against the `--shard` command and the
+  `integration/**` pull request filters). `npm run coverage` refuses `--jobs` above 1, since the
+  per-run transpile caches are removed before it could attribute them (`tests/check-all-npm-smoke.ts`).
+
 - Repository URLs now point to `SATUNIX/luna`; the former public source remains in
   `git.previousSources` so existing installs retain their channel and profile during migration
   (`tests/distribution-smoke.ts`, `tests/distribution-contract-smoke.ts`, `tests/kit-update-smoke.ts`).

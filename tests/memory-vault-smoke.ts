@@ -19,7 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ROOT, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { evalCacheDir, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as Vault from "../packages/extensions/src/memory-vault/vault.ts";
 import type { MemoryVaultDeps } from "../packages/extensions/src/memory-vault/index.ts";
 import { isRecord, object, optional, parseJson, parseJsonAs, record, unknownValue } from "../packages/core/lib/guard.ts";
@@ -80,7 +80,7 @@ try {
 
   // 4. Concurrent writers (separate processes).
   {
-    const compiled = path.join(ROOT, "node_modules", ".cache", "pi-kit-eval", "packages_extensions_src_memory-vault_vault.mjs");
+    const compiled = path.join(evalCacheDir(), "packages_extensions_src_memory-vault_vault.mjs");
     const script = path.join(ws, "writer.mjs");
     // Distinct content words per write (digits are not content words, so "note 1"/"note 2"
     // would rightly be merged as duplicates).

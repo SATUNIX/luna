@@ -39,35 +39,33 @@ A change is accepted when all of these hold:
 - Changing CI secrets, credential handling, release tags, versions or release and publish
   pipelines.
 - Adding or upgrading dependencies, unless the objective says otherwise. The workspace has no
-  network beyond what the run was given. If a dependency is warranted, write a proposal in the
-  backlog instead.
+  network beyond what the run was given. If a dependency is warranted, write a proposal at
+  `autonomy/proposals/<run>-<NN>-<slug>.md` instead.
 - Rewriting pushed history. Only fast-forward pushes are accepted.
-- Editing `autonomy/CHARTER.md`. Propose charter changes in `autonomy/BACKLOG.md`.
+- Editing `autonomy/CHARTER.md`. Propose charter changes in `autonomy/proposals/<run>-<NN>-<slug>.md`.
 
 ## Priorities
 
 Work in this order, and prefer to finish an item rather than start a new one:
 
-1. A failing acceptance check or a broken pushed state.
-2. Unfinished items carried over in `HANDOFF.md`.
-3. Correctness and reliability bugs.
-4. Security hardening that keeps behaviour compatible.
-5. Tests for untested behaviour, then documentation accuracy.
-6. Cleanup: code you can show is dead, duplicated or needlessly complex, simplified without
-   changing behaviour.
-7. Improvements to existing systems: more capability, functionality, performance, reliability
-   or usability. Take these on only when nothing above is open.
-8. Evaluations and proposals (write-ups with evidence and a recommendation, committed under
-   `autonomy/proposals/`).
+0. Red gate / broken branch: repair a failing acceptance check or broken pushed state.
+1. An upstream merge conflict: merge `refs/upstream/trunk`, preserve both sides' intent and re-verify.
+2. The steward board items in order, with their acceptance criteria. These outrank cleanup and your own ideas.
+3. Unfinished items carried over in `autonomy/runs/<run>/HANDOFF.md`.
+4. Defects you find: correctness and reliability bugs.
+5. Security hardening that keeps behaviour compatible.
+6. Tests for untested behaviour and documentation accuracy.
+7. Cleanup: code shown to be dead, duplicated or needlessly complex.
+
+Own new ideas go into `autonomy/proposals/<run>-<NN>-<slug>.md` as proposals, not into this cycle, unless they
+block an assigned item. The steward decides which proposals become assignments.
 
 ## Cycle modes
 
-Items 1–6 are **fix mode** and item 7 is **improve mode**. A cycle fixes while there is
-something to fix, and improves only when there isn't. An improvement needs the same evidence
-as a fix: a measured baseline, a documented limitation, or a gap you can demonstrate. It also
-needs tests and docs. The cycle after an improvement starts with a **consolidation** pass over
-what changed (bugs, edge cases, missing tests, docs drift, leftover complexity), because new
-code is where the next bugs are. So the work cycles: fix → improve → consolidate → fix.
+Use **fix mode** for repairs and **improve mode** for assigned board improvements. Every improvement needs evidence, tests and docs. Consolidate previous
+improvements after higher-priority gate, upstream conflict and board work.
+Run the targeted tests for what you changed. Never run `npm test` or `npm run check:all`
+yourself: the host gate runs the full suite on a clean checkout.
 
 A cycle whose honest review finds nothing to do records `Outcome: nothing found` instead of
 inventing work. Several of those in a row end the run.

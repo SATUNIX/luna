@@ -75,6 +75,8 @@ Any other argument, or a value flag with no value or followed by another `--` fl
 
 `--yes` appears in the usage comment and is passed by `/profile`, but `install.ts` only forwards it to `uninstall.ts`; otherwise it is a no-op.
 
+`uninstall.ts` validates its own arguments the same way: `--scope` must be `global` or `project`, and an unknown argument or a value flag with no value exits 1 with its usage line before it reads any marker or runs `pi remove` (`tests/install-marker-smoke.ts`).
+
 **Mode.** An explicit `--mode` wins. Otherwise, when the installer runs from a copy pi installed itself (its path is under `<agent dir>/git/` or `.pi/git/`, or contains `node_modules`), it keeps that delivery (`git` or `npm`), so `/profile`, `/update` and the first-run auto-profile never register pi's clone as a local checkout. From a git checkout it is `local`, unless `--channel` or `--git-ref` is given, which means "install the released kit" with the configured delivery (`packages/core/distribution.json` `delivery`, `git` by default, overridden by `PI_KIT_DELIVERY`). Anywhere else it is the configured delivery.
 
 **Channel and source.** Without `--channel`, a registered kit entry of the same delivery is kept as it is, with the channel recorded in the marker for that exact source (or, for git, inferred: no ref is `next`, a `v<semver>` tag is `latest`, any other ref is its own channel). With `--channel`, or when nothing is registered (default `latest`):

@@ -8,6 +8,17 @@ import { parseJson } from "../../core/lib/guard.ts";
 /** A short unpredictable suffix for temp files, container names and default run ids (crypto, not Math.random: a name that is guessable can be pre-created). */
 export const randomSuffix = (chars = 6): string => randomBytes(Math.ceil(chars / 2)).toString("hex").slice(0, chars);
 
+/** True when process stdout (fd 1) and `filePath` are the same file: detects a detached supervisor whose stdout was redirected into the run log. */
+export function stdoutIsFile(filePath: string): boolean {
+  try {
+    const out = fs.fstatSync(1);
+    const file = fs.statSync(filePath);
+    return out.dev === file.dev && out.ino === file.ino;
+  } catch {
+    return false;
+  }
+}
+
 /** Atomic JSON write (temp file + rename), so a crash never leaves half a state file. */
 export function writeJsonAtomic(file: string, value: unknown, { mode }: { mode?: number } = {}): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });

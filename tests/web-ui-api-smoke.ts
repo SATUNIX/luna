@@ -111,6 +111,24 @@ try {
     assert.equal(fs.existsSync(userAgentPath), true, "user file must survive");
   });
 
+  // The version reported to the client must be the real package version, not the old hard-coded 0.1.0.
+  const rootPkg = JSON.parse(
+    fs.readFileSync(path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "package.json"), "utf8"),
+  ) as { version: string };
+  const healthRes = fakeRes();
+  await handleApi({ method: "GET", url: "/api/health", on() {} }, healthRes, { pathname: "/api/health" });
+  check("GET /api/health reports the real kit version, not the old hard-coded 0.1.0", () => {
+    assert.equal(healthRes.statusCode, 200);
+    const body = JSON.parse(responseBody(healthRes)) as { version: string };
+    assert.equal(body.version, rootPkg.version);
+    assert.notEqual(body.version, "0.1.0");
+  });
+  const { configInfo } = await import("../packages/web-ui/server/configinfo.ts");
+  check("configInfo().app.version is the real kit version", () => {
+    assert.equal(configInfo().app.version, rootPkg.version);
+    assert.notEqual(configInfo().app.version, "0.1.0");
+  });
+
   // An unexpected failure (an fs error, a bug) must not put its text, which can hold paths and internals, in the response:
   // the client gets a generic 500 and the detail goes to the server's log. A deliberate HttpError keeps its message.
   const secret = "EACCES: permission denied, open '/home/operator/.ssh/id_rsa'";

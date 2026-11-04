@@ -36,7 +36,7 @@ const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
 interface RunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  timeout?: number;
+  readonly timeout?: number;
 }
 
 function run(command: string, args: string[], options: RunOptions = {}) {
@@ -44,21 +44,42 @@ function run(command: string, args: string[], options: RunOptions = {}) {
   return result;
 }
 
-/** The root lockfile's entries for `manifest.dependencies` and everything they pull in, as a lockfile of its own. */
-function runtimeLock(manifest: { name: string; dependencies: Record<string, string> }): Record<string, unknown> {
-  const lock: unknown = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
-  const all = isRecord(lock) && isRecord(lock.packages) ? lock.packages : {};
-  const packages: Record<string, unknown> = { "": { name: manifest.name, dependencies: manifest.dependencies } };
-  const queue = Object.keys(manifest.dependencies);
-  while (queue.length > 0) {
-    const name = queue.shift() ?? "";
-    const key = `node_modules/${name}`;
-    const entry = all[key];
-    if (key in packages || !isRecord(entry)) continue;
-    packages[key] = entry;
-    if (isRecord(entry.dependencies)) queue.push(...Object.keys(entry.dependencies));
+/**
+ * A lockfile for the artefact's runtime dependencies, copied entry by entry from the repo root
+ * package-lock.json (the artefact is packed without one). The set is closed transitively through
+ * each copied entry's three edge fields — `dependencies`, `optionalDependencies` and
+ * `peerDependencies` — so `npm ci` can run offline. A root dependency (a key of `deps`) must have
+ * an entry in the source lock, or this throws; a transitive, optional or peer name with no entry
+ * is skipped silently because that name is not installable from this lock. Pass `source` to use a
+ * synthetic `packages` map instead of reading the root package-lock.json (for tests).
+ */
+export function runtimeLock(deps: Record<string, string>, source?: Record<string, unknown>): Record<string, unknown> {
+  let packages: Record<string, unknown>;
+  if (source !== undefined) {
+    packages = source;
+  } else {
+    const lock = parseJson(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+    if (!isRecord(lock) || !isRecord(lock.packages)) throw new Error("package-lock.json has no packages record");
+    packages = lock.packages;
   }
-  return { name: manifest.name, lockfileVersion: 3, requires: true, packages };
+  const roots = new Set(Object.keys(deps));
+  const copied: Record<string, unknown> = {};
+  const pending = [...roots];
+  for (let i = 0; i < pending.length; i += 1) {
+    const name = pending[i];
+    if (name === undefined || copied[`node_modules/${name}`] !== undefined) continue;
+    const entry = packages[`node_modules/${name}`];
+    if (!isRecord(entry)) {
+      if (roots.has(name)) throw new Error(`package-lock.json has no entry for ${name}`);
+      continue;
+    }
+    copied[`node_modules/${name}`] = entry;
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
+      const edges = entry[field];
+      if (isRecord(edges)) pending.push(...Object.keys(edges));
+    }
+  }
+  return { lockfileVersion: 3, requires: true, packages: { "": { name: "runtime-deps", dependencies: deps }, ...copied } };
 }
 
 const RpcCommand = object({ name: string(), source: optional(string()), sourceInfo: optional(object({ path: optional(string()) })) });
@@ -142,6 +163,30 @@ function rpc(agentDir: string, home: string, cwd: string, command: { id: string;
   ok("packReports reads both npm pack --json shapes (array <=11, object >=12)");
 }
 
+// runtimeLock() must close the copied set over all three edge fields. quickjs-wasi (the only
+// runtime dependency today) has no edge lists, so the transitive loop never runs on the real
+// lock; this synthetic source exercises `dependencies`, `optionalDependencies` and
+// `peerDependencies`, skips a peer name with no source entry, and still throws for a missing root.
+{
+  const syntheticSource: Record<string, unknown> = {
+    "node_modules/a": { version: "1.0.0", dependencies: { b: "^1.0.0" }, optionalDependencies: { c: "^1.0.0" }, peerDependencies: { d: "^1.0.0", f: "^1.0.0" } },
+    "node_modules/b": { version: "1.0.0" },
+    "node_modules/c": { version: "1.0.0", dependencies: { e: "^1.0.0" } },
+    "node_modules/d": { version: "1.0.0" },
+    "node_modules/e": { version: "1.0.0" },
+  };
+  const lock = runtimeLock({ a: "1.0.0" }, syntheticSource);
+  const packages = lock.packages;
+  assert.ok(isRecord(packages), "runtimeLock returns a packages record");
+  assert.deepEqual(
+    Object.keys(packages).sort(),
+    ["", "node_modules/a", "node_modules/b", "node_modules/c", "node_modules/d", "node_modules/e"],
+    "runtimeLock copies dependencies, optionalDependencies and peerDependencies, and skips a peer with no entry",
+  );
+  assert.throws(() => runtimeLock({ missing: "1.0.0" }, syntheticSource), /no entry for missing/, "runtimeLock still throws for a root dependency missing from the source lock");
+  ok("runtimeLock closes over dependencies, optionalDependencies and peerDependencies, skips uninstallable names, and throws for a missing root");
+}
+
 try {
   // 1. Build, pack and unpack the real artefact. It is the compiled stage (build-npm.ts, ADR 0001),
   // unpacked under node_modules/ as an npm install would put it: Node refuses to strip types
@@ -176,20 +221,14 @@ try {
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), documentedNames, "the artefact's runtime dependencies are exactly the documented ones");
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) assert.match(range, /^\d+\.\d+\.\d+$/, `${name} is pinned to an exact version, not ${range}`);
   ok(`the artefact's runtime dependencies are the documented set (${documentedNames.join(", ") || "none"}), pinned exactly`);
-  if (Object.keys(pkg.dependencies ?? {}).length > 0) {
-    // Install exactly the declared runtime set in a scratch project, then place it in the artefact. Installing
-    // in the unpacked tree itself makes npm resolve its dev and peer dependencies too (there is no lockfile),
-    // which needs the network: the autonomy gate has none. --prefer-offline uses the npm cache when it has the
-    // versions; the timeout turns a network stall into a failure instead of eating the gate's budget.
+  const deps = pkg.dependencies ?? {};
+  if (Object.keys(deps).length > 0) {
     const depsDir = path.join(tmp, "runtime-deps");
     fs.mkdirSync(depsDir, { recursive: true });
-    // A lockfile cut from the repository's own (same resolved URL and integrity) lets `npm ci` install from
-    // the cache alone: `npm install` would also need registry metadata, which an offline cache may lack.
-    const manifest = { name: "runtime-deps", private: true, dependencies: pkg.dependencies ?? {} };
-    fs.writeFileSync(path.join(depsDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-    fs.writeFileSync(path.join(depsDir, "package-lock.json"), `${JSON.stringify(runtimeLock(manifest), null, 2)}\n`);
-    const install = run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300_000 });
-    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}${install.error ? `\n${String(install.error)}` : ""}`);
+    fs.writeFileSync(path.join(depsDir, "package.json"), JSON.stringify({ name: "runtime-deps", private: true, dependencies: deps }, null, 2));
+    fs.writeFileSync(path.join(depsDir, "package-lock.json"), JSON.stringify(runtimeLock(deps), null, 2));
+    const install = run(npm, ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1"], { cwd: depsDir, timeout: 300000 });
+    assert.equal(install.status, 0, `runtime dependency install failed:\n${install.stderr}\n${install.error ?? ""}`);
     fs.cpSync(path.join(depsDir, "node_modules"), path.join(unpacked, "node_modules"), { recursive: true });
     ok("the artefact's runtime dependencies install");
   } else {

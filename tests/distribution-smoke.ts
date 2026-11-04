@@ -124,6 +124,9 @@ const tests = {
     const https = parseGitSource("https://github.com/SATUNIX/luna.git");
     assert.ok(https);
     assert.equal(https.repo, "https://github.com/SATUNIX/luna");
+    // A bare `git://` protocol URL is a git source, not a `git:`-prefixed host/path. Before the
+    // guard in parseGitSource() it parsed to null while the kit's /profile matcher accepted it.
+    assert.deepEqual(parseGitSource("git://github.com/SATUNIX/luna"), { repo: "git://github.com/SATUNIX/luna", ref: null, key: "github.com/satunix/luna" });
     assert.equal(parseGitSource("npm:@satunix/pi-system"), null);
     assert.equal(parseGitSource("/home/me/pi-system"), null);
     assert.equal(gitSourceFor(`${GIT}@v1.0.0`, "v1.1.0"), `${GIT}@v1.1.0`);

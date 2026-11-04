@@ -685,6 +685,40 @@ function testUnknownFlagsRejected() {
   }
 }
 
+// The uninstall path is destructive: an unknown flag, a value flag without a value, or an
+// invalid --scope must exit 1 with the usage line instead of falling through to the
+// auto-detected scope and removing the wrong installation.
+function testUninstallRejectsBadArguments() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-uninstall-flags-"));
+  const agentDir = path.join(dir, "agent");
+  const binDir = path.join(dir, "bin");
+  const logPath = path.join(dir, "pi-calls.log");
+  try {
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    const fakePi = path.join(binDir, "pi");
+    fs.writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PI_FAKE_LOG"\nexit 0\n`);
+    fs.chmodSync(fakePi, 0o755);
+
+    for (const [argv, message] of [
+      [["--scope", "bogus"], /unknown --scope "bogus"/],
+      [["--scope"], /--scope needs a value/],
+      [["--dryrun"], /unknown argument "--dryrun"/],
+      [["stray"], /unknown argument "stray"/],
+    ] as const) {
+      const result = spawnSync(process.execPath, [UNINSTALL, ...argv], { cwd: ROOT, env: baseEnv(agentDir, binDir, logPath), encoding: "utf8" });
+      assert.equal(result.status, 1, `uninstall ${argv.join(" ")} must exit 1 (stdout: ${result.stdout})`);
+      assert.match(result.stderr, message, `uninstall ${argv.join(" ")} must say what is wrong`);
+      assert.match(result.stderr, /usage: uninstall\.ts/, `uninstall ${argv.join(" ")} must print the usage line`);
+      assert.ok(!fs.existsSync(logPath), `uninstall ${argv.join(" ")} must never run pi`);
+    }
+
+    console.log("  OK: uninstall rejects invalid and unknown arguments without running pi");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // TOO-2: --only narrows what loads but never below distribution.json requiredProfileExtensions;
 // the missing required extensions are added back with a WARN naming them.
 function testOnlyKeepsRequiredBase() {
@@ -988,6 +1022,7 @@ try {
   testDryRunWithoutRequiredTools();
   testInvalidScopeRejected();
   testUnknownFlagsRejected();
+  testUninstallRejectsBadArguments();
   testOnlyKeepsRequiredBase();
   testCaptureOverridesAllStringEntryDoesNotRemoveAll();
   testCaptureOverridesObjectWithoutExtensions();

@@ -18,11 +18,31 @@ const args = process.argv.slice(2);
 const has = (flag: string): boolean => args.includes(flag);
 const get = (flag: string, def: string): string | undefined => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : def; };
 
+// Every argument must be a known flag, and a value flag needs a value that is not another flag:
+// a typo such as `--scope bogus` used to be ignored and fall through to the auto-detected scope.
+const VALUE_FLAGS = ["--scope"];
+const BOOLEAN_FLAGS = ["--dry-run", "--yes"];
+const USAGE = "usage: uninstall.ts [--scope global|project] [--dry-run] [--yes]";
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i] ?? "";
+  if (BOOLEAN_FLAGS.includes(arg)) continue;
+  const problem = !VALUE_FLAGS.includes(arg)
+    ? `unknown argument "${arg}"`
+    : args[i + 1] === undefined || String(args[i + 1]).startsWith("--") ? `${arg} needs a value` : null;
+  if (problem) {
+    console.error(`[uninstall] ${problem}\n${USAGE}`);
+    process.exit(1);
+  }
+  i++;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const explicitScope = args.includes("--scope") ? get("--scope", "global") : null;
+const scopeArg = args.includes("--scope") ? get("--scope", "global") : null;
+if (scopeArg !== null && scopeArg !== "global" && scopeArg !== "project") { console.error(`[uninstall] unknown --scope "${String(scopeArg)}" (expected global or project)\n${USAGE}`); process.exit(1); }
+const explicitScope = scopeArg;
 const dryRun = has("--dry-run");
 
 // Resolve which marker to read and the effective scope from it:

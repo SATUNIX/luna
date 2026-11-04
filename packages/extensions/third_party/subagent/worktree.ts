@@ -244,6 +244,9 @@ export async function finishWorkflowWorktree(tree: WorkflowWorktree, opts: { jou
 // --- the per-checkout writer lock (writers that run in the main checkout) ---
 
 const locks = new Map<string, Promise<void>>();
+// Checkout roots are resolved one at a time, in call order, so a writer takes its place in `locks` in the
+// order it called even when resolving the root (a git subprocess) finishes sooner for a later caller.
+let arrivals: Promise<unknown> = Promise.resolve();
 
 /**
  * Run `fn` holding the writer lock of the checkout containing `cwd`. Writers of the same checkout
@@ -251,7 +254,9 @@ const locks = new Map<string, Promise<void>>();
  * session launches, not other processes.
  */
 export async function withCheckoutLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
-  const root = await checkoutRoot(cwd);
+  const resolving = arrivals.then(() => checkoutRoot(cwd));
+  arrivals = resolving.catch(() => undefined);
+  const root = await resolving;
   const previous = locks.get(root) ?? Promise.resolve();
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => { release = resolve; });

@@ -143,7 +143,7 @@ export interface GitSource {
 export function parseGitSource(source: unknown): GitSource | null {
   if (typeof source !== "string") return null;
   const trimmed = source.trim();
-  const hasPrefix = trimmed.startsWith("git:");
+  const hasPrefix = trimmed.startsWith("git:") && !trimmed.startsWith("git://");
   const url = hasPrefix ? trimmed.slice(4).trim() : trimmed;
   if (!hasPrefix && !/^(https?|ssh|git):\/\//i.test(url)) return null;
   let host: string;

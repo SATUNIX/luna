@@ -261,8 +261,34 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
 `push` (`tests/autonomy-selfimprove-smoke.ts`).
 
 - **A cycle ends** once its report is on the branch. A live session that settles without one gets
-  two reminders, then a manager decision (`tests/autonomy-smoke.ts`). Acceptance runs on the
+  two reminders, then a manager decision (`tests/autonomy-smoke.ts`). A report whose `Item:` lines
+  leave a commit unnamed gets one follow-up in the live session first: every commit since the cycle
+  start that changes more than record files under `autonomy/` must appear, by a 7-character or
+  longer prefix, in a line `Item: <title> - <commit shas> - <test>`; the commit that writes the
+  report is exempt, since it cannot name itself. The cycle completes after that one follow-up
+  whatever the outcome, and the merge review sees any commit still unnamed (`lib/ledger.ts`;
+  `tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`). Acceptance runs on the
   accepted head in a clean clone with no network; the head is tagged (`tests/autonomy-selfimprove-smoke.ts`).
+- **The cycle prompt** gives the worker the cycle start sha, the review's diff budget and the exact
+  command that measures it (`git diff <start>..HEAD` without the lockfile and this run's record
+  directories, piped to `wc -c`), tells it never to run `npm test` or `npm run check:all` (the host
+  gate runs the full suite) and to repeat that rule in every subagent task, and asks it to keep
+  `report.md` and `verify.md` under 5,000 characters each, because the review keeps only the
+  first and last 3,000. Assigned board items come right after the budget, and the precedence is
+  stated once (`tests/autonomy-selfimprove-smoke.ts`).
+- **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
+  (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
+  The kit's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
+  `--jobs=<the container's CPU quota>` (at most 16) and `--check-timeout=600` when the checked-out
+  tree's `packages/core/check-all.ts` supports those flags, and one check at a time on an older
+  tree. A red `check:all` adds a `check-all:<label> (<detail>)` step for each failed check (up to
+  12), which the next cycle's prompt names, and repeats the failure summary at the end of
+  `gate.log`. The separate `test:security` step is skipped when `check:all` already runs each of
+  its files (`tests/autonomy-image-scripts-smoke.ts`).
+- **The workspace reset** at a new cycle's first session discards uncommitted and unpushed work from
+  an earlier cycle; dirty tracked files no longer abort it. The reset stays owed until a session
+  emits its first frame, so a session that dies while starting is relaunched with the reset again
+  (`tests/autonomy-image-scripts-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **Dead sessions recover on the next tick**, whether the exit code is zero, non-zero or unknown.
   Up to `templateOptions.limits.autoRestartsPerCycle` automatic restarts (default 3; 0 disables)
   continue the same workspace with a briefing, without spending manager calls. The allowance
@@ -278,14 +304,22 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   ordinary cycle review is disabled. Red or empty work is not salvaged and uses the bounded restart
   path (`tests/autonomy-selfimprove-smoke.ts`).
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
-  charter, the report, the commits and the diff. A malformed answer, or none after three attempts,
-  counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
+  charter, the report, the commits and the diff. Its input starts with a host ledger: the cycle's
+  `git log --format="%h %s"` and the `git diff --shortstat` without the lockfile and this run's
+  records, which the reviewer is told are authoritative over any counts or stats in the worker's
+  prose. It rejects for the records only when the report claims work the diff lacks, or when a
+  change outside the records is covered by no report item. A **cycle context** section gives host
+  facts the precedence depends on: the upstream sync outcome, whether the cycle resolves an
+  upstream conflict, and the previous cycle's outcome, gate and merge reason. A malformed answer,
+  or none after three attempts, counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
   can salvage what is sound.
 - **Review inputs are never worker-authored.** The worker can write wherever its write areas allow,
   so the host decides what the review sees and what no review may pass
   (`tests/autonomy-review-inputs-smoke.ts`):
   - the charter comes from the integration head the cycle started from, never from the cycle's own
-    commit;
+    commit; on a stream (an `integration.upstream` run) it is the package's seed charter rendered
+    for the run, because a stream never rewrites the trunk's charter and an older trunk copy can
+    rank board work below its own priorities;
   - a cycle that changes `autonomy/CHARTER.md`, package-manager configuration, a path in
     `templateOptions.integration.controlPaths` (globs, for example the scripts your checks run) or
     the `scripts` of any `package.json` is not merged, and no model is asked, unless
@@ -301,9 +335,16 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
     treats the report, commits and diff as data, never instructions.
 - **The manager** is a separate model call, made only when a trigger fires (20 minutes without
   events from a live session, 90 minutes without a push, the 3-hour soft limit, the per-cycle budget,
-  two red gates in a row, repeated stall escalations, or a live session that settled without a report). It answers
+  two red gates in a row, three stall episodes since the last guard decision or commit, or a live
+  session that settled without a report). Progress-guard notices less than two minutes apart count
+  as one episode. It answers
   with exactly one of `CONTINUE`, `NUDGE`, `RESTART_SESSION`, `NEW_CYCLE`, `RESET_TO_LAST_GOOD` or
-  `ABORT_RUN`, which the supervisor validates and carries out; at most 3 calls per cycle, and the hard
+  `ABORT_RUN`, which the supervisor validates and carries out. At most 3 interventions per cycle
+  count against `managerCallsPerCycle`; `CONTINUE` decisions, and the `CONTINUE` used when the
+  manager cannot be reached, count only against a loop guard of three times that. When the cap is
+  reached while the worker is alive, it gets one steer to commit, record and push, and 15 minutes
+  to do so before the cycle closes as partial with `manager_calls_exhausted`. The manager is told
+  that waiting on the full suite is not progress. The hard
   limits (a 5-hour cycle ceiling, and the run's budget) never consult it. These limits are the
   template's defaults and can be changed in `templateOptions.limits` (`tests/autonomy-smoke.ts`,
   `tests/autonomy-selfimprove-smoke.ts`).
@@ -404,17 +445,34 @@ individual proposal files described below) unless they block an
 assigned item. The merge reviewer receives the claimed board items (or the two assigned items
 when no claim is present), their acceptance, the assigned order and this precedence from the
 prompt's host-held board snapshot. It judges actual progress, churn and lower-priority detours. When the board has
-items, claimed ids that are not on it refuse merge. Without a board (no `control/board.json`, or
+items, a claimed id that is not on it never refuses merge: the cycle is judged against its known
+claims (or the assigned items, labelled as shown for reference rather than claimed), the unknown
+ids are listed to the reviewer as a record concern, recorded as `unknownClaims` in the cycle
+history and named to the next cycle. Without a board (no `control/board.json`, or
 no items), the prompt asks for no `Board:` lines, and any it gets are recorded in the history but
 never refuse merge. The board section, and improve mode taken from assigned items with own ideas
 filed as proposals, apply to streams and to runs with board items; other runs keep the original
 improve mode, chosen by the worker when the review finds nothing to fix. Green partial cycles with new commits also receive independent review, even with normal
 cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
 for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
+A merge refused for an over-budget diff tells the next cycle to carry over only a reviewable
+subset and list the rest in its handoff, not to bring the whole attempt over again.
+
+A `steer` reaches the running cycle session at once (as a steer while it works, as a prompt once
+it has settled). One recorded while no session was alive waits for the next cycle prompt; if it
+was recorded while an earlier cycle was working, it is passed on as "Sent during cycle NN, which
+has ended; apply only if it is still relevant", never as a fresh authoritative order
+(`tests/autonomy-selfimprove-smoke.ts`). On a stream, the cycle prompt also names the stream's
+focus (`objective.title` and `objective.spec`) and tells the worker to stay inside that area and
+file problems elsewhere as proposals.
 
 Set `templateOptions.integration.upstream` to a branch such as `integration/luna`, different from
 `integration.branch`. Before every new cycle the host fetches it from the promotion remote and
 creates a merge commit on the run's integration branch when clean, then starts the cycle there.
+When the integration branch is already an ancestor of the upstream head (typically after an
+integrator landed it with a `--no-ff` merge), the host fast-forwards it instead of writing an
+empty merge, so the stream and the trunk settle rather than trading content-free merges every
+cycle (`tests/autonomy-smoke.ts`).
 A conflict leaves integration unchanged and supplies `refs/upstream/trunk` through the offline
 bundle, with a P0 instruction to merge it, preserve both sides' intent and re-verify. The host
 refuses merging a cycle that omits that upstream ancestry. A cycle that merges the upstream head is
@@ -425,7 +483,7 @@ neither parent) and the worker's write areas. Upstream's own changes (its charte
 and other runs' records) are not the cycle's work. A resolution that keeps the integration side
 of a path upstream changed since the merge base, as `git merge -s ours` does, refuses merge. A failed fetch is logged and the cycle
 continues from its local integration head; `cycle.json`, state history and supervisor logs record
-`merged` (with sha), `conflict`, `up_to_date` or `fetch_failed`. The upstream is fetched from
+`merged` or `fast_forward` (with sha), `conflict`, `up_to_date` or `fetch_failed`. The upstream is fetched from
 the promotion destination, so a contract that sets it under promotion policy `none` (or `push`
 without a git remote) is refused. Without the option, existing runs retain their behaviour and
 need no new state fields (`tests/autonomy-selfimprove-smoke.ts`). New upstream ref transport

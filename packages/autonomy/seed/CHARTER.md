@@ -64,8 +64,8 @@ block an assigned item. The steward decides which proposals become assignments.
 
 Use **fix mode** for repairs and **improve mode** for assigned board improvements. Every improvement needs evidence, tests and docs. Consolidate previous
 improvements after higher-priority gate, upstream conflict and board work.
-Run the tests for what you changed, then finish. Do not run the whole `npm run check:all`
-yourself: the host gate runs it.
+Run the targeted tests for what you changed. Never run `npm test` or `npm run check:all`
+yourself: the host gate runs the full suite on a clean checkout.
 
 A cycle whose honest review finds nothing to do records `Outcome: nothing found` instead of
 inventing work. Several of those in a row end the run.

@@ -85,6 +85,10 @@ export function parseBoardReport(report: string | null): BoardReport[] {
   return out;
 }
 
-export function boardPrompt(board: StewardBoard, proposals = "autonomy/BACKLOG.md"): string {
-  return `\n\n## Assigned work (steward board)\n${assignedItems(board).map((i) => `- ${i.id} [${i.priority}] ${i.title}\n  ${i.detail ?? ""}\n  Acceptance: ${i.acceptance ?? "Demonstrate the item with tests and evidence."}`).join("\n") || "(No assigned items.)"}\n\nPrecedence: ${WORK_PRECEDENCE}.\nOwn new ideas go into ${proposals} as proposals, not into this cycle, unless they block the assigned item.${board.items.length ? "\nPut one line per item worked on in report.md: `Board: <ID> done|progress|blocked - <one sentence>`." : ""}`;
+/**
+ * The assigned items as the cycle prompt shows them (prompts/cycle.md {{BOARD}}, right after the
+ * budget). The precedence and the own-ideas rule are stated once in the prompt itself.
+ */
+export function boardPrompt(board: StewardBoard): string {
+  return `\n\n## Assigned work (steward board)\n${assignedItems(board).map((i) => `- ${i.id} [${i.priority}] ${i.title}\n  ${i.detail ?? ""}\n  Acceptance: ${i.acceptance ?? "Demonstrate the item with tests and evidence."}`).join("\n") || "(No assigned items.)"}${board.items.length ? "\nPut one line per item worked on in report.md: `Board: <ID> done|progress|blocked - <one sentence>`." : ""}`;
 }

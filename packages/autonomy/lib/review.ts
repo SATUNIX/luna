@@ -246,6 +246,16 @@ export interface CycleReviewBundle {
   recordStat?: string | undefined;
   /** Host-computed: changed tests and check definitions (reviewCriticalPaths). */
   criticalPaths?: readonly string[] | undefined;
+  /** Host-computed `git log --format="%h %s"` of the cycle: authoritative for what was committed. */
+  ledger?: string | undefined;
+  /** Host-computed `git diff --shortstat` of the cycle without lockfiles and this run's records. */
+  shortstat?: string | undefined;
+  /** Host-computed: commits beyond records that no `Item:` line of the report names (lib/ledger.ts). */
+  uncovered?: readonly string[] | undefined;
+  /** Host facts the precedence depends on: upstream sync, conflict resolution, the previous cycle, unknown claims. */
+  context?: readonly string[] | undefined;
+  /** False when the report made no known Board: claim and `board` holds the assigned items instead. */
+  claimsFromReport?: boolean | undefined;
 }
 
 /** What the task reviewer sees (lib/engine.ts assembles it from the contract and the checks). */
@@ -295,7 +305,7 @@ export function reviewSystemPrompt(integrationBranch: string, proposals = "auton
     "- Changed behaviour has a test that would fail without the change; docs are updated with it.",
     "- No security control, check or test is weakened, skipped or deleted to make things pass.",
     "- The diff is scoped: no unrelated reformatting, churn or generated bulk.",
-    "- The report and verification record match the diff (no claimed work that is not there).",
+    "- The host ledger and diff are authoritative for what changed. Ignore counts or stats in the worker's prose. REJECT only when the report claims work the diff lacks, or when a non-record change in the diff is covered by no report item.",
     "- The diff actually advances or completes the claimed steward board items against their acceptance criteria. Compare claims with the host's assigned order: reject churn or a lower-priority detour unless higher-priority gate repairs, upstream conflicts or assignment blockers justify it. Partial work may merge when it makes sound, tested progress and honestly records what remains.",
     `Work precedence: ${WORK_PRECEDENCE}. Own new ideas belong in ${proposals} as proposals unless they block an assigned item.`,
     "Improvement work (making an existing system more capable, faster or more reliable) is valid when the need is evidenced (a measured baseline, a documented limitation, a demonstrable gap) and it is tested and documented. A cycle that reports `Outcome: nothing found` and only records its review is valid too; merge it unless its records are misleading.",
@@ -310,10 +320,18 @@ export function buildReviewBundle(b: CycleReviewBundle): string {
   return [
     `Run ${b.run}, cycle ${b.cycle}: ${b.outcome}. Gate green (${(b.gateSteps ?? []).map((s) => s.name).join(", ") || "all steps"}).`,
     "",
+    "## Host ledger (authoritative): git log --format=\"%h %s\" of this cycle",
+    clip(b.ledger || "(no commits)", 4000),
+    `Diff without lockfiles and this run's records: ${b.shortstat?.trim() || "(not computed)"}`,
+    ...(b.uncovered?.length ? [`Commits beyond records that no \`Item:\` line of the report names: ${b.uncovered.join(", ")}`] : []),
+    "",
+    "## Cycle context (host)",
+    (b.context ?? []).map((l) => `- ${l}`).join("\n") || "(none)",
+    "",
     "## Assigned steward board items (host snapshot, priority order)",
     JSON.stringify(b.assignedBoard ?? [], null, 2),
     "",
-    "## Claimed steward board items (host snapshot; report claims, or assigned items when absent)",
+    b.claimsFromReport === false ? "## Board items for reference (the report makes no Board: claim; assigned items shown, not claimed)" : "## Claimed steward board items (host snapshot; report claims, or assigned items when absent)",
     JSON.stringify(b.board ?? [], null, 2),
     `Precedence: ${WORK_PRECEDENCE}.`,
     "",

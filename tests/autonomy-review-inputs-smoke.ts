@@ -103,7 +103,8 @@ await check("unit: control changes are the charter, operator globs and package.j
     assert.match(streamBundle, /Carry-over evidence/);
     assert.ok(streamBundle.includes(paths.proposals));
     assert.ok(reviewSystemPrompt("stream/ux", paths.proposals).includes(paths.proposals));
-    assert.ok(boardPrompt({ items: [] }, paths.proposals).includes(paths.proposals));
+    // The precedence and the own-ideas rule are stated once, in the cycle prompt; the board block holds the items only.
+    assert.doesNotMatch(boardPrompt({ items: [] }), /Precedence:|Own new ideas/);
     if (upstream) {
       assert.doesNotMatch(streamBundle, /autonomy\/BACKLOG.md|autonomy\/HANDOFF.md/);
       assert.doesNotMatch(reviewSystemPrompt("stream/ux", paths.proposals), /autonomy\/BACKLOG.md/);

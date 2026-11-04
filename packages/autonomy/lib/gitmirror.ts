@@ -166,7 +166,8 @@ export function syncIntegration(g: HostGit, cfg: MirrorConfig): SyncResult {
   return { state: "diverged", head: local, remote };
 }
 
-const fill = (text: string, vars: Readonly<Record<string, string | number>>): string => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k: string) => (Object.hasOwn(vars, k) ? String(vars[k]) : m));
+/** Fill a seed template's {{NAME}} placeholders; unknown names stay as written. */
+export const fill = (text: string, vars: Readonly<Record<string, string | number>>): string => text.replace(/\{\{([A-Z_]+)\}\}/g, (m, k: string) => (Object.hasOwn(vars, k) ? String(vars[k]) : m));
 
 /**
  * Add the seed files under autonomy/ in one commit on `parent` (default: the base), and move the
@@ -243,7 +244,7 @@ export function mergeBaseIntoIntegration(g: HostGit, cfg: MirrorConfig): { merge
 }
 
 export type UpstreamSync =
-  | { outcome: "merged"; upstream: string; head: string; sha: string }
+  | { outcome: "merged" | "fast_forward"; upstream: string; head: string; sha: string }
   | { outcome: "conflict" | "up_to_date"; upstream: string; head: string }
   | { outcome: "fetch_failed"; upstream: string };
 
@@ -259,6 +260,14 @@ export function syncUpstream(g: HostGit, cfg: MirrorConfig): UpstreamSync | unde
   const ref = `refs/heads/${cfg.integrationBranch}`;
   const integration = g(["rev-parse", ref]);
   if (isAncestor(g, head, integration)) return { outcome: "up_to_date", upstream, head };
+  // The stream holds nothing the upstream lacks (typically: the integrator just landed it with a
+  // --no-ff merge). Move to the upstream head instead of writing an empty merge, which the
+  // integrator would see as new work, integrate and test again, and which would move the trunk
+  // and restart the loop on every stream.
+  if (isAncestor(g, integration, head)) {
+    g(["update-ref", ref, head, integration]);
+    return { outcome: "fast_forward", upstream, head, sha: head };
+  }
   const tree = mergeTree(g, integration, head);
   if (tree === null) return { outcome: "conflict", upstream, head };
   const sha = g([...identity(cfg), "commit-tree", tree.split("\n")[0] ?? "", "-p", integration, "-p", head, "-m", `chore(autonomy): merge ${upstream} into ${cfg.integrationBranch}\n\nHost upstream sync before a cycle of run ${cfg.run}.`]);

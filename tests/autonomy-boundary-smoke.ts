@@ -268,6 +268,8 @@ const builders = {
   deploySync: { args: dk.deploySyncRunArgs(cfg, p, { service: "web", index: 0, source: "dist" }), networks: [], role: "deploy-sync" },
   workerDocker: { args: dk.agentRunArgs(cfgDocker, p, { n: 1, attempt: 1, reset: false, effort: undefined }), networks: [N.net], role: "worker" },
 } satisfies Record<string, Builder>;
+// The check container gets 8 CPUs by default (gate.sh runs check-all --jobs from the quota).
+assert.deepEqual(flag(builders.check.args, "--cpus"), ["8"]);
 const roots = [p.root, PKG];
 // docker.ts destructures agentRunArgs' options without defaults, so inference makes reset/effort required; they are passed as undefined.
 const inspectOpts = (b: Builder) => ({ roots, networks: b.networks, role: b.role, secretEnvNames: b.secretEnvNames ?? [] });

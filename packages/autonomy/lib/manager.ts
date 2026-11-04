@@ -131,6 +131,7 @@ export function systemPrompt(): string {
     "You are called only when something needs a decision. Choose exactly one decision:",
     ...Object.entries(DECISIONS).map(([k, v]) => `- ${k}: ${v}`),
     "Prefer the least disruptive decision that the evidence supports. Commits and passing gates are progress; repeated identical tool calls, the same error recurring, or long silence are not.",
+    "The worker must not run the full suite (`npm test` or `npm run check:all`): the host gate runs it on a clean checkout after the cycle. Waiting on one is not progress. If the activity shows the worker starting, polling or waiting on the full suite, NUDGE: stop it, run the targeted smokes for the changed files, then record and push.",
     'Reply with only a JSON object: {"decision": "...", "reason": "one or two sentences citing the evidence", "extendMinutes": n (CONTINUE only), "message": "..." (NUDGE and RESTART_SESSION only)}.',
     "A NUDGE or RESTART_SESSION message is read by the agent as coming from the operator: be specific and actionable.",
   ].join("\n");

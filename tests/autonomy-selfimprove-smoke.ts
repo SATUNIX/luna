@@ -181,6 +181,8 @@ await check("stream bookkeeping seeds per-run files, preserves the charter, and 
     assert.ok(review.user.includes(`## Handoff (${paths.handoff})`));
     assert.match(review.user, /Run-specific carry-over evidence/);
     if (stream) assert.equal(resumed.rt.repo.fileAt(resumed.rt.repo.head(), "autonomy/CHARTER.md"), charter.trim());
+    // A stream is judged against the current stream charter (the seed rendered by the host), not an older trunk copy.
+    if (stream) { assert.match(review.user, /# Improvement charter[\s\S]*The steward board items in order/); assert.doesNotMatch(review.user, /Keep this exact charter/); }
   }
 });
 
@@ -264,7 +266,7 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
   assert.match(charter, /Fix what is broken, and add the audit marker\./);
   assert.match(charter, /- gate \(required\)/, "the checks are listed, without their definitions' source");
   assert.doesNotMatch(charter, /pi-system|mkdocs|gitleaks|home\.internal/i, "the seed is general, not specific to one repository");
-  assert.match(charter, /yourself: the host gate runs it/, "the host owns the full gate");
+  assert.match(charter, /Never run `npm test` or `npm run check:all`\s+yourself: the host gate runs the full suite/, "the host owns the full gate");
   assert.match(rt.repo.fileAt(integration, "autonomy/BACKLOG.md") ?? "", /\| B-1 \| open \| P2 \| \*\*Add the audit marker\.\*\* A file called AUDIT_OK must exist\./);
   assert.match(rt.repo.fileAt(integration, "autonomy/HANDOFF.md") ?? "", /first run: improve-test-1/);
   assert.match(nth(prompts, 0), /You are working on the repository in \/work, on branch `pi\/improve-test-1`/);
@@ -782,8 +784,14 @@ await check("board prompt ranks two nonblocked items, refreshes each cycle, and 
         assert.ok(t.message.indexOf("V-02 [P1]") < t.message.indexOf("V-04 [P1]"));
         assert.doesNotMatch(t.message, /V-01|V-03/);
         assert.match(t.message, /First acceptance/);
-        assert.match(t.message, /Do not run the whole `npm run check:all`/);
-        assert.match(t.message, /Own new ideas go into autonomy\/BACKLOG.md as proposals/);
+        assert.match(t.message, /Never run `npm test` or `npm run check:all`/);
+        assert.match(t.message, /Put this rule in every subagent task you send/);
+        assert.match(t.message, /Own new ideas go into `autonomy\/BACKLOG.md` as proposals/);
+        // One copy each of the precedence and the own-ideas rule, and the items before the ground rules.
+        assert.equal(t.message.split(WORK_PRECEDENCE).length, 2, "the precedence is stated once");
+        assert.equal(t.message.split("Own new ideas go into").length, 2, "the own-ideas rule is stated once");
+        assert.ok(t.message.indexOf("## Assigned work") < t.message.indexOf("Ground rules"), "assigned items come right after the budget");
+        assert.doesNotMatch(t.message, /Read the steward board/);
         fs.writeFileSync(path.join(t.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-05", title: "next cycle assignment", priority: "P0", acceptance: "Next acceptance" }] }));
       } else {
         assert.match(t.message, /V-05 \[P0\]/);
@@ -885,6 +893,143 @@ await check("an existing paused cycle with no board or upstream fields loads and
   fs.rmSync(path.join(h.store.p.root, "STOP")); h.store.enqueue("unpause");
   const resumed = await runOnce(h, { rt: h.runtime(async (t) => { report(t, "successful"); t.commit("finish old cycle"); }) });
   assert.equal(resumed.state.selfImprove?.history[1]?.merged, true);
+});
+
+await check("the cycle prompt names the start sha, the review budget with its measure command, the stream focus and the targeted-test rule", async () => {
+  const src = sourceRepo();
+  sh(src, "branch", "integration/trunk");
+  const h = harness(improveRaw(src, {
+    objective: { title: "UX stream", spec: "TUI overlays and the launch screen; owns packages/web-ui.", backlog: [] },
+    budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 },
+    templateOptions: { integration: { upstream: "integration/trunk" } },
+  }), {
+    manager: manager([]),
+    script: async (t) => {
+      const start = t.git(["rev-parse", "HEAD"]).stdout.trim().slice(0, 12);
+      assert.ok(t.message.includes(`\`${start}\`, the cycle start`), "the start sha is given");
+      assert.ok(t.message.includes(`git diff --no-renames ${start}..HEAD -- . ":(exclude)package-lock.json" ":(exclude)autonomy/cycles/improve-test-1/" ":(exclude)autonomy/runs/improve-test-1/" | wc -c`), t.message);
+      assert.match(t.message, /at most 60000 characters/);
+      assert.match(t.message, /stop taking new items once it passes 30000/);
+      assert.ok(t.message.includes(`git log --oneline ${start}..HEAD`));
+      assert.doesNotMatch(t.message, /<cycle start>|main\.\.HEAD/);
+      assert.match(t.message, /Your stream: UX stream: TUI overlays and the launch screen; owns packages\/web-ui\.\. Work only inside this stream's area/);
+      assert.match(t.message, /there is no board file to read/);
+      assert.match(t.message, /this prompt wins: the merge review judges streams against the current stream charter/);
+      assert.match(t.message, /\(a\) run the targeted smokes[\s\S]*\(d\) write `verify\.md`[\s\S]*Then go to step 5/);
+      assert.match(t.message, /Item: <title> - <commit shas> - <test that proves it>/);
+      assert.match(t.message, /under 5000 characters each/);
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("focus");
+    },
+  });
+  assert.equal((await runOnce(h)).state.selfImprove?.merged, 1);
+});
+
+await check("a report that leaves a code commit out of its Item lines gets one follow-up in the live session; the review leads with the host ledger", async () => {
+  const calls: ManagerCall[] = [];
+  const shas: string[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => {
+      if (t.turn === 1) {
+        t.write("feature.txt", "1"); t.commit("feat: first item");
+        shas.push(t.git(["rev-parse", "HEAD"]).stdout.trim());
+        t.write("AUDIT_OK", "1"); report(t, "successful", "fix", "Item: marker - (this commit) - smoke:x"); t.commit("record");
+        return;
+      }
+      assert.equal(t.kind, "prompt", "the follow-up reaches the settled session as its next prompt");
+      assert.match(t.message, /^Commits [0-9a-f]{12} are not in any `Item:` line of autonomy\/cycles\/improve-test-1\/01\/report\.md/);
+      assert.ok(t.message.includes(nth(shas, 0).slice(0, 12)));
+      report(t, "successful", "fix", `Item: feature - ${nth(shas, 0).slice(0, 9)} - smoke:x\nItem: marker - (this commit) - smoke:x`); t.commit("record the feature");
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  assert.equal(state.selfImprove?.history[0]?.merged, true, state.selfImprove?.history[0]?.mergeReason ?? "");
+  assert.equal(rt.turnCount, 2, "exactly one follow-up");
+  const review = nth(calls.filter((c) => /You review one cycle/.test(c.system)), 0);
+  assert.ok(review.user.indexOf("## Host ledger (authoritative)") < review.user.indexOf("## Cycle report"), "the ledger comes first");
+  assert.match(review.user, /[0-9a-f]{7,} feat: first item/);
+  assert.match(review.user, /Diff without lockfiles and this run's records: +2 files changed/);
+  assert.doesNotMatch(review.user, /no `Item:` line of the report names/, "the follow-up fixed the gap");
+  assert.match(review.system, /The host ledger and diff are authoritative for what changed\. Ignore counts or stats in the worker's prose/);
+  assert.match(review.system, /a non-record change in the diff is covered by no report item/);
+  assert.match(review.user, /## Cycle context \(host\)\n- This is the run's first cycle\./);
+});
+
+await check("an unknown Board: claim never discards green work: it is judged on the known claims, flagged to the reviewer and to the next cycle", async () => {
+  const calls: ManagerCall[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => {
+      if (t.step === 2) assert.match(t.message, /claimed board items that were not assigned to it \(V-09\)/);
+      t.write("AUDIT_OK", String(t.step)); report(t, "successful", "fix", t.step === 1 ? "Board: V-09 done - A renumbered item.\nBoard: V-02 progress - Started." : ""); t.commit(`cycle ${t.step}`);
+    },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-02", title: "assigned", priority: "P1", acceptance: "Assigned acceptance" }] }));
+  const { state } = await runOnce(h);
+  const first = state.selfImprove?.history[0];
+  assert.equal(first?.merged, true, first?.mergeReason ?? "");
+  assert.deepEqual(first?.unknownClaims, ["V-09"]);
+  const reviews = calls.filter((c) => /You review one cycle/.test(c.system));
+  assert.match(nth(reviews, 0).user, /not on this cycle's board: V-09/);
+  assert.match(nth(reviews, 0).user, /## Claimed steward board items[\s\S]*Assigned acceptance/);
+  assert.match(nth(reviews, 1).user, /## Board items for reference \(the report makes no Board: claim/);
+  assert.match(nth(reviews, 1).user, /Previous cycle 01: completed, gate green, merged\./);
+});
+
+await check("operator steers reach a live cycle session; one queued during an earlier cycle is marked as such", async () => {
+  const seen: Array<{ kind: string; message: string }> = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => {
+      seen.push({ kind: t.kind, message: t.message });
+      if (seen.length === 1) { t.store.enqueue("steer", { message: "focus on the marker" }); t.hang(); return; }
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("steered");
+    },
+  });
+  const made = h.engine();
+  made.engine.pendingFeedback.push({ text: "Operator steering (authoritative): revert the old file", step: 0, inStep: true });
+  made.engine.pendingFeedback.push({ text: "Operator steering (authoritative): queued between cycles", step: 0, inStep: false });
+  await made.engine.run();
+  const first = nth(seen, 0).message;
+  assert.match(first, /- Sent during cycle 00, which has ended; apply only if it is still relevant: Operator steering: revert the old file/);
+  assert.match(first, /- Operator steering \(authoritative\): queued between cycles/);
+  assert.deepEqual([nth(seen, 1).kind, nth(seen, 1).message], ["steer", "Operator steering (authoritative): focus on the marker"], "delivered to the running session, not queued for the next cycle");
+  assert.equal(h.state().selfImprove?.history[0]?.merged, true);
+});
+
+await check("a session that dies before its first frame is relaunched with the workspace reset still owed", async () => {
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => { t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("after a failed start"); },
+  });
+  const rt = h.runtime();
+  rt.dieOnStart = 1;
+  const { state } = await runOnce(h, { rt });
+  assert.deepEqual(rt.calls.workers.map((w) => w.resetWorkspace), [true, true], "the reset is repeated for the relaunch");
+  assert.equal(state.selfImprove?.history[0]?.merged, true);
+  // Once a session has started (emitted a frame), a restart keeps its workspace.
+  const h2 = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => { if (t.attempt === 1) { t.crash(); return; } t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("after a crash"); },
+  });
+  const rt2 = h2.runtime();
+  await runOnce(h2, { rt: rt2 });
+  assert.deepEqual(rt2.calls.workers.map((w) => w.resetWorkspace), [true, false]);
+});
+
+await check("an over-budget refusal tells the next cycle to carry a reviewable subset, not to re-carry everything", async () => {
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) { t.write("AUDIT_OK", "1"); t.write("bulk.txt", "x".repeat(70_000)); report(t, "successful"); t.commit("too big"); return; }
+      assert.match(t.message, /carry over only a reviewable subset/);
+      assert.doesNotMatch(t.message, /bring over what is sound/);
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("small");
+    },
+  });
+  const { state } = await runOnce(h);
+  assert.match(state.selfImprove?.history[0]?.mergeReason ?? "", /^the diff without lockfiles/);
+  assert.equal(state.selfImprove?.history[1]?.merged, true);
 });
 
 cleanup();

@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { resolveConfig } from "../packages/autonomy/lib/config.ts";
 import { evaluate, runStop, reportOutcome, nothingFoundInARow } from "../packages/autonomy/lib/triggers.ts";
+import { itemShas, uncoveredCommits } from "../packages/autonomy/lib/ledger.ts";
 import { type ManagerBundle, type ManagerDecision, parseDecision, buildBundle, DECISIONS } from "../packages/autonomy/lib/manager.ts";
 import { uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HARNESS_COMMANDS } from "../packages/autonomy/lib/rpc.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
@@ -91,7 +92,8 @@ interface CycleRuntime {
   managerCalls: ManagerRequest[];
   manager(b: ManagerRequest): Promise<ManagerDecision>;
   starts: number;
-  startAgent(o: { attempt: number; onEvent: TickTools["emit"] }): FakeAgent;
+  startAgent(o: { attempt: number; onEvent: TickTools["emit"]; say: (message: string) => void }): FakeAgent;
+  reportGaps?(): Promise<readonly string[]>;
 }
 
 interface FakeRuntimeOptions {
@@ -99,6 +101,8 @@ interface FakeRuntimeOptions {
   manager: Error | ManagerDecision | ((b: ManagerRequest) => ManagerDecision);
   gates?: string[];
   tickMin?: number;
+  /** Answers reportGaps (lib/cycle.ts) in order; absent means the runtime has no ledger check. */
+  gaps?: string[][];
 }
 
 let checks = 0;
@@ -147,6 +151,14 @@ await check("triggers: idle, no-commit, soft limit, budget, crash; hard stops sk
   assert.equal(evaluate(base, 300 * MIN, cfg).stop, "hard_limit");
   assert.equal(evaluate({ ...base, costUsd: 10 }, MIN, cfg).stop, "cycle_budget_hard");
   assert.equal(evaluate({ ...base, managerCalls: 3 }, 21 * MIN, cfg).stop, "manager_calls_exhausted");
+  // CONTINUE decisions spend only the looser loop guard (three times the cap).
+  assert.equal(evaluate({ ...base, managerCalls: 0, managerCallsTotal: 8 }, 21 * MIN, cfg).stop, null);
+  assert.equal(evaluate({ ...base, managerCalls: 0, managerCallsTotal: 9 }, 21 * MIN, cfg).stop, "manager_calls_exhausted");
+  // Guard episodes count from the baseline the last guard decision or commit set, under one stable key.
+  assert.deepEqual(evaluate({ ...base, lastEventAt: MIN, guardEscalations: 7, guardBaseline: 6 }, 2 * MIN, cfg).triggers, []);
+  assert.deepEqual(evaluate({ ...base, lastEventAt: MIN, guardEscalations: 3 }, 2 * MIN, cfg).triggers, ["guard_escalations:0"]);
+  assert.deepEqual(evaluate({ ...base, lastEventAt: MIN, guardEscalations: 4, handled: new Set(["guard_escalations:0"]) }, 2 * MIN, cfg).triggers, [], "a further notice in the same episode makes no new key");
+  assert.deepEqual(evaluate({ ...base, lastEventAt: MIN, guardEscalations: 6, guardBaseline: 3, handled: new Set(["guard_escalations:0"]) }, 2 * MIN, cfg).triggers, ["guard_escalations:3"]);
   assert.equal(runStop({ totalCostUsd: 100, cyclesDone: 3, stopFile: undefined }, cfg), "total_budget");
   assert.equal(runStop({ totalCostUsd: 1, cyclesDone: 50, stopFile: undefined }, cfg), "cycles_done");
   assert.equal(runStop({ totalCostUsd: 1, cyclesDone: 3, stopFile: true }, cfg), "stop_file");
@@ -419,6 +431,39 @@ await check("bare host merges honour union attributes for upstream sync and base
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+await check("upstream sync fast-forwards a stream the trunk already contains, so an integrator's --no-ff landing settles", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-ff-"));
+  try {
+    const src = path.join(tmp, "src");
+    fs.mkdirSync(src);
+    const sh = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    sh(src, "init", "--quiet", "-b", "main");
+    fs.writeFileSync(path.join(src, "a.txt"), "a\n");
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "base");
+    sh(src, "checkout", "--quiet", "-b", "stream/core");
+    fs.writeFileSync(path.join(src, "core.txt"), "core\n");
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "stream work");
+    const stream = sh(src, "rev-parse", "HEAD");
+    sh(src, "checkout", "--quiet", "-b", "integration/trunk", "main");
+    fs.writeFileSync(path.join(src, "ux.txt"), "ux\n");
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "other stream landed");
+    sh(src, "merge", "--quiet", "--no-ff", "-m", "integrator lands stream/core", "stream/core");
+    const trunk = sh(src, "rev-parse", "HEAD");
+    const cfg = { ...resolveConfig({ run: "ff-test", gitRemote: src }), integrationBranch: "stream/core", integrationUpstream: "integration/trunk" };
+    const g = gm.initMirror(path.join(tmp, "mirror.git"));
+    g(["fetch", "--quiet", src, "+refs/heads/*:refs/heads/*"]);
+    const ff = gm.syncUpstream(g, cfg);
+    assert.deepEqual(ff, { outcome: "fast_forward", upstream: "integration/trunk", head: trunk, sha: trunk }, "no empty merge commit");
+    assert.equal(g(["rev-parse", "refs/heads/stream/core"]), trunk);
+    assert.equal(g(["merge-base", "--is-ancestor", stream, trunk], { allowFail: true }), "", "the published stream head only moves forward");
+    assert.deepEqual(gm.syncUpstream(g, cfg), { outcome: "up_to_date", upstream: "integration/trunk", head: trunk }, "and the next sync settles");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 await check("git mirror: integration branch seeded and continued, fast-forward only, tags never move, nothing forced", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-git-"));
   try {
@@ -599,7 +644,7 @@ await check("harness check: a bare pi (kit not loaded) is detected from get_comm
 });
 
 // --- the cycle loop against a fake runtime ---------------------------------------------------
-function fakeRuntime({ script, manager, gates = [], tickMin = 1 }: FakeRuntimeOptions): { rt: CycleRuntime; sent: SentMessage[]; log: string[] } {
+function fakeRuntime({ script, manager, gates = [], tickMin = 1, gaps }: FakeRuntimeOptions): { rt: CycleRuntime; sent: SentMessage[]; log: string[] } {
   let clock = 0; let head = "h0"; let report = false; let meter = 0; const sent: SentMessage[] = []; const log: string[] = [];
   const rt: CycleRuntime = {
     tickMs: tickMin * MIN, now: () => clock, sleep: async (ms) => { clock += ms; },
@@ -609,6 +654,7 @@ function fakeRuntime({ script, manager, gates = [], tickMin = 1 }: FakeRuntimeOp
     resetToLastGood: async (sha) => { rt.resets.push(sha); },
     managerCalls: [],
     manager: async (b) => { rt.managerCalls.push(b); if (manager instanceof Error) throw manager; return typeof manager === "function" ? manager(b) : manager; },
+    ...(gaps ? { reportGaps: async () => gaps.shift() ?? [] } : {}),
     starts: 0,
     startAgent: ({ attempt, onEvent }) => {
       rt.starts++;
@@ -696,6 +742,72 @@ await check("cycle: RESET_TO_LAST_GOOD resets on the head it saw; ABORT_RUN stop
   assert.deepEqual(reset.rt.resets, ["h0"]);
   const abort = fakeRuntime({ manager: { decision: "ABORT_RUN", reason: "no progress" }, script: () => {} });
   assert.equal((await runCycle({ n: 7, cfg, rt: abort.rt, prompt: "p", restartBriefing: undefined, cycleDir: undefined })).outcome, "aborted");
+});
+
+await check("cycle: one guard episode is one notice; spaced notices fire one manager call and never exhaust the cap", async () => {
+  const notice = (message: string) => ({ type: "extension_ui_request", method: "notify", message });
+  const { rt } = fakeRuntime({ manager: { decision: "CONTINUE", reason: "verification in flight", extendMinutes: 10 }, script: ({ minute, emit, report }) => {
+    emit({ type: "turn_start" });
+    if (minute === 1) for (const m of ["progress-guard: oscillating", "progress-guard: 11 reads", "recurring stall", "recovery-orchestrator: entered recovery"]) emit(notice(m));
+    if (minute === 10 || minute === 19 || minute === 28) emit(notice("progress-guard: 13 reads since your last edit"));
+    if (minute === 35) { report(); emit({ type: "agent_settled" }); }
+  } });
+  const r = await runCycle({ n: 1, cfg, rt, prompt: "p" });
+  assert.equal(r.outcome, "completed", r.reason);
+  assert.equal(rt.managerCalls.length, 1, rt.managerCalls.map((b) => b.triggers.join(",")).join(" | "));
+  assert.deepEqual(rt.managerCalls[0]?.triggers, ["guard_escalations:0"]);
+});
+
+await check("cycle: CONTINUE decisions do not spend the per-cycle cap; the cap reached with a live worker sends one wrap-up steer and a grace window", async () => {
+  // Four triggers, each answered CONTINUE: the cycle keeps going and completes.
+  let n = 0;
+  const cont = fakeRuntime({ tickMin: 5, manager: () => ({ decision: "CONTINUE", reason: `progressing ${++n}`, extendMinutes: 10 }), script: ({ minute, emit, report }) => {
+    if (minute < 5) emit({ type: "turn_start" });
+    if (minute === 70) { report(); emit({ type: "agent_settled" }); }
+  } });
+  const r1 = await runCycle({ n: 1, cfg, rt: cont.rt, prompt: "p" });
+  assert.ok(cont.rt.managerCalls.length >= 4, `asked ${cont.rt.managerCalls.length} times`);
+  assert.deepEqual([r1.outcome, r1.reason], ["completed", "report recorded"]);
+  // Three interventions spend the cap; the next trigger asks the live worker to wrap up, and its report completes the cycle.
+  let reported = false;
+  const nudge = fakeRuntime({ manager: { decision: "NUDGE", reason: "looping", message: "Carry on." }, script: ({ minute, emit, report }) => {
+    if (reported) return;
+    if (minute % 3 === 0) emit({ type: "extension_ui_request", method: "notify", message: "progress-guard: loop detected" });
+    if (nudge.sent.some((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))) { reported = true; report(); emit({ type: "agent_settled" }); }
+  } });
+  const r2 = await runCycle({ n: 2, cfg, rt: nudge.rt, prompt: "p" });
+  assert.equal(nudge.rt.managerCalls.length, 3);
+  assert.deepEqual([r2.outcome, r2.reason], ["completed", "report recorded"]);
+  assert.equal(nudge.sent.filter((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now.")).length, 1);
+  assert.match(nudge.sent.find((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))?.message ?? "", /report\.md and autonomy\/cycles\/02\/verify\.md describing exactly the committed diff/);
+  // Without a report within the grace window the cycle closes as before.
+  const silent = fakeRuntime({ manager: { decision: "NUDGE", reason: "looping", message: "Carry on." }, script: ({ minute, emit }) => {
+    if (minute % 3 === 0) emit({ type: "extension_ui_request", method: "notify", message: "progress-guard: loop detected" });
+  } });
+  const r3 = await runCycle({ n: 3, cfg, rt: silent.rt, prompt: "p" });
+  assert.deepEqual([r3.outcome, r3.reason], ["partial", "manager_calls_exhausted"]);
+});
+
+await check("cycle: a report that leaves commits out of its Item lines gets exactly one follow-up before the cycle completes", async () => {
+  const { rt, sent } = fakeRuntime({ gaps: [["abc1234def56"], ["abc1234def56"]], manager: new Error("unused"), script: ({ minute, emit, report }) => {
+    if (minute === 2) { report(); emit({ type: "agent_settled" }); }
+    if (minute === 4 || minute === 6) emit({ type: "agent_settled" });
+  } });
+  const r = await runCycle({ n: 1, cfg, rt, prompt: "p" });
+  assert.deepEqual([r.outcome, r.reason], ["completed", "report recorded"]);
+  const followUps = sent.filter((m) => typeof m.message === "string" && m.message.startsWith("Commits abc1234def56 are not in any `Item:` line of autonomy/cycles/01/report.md"));
+  assert.equal(followUps.length, 1, "one follow-up only, even when the gap remains");
+  // The ledger rule itself: report-writing and record-only commits are exempt; an Item line naming a prefix covers a commit.
+  const commits = [
+    { sha: "a".repeat(40), files: ["src/x.ts"] },
+    { sha: "b".repeat(40), files: ["autonomy/cycles/r/01/plan.md", "autonomy/runs/r/HANDOFF.md"] },
+    { sha: "c".repeat(40), files: ["src/y.ts", "autonomy/cycles/r/01/report.md"] },
+    { sha: "d".repeat(40), files: ["src/z.ts"] },
+  ];
+  const report = "Outcome: successful\nMode: fix\nItem: x - aaaaaaa - smoke:x\nprose naming ddddddd is not an item line\n";
+  assert.deepEqual(itemShas(report), ["aaaaaaa"]);
+  assert.deepEqual(uncoveredCommits(report, commits, "autonomy/cycles/r/01/report.md"), ["d".repeat(12)]);
+  assert.deepEqual(uncoveredCommits(`${report}- **Item:** z - ddddddd, eeeeeee - smoke:z\n`, commits, "autonomy/cycles/r/01/report.md"), []);
 });
 
 await check("hostile model output and malformed RPC lines fail closed", () => {

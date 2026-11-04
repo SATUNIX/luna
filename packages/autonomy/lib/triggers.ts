@@ -35,10 +35,16 @@ export interface CycleObservation {
   readonly lastCommitAt?: number | null | undefined;
   readonly costUsd?: number | undefined;
   readonly extendedMinutes?: number | undefined;
+  /** Manager decisions that intervened (everything but CONTINUE and the unavailable-manager default). */
   readonly managerCalls?: number | undefined;
+  /** Every manager call, CONTINUE included: a loop guard at three times managerCallsPerCycle. */
+  readonly managerCallsTotal?: number | undefined;
   readonly exited?: { readonly code: number } | null | undefined;
   readonly redGatesInARow?: number | undefined;
+  /** Guard episodes (notices at least GUARD_EPISODE_MS apart, lib/cycle.ts), not single notices. */
   readonly guardEscalations?: number | undefined;
+  /** guardEscalations at the last guard decision or commit: only episodes since then count. */
+  readonly guardBaseline?: number | undefined;
   readonly softReviewed?: boolean | undefined;
   /** Trigger keys already sent to the manager. */
   readonly handled?: ReadonlySet<string> | undefined;
@@ -53,9 +59,19 @@ export function evaluate(s: CycleObservation, now: number, cfg: Pick<TriggerConf
   if ((now - s.startedAt) / 60_000 >= l.hardMinutes) return { stop: "hard_limit", triggers: [] };
   // The manager may let a cycle run past its budget (CONTINUE); the hard budget is final.
   if ((s.costUsd ?? 0) >= (cfg.budget.perCycleHardUsd ?? 2 * cfg.budget.perCycleUsd)) return { stop: "cycle_budget_hard", triggers: [] };
-  if ((s.managerCalls ?? 0) >= l.managerCallsPerCycle && pending(s, now, cfg).length) return { stop: "manager_calls_exhausted", triggers: [] };
+  if (managerCallsExhausted(s, l) && pending(s, now, cfg).length) return { stop: "manager_calls_exhausted", triggers: [] };
 
   return { stop: null, triggers: pending(s, now, cfg) };
+}
+
+/**
+ * The per-cycle manager cap: interventions (NUDGE, RESTART_SESSION, ...) count against
+ * managerCallsPerCycle; CONTINUE decisions do not, since a manager that keeps answering
+ * "progressing" has not intervened. Every call counts against a looser loop guard of three times
+ * the cap; hardMinutes and the hard budget still bound wall time and spend.
+ */
+export function managerCallsExhausted(s: Pick<CycleObservation, "managerCalls" | "managerCallsTotal">, l: Pick<CycleLimits, "managerCallsPerCycle">): boolean {
+  return (s.managerCalls ?? 0) >= l.managerCallsPerCycle || (s.managerCallsTotal ?? 0) >= 3 * l.managerCallsPerCycle;
 }
 
 function pending(s: CycleObservation, now: number, cfg: Pick<TriggerConfig, "limits" | "budget">): string[] {
@@ -71,7 +87,10 @@ function pending(s: CycleObservation, now: number, cfg: Pick<TriggerConfig, "lim
   if (!s.softReviewed && min(now - s.startedAt) >= l.softMinutes) add("soft_limit");
   if ((s.costUsd ?? 0) >= cfg.budget.perCycleUsd) add("cycle_budget");
   if ((s.redGatesInARow ?? 0) >= l.redGatesInARow) add(`red_gates:${s.redGatesInARow ?? 0}`);
-  if ((s.guardEscalations ?? 0) >= l.guardEscalations) add(`guard_escalations:${s.guardEscalations ?? 0}`);
+  // One key per baseline: further notices in the same episode do not make new keys; a guard
+  // decision or a commit moves the baseline (lib/cycle.ts) and re-arms the trigger.
+  const baseline = s.guardBaseline ?? 0;
+  if ((s.guardEscalations ?? 0) - baseline >= l.guardEscalations) add(`guard_escalations:${baseline}`);
   return out;
 }
 

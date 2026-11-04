@@ -114,7 +114,7 @@ export interface FakeRuntimeCalls {
   deploy: string[];
   checks: Array<{ id: string; sha: string; definition: string | string[] }>;
   reviews: TaskReviewBundle[];
-  workers: Array<{ name: string; step: number; attempt: number; effort: StartWorkerOptions["effort"] }>;
+  workers: Array<{ name: string; step: number; attempt: number; effort: StartWorkerOptions["effort"]; resetWorkspace: boolean }>;
 }
 
 export interface FakeRuntimeHooks {
@@ -160,6 +160,8 @@ export class FakeRuntime implements Runtime {
   turnCount: number;
   scriptError: unknown;
   sleeps?: number;
+  /** The next this-many sessions exit with code 1 before emitting any frame. */
+  dieOnStart = 0;
 
   constructor({ store, cfg, contract, script = async () => {}, engine = new FakeEngine(), clock = { now: Date.parse("2026-09-30T00:00:00Z") }, review, boundary, tickMs = 60_000, manager, checkTimeoutMs = 20_000, hooks = {} }: FakeRuntimeOptions) {
     this.store = store;
@@ -248,7 +250,9 @@ export class FakeRuntime implements Runtime {
     if (resetWorkspace) this.resetWork();
     this.agents.set(name, agent);
     this.engine.containers.add(name);
-    this.calls.workers.push({ name, step, attempt, effort });
+    this.calls.workers.push({ name, step, attempt, effort, resetWorkspace });
+    // A session that dies in its entrypoint (for example on a dirty tree): it exits before emitting any frame.
+    if (this.dieOnStart > 0) { this.dieOnStart--; agent.alive = false; this.engine.containers.delete(name); resolveExit({ code: 1 }); }
     return agent;
   }
 

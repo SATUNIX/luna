@@ -269,7 +269,8 @@ const builders = {
   workerDocker: { args: dk.agentRunArgs(cfgDocker, p, { n: 1, attempt: 1, reset: false, effort: undefined }), networks: [N.net], role: "worker" },
 } satisfies Record<string, Builder>;
 // The check container gets 8 CPUs by default (gate.sh runs check-all --jobs from the quota).
-assert.deepEqual(flag(builders.check.args, "--cpus"), ["8"]);
+assert.deepEqual(flag(builders.check.args, "--cpus"), [String(Math.min(8, os.availableParallelism()))]); // the gate default, capped at the host
+assert.equal(dk.engineCpus("8", 4), "4"); assert.equal(dk.engineCpus("2", 4), "2"); assert.equal(dk.engineCpus("0.5", 4), "0.5"); assert.equal(dk.engineCpus("8", 32), "8");
 const roots = [p.root, PKG];
 // docker.ts destructures agentRunArgs' options without defaults, so inference makes reset/effort required; they are passed as undefined.
 const inspectOpts = (b: Builder) => ({ roots, networks: b.networks, role: b.role, secretEnvNames: b.secretEnvNames ?? [] });

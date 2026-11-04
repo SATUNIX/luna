@@ -2,7 +2,8 @@
 // Workflow-script sandbox (packages/extensions/third_party/subagent/wf-sandbox.ts, docs/workflow-sandbox.md).
 //   1. the evil suite: Function/eval escapes, Date, Math.random, frozen args and globals, VM realm.
 //   2. the hooks: agent/parallel/pipeline/log/phase/workflow/args/budget mirror, the 4096-item and log caps, hook errors.
-//   3. CPU: busy loops end at the slice deadline; a stalled script ends; prlimit --cpu and the idle watchdog kill the runner.
+//   3. CPU: busy loops end at the slice deadline; a stalled script ends; prlimit --cpu and the idle watchdog kill the runner;
+//      a kill reaches the jail's whole process group, and a process that outlives it cannot hold the run open.
 //   4. memory: an allocation loop ends with kind "memory".
 //   5. 1 MiB caps on the result, on a call's arguments and on a hook's result; unserialisable hook results; malformed call payloads;
 //      U+2028/U+2029 in hook results, args and source.
@@ -23,6 +24,7 @@ import {
   REDUCED_YES,
   SandboxSession,
   detectSupport,
+  findExecutable,
   jailCommand,
   locateQuickjs,
   runWorkflowScript,
@@ -48,8 +50,14 @@ const modes: SandboxMode[] = support.bwrap ? ["full", "reduced"] : ["reduced"];
 if (!support.bwrap) console.log(`  SKIP: full-mode checks (${support.reason ?? "bwrap unavailable"})`);
 
 const echo: WorkflowHooks = { agent: (prompt) => Promise.resolve({ text: `did: ${prompt}` }) };
+// Every run must settle: a run that never does fails here, named, instead of hanging the smoke until the CI job times out.
+const within = <T>(work: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error(`${label}: did not settle within ${String(ms)} ms`)); }, ms); });
+  return Promise.race([work, late]).finally(() => { clearTimeout(timer); });
+};
 const run = (mode: SandboxMode, source: string, extra: Partial<Parameters<typeof runWorkflowScript>[0]> = {}): Promise<SandboxResult> =>
-  runWorkflowScript({ mode, source, hooks: echo, ...extra });
+  within(runWorkflowScript({ mode, source, hooks: echo, ...extra }), 60_000, `${mode} run of ${JSON.stringify(source.slice(0, 60))}`);
 const expectError = (r: SandboxResult, kind: string, pattern: RegExp, label: string): void => {
   assert.equal(r.ok, false, `${label}: expected a failure, got ${JSON.stringify(r)}`);
   if (r.ok) return;
@@ -265,6 +273,48 @@ try {
     assert.deepEqual(await new SandboxSession().prepare({ hasUI: false }), { ok: true, mode: "full" });
   }
   ok("without bwrap: refused headless and on No (the first option); reduced mode after Yes, asked once per session; prlimit required");
+
+  // 3. A launcher killed mid-setup. bwrap's first child holds the stdio pipes, has no --die-with-parent
+  // until its setup is done, and waits on an eventfd for the launcher, so a SIGKILL of the launcher alone
+  // left it blocked forever and the run never settled (seen on CI as the idle watchdog check hanging).
+  // Fake launchers stand in for bwrap: one leaves a process in its group, one a process in a new session.
+  const sh = findExecutable("sh");
+  const sleep = findExecutable("sleep");
+  const setsid = findExecutable("setsid");
+  const cat = findExecutable("cat");
+  assert.ok(sh && sleep && setsid && cat, "sh, sleep, setsid and cat are required");
+  const gone = async (pidFile: string, label: string): Promise<void> => {
+    for (let i = 0; i < 100; i++) {
+      const pid = Number(fs.existsSync(pidFile) ? fs.readFileSync(pidFile, "utf8").trim() : "NaN");
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.fail(`${label}: the leftover process is still running`);
+  };
+  const launcher = (name: string, body: string): string => {
+    const file = path.join(ws, name);
+    fs.writeFileSync(file, `#!${sh}\n${body}\n`, { mode: 0o755 });
+    return file;
+  };
+  const groupPid = path.join(ws, "group.pid");
+  const inGroup = launcher("launcher-group", `${sleep} 600 &\necho $! > '${groupPid}'\nexec ${sleep} 600`);
+  const t3 = Date.now();
+  expectError(await run("full", "return 1", { support: { ...support, bwrap: inGroup }, limits: { idleMs: 300 } }), "idle", /silent for 300 ms/, "launcher with a child in its group");
+  await gone(groupPid, "launcher with a child in its group");
+  const sessionPid = path.join(ws, "session.pid");
+  const inSession = launcher("launcher-session", `${setsid} ${sh} -c 'echo $$ > "$0"; exec ${cat} >&2' '${sessionPid}' &\nexec ${sleep} 600`);
+  expectError(await run("full", "return 1", { support: { ...support, bwrap: inSession }, limits: { idleMs: 300 } }), "idle", /silent for 300 ms/, "launcher with a child in a new session");
+  await gone(sessionPid, "launcher with a child in a new session");
+  for (const mode of modes) {
+    for (let i = 0; i < 10; i++) expectError(await run(mode, "return 1", { limits: { idleMs: 1 } }), "idle", /silent for 1 ms/, `${mode}: watchdog right after spawn (${String(i)})`);
+  }
+  ok(`a watchdog kill reaches the jail's whole process group, a process left outside it cannot hold the run open, and a kill right after spawn always settles (${String(Date.now() - t3)} ms)`);
 
   // 9. No node:vm anywhere in the sandbox, and the evil suite is what selfTest runs.
   for (const file of ["wf-sandbox.ts", "wf-runner.mjs"]) {

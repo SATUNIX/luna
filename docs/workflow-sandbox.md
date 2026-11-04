@@ -84,6 +84,12 @@ agents. A call whose arguments exceed 1 MiB, or a hook result over 1 MiB, reject
 instead of ending the run. A syntax error ends the run with kind `syntax`, an uncaught error with
 kind `script`, and an abort signal kills the runner with kind `aborted`.
 
+Ending a run kills the jail's whole process group, not only the `bwrap` launcher: bwrap's first
+child has no `--die-with-parent` until its setup is done and waits on the launcher, so a launcher
+killed in that window would leave it blocked forever. The host then closes the runner's stdin (the
+runner exits when it closes) and settles the run when the launcher exits, so a process that left
+the group cannot hold the run open.
+
 ## Integrity and first use
 
 `quickjs-wasi@3.6.3` is an explicit dependency of the kit. Before every run the host checks that

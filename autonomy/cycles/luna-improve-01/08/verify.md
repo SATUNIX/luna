@@ -60,3 +60,23 @@ Only two parser guards, two test additions and this cycle's records changed. No
 `autonomy/CHARTER.md`, operator control path, `package.json` script, dependency, `.github/` or
 `packages/web-ui/` change. Diff is `git diff 69afbd4..4cbe38c` (5 files, +93/-3); it reviews
 whole well inside the merge budget.
+
+## Reference gate
+
+`/opt/autonomy/gate.sh` could not be run end-to-end in this session's clone: the gate writes its
+log and `result.json` under `/gate`, and `/` is mounted read-only here, so `/gate` cannot be
+created. Each of the gate's steps was run individually instead, and all pass on the pushed head:
+
+| Gate step | Command | Result |
+|-----------|---------|--------|
+| check-all | `npm run check:all` | 203/203 (exit 0) |
+| security | `npm run test:security` | exit 0 |
+| docs | `python3 -m mkdocs build --strict` | exit 0 |
+| secrets | `gitleaks git --redact --exit-code 1 .` | no leaks (exit 0) |
+| install | `npm_config_cache=<writable cache> npm ci --offline --ignore-scripts` | exit 0 |
+
+The supervisor runs the umbrella gate on the pushed head in its own container, where `/gate` is
+writable. Note for interactive runs in this container: the gate's first step `npm ci --offline`
+removes `node_modules` before reinstalling, so it needs a writable npm cache copy
+(`cp -a /opt/npm-cache /tmp/npm-cache`); with the read-only `/gate` the cache copy silently fails
+and the install step can leave `node_modules` incomplete.

@@ -31,23 +31,24 @@ own matcher. Charter priority 3 (correctness).
 ## Commits (`git log BASE..HEAD`, oldest first)
 
 - `4cbe38c` fix(distribution): parse a bare git:// source as git, not a git:-prefixed path
-- this cycle's record commit: docs(autonomy): record cycle 08 — accept a bare git:// kit source
+- `7b0af8f` docs(autonomy): record cycle 08 — accept a bare git:// kit source
+- follow-up: docs(autonomy): note the read-only /gate limitation in cycle 08 records
 
 ## Diff stat
 
-`git diff BASE..HEAD --stat` at the record commit:
+`git diff BASE..HEAD --stat` at the final pushed head:
 
 ```text
  autonomy/BACKLOG.md                          |   1 +
- autonomy/cycles/luna-improve-01/08/plan.md   |  87 +++++++++++++++++++++++++++
- autonomy/cycles/luna-improve-01/08/report.md |  89 +++++++++++++++++++++++++++
- autonomy/cycles/luna-improve-01/08/review.md |  71 ++++++++++++++++++++++
- autonomy/cycles/luna-improve-01/08/verify.md |  62 ++++++++++++++++++++++
+ autonomy/cycles/luna-improve-01/08/plan.md   |  87 +++++++++++++++++++++++++
+ autonomy/cycles/luna-improve-01/08/report.md | 104 ++++++++++++++++++++++++++++
+ autonomy/cycles/luna-improve-01/08/review.md |  71 +++++++++++++++++++++
+ autonomy/cycles/luna-improve-01/08/verify.md |  82 ++++++++++++++++++++++++
  packages/core/lib/distribution.ts            |   2 +-
  packages/extensions/src/kit-update/index.ts  |   2 +-
  tests/distribution-smoke.ts                  |   3 +
  tests/kit-update-smoke.ts                    |   2 +-
- 9 files changed, 316 insertions(+), 3 deletions(-)
+ 9 files changed, 351 insertions(+), 3 deletions(-)
 ```
 
 The only code change is a one-line guard in each of `packages/core/lib/distribution.ts` and
@@ -75,6 +76,11 @@ duplicate parser in `packages/extensions/src/kit-update/index.ts:188`.
 ## Acceptance checks
 
 - `npm run check:all` — **203/203 check runs passed** in 440.2s (exit 0).
+- The umbrella `/opt/autonomy/gate.sh` cannot run in this session's clone: it writes under
+  `/gate`, and `/` is read-only here. Its steps were run individually on the pushed head and all
+  pass: `check:all` 203/203, `test:security` exit 0, `mkdocs build --strict` exit 0, `gitleaks`
+  no leaks. The supervisor runs the umbrella gate itself. See `verify.md` "Reference gate".
+- Detail in `verify.md`.
 - Independent `reviewer` subagent on `git diff BASE..HEAD` against the charter: **Verdict: PASS**,
   no must-fix items. It confirmed only `git://`-prefixed inputs change, the test fails without the
   fix, no protected path/script/dependency changed, and the core helpers now agree with the

@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, "integration/**"]
   workflow_call:
 
 permissions:
@@ -22,6 +22,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,8 +42,13 @@ jobs:
       # smoke:clean-install, which installs that tarball and starts the real pi) and
       # profile:check per profile from package.json, so a new check is picked up without
       # editing this workflow. It also fails on a test file no script runs (smoke:wiring),
-      # so a green run cannot hide an unwired suite.
-      - run: npm run -s check:all
+      # so a green run cannot hide an unwired suite. The suite is split into
+      # four deterministic shards, each running two checks at once; the shards
+      # are disjoint and together cover every check, and ci-complete waits for
+      # all of them. Each check announces itself when it starts and is stopped after
+      # ten minutes, so a hung check is named in the log (with what it printed) instead
+      # of the job dying at its own timeout without a trace.
+      - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2 --check-timeout=600
 
   # Test coverage of the same suite: check:all again with NODE_V8_COVERAGE set, summarised by
   # packages/core/coverage.ts (no coverage dependency). The line, branch and function figures are
@@ -56,7 +65,7 @@ jobs:
           node-version: "26"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run -s coverage
+      - run: npm run -s coverage -- --check-timeout=600
 
   docs-build:
     runs-on: ubuntu-latest
@@ -139,7 +148,7 @@ jobs:
       # The tarball check does not depend on the pi version. Type checking and lint read pi's type
       # declarations, whose exported names change between releases; the verify job runs them against
       # the pinned version. Extensions load as erased TypeScript, so everything else runs here.
-      - run: npm run -s check:all -- --skip=smoke:package,test:typecheck,test:lint
+      - run: npm run -s check:all -- --skip=smoke:package,test:typecheck,test:lint --check-timeout=600
 
   # The Android companion app (apps/android). The Gradle wrapper jar must be the one Gradle
   # publishes for the wrapper's version (the checksum is fetched from services.gradle.org, the

@@ -53,7 +53,7 @@ names within each profile.
   nav. **Every check has a worked failure example in `WRITING_EXTENSIONS.md`.**
 - `registry.ts` / `skills-catalogue.ts` / `capability-matrix.ts` — generate the catalogues
 - `docs-nav-check.ts` — offline `mkdocs build --strict` stand-in; `check-mermaid.ts` — parses every Mermaid diagram
-- `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`)
+- `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`); `--shard=<i>/<n>` and `--jobs=<n>` split and parallelise the run
 - `lib/effort.ts` — the effort policy loader shared by the toolchain and the autonomy runner
 - `eval/` — the offline behavioural fixture harness (`npm run eval`)
 - `dream.ts` — offline dream-mode pass (allowlisted internal state only; it does not write `AGENTS.md`)

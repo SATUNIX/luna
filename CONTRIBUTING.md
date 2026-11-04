@@ -25,6 +25,12 @@ and a `profile:check` pass per profile — and fails with a summary of every
 failure rather than stopping at the first. Run it before proposing a change; CI runs the
 same command, so a new `smoke:*` script is covered without editing a workflow.
 
+`check:all -- --shard=<i>/<n>` runs one deterministic slice of that list, and `--jobs=<n>` runs up to n
+checks at once with each check's output buffered and printed whole; the final status and summary are
+the same as a sequential run. Checks that cannot share a machine (the npm pack/clean install and the
+web console runtime, for example) always run alone after the parallel batch. CI divides the suite
+across a four-shard matrix for this reason.
+
 Smoke tests must be hermetic. Call `isolateKitEnv()` from
 `packages/core/eval/harness.ts` before loading the extension under test, then set only the
 variables that test needs; the gate must pass with the operator's `PI_KIT_*` environment

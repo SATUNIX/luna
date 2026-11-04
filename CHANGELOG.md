@@ -84,6 +84,7 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Workflow writers of one checkout now take the writer lock in call order. `withCheckoutLock` resolved the checkout root (a git subprocess) before queueing, so a later caller whose lookup finished first ran ahead (`tests/workflow-worktree-smoke.ts`, section 8).
 - `pi-autonomy resume` brings a run back up after its supervisor stopped: the new supervisor runs
   preflight (engine, image and inference key) before the boundary probe, instead of failing with
   "the inference key has not been read" (`tests/autonomy-run-smoke.ts`).

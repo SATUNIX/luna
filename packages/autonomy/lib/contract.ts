@@ -1117,7 +1117,7 @@ export function legacyToRaw(v0: RawContract, c: ProblemSink): RawContract {
     budget: { totalUsd: budget.totalUsd, perStepUsd: budget.perCycleUsd, maxSteps: cycles, maxMinutes: Math.min(maxMinutesWanted, 43_200) },
     acceptance: { review: integration.review !== false, checks: [{ id: "gate", run: ["/opt/autonomy/gate.sh"], timeoutMinutes: field(gate, "timeoutMinutes") ?? 60, required: true }] },
     runtime: { ...(v0.engine ? { engine: v0.engine } : {}), ...(v0.image ? { image: v0.image } : {}), ...(v0.mirrorSeconds ? { mirrorSeconds: v0.mirrorSeconds } : {}), ...(v0.gitIdentity ? { gitIdentity: v0.gitIdentity } : {}), ...spread(v0.container) },
-    templateOptions: { integration: { branch: integration.branch, review: integration.review !== false }, perStepHardUsd: perCycleHardUsd, limits, gate: { memory: field(gate, "memory") ?? field(v0.container, "memory") ?? "6g", cpus: field(gate, "cpus") ?? "4" } },
+    templateOptions: { integration: { branch: integration.branch, review: integration.review !== false }, perStepHardUsd: perCycleHardUsd, limits, gate: { memory: field(gate, "memory") ?? field(v0.container, "memory") ?? "8g", cpus: field(gate, "cpus") ?? "8" } },
   };
   if (policy === "push") raw.promotion = { policy: "push", requiresOperatorApproval: false, destinations: [{ kind: "git-remote", url: remote, branch: integration.branch, tags: true }] };
   else if (policy === "local-branch") raw.promotion = { policy: "local-branch", destinations: [{ kind: "local-branch", ...(isUrlLike(remote) ? {} : { repo: remote }), branch: integration.branch }] };

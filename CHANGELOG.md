@@ -10,6 +10,41 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- Self-improve cycles close the gaps the first live stream run showed. The merge review starts
+  from a host ledger (the cycle's commits and shortstat), which outranks the worker's prose, plus
+  host context on the upstream sync and the previous cycle; a report whose `Item:` lines leave a
+  code commit unnamed gets one follow-up while the session is alive. The cycle prompt gives the
+  start sha, the diff budget and its measure command, the stream's focus and a ban on running the
+  full suite (also told to the manager), with the assigned items right after the budget. Operator
+  steers reach the running session, and a steer queued during an ended cycle is marked stale.
+  Guard notices count as episodes, `CONTINUE` no longer spends the per-cycle manager cap, and a
+  cap reached with a live worker gets one wrap-up steer and 15 minutes. An unknown `Board:` claim
+  is a review concern, not a refusal; streams are judged against the current stream charter. The
+  cycle-start reset survives a dirty tree and is retried when a session dies starting. Upstream
+  sync fast-forwards a stream the trunk already contains instead of writing empty merges. The
+  gate defaults to 8 CPUs and 8 GB, runs `check:all --jobs` when the tree supports it, names failed
+  checks, and skips a `test:security` that `check:all` already covers
+  (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`,
+  `tests/autonomy-image-scripts-smoke.ts`, `tests/autonomy-contract-smoke.ts`,
+  `tests/autonomy-review-inputs-smoke.ts`).
+
+- Self-improve merge review excludes the run's own cycle records and stream handoff directory
+  from its diff budget, lists them in a separate host stat and retains bounded report context.
+  Other runs' records and proposals remain budgeted; oversized code still refuses merge
+  (`tests/autonomy-review-inputs-smoke.ts`).
+
+- Parallel self-improve streams keep handoffs under `autonomy/runs/<run>/` and write separate
+  proposal files instead of editing the shared backlog. Stream seeds preserve existing charters;
+  resume, restart and review inputs follow the run's paths. Changelog additions use union merging,
+  with committed attributes selected explicitly in bare host merges
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts`,
+  `tests/autonomy-smoke.ts`).
+
+- Self-improve streams can sync an upstream branch before every cycle and receive ranked,
+  host-owned assignments with `board --run <id> --file <path.json>`. Cycle history records sync
+  outcomes and board progress; merge review judges claimed acceptance and priority. Green partial
+  work with commits is reviewed instead of discarded, and workers leave the full gate to the host
+  (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-cli-smoke.ts`).
 - **`check:all` can shard and parallelise its run list.** `--shard=<i>/<n>` selects one deterministic
   slice (round-robin over the sorted runs, so the shards are disjoint and together cover every
   check) and `--jobs=<n>` runs up to n checks at once, buffering each check's output and printing it

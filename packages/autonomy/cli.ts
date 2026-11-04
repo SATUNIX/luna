@@ -25,7 +25,8 @@ import { authorisationStatus, boundaryDigest, decideStart, renderBoundary } from
 import { num, parseArgs } from "./lib/cli-args.ts";
 import { type Budget, formatProblems, resolveContract, type RunContract, type TemplateId } from "./lib/contract.ts";
 import { type EffortApi, effortApi } from "./lib/effort.ts";
-import { randomSuffix } from "./lib/fsutil.ts";
+import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
+import { readBoard, readBoardFile } from "./lib/board.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
@@ -268,7 +269,7 @@ function statusReport(store: RunStore, deps: CliDeps) {
     worker: state.worker, promotion: { status: state.promotion.status, error: state.promotion.error ?? null, targets: state.promotion.targets ?? [] },
     questions: state.pendingQuestions ?? [], ui: state.ui ?? null, reconfigurations: state.reconfigurations.length,
     generations: generationsReport(store, state, contract),
-    selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null } : null,
+    selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null, history: state.selfImprove.history } : null,
     history: state.history.slice(-8), boundaryDigest: state.boundaryDigest, authorisation: state.authorisation,
     paths: { root: store.p.root, log: store.p.log, results: store.p.results }, title: contract.objective.title,
   };
@@ -548,6 +549,19 @@ const commands: Record<string, Command> = {
     return { data: { run: after.run, resumed: true, status: after.status, outcome: after.outcome }, text: `run ${after.run}: ${after.status}${after.outcome ? ` (${after.outcome.reason})` : ""}`, exit: exitFor(after.status) };
   },
 
+  async board(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run", "file"], flags: ["json"] });
+    const store = openStore(opts.run, deps);
+    const state = readState(store);
+    if (state.template !== "self-improve") throw new CliError("refused", "board is for self-improve cycles");
+    if (!opts.file && !opts.json) throw new CliError("usage", "--file <path.json> or --json is required");
+    let board;
+    try { board = opts.file ? readBoardFile(path.resolve(opts.file)) : readBoard(store.p.control); }
+    catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+    if (opts.file) writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 });
+    return { data: { run: state.run, board }, text: opts.file ? "steward board saved for the next cycle prompt" : JSON.stringify(board, null, 2) };
+  },
+
   async backlog(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["run", "message"], flags: ["json"] });
     const message = opts.message?.trim();
@@ -694,6 +708,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
+  board --run <id> --file <path.json> | board --run <id> --json
   resume --run <id> [--answer <text> | --approve | --deny]
   promote --run <id> [--yes]             carry out an approval-gated promotion
   export --run <id> [--out <dir>]        results, evidence, usage, decisions, the work

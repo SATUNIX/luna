@@ -4,13 +4,14 @@
 //
 // rt: {
 //   now(), sleep(ms), tickMs,
-//   startAgent({ attempt, onEvent }) -> { send(msg), stop(): Promise, exited: Promise<{code}> },
-//   headSha(), reportExists(), meterUsd(), totalUsd(), stopRequested(),
+//   startAgent({ attempt, onEvent, say }) -> { send(msg), stop(): Promise, exited: Promise<{code}> },
+//   headSha(), reportExists(), reportGaps?(), meterUsd(), totalUsd(), stopRequested(),
 //   manager(bundle) -> decision, extras() -> { gitLog, plan, handoff }, gates() -> ["green"|"red"...],
 //   resetToLastGood(abandonedSha) -> Promise, publish() -> Promise, log(line),
 //   uiPolicy? -> permissions.unattended: dialogs are then answered per the contract and a question ends the cycle as "blocked"
 // }
-import { type TriggerConfig, evaluate } from "./triggers.ts";
+import type { BookkeepingPaths } from "./bookkeeping.ts";
+import { type TriggerConfig, evaluate, managerCallsExhausted } from "./triggers.ts";
 import { type Blocker, type RpcFrame, type UiRequest, type UiResponse, type UnattendedPolicy, uiResponse, activityLine, isGuardEscalation, operatorDecision } from "./rpc.ts";
 import type { ManagerBundle, ManagerDecision } from "./manager.ts";
 
@@ -28,6 +29,7 @@ export interface CycleAgent {
 
 /** What extras() adds to the manager's bundle. */
 export interface CycleExtras {
+  handoffPath?: string;
   gitLog?: string | null | undefined;
   plan?: string | null | undefined;
   handoff?: string | null | undefined;
@@ -38,9 +40,16 @@ export interface CycleRuntime {
   readonly tickMs: number;
   now(): number;
   sleep(ms: number): Promise<void>;
-  startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void }): CycleAgent;
+  /** `say` delivers an operator message to this session (a steer while busy, a prompt when settled). */
+  startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void; say: (message: string) => void }): CycleAgent;
   headSha(): Promise<string>;
   reportExists(): Promise<boolean>;
+  /**
+   * Commits since the cycle start that change more than records and that no `Item:` line of
+   * report.md names (lib/ledger.ts uncoveredCommits). Asked once the report exists, so a stale
+   * report is fixed while the session is still alive.
+   */
+  reportGaps?(): Promise<readonly string[]>;
   /** Host-only close-out from accepted commits; true only after a green gate. */
   salvageReport?(): Promise<boolean>;
   onAutoRestart?(used: number): void;
@@ -73,6 +82,7 @@ export interface RunCycleOptions {
   /** Where the cycle's files go on the branch (default autonomy/cycles/<NN>). */
   cycleDir?: string | undefined;
   autoRestartsUsed?: number;
+  bookkeeping?: BookkeepingPaths;
 }
 
 export type CycleOutcome = "completed" | "partial" | "reset" | "aborted" | "blocked";
@@ -91,19 +101,26 @@ export interface CycleResult {
   blocker?: Blocker;
 }
 
+/** Guard notices closer together than this are one episode (a stall makes several in seconds). */
+export const GUARD_EPISODE_MS = 120_000;
+/** After the manager cap is reached, a live worker gets one wrap-up steer and this long to record. */
+export const WRAP_UP_MS = 15 * 60_000;
+
 const FOLLOW_UP = [
-  "You stopped before the cycle was recorded. Continue from where you are: finish the remaining phases (verify, then record {{DIR}}/report.md, update BACKLOG.md and HANDOFF.md), commit and push.",
-  "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update HANDOFF.md, commit and `git push origin HEAD`.",
+  "You stopped before the cycle was recorded. Continue from where you are: finish the remaining phases (verify, then record {{DIR}}/report.md, {{BOOKKEEPING}}), commit and push.",
+  "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update {{HANDOFF}}, commit and `git push origin HEAD`.",
 ];
 
-export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0 }: RunCycleOptions): Promise<CycleResult> {
+export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0, bookkeeping }: RunCycleOptions): Promise<CycleResult> {
   const NN = String(n).padStart(2, "0");
   const DIR = cycleDir ?? `autonomy/cycles/${NN}`;
+  const handoff = bookkeeping?.handoff ?? "autonomy/HANDOFF.md";
+  const record = bookkeeping && bookkeeping.proposals !== "autonomy/BACKLOG.md" ? `write each proposal to a new file at ${bookkeeping.proposals} and update ${handoff}` : "update BACKLOG.md and HANDOFF.md";
   const startMeter = await rt.meterUsd();
   const s = {
     startedAt: rt.now(), lastEventAt: rt.now(), lastCommitAt: null as number | null, costUsd: 0, extendedMinutes: 0,
-    managerCalls: 0, exited: null as { readonly code: number } | null | undefined, redGatesInARow: consecutiveRed(await rt.gates()), guardEscalations: 0,
-    softReviewed: false, handled: new Set<string>(),
+    managerCalls: 0, managerCallsTotal: 0, exited: null as { readonly code: number } | null | undefined, redGatesInARow: consecutiveRed(await rt.gates()), guardEscalations: 0,
+    guardBaseline: 0, lastGuardAt: null as number | null, softReviewed: false, handled: new Set<string>(),
   };
   const decisions: CycleDecision[] = [];
   const activity: string[] = [];
@@ -117,6 +134,8 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
   let followUps = 0;
   let pendingTrigger: string | null = null;
   let blocker: Blocker | null = null;
+  let gapsChecked = false;
+  let wrapUpAt: number | null = null;
 
   const onEvent = (ev: RpcFrame): void => {
     s.lastEventAt = rt.now();
@@ -133,7 +152,11 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
         if (reply) agent?.send(reply);
       }
     }
-    if (isGuardEscalation(ev)) s.guardEscalations++;
+    // Count guard episodes, not notices: one stall emits several notices within seconds.
+    if (isGuardEscalation(ev)) {
+      const at = rt.now();
+      if (s.lastGuardAt === null || at - s.lastGuardAt >= GUARD_EPISODE_MS) { s.guardEscalations++; s.lastGuardAt = at; }
+    }
     const line = activityLine({ ...ev, at: rt.now() });
     if (line) { activity.push(line); if (activity.length > 200) activity.shift(); }
   };
@@ -145,13 +168,25 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     dead = false;
     s.lastEventAt = rt.now();
     followUps = 0;
-    const started = rt.startAgent({ attempt, onEvent });
+    // An operator steer from outside the loop (engine.steer) starts a turn like any other message.
+    const started = rt.startAgent({ attempt, onEvent, say: (message) => { say(message); settled = false; } });
     agent = started;
     void started.exited.then((e) => { if (agent === started) { s.exited = e; dead = true; settled = true; } });
     started.send({ type: "prompt", message: text });
   };
   // A message from the "operator": steer a running agent, or prompt an idle one.
   const say = (message: string): void => agent?.send(settled ? { type: "prompt", message } : { type: "steer", message });
+  // A report that leaves committed work unnamed gets one follow-up while the session is alive.
+  const reportStale = async (): Promise<boolean> => {
+    if (gapsChecked || !rt.reportGaps) return false;
+    gapsChecked = true;
+    const gaps = await rt.reportGaps();
+    if (!gaps.length) return false;
+    rt.log(`cycle ${NN} report.md names no Item for ${gaps.length} commit(s); one follow-up sent`);
+    say(`Commits ${gaps.slice(0, 20).join(", ")} are not in any \`Item:\` line of ${DIR}/report.md. Add each to the item it belongs to (\`Item: <title> - <commit shas> - <test that proves it>\`) or revert it, then commit and \`git push origin HEAD\`.`);
+    settled = false;
+    return true;
+  };
 
   const close = async (outcome: CycleOutcome, reason: string): Promise<CycleResult> => {
     await agent?.stop();
@@ -167,7 +202,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     const now = rt.now();
     await rt.publish();
     const sha = await rt.headSha();
-    if (sha !== head) { head = sha; s.lastCommitAt = now; }
+    if (sha !== head) { head = sha; s.lastCommitAt = now; s.guardBaseline = s.guardEscalations; }
     s.costUsd = (await rt.meterUsd()) - startMeter;
 
     if (rt.stopRequested() || (await rt.totalUsd()) >= cfg.budget.totalUsd) return close("aborted", "run stop (a control command, a signal or the total budget)");
@@ -188,37 +223,52 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       rt.onAutoRestart?.(autoRestarts);
       rt.log(`cycle ${NN} automatic restart ${autoRestarts} after session exit (${s.exited?.code ?? "unknown"})`);
       await agent?.stop();
-      launch(`The previous worker process exited. Re-read autonomy/HANDOFF.md, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
+      launch(`The previous worker process exited. Re-read ${handoff}, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
       continue;
     }
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
     if (settled && !dead && !pendingTrigger) {
-      if (await rt.reportExists()) return close("completed", "report recorded");
+      if (await rt.reportExists()) {
+        if (await reportStale()) continue;
+        return close("completed", "report recorded");
+      }
       const followUp = FOLLOW_UP[followUps];
       if (followUp !== undefined) {
         followUps++;
-        say(followUp.replaceAll("{{DIR}}", DIR));
+        say(followUp.replaceAll("{{DIR}}", DIR).replaceAll("{{HANDOFF}}", bookkeeping?.handoff ?? "HANDOFF.md").replaceAll("{{BOOKKEEPING}}", record));
         settled = false;
         continue;
       }
       pendingTrigger = "settled_without_report";
     }
-    if (stop) return close("partial", stop);
     if (pendingTrigger && !s.handled.has(pendingTrigger)) triggers.push(pendingTrigger);
+    if (stop === "manager_calls_exhausted" || (triggers.length && managerCallsExhausted(s, cfg.limits))) {
+      // A live worker is told to wrap up and given one grace window to record its committed work.
+      if (wrapUpAt === null && !dead && agent) {
+        wrapUpAt = now;
+        rt.log(`cycle ${NN} manager calls exhausted; wrap-up steer sent`);
+        say(`Stop new work now. Commit what works, write ${DIR}/report.md and ${DIR}/verify.md describing exactly the committed diff, and \`git push origin HEAD\` within 15 minutes.`);
+        settled = false;
+        continue;
+      }
+      if (wrapUpAt !== null && !dead && now - wrapUpAt < WRAP_UP_MS) continue;
+      return close("partial", "manager_calls_exhausted");
+    }
+    if (stop) return close("partial", stop);
     if (!triggers.length) continue;
-    if (s.managerCalls >= cfg.limits.managerCallsPerCycle) return close("partial", "manager_calls_exhausted");
 
     // Ask the manager once for everything that fired, then execute its single decision.
-    s.managerCalls++;
+    s.managerCallsTotal++;
     for (const t of triggers) s.handled.add(t);
     if (triggers.includes("soft_limit")) s.softReviewed = true;
     pendingTrigger = null;
     let d: ManagerDecision;
+    let fallback = false;
     try {
       d = await rt.manager({
         run: cfg.run, cycle: n, cycles: cfg.cycles, triggers, limits: cfg.limits, budget: cfg.budget,
         elapsedMinutes: (now - s.startedAt) / 60_000, extendedMinutes: s.extendedMinutes,
-        costUsd: s.costUsd, totalCostUsd: await rt.totalUsd(), managerCalls: s.managerCalls - 1,
+        costUsd: s.costUsd, totalCostUsd: await rt.totalUsd(), managerCalls: s.managerCallsTotal - 1,
         previousDecisions: decisions, idleMinutes: (now - s.lastEventAt) / 60_000,
         sinceCommitMinutes: s.lastCommitAt ? (now - s.lastCommitAt) / 60_000 : null,
         gates: await rt.gates(), activity: activity.join("\n"), ...(await rt.extras()),
@@ -227,7 +277,11 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       // No usable decision: the least disruptive safe default, recorded like any other.
       const why = error instanceof Error ? error.message : String(error);
       d = { decision: "CONTINUE", reason: `manager unavailable (${why}); default`, extendMinutes: 15 };
+      fallback = true;
     }
+    // Only an intervention spends the per-cycle cap (lib/triggers.ts managerCallsExhausted).
+    if (d.decision !== "CONTINUE" && !fallback) s.managerCalls++;
+    if (triggers.some((t) => t.startsWith("guard_escalations:"))) s.guardBaseline = s.guardEscalations;
     decisions.push({ at: new Date(now).toISOString(), triggers, ...d });
     rt.log(`cycle ${NN} manager: ${d.decision} (${d.reason}) on ${triggers.join(",")}`);
 

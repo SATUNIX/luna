@@ -18,6 +18,7 @@ export interface RunConfig {
   branch: string;
   tagPrefix: string;
   integrationBranch: string | null;
+  integrationUpstream?: string | null;
   baseRef: string;
   baseSource: string | null;
   integrationRemote: string | null;
@@ -69,7 +70,9 @@ export function runtimeConfig(contract: RunContract, opts: RuntimeConfigOptions 
   const hardUsd = numberOr(t.perStepHardUsd ?? undefined, 2 * contract.budget.perStepUsd);
   const limitOverrides = t.limits ?? {};
   const container = { memory: r.memory, cpus: r.cpus, pids: r.pids, tmpSize: r.tmpSize, user: r.user };
-  const gate = { memory: stringOr(option(t.gate, "memory"), r.memory), cpus: stringOr(option(t.gate, "cpus"), "4"), timeoutMinutes: Math.max(1, ...contract.acceptance.checks.map((c) => c.timeoutMinutes)) };
+  // templateOptions.gate.cpus may be a number (the template validates either form); never let one fall back silently.
+  const gateCpus = option(t.gate, "cpus");
+  const gate = { memory: stringOr(option(t.gate, "memory"), r.memory), cpus: typeof gateCpus === "number" ? String(gateCpus) : stringOr(gateCpus, "8"), timeoutMinutes: Math.max(1, ...contract.acceptance.checks.map((c) => c.timeoutMinutes)) };
   // Both engines read --memory 0 / --cpus 0 as "no limit": refuse such a config when it is read, not
   // only when a container is started (runtime.ts checked()). The contract resolver refuses them too.
   for (const [where, l] of [["runtime", container], ["templateOptions.gate", gate]] as const) {
@@ -85,6 +88,7 @@ export function runtimeConfig(contract: RunContract, opts: RuntimeConfigOptions 
     branch: `pi/${contract.run}`,
     tagPrefix: `pi/${contract.run}/`,
     integrationBranch,
+    integrationUpstream: stringOr(option(integration, "upstream"), null),
     baseRef: repo?.ref ?? "HEAD",
     baseSource: repo?.path ?? repo?.url ?? null,
     integrationRemote,

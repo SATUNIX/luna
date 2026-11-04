@@ -9,6 +9,7 @@
 *.js     text eol=lf
 *.json   text eol=lf
 *.md     text eol=lf
+CHANGELOG.md merge=union
 *.yml    text eol=lf
 *.yaml   text eol=lf
 *.sh     text eol=lf

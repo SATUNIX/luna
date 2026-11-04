@@ -15,6 +15,7 @@ import { contractDigest, formatProblems, legacyToRaw, resolveContract, workerCon
 import { classifyAddress, isIpLiteral, normaliseHost, parseLegacyIPv4, isPublicIpLiteral } from "../packages/autonomy/lib/netaddr.ts";
 import { globToRegExp, globProblem, pathsOutsideAreas } from "../packages/autonomy/lib/glob.ts";
 import { templateIds, describeTemplates } from "../packages/autonomy/lib/templates/index.ts";
+import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import type { RawContract } from "./autonomy-helpers.ts";
 import { isRecord } from "../packages/core/lib/guard.ts";
 
@@ -427,6 +428,14 @@ await check("resource limits: a zero --memory or --cpus (no limit, to the contai
   refused(gate({ memory: "6g", cpus: 0 }), "templateOptions.gate.cpus");
   refused(gate({ memory: "-1g" }), "templateOptions.gate.memory");
   assert.ok(errorPaths(gate("big")).includes("templateOptions.gate"), "the gate is an object");
+  // The gate's defaults (8 CPUs for check-all --jobs, 8g), and a numeric cpus reaches the engine as given, never a silent fallback.
+  const defaults = resolve({ ...selfBase, promotion: { policy: "none" } });
+  assert.ok(defaults.ok && defaults.contract, formatProblems(defaults.problems));
+  assert.deepEqual(defaults.contract.templateOptions["gate"], { memory: "8g", cpus: "8" });
+  assert.deepEqual([runtimeConfig(defaults.contract).gate.cpus, runtimeConfig(defaults.contract).gate.memory], ["8", "8g"]);
+  const numeric = gate({ memory: "6g", cpus: 6 });
+  assert.ok(numeric.ok && numeric.contract, formatProblems(numeric.problems));
+  assert.equal(runtimeConfig(numeric.contract).gate.cpus, "6");
   const legacy = resolve({ run: "perpetual-test", cycles: 3, gitRemote: "https://git.example.org/team/repo.git", promotion: "none", container: { memory: "0" } });
   assert.ok(errorPaths(legacy).includes("templateOptions.gate.memory"), `a v0 container memory of 0 is refused too: ${formatProblems(legacy.problems)}`);
 });

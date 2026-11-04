@@ -501,8 +501,19 @@ try {
     const junk = workerExec(`cd /work && echo junk > junk.txt && git add -A && git commit --quiet -m junk && git push --quiet origin HEAD:refs/heads/${cfg.branch}`);
     assert.equal(junk.code, 0, junk.stderr);
     assert.notEqual(gitHost(["--git-dir", p.remote, "rev-parse", `refs/heads/${cfg.branch}`]).stdout.trim(), head);
-    await rt.setWorkerBranch(head);
+    // An upstream conflict's ref travels with the reset (entrypoint.sh setref): the host's refs/upstream/trunk reaches the worker's remote.
+    const upstreamRef = "refs/upstream/trunk";
+    assert.equal(gitHost(["--git-dir", p.mirror, "update-ref", upstreamRef, baseSha]).status, 0);
+    await rt.setWorkerBranch(head, [upstreamRef]);
     assert.equal(gitHost(["--git-dir", p.remote, "rev-parse", `refs/heads/${cfg.branch}`]).stdout.trim(), head, "the worker's branch is back at the accepted head");
+    assert.equal(gitHost(["--git-dir", p.remote, "rev-parse", upstreamRef]).stdout.trim(), baseSha, "the upstream ref arrives in the worker's remote");
+    // The agent role's clone-side refresh (entrypoint.sh, before the session starts) is the same two git commands; pi is not in this image, so the role itself cannot run here.
+    const cloneRef = workerExec(`cd /work && git update-ref -d ${upstreamRef}; git fetch --quiet --no-tags origin "+refs/upstream/*:refs/upstream/*" && git rev-parse ${upstreamRef}`);
+    assert.equal(cloneRef.code, 0, cloneRef.stderr);
+    assert.equal(cloneRef.stdout.trim(), baseSha, "and from there the worker's clone");
+    gitHost(["--git-dir", p.mirror, "update-ref", "-d", upstreamRef]);
+    await rt.setWorkerBranch(head);
+    assert.notEqual(gitHost(["--git-dir", p.remote, "rev-parse", "--verify", "--quiet", upstreamRef]).status, 0, "a reset without the ref clears a stale one");
   });
 
   await check("acceptance checks run in clean, network-less containers from the accepted head, with the held-out overlay, and a failing check is reported as failing", async () => {

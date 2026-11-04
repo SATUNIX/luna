@@ -12,6 +12,8 @@
 //   blocked           NOT terminal: a genuinely external blocker or an approval/answer is needed
 import { clone, isPlainObject } from "./fsutil.ts";
 import type { CycleEntry } from "./templates/self-improve.ts";
+import type { StewardBoard } from "./board.ts";
+import type { UpstreamSync } from "./gitmirror.ts";
 import type { Budget, ContractDraft, EffortChoice, PromotionPolicy, RecoverySettings, RunContract, TemplateId } from "./contract.ts";
 
 export const STATE_SCHEMA_VERSION = 1;
@@ -210,7 +212,7 @@ export interface SelfImproveState {
   merged: number;
   lastGoodSha: string;
   seedSha: string;
-  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number } | null;
+  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard } | null;
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */
   lastPushed: string | null;
   publishError?: string | null;

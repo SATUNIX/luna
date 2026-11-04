@@ -11,6 +11,7 @@
 //   service   run-scoped services (deploy template): hardened, on <net> only, image from the allowlist
 //   helpers   --network none: bundle/snapshot the worker's refs, update its bare repo, deploy-sync,
 //             run one acceptance check in a clean clone
+import os from "node:os";
 import path from "node:path";
 import { isRecord } from "../../core/lib/guard.ts";
 import { randomSuffix } from "./fsutil.ts";
@@ -97,13 +98,24 @@ export interface HardenOptions {
   readonly user?: string | undefined;
 }
 
+/**
+ * The --cpus value the engine accepts on this host. Docker and podman refuse a quota above the
+ * host's CPU count ("range of CPUs is from 0.01 to 4.00"), so a gate configured for 8 CPUs would
+ * never start on a 4-CPU machine or CI runner. Anything non-numeric is passed through for the
+ * boundary checks to judge (tests/autonomy-boundary-smoke.ts).
+ */
+export function engineCpus(cpus: EngineQuantity, host: number = os.availableParallelism()): string {
+  const n = Number(cpus);
+  return Number.isFinite(n) && n > host && host >= 1 ? String(host) : String(cpus);
+}
+
 export function hardened(cfg: DockerConfig, { memory = cfg.container.memory, cpus = cfg.container.cpus, tmpSize = cfg.container.tmpSize, role = "helper", user }: HardenOptions = {}): string[] {
   return [
     // Rootless podman: map the operator's uid to itself inside the container (every other id
     // in the container is an unprivileged sub-id on the host).
     ...(cfg.engine === "podman" ? ["--userns=keep-id"] : []),
     "--user", user ?? userSpec(cfg), "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-    "--pids-limit", String(cfg.container.pids), "--memory", String(memory), "--cpus", String(cpus),
+    "--pids-limit", String(cfg.container.pids), "--memory", String(memory), "--cpus", engineCpus(cpus),
     "--tmpfs", `/tmp:rw,nosuid,size=${String(tmpSize)}`, "--no-healthcheck",
     "--label", `pi-autonomy.run=${cfg.run}`, "--label", `pi-autonomy.role=${role}`,
   ];

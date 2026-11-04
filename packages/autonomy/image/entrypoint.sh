@@ -32,7 +32,8 @@ case "$role" in
     fi
     exit 0 ;;
   setref)
-    git_ -C /git/remote.git fetch --quiet --no-tags /in/branch.bundle "+refs/heads/$1:refs/autonomy/reset" "+${3:-refs/tags/pi/*}:${4:-refs/heads/attempts/*}"
+    git_ -C /git/remote.git update-ref -d refs/upstream/trunk
+    git_ -C /git/remote.git fetch --quiet --no-tags /in/branch.bundle "+refs/heads/$1:refs/autonomy/reset" "+${3:-refs/tags/pi/*}:${4:-refs/heads/attempts/*}" "+refs/upstream/*:refs/upstream/*"
     git_ -C /git/remote.git update-ref "refs/heads/$1" "$2"
     exit 0 ;;
   agent) ;;
@@ -87,14 +88,22 @@ if [ ! -d /work/.git ]; then
   git clone --quiet --branch "$RUN_BRANCH" /git/remote.git /work
 fi
 cd /work
+git_ update-ref -d refs/upstream/trunk
+git_ fetch --quiet --no-tags origin "+refs/upstream/*:refs/upstream/*"
+# --- cycle reset (tests/autonomy-image-scripts-smoke.ts runs this block on its own) ---
 if [ "${CYCLE_RESET:-0}" = 1 ]; then
   # A new cycle starts from the pushed branch: uncommitted or unpushed work from an earlier
-  # cycle is discarded (ignored files such as node_modules are kept).
+  # cycle is discarded (ignored files such as node_modules are kept). The tree is cleaned BEFORE
+  # the checkout, which -f also forces: a plain checkout aborts on dirty tracked files and, under
+  # set -e, would end the session before any reset ran.
   git fetch --quiet origin
-  git checkout --quiet -B "$RUN_BRANCH" "origin/$RUN_BRANCH"
+  git reset --quiet --hard
+  git clean -fdq
+  git checkout --quiet -f -B "$RUN_BRANCH" "origin/$RUN_BRANCH"
   git reset --quiet --hard "origin/$RUN_BRANCH"
   git clean -fdq
 fi
+# --- end cycle reset ---
 git branch --quiet --set-upstream-to="origin/$RUN_BRANCH" 2>/dev/null || true
 
 # Dependencies from the baked cache, when the image has one and the lockfile changed or they are missing.

@@ -3,7 +3,8 @@
 // PI_KIT_* / PI_CODING_AGENT_DIR, which change firewall decisions and state paths. Smoke tests
 // must clear them with isolateKitEnv() (packages/core/eval/harness.ts) before loading the
 // extension under test; eval fixtures must relocate their own state. This test proves both:
-//   1. isolateKitEnv() clears kit-owned variables and its closure restores them exactly;
+//   1. isolateKitEnv() clears kit-owned variables and its closure restores them exactly, and
+//      installDelegation()'s cleanup restores the caller's environment (1c/1d);
 //   2. the four smoke tests that inherited the ambient env pass under a polluted environment, and
 //      leave the whole pi-kit/ state subtree unchanged under an isolated fallback HOME;
 //   3. `npm run eval` leaves the whole pi-kit/ state subtree unchanged under the ambient
@@ -14,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, isolateKitEnv, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
+import { installDelegation } from "../packages/core/eval/delegation.ts";
 
 // Recursively read a directory into a plain object of relativePath -> file contents, plus a
 // "<dir>" sentinel for every directory (including the root as "." when it exists). A missing
@@ -93,6 +95,46 @@ function snapshotDir(dir: string): Record<string, string> {
     restorePolicy();
     restoreSubagentChild();
     restoreSubagentRepo();
+  }
+}
+
+// 1c. Unit: installDelegation() hands the caller's environment back when cleanup() runs. It
+// points PI_CODING_AGENT_DIR at a temp dir and sets PI_KIT_EFFORT for the extensions it loads;
+// cleanup() must remove those and restore whatever the caller had (or leave it absent).
+{
+  const restoreAgentDir = setEnv("PI_CODING_AGENT_DIR", "sentinel-agent-dir-delegation");
+  const restoreEffort = setEnv("PI_KIT_EFFORT", "sentinel-effort-delegation");
+  const restorePolicy = setEnv("PI_KIT_FIREWALL_POLICY", "sentinel-policy-delegation");
+  try {
+    const delegation = await installDelegation();
+    assert.notEqual(process.env.PI_CODING_AGENT_DIR, "sentinel-agent-dir-delegation", "installDelegation must point PI_CODING_AGENT_DIR at its temp dir while installed");
+    assert.equal(process.env.PI_KIT_EFFORT, "exhaustive", "installDelegation must set the requested tier while installed");
+    delegation.cleanup();
+    assert.equal(process.env.PI_CODING_AGENT_DIR, "sentinel-agent-dir-delegation", "cleanup must restore the pre-call PI_CODING_AGENT_DIR exactly");
+    assert.equal(process.env.PI_KIT_EFFORT, "sentinel-effort-delegation", "cleanup must restore the pre-call PI_KIT_EFFORT exactly");
+    assert.equal(process.env.PI_KIT_FIREWALL_POLICY, "sentinel-policy-delegation", "cleanup must restore the pre-call PI_KIT_FIREWALL_POLICY exactly");
+  } finally {
+    restorePolicy();
+    restoreEffort();
+    restoreAgentDir();
+  }
+}
+
+// 1d. Unit: the same holds when the caller had neither variable: cleanup() must leave them absent.
+{
+  const hadAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const hadEffort = process.env.PI_KIT_EFFORT;
+  delete process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PI_KIT_EFFORT;
+  try {
+    const delegation = await installDelegation();
+    assert.ok(process.env.PI_CODING_AGENT_DIR, "installDelegation must set PI_CODING_AGENT_DIR even when it was absent");
+    delegation.cleanup();
+    assert.equal(process.env.PI_CODING_AGENT_DIR, undefined, "cleanup must leave an absent PI_CODING_AGENT_DIR absent");
+    assert.equal(process.env.PI_KIT_EFFORT, undefined, "cleanup must leave an absent PI_KIT_EFFORT absent");
+  } finally {
+    if (hadAgentDir !== undefined) process.env.PI_CODING_AGENT_DIR = hadAgentDir;
+    if (hadEffort !== undefined) process.env.PI_KIT_EFFORT = hadEffort;
   }
 }
 

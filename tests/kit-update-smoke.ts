@@ -233,7 +233,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       "git:github.com/SATUNIX/luna@v0.2.4", "git:git@GITHUB.COM:sAtUnIx/luna.git@feature/test",
       "https://github.com/SATUNIX/luna.git@next", "http://github.com/SATUNIX/luna",
       "ssh://git@GITHUB.COM:2222/SATUNIX/luna.git", "git:https://github.com/SATUNIX/luna",
-      "git:ssh://git@github.com/SATUNIX/luna", "git:git://github.com/SATUNIX/luna",
+      "git:ssh://git@github.com/SATUNIX/luna", "git:git://github.com/SATUNIX/luna", "git://github.com/SATUNIX/luna",
     ]) {
       assert.equal(mod.isKitGitSource(source), true, source);
       const w = makeGitWorld({ kitSource: source });

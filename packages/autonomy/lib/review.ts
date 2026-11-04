@@ -5,6 +5,7 @@
 // rejected cycle is not lost: its head keeps the exp/<run>/cycle-NN tag and the next cycle is
 // told where to find it.
 
+import { isRecord } from "../../core/lib/guard.ts";
 import { globToRegExp } from "./glob.ts";
 import { clip, extractJson, type Complete } from "./manager.ts";
 import type { BookkeepingPaths } from "./bookkeeping.ts";
@@ -23,7 +24,8 @@ import type { BoundedGitRead } from "./gitmirror.ts";
 //     treated as empty;
 //   - a change to a control path (the charter, package-manager configuration, an operator-listed
 //     glob, or the `scripts` of any package.json) is REJECTED without asking the model unless the
-//     contract opts in. Package-manager configuration is built in because it changes what every
+//     contract opts in. The one exception is the root package.json only gaining new
+//     `smoke:<name>: node tests/<name>-smoke.ts` scripts (onlyAddsSmokeScripts), so a cycle can add a test. Package-manager configuration is built in because it changes what every
 //     `npm run` (and so every gate step that runs one) executes;
 //   - changed tests, check definitions and gate entry scripts (the files the package.json scripts
 //     name) are listed to the reviewer by the host.
@@ -155,6 +157,35 @@ function scriptsOf(text: string | null): string | null | undefined {
   return JSON.stringify(scripts ?? null);
 }
 
+/** A new smoke test's script: its name and its one command, `node tests/<name>-smoke.ts`. */
+const NEW_SMOKE_KEY = /^smoke:([a-z0-9][a-z0-9-]{0,63})$/;
+
+/**
+ * True when the root package.json's scripts only gain new smoke tests: every existing script is
+ * unchanged, none is removed, and each added one is `smoke:<name>` running exactly
+ * `node tests/<name>-smoke.ts`. Such a script runs nothing a test file could not already run through
+ * an existing script, and the new file is listed to the reviewer (scriptTargets, reviewCriticalPaths).
+ * Without it no cycle could add a test file: check:all fails on a test that no script names.
+ */
+export function onlyAddsSmokeScripts(before: string | null, after: string | null): boolean {
+  const scripts = (text: string | null): Record<string, unknown> | null => {
+    if (text === null) return null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { return null; }
+    if (!isRecord(parsed) || !isRecord(parsed.scripts)) return null;
+    return parsed.scripts;
+  };
+  const a = scripts(before);
+  const b = scripts(after);
+  if (!a || !b) return false;
+  for (const [key, command] of Object.entries(a)) if (!Object.hasOwn(b, key) || b[key] !== command) return false;
+  const added = Object.keys(b).filter((key) => !Object.hasOwn(a, key));
+  return added.length > 0 && added.every((key) => {
+    const name = NEW_SMOKE_KEY.exec(key)?.[1];
+    return name !== undefined && b[key] === `node tests/${name}-smoke.ts`;
+  });
+}
+
 /** The control-path changes in a cycle, one description each; empty when there are none. */
 export function controlChanges({ files, before, after, controlPaths = [] }: ControlChangeInput): string[] {
   const globs = [CHARTER_PATH, ...PACKAGE_MANAGER_CONFIG_PATHS, ...controlPaths].map((g) => ({ glob: g, re: globToRegExp(g) }));
@@ -166,7 +197,7 @@ export function controlChanges({ files, before, after, controlPaths = [] }: Cont
       const a = scriptsOf(before(file));
       const b = scriptsOf(after(file));
       if (a === undefined || b === undefined) out.push(`${file} (not a JSON object, so its scripts cannot be compared)`);
-      else if (a !== b) out.push(`${file} (scripts changed: the gate runs them)`);
+      else if (a !== b && !(file === "package.json" && onlyAddsSmokeScripts(before(file), after(file)))) out.push(`${file} (scripts changed: the gate runs them)`);
     }
   }
   return out;

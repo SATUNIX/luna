@@ -40,7 +40,3 @@ export function readSources(file: string = SOURCES_PATH): Sources {
   return SourcesSchema.parse(parsed, file);
 }
 
-export function getExternalByProfile(profile: string): ExternalSource[] {
-  const { external } = readSources();
-  return external.filter(e => e.profiles?.includes(profile));
-}

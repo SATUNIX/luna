@@ -16,8 +16,9 @@
  *   - every required check in the expected settings names a job that exists;
  *   - ci.yml's `verify` job runs `check:all` as a shard matrix whose shard count matches the
  *     `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check), with `--jobs`
- *     and a `--check-timeout`; and ci.yml and security.yml gate pull requests to `main` and
- *     `integration/**`;
+ *     and a `--check-timeout`; every check:all run in ci.yml (including `coverage`, which runs
+ *     check:all) passes `--check-timeout`, so a hung check fails named instead of as a silent job
+ *     timeout; and ci.yml and security.yml gate pull requests to `main` and `integration/**`;
  *   - each line-pinned zizmor ignore still points at a `uses: ./` call.
  * Each rule is also run against a mutated copy, so the checker is shown to fail.
  *
@@ -82,6 +83,23 @@ export function verifyShardProblems(body: string): string[] {
   return out;
 }
 
+/**
+ * Every step that runs check:all (directly, or through `coverage`, which passes its arguments to
+ * check:all), on a `run:` line or inside a multi-line script, carries `--check-timeout`. Without it
+ * a hung check runs until the job's timeout-minutes cancels the job, and the log names only the
+ * last check that printed a header.
+ */
+export function checkTimeoutProblems(text: string): string[] {
+  const out: string[] = [];
+  for (const [job, body] of jobsOf(text)) {
+    for (const line of code(body)) {
+      const command = line.match(/\b(npm run(?: -s)? (?:check:all|coverage)\b.*)$/)?.[1];
+      if (command !== undefined && !/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: "${command}" has no --check-timeout, so a hung check is never named`);
+    }
+  }
+  return out;
+}
+
 /** The pull_request trigger gates PRs to main and to integration/** branches. */
 export function pullRequestBranchProblems(file: string, text: string): string[] {
   const branches = text.match(/^ {2}pull_request:\s*\n {4}branches:\s*\[([^\]]*)\]\s*$/m)?.[1];
@@ -121,6 +139,7 @@ export function fileProblems(file: string, text: string): string[] {
     }
     if (/advisory: true/.test(jobs.get("pi-compat") ?? "")) out.push("ci.yml pi-compat: an advisory lane is not gated; record it before enabling one");
     out.push(...verifyShardProblems(jobs.get("verify") ?? ""));
+    out.push(...checkTimeoutProblems(text));
   }
   if (file === "ci.yml" || file === "security.yml") out.push(...pullRequestBranchProblems(file, text));
   return out;
@@ -178,6 +197,8 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["a gap in the shard matrix", "ci.yml", ci.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 4, 5]"), /matrix.shard must be 1..n/],
   ["verify without --jobs", "ci.yml", ci.replace(" --jobs=2", ""), /verify: check:all has no --jobs/],
   ["verify without --check-timeout", "ci.yml", ci.replace(/ --check-timeout=\d+/, ""), /verify: check:all has no --check-timeout/],
+  ["pi-compat without --check-timeout", "ci.yml", ci.replace("--skip=smoke:package,test:typecheck,test:lint --check-timeout=600", "--skip=smoke:package,test:typecheck,test:lint"), /ci.yml pi-compat: .* has no --check-timeout/],
+  ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "npm run -s coverage"), /ci.yml coverage: .* has no --check-timeout/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],
   ["security.yml PRs without integration/**", "security.yml", security.replace('branches: [main, "integration/**"]', "branches: [main]"), /security.yml: pull_request does not run on integration\/\*\*/],

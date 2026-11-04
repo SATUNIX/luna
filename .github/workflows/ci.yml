@@ -65,7 +65,7 @@ jobs:
           node-version: "26"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run -s coverage
+      - run: npm run -s coverage -- --check-timeout=600
 
   docs-build:
     runs-on: ubuntu-latest
@@ -148,7 +148,7 @@ jobs:
       # The tarball check does not depend on the pi version. Type checking and lint read pi's type
       # declarations, whose exported names change between releases; the verify job runs them against
       # the pinned version. Extensions load as erased TypeScript, so everything else runs here.
-      - run: npm run -s check:all -- --skip=smoke:package,test:typecheck,test:lint
+      - run: npm run -s check:all -- --skip=smoke:package,test:typecheck,test:lint --check-timeout=600
 
   # The Android companion app (apps/android). The Gradle wrapper jar must be the one Gradle
   # publishes for the wrapper's version (the checksum is fetched from services.gradle.org, the

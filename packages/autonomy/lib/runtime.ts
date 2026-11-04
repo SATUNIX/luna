@@ -38,6 +38,18 @@ const PKG = path.resolve(LIB, "..");
 const pad = (n: number): string => String(n).padStart(2, "0");
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * The environment every container-engine call runs with: the supervisor's own, plus `extra`, without
+ * NOTIFY_SOCKET. A desktop session's terminal inherits the user manager's NOTIFY_SOCKET, and podman then
+ * mounts that socket at /run/notify in every container, which fails on the read-only root the boundary
+ * uses ("make mountpoint /run/notify ... Read-only file system"). The harness never uses sd_notify.
+ */
+export function engineEnv(extra: Readonly<Record<string, string>> = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra };
+  delete env["NOTIFY_SOCKET"];
+  return env;
+}
+
 // --- what the runtime returns ------------------------------------------------------------------------
 
 /** A line logger (the engine's, or the CLI's stderr for a standalone probe). */
@@ -194,7 +206,7 @@ export class DockerRuntime implements Runtime {
   cli(args: readonly string[], opts?: CliOptions & { allowFail?: false }): string;
   cli(args: readonly string[], opts: CliOptions & { allowFail: boolean }): string | null;
   cli(args: readonly string[], { timeoutMs = 120_000, input, allowFail = false, env }: CliOptions & { allowFail?: boolean } = {}): string | null {
-    const r = spawnSync(this.bin, args, { encoding: "utf8", timeout: timeoutMs, ...(input === undefined ? {} : { input }), maxBuffer: 32 * 1024 * 1024, env: env ?? process.env });
+    const r = spawnSync(this.bin, args, { encoding: "utf8", timeout: timeoutMs, ...(input === undefined ? {} : { input }), maxBuffer: 32 * 1024 * 1024, env: engineEnv({}, env ?? process.env) });
     if (r.error || r.status !== 0) {
       if (allowFail) return null;
       const err = r.error?.message ?? r.stderr.trim();
@@ -217,12 +229,12 @@ export class DockerRuntime implements Runtime {
   helper(args: readonly string[], { role, networks = [], timeoutMs, secretEnv = {} }: { role: string; networks?: readonly string[]; timeoutMs: number; secretEnv?: Record<string, string> }): Promise<HelperResult> {
     this.checked(args, { networks, role, secretEnvNames: Object.keys(secretEnv) });
     return new Promise((resolve) => {
-      const child = spawn(this.bin, args, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...secretEnv } });
+      const child = spawn(this.bin, args, { stdio: ["ignore", "pipe", "pipe"], env: engineEnv(secretEnv) });
       let stdout = ""; let stderr = ""; let timedOut = false;
       child.stdout.on("data", (c: Buffer) => { if (stdout.length < 4e6) stdout += c.toString(); });
       child.stderr.on("data", (c: Buffer) => { if (stderr.length < 4e6) stderr += c.toString(); });
       const name = args[args.indexOf("--name") + 1];
-      const timer = setTimeout(() => { timedOut = true; if (name !== undefined) spawnSync(this.bin, ["rm", "-f", name], { stdio: "ignore", timeout: 30_000 }); }, timeoutMs);
+      const timer = setTimeout(() => { timedOut = true; if (name !== undefined) spawnSync(this.bin, ["rm", "-f", name], { stdio: "ignore", timeout: 30_000, env: engineEnv() }); }, timeoutMs);
       child.on("close", (code: number | null) => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr, timedOut }); });
       child.on("error", (e: Error) => { clearTimeout(timer); resolve({ code: 1, stdout, stderr: String(e), timedOut }); });
     });
@@ -345,7 +357,7 @@ export class DockerRuntime implements Runtime {
     this.checked(runArgs, { networks: [this.names.egress], role });
     this.cli(runArgs);
     this.cli(connect);
-    const child = spawn(this.bin, execArgs, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(this.bin, execArgs, { stdio: ["pipe", "pipe", "pipe"], env: engineEnv() });
     child.stderr.on("data", (c: Buffer) => { fs.appendFileSync(path.join(this.p.meter, `${label}.log`), c); });
     child.stdin.end(`${JSON.stringify(config)}\n`);
     await new Promise<void>((resolve, reject) => {
@@ -394,7 +406,7 @@ export class DockerRuntime implements Runtime {
         values[envName] = value;
       }
       this.checked(args, { networks: [names.net], role: "service", secretEnvNames: Object.keys(values) });
-      const r = spawnSync(this.bin, args, { encoding: "utf8", env: { ...process.env, ...values }, timeout: 120_000 });
+      const r = spawnSync(this.bin, args, { encoding: "utf8", env: engineEnv(values), timeout: 120_000 });
       if (r.status !== 0) throw new Error(`starting service ${svc.name} failed: ${r.stderr.trim().slice(0, 300)}`);
       log(`service ${svc.name} started (${svc.image})`);
     }
@@ -408,7 +420,7 @@ export class DockerRuntime implements Runtime {
 
   async probeService(svc: ServiceSpec, { path: urlPath, expectStatus }: HealthTarget): Promise<HealthOutcome> {
     if (svc.health.cmd) {
-      const r = spawnSync(this.bin, ["exec", this.names.service(svc.name), ...svc.health.cmd], { encoding: "utf8", timeout: (svc.health.timeoutSeconds + 5) * 1000 });
+      const r = spawnSync(this.bin, ["exec", this.names.service(svc.name), ...svc.health.cmd], { encoding: "utf8", timeout: (svc.health.timeoutSeconds + 5) * 1000, env: engineEnv() });
       return { ok: r.status === 0, detail: r.status === 0 ? "health command succeeded" : `health command exited ${String(r.status)}` };
     }
     const args = dk.healthProbeRunArgs(this.cfg, this.p, { url: `http://${svc.name}:${svc.port}${urlPath ?? "/"}`, expectStatus: expectStatus ?? 200, timeoutSeconds: svc.health.timeoutSeconds });
@@ -487,7 +499,7 @@ export class DockerRuntime implements Runtime {
     this.checked(args, { networks: [names.net], role: "worker" });
     const events = fs.createWriteStream(path.join(dir, `events-${attempt}.jsonl`), { flags: "a" });
     const stderr = fs.createWriteStream(path.join(dir, `agent-${attempt}.log`), { flags: "a" });
-    const child = spawn(this.bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(this.bin, args, { stdio: ["pipe", "pipe", "pipe"], env: engineEnv() });
     child.stderr.pipe(stderr);
     child.stdin.on("error", () => {});
     child.stdout.on("data", lineParser((msg) => {

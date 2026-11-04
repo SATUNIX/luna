@@ -89,6 +89,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `pi-autonomy start` from a desktop terminal no longer fails its boundary probe with "make mountpoint
+  /run/notify ... Read-only file system": every container-engine call drops `NOTIFY_SOCKET`, which a
+  terminal inherits from the user's systemd manager and which makes podman mount the socket into the
+  read-only root (`tests/autonomy-boundary-smoke.ts`).
+
 - Workflow writers of one checkout now take the writer lock in call order. `withCheckoutLock` resolved the checkout root (a git subprocess) before queueing, so a later caller whose lookup finished first ran ahead (`tests/workflow-worktree-smoke.ts`, section 8).
 - `pi-autonomy resume` brings a run back up after its supervisor stopped: the new supervisor runs
   preflight (engine, image and inference key) before the boundary probe, instead of failing with

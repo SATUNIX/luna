@@ -1,6 +1,6 @@
 # Autonomous runs
 
-`packages/autonomy` runs a task with the kit's agent **without you at the keyboard**: implement
+`packages/autonomy` runs a task with Luna's agent **without you at the keyboard**: implement
 something to a specification, build and deploy it against services inside the run, or improve a
 repository in reviewed cycles. Each run happens inside a hardened container boundary that you read
 and authorise first, is bounded by a budget in money, steps and time, judges its own success only
@@ -66,7 +66,7 @@ anything runs:
 
 ### Unattended operation, and how it stays inside the zone
 
-With `permissions.unattended.authorised`, the worker runs the kit's tool firewall in
+With `permissions.unattended.authorised`, the worker runs Luna's tool firewall in
 [unattended mode](autonomy-gate.md#unattended-mode): in-zone actions run without prompts, hard
 denials stay, and anything that would need authority outside the zone fails closed. The supervisor
 gives the worker `PI_KIT_UNATTENDED=1`, `PI_KIT_UNATTENDED_BOUNDARY=container` and a read-only,
@@ -278,7 +278,7 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   stated once (`tests/autonomy-selfimprove-smoke.ts`).
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
-  The kit's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
+  Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
   `--jobs=<the container's CPU quota>` (at most 16) and `--check-timeout=600` when the checked-out
   tree's `packages/core/check-all.ts` supports those flags, and one check at a time on an older
   tree. A red `check:all` adds a `check-all:<label> (<detail>)` step for each failed check (up to
@@ -593,7 +593,7 @@ evidence and are not made safe for public posting by the commit scan.
    packages/autonomy/build-image.sh --kit-ref v<version> --base-ref origin/main
    ```
 
-   `--kit-ref` is the kit release the worker runs. Without it the script uses the release tag of the
+   `--kit-ref` is the Luna release the worker runs. Without it the script uses the release tag of the
    checkout's `package.json` version (`v<version>`), so a build never quietly bakes an older kit, and it
    stops before building when that tag is not in the clone (`tests/autonomy-build-image-smoke.ts`).
    Before the release tag exists, pass a branch such as `origin/main`. `--base-ref` optionally prebakes that repository's dependencies for offline

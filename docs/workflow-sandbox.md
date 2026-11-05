@@ -92,7 +92,7 @@ the group cannot hold the run open.
 
 ## Integrity and first use
 
-`quickjs-wasi@3.6.3` is an explicit dependency of the kit. Before every run the host checks that
+`quickjs-wasi@3.6.3` is an explicit dependency of Luna. Before every run the host checks that
 the installed package is version 3.6.x and that the sha256 of its `quickjs.wasm` matches the pinned
 digest. A mismatch ends the run with kind `integrity`. The runner checks the digest again on the
 bytes it compiles; the test pins only the host's check.

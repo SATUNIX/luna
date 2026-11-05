@@ -926,7 +926,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("profile", {
     description:
-      "Switch the pi-kit profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart.",
+      "Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart.",
     getArgumentCompletions: (prefix: string) => {
       const kitRoot = findKitRoot();
       const names = kitRoot ? listProfiles(kitRoot).map((p) => p.name) : [];
@@ -1001,7 +1001,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         const labels = profiles.map((p) => `${p.name}${p.name === current ? " (current)" : ""}${diffLabel(p.name)} - ${p.description}`);
-        const choice = await c.ui.select(`Switch pi-kit profile (current: ${currentLabel})`, labels);
+        const choice = await c.ui.select(`Switch Luna profile (current: ${currentLabel})`, labels);
         if (choice === undefined) return; // cancelled: nothing changes
         target = profiles[labels.indexOf(choice)]?.name ?? "";
       }

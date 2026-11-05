@@ -4,7 +4,7 @@
 > `registerCommand` / `registerTool` calls in the extension sources. Do not hand-edit; run
 > `npm run catalog`. `npm run verify` fails when this page is stale.
 
-The kit's external interface: what an operator types, what the model can call, the environment
+Luna's external interface: what an operator types, what the model can call, the environment
 it reads and the files it is configured by. Which extensions a profile loads is in the
 [capability matrix](capability-matrix.md); each extension's purpose is in the
 [extension catalogue](EXTENSIONS.md). A command or tool exists only while its extension is loaded.
@@ -49,7 +49,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/pentest:reload-policy` | `pentest-governance-domain` | Reload pentest policy metadata and scope/ROE files from disk immediately | [security](security.md) |
 | `/pentest:status` | `pentest-governance-domain` | Show pentest data-root and governance status | [security](security.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
-| `/profile` | `session-helpers` | Switch the pi-kit profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
+| `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
 | `/recover` | `recovery-orchestrator` | Manually trigger recovery-orchestration for the current stuck state (/recover [signature]). | [recovery-orchestration-mode](recovery-orchestration-mode.md) |
 | `/reflect` | `progress-guard` | Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?). | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [control-center](control-center.md) |
@@ -64,7 +64,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
-| `/update` | `kit-update` | Check for and apply updates to pi, the pi-system kit (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
@@ -270,7 +270,7 @@ Extension `skill-forge`. Archive a superseded skill proposal or skill into .pi/s
 
 ### `skill_score`
 
-Extension `skill-forge`. Score the kit against its own eval harness (real, eval-tied number) as the skill's regression baseline.
+Extension `skill-forge`. Score Luna against its own eval harness (real, eval-tied number) as the skill's regression baseline.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -598,7 +598,7 @@ absolute or relative to the working directory.
 |---|---|---|
 | `packages/kit/profiles/<name>.json` | A profile: which extensions, skills and prompts load, and the firewall mode | [profiles](profiles.md) |
 | `packages/extensions/src/tool-firewall/default-policy.json` | The shipped firewall policy (a custom one is named by `PI_KIT_FIREWALL_POLICY`) | [security](security.md) |
-| `packages/core/.env.example` | Every environment variable the kit reads, with defaults | [INSTALL](INSTALL.md#environment-variables) |
+| `packages/core/.env.example` | Every environment variable Luna reads, with defaults | [INSTALL](INSTALL.md#environment-variables) |
 
 ### JSON schemas
 

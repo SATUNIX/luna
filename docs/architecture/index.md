@@ -1,6 +1,6 @@
 # Architecture diagrams
 
-These pages show the heavily developed parts of the kit as Mermaid diagrams, each with the prose that explains what the diagram cannot. Each page describes how the code behaves now and lists the source files it is drawn from.
+These pages show the heavily developed parts of Luna as Mermaid diagrams, each with the prose that explains what the diagram cannot. Each page describes how the code behaves now and lists the source files it is drawn from.
 
 | Page | Covers | Source files |
 |---|---|---|

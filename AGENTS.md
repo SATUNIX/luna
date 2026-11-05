@@ -1,7 +1,7 @@
-# pi-system: instructions for the agent
+# Luna: instructions for the agent
 
 This file is loaded by pi as project context whenever pi runs in this repository, or in a project
-that copies it. It tells the agent how to install and use the kit. The full guide for developing
+that copies it. It tells the agent how to install and use Luna. The full guide for developing
 this repository is `CLAUDE.md`, but pi loads only the first context file it finds in a directory
 (`AGENTS.override.md`, `AGENTS.md`, then `CLAUDE.md`; pi's resource loader, which no test here
 pins), so it never loads `CLAUDE.md` here. The

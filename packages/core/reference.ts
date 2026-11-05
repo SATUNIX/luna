@@ -227,7 +227,7 @@ function whereEnv(name: string, pages: ReadonlyArray<{ file: string; text: strin
 const CONFIG_FILES: ReadonlyArray<{ file: string; what: string; defined: string }> = [
   { file: "packages/kit/profiles/<name>.json", what: "A profile: which extensions, skills and prompts load, and the firewall mode", defined: "[profiles](profiles.md)" },
   { file: "packages/extensions/src/tool-firewall/default-policy.json", what: "The shipped firewall policy (a custom one is named by `PI_KIT_FIREWALL_POLICY`)", defined: "[security](security.md)" },
-  { file: "packages/core/.env.example", what: "Every environment variable the kit reads, with defaults", defined: "[INSTALL](INSTALL.md#environment-variables)" },
+  { file: "packages/core/.env.example", what: "Every environment variable Luna reads, with defaults", defined: "[INSTALL](INSTALL.md#environment-variables)" },
 ];
 
 function schemaRows(): string[] {
@@ -273,7 +273,7 @@ function render(): string {
     "> `registerCommand` / `registerTool` calls in the extension sources. Do not hand-edit; run",
     "> `npm run catalog`. `npm run verify` fails when this page is stale.",
     "",
-    "The kit's external interface: what an operator types, what the model can call, the environment",
+    "Luna's external interface: what an operator types, what the model can call, the environment",
     "it reads and the files it is configured by. Which extensions a profile loads is in the",
     "[capability matrix](capability-matrix.md); each extension's purpose is in the",
     "[extension catalogue](EXTENSIONS.md). A command or tool exists only while its extension is loaded.",

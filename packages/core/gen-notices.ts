@@ -61,9 +61,9 @@ const CAVEMAN_CONCEPT_NOTE = [
   "  Julius Brussee (https://github.com/JuliusBrussee/caveman), which is MIT-licensed with a",
   "  scope note that its engine directories (engine/, proxy/, rewriter/, browse/, mcp/,",
   "  shrink/ and others listed in its LICENSING.md) are under the Business Source License 1.1.",
-  "  Nothing from those directories is used: the kit's `caveman` is a reimplementation of the",
+  "  Nothing from those directories is used: Luna's `caveman` is a reimplementation of the",
   "  `pi-caveman` extension (MIT, Copyright (c) 2026), not a verbatim port of either project,",
-  "  and is distributed under the kit's MIT license. The concept source is credited regardless.",
+  "  and is distributed under Luna's MIT license. The concept source is credited regardless.",
 ].join("\n");
 
 interface VendoredEntry {
@@ -91,7 +91,7 @@ function render(): string {
     "> `packages/extensions/third_party/*/SOURCE.md`. Do not hand-edit; run",
     "> `node packages/core/gen-notices.ts`.",
     "",
-    "pi-system is distributed under the MIT license (see `LICENSE`). It vendors the",
+    "Luna is distributed under the MIT license (see `LICENSE`). It vendors the",
     "third-party extensions listed below. Each entry records the upstream source and the",
     "changes made in this repository.",
     "",

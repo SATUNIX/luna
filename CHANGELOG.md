@@ -10,6 +10,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- The project is named **Luna** in the README and documentation. The pi package keeps the name
+  `@satunix/pi-system`, so install commands, settings entries and environment variables are
+  unchanged. A moon-themed animated overview (`docs/assets/luna.gif`) now heads the README and the
+  documentation home; its source spec is `docs/assets/luna-anim.json`.
+
 - Self-improve cycles can add a test without `allowControlChanges`: a root `package.json` change that
   only adds `smoke:<name>` scripts running exactly `node tests/<name>-smoke.ts`, leaving every existing
   script as it was, is no longer a control change (`tests/autonomy-review-inputs-smoke.ts`). Any other

@@ -75,7 +75,7 @@ regresses, is not detected as a trigger; see [Future work](future-work.md#delega
 
 ## 4. Mapping onto existing kit primitives
 
-This mode is an *orchestration* over pieces the kit already ships; it should not
+This mode is an *orchestration* over pieces Luna already ships; it should not
 reinvent them.
 
 | Method step | Existing primitive |

@@ -4,7 +4,7 @@
 > `packages/extensions/third_party/*/SOURCE.md`. Do not hand-edit; run
 > `node packages/core/gen-notices.ts`.
 
-pi-system is distributed under the MIT license (see `LICENSE`). It vendors the
+Luna is distributed under the MIT license (see `LICENSE`). It vendors the
 third-party extensions listed below. Each entry records the upstream source and the
 changes made in this repository.
 
@@ -58,7 +58,7 @@ SOFTWARE.
 - Date: 2026-07-03
 - Changes (reimplementation, not a verbatim port):
   - Upstream injects its compression directive by returning `{ systemPrompt }` from
-    `before_agent_start`. That is **forbidden** in this kit — `packages/core/verify.ts` lint 5b reserves
+    `before_agent_start`. That is **forbidden** in Luna — `packages/core/verify.ts` lint 5b reserves
     system-prompt assembly to `extensions/context-sieve`. Rewritten to instead write a
     `.pi/ctx-contributions/sessions/<session-id>/caveman.json` contribution (the flat
     `.pi/ctx-contributions/caveman.json` when pi exposes no session id) that context-sieve assembles
@@ -83,9 +83,9 @@ SOFTWARE.
   Julius Brussee (https://github.com/JuliusBrussee/caveman), which is MIT-licensed with a
   scope note that its engine directories (engine/, proxy/, rewriter/, browse/, mcp/,
   shrink/ and others listed in its LICENSING.md) are under the Business Source License 1.1.
-  Nothing from those directories is used: the kit's `caveman` is a reimplementation of the
+  Nothing from those directories is used: Luna's `caveman` is a reimplementation of the
   `pi-caveman` extension (MIT, Copyright (c) 2026), not a verbatim port of either project,
-  and is distributed under the kit's MIT license. The concept source is credited regardless.
+  and is distributed under Luna's MIT license. The concept source is credited regardless.
 
 ### `custom-footer`
 
@@ -387,7 +387,7 @@ SOFTWARE.
   - **Safe writes and shared redaction (2026-10-24):** run files, logs, the live state and the
     worktree journal are written through the generated `shared/safe-fs.ts` (no symbolic link
     followed under the workspace; temporary prompt files are created exclusively), `redact.ts`
-    applies the kit's shared table (`shared/redact.ts`) after its own rules, and workflow gate
+    applies Luna's shared table (`shared/redact.ts`) after its own rules, and workflow gate
     patterns and structured-output patterns use the shared `shared/safe-regex.ts` check
     (`tests/workspace-symlink-smoke.ts`, `tests/redaction-corpus-smoke.ts`, `tests/workflow-smoke.ts`).
 

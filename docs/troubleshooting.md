@@ -5,7 +5,7 @@ it loaded), `/update status` (versions and channel) and `pi list` (what is regis
 
 ## Install and update
 
-**`pi` reports "No models available".** The kit does not choose a model. Run `/login`, or add an
+**`pi` reports "No models available".** Luna does not choose a model. Run `/login`, or add an
 API key or `models.json` as pi describes.
 
 **`node packages/core/install.ts --channel latest` says there are no release tags.** `latest`
@@ -17,22 +17,22 @@ happen; nothing was changed. Check `git ls-remote https://github.com/SATUNIX/lun
 from the same shell, then retry. Behind a proxy, configure git's proxy settings: pi and `/update`
 use your git configuration.
 
-**Every extension seems to load twice.** Two copies of the kit are registered (for example a
+**Every extension seems to load twice.** Two copies of Luna are registered (for example a
 checkout and a release). `pi list` shows them. Run the installer once
 (`node packages/core/install.ts --profile <name> --yes`); it keeps one registration and removes
 the other.
 
 **`/update` says a step failed.** `/update` checks the installed state after each step. The message
-says what it expected and what it found (for example, the kit is still at the old commit), the run
-stopped there, and pi was not reloaded. Fix the cause it names and run `/update` again. If the kit
+says what it expected and what it found (for example, Luna is still at the old commit), the run
+stopped there, and pi was not reloaded. Fix the cause it names and run `/update` again. If Luna
 was already replaced and only re-applying the profile failed, a second `/update` has nothing left
 to do: the message says so and gives the version to go back to and the installer command that
 re-applies the profile instead (`tests/kit-update-smoke.ts`). Without a terminal UI the same text
 goes to standard error, prefixed `[update]`.
 
-**The kit is "registered from a retired private source".** See [Migration](migration.md).
+**Luna is "registered from a retired private source".** See [Migration](migration.md).
 
-**Node or pi is too old.** The kit needs Node 22.19 or newer and pi 0.85.1 or newer. `node
+**Node or pi is too old.** Luna needs Node 22.19 or newer and pi 0.85.1 or newer. `node
 --version` and `pi --version` show what you have.
 
 ## Profiles
@@ -78,11 +78,11 @@ rejected file is kept next to it as `.rejected-<hash>`.
 
 **"delegation refused".** The message names the reason. The common ones: the tier allows no
 children (`/effort` to raise it), the request's budget is used up (children that failed or were
-retried still count), or a required protection could not be located next to the kit. A child is
+retried still count), or a required protection could not be located next to Luna. A child is
 never started with weaker protection than its parent.
 
 **A child exited with code 78 (EX_CONFIG).** Inside the child, `delegation-guard` found that a
-required protection did not load, so it blocked every tool and exited. Reinstall the kit; this is
+required protection did not load, so it blocked every tool and exited. Reinstall Luna; this is
 a broken installation, not a task failure.
 
 ## Status bar

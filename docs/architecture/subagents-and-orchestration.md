@@ -182,7 +182,7 @@ What the child loads:
 
 - **Required set (`requiredForChild`).** Every extension whose `extension.json` says
   `childGovernance: true` that the parent has actually loaded, plus the mandatory protections the
-  parent has. `delegation-guard` and `effort` are always required. In the kit the governance
+  parent has. `delegation-guard` and `effort` are always required. In Luna the governance
   extensions are `delegation-guard`, `effort`, `tool-firewall`, `secret-guard`, `protected-paths` and
   `pentest-governance-domain`.
 - **Order.** `delegation-guard` first, so its blocking hook runs before anything else, then

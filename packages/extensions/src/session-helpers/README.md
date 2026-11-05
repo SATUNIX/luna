@@ -1,12 +1,12 @@
 # session-helpers
 
-Session-control helpers layered on top of the kit's autonomous behaviour: the `/profile` switch, the
+Session-control helpers layered on top of Luna's autonomous behaviour: the `/profile` switch, the
 `/compaction` view, a cheatsheet, and the one hook that keeps the effective compaction state visible.
 It is in every profile, so every profile can see and fix its own configuration.
 
 ## Why
 
-The kit is designed to run autonomously. Operators still need to see and change what is loaded and
+Luna is designed to run autonomously. Operators still need to see and change what is loaded and
 whether pi will keep the context under control, and `pi` ships no `/clear` and no one-stop command list.
 This extension fills those gaps. It changes nothing on its own except publishing state and warning once.
 
@@ -15,7 +15,7 @@ This extension fills those gaps. It changes nothing on its own except publishing
 | Command | What it does |
 | --- | --- |
 | `/clear` | **Guidance only — does not clear anything.** Explains `/compact` (shrink context, keep thread), `/new` (fresh session), and `/fork` (branch). |
-| `/kit`, `/helpers` | The cheatsheet of pi built-ins plus the kit helpers. |
+| `/kit`, `/helpers` | The cheatsheet of pi built-ins plus Luna helpers. |
 | `/profile` | Switch the profile, all-or-nothing (below). `/profile` picker, `/profile <name>`, `/profile list`, `/profile status`. |
 | `/compaction` | `status` (default without a UI) shows whether pi auto-compaction is really on, at what token count it triggers, the kit trigger, and why it is degraded. `on` / `off` write pi's global `compaction.enabled` and reload; `trigger on\|off` toggles the kit's fixed-budget trigger. |
 

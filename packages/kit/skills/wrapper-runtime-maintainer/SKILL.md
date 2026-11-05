@@ -1,14 +1,14 @@
 ---
 name: wrapper-runtime-maintainer
 category: maintainer
-description: Maintain the Pi System container wrapper without forking upstream Pi core. Use when editing the Dockerfile, entrypoint, compose, env defaults, or health checks — preserve the security posture and keep project resources under .pi/.
+description: Maintain the Luna container wrapper without forking upstream Pi core. Use when editing the Dockerfile, entrypoint, compose, env defaults, or health checks — preserve the security posture and keep project resources under .pi/.
 disable-model-invocation: true
 triggers: ["dockerfile", "docker compose", "docker-compose", "container entrypoint", "healthcheck", "container wrapper"]
 ---
 
 # Wrapper Runtime Maintainer
 
-The wrapper packages upstream Pi for Pi System; it must not fork Pi core, and it must preserve
+The wrapper packages upstream Pi for Luna; it must not fork Pi core, and it must preserve
 the container's security posture.
 
 ## When to use

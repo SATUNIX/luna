@@ -27,7 +27,7 @@ Run readiness validation before starting an interactive Pi loop:
 python3 scripts/validate-runtime-readiness.py
 ```
 
-Expected result: required Pi profile files are readable, `.pi/mcp-adapter.json` remains MCP proxy-only, `pi_system_governance` has exact local tool-policy mappings, committed MCP/engagement overlays do not contain secret-looking values, and root/canonical compose parity passes. On a host checkout where `/srv/data/pi-system` does not exist, the validator may warn that data directory creation is deferred to container/Pi System runtime.
+Expected result: required Pi profile files are readable, `.pi/mcp-adapter.json` remains MCP proxy-only, `pi_system_governance` has exact local tool-policy mappings, committed MCP/engagement overlays do not contain secret-looking values, and root/canonical compose parity passes. On a host checkout where `/srv/data/pi-system` does not exist, the validator may warn that data directory creation is deferred to container/Luna runtime.
 
 Optionally probe local Ollama:
 
@@ -167,5 +167,5 @@ Roll back by redeploying the previous image tag or environment overlay. Do not p
 
 - Keep Docker socket disabled unless a future tool workflow explicitly requires it and the risk is accepted.
 - Keep MCP direct tools disabled by default.
-- Keep live scope, ROE, and tool policy in Pi System overlays.
+- Keep live scope, ROE, and tool policy in Luna overlays.
 - Keep root and canonical compose files aligned.

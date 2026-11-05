@@ -25,7 +25,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |
 | `/caveman` | `caveman` | Toggle/set output compression: /caveman [on\|off\|lite\|full\|ultra\|micro\|status] | [control-center](control-center.md) |
 | `/clear` | `session-helpers` | How to reset context (pi has no native /clear). Non-destructive: prints guidance only. | [control-center](control-center.md) |
-| `/compact-threshold` | `trigger-compact` | View or change the Luna auto-compact trigger: /compact-threshold [amount\|off\|on\|reset], e.g. /compact-threshold 500k | [INSTALL](INSTALL.md) |
+| `/compact-threshold` | `trigger-compact` | View or change the kit auto-compact trigger: /compact-threshold [amount\|off\|on\|reset], e.g. /compact-threshold 500k | [INSTALL](INSTALL.md) |
 | `/compaction` | `session-helpers` | Show or change auto-compaction: /compaction [status\|on\|off\|trigger on\|trigger off] | [troubleshooting](troubleshooting.md) |
 | `/compress` | `compress` | Instant deterministic compaction: keeps user asks and assistant replies, drops tool output. No model call. Optional note: /compress <note> | [control-center](control-center.md) |
 | `/console` | `web-console` | Start/stop the bundled Pi Console web UI. Usage: /console [start\|stop\|status\|open]. | [web-console](web-console.md) |

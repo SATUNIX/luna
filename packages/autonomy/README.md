@@ -2,8 +2,8 @@
 
 The bounded autonomous task runner for Luna: a versioned run contract, a run engine with an
 explicit lifecycle, templates (`implement`, `deploy`, `self-improve`), a hardened container runtime,
-an inference relay and an egress proxy. Private (not published on npm); it ships with Luna's git
-delivery and runs from a checkout or from pi's copy of Luna.
+an inference relay and an egress proxy. Private (not published on npm); it ships with the kit's git
+delivery and runs from a checkout or from pi's copy of the kit.
 
 Operator documentation, including the boundary, the contract, the lifecycle and what has and has not
 been verified, is `docs/autonomy.md`. From inside pi, use `/autonomy` in the `autonomous` profile.

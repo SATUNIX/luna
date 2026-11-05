@@ -45,7 +45,7 @@ VM when evaluating hostile container-escape payloads.
 A read-only, invocation-local firewall policy allows tools without interactive
 approval. Secret/protected-path guards still apply. The policy is never installed
 in the host Pi configuration. Writable files are disposable fixture workspaces,
-session logs and temporary Pi settings. Luna mount remains read-only.
+session logs and temporary Pi settings. The kit mount remains read-only.
 
 ## Results and evidence
 

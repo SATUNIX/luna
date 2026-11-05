@@ -5,7 +5,7 @@ Tells you when something in your pi setup can be updated, and `/update` applies 
 It checks three things:
 
 - **Luna**: the package, on the channel it is registered on. The channels are the same however
-  Luna is delivered:
+  the kit is delivered:
   - `latest`: the newest release (a stable release once one exists, otherwise the newest beta).
   - `next`: every commit on `main`.
   - an exact version such as `0.2.1-beta.0`: a pin, never moved on its own.
@@ -26,7 +26,7 @@ It checks three things:
 |---|---|
 | `/update` | Check now, then pick what to update from a list |
 | `/update status` | Show installed and available versions |
-| `/update all` | Update Luna, linked packages and pi, re-apply the profile, reload |
+| `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
 | `/update channel latest\|next\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
@@ -55,8 +55,8 @@ for credentials). When something can be updated you get one notice, and the stat
 |---|---|
 | `PI_KIT_UPDATE_CHECK=0` | Turn off the background check (`/update` still works) |
 | `PI_KIT_UPDATE_CHECK_HOURS` | Hours between background checks (default 24) |
-| `PI_KIT_DELIVERY` | `git` or `npm`: override Luna's delivery on this machine |
-| `PI_SYSTEM_GIT_SOURCE` | Git source of Luna, e.g. `git:git@github.com:SATUNIX/luna` for SSH; a value that names a retired private source is ignored and reported |
+| `PI_KIT_DELIVERY` | `git` or `npm`: override the kit's delivery on this machine |
+| `PI_SYSTEM_GIT_SOURCE` | Git source of the kit, e.g. `git:git@github.com:SATUNIX/luna` for SSH; a value that names a retired private source is ignored and reported |
 | `PI_KIT_NPM_REGISTRY` | Registry to query (default `https://registry.npmjs.org`) |
 | `PI_OFFLINE` | pi's offline switch: no background check |
 

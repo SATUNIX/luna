@@ -33,7 +33,7 @@ profile, or `PI_KIT_PROFILE=lite` for small local models.
 
 Ollama at `http://host.docker.internal:11434/v1`, model `gemma4:latest`.
 Override via `OLLAMA_BASE_URL` and edit `overlays/pi/models.json`. Local-model costs default to
-zero; kit pricing and the status bar are documented in
+zero; Luna pricing and the status bar are documented in
 [`docs/status-bar-and-costs.md`](../../docs/status-bar-and-costs.md).
 
 ## Build modes
@@ -42,7 +42,7 @@ The image has two build modes controlled by the `BUILD_MODE` ARG.
 
 ### Dev mode (default)
 
-Luna is mounted from a local clone and installed at container start. Edits to Luna are
+The kit is mounted from a local clone and installed at container start. Edits to the kit are
 applied on the next `pi-agent` launch without rebuilding.
 
 ```sh
@@ -59,7 +59,7 @@ docker compose -f capability/compose/compose.yaml \
 
 ### Release mode
 
-Luna is baked into the image at a pinned git ref. No runtime mount needed.
+The kit is baked into the image at a pinned git ref. No runtime mount needed.
 
 ```sh
 # Build with default ref (main)

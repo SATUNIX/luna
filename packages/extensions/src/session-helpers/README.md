@@ -64,10 +64,10 @@ kit; `shared/kit-source.ts`) → this module's own location. Two layouts are sup
 4. Any failure — exception, kill, timeout, non-zero exit, missing completion line, corrupt or mismatching
    result, or a failed reload — restores every snapshot byte-for-byte, removes stray lock/tmp files and says
    what happened. If a restore itself fails, the original bytes are saved to a temp directory and named.
-   The snapshots cover files only: a `pi install` the installer already ran (a companion, or Luna when
+   The snapshots cover files only: a `pi install` the installer already ran (a companion, or the kit when
    it was not registered) is not undone, so the message names each one instead of saying nothing was
    changed (`tests/profile-transaction-smoke.ts`, `tests/profile-safety-smoke.ts`). `/profile` passes
-   `--no-migrate`, so a switch never moves Luna off a retired or previous source: the installer stops
+   `--no-migrate`, so a switch never moves the kit off a retired or previous source: the installer stops
    before any change and names `/update kit` and the Migration guide instead, and no `pi remove` can
    delete a clone that this rollback would point settings back at (`tests/profile-transaction-smoke.ts`,
    `tests/distribution-smoke.ts`).

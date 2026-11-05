@@ -268,7 +268,7 @@ export default function (pi: ExtensionAPI) {
     if (info.nativeWillFire || info.redundant) {
       if (info.redundant && info.native !== null && !notedInactive) {
         notedInactive = true;
-        notifySafely(ctx, `Luna auto-compact trigger (${formatTokens(thresholdTokens)}) is at or above pi's own trigger (${formatTokens(info.native)} = window - reserveTokens), so pi compacts first and this trigger is idle. Lower it with /compact-threshold to use it.`, "warning");
+        notifySafely(ctx, `Kit auto-compact trigger (${formatTokens(thresholdTokens)}) is at or above pi's own trigger (${formatTokens(info.native)} = window - reserveTokens), so pi compacts first and this trigger is idle. Lower it with /compact-threshold to use it.`, "warning");
       }
       return;
     }
@@ -311,7 +311,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("compact-threshold", {
-    description: "View or change the Luna auto-compact trigger: /compact-threshold [amount|off|on|reset], e.g. /compact-threshold 500k",
+    description: "View or change the kit auto-compact trigger: /compact-threshold [amount|off|on|reset], e.g. /compact-threshold 500k",
     handler: async (args, ctx) => {
       const arg = args.trim();
       const usage = ctx.getContextUsage();
@@ -341,7 +341,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         const piNote = enable && !settings.enabled ? " — note: pi auto-compaction is still off in /settings, which also stops this trigger" : "";
-        if (ctx.hasUI) ctx.ui.notify(`Luna auto-compact trigger ${enable ? "enabled" : "disabled"}${piNote}. Manual /compact and /trigger-compact still work.`, "info");
+        if (ctx.hasUI) ctx.ui.notify(`Kit auto-compact trigger ${enable ? "enabled" : "disabled"}${piNote}. Manual /compact and /trigger-compact still work.`, "info");
         return;
       }
 

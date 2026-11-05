@@ -23,7 +23,8 @@ import { collectRuns, formatRunTable } from "./status.ts";
 import { stopAllLive, stopLive, stopRecordedRun, recordStop } from "./live.ts";
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
-import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
+import { bindWorkflowStatus, releasePanelHolds, workflowStatus } from "./wf-panel.ts";
+import { showWhenFree } from "./shared/input-owner.ts";
 
 const TaskItem = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -188,6 +189,7 @@ async function projectTrustError(
   projectAgentsDir: string | null,
   params: Record<string, unknown>,
   ctx: ToolContext,
+  signal: AbortSignal | undefined,
 ): Promise<string | null> {
   const requested = new Set<string>();
   if (Array.isArray(params.chain)) for (const s of params.chain as Array<{ agent: string }>) requested.add(s.agent);
@@ -200,11 +202,14 @@ async function projectTrustError(
     .filter((a) => !trusted.includes(projectRoleDigest(a)));
   if (projectRequested.length === 0) return null;
   if (!ctx.hasUI || !ctx.ui?.confirm) return "Blocked: project-local agents require interactive operator approval.";
-  const ok = await ctx.ui.confirm(
-    "Run project-local agents?",
-    `Agents: ${projectRequested.map((a) => a.name).join(", ")}\nSource: ${projectAgentsDir ?? "(unknown)"}\n\nOnly continue for trusted repositories.`,
+  // This card starts on Yes and launches a role: a key typed into an open overlay must not answer it.
+  const confirm = ctx.ui.confirm.bind(ctx.ui);
+  const asked = await showWhenFree(
+    (card) => confirm("Run project-local agents?", `Agents: ${projectRequested.map((a) => a.name).join(", ")}\nSource: ${projectAgentsDir ?? "(unknown)"}\n\nOnly continue for trusted repositories.`, card),
+    { signal: signal ?? ctx.signal, onHeld: (holder) => ctx.ui?.notify?.(`subagent: a project-local agent is waiting for approval; close ${holder} to see it.`, "warning") },
   );
-  return ok ? null : "Canceled: project-local agents not approved.";
+  if (asked.kind !== "shown") return "Canceled: no operator approved the project-local agents.";
+  return asked.value ? null : "Canceled: project-local agents not approved.";
 }
 
 async function runChainMode(
@@ -284,6 +289,8 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     stopAllLive();
     workflowStatus.unbind();
+    // pi's reload removes an open panel without settling it, so its hold ends here or never.
+    releasePanelHolds();
   });
 
   pi.registerTool({
@@ -325,7 +332,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
       }
 
       if (scope === "project" || scope === "both") {
-        const trustError = await projectTrustError(agents, discovery.projectAgentsDir, params, ctx);
+        const trustError = await projectTrustError(agents, discovery.projectAgentsDir, params, ctx, signal);
         if (trustError) return textResult(trustError, trustError.startsWith("Blocked"));
       }
 

@@ -5,16 +5,17 @@
 // focus from an open `ctx.ui.custom` overlay. Keys typed into the box then answer the approval, and
 // Enter picks "Allow once". These cases hold the hub (and the workflow panel) open through a fake
 // `ui.custom`, fire a `vendor_pending` approval and prove the firewall neither prompts nor settles
-// until the box closes; an abort while held blocks as aborted without ever prompting, the prompt
-// timeout starts only when the card is shown, a page move keeps the hold, and the headless path is
-// untouched. A child's brokered approval waits too: the human console leaves the pending file alone
-// while input is held, the requester's own deadline still fails closed, and an answer that needs no
+// until the box closes; an abort while held blocks as aborted without ever prompting, a page move
+// keeps the hold, and the headless path is untouched. A child's brokered approval waits too: the
+// human console leaves the pending file alone while input is held, the requester's own deadline still fails closed, and an answer that needs no
 // prompt (a run grant or a sticky deny) still goes through. A session's own `ask_human` waits the same
-// way, and a deferred request's card shows only the time its requester has left.
+// way, and a deferred request's card shows only the time its requester has left. A hold and the card
+// after it share one deadline, so an overlay left open cannot park a call for ever, and a reload (which
+// drops an overlay without settling it) drops the hold, proved on pi's real reload path.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, initTheme, ModelRuntime, SessionManager, SettingsManager, type ExtensionFactory, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { fakePi, isolateKitEnv, loadExtension, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import { startConsole } from "./console-answer.ts";
 import type * as HubModule from "../packages/extensions/src/control-center/hub.ts";
@@ -22,6 +23,8 @@ import type * as ModelModule from "../packages/extensions/src/control-center/mod
 import type * as HumanConsole from "../packages/extensions/src/human-console/index.ts";
 import type * as ValuesModule from "../packages/extensions/src/control-center/values.ts";
 import type * as PanelModule from "../packages/extensions/third_party/subagent/wf-panel.ts";
+import type * as WfTool from "../packages/extensions/third_party/subagent/wf-tool.ts";
+import type * as WorkflowTools from "../packages/extensions/third_party/subagent/workflow-tools.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
 /** What the firewall's tool_call handler returns when it blocks a call. */
@@ -80,6 +83,18 @@ let checks = 0;
 const ok = (label: string): void => {
   checks++;
   console.log(`  OK: ${label}`);
+};
+// A case that reports its failure and lets the rest run, so one run shows every defect.
+const failures: string[] = [];
+const attempt = async (label: string, run: () => Promise<void>): Promise<void> => {
+  try {
+    await run();
+    ok(label);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    failures.push(`${label}: ${message}`);
+    console.log(`  FAIL: ${label}: ${message}`);
+  }
 };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate: () => boolean, ms = 1000): Promise<void> {
@@ -298,23 +313,46 @@ try {
     ok("the workflow panel holds input while open and releases it on close");
   }
 
-  // 7. The prompt timeout starts when the card is shown: holding input longer than it must not
-  //    time the approval out.
-  {
+  // 7. The hold and the card share the prompt timeout: an overlay left open (or opened from a linked
+  //    phone) cannot park the call. It ends as the refusal an unanswered card gets, and says why.
+  await attempt("a hold past the prompt timeout fails closed and shows no card", async () => {
     const view = overlayUi("overlay-queue-timeout");
     const restoreTimeout = setEnv("PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS", "30");
     const hold = owner.holdInput("a text box");
+    try {
+      const result = await Promise.race([fire(view.ctx), sleep(500).then(() => "parked" as const)]);
+      assert.notEqual(result, "parked", "a hold must not park the call past the prompt timeout");
+      assert.ok(result && result !== "parked" && result.block, "the call is refused");
+      assert.match(result.reason, /none arrived within .*overlay/, "the refusal says the overlay held the card");
+      assert.equal(view.selects.length, 0, "no card while the box is held");
+    } finally {
+      hold();
+      restoreTimeout();
+    }
+    await sleep(30);
+    assert.equal(view.selects.length, 0, "and none after the release: the call has ended");
+  });
+
+  // 7b. A card shown after a hold runs for the time left.
+  await attempt("a card shown after a hold gets only the time left on the prompt timeout", async () => {
+    const view = overlayUi("overlay-queue-left");
+    const options: unknown[] = [];
+    view.ctx.ui.select = async (_title, _options, opts) => {
+      options.push(opts);
+      return "Deny";
+    };
+    const restoreTimeout = setEnv("PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS", "2000");
+    const hold = owner.holdInput("a text box");
     const pending = fire(view.ctx);
-    await sleep(100); // four times the prompt timeout, all of it while the box is held
-    assert.equal(view.selects.length, 0, "no prompt while the box is held");
+    await sleep(300);
     hold();
-    const result = await pending;
-    assert.equal(view.selects.length, 1, "the card is shown once, after the hold, and answered");
-    assert.equal(result?.block, true, '"Deny" blocks the call');
-    assert.doesNotMatch(result?.reason ?? "", /none arrived within|not answered/, "the prompt timeout must start when the card is shown, not while input is held");
+    await pending;
     restoreTimeout();
-    ok("the prompt timeout starts when the card is shown, not while an overlay holds input");
-  }
+    const shown = options[0];
+    assert.ok(typeof shown === "object" && shown !== null, "the card got dialog options");
+    const timeout = Number(Reflect.get(shown, "timeout"));
+    assert.ok(timeout > 0 && timeout <= 1750, `the card got the time left, not a fresh timeout (${String(timeout)} ms)`);
+  });
 
   // 8. Closing the hub with Esc releases input (not the test's own `done` call).
   {
@@ -427,15 +465,37 @@ try {
     let pick: string | undefined;
     // Set for a case that needs a card nobody answers, so only its timeout can close it.
     let unanswered = false;
+    // The options each card was opened with, and what it told the operator.
+    const cardOptions: unknown[] = [];
+    const consoleNotices: string[] = [];
+    let typed: string | undefined;
     const consoleCtx = {
       cwd: ws,
       hasUI: true,
       ui: {
-        select: async (title: string): Promise<string | undefined> => {
+        notify: (message: string): void => {
+          consoleNotices.push(message);
+        },
+        select: async (title: string, _options?: string[], opts?: unknown): Promise<string | undefined> => {
           selects.push(title);
+          cardOptions.push(opts);
           return unanswered ? new Promise<undefined>(() => {}) : pick;
         },
+        input: async (_title: string, _placeholder?: string, opts?: unknown): Promise<string | undefined> => {
+          cardOptions.push(opts);
+          return typed;
+        },
+        confirm: async (_title: string, _body: string, opts?: unknown): Promise<boolean> => {
+          cardOptions.push(opts);
+          return false;
+        },
       },
+    };
+    const assertBounded = (opts: unknown, limitMs: number, label: string): void => {
+      assert.ok(typeof opts === "object" && opts !== null, `${label}: the card got dialog options`);
+      const timeout = Number(Reflect.get(opts, "timeout"));
+      assert.ok(timeout > 0 && timeout <= limitMs, `${label}: the card is dismissed at the deadline (${String(timeout)} ms, limit ${String(limitMs)})`);
+      assert.ok(Reflect.get(opts, "signal") instanceof AbortSignal, `${label}: the card can be dismissed by a signal`);
     };
     const pendingFile = (id: string): string => path.join(consoleDir, "pending", `${id}.json`);
     const resolvedFile = (id: string): string => path.join(consoleDir, "resolved", `${id}.json`);
@@ -591,12 +651,202 @@ try {
         assert.equal(fs.existsSync(resolvedFile("held-late")), false, "a card that outlives nobody leaves no answer");
         ok("a card shown after a hold is bounded by the time left, not the full timeout");
       }
+
+      // 20. Every deferred card is handed its deadline, so pi dismisses it: a wrapper timeout alone
+      //     leaves the expired dialog focused, a late Enter lost and the next card stacked on top.
+      const pendingCard = (id: string, fields: Record<string, unknown>): void => {
+        fs.writeFileSync(pendingFile(id), JSON.stringify({ id, createdAt: new Date().toISOString(), timeoutMs: 20000, ...fields }));
+      };
+      await attempt("every deferred card gets its timeout and a signal", async () => {
+        typed = "because";
+        for (const [id, fields, cards] of [
+          ["card-menu", { kind: "approval", title: "T", choices: ["Allow once", "Deny"] }, 1],
+          ["card-tell", { kind: "approval", title: "T", choices: ["Deny and tell"] }, 2],
+          ["card-confirm", { kind: "approval", title: "T" }, 1],
+          ["card-question", { kind: "question", question: "Q", options: ["One"] }, 1],
+          ["card-other", { kind: "question", question: "Q", options: ["One"] }, 2],
+        ] as const) {
+          cardOptions.length = 0;
+          pick = id === "card-tell" ? "Deny and tell" : id === "card-other" ? "Other (type an answer)" : id === "card-question" ? "One" : "Allow once";
+          pendingCard(id, fields);
+          await until(() => cardOptions.length >= cards, 2500);
+          assert.equal(cardOptions.length, cards, `${id}: the expected cards opened`);
+          for (const opts of cardOptions) assertBounded(opts, 20000, id);
+        }
+        typed = undefined;
+      });
+
+      // 21. A held request tells the operator, once, instead of going quiet for its whole timeout.
+      await attempt("a child's request held behind an overlay shows one honest notice", async () => {
+        consoleNotices.length = 0;
+        selects.length = 0;
+        const hold = owner.holdInput("the workflow panel");
+        try {
+          pendingCard("noticed-plain", { kind: "approval", title: "T", toolName: "bash", choices: ["Allow once", "Deny"] });
+          fs.writeFileSync(pendingFile("noticed-run"), JSON.stringify({ ...runRequest("noticed-run", "e", 20000), toolName: "bash" }));
+          await sleep(2300);
+          assert.equal(selects.length, 0, "no card under the hold");
+          for (const id of ["noticed-plain", "noticed-run"]) fs.rmSync(pendingFile(id), { force: true });
+        } finally {
+          hold();
+        }
+        const held = consoleNotices.filter((n) => /close the workflow panel/.test(n));
+        assert.equal(held.length, 2, `one notice per held request, not one per poll: ${JSON.stringify(consoleNotices)}`);
+      });
+
+      // 22. createdAt comes from a pending file. A future date must not stretch the card, and a date
+      //     that does not parse is expired rather than given a new deadline on every poll.
+      await attempt("a pending file's createdAt cannot stretch a card or its deadline", async () => {
+        selects.length = 0;
+        cardOptions.length = 0;
+        pick = "Deny";
+        pendingCard("future-date", { kind: "approval", title: "T", choices: ["Allow once", "Deny"], createdAt: new Date(Date.now() + 3_600_000).toISOString(), timeoutMs: 5000 });
+        await until(() => cardOptions.length === 1, 2500);
+        assertBounded(cardOptions[0], 5000, "future-date");
+        selects.length = 0;
+        pendingCard("bad-date", { kind: "approval", title: "T", choices: ["Allow once", "Deny"], createdAt: "soon" });
+        await until(() => !fs.existsSync(pendingFile("bad-date")), 2500);
+        assert.equal(fs.existsSync(pendingFile("bad-date")), false, "an unparsable createdAt is expired and dropped");
+        assert.equal(selects.length, 0, "an unparsable createdAt is never shown");
+        assert.equal(fs.existsSync(resolvedFile("bad-date")), false, "and never answered");
+      });
+
+      // 23. ask_human passes only its declared fields: pi's validator keeps undeclared arguments, which
+      //     would otherwise turn a question into an approval, or join a workflow run's grants.
+      await attempt("ask_human files only its declared fields", async () => {
+        const headless = { cwd: ws, hasUI: false, ui: {} };
+        const asked = hpi.tools.get("ask_human").execute("smuggle", { question: "Marker question?", timeoutMs: 400, kind: "approval", workflowRun: "wf-smuggled", actionHash: "f".repeat(64), createdAt: "2000-01-01T00:00:00.000Z", title: "Injected title", choices: ["Allow once"], requester: { agent: "operator" } }, undefined, undefined, headless);
+        let filed: Record<string, unknown> | undefined;
+        const readFiled = (name: string): void => {
+          try {
+            const text = fs.readFileSync(path.join(path.dirname(pendingFile("x")), name), "utf8");
+            if (text.includes("Marker question?")) filed = JSON.parse(text) as Record<string, unknown>;
+          } catch {
+            /* the watcher took it, or it is still being written */
+          }
+        };
+        await until(() => {
+          fs.readdirSync(path.dirname(pendingFile("x"))).filter((name) => name.endsWith(".json")).forEach(readFiled);
+          return filed !== undefined;
+        }, 300);
+        await asked;
+        assert.ok(filed, "the question was filed");
+        assert.equal(filed.kind, "question", "kind cannot be overridden");
+        for (const field of ["workflowRun", "actionHash", "title", "choices"]) assert.equal(filed[field], undefined, `${field} is not declared and is not filed`);
+        assert.notEqual(filed.createdAt, "2000-01-01T00:00:00.000Z", "createdAt cannot be overridden");
+        assert.notDeepEqual(filed.requester, { agent: "operator" }, "requester cannot be overridden");
+      });
+
+      // 24. ask_human's own hold is bounded by its timeout too.
+      await attempt("a hold past ask_human's timeout answers nothing and shows no card", async () => {
+        selects.length = 0;
+        const hold = owner.holdInput("the workflow panel");
+        try {
+          const result = await Promise.race([hpi.tools.get("ask_human").execute("bounded", { question: "Q", options: ["A"], timeoutMs: 40 }, undefined, undefined, consoleCtx), sleep(500).then(() => "parked" as const)]);
+          assert.notEqual(result, "parked", "ask_human must not wait past its timeout under a hold");
+          assert.equal(selects.length, 0, "no card under the hold");
+        } finally {
+          hold();
+        }
+      });
     } finally {
       await hpi.handlers.get("session_shutdown")({}, consoleCtx);
       restoreConsole();
     }
   }
 
+  // 25. A trust prompt launches code: one Enter typed into an open box must not answer it.
+  await attempt("the project-agent trust prompt waits for an overlay, and an abort refuses", async () => {
+    fs.mkdirSync(path.join(ws, ".pi", "agents"), { recursive: true });
+    fs.writeFileSync(path.join(ws, ".pi", "agents", "held-role.md"), "---\nname: held-role\ndescription: fixture\ntools: read\n---\nheld\n");
+    const subagent = await loadExtension("vendor/subagent/index.ts");
+    const spi = fakePi();
+    subagent(spi.api);
+    let confirms = 0;
+    const ctx = { cwd: ws, hasUI: true, ui: { notify() {}, confirm: async (): Promise<boolean> => { confirms++; return false; } } };
+    const params = { agent: "held-role", task: "fixture", agentScope: "project", confirmProjectAgents: false };
+    const textOf = (result: { content: Array<{ type: string; text?: string }> }): string => result.content[0]?.text ?? "";
+    const hold = owner.holdInput("the test box");
+    const asked = spi.tools.get("subagent").execute("trust", params, undefined, undefined, ctx);
+    await sleep(60);
+    try {
+      assert.equal(confirms, 0, "the trust prompt must not open while an overlay holds input");
+    } finally {
+      hold();
+    }
+    assert.match(textOf(await asked), /Canceled/, "after the hold the operator's answer decides");
+    assert.equal(confirms, 1, "the prompt is shown once, after the hold");
+    const abort = new AbortController();
+    const second = owner.holdInput("the test box");
+    const aborted = spi.tools.get("subagent").execute("trust", params, abort.signal, undefined, ctx);
+    await sleep(20);
+    abort.abort();
+    const refused = textOf(await aborted);
+    second();
+    assert.match(refused, /Blocked|Canceled/, "aborting while input is held refuses");
+    assert.equal(confirms, 1, "an aborted request never shows the prompt");
+  });
+
+  // 26. The project-workflow trust prompt and the reduced-sandbox prompt are raised by a tool too.
+  await attempt("the project-workflow trust prompt waits for an overlay, and an abort refuses", async () => {
+    const tools = await loadModule<typeof WorkflowTools>("vendor/subagent/workflow-tools.ts");
+    let shown = 0;
+    const ctx = { cwd: ws, hasUI: true, ui: { select: async (): Promise<string> => { shown++; return "No, do not run it"; } } };
+    const gated = { name: "w", description: "d", source: "project" as const, file: "w.yaml" };
+    const abort = new AbortController();
+    const hold = owner.holdInput("the test box");
+    const aborted = tools.trustError(gated, "0".repeat(64), { ...ctx, signal: abort.signal });
+    await sleep(20);
+    assert.equal(shown, 0, "the trust prompt must not open while an overlay holds input");
+    abort.abort();
+    assert.match((await aborted) ?? "", /Blocked/, "aborting while input is held refuses");
+    hold();
+    assert.equal(shown, 0, "an aborted request never shows the prompt");
+  });
+  await attempt("the reduced-sandbox prompt waits for an overlay and a hold past its time reads as no", async () => {
+    const tool = await loadModule<typeof WfTool>("vendor/subagent/wf-tool.ts");
+    let shown = 0;
+    const abort = new AbortController();
+    const ui = tool.sandboxUi({ cwd: ws, hasUI: true, signal: abort.signal, ui: { select: async (): Promise<string> => { shown++; return "yes"; } } });
+    const hold = owner.holdInput("the test box");
+    const asked = ui.select?.("Reduced?", ["no", "yes"]);
+    await sleep(20);
+    assert.equal(shown, 0, "the sandbox prompt must not open while an overlay holds input");
+    abort.abort();
+    assert.equal(await asked, undefined, "aborting while input is held answers nothing, which declines");
+    hold();
+    assert.equal(shown, 0, "an aborted request never shows the prompt");
+  });
+
+  // 27. pi's /reload and every command parked on waitForIdle remove an overlay without settling it, so
+  //     `finally` never runs. Without this every approval then waits behind a box nobody can see, until
+  //     a restart. This drives pi's real session.reload(), with a `custom` that never settles.
+  await attempt("a reload drops the hold of an overlay it removed without settling", async () => {
+    const reloadHome = path.join(ws, "reload");
+    fs.mkdirSync(reloadHome, { recursive: true });
+    const noop = (): undefined => undefined;
+    const parkedUi = new Proxy<Record<string, unknown>>({ custom: () => new Promise(() => {}), select: async () => undefined, confirm: async () => false, input: async () => undefined }, { get: (target, key): unknown => Reflect.get(target, key) ?? noop });
+    const factories: ExtensionFactory[] = [await loadExtension("extensions/control-center/index.ts"), await loadExtension("vendor/subagent/index.ts")];
+    const settingsManager = SettingsManager.inMemory();
+    const resourceLoader = new DefaultResourceLoader({ cwd: ws, agentDir: reloadHome, settingsManager, noExtensions: true, noSkills: true, noPromptTemplates: true, noContextFiles: true, extensionFactories: factories });
+    await resourceLoader.reload();
+    const modelRuntime = await ModelRuntime.create({ authPath: path.join(reloadHome, "auth.json"), modelsPath: null, refreshOnCreate: false });
+    const { session } = await createAgentSession({ cwd: ws, agentDir: reloadHome, modelRuntime, tools: ["read"], resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(ws) });
+    try {
+      await session.bindExtensions({ uiContext: parkedUi as unknown as ExtensionUIContext, mode: "tui" });
+      for (const command of ["/kit", "/workflows"]) {
+        void session.prompt(command).catch(() => {});
+        await until(() => owner.inputHeld() !== undefined);
+        assert.ok(owner.inputHeld(), `${command} holds input`);
+        await session.reload();
+        assert.equal(owner.inputHeld(), undefined, `a reload drops the hold ${command} took`);
+      }
+    } finally {
+      session.dispose();
+    }
+  });
+
+  assert.deepEqual(failures, [], "every case above passed");
   console.log(`[firewall-overlay-queue-smoke] all ${checks} checks passed`);
 } finally {
   for (const r of restores.reverse()) r();

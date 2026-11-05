@@ -89,6 +89,7 @@ const B = await loadModule<typeof Broker>("extensions/human-console/run-broker.t
 const C = await loadModule<typeof Control>("vendor/subagent/control.ts");
 const runE = C.runControls.open("wf-e");
 const runF = C.runControls.open("wf-f");
+C.runControls.open("wf-g");
 
 interface Prompt { header: string; options: string[]; answer: (value: string | undefined) => void; done: boolean }
 const prompts: Prompt[] = [];
@@ -228,6 +229,37 @@ const openFor = (runId: string): Prompt[] => prompts.filter((p) => !p.done && p.
   assert.equal(runE.control.paused, true, "and the run stays paused");
   assert.equal(runF.control.paused, false, "Yes resumes it");
   ok("console: an 11th distinct approval pauses the run; No keeps it paused (the agent cannot resume it), Yes resumes it");
+}
+
+// 2e. The resume question is a keyboard card too: under an overlay it waits. The hold is taken once the
+// 11th approval is on screen, so the question is what the hold has to stop.
+{
+  const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+  const ids: string[] = [];
+  for (let i = 1; i <= 11; i++) ids.push(file("wf-g", `wf-g-${i}`));
+  const answered = (): number => ids.filter((id) => answerOf(id)).length;
+  while (answered() < 10) {
+    await until("a wf-g prompt", () => openFor("wf-g").length > 0);
+    const open = openFor("wf-g");
+    for (const p of open.slice(0, 10 - answered())) p.answer(B.RUN_CHOICE_ALLOW_ONCE);
+    await wait(60);
+  }
+  await until("the 11th wf-g prompt", () => openFor("wf-g").length === 1);
+  const release = holdInput("the workflow panel");
+  try {
+    openFor("wf-g")[0]?.answer(B.RUN_CHOICE_ALLOW_ONCE);
+    await until("the 11th wf-g answer", () => answerOf(ids[10] ?? "") !== null);
+    await wait(150);
+    assert.equal(prompts.some((p) => !p.done && p.header.startsWith("Workflow run wf-g has had 11")), false, "the resume question must not open while an overlay holds input");
+  } finally {
+    release();
+  }
+  await until("the wf-g resume question", () => prompts.some((p) => !p.done && p.header.startsWith("Workflow run wf-g has had 11")));
+  const question = prompts.find((p) => !p.done && p.header.startsWith("Workflow run wf-g has had 11"));
+  assert.ok(question, "the question is shown after the hold");
+  question.answer(B.PAUSE_CHOICE_NO);
+  await wait(30);
+  ok("console: the resume question waits for an open overlay");
 }
 
 // ---- 3. tool-firewall in a workflow child tags its request; the console's denial sticks --------

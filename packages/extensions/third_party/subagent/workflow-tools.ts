@@ -28,6 +28,7 @@ import {
   type WorkflowDef,
 } from "./workflow.ts";
 import type { ToolContext } from "./types.ts";
+import { showWhenFree } from "./shared/input-owner.ts";
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], details: undefined, ...(isError ? { isError: true } : {}) };
@@ -97,10 +98,14 @@ export async function trustError(w: Gated, digest: string, ctx: ToolContext, cal
   const envGrants = (process.env.PI_KIT_TRUSTED_WORKFLOWS ?? "").split(";").map((d) => d.trim());
   if (envGrants.includes(digest) || trustedDigests().includes(digest)) return null;
   if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: project workflow "${w.name}" needs interactive approval or a digest grant (sha256 ${digest} in PI_KIT_TRUSTED_WORKFLOWS, or trusted earlier with "Trust this digest").`;
-  const choice = await ctx.ui.select(
-    `Run project workflow "${w.name}"${calledFrom ? ` (called by workflow "${calledFrom}")` : ""}? ${w.description}\nSource: ${w.file}\nsha256: ${digest}\nOnly run workflows from repositories you trust.`,
-    [...TRUST_CHOICES],
+  // A tool raises this card, and a script can raise it mid-run: under an open overlay it waits.
+  const select = ctx.ui.select.bind(ctx.ui);
+  const asked = await showWhenFree(
+    (card) => select(`Run project workflow "${w.name}"${calledFrom ? ` (called by workflow "${calledFrom}")` : ""}? ${w.description}\nSource: ${w.file}\nsha256: ${digest}\nOnly run workflows from repositories you trust.`, [...TRUST_CHOICES], card),
+    { signal: ctx.signal, onHeld: (holder) => ctx.ui?.notify?.(`workflow ${w.name}: waiting for approval; close ${holder} to see it.`, "warning") },
   );
+  if (asked.kind !== "shown") return `Blocked: no operator approved project workflow "${w.name}".`;
+  const choice = asked.value;
   if (choice === TRUST_CHOICES[1]) return null;
   if (choice === TRUST_CHOICES[2]) {
     try {
@@ -145,10 +150,13 @@ export async function resumeWriterGate(w: WorkflowDef, state: RunState, agents: 
   if (!writers.length) return null;
   const names = writers.map((s) => s.id).join(", ");
   if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: run ${state.id} was interrupted while writer step(s) ${names} ran; they may have left partial changes. Resume it interactively (/workflow resume ${state.id}) to choose whether to re-run or skip them.`;
-  const choice = await ctx.ui.select(
-    `Run ${state.id} was interrupted while step(s) ${names} could write files. They may have left partial changes in the workspace or run directory.\nRe-run or skip them?`,
-    [...RESUME_WRITER_CHOICES],
+  const select = ctx.ui.select.bind(ctx.ui);
+  const asked = await showWhenFree(
+    (card) => select(`Run ${state.id} was interrupted while step(s) ${names} could write files. They may have left partial changes in the workspace or run directory.\nRe-run or skip them?`, [...RESUME_WRITER_CHOICES], card),
+    { signal: ctx.signal, onHeld: (holder) => ctx.ui?.notify?.(`workflow run ${state.id}: waiting for your answer; close ${holder} to see it.`, "warning") },
   );
+  if (asked.kind !== "shown") return `Blocked: no operator chose whether to re-run or skip step(s) ${names} of run ${state.id}.`;
+  const choice = asked.value;
   if (choice === RESUME_WRITER_CHOICES[1]) return null;
   if (choice === RESUME_WRITER_CHOICES[2]) {
     const now = new Date().toISOString();

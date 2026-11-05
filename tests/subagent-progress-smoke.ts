@@ -248,9 +248,47 @@ try {
     lookalike.child.stdout.write(toolEnd("t1"));
     lookalike.child.emit("close", 0);
     assert.equal((await lookalikeRun).exitCode, 0);
+
+    await __delegation.newTurn();
+
+    // (f2) a blank id is no id: pi could send it for parallel calls, and one Set entry would let the
+    // first end rearm the watchdog while the second call still runs. Blank and missing ids are one
+    // counted key, so two starts need two ends.
+    const blank = fakeIdleChild();
+    const blankRun = module.runSingleAgent(ws, agents, "scout", "blank ids", undefined, undefined, undefined, undefined, () => {
+      blank.child.stdout.write(jsonLine({ type: "tool_execution_start", toolCallId: "" }) + jsonLine({ type: "tool_execution_start", toolCallId: "" }));
+      return blank.child;
+    });
+    await sleep(50);
+    blank.child.stdout.write(jsonLine({ type: "tool_execution_end", toolCallId: "" }));
+    await sleep(600);
+    assert.equal(blank.child.killed, false, "a second call with a blank id still holds the watchdog after the first ends");
+    // A missing id is the same key, so it closes the second call.
+    blank.child.stdout.write(jsonLine({ type: "tool_execution_end" }));
+    assert.equal((await settledWithin(blankRun, 3000, "idle timeout")).stopReason, "timeout", "the last end rearms the watchdog");
   } finally {
     restoreIdleShort();
     restoreRetries();
+  }
+
+  // (f3) a limit above 2^31-1 ms must not overflow setTimeout, which would fire at once.
+  for (const [name, off] of [["PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS", "PI_KIT_SUBAGENT_MAX_RUNTIME_MS"], ["PI_KIT_SUBAGENT_MAX_RUNTIME_MS", "PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS"]] as const) {
+    await __delegation.newTurn();
+    const restoreHuge = setEnv(name, "3000000000");
+    const restoreOff = setEnv(off, "0");
+    const restoreRetriesHuge = setEnv("PI_KIT_SUBAGENT_RETRIES", "0");
+    try {
+      const huge = fakeIdleChild();
+      const hugeRun = module.runSingleAgent(ws, agents, "scout", "huge limit", undefined, undefined, undefined, undefined, () => huge.child);
+      await sleep(150);
+      assert.equal(huge.child.killed, false, `${name} above the timer limit must not fire at once`);
+      huge.child.emit("close", 0);
+      await hugeRun;
+    } finally {
+      restoreHuge();
+      restoreOff();
+      restoreRetriesHuge();
+    }
   }
 
   // (g) the wall-clock ceiling is independent of tool activity.

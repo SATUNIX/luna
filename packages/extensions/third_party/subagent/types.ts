@@ -110,8 +110,8 @@ export interface ToolContext {
   cwd?: string;
   hasUI?: boolean;
   ui?: {
-    confirm?(title: string, message: string): Promise<boolean>;
-    select?(title: string, options: string[]): Promise<string | undefined>;
+    confirm?(title: string, message: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<boolean>;
+    select?(title: string, options: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<string | undefined>;
     notify?(message: string, level?: string): void;
     // Footer/status-bar text. The subagent tool uses this to show a live run summary
     // (agent, elapsed, last action, run id) for human oversight and debugging.

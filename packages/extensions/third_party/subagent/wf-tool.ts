@@ -22,7 +22,8 @@ import type { StepResult } from "./run-contract.ts";
 import type { ToolContext } from "./types.ts";
 import { OMISSIONS_NAMED, startScriptRun, scriptRunsRoot, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
 import { parseScriptMeta } from "./wf-meta.ts";
-import { SandboxSession } from "./wf-sandbox.ts";
+import { SandboxSession, type ModeUi } from "./wf-sandbox.ts";
+import { showWhenFree } from "./shared/input-owner.ts";
 import { MAX_SCRIPT_BYTES, discoverWorkflows, workflowDirs } from "./workflow.ts";
 import { openScriptWorkflow, trustError } from "./workflow-tools.ts";
 
@@ -192,6 +193,25 @@ export function formatCompletion(o: RunOutcome): string {
   return lines.join("\n");
 }
 
+/**
+ * The reduced-sandbox question as a tool raises it: under an open overlay it waits, and an abort or a
+ * hold past its time answers nothing, which declines for the session as Escape does.
+ */
+export function sandboxUi(ctx: ToolContext): ModeUi {
+  const select = ctx.ui?.select?.bind(ctx.ui);
+  if (!select) return { hasUI: ctx.hasUI === true };
+  return {
+    hasUI: ctx.hasUI === true,
+    select: async (title, options) => {
+      const asked = await showWhenFree((card) => select(title, options, card), {
+        signal: ctx.signal,
+        onHeld: (holder) => ctx.ui?.notify?.(`workflow: the sandbox question is waiting; close ${holder} to see it.`, "warning"),
+      });
+      return asked.kind === "shown" ? asked.value : undefined;
+    },
+  };
+}
+
 export interface ScriptToolDeps {
   sandbox?: SandboxSession;
   /** Test seams: engine options laid over the ones the tool builds. */
@@ -240,7 +260,7 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
         if (opened.error !== undefined) return textResult(opened.error, true);
         spec = { name: opened.def.name, description: opened.def.description, phases: opened.def.phases, source: opened.source, file: opened.def.file };
       }
-      const mode = await sandbox.prepare({ hasUI: ctx.hasUI === true, ...(ctx.ui?.select ? { select: ctx.ui.select.bind(ctx.ui) } : {}) });
+      const mode = await sandbox.prepare(sandboxUi(ctx));
       if (!mode.ok) return textResult(mode.error, true);
       const budget = standingBudget();
       const started = startScriptRun(spec, params.args, {

@@ -382,6 +382,20 @@ steps:
     gs.status = "interrupted";
     gs.steps.review = { status: "aborted", attempts: 1, runIds: [], cost: 0 };
     const selectSkip = { cwd: ws, hasUI: true, ui: { select: () => Promise.resolve("Skip the interrupted step(s)"), setStatus: () => {} } };
+    // The gate is a keyboard card: under an open overlay it waits, and an abort during the wait refuses.
+    {
+      const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+      let shown = 0;
+      const counting = { ...selectSkip, ui: { ...selectSkip.ui, select: () => { shown++; return Promise.resolve("Skip the interrupted step(s)"); } } };
+      const abort = new AbortController();
+      const hold = holdInput("the test box");
+      const aborted = T.resumeWriterGate(gd, gs, agents, { ...counting, signal: abort.signal });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      abort.abort();
+      assert.match((await aborted) ?? "", /Blocked/, "aborting while input is held refuses the resume");
+      assert.equal(shown, 0, "the gate's card must not open while an overlay holds input");
+      hold();
+    }
     assert.equal(await T.resumeWriterGate(gd, gs, agents, selectSkip), null);
     assert.equal(gs.cursor, 0, "a skipped gate step is not stepped past");
     gs.status = "running";

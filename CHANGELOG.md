@@ -10,6 +10,25 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- Holding prompts behind an open overlay now covers every prompt an agent can raise on its own: the
+  project-agent, specialist and project-workflow trust prompts, the resume prompts and the
+  reduced-sandbox and wake-chain questions join approvals and `ask_human`. A hold and its card share one
+  timeout, so an overlay left open fails closed; a reload drops the hold; a pentest action asks scope
+  and RoE again after the wait and after the Yes; deferred cards are dismissed by pi at their deadline
+  and tell you when an overlay holds them (`tests/firewall-overlay-queue-smoke.ts`,
+  `tests/governance-smoke.ts`).
+- E1 also hides `dual_review` and `dispatch_specialist`, and recovery no longer brings `workflow` back
+  at E1, where a run scope always refuses it (`tests/effort-smoke.ts`). `workflow_status` and
+  the `pause` and `stop` actions of `workflow_control` pass pentest MCP-only mode; `resume` and `skip`
+  stay blocked (`tests/governance-smoke.ts`).
+- The idle watchdog counts open tool calls per id, holds a conductor specialist's too, and a limit
+  above 2^31-1 ms no longer fires at once. A specialist now has a 30-minute wall clock by default, as
+  a subagent does, so a hung tool cannot pin the parent (`PI_KIT_SPECIALIST_MAX_RUNTIME_MS`, 0 turns
+  it off; `tests/subagent-progress-smoke.ts`, `tests/conductor-specialist-bounds-smoke.ts`).
+- `ask_human` files only its declared fields: an undeclared argument can no longer set `kind`,
+  `workflowRun`, `actionHash`, `createdAt` or a card's text. A pending request's `createdAt` can no
+  longer stretch its card, and one that does not parse is expired (`tests/firewall-overlay-queue-smoke.ts`).
+
 - Self-improve cycles can add a test without `allowControlChanges`: a root `package.json` change that
   only adds `smoke:<name>` scripts running exactly `node tests/<name>-smoke.ts`, leaving every existing
   script as it was, is no longer a control change (`tests/autonomy-review-inputs-smoke.ts`). Any other

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
-import { inputHeld, whenInputFree } from "./shared/input-owner.ts";
+import { inputHeld, showWhenFree, whenInputFree } from "./shared/input-owner.ts";
 
 const POLL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 900000;
@@ -107,17 +107,28 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
   }
 }
 
-async function answerQuestion(ctx: UiContext, request: Pending, signal?: AbortSignal, timeoutMs?: number): Promise<{ approved: boolean; answer: string | null }> {
+// Each card of a request is handed what is left of its time and the signal, so pi itself dismisses it.
+// The wrapper's timer alone would leave an expired dialog focused, a late Enter lost and the next card
+// stacked on top of it.
+function cardBudget(timeoutMs: number, signal?: AbortSignal): () => { timeout: number; signal?: AbortSignal } {
+  const deadline = Date.now() + timeoutMs;
+  return () => ({ timeout: Math.max(1, deadline - Date.now()), ...(signal ? { signal } : {}) });
+}
+
+async function answerQuestion(ctx: UiContext, request: Pending, signal: AbortSignal | undefined, timeoutMs: number): Promise<{ approved: boolean; answer: string | null }> {
   const options: string[] = Array.isArray(request.options) ? request.options.filter(isString) : [];
   const question = text(request.question ?? "");
+  const nextCard = cardBudget(timeoutMs, signal);
   if (options.length && ctx.ui?.select) {
     const other = "Other (type an answer)";
-    const selection = await waitForUi(ctx.ui.select(question, [...options, other]), timeoutMs, signal);
+    const card = nextCard();
+    const selection = await waitForUi(ctx.ui.select(question, [...options, other], card), card.timeout, signal);
     if (!selection.settled) return { approved: false, answer: null };
     const selected = selection.value;
     if (selected && selected !== other) return { approved: true, answer: selected };
   }
-  const input = ctx.ui?.input ? await waitForUi(ctx.ui.input(question, text(request.context || "")), timeoutMs, signal) : { settled: true, value: null };
+  const inputCard = nextCard();
+  const input = ctx.ui?.input ? await waitForUi(ctx.ui.input(question, text(request.context || ""), inputCard), inputCard.timeout, signal) : { settled: true, value: null };
   if (!input.settled) return { approved: false, answer: null };
   const answer = input.value;
   return { approved: Boolean(answer), answer: typeof answer === "string" && answer.trim() ? answer : null };
@@ -127,24 +138,28 @@ async function answerQuestion(ctx: UiContext, request: Pending, signal?: AbortSi
 // and tell) is shown as a menu; the title and card go in the menu header. Choices starting
 // with "Allow" approve; "Deny and tell…" also collects a note for the agent. Without choices
 // (or without a select UI) it stays a yes/no confirm.
-async function answerApproval(ctx: UiContext, request: Pending, timeoutMs: number | undefined): Promise<{ approved: boolean; answer: string | null; note?: string | null }> {
+async function answerApproval(ctx: UiContext, request: Pending, timeoutMs: number, signal?: AbortSignal): Promise<{ approved: boolean; answer: string | null; note?: string | null }> {
   const choices: string[] = Array.isArray(request.choices) ? request.choices.filter((x: unknown): x is string => typeof x === "string" && x.trim() !== "").slice(0, 6) : [];
   const title = text(request.title || "Approve tool call?");
   const body = text(request.body || "");
+  const nextCard = cardBudget(timeoutMs, signal);
   if (choices.length && typeof ctx.ui?.select === "function") {
     const header = [title, body].filter(Boolean).join("\n");
-    const picked = await waitForUi(ctx.ui.select(header, choices), timeoutMs);
+    const card = nextCard();
+    const picked = await waitForUi(ctx.ui.select(header, choices, card), card.timeout, signal);
     const choice = picked.settled && typeof picked.value === "string" ? picked.value : null;
     if (!choice) return { approved: false, answer: null };
     if (/^allow/i.test(choice)) return { approved: true, answer: choice };
     let note: string | null = null;
     if (/tell/i.test(choice) && typeof ctx.ui?.input === "function") {
-      const typed = await waitForUi(ctx.ui.input("Tell the agent why (it sees this):", "e.g. don't touch production; use the staging host"), timeoutMs);
+      const noteCard = nextCard();
+      const typed = await waitForUi(ctx.ui.input("Tell the agent why (it sees this):", "e.g. don't touch production; use the staging host", noteCard), noteCard.timeout, signal);
       note = typed.settled && typeof typed.value === "string" && typed.value.trim() ? typed.value.trim() : null;
     }
     return { approved: false, answer: choice, note };
   }
-  const confirmation = ctx.ui?.confirm ? await waitForUi(ctx.ui.confirm(title, body), timeoutMs) : { settled: true, value: false };
+  const confirmCard = nextCard();
+  const confirmation = ctx.ui?.confirm ? await waitForUi(ctx.ui.confirm(title, body, confirmCard), confirmCard.timeout, signal) : { settled: true, value: false };
   return { approved: confirmation.settled && confirmation.value === true, answer: null };
 }
 
@@ -166,9 +181,17 @@ function controlWorkflowRun(runId: string, action: "pause" | "resume"): { ok: bo
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 }
+// createdAt comes from a file. A date that does not parse is expired, not given a new deadline on each
+// poll; every requester stamps one, so only a damaged or foreign request lacks it.
 function deadlineOf(request: Pending): number {
-  const createdMs = Date.parse(text(request.createdAt)) || Date.now();
+  const createdMs = Date.parse(text(request.createdAt));
+  if (Number.isNaN(createdMs)) return 0;
   return createdMs + (requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS);
+}
+// How long a card may stay open: the time left, and never more than the request asked for, so a future
+// createdAt cannot stretch it.
+function cardMs(request: Pending, deadline: number): number {
+  return Math.max(1, Math.min(deadline - Date.now(), requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS));
 }
 // Write the answer for a pending request and remove the pending file. The pending file may already
 // be gone (another resolver, or a requester that gave up): a missing file is success, not an error.
@@ -196,6 +219,23 @@ function stickyNote(runId: string, note?: string | null): string {
 
 export default function humanConsole(pi: ExtensionAPI) {
   const runBroker = new RunApprovalBroker();
+  // Requests the operator has been told are waiting behind an overlay: one notice each, not one a poll.
+  const heldNoticed = new Set<string>();
+  // Dismisses open deferred cards when the session ends.
+  let cards = new AbortController();
+  const noteHeld = (ctx: ExtensionContext, id: string, request: Pending, holder: string) => {
+    if (heldNoticed.has(id)) return;
+    heldNoticed.add(id);
+    const what = request.kind === "question" ? "A child's question" : `A child's approval (${text(request.toolName || "tool call")})`;
+    ctx.ui?.notify?.(`human-console: ${what} is waiting; close ${holder} to see it. It is refused at its timeout if ${holder} stays open.`, "warning");
+    audit(ctx.cwd, { event: "human_console_held", id, holder });
+  };
+  // A request nobody can answer any more: the requester has failed closed, so drop its file and say so.
+  const expire = (ctx: ExtensionContext, id: string, file: string) => {
+    if (heldNoticed.delete(id)) ctx.ui?.notify?.("human-console: a child's request ran out of time and was refused.", "warning");
+    audit(ctx.cwd, { event: "human_console_expired", id });
+    try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
+  };
   // A grouped request takes the shown request's answer, if it is still pending and in time.
   const answerMember = (ctx: ExtensionContext, id: string, result: Answer) => {
     const file = path.join(pendingDir(ctx.cwd), `${id}.json`);
@@ -216,8 +256,14 @@ export default function humanConsole(pi: ExtensionAPI) {
       const header = `Workflow run ${runId} has had ${distinct} distinct actions approved, so it is paused: no new agents start.\nResume it?`;
       let resume = false;
       if (typeof ctx.ui?.select === "function") {
-        const picked = await waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES]), DEFAULT_TIMEOUT_MS);
-        resume = picked.settled && picked.value === PAUSE_CHOICE_YES;
+        // Keys meant for an open overlay must not answer this. A hold that outlasts it leaves the run
+        // paused, the same as No: /workflow resume still lifts it.
+        const asked = await showWhenFree((card) => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal), {
+          signal: cards.signal,
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          onHeld: (holder) => ctx.ui?.notify?.(`human-console: workflow run ${runId} is paused and asks to resume; close ${holder} to answer.`, "warning"),
+        });
+        resume = asked.kind === "shown" && asked.value.settled && asked.value.value === PAUSE_CHOICE_YES;
       }
       if (resume) controlWorkflowRun(runId, "resume");
       audit(ctx.cwd, { event: "workflow_approvals_resume_answer", runId, resumed: resume });
@@ -229,7 +275,7 @@ export default function humanConsole(pi: ExtensionAPI) {
     const deadline = deadlineOf(request);
     if (Date.now() > deadline) {
       runBroker.leave(run);
-      try { fs.unlinkSync(file); } catch { /* already removed */ }
+      expire(ctx, run.id, file);
       return;
     }
     const offer = runBroker.offer(run);
@@ -240,17 +286,22 @@ export default function humanConsole(pi: ExtensionAPI) {
       return;
     }
     // No card while an overlay owns the keyboard (see processOne); give the slot back and retry.
-    if (inputHeld()) {
+    const holder = inputHeld();
+    if (holder) {
+      noteHeld(ctx, run.id, request, holder);
       runBroker.abandon(run);
       return;
     }
     let settled = false;
+    const { signal } = cards;
     try {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}`;
-      const result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, Math.max(1, deadline - Date.now()));
+      const result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal);
+      // The session ended under the card: nobody answered, and the requester's own deadline decides.
+      if (signal.aborted) return;
       // No answer before the requester's deadline: it has already failed closed; decide nothing.
       if (!result.approved && result.answer === null && Date.now() >= deadline) {
-        try { fs.unlinkSync(file); } catch { /* already removed */ }
+        expire(ctx, run.id, file);
         return;
       }
       const approved = result.approved;
@@ -297,25 +348,31 @@ export default function humanConsole(pi: ExtensionAPI) {
       // A deferred request may have run out behind an overlay. Its requester has failed closed, so
       // there is nothing to ask; this runs before the hold check so that the drop is not held up.
       const deadline = deadlineOf(request);
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        try { fs.unlinkSync(file); } catch { /* already removed */ }
+      if (deadline - Date.now() <= 0) {
+        expire(ctx, id, file);
         return;
       }
       // An open overlay owns the keyboard (V-02): `select` would take focus from it, and keys typed
       // into it could answer a child's card. Leave the pending file for a later poll; the requester's
       // own deadline still fails closed. The check is per request, not per scan, so that a run grant
       // or a sticky deny, which needs no card, is not stalled behind the workflow panel.
-      if (inputHeld()) return;
+      const holder = inputHeld();
+      if (holder) {
+        noteHeld(ctx, id, request, holder);
+        return;
+      }
       // The card runs for the time left, not the full timeout: past the deadline an answer is discarded.
+      const { signal } = cards;
       let result: Answer;
-      if (request.kind === "approval") result = await answerApproval(ctx, request, remainingMs);
-      else result = await answerQuestion(ctx, request, undefined, remainingMs);
+      if (request.kind === "approval") result = await answerApproval(ctx, request, cardMs(request, deadline), signal);
+      else result = await answerQuestion(ctx, request, signal, cardMs(request, deadline));
+      // The session ended under the card: nobody answered, and the requester's own deadline decides.
+      if (signal.aborted) return;
       if (Date.now() >= deadline) {
         // The requester gave up at its deadline (brokerRequest unlinks both files in its
         // finally); do not recreate an orphan resolved file. Drop the pending file too so
         // the watcher does not re-answer it forever.
-        try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
+        expire(ctx, id, file);
         return;
       }
       // writeAnswer tolerates a pending file that is already gone: an unguarded unlinkSync
@@ -327,7 +384,10 @@ export default function humanConsole(pi: ExtensionAPI) {
     try {
       ensure(ctx.cwd);
       pruneInvalid(ctx.cwd);
-      for (const name of fs.readdirSync(pendingDir(ctx.cwd)).filter((f) => f.endsWith(".json"))) {
+      const names = fs.readdirSync(pendingDir(ctx.cwd)).filter((f) => f.endsWith(".json"));
+      // A request its requester has taken back needs no further notice.
+      for (const id of heldNoticed) if (!names.includes(`${id}.json`)) heldNoticed.delete(id);
+      for (const name of names) {
         const file = path.join(pendingDir(ctx.cwd), name);
         if (processing.has(file)) continue;
         processing.add(file);
@@ -352,6 +412,7 @@ export default function humanConsole(pi: ExtensionAPI) {
   };
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
+    cards = new AbortController();
     // The interactive console is the only creator of the answer key (console-auth.ts): requesters
     // started after this find it; one started before reports that the console must start first.
     const key = loadConsoleKey({ create: true });
@@ -359,19 +420,26 @@ export default function humanConsole(pi: ExtensionAPI) {
     processPending(ctx);
     watcher = setInterval(() => { processPending(ctx); }, POLL_MS); watcher.unref?.();
   });
-  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; runBroker.clear(); });
+  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; cards.abort(); heldNoticed.clear(); runBroker.clear(); });
   pi.registerTool({ name: "ask_human", label: "Ask human", description: "Ask the operator a concise clarifying question.", parameters: Type.Object({ question: Type.String(), options: Type.Optional(Type.Array(Type.String())), context: Type.Optional(Type.String()), timeoutMs: Type.Optional(Type.Number({ minimum: 1 })) }), async execute(_id, params, signal, _onUpdate, ctx) {
     let answer: string | null;
+    // Only the declared fields: pi's validator keeps undeclared arguments, and the model must not reach
+    // kind, workflowRun, actionHash, createdAt or a card's text through them.
+    const question: Pending = { question: params.question, ...(params.options === undefined ? {} : { options: params.options }), ...(params.context === undefined ? {} : { context: params.context }), ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }) };
     // An interactive question is bounded too: a UI that never answers (a closed terminal, an RPC client that ignores
     // the request) must not park the agent for ever. Without a timeoutMs of its own it gets the console's timeout.
     if (ctx.hasUI && ctx.ui) {
       // An open overlay owns the keyboard here too (see processOne): `select` would take focus and Enter
-      // would return the first option as the human's answer. The timeout starts when the card is shown.
-      if ((await whenInputFree(signal)) === "aborted") return { content: [{ type: "text" as const, text: "No human answered in time." }], details: { answer: null } };
-      answer = (await answerQuestion(ctx, { kind: "question", ...params }, signal, requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)))).answer;
+      // would return the first option as the human's answer. The wait and the card share the timeout.
+      const timeoutMs = requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)) ?? DEFAULT_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
+      const holder = inputHeld();
+      if (holder) ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning");
+      if ((await whenInputFree(signal, timeoutMs)) !== "free") return { content: [{ type: "text" as const, text: "No human answered in time." }], details: { answer: null } };
+      answer = (await answerQuestion(ctx, { kind: "question", ...question }, signal, Math.max(1, deadline - Date.now()))).answer;
     } else {
       const id = crypto.randomUUID(); audit(ctx.cwd, { event: "ask_human_pending", id });
-      const outcome = await brokerRequest(ctx.cwd, { id, kind: "question", requester: requester(ctx), ...params }, signal);
+      const outcome = await brokerRequest(ctx.cwd, { ...question, id, kind: "question", requester: requester(ctx) }, signal);
       answer = outcome.answer;
       audit(ctx.cwd, { event: outcome.timedOut ? "ask_human_timeout" : "ask_human_resolved", id });
     }

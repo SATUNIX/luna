@@ -18,7 +18,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { getOrCreateControls } from "./controls.ts";
 import { buildModel, PAGES } from "./model.ts";
-import { openHub, terminalConfirm, type CommandInfo, type HubDeps } from "./hub.ts";
+import { openHub, releaseHubHolds, terminalConfirm, type CommandInfo, type HubDeps } from "./hub.ts";
 import { readMarker, readCompaction, readDelegation, readEffort, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
 import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts";
 import { builtinCommandNames } from "./builtins.ts";
@@ -112,6 +112,10 @@ export default function controlCenter(pi: ExtensionAPI): void {
 
   // Publish the registry at load so an owning extension can register before the hub ever opens.
   getOrCreateControls();
+  // pi's reload removes an open hub without settling it, so its hold ends here or never.
+  pi.on("session_shutdown", () => {
+    releaseHubHolds();
+  });
   const hubKey = readHubKey();
 
   const open = async (args: string | string[], ctx: ExtensionCommandContext): Promise<void> => {

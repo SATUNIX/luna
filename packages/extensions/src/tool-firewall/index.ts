@@ -511,8 +511,7 @@ export function promptTimeoutMs(): number {
 
 type Prompted<T> = { kind: "answered"; value: T } | { kind: "timeout" } | { kind: "aborted" } | { kind: "error"; message: string };
 
-function boundedPrompt<T>(ctx: ExtensionContext, run: (opts: ExtensionUIDialogOptions & { timeout: number }) => Promise<T> | T): Promise<Prompted<T>> {
-  const timeout = promptTimeoutMs();
+function boundedPrompt<T>(ctx: ExtensionContext, run: (opts: ExtensionUIDialogOptions & { timeout: number }) => Promise<T> | T, timeout: number = promptTimeoutMs()): Promise<Prompted<T>> {
   const signal: AbortSignal | undefined = ctx?.signal;
   return new Promise((resolve) => {
     let done = false;
@@ -1128,8 +1127,8 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
             : why === "error"
               ? `the approval prompt failed (${detail})`
               : via === "console"
-                ? `none arrived within ${secs}s (headless: no attended session answered the human console)`
-                : `none arrived within ${secs}s (the approval prompt was not answered)`;
+                ? `none arrived within ${secs}s (no attended session answered the human console, or an open overlay held the card there)`
+                : `none arrived within ${secs}s (${detail ?? "the approval prompt was not answered"})`;
       return blocked(`tool-firewall: denied ${toolName} [${TAG.uncertain}: no operator decision] — ${summary}. ${uncertain ? "The automatic checks could not settle this, and it" : "It"} needs operator approval, and ${what}. Nothing ran. Ask the user to approve it or to run it themselves, or choose a lower-impact approach; do not retry it unchanged.`, why === "timeout" ? (via === "console" ? "broker_timeout" : "prompt_timeout") : why, "uncertain", { why });
     };
 
@@ -1139,21 +1138,24 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
 
     // An open overlay owns the keyboard (V-02): pi's `select`/`confirm` pushes a dialog and calls
     // `tui.setFocus`, so a card shown meanwhile takes focus from the box and keys typed into it can
-    // answer the card. Wait for the overlay to close with one notice, outside `boundedPrompt`, so the
-    // prompt timeout only starts when the card is actually shown. The broker path below is unchanged.
+    // answer the card. Wait for the overlay to close with one notice. The wait and the card share the
+    // prompt timeout, so an overlay left open, or opened from a linked phone, fails closed like an
+    // unanswered card instead of parking the call. The broker path below is unchanged.
+    const promptMs = promptTimeoutMs();
+    const promptDeadline = Date.now() + promptMs;
+    const promptLeft = (): number => Math.max(1, promptDeadline - Date.now());
     if (ctx?.hasUI && (typeof ctx.ui?.select === "function" || typeof ctx.ui?.confirm === "function")) {
       const holder = inputHeld();
       if (holder) {
         ctx.ui?.notify?.(`tool-firewall: ${toolName} is waiting for approval; close ${holder} to see it.`, "warning");
-        // Re-check after each wait: another overlay can take the keyboard before the card is shown.
-        while (inputHeld()) {
-          if ((await whenInputFree(ctx?.signal)) === "aborted") return noAnswer("aborted", "prompt", 0);
-        }
+        const waited = await whenInputFree(ctx?.signal, promptMs);
+        if (waited === "aborted") return noAnswer("aborted", "prompt", 0);
+        if (waited === "timeout") return noAnswer("timeout", "prompt", Math.round(promptMs / 1000), `an open overlay, ${holder}, held the card`);
       }
     }
 
     if (ctx?.hasUI && typeof ctx.ui?.select === "function") {
-      const res = await boundedPrompt(ctx, (o) => ctx.ui.select(card, choices, o));
+      const res = await boundedPrompt(ctx, (o) => ctx.ui.select(card, choices, o), promptLeft());
       if (res.kind === "aborted") return noAnswer("aborted", "prompt", 0);
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);
@@ -1179,7 +1181,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     let picked: string | undefined;
     if (ctx?.hasUI && typeof ctx.ui?.confirm === "function") {
       // The answer comes from a UI implementation: only a literal `true` approves.
-      const res = await boundedPrompt<unknown>(ctx, (o) => ctx.ui.confirm("Approve tool call?", card, o));
+      const res = await boundedPrompt<unknown>(ctx, (o) => ctx.ui.confirm("Approve tool call?", card, o), promptLeft());
       if (res.kind === "aborted") return noAnswer("aborted", "prompt", 0);
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);

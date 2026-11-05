@@ -99,9 +99,11 @@ sequenceDiagram
     Child-->>Ledger: settle (no refund)
 ```
 
-At **E1** the model-launchable delegation tools are not even offered (their descriptions cost
-around 1,200 tokens a turn and could only be refused); they return at the next message after a
-higher tier is chosen.
+At **E1** the model-launchable delegation tools (`subagent`, `workflow_run`, `workflow`,
+`dual_review` and `dispatch_specialist`) are not even offered: their descriptions cost around 1,200
+tokens a turn and they could only be refused. They return at the next message after a higher tier is
+chosen. Recovery brings them back at E1 too, except `workflow`, which a run scope always refuses
+there (`tests/effort-smoke.ts`).
 
 Three kinds of launch are accounted separately from the discretionary budget above:
 
@@ -146,7 +148,8 @@ the token is written to disk. The scope lives in the session's workflow ledger
 (`<agent dir>/pi-kit/effort/ledgers/<session>-workflows.json`), a separate file that the per-turn
 ledger rotation never replaces, so a run that keeps going across your messages keeps its count. A
 run id is opened once; child processes cannot open runs, and a tier with a maximum total of 0 (E1)
-refuses with code `tier`, while `/workflow run` stays available there as a user launch. The workflow ledger is created only when
+refuses with code `tier`, while `/workflow run` stays available there as a user launch
+(`tests/effort-smoke.ts`). The workflow ledger is created only when
 no file exists there. An existing file that cannot be read, or that has no workflow section, is
 never replaced: opening a run and reserving both refuse with code `no-ledger`, so a corrupt or
 edited file cannot reset the session's count. Workflow agents never draw on the tier

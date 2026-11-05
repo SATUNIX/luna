@@ -5,8 +5,11 @@
  * Why it exists: pi's `ctx.ui.select()` pushes a dialog and calls `tui.setFocus()`, so a card shown
  * while `ctx.ui.custom()` has an overlay open takes the keyboard away from that overlay. Keys the
  * operator is typing into the box then answer the card, and Enter picks its first choice. The
- * firewall, the human console and the pentest gate ask this registry before they prompt, and the two overlays in the
- * kit (control-center's hub and the subagent workflow panel) hold input while they are open.
+ * firewall, the human console, the pentest gate and every other prompt an agent can raise on its own
+ * (the list is in docs/security.md) ask this registry before they prompt, and the two overlays in the
+ * kit (control-center's hub and the subagent workflow panel) hold input while they are open. A holder
+ * also releases on `session_shutdown`: pi's reload removes an overlay without settling `ui.custom`, so
+ * a `finally` alone would leave the hold in this process-wide registry until a restart.
  *
  * Extensions are self-contained and may not import each other, so this module is the canonical
  * source and every consumer holds a generated, byte-checked copy (`npm run gen:shared`; `npm run
@@ -17,6 +20,15 @@
 
 /** The `globalThis` key every copy shares. */
 const KEY = Symbol.for("pi-kit.input-owner");
+
+const DEFAULT_CARD_TIMEOUT_MS = 900_000;
+// setTimeout fires at once above this.
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** How long a prompt with no timeout of its own waits for an overlay and for its answer: the console's timeout. */
+export function cardTimeoutMs(): number {
+  return Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_CARD_TIMEOUT_MS);
+}
 
 export interface InputOwner {
   /** Take a hold for the overlay named `label`; returns an idempotent release. */
@@ -102,7 +114,53 @@ export function inputHeld(): string | undefined {
   return inputOwnerRegistry().inputHeld();
 }
 
-/** Resolve "free" when no overlay holds input; "aborted" when `signal` aborts first. */
-export function whenInputFree(signal?: AbortSignal): Promise<"free" | "aborted"> {
-  return inputOwnerRegistry().whenInputFree(signal);
+/**
+ * Resolve "free" when no overlay holds input, "aborted" when `signal` aborts first, "timeout" when
+ * `timeoutMs` passes first. A request for a card must pass a timeout: nothing waits forever unattended.
+ */
+export async function whenInputFree(signal?: AbortSignal, timeoutMs?: number): Promise<"free" | "aborted" | "timeout"> {
+  const owner = inputOwnerRegistry();
+  const expiry = new AbortController();
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => expiry.abort(), Math.min(timeoutMs, MAX_TIMER_MS));
+  const wait = signal ? AbortSignal.any([signal, expiry.signal]) : expiry.signal;
+  try {
+    // Re-check after each wait: another overlay can take the keyboard before the card is shown.
+    for (;;) {
+      const result = await owner.whenInputFree(wait);
+      if (signal?.aborted) return "aborted";
+      if (result === "aborted") return "timeout";
+      if (!owner.inputHeld()) return "free";
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The options a held card is opened with: pi dismisses it at `timeout`, or when `signal` aborts. */
+export interface CardOptions {
+  timeout: number;
+  signal?: AbortSignal;
+}
+
+export interface ShowWhenFreeOptions {
+  signal?: AbortSignal | undefined;
+  /** The bound on the hold and the card together. */
+  timeoutMs?: number | undefined;
+  /** Called once, with the holder's label, when the card has to wait. */
+  onHeld?: ((holder: string) => void) | undefined;
+}
+
+/**
+ * Show a card once no overlay holds input. The wait and the card share one deadline, and pi is given
+ * what is left of it, so an overlay left open fails closed instead of parking the caller.
+ */
+export async function showWhenFree<T>(show: (card: CardOptions) => Promise<T>, options: ShowWhenFreeOptions = {}): Promise<{ kind: "shown"; value: T } | { kind: "aborted" | "timeout" }> {
+  const { signal, timeoutMs = cardTimeoutMs(), onHeld } = options;
+  const deadline = Date.now() + timeoutMs;
+  const holder = inputHeld();
+  if (holder) onHeld?.(holder);
+  const waited = await whenInputFree(signal, timeoutMs);
+  if (waited !== "free") return { kind: waited };
+  const card: CardOptions = { timeout: Math.min(Math.max(1, deadline - Date.now()), MAX_TIMER_MS), ...(signal ? { signal } : {}) };
+  return { kind: "shown", value: await show(card) };
 }

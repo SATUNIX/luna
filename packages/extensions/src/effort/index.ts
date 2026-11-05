@@ -8,6 +8,7 @@ import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt,
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
 import type { StandingState } from "./standing.ts";
+import { showWhenFree } from "./shared/input-owner.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer, plus this extension's own
 // files. No sibling-extension imports. See CONTRIBUTING.md.
@@ -136,7 +137,9 @@ function unbudgeted(childTier: string): Reservation {
 }
 
 /** Tools through which the model starts children of its own accord. Hidden while the tier allows none. */
-export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow"];
+export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist"];
+/** Hidden at such a tier even in recovery: openRunScope refuses them there whatever recovery does. */
+const NO_RUN_SCOPE_TOOLS = ["workflow"];
 
 const USAGE_REFRESH_MS = 2000;
 const LEDGER_KEEP_MS = 24 * 60 * 60 * 1000;
@@ -399,26 +402,23 @@ export default function (pi: ExtensionAPI) {
    * Keep the model-launchable delegation tools out of the prompt while the tier allows no
    * delegation (E1): their descriptions cost about 1,200 tokens a turn and could only ever be
    * refused. They come back at the next user turn after a higher tier is chosen, and while the
-   * trusted recovery extension has recovery active (recovery may start read-only scouts). Only
-   * tools this extension removed are ever restored; a tool the profile or operator removed stays
-   * removed. Skipped quietly on a pi without active-tool control.
+   * trusted recovery extension has recovery active (recovery may start read-only scouts), except
+   * the workflow tool, which only ever reaches the scope refusal at that tier, after asking the
+   * operator for approvals. Only tools this extension removed are ever restored; a tool the profile
+   * or operator removed stays removed. Skipped quietly on a pi without active-tool control.
    */
   function syncDelegationTools(): void {
     try {
       if (!active || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
-      const noDelegation = limitsFor(active.tier).maxTotal === 0 && !recoveryOn;
+      const noDelegation = limitsFor(active.tier).maxTotal === 0;
+      const hide = noDelegation ? (recoveryOn ? NO_RUN_SCOPE_TOOLS : DELEGATION_TOOLS) : [];
       const current = pi.getActiveTools();
-      let next = current;
-      if (noDelegation) {
-        const remove = DELEGATION_TOOLS.filter((t) => current.includes(t));
-        remove.forEach((t) => hidden.add(t));
-        if (remove.length) next = current.filter((t) => !remove.includes(t));
-      } else if (hidden.size) {
-        const restore = [...hidden].filter((t) => !current.includes(t));
-        next = [...current, ...restore];
-        hidden.clear();
-      }
-      if (next !== current) pi.setActiveTools(next);
+      const remove = hide.filter((t) => current.includes(t));
+      remove.forEach((t) => hidden.add(t));
+      const released = [...hidden].filter((t) => !hide.includes(t));
+      released.forEach((t) => hidden.delete(t));
+      const restore = released.filter((t) => !current.includes(t));
+      if (remove.length || restore.length) pi.setActiveTools([...current.filter((t) => !remove.includes(t)), ...restore]);
     } catch {
       /* tool activation is an optimisation, never a reason to fail a turn */
     }
@@ -672,7 +672,13 @@ export default function (pi: ExtensionAPI) {
     let choice: string | undefined;
     if (ctx.hasUI) {
       try {
-        choice = await ctx.ui.select(`A workflow result has started ${String(wakeChain)} turns in a row without a message from you. Let the agent continue?`, [no, yes]);
+        // A turn raises this card, not the operator: keys meant for an open overlay must not answer it,
+        // and a hold that outlasts it stops the turn, as No does.
+        const asked = await showWhenFree((card) => ctx.ui.select(`A workflow result has started ${String(wakeChain)} turns in a row without a message from you. Let the agent continue?`, [no, yes], card), {
+          signal: ctx.signal,
+          onHeld: (holder) => say(ctx, `effort: a workflow result is waiting for your answer; close ${holder} to see it.`, "warning"),
+        });
+        choice = asked.kind === "shown" ? asked.value : undefined;
       } catch {
         choice = undefined;
       }

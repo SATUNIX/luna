@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "./config.ts";
 import type { KillReason, SpawnChild } from "./types.ts";
 
+// setTimeout fires at once above 2^31-1 ms, which would turn a very long limit into an instant kill.
+const timerMs = (ms: number): number => Math.min(ms, 2_147_483_647);
+
 // Runtimes that execute a JS entry file passed as their first argument. Everything else
 // (in particular a bun-compiled standalone `pi` binary) already IS the pi executable.
 const JS_RUNTIMES = new Set(["node", "nodejs", "bun", "deno"]);
@@ -134,10 +137,9 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
     // The idle watchdog keys on output, which would kill a child that is legitimately silent
     // inside a tool call (a long build, a slow test run). The child's JSONL names every tool call
     // it starts and finishes, so the watchdog is held while any call is open and rearmed once the
-    // last one ends. Ids are tracked, so nested and parallel calls each hold it open; a call that
-    // arrives without an id falls back to a count.
-    const openToolCalls = new Set<string>();
-    let openUnnamedToolCalls = 0;
+    // last one ends. Open calls are counted per id, so nested and parallel calls each hold it open
+    // even when they share an id; a blank or missing id is one counted key.
+    const openToolCalls = new Map<string, number>();
     const noteToolCall = (line: string) => {
       // Only the two event types matter; `tool_execution_update` chatter is common and is not
       // parsed. (A tool result that quotes the string still reaches JSON.parse and is discarded.)
@@ -150,25 +152,19 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
       }
       if (!isRecord(parsed)) return;
       if (parsed.type !== "tool_execution_start" && parsed.type !== "tool_execution_end") return;
-      // A named end only closes a named start; the namespaces are deliberately not crossed, so a
-      // stream that loses its ids cannot close another call. Real pi always sends balanced ids.
-      const id = typeof parsed.toolCallId === "string" ? parsed.toolCallId : undefined;
-      if (parsed.type === "tool_execution_start") {
-        if (id === undefined) openUnnamedToolCalls++;
-        else openToolCalls.add(id);
-      } else if (id === undefined) {
-        openUnnamedToolCalls = Math.max(0, openUnnamedToolCalls - 1);
-      } else {
-        openToolCalls.delete(id);
-      }
+      // An end for a key with nothing open changes nothing. Real pi always sends balanced ids.
+      const id = typeof parsed.toolCallId === "string" ? parsed.toolCallId.trim() : "";
+      const open = (openToolCalls.get(id) ?? 0) + (parsed.type === "tool_execution_start" ? 1 : -1);
+      if (open > 0) openToolCalls.set(id, open);
+      else openToolCalls.delete(id);
     };
-    const toolCallOpen = () => openToolCalls.size > 0 || openUnnamedToolCalls > 0;
+    const toolCallOpen = () => openToolCalls.size > 0;
     const armIdle = () => {
       if (idleTimeoutMs <= 0 || exited || killReason) return;
       clearIdle();
       // A tool call in progress is work, not a stall: hold the watchdog until the last one ends.
       if (toolCallOpen()) return;
-      idleTimer = setTimeout(() => kill("timeout"), idleTimeoutMs);
+      idleTimer = setTimeout(() => kill("timeout"), timerMs(idleTimeoutMs));
       idleTimer.unref();
     };
     const onSignalAbort = () => kill("signal");
@@ -239,7 +235,7 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
 
     // Wall-clock backstop: independent of stdout/stderr activity.
     if (maxRuntimeMs > 0) {
-      wallTimer = setTimeout(() => kill("wall-clock"), maxRuntimeMs);
+      wallTimer = setTimeout(() => kill("wall-clock"), timerMs(maxRuntimeMs));
       wallTimer.unref();
     }
     // Heartbeat: report liveness even while the child is silent (e.g. a long tool call).

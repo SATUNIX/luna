@@ -118,7 +118,7 @@ async function run() {
       const pend = path.join(ws, "console", "pending"); fs.mkdirSync(pend, { recursive: true });
       const id = `menu-${approved ? "allow" : "deny"}`;
       const choices = ["Allow once", "Allow for this session: root on srv02: writes system paths", "Deny", "Deny and tell the agent why…"];
-      fs.writeFileSync(path.join(pend, `${id}.json`), JSON.stringify({ id, kind: "approval", title: "Approve tool call? (subagent)", body: "HIGH · bash · x", choices, timeoutMs: 1000 }));
+      fs.writeFileSync(path.join(pend, `${id}.json`), JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), title: "Approve tool call? (subagent)", body: "HIGH · bash · x", choices, timeoutMs: 1000 }));
       let header = "";
       await hpi.handlers.get("session_start")({}, { cwd: ws, hasUI: true, ui: { select: async (h: string, opts: string[]) => { header = h; assert.deepEqual(opts, choices); return picked; }, input: async () => "wrong host", confirm: async () => { throw new Error("menu requests must not fall back to confirm"); } } });
       await wait(60);
@@ -175,7 +175,7 @@ async function run() {
     // (void processOne(...) with no catch), which exits the pi process.
     const raceId = "race-removed-mid-approval";
     const raceFile = path.join(pending, `${raceId}.json`);
-    fs.writeFileSync(raceFile, JSON.stringify({ id: raceId, kind: "approval", title: "race", body: "race", timeoutMs: 1000 }));
+    fs.writeFileSync(raceFile, JSON.stringify({ id: raceId, kind: "approval", createdAt: new Date().toISOString(), title: "race", body: "race", timeoutMs: 1000 }));
     const raceCtx = { cwd: ws, hasUI: true, ui: { confirm: async () => { try { fs.unlinkSync(raceFile); } catch { /* simulate concurrent resolver */ } return true; } } };
     hpi.handlers.get("session_start")({}, raceCtx);
     await wait(80);
@@ -228,7 +228,7 @@ async function run() {
       console.error = (...args: unknown[]) => { recovered.push(args.map(String).join(" ")); };
       try {
         const recoverId = "recover-after-unusable-pending";
-        fs.writeFileSync(path.join(pendingPath, `${recoverId}.json`), JSON.stringify({ id: recoverId, kind: "approval", title: "recover", body: "recover", timeoutMs: 5000 }));
+        fs.writeFileSync(path.join(pendingPath, `${recoverId}.json`), JSON.stringify({ id: recoverId, kind: "approval", createdAt: new Date().toISOString(), title: "recover", body: "recover", timeoutMs: 5000 }));
         await hpi.handlers.get("session_start")({}, { cwd: ws, hasUI: true, ui: { confirm: async () => true } });
         const resolvedFile = path.join(ws, "console", "resolved", `${recoverId}.json`);
         let resolved = false;

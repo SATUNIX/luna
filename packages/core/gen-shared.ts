@@ -74,7 +74,9 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/third_party/protected-paths/shared/inline-guard.ts",
   ],
   "input-owner.ts": [
+    "packages/extensions/src/conductor/shared/input-owner.ts",
     "packages/extensions/src/control-center/shared/input-owner.ts",
+    "packages/extensions/src/effort/shared/input-owner.ts",
     "packages/extensions/src/human-console/shared/input-owner.ts",
     "packages/extensions/src/pentest-governance-domain/shared/input-owner.ts",
     "packages/extensions/src/tool-firewall/shared/input-owner.ts",

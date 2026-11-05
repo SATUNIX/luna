@@ -355,6 +355,16 @@ function tuiRenderer(deps: HubDeps): Renderer {
 
 // --- the loop ----------------------------------------------------------------------------------
 
+// The holds of hubs still open. pi's reload removes an overlay without settling `ui.custom`, so the
+// `finally` in openHub never runs and only session_shutdown can release them.
+const openHolds = new Set<() => void>();
+
+/** Drop the hold of any hub the session is ending under (control-center's session_shutdown). */
+export function releaseHubHolds(): void {
+  for (const release of openHolds) release();
+  openHolds.clear();
+}
+
 /** Open the hub at `startPage`. Returns when the operator closes it or a session-changing action ran. */
 export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> {
   if (!deps.ctx.hasUI) {
@@ -366,8 +376,9 @@ export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> 
   let focus: string | undefined;
   // The TUI hub owns the keyboard for the whole session, not one page: a per-page hold would be
   // released between pages, and an approval could take focus (and keys) from the next page. Released
-  // on every exit (return, Esc, throw).
+  // on every exit (return, Esc, throw), and on a reload, which never settles the overlay.
   const release = deps.ctx.mode === "tui" ? holdInput("the kit hub") : undefined;
+  if (release) openHolds.add(release);
   try {
     for (;;) {
       const rows = rowsForPage(page, deps);
@@ -405,6 +416,7 @@ export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> 
     }
   } finally {
     release?.();
+    if (release) openHolds.delete(release);
   }
 }
 

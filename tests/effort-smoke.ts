@@ -667,7 +667,7 @@ const tests: Record<string, () => void | Promise<void>> = {
     const w = world();
     try {
       const b = boot();
-      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "workflow_status", "workflow_control", "subagent_status", "subagent_stop"];
+      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist", "workflow_status", "workflow_control", "subagent_status", "subagent_stop"];
       const calls: string[][] = [];
       let current = [...active];
       const api: ToolControlApi = b.pi.api;
@@ -677,6 +677,8 @@ const tests: Record<string, () => void | Promise<void>> = {
       await b.start();
       await b.turn();
       assert.ok(!current.includes("subagent") && !current.includes("workflow_run") && !current.includes("workflow"), "delegation tools are hidden at E1");
+      // Both can only be refused at E1, and a refused dispatch_specialist still spends an engagement slot.
+      assert.ok(!current.includes("dual_review") && !current.includes("dispatch_specialist"), "dual_review and dispatch_specialist are hidden at E1");
       assert.ok(current.includes("subagent_status") && current.includes("subagent_stop") && current.includes("workflow_status") && current.includes("workflow_control"), "the read/stop tools stay so running children can still be inspected and stopped");
       assert.equal(calls.length, 1);
       await b.turn(); // no change, no churn
@@ -685,14 +687,17 @@ const tests: Record<string, () => void | Promise<void>> = {
       current = current.filter((t) => t !== "edit");
       await b.command("standard");
       await b.turn();
-      assert.ok(current.includes("subagent") && current.includes("workflow_run") && current.includes("workflow"), "raising effort restores them at the next turn");
+      assert.ok(current.includes("subagent") && current.includes("workflow_run") && current.includes("workflow") && current.includes("dual_review") && current.includes("dispatch_specialist"), "raising effort restores them at the next turn");
       assert.ok(!current.includes("edit"), "tools this extension did not remove stay removed");
-      // recovery opens the delegation tools even at E1 (read-only scouts), then closes again
+      // recovery opens the delegation tools even at E1 (read-only scouts), then closes again. The
+      // workflow tool stays hidden: at E1 openRunScope always refuses it, so showing it would only
+      // ask the operator for approvals that end in that refusal.
       await b.command("minimal");
       await b.turn();
       assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       b.registry().setRecoveryActive(true);
-      assert.ok(current.includes("subagent") && current.includes("workflow"), "recovery makes the delegation tools available");
+      assert.ok(current.includes("subagent"), "recovery makes the delegation tools available");
+      assert.ok(!current.includes("workflow"), "recovery does not bring back a tool the run scope always refuses at E1");
       b.registry().setRecoveryActive(false);
       await b.turn();
       assert.ok(!current.includes("subagent") && !current.includes("workflow"));
@@ -706,7 +711,7 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   // S2: a script-workflow run scope is refused at E1, so E1 launches nothing even on a pi without
-  // active-tool control. Recovery restores the workflow tool but not the scope, and a user-typed
+  // active-tool control. Recovery opens neither the tool nor the scope, and a user-typed
   // /workflow run is a "user" launch, which the tier does not bound.
   "E1 refuses a workflow run scope, and a user-directed workflow launch still works": async () => {
     const w = world();
@@ -731,7 +736,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       await bare.start();
       await bare.turn();
       assert.equal(bare.registry().openRunScope("e1-bare").ok, false, "no active-tool control: the scope still refuses");
-      // Recovery restores the workflow tool, but a run scope still refuses at E1.
+      // Recovery does not open a run scope at E1 either.
       reg.setRecoveryActive(true);
       assert.equal(reg.openRunScope("e1-recovery").ok, false, "recovery does not open a run scope at E1");
       reg.setRecoveryActive(false);

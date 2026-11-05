@@ -707,6 +707,16 @@ export function supportsOverlay(version: string = VERSION): boolean {
   return major > 1 || (major === 1 && minor >= 3);
 }
 
+// The holds of panels still open. pi's reload removes an overlay without settling `ui.custom`, so the
+// `finally` in openWorkflowPanel never runs and only session_shutdown can release them.
+const openHolds = new Set<() => void>();
+
+/** Drop the hold of any panel the session is ending under (the extension's session_shutdown). */
+export function releasePanelHolds(): void {
+  for (const release of openHolds) release();
+  openHolds.clear();
+}
+
 /** Open the panel (TUI) or print its text (any other mode). */
 export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, registry: RunRegistry = runRegistry, narration: Narrator = narrator): Promise<void> {
   const cwd = ctx.cwd || process.cwd();
@@ -723,8 +733,10 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
     return;
   }
   // While the panel is open it owns the keyboard: an approval prompt would take focus from it and
-  // keys typed here could answer the card. The hold is released on every exit (done, Esc, throw).
+  // keys typed here could answer the card. The hold is released on every exit (done, Esc, throw), and
+  // on a reload, which never settles the overlay.
   const release = holdInput("the workflow panel");
+  openHolds.add(release);
   try {
     await ctx.ui.custom<undefined>(
       (tui, theme, keybindings, done) => {
@@ -767,6 +779,7 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
     );
   } finally {
     release();
+    openHolds.delete(release);
   }
 }
 

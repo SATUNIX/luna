@@ -50,6 +50,7 @@ const standingMod: typeof StandingModule = await loadModule("extensions/effort/s
 const policyMod: typeof PolicyModule = await loadModule("extensions/effort/policy.ts");
 const wfTool: typeof WfTool = await loadModule("vendor/subagent/wf-tool.ts");
 const firewall = await loadExtension<(api: object) => void>("extensions/tool-firewall/index.ts");
+const owner = await import("../packages/core/shared/input-owner.ts");
 
 interface Note { m: string; l: string | undefined }
 interface Entry { type: "custom"; customType: string; data: unknown }
@@ -276,6 +277,44 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(s.aborts(), 2);
     await s.turn();
     assert.equal(s.registry().standing().wakeChain, 0, "your message ends the chain");
+  },
+
+  // The wake-chain question is a keyboard card raised by a turn, not by the operator: Enter typed into an
+  // open workflow panel would stop the agent, and Down then Enter would lift the cap.
+  "the wake-chain question waits for an open overlay, and a hold that outlasts its time stops the turn": async () => {
+    fresh();
+    let reply: string | undefined = "Yes, let the agent continue (asks again after 5 more)";
+    const s = await boot({ answer: (o) => (o[0]?.startsWith("No, keep") ? yes(o) : reply) });
+    await s.command("ultracode");
+    await s.turn();
+    for (let i = 0; i < 5; i++) await s.wake();
+    const asked = s.selects.length;
+    const restoreLong = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "60000");
+    const release = owner.holdInput("the workflow panel");
+    let settled = false;
+    const sixth = s.wake().finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    try {
+      assert.equal(s.selects.length, asked, "the question must not open while an overlay holds input");
+      assert.equal(settled, false, "the turn waits for the overlay");
+    } finally {
+      release();
+      restoreLong();
+    }
+    assert.notEqual(await sixth, undefined, "after the hold the operator's answer decides");
+    assert.equal(s.selects.length, asked + 1, "the question is shown once, after the hold");
+    reply = "ignored";
+    for (let i = 0; i < 4; i++) await s.wake();
+    const before = s.selects.length;
+    const restore = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "40");
+    const held = owner.holdInput("the workflow panel");
+    try {
+      assert.equal(await s.wake(), undefined, "a hold that outlasts the question stops the turn, the same as No");
+      assert.equal(s.selects.length, before, "and it never shows the card");
+    } finally {
+      held();
+      restore();
+    }
   },
 
   "the workflow tool's run budget comes from standing mode": async () => {

@@ -109,10 +109,14 @@ A subagent is a long-lived child process; the parent must never be wedged by one
 - **Idle watchdog** — `PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS` (default 15 min, 0 disables). Keys on
   child output, and is paused from `tool_execution_start` until the matching
   `tool_execution_end`, so a long silent tool call is not a stall; it rearms after the last open
-  call ends.
+  call ends (`tests/subagent-progress-smoke.ts`). A conductor specialist's own idle watchdog is held
+  the same way, with its own wall clock, `PI_KIT_SPECIALIST_MAX_RUNTIME_MS` (default 30 min), so
+  setting that to 0 leaves a hung tool unbounded (`tests/conductor-specialist-bounds-smoke.ts`).
 - **Wall-clock ceiling** — `PI_KIT_SUBAGENT_MAX_RUNTIME_MS` (default 30 min, 0 disables). The
   backstop for a child that keeps dripping output, and the only limit on a tool call that never
-  ends, so setting it to 0 leaves a hung tool unbounded. Reports `stopReason: "wall-clock"`.
+  ends, so setting it to 0 leaves a hung tool unbounded. Reports `stopReason: "wall-clock"`
+  (`tests/subagent-progress-smoke.ts`). Either limit is capped at about 24.8 days, the longest a
+  timer can run.
 - **Live heartbeat** — `PI_KIT_SUBAGENT_HEARTBEAT_MS` (default 5 s, 0 disables). Emits elapsed /
   idle / bytes to the parent (and the TUI footer) while the child is silent.
 - **Cancel and background.** Esc (a cancelled tool call) stops the children, so there's no

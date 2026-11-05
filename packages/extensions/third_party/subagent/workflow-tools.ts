@@ -11,6 +11,7 @@ import { agentDir } from "./config.ts";
 import { CONTROL_ACTIONS, controlRun, runControls } from "./control.ts";
 import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
 import { producedResult } from "./run-contract.ts";
+import { effortRegistry } from "./wf-engine.ts";
 import {
   discoverWorkflows,
   executeWorkflow,
@@ -19,16 +20,19 @@ import {
   newRunState,
   readScript,
   resolveInputs,
+  runScopeId,
   runsRoot,
   summarizeRun,
   workflowDigest,
+  worstCaseAgents,
   SKIPPED_ON_RESUME,
+  type ExecuteOptions,
   type RunState,
   type StepDef,
   type ScriptWorkflowDef,
   type WorkflowDef,
 } from "./workflow.ts";
-import type { ToolContext } from "./types.ts";
+import type { SpawnChild, ToolContext } from "./types.ts";
 import { showWhenFree, type CardOptions } from "./shared/input-owner.ts";
 
 function textResult(text: string, isError = false) {
@@ -237,12 +241,16 @@ function parseKv(args: string[]): Record<string, string> {
   return out;
 }
 
-async function start(
-  pi: ExtensionAPI,
+/**
+ * Start or resume a YAML workflow. A run you typed is a "user" launch. Any other is the model's: it
+ * opens an effort run scope first, charged the run's worst case, so a run that cannot be afforded is
+ * refused here with nothing started. Its agents then launch as kind "workflow" in that scope.
+ */
+export async function startWorkflow(
   ctx: ToolContext,
   name: string,
   inputsGiven: Record<string, string>,
-  opts: { resume?: RunState | undefined; signal?: AbortSignal | undefined; onProgress?: (t: string) => void; launchKind?: "discretionary" | "user" },
+  opts: { resume?: RunState | undefined; signal?: AbortSignal | undefined; onProgress?: (t: string) => void; launchKind?: "user"; spawnChild?: SpawnChild | undefined },
 ): Promise<{ error: string; state?: undefined; workflow?: undefined } | { error?: undefined; state: RunState; workflow: WorkflowDef }> {
   const cwd = ctx.cwd ?? process.cwd();
   const { workflows, scripts } = discoverWorkflows(cwd);
@@ -265,10 +273,20 @@ async function start(
     if (missing.length) return { error: `Missing required input(s) for ${name}: ${missing.join(", ")}. Inputs: ${Object.entries(w.inputs).map(([k, v]) => `${k}${v.required ? "*" : ""} (${v.description ?? ""})`).join("; ")}` };
     state = newRunState(w, inputs);
   }
+  let launch: Pick<ExecuteOptions, "launchKind" | "workflowRun" | "concurrency"> = { launchKind: "user" };
+  if (opts.launchKind !== "user") {
+    const effort = effortRegistry();
+    if (!effort) return { error: "Refused: workflow runs need the effort extension (it budgets their agents); it is in every shipped profile." };
+    const runId = runScopeId(state);
+    const scope = effort.openRunScope(runId, { planned: worstCaseAgents(w, state) });
+    if (!scope.ok) return { error: `Refused: the workflow run could not be budgeted (${scope.code}): ${scope.reason}` };
+    state.scopes = (state.scopes ?? 0) + 1;
+    launch = { launchKind: "workflow", workflowRun: { runId, runToken: scope.runToken }, ...(scope.maxConcurrent === undefined ? {} : { concurrency: scope.maxConcurrent }) };
+  }
   // The run's control (pause/resume/stop/skip); the tool call's signal (Esc) stops it.
   const { control, close } = runControls.open(state.id, opts.signal);
   try {
-    const final = await executeWorkflow(w, state, { cwd, agents, control, parentModel: parentModelOf(ctx), onProgress: opts.onProgress, launchKind: opts.launchKind });
+    const final = await executeWorkflow(w, state, { cwd, agents, control, parentModel: parentModelOf(ctx), onProgress: opts.onProgress, spawnChild: opts.spawnChild, ...launch });
     return { state: final, workflow: w };
   } finally {
     close();
@@ -316,7 +334,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
         }
       };
       try {
-        const r = await start(pi, ctx, resume?.workflow ?? params.name, params.inputs ?? {}, { resume, signal, onProgress: report });
+        const r = await startWorkflow(ctx, resume?.workflow ?? params.name, params.inputs ?? {}, { resume, signal, onProgress: report });
         if (r.error !== undefined) return textResult(r.error, true);
         const dir = path.join(runsRoot(cwd), r.state.id);
         // A parsed workflow always has at least one step.
@@ -441,7 +459,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
         // Commands run outside a turn: the workflow runs in the background, drives the footer,
         // and posts its summary into the session when done so the agent can pick it up.
         notify(`workflow ${name}: started${resume ? ` (resuming ${resume.id})` : ""}. /workflow status to follow, /workflow stop <id> to stop.`);
-        void start(pi, ctx, name, inputs, { resume, launchKind: "user", onProgress: (t) => {
+        void startWorkflow(ctx, name, inputs, { resume, launchKind: "user", onProgress: (t) => {
           ctx.ui?.setStatus?.("workflow", t.slice(0, 120));
         } })
           .then((r) => {

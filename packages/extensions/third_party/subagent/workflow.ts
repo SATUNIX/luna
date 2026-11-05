@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { agentDir, toText } from "./config.ts";
 import type { AgentConfig } from "./agents.ts";
-import { mapWithConcurrencyLimit, runAgent, type RunOverrides } from "./runner.ts";
+import { mapWithConcurrencyLimit, runAgent, type RunAgentOptions, type RunOverrides } from "./runner.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
 import { deriveOutcome, RUN_STATUSES, type Execution, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, type PhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
@@ -315,6 +315,8 @@ export interface RunState {
   redactionPolicy?: string;
   // Set while the live run is paused (control.ts); removed when it is resumed or ends.
   paused?: true | undefined;
+  // Effort run scopes this model-started run has opened (runScopeId); absent on other runs.
+  scopes?: number | undefined;
 }
 
 export const runsRoot = (cwd: string) => path.join(cwd, ".pi", "workflows", "runs");
@@ -403,7 +405,8 @@ function isRunState(value: unknown): value is RunState {
     isRecord(s.loops) &&
     Object.values(s.loops).every((n) => typeof n === "number") &&
     isRecord(s.steps) &&
-    Object.values(s.steps).every(isStepState)
+    Object.values(s.steps).every(isStepState) &&
+    (s.scopes === undefined || (typeof s.scopes === "number" && Number.isInteger(s.scopes) && s.scopes >= 0))
   );
 }
 
@@ -499,6 +502,66 @@ function gatePasses(pattern: string, output: string): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Worst case and run scope
+
+const leafCount = (step: StepDef): number => step.parallel?.length ?? 1;
+
+/**
+ * The most agents a run can still launch, retries of a failed launch aside: each step once, plus
+ * every gated segment (retry target to gate) for each loop its gate has left. Loop counts persist
+ * across a rewind, so each gate adds its own loops once and overlapping gates simply add up.
+ *
+ * With `state`, only what is left: the steps from the cursor, the unpassed members of an interrupted
+ * group there, and the gates a run from here can still reach, which includes one behind the cursor
+ * when a later gate can rewind past it.
+ */
+export function worstCaseAgents(w: WorkflowDef, state?: RunState): number {
+  const cursor = state?.cursor ?? 0;
+  const left = (step: StepDef): number => (step.gate ? Math.max(0, step.gate.maxLoops - (state?.loops[step.id] ?? 0)) : 0);
+  const retryIndex = (step: StepDef): number => (step.gate?.retry ? w.steps.findIndex((s) => s.id === step.gate?.retry) : -1);
+  let reach = cursor;
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [i, step] of w.steps.entries()) {
+      const target = retryIndex(step);
+      if (i >= reach && left(step) > 0 && target >= 0 && target < reach) {
+        reach = target;
+        changed = true;
+      }
+    }
+  }
+  let total = 0;
+  for (const [i, step] of w.steps.entries()) {
+    if (i >= cursor) total += i === cursor && step.parallel && state ? unfinishedMembers(step, state).length : leafCount(step);
+    const target = retryIndex(step);
+    if (i >= reach && target >= 0) total += left(step) * w.steps.slice(target, i + 1).reduce((sum, s) => sum + leafCount(s), 0);
+  }
+  return total;
+}
+
+/** A parallel group's members to run: all of them, or on resume those that had not passed or been skipped. */
+function unfinishedMembers(group: StepDef, state: RunState): StepDef[] {
+  const members = group.parallel ?? [];
+  const status = state.steps[group.id]?.status;
+  if (status !== "aborted" && status !== "running") return members;
+  return members.filter((inner) => !["passed", "skipped"].includes(state.steps[inner.id]?.status ?? "pending"));
+}
+
+const MAX_RUN_SCOPE_ID = 64;
+
+/**
+ * The effort scope id for this run's next scope. The ledger opens an id once, so a resume takes a new
+ * one: the run id, then `.r2`, `.r3`. A run id too long for the ledger is replaced by its digest.
+ */
+export function runScopeId(state: RunState): string {
+  const n = (state.scopes ?? 0) + 1;
+  const suffix = n > 1 ? `.r${String(n)}` : "";
+  const room = MAX_RUN_SCOPE_ID - suffix.length;
+  const base = state.id.length <= room ? state.id : crypto.createHash("sha256").update(state.id).digest("hex").slice(0, room);
+  return `${base}${suffix}`;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Executor
 
 export interface ExecuteOptions {
@@ -509,9 +572,10 @@ export interface ExecuteOptions {
   onProgress?: ((text: string) => void) | undefined;
   spawnChild?: SpawnChild | undefined;
   concurrency?: number;
-  // "user" when the person typed the command (bounded by platform ceilings only); the model-callable
-  // tool uses the default, "discretionary" (bounded by the effort tier).
-  launchKind?: "discretionary" | "user" | undefined;
+  // "user" when the person typed the command (bounded by platform ceilings only); "workflow" when
+  // the model started the run, charged to `workflowRun`, the scope effort opened for it.
+  launchKind?: "discretionary" | "user" | "workflow" | undefined;
+  workflowRun?: { runId: string; runToken: string } | undefined;
   // The telemetry registry this run reports to (run-model.ts); defaults to the process-wide one.
   registry?: RunRegistry | undefined;
   // Pause/resume/stop/skip for this run (control.ts). Without one the run gets its own; `signal`
@@ -587,6 +651,39 @@ interface StepTelemetry {
   phase: string;
 }
 
+const DENIAL_POLL_MS = 250;
+
+/** Wait `ms`, or less when the signal aborts first. */
+export function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * runAgent for a workflow step: a "concurrency" denial means the run's slots are full, so it waits
+ * for one instead of failing the step. Both workflow engines launch through this.
+ */
+export async function runAgentWithSlot(options: RunAgentOptions & { signal: AbortSignal }): Promise<SingleResult> {
+  for (;;) {
+    const r = await runAgent(options);
+    if (r.deniedCode !== "concurrency" || options.signal.aborted) return r;
+    await delay(DENIAL_POLL_MS, options.signal);
+  }
+}
+
 async function runStep(step: StepDef, state: RunState, runDir: string, loop: number, opts: RunOptions, tele: StepTelemetry): Promise<StepState> {
   const st: StepState = state.steps[step.id] ?? { status: "pending", attempts: 0, runIds: [], cost: 0 };
   state.steps[step.id] = st;
@@ -618,6 +715,9 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   st.attempts++;
   st.startedAt = new Date().toISOString();
   state.executions++;
+  // On disk before the launch: a crash during this step must leave it "running", so a resume knows
+  // a writer may have changed files (interruptedWriterSteps), not as if it had never started.
+  saveState(runDir, state);
   opts.onProgress?.(`${state.workflow} · ${step.id}${loop ? ` (loop ${loop})` : ""} · running ${step.agent}`);
   const overrides: RunOverrides = {
     model: step.model,
@@ -632,7 +732,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   const handle = opts.control.agent(step.id, agentId);
   let result: SingleResult;
   try {
-    result = await runAgent({
+    result = await runAgentWithSlot({
       defaultCwd: opts.cwd,
       agents: opts.agents,
       agentName: step.agent ?? "", // parseStep requires an agent on every non-parallel step
@@ -642,6 +742,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
       spawnChild: opts.spawnChild,
       overrides,
       launchKind: opts.launchKind,
+      workflowRun: opts.workflowRun,
       onUpdate: (t) => {
         tele.run.agentUpdate(agentId, { activity: t });
         opts.onProgress?.(`${state.workflow} · ${step.id} · ${t}`);
@@ -785,9 +886,7 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
     if (step.parallel) {
       const group: StepState = state.steps[step.id] ?? { status: "pending", attempts: 0, runIds: [], cost: 0 };
       state.steps[step.id] = group;
-      // Resuming an interrupted group re-runs only the members that had not passed (or were skipped).
-      const resuming = group.status === "aborted" || group.status === "running";
-      const todo = resuming ? step.parallel.filter((inner) => !["passed", "skipped"].includes(state.steps[inner.id]?.status ?? "pending")) : step.parallel;
+      const todo = unfinishedMembers(step, state);
       group.status = "running";
       group.startedAt = new Date().toISOString();
       saveState(runDir, state);

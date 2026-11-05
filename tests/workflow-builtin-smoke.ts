@@ -15,21 +15,32 @@
 //      A reported branch that is not luna/wf/<runId>/<n> fails the site: not reviewed, not in toMerge.
 //   8. Missing required args fail the run with a message naming the argument.
 //   9. The skill names the built-ins, the Luna notes and the tool's parameters.
+//  10. Model-started YAML runs in a run scope (docs/workflows.md#execution-rules, docs/effort.md): the
+//      kit's bugfix, feature and research with their worst cases, the per-request allowance, the tier's
+//      parallel limit, no subagent below a step, uncapped approved scripts, resume in a new scope, and
+//      state saved `running` before a sequential writer launches.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
+import { ROOT, fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
 import type * as AgentsModule from "../packages/extensions/third_party/subagent/agents.ts";
 import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
+import type * as LedgerModule from "../packages/extensions/src/effort/ledger.ts";
 import type * as FenceModule from "../packages/extensions/third_party/subagent/fence.ts";
 import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type * as WorkflowModule from "../packages/extensions/third_party/subagent/workflow.ts";
+import type * as WorkflowToolsModule from "../packages/extensions/third_party/subagent/workflow-tools.ts";
+import type { ToolContext } from "../packages/extensions/third_party/subagent/types.ts";
 import { fakeSpawner, type FakeReply, type FakeSpawn, type Spawned } from "./workflow-fakes.ts";
 
 type Options = Omit<EngineModule.EngineOptions, "spawnChild"> & { spawnChild: FakeSpawn };
+type StartOptions = Parameters<typeof WorkflowToolsModule.startWorkflow>[3];
+type ToolsView = Omit<typeof WorkflowToolsModule, "startWorkflow"> & {
+  startWorkflow(ctx: ToolContext, name: string, inputs: Record<string, string>, opts: Omit<StartOptions, "spawnChild"> & { spawnChild: FakeSpawn }): ReturnType<typeof WorkflowToolsModule.startWorkflow>;
+};
 interface EngineView {
   startScriptRun(spec: EngineModule.ScriptSpec, args: unknown, opts: Options): EngineModule.StartResult;
 }
@@ -324,6 +335,238 @@ try {
     const orchestration = fs.readFileSync(path.join(ROOT, "packages", "kit", "skills", "agent-orchestration", "SKILL.md"), "utf8");
     assert.ok(orchestration.includes("workflow-authoring"), "agent-orchestration points to the workflow-authoring skill");
     ok("the workflow-authoring skill names the built-ins, the Luna notes and the tool's parameters");
+  }
+
+  // 10. model-started YAML: real kit files, real effort and delegation-guard, fake children
+  {
+    const toolsMod = await loadModule<ToolsView>("vendor/subagent/workflow-tools.ts");
+    const ledgerMod = await loadModule<typeof LedgerModule>("extensions/effort/ledger.ts");
+    const effortMod = await loadModule<{ default: (api: ReturnType<typeof fakePi>["api"]) => void }>("extensions/effort/index.ts");
+    const agentDir = process.env.PI_CODING_AGENT_DIR ?? "";
+    restores.push(setEnv("PI_KIT_EFFORT_CONFIG", path.join(ws, "no-effort-config.json")));
+    const userWorkflows = path.join(agentDir, "workflows");
+    fs.mkdirSync(userWorkflows, { recursive: true });
+    const members = ["a", "b", "c", "d", "e"].map((id) => `      - { id: ${id}, agent: scout, task: "look at ${id}" }`).join("\n");
+    fs.writeFileSync(path.join(userWorkflows, "five.md"), `---\nname: five\ndescription: five at once\nsteps:\n  - id: all\n    parallel:\n${members}\n---\n`);
+    fs.writeFileSync(path.join(userWorkflows, "spawner.md"), "---\nname: spawner\ndescription: a step that names subagent\nsteps:\n  - id: one\n    agent: delegator\n    task: delegate this\n    tools: [read, subagent]\n    extensions: [subagent]\n---\n");
+    let boots = 0;
+    /** One session at a tier: its own ledgers, and the turns as pi fires them. */
+    const session = async (tier: string) => {
+      const restoreTier = setEnv("PI_KIT_EFFORT", tier);
+      const key = `yaml-${String(++boots)}`;
+      const pi = fakePi();
+      effortMod.default(pi.api);
+      const ctx = { hasUI: false, cwd: project, ui: {}, sessionManager: { getSessionId: () => key } };
+      await pi.handlers.get("session_start")({ reason: "startup" }, ctx);
+      restoreTier();
+      const turn = (event: Record<string, unknown>): unknown => pi.handlers.get("before_agent_start")({ systemPrompt: "", ...event }, ctx);
+      const userTurn = (): unknown => turn({ messageType: "user", prompt: "go" });
+      await userTurn();
+      const wake = (): unknown => turn({ messageType: "custom", message: { customType: "luna-workflow-result", content: "done", display: true } });
+      return { userTurn, wake, ledger: path.join(agentDir, "pi-kit", "effort", "ledgers", `${key}-workflows.json`) };
+    };
+    const ctxOf = (answer?: string): ToolContext => (answer === undefined ? { cwd: project, hasUI: false } : { cwd: project, hasUI: true, ui: { select: () => Promise.resolve(answer), notify: () => {}, setStatus: () => {} } });
+    const inputsOf = (name: string): Record<string, string> => {
+      const w = workflowMod.discoverWorkflows(project).workflows.find((x) => x.name === name);
+      assert.ok(w, `${name} is a workflow`);
+      return Object.fromEntries(Object.keys(w.inputs).map((k) => [k, "the login bug"]));
+    };
+    const verdict = (s: Spawned): FakeReply => ({ text: s.task.includes("VERDICT") ? "done\nVERDICT: PASS" : "done" });
+    const started = async (name: string, reply: (s: Spawned) => FakeReply = verdict, opts: { signal?: AbortSignal; resume?: WorkflowModule.RunState; answer?: string } = {}) => {
+      const fake = fakeSpawner(reply);
+      // A live pid: the ledger reaps a slot whose process is gone, and a fake's pid is nobody's.
+      const spawnChild: FakeSpawn = (command, args, options) => Object.assign(fake.spawn(command, args, options), { pid: process.pid });
+      const r = await toolsMod.startWorkflow(ctxOf(opts.answer), name, opts.resume ? {} : inputsOf(name), { spawnChild, signal: opts.signal, resume: opts.resume });
+      return { r, fake };
+    };
+    const statusOf = (r: Awaited<ReturnType<typeof started>>["r"]): string => r.error ?? r.state.status;
+    const failures: string[] = [];
+    const check = async (label: string, body: () => Promise<void>): Promise<void> => {
+      try {
+        await body();
+        ok(label);
+      } catch (error) {
+        failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        console.log(`  FAIL: ${label}`);
+      }
+    };
+
+    await check("worst cases are pinned: bugfix 8, feature 8, research 5", () => {
+      const { workflows } = workflowMod.discoverWorkflows(project);
+      const worst = Object.fromEntries(workflows.filter((w) => w.source === "kit").map((w) => [w.name, workflowMod.worstCaseAgents(w)]));
+      assert.deepEqual(worst, { bugfix: 8, feature: 8, research: 5 });
+      return Promise.resolve();
+    });
+
+    await check("the worst case of what is left: a resume counts unpassed steps and every gate it can still reach", () => {
+      const parsed = workflowMod.parseWorkflow(`---
+name: nested
+steps:
+  - { id: one, agent: scout, task: t }
+  - id: two
+    agent: scout
+    task: t
+    gate: { pass: ok, retry: one, max_loops: 1 }
+  - id: three
+    parallel:
+      - { id: three-a, agent: scout, task: t }
+      - { id: three-b, agent: scout, task: t }
+  - id: four
+    agent: scout
+    task: t
+    gate: { pass: ok, retry: two, max_loops: 2 }
+---
+`, "nested.md", "user");
+      const w = parsed.workflow;
+      assert.ok(w, parsed.errors.join("; "));
+      assert.equal(workflowMod.worstCaseAgents(w), 5 + 2 * 1 + 4 * 2, "gated segments add up where they overlap");
+      const state = workflowMod.newRunState(w, {});
+      state.cursor = 2;
+      state.loops = { four: 1 };
+      assert.equal(workflowMod.worstCaseAgents(w, state), 3 + 4 + 2, "3 steps left, 4 for gate four's last loop, and 2 for gate two, behind the cursor, which that loop reaches");
+      return Promise.resolve();
+    });
+
+    await check("a scope id fits the ledger and changes per scope", () => {
+      const state = workflowMod.newRunState({ name: "n".repeat(41), description: "", inputs: {}, steps: [], vault: false, source: "user", file: "x" }, {});
+      assert.ok(state.id.length > 64, "the longest workflow name makes a run id longer than a ledger id");
+      const first = workflowMod.runScopeId(state);
+      assert.equal(first.length, 64);
+      state.scopes = 1;
+      const second = workflowMod.runScopeId(state);
+      assert.match(second, /\.r2$/);
+      assert.equal(second.length, 64);
+      assert.notEqual(first, second);
+      return Promise.resolve();
+    });
+
+    await check("model-started bugfix and feature pass at E3, research at E3 and E4; agents run at E1 on the run's ledger", async () => {
+      for (const [tier, name, launches] of [["standard", "bugfix", 4], ["standard", "feature", 4], ["standard", "research", 5], ["thorough", "research", 5]] as const) {
+        const s = await session(tier);
+        const { r, fake } = await started(name);
+        assert.equal(statusOf(r), "passed", `${name} at ${tier}`);
+        assert.equal(fake.seen.length, launches, `${name} at ${tier}`);
+        for (const child of fake.seen) {
+          assert.equal(child.env.PI_KIT_EFFORT, "minimal");
+          assert.equal(child.env.PI_KIT_EFFORT_LEDGER, s.ledger);
+        }
+      }
+    });
+
+    await check("bugfix at E2 is refused with 0 launches, a reason naming /effort, and no run directory", async () => {
+      await session("focused");
+      const before = workflowMod.listRuns(project, 1000).length;
+      const { r, fake } = await started("bugfix");
+      assert.match(r.error ?? "", /\/effort/);
+      assert.equal(fake.seen.length, 0);
+      assert.equal(workflowMod.listRuns(project, 1000).length, before);
+    });
+
+    await check("a second plan past the allowance is refused; a workflow-result wake does not refresh it; a user turn does", async () => {
+      const s = await session("standard");
+      assert.equal(statusOf((await started("bugfix")).r), "passed");
+      const second = await started("feature");
+      assert.match(second.r.error ?? "", /\/effort/, "8 of 8 are planned, so a second plan is refused");
+      assert.equal(second.fake.seen.length, 0);
+      await s.wake();
+      const woken = await started("feature");
+      assert.match(woken.r.error ?? "", /\/effort/, "a wake starts a turn and a fresh ledger, not a fresh allowance");
+      assert.equal(woken.fake.seen.length, 0);
+      await s.userTurn();
+      assert.equal(statusOf((await started("feature")).r), "passed");
+    });
+
+    await check("5 parallel at E3 run 2 at a time", async () => {
+      await session("standard");
+      const { r, fake } = await started("five", () => ({ text: "seen", delayMs: 40 }));
+      assert.equal(statusOf(r), "passed");
+      assert.equal(fake.seen.length, 5);
+      assert.equal(fake.maxLive(), 2);
+    });
+
+    await check("a concurrency denial is waited out, not a failed step", async () => {
+      const policy = path.join(ws, "policy-one-live");
+      fs.cpSync(path.join(ROOT, "packages", "extensions", "src", "effort", "policy"), policy, { recursive: true });
+      const parsed: unknown = JSON.parse(fs.readFileSync(path.join(policy, "effort.json"), "utf8"));
+      assert.ok(isRecord(parsed) && isRecord(parsed.workflow));
+      parsed.workflow.workflowConcurrent = 1;
+      fs.writeFileSync(path.join(policy, "effort.json"), JSON.stringify(parsed));
+      const restorePolicy = setEnv("PI_KIT_EFFORT_POLICY_DIR", policy);
+      try {
+        await session("standard");
+        const { r, fake } = await started("five", () => ({ text: "seen", delayMs: 40 }));
+        assert.equal(statusOf(r), "passed");
+        assert.equal(fake.seen.length, 5);
+        assert.equal(fake.maxLive(), 1);
+      } finally {
+        restorePolicy();
+      }
+    });
+
+    await check("a YAML step naming subagent gets neither the tool nor the extension", async () => {
+      await session("standard");
+      const { r, fake } = await started("spawner");
+      assert.equal(statusOf(r), "passed");
+      const child = fake.seen[0];
+      assert.ok(child);
+      const tools = child.args[child.args.indexOf("--tools") + 1];
+      assert.equal(tools, "read");
+      assert.ok(!child.args.some((a) => /subagent[\\/]index\.ts$/.test(a)), child.args.join(" "));
+    });
+
+    await check("an approved script at E3 is not held to the 8 of a plan", async () => {
+      await session("standard");
+      const fake = fakeSpawner(() => ({ text: "done" }));
+      const source = 'export const meta = { name: "ten", description: "ten agents" };\nfor (let i = 0; i < 10; i++) await agent(`task ${i}`, { agentType: "scout" });\nreturn "ok";';
+      const run = engine.startScriptRun({ name: "ten", description: "ten agents", source, phases: [] }, undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: fake.spawn });
+      if (!run.ok) throw new Error(run.error);
+      assert.equal((await run.done).status, "passed");
+      assert.equal(fake.seen.length, 10);
+    });
+
+    await check("a model-started run interrupted then resumed opens a new scope and is charged only unpassed steps", async () => {
+      const s = await session("standard");
+      const stop = new AbortController();
+      const first = await started("bugfix", (c) => {
+        if (c.task.includes("Fix this bug")) stop.abort();
+        return { ...verdict(c), delayMs: 5 };
+      }, { signal: stop.signal });
+      assert.equal(statusOf(first.r), "interrupted");
+      const id = first.r.state?.id ?? "";
+      const loaded = workflowMod.loadState(project, id);
+      assert.ok(loaded);
+      const again = await started("bugfix", verdict, { resume: loaded, answer: toolsMod.RESUME_WRITER_CHOICES[1] });
+      assert.match(again.r.error ?? "", /\/effort/, "the first run's 8 are spent in this request");
+      assert.equal(again.fake.seen.length, 0);
+      await s.userTurn();
+      const resumed = workflowMod.loadState(project, id);
+      assert.ok(resumed);
+      const { r, fake } = await started("bugfix", verdict, { resume: resumed, answer: toolsMod.RESUME_WRITER_CHOICES[1] });
+      assert.equal(statusOf(r), "passed");
+      assert.equal(fake.seen.length, 2, "fix and verify; reproduce and diagnose had passed");
+      const saved = ledgerMod.readLedger(s.ledger)?.workflow;
+      assert.ok(saved);
+      assert.equal(saved.plannedUsed, 6, "fix + verify + 2 loops of both");
+      assert.deepEqual(Object.keys(saved.runs).sort(), [id, `${id}.r2`]);
+    });
+
+    await check("state saved during a sequential writer step shows running, and interruptedWriterSteps finds it", async () => {
+      await session("standard");
+      const { workflows } = workflowMod.discoverWorkflows(project);
+      const bugfix = workflows.find((w) => w.name === "bugfix");
+      assert.ok(bugfix);
+      const during: WorkflowModule.RunState[] = [];
+      await started("bugfix", (c) => {
+        if (c.task.includes("Fix this bug")) during.push(...workflowMod.listRuns(project, 1).filter((x) => x.workflow === "bugfix"));
+        return verdict(c);
+      });
+      const saved = during[0];
+      assert.ok(saved, "the run saved its state");
+      assert.equal(saved.steps.fix?.status, "running");
+      assert.deepEqual(toolsMod.interruptedWriterSteps(bugfix, saved, agents).map((step) => step.id), ["fix"]);
+    });
+
+    assert.deepEqual(failures, [], "model-started YAML cases");
   }
 
   console.log(`\nworkflow-builtin-smoke: ${checks} checks passed`);

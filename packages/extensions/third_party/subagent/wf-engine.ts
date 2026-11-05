@@ -45,20 +45,19 @@ import { redact, REDACTION_POLICY } from "./redact.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
 import { deriveOutcome, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, terminalPhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
-import { launchDigest, runAgent, type RunOverrides } from "./runner.ts";
+import { launchDigest, type RunOverrides } from "./runner.ts";
 import { StructuredSchemaError } from "./structured-output/check.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
 import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, type WorktreeOutcome } from "./worktree.ts";
-import { ensurePrivateDir, runsRoot, writePrivate } from "./workflow.ts";
+import { delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
 import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
 export const MAX_AGENTS_PER_RUN = 1000;
 export const MAX_CONCURRENCY = 16;
 const EFFORT_KEY = Symbol.for("pi-kit.effort");
 const RUN_ID = /^wf-[a-z0-9-]{1,60}$/;
-const DENIAL_POLL_MS = 250;
 // How often a call that a budget cannot yet afford re-checks, while a live agent holds the spend.
 const BUDGET_POLL_MS = 50;
 // What a script can make the host keep, in step with the sandbox's log cap and the narrator.
@@ -86,7 +85,7 @@ export interface ScriptSpec {
 }
 
 export interface WorkflowEffort {
-  openRunScope(runId: string): { ok: true; runToken: string } | { ok: false; code: string; reason: string };
+  openRunScope(runId: string, options?: { planned: number }): { ok: true; runToken: string; maxConcurrent?: number } | { ok: false; code: string; reason: string };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -98,9 +97,9 @@ export function effortRegistry(): WorkflowEffort | null {
   const open: unknown = Reflect.get(registry, "openRunScope");
   if (typeof open !== "function") return null;
   return {
-    openRunScope(runId) {
-      const r: unknown = Reflect.apply(open, registry, [runId]);
-      if (isRecord(r) && r.ok === true && typeof r.runToken === "string") return { ok: true, runToken: r.runToken };
+    openRunScope(runId, options) {
+      const r: unknown = Reflect.apply(open, registry, options ? [runId, options] : [runId]);
+      if (isRecord(r) && r.ok === true && typeof r.runToken === "string") return { ok: true, runToken: r.runToken, ...(typeof r.maxConcurrent === "number" ? { maxConcurrent: r.maxConcurrent } : {}) };
       const code = isRecord(r) && typeof r.code === "string" ? r.code : "run-scope";
       const reason = isRecord(r) && typeof r.reason === "string" ? r.reason : "the effort registry did not open a run scope";
       return { ok: false, code, reason };
@@ -629,24 +628,6 @@ class Semaphore {
   }
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 // ---------------------------------------------------------------------------------------------
 // The run
 
@@ -812,32 +793,24 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     let worktree: WorktreeOutcome | undefined;
     let workspace: string | undefined;
     try {
-      const once = async (cwd: string): Promise<SingleResult> => {
-        for (;;) {
-          const r = await runAgent({
-            defaultCwd: opts.cwd,
-            cwd,
-            agents: opts.agents,
-            agentName: role.name,
-            task: prompt,
-            signal: handle.signal,
-            parentModel: opts.parentModel,
-            spawnChild: opts.spawnChild,
-            launchKind: "workflow",
-            workflowRun: { runId: rc.runId, runToken: rc.runToken },
-            overrides: launchOverrides(o, model),
-            ...(o.schema !== undefined ? { schema: o.schema } : {}),
-            onUpdate: (t) => run.agentUpdate(id, { activity: t }),
-            onUsage: (usage, m) => run.agentUpdate(id, { usage, model: m }),
-          });
-          // The run's own concurrency cap keeps the ledger's per-run limit free; should it still be full, wait.
-          if (r.deniedCode === "concurrency" && !handle.signal.aborted) {
-            await delay(DENIAL_POLL_MS, handle.signal);
-            continue;
-          }
-          return r;
-        }
-      };
+      // The run's own concurrency cap keeps the ledger's per-run limit free; should it still be full, this waits.
+      const once = (cwd: string): Promise<SingleResult> =>
+        runAgentWithSlot({
+          defaultCwd: opts.cwd,
+          cwd,
+          agents: opts.agents,
+          agentName: role.name,
+          task: prompt,
+          signal: handle.signal,
+          parentModel: opts.parentModel,
+          spawnChild: opts.spawnChild,
+          launchKind: "workflow",
+          workflowRun: { runId: rc.runId, runToken: rc.runToken },
+          overrides: launchOverrides(o, model),
+          ...(o.schema !== undefined ? { schema: o.schema } : {}),
+          onUpdate: (t) => run.agentUpdate(id, { activity: t }),
+          onUsage: (usage, m) => run.agentUpdate(id, { usage, model: m }),
+        });
       if (o.isolation === "worktree") {
         const tree = await createWorkflowWorktree({ cwd: opts.cwd, runId: rc.runId, index: ++worktreeIndex, signal: handle.signal });
         try {

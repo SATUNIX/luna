@@ -195,3 +195,11 @@
     option and launches. `runsRoot`, `ensurePrivateDir` and `writePrivate` have one copy, in
     `workflow.ts`. No other change to outcomes, refusals, launches or grants
     (`tests/workflow-hooks-smoke.ts`, `tests/workflow-sandbox-smoke.ts`).
+  - **Model-started YAML runs in a run scope (2026-11-05):** `workflow.ts` adds `worstCaseAgents`
+    and `startWorkflow`, which opens the scope with `planned` for a model launch and passes
+    `{launchKind: "workflow", workflowRun}`, so a run that cannot be afforded starts nothing and
+    has no run directory. The parallel limit is the tier's `maxConcurrent`, `runStep` saves
+    `running` before `runAgent`, and a resume opens `<runId>.r<n>`, charged only what is left. The
+    concurrency wait is `runAgentWithSlot`, shared with `wf-engine.ts`. `workflow-tools.ts` passes
+    the launch through, `runner.ts` only corrects a comment, and firewall decisions are unchanged
+    (`tests/workflow-builtin-smoke.ts`).

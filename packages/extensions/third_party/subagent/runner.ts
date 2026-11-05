@@ -119,7 +119,8 @@ export interface RunAgentOptions {
   overrides?: RunOverrides | undefined;
   // "discretionary" (default): the agent's own delegation, bounded by the effort tier.
   // "user": a launch the person typed (a /workflow command), bounded only by the platform ceilings.
-  // "workflow": an agent of a script-workflow run, charged to the run's pinned scope (`workflowRun`).
+  // "workflow": an agent of a script run or a model-started YAML run, charged to the run's pinned
+  // scope (`workflowRun`).
   launchKind?: "discretionary" | "user" | "workflow" | undefined;
   // Workflow launches only: the run id and run token from effort's openRunScope. Such a child never
   // delegates further: it gets no subagent tool or extension and its nesting limit is its own depth.

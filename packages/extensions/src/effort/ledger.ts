@@ -25,6 +25,10 @@
  *    holds): at most `concurrent` live per run, `totalPerRun` per run and `sessionTotal` across the
  *    session's runs. They never count toward the tier budget or the session ceiling. A "concurrency"
  *    denial means "wait for a slot"; every other denial is final for the request.
+ *    A model-started YAML run also has a plan: its worst case is charged to `plannedUsed` when its
+ *    scope opens, up to the tier's allowance, which then caps the run as well. The charge lives here,
+ *    so neither the per-turn rotation nor a reload refreshes it; only a user message does
+ *    (resetPlanned), including one sent by an extension, and a run that spends less gets nothing back. An approved script opens no plan and has no cap.
  *
  * Effort budgets govern cost and behaviour, not security: the ledger is a file the session can
  * write, so a hostile process with shell access in the same account could tamper with it. The
@@ -63,6 +67,8 @@ export interface WorkflowRun {
   tokenHash: string;
   used: number;
   openedAt: number;
+  /** Planned runs only: the tier allowance, which holds the run below `totalPerRun`. */
+  cap?: number;
 }
 
 /** The workflow limits a workflow ledger is created with. */
@@ -75,6 +81,8 @@ export interface WorkflowInit {
 /** The workflow part of a session's workflow ledger: the limits, the session's use, and each run. */
 export interface WorkflowSection extends WorkflowInit {
   used: number;
+  /** Agents planned in the current user request; absent until the first plan. */
+  plannedUsed?: number;
   runs: Record<string, WorkflowRun>;
 }
 
@@ -103,7 +111,7 @@ export interface LedgerData {
   workflow?: WorkflowSection;
 }
 
-export type DenialCode = "no-ledger" | "concurrency" | "total" | "scouts" | "tier" | "session-ceiling" | "recovery-closed" | "recovery-budget" | "recovery-role" | "mandatory-budget" | "run-scope" | "invalid";
+export type DenialCode = "no-ledger" | "concurrency" | "total" | "scouts" | "tier" | "session-ceiling" | "recovery-closed" | "recovery-budget" | "recovery-role" | "mandatory-budget" | "run-scope" | "plan-allowance" | "invalid";
 
 export interface Denial {
   ok: false;
@@ -230,11 +238,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 function isWorkflowRun(value: unknown): value is WorkflowRun {
-  return isRecord(value) && typeof value.tokenHash === "string" && isCount(value.used) && typeof value.openedAt === "number";
+  return isRecord(value) && typeof value.tokenHash === "string" && isCount(value.used) && typeof value.openedAt === "number" && (value.cap === undefined || isCount(value.cap));
 }
 
 function isWorkflowSection(value: unknown): value is WorkflowSection {
-  if (!isRecord(value) || !isCount(value.concurrent) || !isCount(value.totalPerRun) || !isCount(value.sessionTotal) || !isCount(value.used)) return false;
+  if (!isRecord(value) || !isCount(value.concurrent) || !isCount(value.totalPerRun) || !isCount(value.sessionTotal) || !isCount(value.used) || (value.plannedUsed !== undefined && !isCount(value.plannedUsed))) return false;
   const runs = value.runs;
   return isRecord(runs) && !Array.isArray(runs) && Object.values(runs).every(isWorkflowRun);
 }
@@ -327,26 +335,55 @@ function tokenMatches(tokenHash: string, token: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+/** A planned run's worst case, and the tier allowance it is charged against and capped at. */
+export interface RunPlan {
+  planned: number;
+  allowance: number;
+  /** A short label of the tier for messages, e.g. "E3 Standard". */
+  label: string;
+}
+
 /**
  * Open a workflow run's scope in a workflow ledger (one created with `workflow` limits). A run id is
  * opened once: opening it again is refused, so a second caller can neither reset the run's count
  * nor replace its token. Returns the run token, which every reservation for the run must carry.
+ * With a `plan` the charge and the open are one step under the lock: a refused plan spends nothing.
  */
-export function openRun(file: string, runId: string, now = Date.now(), newToken: () => string = () => crypto.randomBytes(24).toString("hex")): { ok: true; runToken: string } | Denial {
+export function openRun(file: string, runId: string, now = Date.now(), newToken: () => string = () => crypto.randomBytes(24).toString("hex"), plan?: RunPlan): { ok: true; runToken: string } | Denial {
   if (!RUN_ID_RE.test(runId)) return deny("invalid", `"${runId.slice(0, 80)}" is not a valid workflow run id (letters, digits, ".", "_" and "-", at most 64)`);
+  if (plan && !isCount(plan.planned)) return deny("invalid", "a planned run's worst case must be a non-negative whole number of agents");
   try {
     return withLock(file, () => {
       const data = readLedger(file);
       if (!data) return deny("no-ledger", "the workflow ledger is missing or unreadable, so the run cannot be budgeted");
       if (!data.workflow) return deny("run-scope", "this ledger is not a workflow ledger");
       if (Object.hasOwn(data.workflow.runs, runId)) return deny("run-scope", `workflow run "${runId}" already has a scope; a run id is opened once`);
+      if (plan) {
+        const planned = data.workflow.plannedUsed ?? 0;
+        if (planned + plan.planned > plan.allowance) return deny("plan-allowance", `this workflow can start up to ${plan.planned} agents, and ${plan.label} allows ${plan.allowance} planned agents a request (${planned} already planned). Run a smaller workflow, or ask the user to raise effort with /effort.`);
+        data.workflow.plannedUsed = planned + plan.planned;
+      }
       const runToken = newToken();
-      data.workflow.runs[runId] = { tokenHash: hashToken(runToken), used: 0, openedAt: now };
+      data.workflow.runs[runId] = { tokenHash: hashToken(runToken), used: 0, openedAt: now, ...(plan ? { cap: plan.allowance } : {}) };
       writeLedger(file, data);
       return { ok: true as const, runToken };
     });
   } catch (error) {
     return deny("no-ledger", `the workflow ledger could not be updated (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
+/** A new user request: plans may be charged again. Failing leaves the charge, which only refuses more. */
+export function resetPlanned(file: string): void {
+  try {
+    withLock(file, () => {
+      const data = readLedger(file);
+      if (!data?.workflow?.plannedUsed) return;
+      data.workflow.plannedUsed = 0;
+      writeLedger(file, data);
+    });
+  } catch {
+    /* the allowance stays spent */
   }
 }
 
@@ -370,7 +407,8 @@ export function reserve(file: string, request: ReserveRequest, now = Date.now(),
         const run = runId !== undefined && Object.hasOwn(wf.runs, runId) ? wf.runs[runId] : undefined;
         if (!runId || !run || typeof request.runToken !== "string" || !tokenMatches(run.tokenHash, request.runToken)) return deny("run-scope", `no open workflow run matches this request (unknown run id or wrong run token)`);
         if (wf.used >= wf.sessionTotal) return deny("session-ceiling", `workflow runs in this session have started ${wf.used} agents, the session limit (${wf.sessionTotal}). Start a new session for more.`);
-        if (run.used >= wf.totalPerRun) return deny("total", `workflow run "${runId}" has started ${run.used} agents, the per-run limit (${wf.totalPerRun}); retries and failed agents count.`);
+        const perRun = Math.min(run.cap ?? wf.totalPerRun, wf.totalPerRun);
+        if (run.used >= perRun) return deny("total", `workflow run "${runId}" has started ${run.used} agents, the per-run limit (${perRun}); retries and failed agents count.`);
         const liveRun = data.live.filter((e) => e.kind === "workflow" && e.runId === runId).length;
         if (liveRun >= wf.concurrent) return deny("concurrency", `${liveRun} agents of workflow run "${runId}" are already running (limit ${wf.concurrent}). Wait for one to finish.`);
         run.used++;

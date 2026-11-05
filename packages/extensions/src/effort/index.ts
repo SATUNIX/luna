@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
 import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
-import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowLimits } from "./policy.ts";
+import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
 import type { StandingState } from "./standing.ts";
@@ -70,7 +70,7 @@ export interface ReserveInput {
 }
 
 /** A workflow run's pinned scope: every agent of the run reserves with this id and token. */
-export type RunScope = { ok: true; runId: string; runToken: string; ledger: string } | { ok: false; code: string; reason: string };
+export type RunScope = { ok: true; runId: string; runToken: string; ledger: string; maxConcurrent: number } | { ok: false; code: string; reason: string };
 
 /** Thrown by reserveWorkflow for every denial except "concurrency" (which it waits out). */
 export class WorkflowLedgerError extends Error {
@@ -119,9 +119,12 @@ export interface EffortRegistry {
   /**
    * Open a script-workflow run's scope in this session's workflow ledger. The scope is pinned: it
    * outlives the per-turn ledger rotation, so a background run keeps its count across user turns.
-   * Refused in child processes, when the policy is unavailable, and at a tier that allows no child invocations (code "tier").
+   * Refused in child processes, when the policy is unavailable, and at a tier with no workflow allowance (code "tier").
+   * `planned` (a model-started YAML run's worst case) is charged to this user request, past the
+   * allowance refused with code "plan-allowance", and the run is capped at the allowance. An
+   * approved script passes none: it is charged nothing and keeps the per-run limit.
    */
-  openRunScope(runId: string): RunScope;
+  openRunScope(runId: string, options?: { planned?: number }): RunScope;
   /**
    * Reserve a slot for one agent of a workflow run. A "concurrency" denial is waited out (polling
    * until a slot frees or `signal` aborts); every other denial throws a WorkflowLedgerError.
@@ -139,7 +142,7 @@ function unbudgeted(childTier: string): Reservation {
 /** Tools through which the model starts children of its own accord. Hidden while the tier allows none. */
 export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist"];
 /** Hidden at such a tier even in recovery: openRunScope refuses them there whatever recovery does. */
-const NO_RUN_SCOPE_TOOLS = ["workflow"];
+const NO_RUN_SCOPE_TOOLS = ["workflow", "workflow_run"];
 
 const USAGE_REFRESH_MS = 2000;
 const LEDGER_KEEP_MS = 24 * 60 * 60 * 1000;
@@ -403,8 +406,8 @@ export default function (pi: ExtensionAPI) {
    * delegation (E1): their descriptions cost about 1,200 tokens a turn and could only ever be
    * refused. They come back at the next user turn after a higher tier is chosen, and while the
    * trusted recovery extension has recovery active (recovery may start read-only scouts), except
-   * the workflow tool, which only ever reaches the scope refusal at that tier, after asking the
-   * operator for approvals. Only tools this extension removed are ever restored; a tool the profile
+   * the workflow tools, which only ever reach the scope refusal at that tier, the `workflow` tool
+   * after asking the operator for approvals. Only tools this extension removed are ever restored; a tool the profile
    * or operator removed stays removed. Skipped quietly on a pi without active-tool control.
    */
   function syncDelegationTools(): void {
@@ -436,10 +439,12 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const workflowLedgerFile = (): string => path.join(ledgerDir(), `${sessionKey}-workflows.json`);
+
   /** This session's workflow ledger, created on first use (only when no file exists) and reused (also across a reload). */
   function workflowLedger(): string {
     if (!policy || !active) throw new Error("the effort policy is unavailable");
-    const file = path.join(ledgerDir(), `${sessionKey}-workflows.json`);
+    const file = workflowLedgerFile();
     const wf = workflowLimits(policy);
     const lowest = policy.tiers[0];
     if (!lowest) throw new Error("effort policy has no tiers");
@@ -521,12 +526,13 @@ export default function (pi: ExtensionAPI) {
     recoveryEligible(role: string, readOnly?: boolean): boolean {
       return Boolean(policy && recoveryOn && readOnly !== false && policy.recovery.roles.includes(role));
     },
-    openRunScope(runId: string): RunScope {
+    openRunScope(runId: string, options: { planned?: number } = {}): RunScope {
       if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
       if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so a workflow run cannot be budgeted.` };
-      // A tier that allows no child invocations cannot budget a run, so it refuses before any launch.
-      // This is the boundary on a pi without active-tool control, where the workflow tool stays visible.
-      if (limitsFor(active.tier).maxTotal === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
+      // A tier with no workflow allowance cannot budget a run, so it refuses before any launch. This
+      // is the boundary on a pi without active-tool control, where the workflow tools stay visible.
+      const allowance = workflowAllowance(policy, active.tier, config.limits);
+      if (allowance === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
       if (runFiles.has(runId)) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" already has a scope; a run id is opened once` };
       let file: string;
       try {
@@ -535,10 +541,11 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         return { ok: false, code: "no-ledger", reason: `the workflow ledger could not be created or read (${error instanceof Error ? error.message : String(error)})` };
       }
-      const opened = ledger.openRun(file, runId);
+      const plan = options.planned === undefined ? undefined : { planned: options.planned, allowance, label: label(active.tier) };
+      const opened = ledger.openRun(file, runId, undefined, undefined, plan);
       if (!opened.ok) return opened;
       runFiles.set(runId, file);
-      return { ok: true, runId, runToken: opened.runToken, ledger: file };
+      return { ok: true, runId, runToken: opened.runToken, ledger: file, maxConcurrent: limitsFor(active.tier).maxConcurrent };
     },
     async reserveWorkflow(input, options = {}) {
       const pollMs = Math.max(10, options.pollMs ?? 250);
@@ -636,7 +643,12 @@ export default function (pi: ExtensionAPI) {
     if (!policy) return undefined;
     // A workflow's completion message that starts a turn while idle is a wake; your message ends the chain.
     if (event.messageType === "custom" && event.message.customType === WORKFLOW_RESULT_TYPE) wakeChain++;
-    else if (event.messageType === "user") wakeChain = 0;
+    else if (event.messageType === "user") {
+      wakeChain = 0;
+      // A user message renews the plan allowance, including one an extension sends (trigger-compact's
+      // resume, remote-control); a wake rotates the turn's ledger, not this one.
+      if (!isChildProcess()) ledger.resetPlanned(workflowLedgerFile());
+    }
     if (standing.on && wakeChain > WAKE_CHAIN_CAP && !(await continueWakeChain(ctx))) return undefined;
     if (pending && (pending.tier !== active?.tier || pending.source !== active.source)) {
       active = pending;

@@ -35,6 +35,8 @@ const TierSchema = object({
   label: string({ minLength: 1 }),
   aliases: withDefault(array(string()), []),
   promptFile: string(),
+  /** The agents model-started YAML runs may plan in one user request (0: no run scope opens). */
+  workflowAgents: Count,
   limits: TierLimitsSchema,
   /** The most Memento generations a task at this tier may use (0: none). */
   memento: object({ maxGenerations: Count }),
@@ -85,6 +87,22 @@ function mementoProblems(block: unknown, tiers: unknown[]): string[] {
     if (!isCount(n)) return void problems.push(`tiers[${index}].memento.maxGenerations must be a non-negative integer`);
     if (isCount(ceiling) && n > ceiling) problems.push(`tiers[${index}].memento.maxGenerations ${n} exceeds memento.maxGenerationsCeiling ${ceiling}`);
     if (previous !== null && n < previous) problems.push(`tiers[${index}].memento.maxGenerations must not fall below the previous tier's`);
+    previous = n;
+  });
+  return problems;
+}
+
+/**
+ * The workflowAgents problems (empty when valid): every tier a count that never falls below the tier
+ * before it. Mirrors the effort extension's policy.ts workflowAgentsProblems (tests/effort-smoke.ts compares them).
+ */
+function workflowAgentsProblems(tiers: unknown[]): string[] {
+  const problems: string[] = [];
+  let previous: number | null = null;
+  tiers.forEach((tier, index) => {
+    const n = prop(tier, "workflowAgents");
+    if (!isCount(n)) return void problems.push(`tiers[${index}].workflowAgents must be a non-negative integer`);
+    if (previous !== null && n < previous) problems.push(`tiers[${index}].workflowAgents must not fall below the previous tier's`);
     previous = n;
   });
   return problems;
@@ -157,6 +175,7 @@ export function validateEffortPolicy(policy: unknown, baseDir = EFFORT_POLICY_DI
     if (isCount(c) && isCount(run) && c > run) problems.push("workflow.workflowConcurrent cannot exceed workflow.workflowTotalPerRun");
     if (isCount(run) && isCount(session) && run > session) problems.push("workflow.workflowTotalPerRun cannot exceed workflow.workflowSessionTotal");
   }
+  problems.push(...workflowAgentsProblems(tiers));
   problems.push(...mementoProblems(policy.memento, tiers));
   const r = policy.recovery;
   if (!r || !isCount(prop(r, "maxInvocations")) || !isCount(prop(r, "maxConcurrent")) || !Array.isArray(prop(r, "roles"))) problems.push("recovery needs maxInvocations, maxConcurrent and roles");

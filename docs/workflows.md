@@ -197,7 +197,7 @@ steps:
 | `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. |
 | `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. |
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
-| `parallel` | A list of steps run concurrently (up to 4 at once) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
+| `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
 ### Templates
 
@@ -278,10 +278,17 @@ whole state is treated as corrupt.
   protection check (see [Agent orchestration](agent-orchestration.md#child-governance)). A subagent
   can't start another workflow.
 - **Effort budgets apply.** `/workflow run` and `/workflow resume` are user-directed launches, limited
-  only by the platform ceilings. The `workflow_run` tool, which the model calls, spends the
-  discretionary [effort](effort.md) budget like any delegation and is hidden at E1. The `research`
-  workflow starts three scouts at once, so as a model-started workflow it needs an effort tier that
-  allows three scouts (E5); use `/workflow run research` at lower tiers.
+  only by the platform ceilings. The `workflow_run` tool, which the model calls, runs in its own
+  [run scope](effort.md#plan-allowance) and is hidden at E1. The run's worst case (each step, plus
+  every gated segment at its full `max_loops`) is charged to the tier's plan allowance before the
+  first launch, so a run that does not fit is refused with nothing started, and the reason names
+  `/effort`. The allowance is per user request: 1 at E2, 8 at E3, 16 at E4, 64 at E5. The kit's
+  `bugfix` and `feature` cost 8 and `research` costs 5, so each fits at E3 and above, one to a
+  request at E3. A model-started resume opens a new scope and is charged only what has not passed.
+  A parallel group runs at most the tier's `maxConcurrent` at once.
+  (`tests/workflow-builtin-smoke.ts`)
+- **Steps do not delegate.** An agent of a model-started run has E1 as its tier and cap, and gets
+  neither the `subagent` tool nor its extension, whatever its role or step asks for.
 
 ## Live telemetry
 

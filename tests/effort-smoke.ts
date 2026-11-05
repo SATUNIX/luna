@@ -216,6 +216,27 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   // M4: every tier carries a Memento allowance (E1-E3 none, E4 2, E5 4), and both validators refuse the same bad values.
+  // The tier's plan allowance: validated and monotonic the same way in both validators.
+  "the runtime and toolchain implementations agree on workflowAgents (0/1/8/16/64) and refuse the same bad values": () => {
+    const expected = [0, 1, 8, 16, 64];
+    assert.deepEqual(corePolicy.tiers.map((t) => t.workflowAgents), expected);
+    assert.deepEqual(rtPolicy.tiers.map((t) => t.workflowAgents), expected);
+    assert.deepEqual(rtPolicy.tiers.map((t) => policyMod.workflowAllowance(rtPolicy, t.id)), expected);
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 0 } }), 0, "a tier the operator set to no delegation plans nothing");
+    const dir = policyMod.policyDir();
+    const allowanceProblems = (problems: string[]): string[] => problems.filter((p) => p.includes("workflowAgents"));
+    const withTier = (index: number, workflowAgents: unknown): unknown => {
+      const policy = structuredClone(corePolicy);
+      const tiers: unknown[] = policy.tiers.map((t, i) => (i === index ? { ...t, workflowAgents } : t));
+      return { ...policy, tiers };
+    };
+    for (const policy of [withTier(2, undefined), withTier(2, -1), withTier(2, 1.5), withTier(2, "8"), withTier(2, 0), withTier(4, 15)]) {
+      const core = allowanceProblems(validateEffortPolicy(policy));
+      assert.ok(core.length > 0, `core refuses ${JSON.stringify(policy).slice(0, 80)}`);
+      assert.deepEqual(allowanceProblems(policyMod.validatePolicy(policy, dir)), core, "runtime agrees");
+    }
+  },
+
   "the runtime and toolchain implementations agree on memento.maxGenerations (0/0/0/2/4) and refuse the same bad values": () => {
     const expected = [0, 0, 0, 2, 4];
     assert.deepEqual(corePolicy.tiers.map((t) => mementoGenerations(t.id, corePolicy)), expected);
@@ -690,14 +711,14 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.ok(current.includes("subagent") && current.includes("workflow_run") && current.includes("workflow") && current.includes("dual_review") && current.includes("dispatch_specialist"), "raising effort restores them at the next turn");
       assert.ok(!current.includes("edit"), "tools this extension did not remove stay removed");
       // recovery opens the delegation tools even at E1 (read-only scouts), then closes again. The
-      // workflow tool stays hidden: at E1 openRunScope always refuses it, so showing it would only
+      // workflow tools stay hidden: at E1 openRunScope always refuses them, so showing them would only
       // ask the operator for approvals that end in that refusal.
       await b.command("minimal");
       await b.turn();
       assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       b.registry().setRecoveryActive(true);
       assert.ok(current.includes("subagent"), "recovery makes the delegation tools available");
-      assert.ok(!current.includes("workflow"), "recovery does not bring back a tool the run scope always refuses at E1");
+      assert.ok(!current.includes("workflow") && !current.includes("workflow_run"), "recovery does not bring back a tool the run scope always refuses at E1");
       b.registry().setRecoveryActive(false);
       await b.turn();
       assert.ok(!current.includes("subagent") && !current.includes("workflow"));
@@ -747,6 +768,60 @@ const tests: Record<string, () => void | Promise<void>> = {
       await b.command("standard");
       await b.turn();
       assert.equal(reg.openRunScope("e3-run").ok, true);
+    } finally { w.cleanup(); }
+  },
+
+  // N1, P3: a planned scope charges its worst case per user request, and the tier allowance caps the
+  // run. A scope without `planned` (an approved script) is charged nothing and keeps totalPerRun.
+  "a planned run scope charges the request and caps the run; a plain scope does neither": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const first = reg.openRunScope("plan-1", { planned: 5 });
+      assert.ok(first.ok, "a plan within the allowance opens");
+      assert.equal(first.maxConcurrent, 2, "the scope carries the tier's parallel limit");
+      const over = reg.openRunScope("plan-2", { planned: 4 });
+      assert.equal(codeOf(over), "plan-allowance", "5 + 4 is past E3's 8");
+      assert.match(over.ok ? "" : over.reason, /\/effort/);
+      assert.ok(reg.openRunScope("plan-2", { planned: 3 }).ok, "a refused plan charged nothing, and did not spend its run id");
+      assert.equal(codeOf(reg.openRunScope("plan-3", { planned: 1 })), "plan-allowance", "the allowance is used up");
+      assert.equal(codeOf(reg.openRunScope("plan-4", { planned: -1 })), "invalid", "a negative plan cannot refund the request");
+      const script = reg.openRunScope("script-1");
+      assert.ok(script.ok, "a scope with no plan is not charged, so the used-up allowance does not refuse it");
+      const saved = present(ledgerMod.readLedger(first.ledger)?.workflow, "the workflow section");
+      assert.equal(saved.runs["plan-1"]?.cap, 8);
+      assert.equal(saved.runs["script-1"]?.cap, undefined, "cap applies only to planned scopes");
+      assert.equal(saved.plannedUsed, 8);
+      for (let i = 0; i < 8; i++) assert.equal(ledgerMod.reserve(first.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "plan-1", runToken: first.runToken }, Date.now() + i, () => `a${String(i)}`).ok, true);
+      const ninth = ledgerMod.reserve(first.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "plan-1", runToken: first.runToken });
+      assert.equal(codeOf(ninth), "total", "reserve holds a planned run to min(cap, totalPerRun)");
+      assert.match(ninth.ok ? "" : ninth.reason, /limit \(8\)/);
+      // A turn that is not the user's keeps the charge, a user turn renews it, and a reload changes nothing.
+      await b.turn();
+      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "a turn with no user message does not refresh the allowance");
+      await b.start("reload");
+      await b.turn();
+      assert.equal(codeOf(reg.openRunScope("plan-6", { planned: 1 })), "plan-allowance", "nor does a reload");
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "go" }, b.ctx);
+      assert.ok(reg.openRunScope("plan-7", { planned: 8 }).ok, "a user turn renews it");
+    } finally { w.cleanup(); }
+  },
+
+  // E1 stays closed through the allowance key, and a tier the operator set to no delegation stays closed too.
+  "an operator's maxTotal 0 refuses a run scope at any tier": async () => {
+    const w = world();
+    try {
+      fs.mkdirSync(path.dirname(mod.configPath()), { recursive: true });
+      fs.writeFileSync(mod.configPath(), JSON.stringify({ schemaVersion: 1, limits: { standard: { maxTotal: 0 } } }));
+      const b = boot();
+      await b.start();
+      await b.turn();
+      assert.equal(codeOf(b.registry().openRunScope("none")), "tier");
+      assert.equal(codeOf(b.registry().openRunScope("none-plan", { planned: 1 })), "tier");
     } finally { w.cleanup(); }
   },
 

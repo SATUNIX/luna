@@ -40,6 +40,8 @@ export interface Tier {
   label: string;
   aliases: string[];
   promptFile: string;
+  /** The agents model-started YAML runs may plan in one user request (0: no run scope opens). */
+  workflowAgents: number;
   limits: TierLimits;
   memento: MementoAllowance;
 }
@@ -127,6 +129,22 @@ function mementoProblems(block: unknown, tiers: unknown[]): string[] {
   return problems;
 }
 
+/**
+ * The workflowAgents problems (empty when valid): every tier a count that never falls below the tier
+ * before it. Mirrors packages/core/lib/effort.ts workflowAgentsProblems (tests/effort-smoke.ts compares them).
+ */
+function workflowAgentsProblems(tiers: unknown[]): string[] {
+  const problems: string[] = [];
+  let previous: number | null = null;
+  tiers.forEach((tier, index) => {
+    const n = isRecord(tier) ? tier.workflowAgents : undefined;
+    if (!isCount(n)) return void problems.push(`tiers[${index}].workflowAgents must be a non-negative integer`);
+    if (previous !== null && n < previous) problems.push(`tiers[${index}].workflowAgents must not fall below the previous tier's`);
+    previous = n;
+  });
+  return problems;
+}
+
 /** A tier's Memento allowance when it is a count; null otherwise. */
 function mementoOf(value: unknown): MementoAllowance | null {
   const n = isRecord(value) ? value.maxGenerations : undefined;
@@ -147,7 +165,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   const tiers: Tier[] = [];
   rawTiers.forEach((tier, index) => {
     if (!isRecord(tier)) return void problems.push(`tiers[${index}] is not an object`);
-    const { id, level, code, label, aliases, promptFile } = tier;
+    const { id, level, code, label, aliases, promptFile, workflowAgents } = tier;
     if (typeof id !== "string" || !/^[a-z]+$/.test(id)) problems.push(`tiers[${index}].id must be lower-case letters`);
     if (ids.has(id)) problems.push(`tiers[${index}].id "${String(id)}" is duplicated`);
     ids.add(id);
@@ -158,8 +176,8 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
     if (typeof promptFile !== "string" || !fs.existsSync(path.join(dir, promptFile))) problems.push(`tiers[${index}].promptFile is missing`);
     const limits = limitsOf(tier.limits);
     const memento = mementoOf(tier.memento);
-    if (typeof id === "string" && typeof level === "number" && typeof code === "string" && typeof label === "string" && typeof promptFile === "string" && limits && memento) {
-      tiers.push({ id, level, code, label, aliases: isStringArray(aliases) ? aliases : [], promptFile, limits, memento });
+    if (typeof id === "string" && typeof level === "number" && typeof code === "string" && typeof label === "string" && typeof promptFile === "string" && isCount(workflowAgents) && limits && memento) {
+      tiers.push({ id, level, code, label, aliases: isStringArray(aliases) ? aliases : [], promptFile, workflowAgents, limits, memento });
     }
   });
   const { default: def, sharedPromptFile, recovery } = policy;
@@ -172,6 +190,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   const ceilings = limitsOf(policy.ceilings);
   problems.push(...workflowProblems(policy.workflow));
   const workflow = workflowOf(policy.workflow);
+  problems.push(...workflowAgentsProblems(rawTiers));
   problems.push(...mementoProblems(policy.memento, rawTiers));
   const mementoCeiling = isRecord(policy.memento) ? policy.memento.maxGenerationsCeiling : undefined;
   const r = isRecord(recovery) ? recovery : null;
@@ -244,6 +263,15 @@ export function tierLimits(policy: EffortPolicy, id: string, overrides: LimitOve
 /** The script-workflow limits (a copy: callers cannot change the loaded policy through it). */
 export function workflowLimits(policy: EffortPolicy): WorkflowLimits {
   return { ...policy.workflow };
+}
+
+/**
+ * The agents model-started YAML runs may plan in one request at tier `id` (the policy default for an
+ * unknown id). A tier the operator set to no delegation plans nothing, whatever the policy allows.
+ */
+export function workflowAllowance(policy: EffortPolicy, id: string, overrides: LimitOverrides = {}): number {
+  const tier = tierOf(policy, id) ?? defaultTier(policy);
+  return tierLimits(policy, tier.id, overrides).maxTotal === 0 ? 0 : tier.workflowAgents;
 }
 
 /** The most Memento generations a task at tier `id` may use (the policy default for an unknown id). */

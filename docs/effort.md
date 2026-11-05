@@ -102,8 +102,8 @@ sequenceDiagram
 At **E1** the model-launchable delegation tools (`subagent`, `workflow_run`, `workflow`,
 `dual_review` and `dispatch_specialist`) are not even offered: their descriptions cost around 1,200
 tokens a turn and they could only be refused. They return at the next message after a higher tier is
-chosen. Recovery brings them back at E1 too, except `workflow`, which a run scope always refuses
-there (`tests/effort-smoke.ts`).
+chosen. Recovery brings them back at E1 too, except `workflow` and `workflow_run`, which a run scope
+always refuses there (`tests/effort-smoke.ts`).
 
 Three kinds of launch are accounted separately from the discretionary budget above:
 
@@ -132,9 +132,9 @@ specialists (`tests/conductor-specialist-bounds-smoke.ts`).
 ## Script workflows
 
 The ledger also has a **workflow** launch kind for the agents of a
-[script-workflow](script-workflows.md) run: every agent the `workflow` tool starts is charged here,
-through delegation-guard with the run id and token. Its limits live in the
-`workflow` block of `effort.json`:
+[script-workflow](script-workflows.md) run and of a YAML workflow the model starts with `workflow_run`:
+every such agent is charged here, through delegation-guard with the run id and token. Its limits live
+in the `workflow` block of `effort.json`:
 
 | Limit | Default | Bounds |
 |---|---:|---|
@@ -147,9 +147,9 @@ run token, and every reservation for the run must carry the run id and that toke
 the token is written to disk. The scope lives in the session's workflow ledger
 (`<agent dir>/pi-kit/effort/ledgers/<session>-workflows.json`), a separate file that the per-turn
 ledger rotation never replaces, so a run that keeps going across your messages keeps its count. A
-run id is opened once; child processes cannot open runs, and a tier with a maximum total of 0 (E1)
-refuses with code `tier`, while `/workflow run` stays available there as a user launch
-(`tests/effort-smoke.ts`). The workflow ledger is created only when
+run id is opened once; child processes cannot open runs, and a tier with a workflow allowance of 0
+(E1, or any tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflow run` stays
+available there as a user launch (`tests/effort-smoke.ts`). The workflow ledger is created only when
 no file exists there. An existing file that cannot be read, or that has no workflow section, is
 never replaced: opening a run and reserving both refuse with code `no-ledger`, so a corrupt or
 edited file cannot reset the session's count. Workflow agents never draw on the tier
@@ -163,6 +163,33 @@ or wrong token, a used-up run, a used-up session, an unreadable ledger) throws a
 (`packages/extensions/src/effort/policy.ts` and `packages/core/lib/effort.ts`) read and validate
 the block the same way. Tests: `tests/workflow-ledger-smoke.ts` (`npm run smoke:workflow-ledger`)
 and `tests/effort-smoke.ts` (`npm run smoke:effort`, the parity check).
+
+### Plan allowance
+
+The model starting a YAML workflow is charged before anything launches. Each tier has a
+`workflowAgents` allowance, the agents such runs may plan in one user request:
+
+| E1 | E2 | E3 | E4 | E5 |
+|---:|---:|---:|---:|---:|
+| 0 | 1 | 8 | 16 | 64 |
+
+`openRunScope(runId, {planned})` charges the run's worst case (its steps, plus every gated segment
+at its full `max_loops`) against the allowance. A plan that does not fit is refused with code
+`plan-allowance` and starts nothing, and the reason names `/effort`. The charge is never refunded,
+so a run that passes its gate first time still spends its worst case. It survives the per-turn
+ledger rotation and a reload: a workflow's completion message starting a turn does not refresh it,
+and only a user message does: yours, or one an extension sends on your behalf, which includes the
+resume after an automatic compaction interrupts a run. The allowance also caps each planned run, so
+the run's limit is the lower of the allowance and `workflowTotalPerRun`. A transient retry is an agent like any other,
+so a run planned at exactly its tier's allowance can use up its cap on its last gate loop.
+
+**The cost.** Plans are additive to the discretionary budget: at E3 a request can start the 3
+children of the `subagent` tool and 8 planned workflow agents. Those 8 run at E1, cannot delegate,
+and run at most the tier's `maxConcurrent` at once.
+
+A script is different: the `workflow` tool stays behind the firewall's ask, so an approved script
+opens its scope with no `planned`, is charged nothing here and keeps `workflowTotalPerRun`.
+Tests: `tests/effort-smoke.ts`, `tests/workflow-builtin-smoke.ts`.
 
 ## Memento mode
 

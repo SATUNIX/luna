@@ -39,6 +39,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   own `refused` route. Outcomes, refusals, launches and grants are unchanged, with one exception: a
   script's own `invalid` option on `agent()` is now an ordinary unknown option, so that call launches
   (`tests/workflow-hooks-smoke.ts`, `tests/workflow-sandbox-smoke.ts`).
+- **Authority change:** the model starting a YAML workflow with `workflow_run` no longer spends the
+  discretionary budget. Each tier has a `workflowAgents` allowance per user request (E1 0, E2 1, E3 8,
+  E4 16, E5 64), additive to the `subagent` limit, so E3 goes from 3 agents a request to 8 for plans.
+  A run's worst case is charged before anything launches and never refunded; a plan that does not
+  fit is refused with code `plan-allowance`, a reason naming `/effort`, and no run directory. Only a
+  user message renews the allowance, which includes one an extension sends on your behalf, such as
+  the resume after an automatic compaction. Children run at E1 without `subagent`, parallel groups
+  run at the tier's `maxConcurrent`, a resume is charged only what is left, and a crash during a
+  sequential step now leaves it `running`, so a resume cannot rerun a writer without asking.
+  `/workflow run` and approved scripts are unchanged. See [Effort](docs/effort.md#plan-allowance)
+  (`tests/effort-smoke.ts`, `tests/workflow-builtin-smoke.ts`).
 - The project is named **Luna** in the README and documentation. The pi package keeps the name
   `@satunix/pi-system`, so install commands, settings entries and environment variables are
   unchanged.

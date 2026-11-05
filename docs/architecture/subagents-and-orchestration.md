@@ -237,8 +237,8 @@ readable ledger, it runs unbudgeted rather than not at all. It never skips the p
 | Launcher | Launch kind | Isolation | Notes |
 |---|---|---|---|
 | `subagent` tool (single, parallel, chain) | `discretionary` | isolated | Each task or chain step reserves its own slot. The `effort` argument can ask for a lower tier. |
-| `workflow_run` tool | `discretionary` | isolated | Hidden together with `subagent` at E1. |
-| `workflow` tool | `workflow` | isolated | Hidden at E1, in recovery too; `openRunScope` refuses a run at a tier with maximum total 0 (code `tier`), so E1 launches nothing even without active-tool control (`tests/effort-smoke.ts`). |
+| `workflow_run` tool | `workflow` | isolated | Hidden at E1, in recovery too; charged to the plan allowance. |
+| `workflow` tool | `workflow` | isolated | Hidden at E1, in recovery too; `openRunScope` refuses a run at a tier with no workflow allowance (code `tier`), so E1 launches nothing even without active-tool control (`tests/effort-smoke.ts`). |
 | `/workflow run` and `/workflow resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
 | Completion reviewer (`/verify`, `verify_completion`) | `mandatory` | isolated | Role `reviewer`, read-only, tools `read,grep,find,ls`. |
 | `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tool list is non-empty and names only `read`, `grep`, `find` and `ls`, the same rule as `subagent` (`tests/conductor-specialist-bounds-smoke.ts`). |
@@ -280,7 +280,7 @@ flowchart TD
 If the policy or the ledger cannot be read, discretionary, recovery and user launches are refused.
 At E1 the `subagent`, `workflow_run`, `workflow`, `dual_review` and `dispatch_specialist` tools are taken
 out of the prompt for the turn, because they could only be refused. They return once a higher tier is
-chosen, and all but `workflow` return while the recovery budget is open (`tests/effort-smoke.ts`).
+chosen, and all but `workflow` and `workflow_run` return while the recovery budget is open (`tests/effort-smoke.ts`).
 
 ## Single delegation end to end
 

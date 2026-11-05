@@ -316,14 +316,16 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
       return `[${agentName}]${step ? ` step ${step}` : ""} ${suffix} · ${elapsed}s${tool} · ${result.usage.turns} turn(s) · run ${runLog.id}`;
     };
 
-    const processLine = (line: string) => {
+    const processLine = (line: string, known?: Record<string, unknown>) => {
       if (!line.trim()) return;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        runLog.write(`[unparsed] ${line.slice(0, 300)}`);
-        return;
+      let parsed: unknown = known;
+      if (parsed === undefined) {
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          runLog.write(`[unparsed] ${line.slice(0, 300)}`);
+          return;
+        }
       }
       // The child's JSON is outside data: read only checked fields from it.
       const event = isRecord(parsed) ? parsed : {};

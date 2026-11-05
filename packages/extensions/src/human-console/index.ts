@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
-import { inputHeld, showWhenFree, whenInputFree } from "./shared/input-owner.ts";
+import { cardTimeoutMs, inputHeld, showWhenFree } from "./shared/input-owner.ts";
 
 const POLL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 900000;
@@ -24,10 +24,7 @@ function auditPath(cwd: string): string { return path.join(cwd, ".pi", "human-co
 function ensure(cwd: string): void { fs.mkdirSync(pendingDir(cwd), { recursive: true }); fs.mkdirSync(resolvedDir(cwd), { recursive: true }); }
 // Cap the deliberate `.invalid` quarantine by evicting the oldest by mtime. Best-effort:
 // a missing directory is fine and per-file errors (e.g. an ENOENT race) are swallowed.
-function pruneInvalid(cwd: string): void {
-  const dir = pendingDir(cwd);
-  let names: string[];
-  try { names = fs.readdirSync(dir).filter((f) => f.endsWith(".invalid")); } catch { return; }
+function pruneInvalid(dir: string, names: readonly string[]): void {
   if (names.length <= MAX_INVALID_QUARANTINE) return;
   const byMtime = names.map((name) => { const file = path.join(dir, name); let mtimeMs = 0; try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* race; treat as oldest */ } return { file, mtimeMs }; }).sort((a, b) => a.mtimeMs - b.mtimeMs);
   for (const { file } of byMtime.slice(0, byMtime.length - MAX_INVALID_QUARANTINE)) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
@@ -42,7 +39,7 @@ function text(value: unknown): string { return String(value); }
 function isString(value: unknown): value is string { return typeof value === "string"; }
 function requester(ctx: unknown): Record<string, unknown> { return { pid: process.pid, sessionId: prop(ctx, "sessionId") || prop(prop(ctx, "sessionManager"), "sessionId") || null, agent: prop(prop(ctx, "agent"), "name") || prop(ctx, "agentName") || "root" }; }
 function isSafeRequestId(value: unknown): value is string { return typeof value === "string" && SAFE_REQUEST_ID.test(value); }
-function requestedTimeout(request: Pending, fallback?: number): number | undefined {
+function requestedTimeout(request: Pending, fallback: number): number {
   const value = Number(request.timeoutMs);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -186,7 +183,7 @@ function controlWorkflowRun(runId: string, action: "pause" | "resume"): { ok: bo
 function deadlineOf(request: Pending): number {
   const createdMs = Date.parse(text(request.createdAt));
   if (Number.isNaN(createdMs)) return 0;
-  return createdMs + (requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS);
+  return createdMs + requestedTimeout(request, DEFAULT_TIMEOUT_MS);
 }
 // A timer can fire a moment before the wall clock reaches it, so a card that ran out on its own timeout
 // may end just short of the deadline. Inside this margin nobody answered.
@@ -195,7 +192,7 @@ const pastDeadline = (deadline: number): boolean => Date.now() + TIMER_MARGIN_MS
 // How long a card may stay open: the time left, and never more than the request asked for, so a future
 // createdAt cannot stretch it.
 function cardMs(request: Pending, deadline: number): number {
-  return Math.max(1, Math.min(deadline - Date.now(), requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS));
+  return Math.max(1, Math.min(deadline - Date.now(), requestedTimeout(request, DEFAULT_TIMEOUT_MS)));
 }
 // Write the answer for a pending request and remove the pending file. The pending file may already
 // be gone (another resolver, or a requester that gave up): a missing file is success, not an error.
@@ -387,12 +384,14 @@ export default function humanConsole(pi: ExtensionAPI) {
   const processPending = (ctx: ExtensionContext) => {
     try {
       ensure(ctx.cwd);
-      pruneInvalid(ctx.cwd);
-      const names = fs.readdirSync(pendingDir(ctx.cwd)).filter((f) => f.endsWith(".json"));
+      const dir = pendingDir(ctx.cwd);
+      const entries = fs.readdirSync(dir);
+      pruneInvalid(dir, entries.filter((f) => f.endsWith(".invalid")));
+      const names = entries.filter((f) => f.endsWith(".json"));
       // A request its requester has taken back needs no further notice.
       for (const id of heldNoticed) if (!names.includes(`${id}.json`)) heldNoticed.delete(id);
       for (const name of names) {
-        const file = path.join(pendingDir(ctx.cwd), name);
+        const file = path.join(dir, name);
         if (processing.has(file)) continue;
         processing.add(file);
         void processOne(ctx, file).catch(() => { /* never let a pending-file race crash the host */ });
@@ -435,12 +434,13 @@ export default function humanConsole(pi: ExtensionAPI) {
     if (ctx.hasUI && ctx.ui) {
       // An open overlay owns the keyboard here too (see processOne): `select` would take focus and Enter
       // would return the first option as the human's answer. The wait and the card share the timeout.
-      const timeoutMs = requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)) ?? DEFAULT_TIMEOUT_MS;
-      const deadline = Date.now() + timeoutMs;
-      const holder = inputHeld();
-      if (holder) ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning");
-      if ((await whenInputFree(signal, timeoutMs)) !== "free") return { content: [{ type: "text" as const, text: "No human answered in time." }], details: { answer: null } };
-      answer = (await answerQuestion(ctx, { kind: "question", ...question }, signal, Math.max(1, deadline - Date.now()))).answer;
+      const asked = await showWhenFree((card) => answerQuestion(ctx, { kind: "question", ...question }, signal, card.timeout), {
+        signal,
+        timeoutMs: requestedTimeout(params, cardTimeoutMs()),
+        rawTimeout: true,
+        onHeld: (holder) => ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning"),
+      });
+      answer = asked.kind === "shown" ? asked.value.answer : null;
     } else {
       const id = crypto.randomUUID(); audit(ctx.cwd, { event: "ask_human_pending", id });
       const outcome = await brokerRequest(ctx.cwd, { ...question, id, kind: "question", requester: requester(ctx) }, signal);

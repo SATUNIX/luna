@@ -22,7 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFileSafe, rotateFileSafe, writeFileSafe } from "./shared/safe-fs.ts";
-import { inputHeld, whenInputFree } from "./shared/input-owner.ts";
+import { cardTimeoutMs, showWhenFree } from "./shared/input-owner.ts";
 import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
@@ -425,7 +425,7 @@ function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: st
   const pending = path.join(root, "pending");
   const resolved = path.join(root, "resolved");
   const id = crypto.randomUUID();
-  const timeoutMs = Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || 900000);
+  const timeoutMs = cardTimeoutMs();
   // Subagent launchers name the agent on the context (not part of pi's declared shape).
   const agentName = field(field(ctx, "agent"), "name") || field(ctx, "agentName");
   const titleAgent: unknown = agentName || (process.env.PI_KIT_INTERNAL_CHILD ? "subagent" : "headless session");
@@ -1142,20 +1142,24 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // prompt timeout, so an overlay left open, or opened from a linked phone, fails closed like an
     // unanswered card instead of parking the call. The broker path below is unchanged.
     const promptMs = promptTimeoutMs();
-    const promptDeadline = Date.now() + promptMs;
-    const promptLeft = (): number => Math.max(1, promptDeadline - Date.now());
-    if (ctx?.hasUI && (typeof ctx.ui?.select === "function" || typeof ctx.ui?.confirm === "function")) {
-      const holder = inputHeld();
-      if (holder) {
-        ctx.ui?.notify?.(`tool-firewall: ${toolName} is waiting for approval; close ${holder} to see it.`, "warning");
-        const waited = await whenInputFree(ctx?.signal, promptMs);
-        if (waited === "aborted") return noAnswer("aborted", "prompt", 0);
-        if (waited === "timeout") return noAnswer("timeout", "prompt", Math.round(promptMs / 1000), `an open overlay, ${holder}, held the card`);
-      }
-    }
+    let heldBy = "";
+    // boundedPrompt reports the card's own timeout; a timeout of showWhenFree's is the hold.
+    const ask = <T>(run: Parameters<typeof boundedPrompt<T>>[1]) =>
+      showWhenFree((held) => boundedPrompt(ctx, run, held.timeout), {
+        signal: ctx?.signal,
+        timeoutMs: promptMs,
+        rawTimeout: true,
+        onHeld: (holder) => {
+          heldBy = holder;
+          ctx.ui?.notify?.(`tool-firewall: ${toolName} is waiting for approval; close ${holder} to see it.`, "warning");
+        },
+      });
+    const heldOut = (kind: "aborted" | "timeout") => (kind === "aborted" ? noAnswer("aborted", "prompt", 0) : noAnswer("timeout", "prompt", Math.round(promptMs / 1000), `an open overlay, ${heldBy}, held the card`));
 
     if (ctx?.hasUI && typeof ctx.ui?.select === "function") {
-      const res = await boundedPrompt(ctx, (o) => ctx.ui.select(card, choices, o), promptLeft());
+      const asked = await ask((o) => ctx.ui.select(card, choices, o));
+      if (asked.kind !== "shown") return heldOut(asked.kind);
+      const res = asked.value;
       if (res.kind === "aborted") return noAnswer("aborted", "prompt", 0);
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);
@@ -1181,7 +1185,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     let picked: string | undefined;
     if (ctx?.hasUI && typeof ctx.ui?.confirm === "function") {
       // The answer comes from a UI implementation: only a literal `true` approves.
-      const res = await boundedPrompt<unknown>(ctx, (o) => ctx.ui.confirm("Approve tool call?", card, o), promptLeft());
+      const asked = await ask<unknown>((o) => ctx.ui.confirm("Approve tool call?", card, o));
+      if (asked.kind !== "shown") return heldOut(asked.kind);
+      const res = asked.value;
       if (res.kind === "aborted") return noAnswer("aborted", "prompt", 0);
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);

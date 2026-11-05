@@ -279,6 +279,14 @@ try {
     held();
     assert.equal(await owner.whenInputFree(new AbortController().signal), "free", "with nothing held a waiter resolves free");
     ok("the shared contract: idempotent release, nested holds, free/aborted waiters");
+
+    const huge = 3_000_000_000;
+    const timeoutOf = (rawTimeout: boolean) => owner.showWhenFree(async (card) => card.timeout, { timeoutMs: huge, rawTimeout });
+    const bounded = await timeoutOf(false);
+    const raw = await timeoutOf(true);
+    assert.ok(bounded.kind === "shown" && bounded.value === 2_147_483_647, "a card's timeout is bounded for setTimeout by default");
+    assert.ok(raw.kind === "shown" && raw.value > 2_147_483_647, "rawTimeout gives the card the time left as it stands");
+    ok("showWhenFree bounds the card's timeout unless the caller keeps it raw");
   }
 
   // 5. A throwing overlay releases input (openHub's finally path).
@@ -331,6 +339,21 @@ try {
     }
     await sleep(30);
     assert.equal(view.selects.length, 0, "and none after the release: the call has ended");
+  });
+
+  // 7a. A prompt timeout past setTimeout's range refuses at once, and is not bounded into an open card.
+  await attempt("a prompt timeout past the timer's range still refuses at once", async () => {
+    const view = overlayUi("overlay-queue-huge");
+    view.ctx.ui.select = () => new Promise<undefined>(() => {});
+    const restoreTimeout = setEnv("PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS", "3000000000");
+    try {
+      const result = await Promise.race([fire(view.ctx), sleep(500).then(() => "parked" as const)]);
+      assert.notEqual(result, "parked", "the card's timer fires at once");
+      assert.ok(result && result !== "parked" && result.block, "the call is refused");
+      assert.match(result.reason, /none arrived within/, "as an unanswered card");
+    } finally {
+      restoreTimeout();
+    }
   });
 
   // 7b. A card shown after a hold runs for the time left.

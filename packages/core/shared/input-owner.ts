@@ -7,9 +7,10 @@
  * operator is typing into the box then answer the card, and Enter picks its first choice. The
  * firewall, the human console, the pentest gate and every other prompt an agent can raise on its own
  * (the list is in docs/security.md) ask this registry before they prompt, and the two overlays in the
- * kit (control-center's hub and the subagent workflow panel) hold input while they are open. A holder
- * also releases on `session_shutdown`: pi's reload removes an overlay without settling `ui.custom`, so
- * a `finally` alone would leave the hold in this process-wide registry until a restart.
+ * kit (control-center's hub and the subagent workflow panel) hold input while they are open, through
+ * `withInputHold`. A holder also calls `releaseInputHolds` on `session_shutdown`: pi's reload removes an
+ * overlay without settling `ui.custom`, so a `finally` alone would leave the hold in this process-wide
+ * registry until a restart.
  *
  * Extensions are self-contained and may not import each other, so this module is the canonical
  * source and every consumer holds a generated, byte-checked copy (`npm run gen:shared`; `npm run
@@ -22,15 +23,16 @@
 const KEY = Symbol.for("pi-kit.input-owner");
 
 const DEFAULT_CARD_TIMEOUT_MS = 900_000;
-// setTimeout fires at once above this.
-const MAX_TIMER_MS = 2_147_483_647;
+
+/** A delay for setTimeout, which fires at once above 2^31-1 ms: a very long limit must not become an instant one. */
+export const timerMs = (ms: number): number => Math.min(ms, 2_147_483_647);
 
 /** How long a prompt with no timeout of its own waits for an overlay and for its answer: the console's timeout. */
 export function cardTimeoutMs(): number {
   return Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_CARD_TIMEOUT_MS);
 }
 
-export interface InputOwner {
+interface InputOwner {
   /** Take a hold for the overlay named `label`; returns an idempotent release. */
   holdInput(label: string): () => void;
   /** The label of the overlay holding input (the most recent hold), or undefined when input is free. */
@@ -95,7 +97,7 @@ function isOwner(value: unknown): value is InputOwner {
 }
 
 /** The one registry every copy shares. */
-export function inputOwnerRegistry(): InputOwner {
+function inputOwnerRegistry(): InputOwner {
   const global = globalThis as Record<symbol, unknown>;
   const existing = global[KEY];
   if (isOwner(existing)) return existing;
@@ -114,14 +116,40 @@ export function inputHeld(): string | undefined {
   return inputOwnerRegistry().inputHeld();
 }
 
+// The releases of the holds this copy took and has not given back. Module state, so each extension's
+// generated copy keeps its own: one extension's shutdown must not drop another's hold.
+const scopedHolds = new Set<() => void>();
+
+/** Run `body` while the overlay named `label` holds input. See releaseInputHolds for what `finally` misses. */
+export async function withInputHold<T>(label: string, body: () => Promise<T>): Promise<T> {
+  const release = holdInput(label);
+  scopedHolds.add(release);
+  try {
+    return await body();
+  } finally {
+    scopedHolds.delete(release);
+    release();
+  }
+}
+
+/** Drop the holds of any overlay the session is ending under: call it from `session_shutdown`. */
+export function releaseInputHolds(): void {
+  for (const release of scopedHolds) release();
+  scopedHolds.clear();
+}
+
 /**
  * Resolve "free" when no overlay holds input, "aborted" when `signal` aborts first, "timeout" when
  * `timeoutMs` passes first. A request for a card must pass a timeout: nothing waits forever unattended.
  */
 export async function whenInputFree(signal?: AbortSignal, timeoutMs?: number): Promise<"free" | "aborted" | "timeout"> {
+  // The registry's shape is checked on every call: it guards against a mismatched copy.
   const owner = inputOwnerRegistry();
+  if (signal?.aborted) return "aborted";
+  if (!owner.inputHeld()) return "free";
   const expiry = new AbortController();
-  const timer = timeoutMs === undefined ? undefined : setTimeout(() => expiry.abort(), Math.min(timeoutMs, MAX_TIMER_MS));
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => expiry.abort(), timerMs(timeoutMs));
+  timer?.unref();
   const wait = signal ? AbortSignal.any([signal, expiry.signal]) : expiry.signal;
   try {
     // Re-check after each wait: another overlay can take the keyboard before the card is shown.
@@ -148,6 +176,12 @@ export interface ShowWhenFreeOptions {
   timeoutMs?: number | undefined;
   /** Called once, with the holder's label, when the card has to wait. */
   onHeld?: ((holder: string) => void) | undefined;
+  /**
+   * Give the card the time left as it stands, not bounded for setTimeout. The firewall, console and
+   * pentest prompts take this: a configured value past the timer's range ends their card at once,
+   * which refuses, and bounding it would turn that refusal into an open card.
+   */
+  rawTimeout?: boolean | undefined;
 }
 
 /**
@@ -155,12 +189,13 @@ export interface ShowWhenFreeOptions {
  * what is left of it, so an overlay left open fails closed instead of parking the caller.
  */
 export async function showWhenFree<T>(show: (card: CardOptions) => Promise<T>, options: ShowWhenFreeOptions = {}): Promise<{ kind: "shown"; value: T } | { kind: "aborted" | "timeout" }> {
-  const { signal, timeoutMs = cardTimeoutMs(), onHeld } = options;
+  const { signal, timeoutMs = cardTimeoutMs(), onHeld, rawTimeout = false } = options;
   const deadline = Date.now() + timeoutMs;
   const holder = inputHeld();
   if (holder) onHeld?.(holder);
   const waited = await whenInputFree(signal, timeoutMs);
   if (waited !== "free") return { kind: waited };
-  const card: CardOptions = { timeout: Math.min(Math.max(1, deadline - Date.now()), MAX_TIMER_MS), ...(signal ? { signal } : {}) };
+  const left = Math.max(1, deadline - Date.now());
+  const card: CardOptions = { timeout: rawTimeout ? left : timerMs(left), ...(signal ? { signal } : {}) };
   return { kind: "shown", value: await show(card) };
 }

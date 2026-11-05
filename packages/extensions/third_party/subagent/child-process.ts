@@ -12,10 +12,9 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "./config.ts";
+import { timerMs } from "./shared/input-owner.ts";
+import { openToolCalls } from "./shared/open-tool-calls.ts";
 import type { KillReason, SpawnChild } from "./types.ts";
-
-// setTimeout fires at once above 2^31-1 ms, which would turn a very long limit into an instant kill.
-const timerMs = (ms: number): number => Math.min(ms, 2_147_483_647);
 
 // Runtimes that execute a JS entry file passed as their first argument. Everything else
 // (in particular a bun-compiled standalone `pi` binary) already IS the pi executable.
@@ -61,7 +60,8 @@ export interface ChildRunOptions {
   heartbeatMs: number;
   spawnChild?: SpawnChild | undefined;
   onSpawn?: (handle: { pid?: number | undefined; terminate: () => void }) => void;
-  onLine: (line: string) => void;
+  /** One stdout line, with its parsed JSON when the tool-call tracking already parsed it. */
+  onLine: (line: string, parsed?: Record<string, unknown>) => void;
   onStderr: (text: string) => void;
   onKill: (reason: KillReason) => void;
   onHeartbeat?: (info: ChildHeartbeat) => void;
@@ -137,33 +137,27 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
     // The idle watchdog keys on output, which would kill a child that is legitimately silent
     // inside a tool call (a long build, a slow test run). The child's JSONL names every tool call
     // it starts and finishes, so the watchdog is held while any call is open and rearmed once the
-    // last one ends. Open calls are counted per id, so nested and parallel calls each hold it open
-    // even when they share an id; a blank or missing id is one counted key.
-    const openToolCalls = new Map<string, number>();
-    const noteToolCall = (line: string) => {
+    // last one ends.
+    const toolCalls = openToolCalls();
+    const noteToolCall = (line: string): Record<string, unknown> | undefined => {
       // Only the two event types matter; `tool_execution_update` chatter is common and is not
       // parsed. (A tool result that quotes the string still reaches JSON.parse and is discarded.)
-      if (!line.includes('"tool_execution_start"') && !line.includes('"tool_execution_end"')) return;
+      if (!line.includes('"tool_execution_start"') && !line.includes('"tool_execution_end"')) return undefined;
       let parsed: unknown;
       try {
         parsed = JSON.parse(line);
       } catch {
-        return; // an unparsed line is the caller's concern; it cannot be a tool event here
+        return undefined; // an unparsed line is the caller's concern; it cannot be a tool event here
       }
-      if (!isRecord(parsed)) return;
-      if (parsed.type !== "tool_execution_start" && parsed.type !== "tool_execution_end") return;
-      // An end for a key with nothing open changes nothing. Real pi always sends balanced ids.
-      const id = typeof parsed.toolCallId === "string" ? parsed.toolCallId.trim() : "";
-      const open = (openToolCalls.get(id) ?? 0) + (parsed.type === "tool_execution_start" ? 1 : -1);
-      if (open > 0) openToolCalls.set(id, open);
-      else openToolCalls.delete(id);
+      if (!isRecord(parsed)) return undefined;
+      toolCalls.note(parsed);
+      return parsed; // the largest lines in the stream: the caller need not parse them again
     };
-    const toolCallOpen = () => openToolCalls.size > 0;
     const armIdle = () => {
       if (idleTimeoutMs <= 0 || exited || killReason) return;
       clearIdle();
       // A tool call in progress is work, not a stall: hold the watchdog until the last one ends.
-      if (toolCallOpen()) return;
+      if (toolCalls.open()) return;
       idleTimer = setTimeout(() => kill("timeout"), timerMs(idleTimeoutMs));
       idleTimer.unref();
     };
@@ -180,9 +174,9 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
 
     // A consumer-thrown exception inside the data handler would otherwise escape as an
     // uncaught exception and can break the stream reader; contain it per line.
-    const emitLine = (line: string) => {
+    const emitLine = (line: string, parsed?: Record<string, unknown>) => {
       try {
-        onLine(line);
+        onLine(line, parsed);
       } catch {
         /* a listener error must not tear down the child reader */
       }
@@ -200,10 +194,7 @@ export async function runChildProcess(options: ChildRunOptions): Promise<ChildOu
       buffer = lines.pop() || "";
       // Tool state is updated before the watchdog is rearmed, so the line that closes the last
       // call rearms the full timeout instead of leaving it paused.
-      for (const line of lines) {
-        noteToolCall(line);
-        emitLine(line);
-      }
+      for (const line of lines) emitLine(line, noteToolCall(line));
       armIdle();
     });
     stderr.on("data", (data: Buffer | string) => {

@@ -409,6 +409,11 @@ SOFTWARE.
     limit and the budget after taking a slot, and estimates from finished agents that spent output.
     The end of a run stops calls still waiting for admission
     (`tests/workflow-kernel-regress-smoke.ts`).
+  - **One path for holds and open calls (2026-11-05):** `tools.ts`, `workflow-tools.ts`, `wf-tool.ts`
+    and `wf-panel.ts` take holds and held cards from the generated `shared/input-owner.ts`;
+    `child-process.ts` counts open tool calls with the generated `shared/open-tool-calls.ts` and
+    passes the parsed line to `runner.ts` through `onLine`'s second argument, so each line is
+    parsed once. No behaviour change (`tests/firewall-overlay-queue-smoke.ts`).
 
 ### `todo`
 

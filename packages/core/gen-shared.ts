@@ -82,6 +82,10 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/tool-firewall/shared/input-owner.ts",
     "packages/extensions/third_party/subagent/shared/input-owner.ts",
   ],
+  "open-tool-calls.ts": [
+    "packages/extensions/src/conductor/shared/open-tool-calls.ts",
+    "packages/extensions/third_party/subagent/shared/open-tool-calls.ts",
+  ],
   "safe-regex.ts": [
     "packages/extensions/src/skill-router/shared/safe-regex.ts",
     "packages/extensions/third_party/subagent/shared/safe-regex.ts",

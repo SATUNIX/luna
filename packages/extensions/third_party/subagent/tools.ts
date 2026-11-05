@@ -23,8 +23,9 @@ import { collectRuns, formatRunTable } from "./status.ts";
 import { stopAllLive, stopLive, stopRecordedRun, recordStop } from "./live.ts";
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
-import { bindWorkflowStatus, releasePanelHolds, workflowStatus } from "./wf-panel.ts";
-import { showWhenFree } from "./shared/input-owner.ts";
+import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
+import { releaseInputHolds } from "./shared/input-owner.ts";
+import { askFree } from "./workflow-tools.ts";
 
 const TaskItem = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -204,10 +205,11 @@ async function projectTrustError(
   if (!ctx.hasUI || !ctx.ui?.confirm) return "Blocked: project-local agents require interactive operator approval.";
   // This card starts on Yes and launches a role: a key typed into an open overlay must not answer it.
   const confirm = ctx.ui.confirm.bind(ctx.ui);
-  const asked = await showWhenFree(
-    (card) => confirm("Run project-local agents?", `Agents: ${projectRequested.map((a) => a.name).join(", ")}\nSource: ${projectAgentsDir ?? "(unknown)"}\n\nOnly continue for trusted repositories.`, card),
-    { signal: signal ?? ctx.signal, onHeld: (holder) => ctx.ui?.notify?.(`subagent: a project-local agent is waiting for approval; close ${holder} to see it.`, "warning") },
-  );
+  const asked = await askFree(ctx, {
+    what: "subagent: a project-local agent is waiting for approval",
+    signal,
+    show: (card) => confirm("Run project-local agents?", `Agents: ${projectRequested.map((a) => a.name).join(", ")}\nSource: ${projectAgentsDir ?? "(unknown)"}\n\nOnly continue for trusted repositories.`, card),
+  });
   if (asked.kind !== "shown") return "Canceled: no operator approved the project-local agents.";
   return asked.value ? null : "Canceled: project-local agents not approved.";
 }
@@ -290,7 +292,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     stopAllLive();
     workflowStatus.unbind();
     // pi's reload removes an open panel without settling it, so its hold ends here or never.
-    releasePanelHolds();
+    releaseInputHolds();
   });
 
   pi.registerTool({

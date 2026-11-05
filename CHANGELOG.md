@@ -28,6 +28,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 - `ask_human` files only its declared fields: an undeclared argument can no longer set `kind`,
   `workflowRun`, `actionHash`, `createdAt` or a card's text. A pending request's `createdAt` can no
   longer stretch its card, and one that does not parse is expired (`tests/firewall-overlay-queue-smoke.ts`).
+- Held prompts, input holds and child open-tool-call counting each have one implementation:
+  `ask_human`, the firewall card and the pentest card go through `showWhenFree`, the card timeout
+  default comes from `cardTimeoutMs()`, and `withInputHold`, `releaseInputHolds`, `timerMs` and the
+  generated `open-tool-calls.ts` replace the copies. A tool-event line is parsed once, and the console
+  poll lists the pending directory once. An over-range timeout is still refused at once
+  (`tests/firewall-overlay-queue-smoke.ts`).
 - The project is named **Luna** in the README and documentation. The pi package keeps the name
   `@satunix/pi-system`, so install commands, settings entries and environment variables are
   unchanged.

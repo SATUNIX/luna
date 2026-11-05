@@ -23,9 +23,8 @@ import type { ToolContext } from "./types.ts";
 import { OMISSIONS_NAMED, startScriptRun, scriptRunsRoot, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
 import { parseScriptMeta } from "./wf-meta.ts";
 import { SandboxSession, type ModeUi } from "./wf-sandbox.ts";
-import { showWhenFree } from "./shared/input-owner.ts";
 import { MAX_SCRIPT_BYTES, discoverWorkflows, workflowDirs } from "./workflow.ts";
-import { openScriptWorkflow, trustError } from "./workflow-tools.ts";
+import { askFree, openScriptWorkflow, trustError } from "./workflow-tools.ts";
 
 export const RESULT_MESSAGE_TYPE = "luna-workflow-result";
 /** Longest result text inside the completion message's fence. */
@@ -203,10 +202,7 @@ export function sandboxUi(ctx: ToolContext): ModeUi {
   return {
     hasUI: ctx.hasUI === true,
     select: async (title, options) => {
-      const asked = await showWhenFree((card) => select(title, options, card), {
-        signal: ctx.signal,
-        onHeld: (holder) => ctx.ui?.notify?.(`workflow: the sandbox question is waiting; close ${holder} to see it.`, "warning"),
-      });
+      const asked = await askFree(ctx, { what: "workflow: the sandbox question is waiting", show: (card) => select(title, options, card) });
       return asked.kind === "shown" ? asked.value : undefined;
     },
   };

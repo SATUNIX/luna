@@ -8,7 +8,8 @@ import os from "node:os";
 import { Type } from "typebox";
 import { finalAssistantOutput, pendingValidatorFindings, registerValidatorTools } from "./validate/validator.ts";
 import { appendFileSafe, createFileExclusive, openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
-import { showWhenFree } from "./shared/input-owner.ts";
+import { showWhenFree, timerMs } from "./shared/input-owner.ts";
+import { openToolCalls } from "./shared/open-tool-calls.ts";
 
 // conductor: durable, restartable engagement lifecycle state. It only contributes
 // context for context-sieve to inject; it never injects a system prompt itself.
@@ -62,8 +63,6 @@ const VERDICT_MAX_AGE_MS = Number(process.env.PI_KIT_VERDICT_MAX_AGE_MS) || 24 *
 export const DEFAULT_RECURSION_BUDGET: Readonly<RecursionBudget> = Object.freeze({ maxDepth: 2, maxDispatches: 8, dispatchesUsed: 0 });
 const AGENT_NAME = /^[a-z0-9][a-z0-9-]*$/;
 const LOCK_STALE_MS = 60_000;
-// setTimeout fires at once above this.
-const MAX_TIMER_MS = 2_147_483_647;
 // Shell access is deliberately excluded in Phase 4: a bash-capable child could invoke
 // pi directly and evade the wrapper-owned durable reservation boundary.
 const SPECIALIST_ALLOWED_TOOLS = new Set(["read", "grep", "find", "ls", "write", "edit"]);
@@ -435,27 +434,19 @@ export function streamSpecialistChild(
       escalation = setTimeout(() => { if (!exited) { try { proc.kill("SIGKILL"); } catch { /* already gone */ } } }, 5000);
       escalation.unref();
     };
-    // Open tool calls per id, as subagent's child-process.ts counts them: a long silent tool call is
-    // work, not a stall, so the idle watchdog is held until the last one ends. A blank or missing id
-    // is one counted key. The wall clock still ends a call that never finishes.
-    const openToolCalls = new Map<string, number>();
-    const noteToolCall = (event: Record<string, unknown>) => {
-      const id = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
-      const open = (openToolCalls.get(id) ?? 0) + (event.type === "tool_execution_start" ? 1 : -1);
-      if (open > 0) openToolCalls.set(id, open);
-      else openToolCalls.delete(id);
-    };
+    // The idle watchdog is held while a tool call is open. The wall clock still ends a call that never finishes.
+    const toolCalls = openToolCalls();
     const armIdle = () => {
       if (exited || bounds.idleTimeoutMs <= 0) return;
       if (idleTimer) clearTimeout(idleTimer);
-      if (openToolCalls.size > 0) return;
-      idleTimer = setTimeout(() => stop("idle-timeout"), Math.min(bounds.idleTimeoutMs, MAX_TIMER_MS));
+      if (toolCalls.open()) return;
+      idleTimer = setTimeout(() => stop("idle-timeout"), timerMs(bounds.idleTimeoutMs));
       idleTimer.unref();
     };
     const line = (raw: string) => {
       try {
         const event: unknown = JSON.parse(raw);
-        if (isRecord(event) && (event.type === "tool_execution_start" || event.type === "tool_execution_end")) noteToolCall(event);
+        if (isRecord(event)) toolCalls.note(event);
         if (isRecord(event) && (event.type === "message_end" || event.type === "tool_result_end") && isRecord(event.message)) { messages.push(event.message); onUpdate?.("received child progress"); }
       } catch { /* only JSON stream messages are trusted */ }
     };
@@ -488,7 +479,7 @@ export function streamSpecialistChild(
     });
     if (signal) { if (signal.aborted) stop("signal"); else signal.addEventListener("abort", onAbort, { once: true }); }
     armIdle();
-    if (bounds.maxRuntimeMs > 0) { wallTimer = setTimeout(() => stop("wall-clock"), Math.min(bounds.maxRuntimeMs, MAX_TIMER_MS)); wallTimer.unref(); }
+    if (bounds.maxRuntimeMs > 0) { wallTimer = setTimeout(() => stop("wall-clock"), timerMs(bounds.maxRuntimeMs)); wallTimer.unref(); }
   });
 }
 

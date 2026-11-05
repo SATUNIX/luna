@@ -17,10 +17,15 @@
  *   pause gate again; once `budget.total` is reached agent() throws. The check is an estimate, so a run
  *   can pass `budget.total` by at most what its live agents spend.
  * - workflow(nameOrRef, args) runs another script inline, one level deep.
- * - Every agent call is journaled (journal.jsonl in the run's transcript directory). A resumed run
+ * - Every agent call is journaled (journal.jsonl in the run's transcript directory): a `run` row with
+ *   the checkout's fingerprint, a `started` row before each launch, an end row after it. A resumed run
  *   (resumeFrom) reuses the longest unchanged prefix of agent() calls, keyed by
- *   sha256(canonical {prompt, opts without label or required}); a cached writer result is reused only while the
- *   checkout (or its kept worktree branch) is as the earlier run left it.
+ *   sha256(canonical {prompt, opts without label or required}). A result is reused only while the
+ *   checkout is as the earlier run left it, the launch resolves to the same definition (launchDigest)
+ *   and a kept worktree still holds what the agent left; a miss says why (reuse.rejected{reason}).
+ * - A `started` row with no end row is an unknown effect. A read or a worktree writer replays. A
+ *   main-checkout writer replays only if the checkout is as the run left it; otherwise no
+ *   main-checkout writer runs on that state (blocked:unknown-effect), on this resume or a later one.
  *
  * - Every agent() call ends in one StepResult, launched or refused, and the run's status comes from
  *   those (run-contract.ts), so a script cannot make a failed step read as passed.
@@ -35,11 +40,12 @@ import path from "node:path";
 import type { AgentConfig } from "./agents.ts";
 import { runControls, type ControlRegistry } from "./control.ts";
 import { isReadOnlyRole } from "./launch.ts";
+import { subagentStateDir } from "./logging.ts";
 import { redact, REDACTION_POLICY } from "./redact.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
 import { deriveOutcome, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, type RunModel, type RunRegistry } from "./run-model.ts";
-import { runAgent } from "./runner.ts";
+import { launchDigest, runAgent, type RunOverrides } from "./runner.ts";
 import { StructuredSchemaError } from "./structured-output/check.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
 import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
@@ -146,6 +152,8 @@ export interface RunOutcome {
   omissionCount?: number | undefined;
   /** Worktrees kept because their agent changed something (never merged). */
   keptWorktrees: WorktreeOutcome[];
+  /** Why journaled results were not reused, one fixed line per reason. */
+  reuseRejected?: string[] | undefined;
   resumedFrom?: string | undefined;
 }
 
@@ -195,8 +203,9 @@ export function callKey(prompt: string, opts: Record<string, unknown> | null): s
   return crypto.createHash("sha256").update(canonicalJson({ prompt, opts: rest })).digest("hex");
 }
 
+/** An end row. Version 1 entries still parse, and reuse nothing: they hold no definition and no starting fingerprint. */
 export interface JournalEntry {
-  v: 1;
+  v: 1 | 2;
   seq: number;
   key: string;
   label: string;
@@ -210,39 +219,83 @@ export interface JournalEntry {
   writer: boolean;
   /** For a writer in the main checkout: the checkout's fingerprint once it finished. */
   workspace?: string | undefined;
-  /** For a worktree agent: its branch, the head it ended at, and whether the worktree was kept. */
-  worktree?: { branch: string; head: string; status: "removed" | "kept" } | undefined;
+  /** For a worktree agent: its branch, the head it ended at and whether it was kept; a kept one also has its path and fingerprint. */
+  worktree?: { branch: string; head: string; status: "removed" | "kept"; path?: string | undefined; tree?: string | undefined } | undefined;
+  /** launchDigest of the call. */
+  definition?: string | undefined;
+  /** The seq of the `started` row this row ends; a call that never launched has none. */
+  started?: number | undefined;
   outputTokens: number;
   subagentRunId?: string | undefined;
   error?: string | undefined;
 }
 
+/** Written just before a launch. With no end row naming its seq, nobody knows what the call did. */
+interface StartedRow {
+  seq: number;
+  event: "started";
+  key: string;
+  label: string;
+  role: string;
+  writer: boolean;
+  /** The call ran in a worktree of its own, so whatever it did cannot have reached the checkout. */
+  isolated?: true | undefined;
+}
+
+/** What a resume needs of an earlier run. */
+export interface RunJournal {
+  entries: JournalEntry[];
+  /** The run row's fingerprint: the checkout this run built on. */
+  fingerprint?: string | undefined;
+  /** Calls that started and have no end row. */
+  unknown: StartedRow[];
+}
+
+const isKey = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+const optional = (v: unknown, type: "string" | "number"): boolean => v === undefined || typeof v === type;
+
 function isJournalEntry(v: unknown): v is JournalEntry {
   if (!isRecord(v)) return false;
   const tree = v.worktree;
-  const treeOk = tree === undefined || (isRecord(tree) && typeof tree.branch === "string" && typeof tree.head === "string" && (tree.status === "removed" || tree.status === "kept"));
-  return v.v === 1 && typeof v.seq === "number" && typeof v.key === "string" && /^[0-9a-f]{64}$/.test(v.key) && typeof v.ok === "boolean" && typeof v.writer === "boolean" && (v.workspace === undefined || typeof v.workspace === "string") && treeOk;
+  const treeOk = tree === undefined || (isRecord(tree) && typeof tree.branch === "string" && typeof tree.head === "string" && (tree.status === "removed" || tree.status === "kept") && optional(tree.path, "string") && optional(tree.tree, "string"));
+  return (v.v === 1 || v.v === 2) && typeof v.seq === "number" && isKey(v.key) && typeof v.ok === "boolean" && typeof v.writer === "boolean" && optional(v.workspace, "string") && optional(v.definition, "string") && optional(v.started, "number") && treeOk;
 }
 
-/** A script run's journal, in the order the calls finished. Missing or malformed lines are skipped. */
-export function readJournal(file: string): JournalEntry[] {
+function isStartedRow(v: unknown): v is StartedRow {
+  return isRecord(v) && v.event === "started" && typeof v.seq === "number" && isKey(v.key) && typeof v.label === "string" && typeof v.role === "string" && typeof v.writer === "boolean" && (v.isolated === undefined || v.isolated === true);
+}
+
+function journalRows(file: string): unknown[] {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
   } catch {
     return [];
   }
-  const out: JournalEntry[] = [];
+  const out: unknown[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const parsed: unknown = JSON.parse(line);
-      if (isJournalEntry(parsed)) out.push(parsed);
+      out.push(JSON.parse(line));
     } catch {
       /* a torn last line from a crash */
     }
   }
   return out;
+}
+
+/** A script run's end rows, in the order the calls finished. Missing or malformed lines are skipped. */
+export function readJournal(file: string): JournalEntry[] {
+  return journalRows(file).filter(isJournalEntry);
+}
+
+function readRunJournal(file: string): RunJournal {
+  const rows = journalRows(file);
+  const entries = rows.filter(isJournalEntry);
+  const ended = new Set(entries.map((e) => e.started));
+  const run = rows.find((r) => isRecord(r) && r.event === "run");
+  const fingerprint = isRecord(run) && typeof run.fingerprint === "string" ? run.fingerprint : undefined;
+  return { entries, fingerprint, unknown: rows.filter(isStartedRow).filter((s) => !ended.has(s.seq)) };
 }
 
 /** The run.json of a script run, when it is one. */
@@ -265,8 +318,11 @@ function newRunId(): string {
 // ---------------------------------------------------------------------------------------------
 // The checkout fingerprint (T6): HEAD plus the tree of the whole working copy, untracked files
 // included (ignored ones are not), built in a scratch index so the real index is never touched.
+// The scratch index starts as a copy of the real one, so git need only hash the files whose stat
+// data changed: every run takes a fingerprint, and a read of the whole tree would cost each of them.
 
 const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false"];
+const INDEX_AGE_MARGIN_MS = 2000;
 
 function git(args: string[], cwd: string, env?: Record<string, string | undefined>): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -278,8 +334,31 @@ function git(args: string[], cwd: string, env?: Record<string, string | undefine
 }
 
 /**
- * The checkout's fingerprint, or "no-git" outside a git checkout (writers are then never reused).
- * `exclude` (the workflow runs root) is left out: the run's own journal changes after every call.
+ * Copies the real index to `index`; false when it cannot stand in for a read of the working tree.
+ * git trusts an entry's stat data only if the entry is older than the index, so the copy keeps the
+ * index's age, set back past its timestamp's rounding: a nearby edit is then hashed, never assumed
+ * clean. A file flagged assume-unchanged or skip-worktree would not be read at all, so an index with
+ * any of those is not used.
+ */
+async function seedIndex(root: string, index: string, env: Record<string, string | undefined>): Promise<boolean> {
+  try {
+    const real = path.resolve(root, await git(["rev-parse", "--git-path", "index"], root));
+    fs.copyFileSync(real, index);
+    const age = new Date(fs.statSync(real).mtimeMs - INDEX_AGE_MARGIN_MS);
+    fs.utimesSync(index, age, age);
+    const flagged = /(?:^|\0)(?:[a-z]|S) /.test(await git(["ls-files", "-v", "-z"], root, env));
+    if (!flagged) return true;
+  } catch {
+    /* no index yet, or none git can read: the fresh path below decides */
+  }
+  fs.rmSync(index, { force: true });
+  return false;
+}
+
+/**
+ * The checkout's fingerprint, or "no-git" outside a git checkout (nothing is then reused).
+ * `exclude` (the workflow runs root) is left out, because the run's own journal changes after every
+ * call, and so are the run's worktrees and agent logs, which sit under the same `.pi`.
  */
 export async function workspaceFingerprint(cwd: string, exclude?: string): Promise<string> {
   let root: string;
@@ -288,23 +367,28 @@ export async function workspaceFingerprint(cwd: string, exclude?: string): Promi
   } catch {
     return "no-git";
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wf-index-"));
+  let tmp: string | undefined;
   try {
-    const env = { ...process.env, GIT_INDEX_FILE: path.join(tmp, "index") };
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wf-index-"));
+    const index = path.join(tmp, "index");
+    const env = { ...process.env, GIT_INDEX_FILE: index };
     const head = await git(["rev-parse", "--verify", "HEAD^{commit}"], root).catch(() => "no-head");
-    if (head !== "no-head") await git(["read-tree", "HEAD"], root, env);
-    const skip = exclude === undefined ? "" : path.relative(realOr(root), realOr(exclude));
-    const inside = skip !== "" && skip !== ".." && !skip.startsWith(`..${path.sep}`) && !path.isAbsolute(skip);
-    const rel = skip.split(path.sep).join("/");
-    // An ignored runs root needs no exclude (git add refuses a pathspec naming an ignored path).
-    const ignored = inside && (await git(["check-ignore", "-q", "--", rel], root).then(() => true, () => false));
-    await git(["add", "-A", "--", ".", ...(inside && !ignored ? [`:(exclude,literal)${rel}`] : [])], root, env);
+    if (!(await seedIndex(root, index, env)) && head !== "no-head") await git(["read-tree", "HEAD"], root, env);
+    const excludes: string[] = [];
+    for (const dir of exclude === undefined ? [] : [exclude, path.join(root, ".pi", "worktrees"), subagentStateDir(cwd)]) {
+      const skip = path.relative(realOr(root), realOr(dir));
+      if (skip === "" || skip === ".." || skip.startsWith(`..${path.sep}`) || path.isAbsolute(skip)) continue;
+      const rel = skip.split(path.sep).join("/");
+      // An ignored directory needs no exclude (git add refuses a pathspec naming an ignored path).
+      if (!(await git(["check-ignore", "-q", "--", rel], root).then(() => true, () => false))) excludes.push(`:(exclude,literal)${rel}`);
+    }
+    await git(["add", "-A", "--", ".", ...excludes], root, env);
     const tree = await git(["write-tree"], root, env);
     return crypto.createHash("sha256").update(`${head}\n${tree}`).digest("hex");
   } catch (error) {
     return `unreadable:${error instanceof Error ? error.message.slice(0, 80) : "error"}`;
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    if (tmp !== undefined) fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -319,28 +403,75 @@ function realOr(p: string): string {
 // ---------------------------------------------------------------------------------------------
 // Resume cache: the longest unchanged prefix of agent() calls
 
+export type ReuseRejection = "definition" | "workspace" | "worktree" | "legacy";
+
+// Fixed text: these lines reach the completion message outside its untrusted fences.
+const REUSE_REJECTED: Readonly<Record<ReuseRejection, string>> = {
+  definition: "a role, model or skill the call launches with has changed",
+  workspace: "the checkout is not as the earlier run left it, or cannot be fingerprinted",
+  worktree: "a kept worktree is gone or no longer holds what its agent left",
+  legacy: "the earlier journal predates these checks, so this resume cost one rerun",
+};
+
+const usable = (fingerprint: string): boolean => fingerprint !== "no-git" && !fingerprint.startsWith("unreadable:");
+
+const readText = (file: string): string => {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+/**
+ * Whether a worktree's link still leads through this checkout's git dir. An agent can write the
+ * `.git` file in its worktree, and a planted repository's configuration runs in any git command
+ * started there, so this reads files only.
+ */
+async function linkIntact(worktree: string, cwd: string): Promise<boolean> {
+  const common = realOr(path.resolve(cwd, await git(["rev-parse", "--git-common-dir"], cwd)));
+  const dotGit = path.join(worktree, ".git");
+  const link = /^gitdir:\s*(.+?)\s*$/m.exec(readText(dotGit))?.[1];
+  if (!link) return false;
+  const gitDir = realOr(path.resolve(worktree, link));
+  if (path.dirname(gitDir) !== path.join(common, "worktrees")) return false;
+  const commonDir = readText(path.join(gitDir, "commondir")).trim();
+  const back = readText(path.join(gitDir, "gitdir")).trim();
+  return commonDir !== "" && back !== "" && realOr(path.resolve(gitDir, commonDir)) === common && realOr(path.resolve(gitDir, back)) === realOr(dotGit);
+}
+
+/** A kept worktree's fingerprint, or undefined when its link moved or it cannot be read. */
+async function keptTree(worktree: string, cwd: string): Promise<string | undefined> {
+  if (!(await linkIntact(worktree, cwd).catch(() => false))) return undefined;
+  const fingerprint = await workspaceFingerprint(worktree);
+  return usable(fingerprint) ? fingerprint : undefined;
+}
+
 class ResumeCache {
   private readonly entries: JournalEntry[];
   private readonly used: boolean[];
   private broken = false;
-  private readonly checkoutOk: boolean;
+  private readonly inPlace: boolean;
   private readonly cwd: string;
+  /** The checkout the earlier run left: the fingerprint of the last writer it ran, or the one it started on. */
+  readonly base: string;
+  /** Main-checkout writers that started, have no end row, and may have changed what is there now. */
+  readonly unknownEffects: readonly StartedRow[];
 
-  constructor(entries: JournalEntry[], fingerprint: string, cwd: string) {
-    this.entries = entries.filter((e) => e.ok);
+  constructor(previous: RunJournal, fingerprint: string, cwd: string) {
+    this.entries = previous.entries.filter((e) => e.ok);
     this.used = this.entries.map(() => false);
     this.cwd = cwd;
-    // Writers in the main checkout are reused only when the checkout is as the last of them left it.
-    const last = [...entries].reverse().find((e) => e.ok && e.writer && e.workspace !== undefined);
-    this.checkoutOk = fingerprint !== "no-git" && !fingerprint.startsWith("unreadable:") && (last === undefined || last.workspace === fingerprint);
-  }
-
-  get size(): number {
-    return this.entries.length;
+    // A failed writer counts: the state it left is the one a resume continues from. A cached one does
+    // not: its row holds an older run's state, and that run's hit means the run row already covers it.
+    const lastWriter = [...previous.entries].reverse().find((e) => e.writer && e.workspace !== undefined && !e.cached);
+    this.base = lastWriter?.workspace ?? previous.fingerprint ?? "unreadable:no run row";
+    this.inPlace = usable(fingerprint) && fingerprint === this.base;
+    this.unknownEffects = this.inPlace ? [] : previous.unknown.filter((s) => s.writer && !s.isolated);
   }
 
   /** The cached entry for this call, or null; the first miss ends the prefix for every later call. */
-  async take(key: string): Promise<JournalEntry | null> {
+  async take(key: string, definition: string, rejected: (reason: ReuseRejection) => void): Promise<JournalEntry | null> {
     if (this.broken) return null;
     const at = this.entries.findIndex((e, i) => !this.used[i] && e.key === key);
     const entry = at >= 0 ? this.entries[at] : undefined;
@@ -350,22 +481,29 @@ class ResumeCache {
     }
     // Claimed before the await so identical concurrent calls each get their own entry.
     this.used[at] = true;
-    if (!(await this.valid(entry))) {
+    const reason = await this.rejection(entry, definition);
+    if (reason !== null) {
       this.used[at] = false;
       this.broken = true;
+      rejected(reason);
       return null;
     }
     return entry;
   }
 
-  private async valid(entry: JournalEntry): Promise<boolean> {
-    if (!entry.writer) return true;
-    if (entry.worktree) {
-      if (entry.worktree.status === "removed") return true; // it changed nothing
-      const head = await git(["rev-parse", "--verify", `refs/heads/${entry.worktree.branch}`], this.cwd).catch(() => "");
-      return head === entry.worktree.head;
-    }
-    return entry.workspace !== undefined && this.checkoutOk;
+  private async rejection(entry: JournalEntry, definition: string): Promise<ReuseRejection | null> {
+    if (entry.v === 1) return "legacy";
+    if (!this.inPlace) return "workspace"; // decision 12: one rule, readers and writers alike
+    if (entry.definition !== definition) return "definition";
+    return (await this.worktreeHolds(entry)) ? null : "worktree";
+  }
+
+  private async worktreeHolds(entry: JournalEntry): Promise<boolean> {
+    const tree = entry.worktree;
+    if (!tree || tree.status === "removed") return true; // no worktree, or it changed nothing
+    if (tree.path === undefined || tree.tree === undefined || !fs.existsSync(tree.path)) return false;
+    const head = await git(["rev-parse", "--verify", `refs/heads/${tree.branch}`], this.cwd).catch(() => "");
+    return head === tree.head && (await keptTree(tree.path, this.cwd)) === tree.tree;
   }
 }
 
@@ -452,6 +590,9 @@ function editsFiles(role: AgentConfig): boolean {
   const tools = role.tools;
   return !tools || tools.length === 0 || tools.some((t) => t === "write" || t === "edit");
 }
+
+/** The overrides every launch of this call uses, so the journal's digest and the launch cannot differ. */
+const launchOverrides = (o: AgentOpts, model: string | undefined): RunOverrides => ({ model, thinking: o.effort ? EFFORT_TO_THINKING[o.effort] : undefined, appendSystemPrompt: WORKFLOW_AGENT_NOTE });
 
 /** The launch was refused before a child ran (firewall, effort, or a role with no usable tool). */
 class LaunchRefused extends Error {}
@@ -551,11 +692,11 @@ export function startScriptRun(spec: ScriptSpec, args: unknown, opts: EngineOpti
   const effort = opts.effort === undefined ? effortRegistry() : opts.effort;
   if (!effort) return { ok: false, error: "Refused: workflow runs need the effort extension (it budgets their agents); it is in every shipped profile." };
   const runsDir = opts.runsDir ?? scriptRunsRoot(opts.cwd);
-  let previous: JournalEntry[] = [];
+  let previous: RunJournal = { entries: [], unknown: [] };
   if (opts.resumeFrom !== undefined) {
     const prior = readScriptRun(runsDir, opts.resumeFrom);
     if (!prior) return { ok: false, error: `No script workflow run "${opts.resumeFrom}" to resume from.` };
-    previous = readJournal(path.join(runsDir, prior.id, "journal.jsonl"));
+    previous = readRunJournal(path.join(runsDir, prior.id, "journal.jsonl"));
   }
   const runId = newRunId();
   const scope = effort.openRunScope(runId);
@@ -590,7 +731,7 @@ interface RunContext {
   dir: string;
   journalPath: string;
   scriptPath: string;
-  previous: JournalEntry[];
+  previous: RunJournal;
   writeRun: (status: string, extra?: Record<string, unknown>) => void;
 }
 
@@ -611,7 +752,8 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   const offControl = control.onChange((paused) => run.setPaused(paused));
   const sem = new Semaphore(opts.concurrency ?? defaultConcurrency());
   const maxAgents = opts.maxAgents ?? MAX_AGENTS_PER_RUN;
-  const cache = new ResumeCache(rc.previous, rc.previous.some((e) => e.writer && e.workspace !== undefined) ? await workspaceFingerprint(opts.cwd, rc.runsDir) : "unused", opts.cwd);
+  const fingerprint = await workspaceFingerprint(opts.cwd, rc.runsDir);
+  const cache = new ResumeCache(rc.previous, fingerprint, opts.cwd);
   const kept: WorktreeOutcome[] = [];
   let launched = 0;
   // Admitted and not yet finished, and the finished agents that spent output: decision 14's budget estimate.
@@ -641,18 +783,32 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     refusalHeld.add(step.required);
   };
 
-  const journal = (entry: Omit<JournalEntry, "v" | "seq">): void => {
+  const appendRow = (row: Record<string, unknown>): number => {
+    const at = ++seq;
     try {
-      appendPrivate(rc.journalPath, `${JSON.stringify({ v: 1, seq: ++seq, ...entry, label: redact(entry.label), phase: redact(entry.phase), value: redactValue(entry.value), ...(entry.error ? { error: redact(entry.error) } : {}) })}\n`);
+      appendPrivate(rc.journalPath, `${JSON.stringify({ v: 2, seq: at, ...row })}\n`);
     } catch {
       /* a journal write failure only costs resume */
     }
+    return at;
   };
+  // A run held back by an unknown effect ran on a checkout nobody vouches for, so nothing it journals
+  // is reusable. It keeps the old base and the old rows too, so that its own journal cannot read as
+  // a clean start and clear the block on the next resume.
+  const heldBack = cache.unknownEffects.length > 0;
+  const journal = (entry: Omit<JournalEntry, "v" | "seq">): void => {
+    appendRow({ ...entry, ok: entry.ok && !heldBack, label: redact(entry.label), phase: redact(entry.phase), value: redactValue(entry.value), ...(entry.error ? { error: redact(entry.error) } : {}) });
+  };
+  const journalStart = (row: Omit<StartedRow, "seq" | "event">): number => appendRow({ event: "started", ...row, label: redact(row.label) });
+  appendRow({ event: "run", fingerprint: heldBack ? cache.base : fingerprint });
+  for (const { key, label, role, writer } of cache.unknownEffects) journalStart({ key, label, role, writer });
+  const reuseRejected = new Set<ReuseRejection>();
   const narrator: string[] = [];
   const note = (frame: Frame, text: string): void => {
     narrator.push(`${frame.nested ? `▸ ${frame.name}: ` : ""}${text}`);
     if (narrator.length > 200) narrator.shift();
   };
+  for (const row of cache.unknownEffects) narrator.push(`${row.label} of the earlier run has an unknown effect: no writer runs in this checkout`);
 
   const launch = async (role: AgentConfig, prompt: string, o: AgentOpts, model: string | undefined, frame: Frame, label: string, phase: string, step: StepResult): Promise<{ value: unknown; result?: SingleResult | undefined; worktree?: WorktreeOutcome | undefined; workspace?: string | undefined }> => {
     const writer = isWriter(role);
@@ -675,7 +831,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
             spawnChild: opts.spawnChild,
             launchKind: "workflow",
             workflowRun: { runId: rc.runId, runToken: rc.runToken },
-            overrides: { model, thinking: o.effort ? EFFORT_TO_THINKING[o.effort] : undefined, appendSystemPrompt: WORKFLOW_AGENT_NOTE },
+            overrides: launchOverrides(o, model),
             ...(o.schema !== undefined ? { schema: o.schema } : {}),
             onUpdate: (t) => run.agentUpdate(id, { activity: t }),
             onUsage: (usage, m) => run.agentUpdate(id, { usage, model: m }),
@@ -810,16 +966,24 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     }
     const key = callKey(prompt, rawOpts);
     const writer = isWriter(role);
-    const hit = await cache.take(key);
+    const definition = launchDigest(role, launchOverrides(o, model), opts.cwd, opts.parentModel);
+    const hit = await cache.take(key, definition, (reason) => {
+      reuseRejected.add(reason);
+      note(frame, `reuse.rejected{${reason}}: ${label} runs live: ${REUSE_REJECTED[reason]}`);
+    });
     if (hit) {
       cached++;
       const id = run.agentStart({ label, phase, role: role.name, model, cached: true, ...(frame.nested ? { group: frame.name } : {}) });
       run.agentUpdate(id, { activity: "cached (resumed)" });
       run.agentEnd(id, { status: "passed" });
-      journal({ key, label, phase, role: role.name, ok: true, value: hit.value, cached: true, writer: hit.writer, workspace: hit.workspace, worktree: hit.worktree, outputTokens: 0 });
+      journal({ key, label, phase, role: role.name, ok: true, value: hit.value, cached: true, writer: hit.writer, workspace: hit.workspace, worktree: hit.worktree, definition, outputTokens: 0 });
       settle(step, "completed");
       step.ref = String(seq);
       return hit.value;
+    }
+    const cutOff = cache.unknownEffects[0];
+    if (cutOff && writer && o.isolation !== "worktree") {
+      throw refuse(step, "unknown-effect", `${cutOff.label} of the earlier run was cut off with no record of how it ended, and the checkout is not as that run left it, so no writer runs on it. Check the checkout, then start a fresh run.`);
     }
     // Admission (decision 14): the slot comes first, then every check, so a fan-out waiting in the
     // queue cannot pass them all before any of it has spent anything. Every exit below releases it.
@@ -835,13 +999,15 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       }
       reserved = true;
       step.usage.agents = 1;
+      const started = journalStart({ key, label, role: role.name, writer, ...(o.isolation === "worktree" ? { isolated: true } : {}) });
       try {
         const r = await launch(role, prompt, o, model, frame, label, phase, step);
         const tree = r.worktree;
+        const fingerprintOfKept = tree?.status === "kept" ? await keptTree(tree.path, opts.cwd) : undefined;
         journal({
-          key, label, phase, role: role.name, ok: r.value !== null, value: r.value, writer,
+          key, label, phase, role: role.name, ok: r.value !== null, value: r.value, writer, definition, started,
           ...(r.workspace !== undefined ? { workspace: r.workspace } : {}),
-          ...(tree ? { worktree: { branch: tree.branch, head: tree.head, status: tree.status } } : {}),
+          ...(tree ? { worktree: { branch: tree.branch, head: tree.head, status: tree.status, ...(tree.status === "kept" ? { path: tree.path, tree: fingerprintOfKept } : {}) } } : {}),
           outputTokens: r.result?.usage.output ?? 0, subagentRunId: r.result?.runId,
           ...(r.value === null && r.result?.errorMessage ? { error: r.result.errorMessage } : {}),
         });
@@ -849,7 +1015,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
         return r.value;
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
-        journal({ key, label, phase, role: role.name, ok: false, value: null, writer, outputTokens: 0, error: text });
+        journal({ key, label, phase, role: role.name, ok: false, value: null, writer, definition, started, outputTokens: 0, error: text });
         step.ref = String(seq);
         if (error instanceof LaunchRefused) settle(step, "blocked", "denied", text);
         else if (error instanceof StructuredSchemaError) settle(step, "blocked", "schema", text);
@@ -968,6 +1134,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     ...(result?.ok ? { value } : {}),
     ...(engineError !== undefined ? { error: engineError, errorKind: "engine" } : (scriptError ?? failure ?? {})),
     ...(omissions.length > 0 ? { omissions, omissionCount } : {}),
+    ...(reuseRejected.size > 0 ? { reuseRejected: [...reuseRejected].map((reason) => `reuse.rejected{${reason}}: ${REUSE_REJECTED[reason]}`) } : {}),
   };
   for (const p of run.snapshot().phases) if (p.status === "running") run.setPhaseStatus(p.id, status === "passed" || status === "partial" ? "passed" : "aborted");
   run.finish(status, outcome.error);

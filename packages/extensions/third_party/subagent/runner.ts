@@ -155,6 +155,36 @@ export interface RunOverrides {
   appendSystemPrompt?: string | undefined;
 }
 
+/** What a launch of `agent` resolves to, before its environment is prepared. */
+function launchFields(agent: AgentConfig, overrides: RunOverrides, parentModel: string | undefined, inheritParentModel: boolean, workflowLaunch: boolean) {
+  // Model: an explicit per-call override, else the role's `model:` frontmatter, else the active
+  // parent model. PI_KIT_SUBAGENT_INHERIT_MODEL=1 forces the parent model for every role.
+  const selectedModel = overrides.model ?? (inheritParentModel ? parentModel : agent.model ?? parentModel);
+  const listed = overrides.tools ?? agent.tools;
+  return {
+    selectedModel,
+    thinking: overrides.thinking ?? agent.thinking,
+    listed,
+    tools: workflowLaunch && listed ? listed.filter((t) => t !== "subagent") : listed,
+    skills: [...new Set([...(agent.skills ?? []), ...(overrides.skills ?? [])])],
+    extensions: [...(agent.extensions ?? []), ...(overrides.extensions ?? [])].filter((e) => !workflowLaunch || e !== "subagent"),
+    requestedTier: overrides.effort ?? agent.effort,
+    maxRuntimeMs: overrides.maxRuntimeMs ?? agent.maxRuntimeMs ?? envInt("PI_KIT_SUBAGENT_MAX_RUNTIME_MS", DEFAULT_MAX_RUNTIME_MS, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+/**
+ * A digest of everything a workflow agent launch resolves to: tools, model, thinking, skills with
+ * their text, extensions, effort, runtime and system prompt. A journaled result is reused only
+ * while this matches, so a role or a skill that changed reruns (wf-engine.ts).
+ */
+export function launchDigest(agent: AgentConfig, overrides: RunOverrides, cwd: string, parentModel: string | undefined): string {
+  const { selectedModel, thinking, tools, skills, extensions, requestedTier, maxRuntimeMs } = launchFields(agent, overrides, parentModel, false, true);
+  const preload = skillPreamble(skills, cwd);
+  const resolved = { model: selectedModel, thinking, tools, skills, preamble: preload.text, missing: preload.missing, extensions, effort: requestedTier, maxRuntimeMs, systemPrompt: agent.systemPrompt, appended: overrides.appendSystemPrompt };
+  return crypto.createHash("sha256").update(JSON.stringify(resolved)).digest("hex");
+}
+
 export async function runAgent(options: RunAgentOptions): Promise<SingleResult> {
   const {
     defaultCwd,
@@ -213,13 +243,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
     return { ...early, exitCode: 1, stderr: `Unknown agent: "${agentName}". Available: ${available}.` };
   }
 
-  // Model: an explicit per-call override, else the role's `model:` frontmatter, else the active
-  // parent model. PI_KIT_SUBAGENT_INHERIT_MODEL=1 forces the parent model for every role.
-  const selectedModel = overrides.model ?? (inheritParentModel ? parentModel : agent.model ?? parentModel);
-  const thinking = overrides.thinking ?? agent.thinking;
   const workflowLaunch = launchKind === "workflow";
-  const listed = overrides.tools ?? agent.tools;
-  const tools = workflowLaunch && listed ? listed.filter((t) => t !== "subagent") : listed;
+  const { selectedModel, thinking, listed, tools, skills, extensions, requestedTier, maxRuntimeMs } = launchFields(agent, overrides, parentModel, inheritParentModel, workflowLaunch);
   // An empty tool list means "every tool", so a role left with none is refused rather than widened.
   if (listed && listed.length > 0 && tools?.length === 0) {
     return { ...early, exitCode: 1, stopReason: "denied", errorMessage: `Subagent not started: role "${agentName}" has no tool a workflow agent may use (workflow agents cannot delegate)`, deniedCode: "no-tools" };
@@ -232,7 +257,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
   // The extension arguments and environment come from delegation-guard per attempt (below): every
   // attempt is a new child execution, so it reserves against the effort budget again.
 
-  const skills = [...new Set([...(agent.skills ?? []), ...(overrides.skills ?? [])])];
   const preload = skillPreamble(skills, childCwd);
   const systemPrompt = `${agent.systemPrompt.trim()}${preload.text}${overrides.appendSystemPrompt ? `\n\n${overrides.appendSystemPrompt.trim()}` : ""}${structured ? `\n\n${structuredPrompt()}` : ""}`;
 
@@ -242,7 +266,6 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
 
   const streamCap = envInt("PI_KIT_SUBAGENT_STREAM_CAP_BYTES", DEFAULT_CHILD_STREAM_CAP, 64 * 1024, Number.MAX_SAFE_INTEGER);
   const idleTimeoutMs = envInt("PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS", DEFAULT_IDLE_TIMEOUT_MS, 0, Number.MAX_SAFE_INTEGER);
-  const maxRuntimeMs = overrides.maxRuntimeMs ?? agent.maxRuntimeMs ?? envInt("PI_KIT_SUBAGENT_MAX_RUNTIME_MS", DEFAULT_MAX_RUNTIME_MS, 0, Number.MAX_SAFE_INTEGER);
   const heartbeatMs = envInt("PI_KIT_SUBAGENT_HEARTBEAT_MS", DEFAULT_HEARTBEAT_MS, 0, Number.MAX_SAFE_INTEGER);
   const maxAttempts = 1 + envInt("PI_KIT_SUBAGENT_RETRIES", DEFAULT_RETRIES, 0, 5);
   const retryBackoffMs = envInt("PI_KIT_SUBAGENT_RETRY_BACKOFF_MS", RETRY_BACKOFF_MS, 0, 60000);
@@ -269,8 +292,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
       scout: isScoutRole(agent),
       readOnly: isReadOnlyRole(agent, tools),
       readOnlyTools: readOnlyTools(agent, tools),
-      requestedTier: overrides.effort ?? agent.effort,
-      extraExtensions: [...(agent.extensions ?? []), ...(overrides.extensions ?? [])].filter((e) => !workflowLaunch || e !== "subagent"),
+      requestedTier,
+      extraExtensions: extensions,
       needsSubagent: !workflowLaunch && (tools?.includes("subagent") ?? false),
       baseEnv: { ...process.env },
       ...(workflowRun ? { runId: workflowRun.runId, runToken: workflowRun.runToken } : {}),

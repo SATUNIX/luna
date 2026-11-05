@@ -178,3 +178,12 @@
     `child-process.ts` counts open tool calls with the generated `shared/open-tool-calls.ts` and
     passes the parsed line to `runner.ts` through `onLine`'s second argument, so each line is
     parsed once. No behaviour change (`tests/firewall-overlay-queue-smoke.ts`).
+  - **Reuse bound to the checkout (2026-11-05):** journal v2 in `wf-engine.ts`: a `run` row holds the
+    starting fingerprint, a `started` row precedes each launch, and end rows carry `definition` and
+    the seq they end. One predicate replaces `checkoutOk` and covers reads as well as writers. A
+    worktree entry also needs its path, git link, branch head and tree. `launchDigest` in `runner.ts`
+    hashes what `launchFields` resolves, shared with `runAgent`. A `started` row with no end row and a
+    changed checkout blocks main-checkout writers as `blocked:unknown-effect`; such a run journals
+    every end row with `ok: false`, and cached rows do not move the base. `wf-tool.ts` names refused
+    reuse in the completion message (`tests/workflow-kernel-regress-smoke.ts`,
+    `tests/workflow-resume-smoke.ts`).

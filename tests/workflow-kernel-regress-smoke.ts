@@ -10,8 +10,7 @@
 // Controls (no defect, they pass today and must keep passing) guard each contract against a fix that overreaches:
 // an unchanged checkout and role still reuse a read, an untouched kept worktree is still reused, serial calls still stop at
 // the limits, a best-effort parallel() branch that fails is still null and does not fail the run.
-// KNOWN_RED lists the cases whose defect is still present. A listed case that fails is reported and is not fatal; a listed
-// case that passes exits 1 until it is removed, so a fix cannot leave its entry behind; anything else not passing exits 1.
+// Any case or control that does not pass exits 1.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -135,49 +134,6 @@ interface CaseResult {
   failures: string[];
 }
 const results: CaseResult[] = [];
-
-/** Defects not fixed yet. A fix deletes its own ids in the same change. */
-const KNOWN_RED: ReadonlySet<string> = new Set(["F1a", "F1b", "F1c", "F1d", "F1e", "F2a", "F2b", "F2c"]);
-
-interface Verdict {
-  exit: 0 | 1;
-  /** Listed cases that failed as expected. */
-  knownRed: string[];
-  /** One line for each reason the file exits 1. */
-  fatal: string[];
-}
-
-/** The exit rule. A control can never be excused, and an ERROR is a broken test, not the listed defect. */
-function judge(list: readonly CaseResult[], knownRed: ReadonlySet<string>): Verdict {
-  const excusable = list.filter((r) => !r.control && knownRed.has(r.id));
-  const expected = excusable.filter((r) => r.state === "FAIL");
-  const fatal = [
-    ...excusable.filter((r) => r.state === "pass").map((r) => `${r.id} passes but is still in KNOWN_RED: remove it`),
-    ...list.filter((r) => r.state !== "pass" && !expected.includes(r)).map((r) => `${r.id}: ${r.state}, which KNOWN_RED does not excuse`),
-    ...[...knownRed].filter((id) => !excusable.some((r) => r.id === id)).map((id) => `${id} is in KNOWN_RED but is not a case`),
-  ];
-  return { exit: fatal.length > 0 ? 1 : 0, knownRed: expected.map((r) => r.id), fatal };
-}
-
-/** Every exit path of judge(), on synthetic results, so the rule is proved whatever the real cases do today. */
-function metaCheck(): void {
-  const result = (id: string, state: CaseResult["state"], control = false): CaseResult => ({ id, control, state, failures: [] });
-  const verdict = (list: CaseResult[], ...knownRed: string[]): Verdict => judge(list, new Set(knownRed));
-
-  const listedRed = verdict([result("A", "FAIL"), result("B", "pass")], "A");
-  assert.deepEqual(listedRed, { exit: 0, knownRed: ["A"], fatal: [] }, "a listed case that fails is reported, not fatal");
-  const listedGreen = verdict([result("A", "pass")], "A");
-  assert.equal(listedGreen.exit, 1, "a listed case that passes exits 1");
-  assert.match(listedGreen.fatal.join("\n"), /A passes but is still in KNOWN_RED/);
-  const unlistedRed = verdict([result("A", "FAIL")]);
-  assert.equal(unlistedRed.exit, 1, "an unlisted failure exits 1");
-  assert.deepEqual(unlistedRed.knownRed, []);
-
-  assert.equal(verdict([result("A", "pass")]).exit, 0, "an empty list and no failure is plainly green");
-  assert.equal(verdict([result("A", "ERROR")], "A").exit, 1, "a broken precondition is not excused by the list");
-  assert.equal(verdict([result("A-control", "FAIL", true)], "A-control").exit, 1, "a control is not excused by the list");
-  assert.equal(verdict([result("A", "pass")], "Z").exit, 1, "an id that names no case exits 1");
-}
 
 async function scenario(id: string, title: string, body: (p: Probe) => Promise<void>, control = false): Promise<void> {
   const probe = new Probe();
@@ -439,12 +395,8 @@ try {
   const controls = results.filter((r) => r.control);
   const count = (list: CaseResult[], state: CaseResult["state"]): number => list.filter((r) => r.state === state).length;
   console.log(`\nworkflow-kernel-regress-smoke: ${String(cases.length)} cases (${String(count(cases, "pass"))} pass, ${String(count(cases, "FAIL"))} FAIL, ${String(count(cases, "ERROR"))} ERROR), ${String(controls.length)} controls (${String(count(controls, "pass"))} pass)`);
-  metaCheck();
-  console.log("meta-check: listed red, listed green, unlisted red and the stricter paths all exit as specified");
-  const verdict = judge(results, KNOWN_RED);
-  if (verdict.knownRed.length > 0) console.log(`known red, not fatal: ${verdict.knownRed.join(", ")}`);
-  for (const line of verdict.fatal) console.log(`fatal: ${line}`);
-  process.exitCode = verdict.exit;
+  for (const r of results) if (r.state !== "pass") console.log(`fatal: ${r.id}: ${r.state}`);
+  process.exitCode = results.every((r) => r.state === "pass") ? 0 : 1;
 } finally {
   delegation.cleanup();
   for (const restore of restores.reverse()) restore();

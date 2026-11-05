@@ -195,26 +195,49 @@ script is not redacted. Script runs do not appear in `workflow_status`, which li
 
 ## Resume
 
-Every `agent()` call is journaled when it ends, with its key, label, phase, role, whether it
-succeeded, its (redacted) value and, for writers, what it changed. The key is the SHA-256 of the
-canonical JSON of `{prompt, opts}` with `label` left out, so relabelling a call does not change it.
+The journal opens with a fingerprint of the checkout. Every launched `agent()` call adds a `started`
+row before it launches and an end row with its key, label, phase, role, whether it succeeded, its
+(redacted) value, a digest of what it launched with and, for writers, what it changed. The key is
+the SHA-256 of the canonical JSON of `{prompt, opts}` with `label` left out, so relabelling a call
+does not change it.
 
 Resuming (`resumeFromRunId`) starts a new run with a new id and reuses the longest unchanged prefix
 of the earlier run's calls. A call is answered from the journal when no call before it has missed
 and an unused earlier entry has the same key; matching ignores the order calls finished in, so a
 pipeline resumes fully. An entry is claimed by one call only, so identical concurrent calls (a
 best-of-N fan-out) each get their own. The first call with no match runs live, and so does every
-call after it. The same script with the same args reuses every call.
+call after it. The same script with the same args, on an unchanged checkout and roles, reuses every
+call.
 
 - A failed, skipped or refused call is journaled with `ok: false` and never reused.
-- A writer in the main checkout (a role that is not read-only) records a fingerprint of the
-  checkout when it ends: `HEAD` plus the tree of the whole working copy, untracked files included,
-  built in a scratch index. The workflow runs directory (`.pi/workflows/runs`) is left out, so a
-  repo that does not gitignore `.pi/` still reuses writers. It is reused only when the checkout's fingerprint now equals the one
-  the earlier run's last such writer recorded. Outside a git checkout, writers are never reused.
+- The fingerprint is `HEAD` plus the tree of the whole working copy, untracked files included,
+  built in a scratch index seeded from the real one. The workflow runs directory
+  (`.pi/workflows/runs`), `.pi/worktrees` and the agent logs (`.pi/subagent`) are left out, so a repo
+  that does not gitignore `.pi/` still reuses results. A writer in the main checkout (a role that is not read-only) records it when
+  it ends, failed or not.
+- Any entry, read or write, is reused only when the fingerprint now equals the one the earlier run's
+  last live writer recorded, or the one the run started on if no writer ran live. So an edit or commit after
+  the run reuses nothing. Outside a git checkout nothing is reused.
+- An entry is reused only when the call would launch the same thing: its resolved tools, model,
+  thinking, skills and their text, extensions, effort, runtime and system prompt.
 - A worktree agent is reused when its worktree was removed (it changed nothing), or when its kept
-  branch still points at the head it ended at.
+  worktree still exists with its git link intact, its branch at the head it ended at, and the same
+  contents, uncommitted changes included. Git does not run in a worktree whose link moved.
+- A journal written before these rows existed reuses nothing, once: the resumed run writes the new
+  form.
 - Reused values are the journal's redacted copies.
+
+A refused reuse logs `reuse.rejected{definition|workspace|worktree|legacy}` in the run's log, and the
+completion message gives the reason.
+
+A `started` row with no end row means the run died during that call and nobody knows what it did. A
+read replays, and a worktree writer replays in a new worktree. A writer in the main checkout replays
+only if the checkout is as the run left it. Otherwise every call that would write to the main
+checkout is refused as `blocked` with reason `unknown-effect`, reads and worktree writers still run,
+and later resumes stay refused until the checkout is back as the run left it. Calls that run while
+held back are journaled with `ok: false` and never reused, even once the checkout is back. A resume
+cannot settle it: check the checkout and start a fresh run. YAML workflows have their own record of this
+(`interruptedWriterSteps`).
 
 An unknown run id is refused. (`tests/workflow-resume-smoke.ts`)
 

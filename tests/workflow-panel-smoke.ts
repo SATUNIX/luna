@@ -33,6 +33,7 @@
 //  14. real engine runs (fake children) feed all of it: nested groups, ◆ on resume, the reduced
 //      sandbox badge, p pause shown in the run, k skip, and s save of the run's script.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -723,6 +724,7 @@ try {
     const support = S.detectSupport();
     const project = path.join(ws, "engine-proj");
     fs.mkdirSync(project, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: project }); // outside git nothing is reused
     const roles = ["scout", "implementer"].map((name): AgentConfig => ({ name, description: name, systemPrompt: "", source: "kit", filePath: name, ...(name === "scout" ? { tools: ["read", "grep", "find", "ls"] } : {}) }));
     const scriptSpec = (name: string, body: string): EngineModule.ScriptSpec => ({ name, description: `${name} test`, source: `export const meta = { name: "${name}", description: "${name} test" };\n${body}`, phases: [] });
     const child = scriptSpec("child", `phase("Inner"); return await agent("inner " + args.n, { agentType: "scout" })`);

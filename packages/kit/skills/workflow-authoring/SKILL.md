@@ -205,9 +205,11 @@ loops, staged escalation) when the task needs them.
 To resume after a stop or failure, call `workflow({scriptPath, resumeFromRunId: "<runId>"})`;
 after a script edit, call `workflow({script: "<edited source>", resumeFromRunId: "<runId>"})`. The new run reuses the longest unchanged
 prefix of `agent()` calls from the earlier run's journal and runs the first changed call and
-everything after it live. The same script with the same args reuses every call. A failed or
-skipped call is never reused, a writer in the main checkout only when the checkout is unchanged
-since, and a worktree agent only when its branch is where it left it.
+everything after it live. The same script with the same args reuses every call while the checkout,
+the roles and their skills are unchanged. A failed or skipped call is never reused. Any call, read
+or write, is reused only while the checkout is as the earlier run left it, so an edit or commit
+reuses nothing, and outside git nothing is reused. A kept worktree must also still hold what its
+agent left. The completion message gives the reason (`reuse.rejected`).
 
 Before diagnosing an empty or odd result, read `<transcriptDir>/journal.jsonl`: it records each
 agent's (redacted) return value. Do not assume cached results are non-empty. `run.json` in the

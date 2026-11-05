@@ -127,6 +127,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A resumed workflow no longer replays results that stopped being true. A journaled call is reused only
+  when the checkout still matches what the earlier run left, reads included, and when the call would
+  launch the same thing: tools, model, thinking, skills and their text, extensions, effort, runtime and
+  system prompt. A kept worktree also needs its path, git link, branch head and contents, uncommitted
+  changes included. Outside a git checkout nothing is reused, and a journal from an older version
+  reuses nothing, once. Each refused reuse logs `reuse.rejected` and the completion message names it.
+  A run killed during a writer now leaves a `started` row: if the checkout changed, every main-checkout
+  writer of a resume is `blocked:unknown-effect`, nothing from that resume is reused later, and a killed
+  writer that changed nothing no longer blocks. Interrupted reads and worktree writers replay
+  (F1, F2, `tests/workflow-resume-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).
 - A workflow's `maxAgents` and `budget.total` now hold across a fan-out. A call takes its slot before
   it is checked, so queued calls can no longer all pass the checks at once, and a pause reaches a queued
   call. A run can pass `budget.total` by at most what its live agents spend. A call still waiting for

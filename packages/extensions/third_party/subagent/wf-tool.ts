@@ -175,6 +175,7 @@ export function formatCompletion(o: RunOutcome): string {
   const lines = [
     `Workflow ${o.name} (run ${o.runId}) ${o.status}${o.error ? ` (${o.errorKind ?? "error"}); the error text is below.` : "."}`,
     `Agents: ${String(o.launched)} launched, ${String(o.cached)} reused from the journal; ${String(o.outputTokens)} output tokens.`,
+    ...(o.reuseRejected ?? []).map((line) => `Not reused: ${line}.`),
     ...o.keptWorktrees.map((w) => `Kept worktree ${w.path} on branch ${w.branch} (${w.reason ?? "changed"}); it is not merged: review it yourself.`),
     `Journal: ${o.journalPath}`,
     `Script: ${o.scriptPath}`,

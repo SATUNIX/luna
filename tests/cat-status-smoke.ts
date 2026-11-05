@@ -90,8 +90,10 @@ const tests = {
       for (const frame of cat.catFrames(state)) assert.equal(frame.length, cat.CAT_WIDTH, `${state}: padded to a constant width`);
     }
     assert.deepEqual([...cat.PRIORITY].sort(), [...cat.CAT_STATES].sort(), "every state has exactly one place in the priority");
-    assert.equal(cat.ANIMATIONS.idle.frames[0], "=^..^=");
-    assert.equal(cat.ANIMATIONS.error.frames.at(-1), "=^x.x^=", "error settles on the dead face");
+    // The table's canonical faces: the resting face and the face a failure settles on.
+    assert.equal(cat.ANIMATIONS.idle.frames[0], "=^o.o^=", "idle shows the resting face");
+    assert.ok(cat.ANIMATIONS.idle.frames.includes("=^-.-^="), "idle blinks to the sleepy face");
+    assert.equal(cat.ANIMATIONS.error.frames.at(-1), "=^X.X^=", "error settles on the dead face");
   },
 
   priorityBeatsRecency() {
@@ -114,7 +116,9 @@ const tests = {
     assert.equal(cat.finished("error", 0), false);
     assert.equal(cat.finished("error", 10_000), true);
     assert.equal(cat.finished("thinking", 10_000), false, "a loop never finishes");
-    assert.equal(cat.frameAt("idle", 99_999), "=^..^= ", "a static cat does not move");
+    const idle = cat.catFrames("idle");
+    assert.equal(cat.frameAt("idle", cat.ANIMATIONS.idle.intervalMs * idle.length), idle[0], "a looping cat repeats");
+    for (const elapsed of [0, 1_000, 99_999]) assert.equal(cat.frameAt("idle", elapsed).length, cat.CAT_WIDTH, "every rendered frame keeps the width");
     assert.equal(cat.frameAt("thinking", -5), frames[0]);
   },
 
@@ -123,9 +127,9 @@ const tests = {
     assert.equal(t.frames.length, cat.ANIMATIONS.thinking.frames.length);
     const first = t.frames[0];
     assert.ok(first !== undefined, "the indicator has a first frame");
-    assert.match(first, /^<accent>=\^o\.\^= <\/>$/);
+    assert.equal(first, `<accent>${cat.catFrames("thinking")[0]}</>`, "the first frame is painted with the state colour");
     const e = cat.indicatorFor("error", keep);
-    assert.deepEqual(e.frames, ["=^x.x^="], "pi's indicator only loops, so a result is its last frame");
+    assert.deepEqual(e.frames, [cat.catFrames("error").at(-1)], "pi's indicator only loops, so a result is its last frame");
   },
 
   toolErrorsAreClassified() {
@@ -146,8 +150,10 @@ const tests = {
         for (const l of lines) assert.ok(widthMod.displayWidth(l) <= width, `${mode}/${width}: ${l}`);
       }
     }
-    const wide = render.renderFooter({ ...base, model: "m", cat: { text: cat.renderCat("success", 0, keep), label: "Complete" } }, plain, 120, "default").join("\n");
-    assert.match(wide, /=\^\.\.\^= {2}Complete|=\^\.\.\^=\s+Complete/, "a result shows the face and its words");
+    const success = cat.renderCat("success", 0, keep);
+    const wide = render.renderFooter({ ...base, model: "m", cat: { text: success, label: "Complete" } }, plain, 120, "default").join("\n");
+    const at = wide.indexOf(success);
+    assert.ok(at >= 0 && wide.indexOf("Complete", at) > at, "a result shows the face and then its words");
     const none = render.renderFooter({ ...base, model: "m" }, plain, 120, "default").join("\n");
     assert.doesNotMatch(none, /=\^/, "no cat when it is off or running");
   },

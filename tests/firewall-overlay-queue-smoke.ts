@@ -465,6 +465,7 @@ try {
     let pick: string | undefined;
     // Set for a case that needs a card nobody answers, so only its timeout can close it.
     let unanswered = false;
+    let endsEarly = false;
     // The options each card was opened with, and what it told the operator.
     const cardOptions: unknown[] = [];
     const consoleNotices: string[] = [];
@@ -479,6 +480,10 @@ try {
         select: async (title: string, _options?: string[], opts?: unknown): Promise<string | undefined> => {
           selects.push(title);
           cardOptions.push(opts);
+          if (endsEarly) {
+            const { timeout } = opts as { timeout: number };
+            return new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), Math.max(0, timeout - 3)));
+          }
           return unanswered ? new Promise<undefined>(() => {}) : pick;
         },
         input: async (_title: string, _placeholder?: string, opts?: unknown): Promise<string | undefined> => {
@@ -650,6 +655,20 @@ try {
         assert.equal(fs.existsSync(pendingFile("held-late")), false, "the card ends at the request's deadline, not a full timeout after it opened");
         assert.equal(fs.existsSync(resolvedFile("held-late")), false, "a card that outlives nobody leaves no answer");
         ok("a card shown after a hold is bounded by the time left, not the full timeout");
+      }
+
+      // 19b. A timer can fire just ahead of the wall clock. A card that ends on its timeout is still
+      //      nobody answering, so it leaves no answer. Pi's select returns undefined for a timeout.
+      {
+        selects.length = 0;
+        endsEarly = true;
+        const created = new Date().toISOString();
+        fs.writeFileSync(pendingFile("early-timer"), JSON.stringify({ id: "early-timer", kind: "approval", title: "Approve tool call?", choices: ["Allow once", "Deny"], timeoutMs: 600, createdAt: created }));
+        await until(() => !fs.existsSync(pendingFile("early-timer")), 2000);
+        endsEarly = false;
+        assert.equal(selects.length, 1, "the card was shown");
+        assert.equal(fs.existsSync(resolvedFile("early-timer")), false, "a card that ended on its own timeout leaves no answer");
+        ok("a card timer that fires just before the deadline writes no answer");
       }
 
       // 20. Every deferred card is handed its deadline, so pi dismisses it: a wrapper timeout alone

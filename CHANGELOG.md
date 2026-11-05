@@ -108,6 +108,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A human-console card that runs out on its own timeout no longer writes an answer when its timer fires
+  a moment before the deadline. This made `check-all` fail intermittently; the request failed closed
+  either way (`tests/firewall-overlay-queue-smoke.ts`).
 - A workflow run's status now comes from what its steps did, not from whether the script returned. A
   failed required step no longer reads `passed` in the outcome, `run.json`, the run model or the
   completion message. New status `partial`: the value is shown with its omissions named. New

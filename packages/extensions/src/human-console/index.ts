@@ -188,6 +188,10 @@ function deadlineOf(request: Pending): number {
   if (Number.isNaN(createdMs)) return 0;
   return createdMs + (requestedTimeout(request, DEFAULT_TIMEOUT_MS) ?? DEFAULT_TIMEOUT_MS);
 }
+// A timer can fire a moment before the wall clock reaches it, so a card that ran out on its own timeout
+// may end just short of the deadline. Inside this margin nobody answered.
+const TIMER_MARGIN_MS = 5;
+const pastDeadline = (deadline: number): boolean => Date.now() + TIMER_MARGIN_MS >= deadline;
 // How long a card may stay open: the time left, and never more than the request asked for, so a future
 // createdAt cannot stretch it.
 function cardMs(request: Pending, deadline: number): number {
@@ -300,7 +304,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
       // No answer before the requester's deadline: it has already failed closed; decide nothing.
-      if (!result.approved && result.answer === null && Date.now() >= deadline) {
+      if (!result.approved && result.answer === null && pastDeadline(deadline)) {
         expire(ctx, run.id, file);
         return;
       }
@@ -368,7 +372,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       else result = await answerQuestion(ctx, request, signal, cardMs(request, deadline));
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
-      if (Date.now() >= deadline) {
+      if (pastDeadline(deadline)) {
         // The requester gave up at its deadline (brokerRequest unlinks both files in its
         // finally); do not recreate an orphan resolved file. Drop the pending file too so
         // the watcher does not re-answer it forever.

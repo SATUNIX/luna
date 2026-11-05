@@ -154,3 +154,9 @@
     applies the kit's shared table (`shared/redact.ts`) after its own rules, and workflow gate
     patterns and structured-output patterns use the shared `shared/safe-regex.ts` check
     (`tests/workspace-symlink-smoke.ts`, `tests/redaction-corpus-smoke.ts`, `tests/workflow-smoke.ts`).
+  - **Idle watchdog held during tool calls (2026-11-05):** `child-process.ts` tracks open calls from
+    the child's `tool_execution_start` / `tool_execution_end` events (by `toolCallId`, with a count
+    for a call without an id) and does not arm the idle watchdog while one is open, so a long silent
+    tool call is no longer killed with `stopReason: "timeout"`. It rearms for a full timeout after
+    the last end, a limit that has fired is not rearmed, and the wall-clock ceiling still applies
+    (`tests/subagent-progress-smoke.ts`).

@@ -64,6 +64,8 @@ interface SpawnLaunch {
   options: SpawnOptions;
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Launches go through delegation-guard (mandatory protections + effort budget); fake children still need it in place.
 const __delegation = await installDelegation();
 process.on("exit", () => __delegation.cleanup());
@@ -141,6 +143,151 @@ try {
     assert.equal(added, 1, "runner subscribes to the abort signal exactly once");
     assert.equal(removed, added, `abort listener leaked: added=${added} removed=${removed}`);
   } finally { restoreDetachOn(); }
+  // N5: an idle watchdog that only counts bytes kills a child in the middle of a long tool call
+  // (a build, a slow test run) that is working correctly. The child already streams
+  // `tool_execution_start` / `tool_execution_end`, so the watchdog must pause for the life of
+  // every open call — nested and parallel calls included — and rearm once the last one ends.
+  const fakeIdleChild = () => {
+    const child = new EventEmitter() as FakeChild;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.killed = false;
+    const kills: Array<string | undefined> = [];
+    child.kill = (signal?: string) => { kills.push(signal); child.killed = true; queueMicrotask(() => child.emit("close", null)); return true; };
+    return { child, kills };
+  };
+  const jsonLine = (payload: Record<string, unknown>) => JSON.stringify(payload) + "\n";
+  const toolStart = (id: string) => jsonLine({ type: "tool_execution_start", toolCallId: id, toolName: "bash", args: {} });
+  const toolEnd = (id: string) => jsonLine({ type: "tool_execution_end", toolCallId: id, toolName: "bash", isError: false });
+
+  // A run whose limit never fires would hang the smoke instead of failing it; the race keeps a
+  // ref'd timer on the loop and throws if the run does not settle.
+  const settledWithin = <T>(run: Promise<T>, ms: number, label: string): Promise<T> =>
+    Promise.race([run, sleep(ms).then(() => { throw new Error(`${label} did not settle within ${ms} ms`); })]);
+
+  // (a) an open tool call, (b) nested calls, (c) a child with no tool event at all, (d) stderr
+  // during an open call, (e) an id-less event and (f) a line that only quotes the event name: the
+  // watchdog pauses for an open call, rearms after the last end, and still fires outside one.
+  const restoreIdleShort = setEnv("PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS", "200");
+  const restoreRetries = setEnv("PI_KIT_SUBAGENT_RETRIES", "0");
+  try {
+    const paused = fakeIdleChild();
+    const pausedRun = module.runSingleAgent(ws, agents, "scout", "tool pause", undefined, undefined, undefined, undefined, () => {
+      paused.child.stdout.write(toolStart("t1"));
+      return paused.child;
+    });
+    await sleep(600);
+    assert.equal(paused.child.killed, false, "the idle watchdog must not kill a child whose tool is still running");
+    paused.child.stdout.write(toolEnd("t1"));
+    paused.child.emit("close", 0);
+    const pausedResult = await pausedRun;
+    assert.equal(pausedResult.exitCode, 0);
+    assert.notEqual(pausedResult.stopReason, "timeout");
+
+    const nested = fakeIdleChild();
+    const nestedRun = module.runSingleAgent(ws, agents, "scout", "nested tools", undefined, undefined, undefined, undefined, () => {
+      nested.child.stdout.write(toolStart("outer") + toolStart("inner"));
+      return nested.child;
+    });
+    await sleep(600);
+    assert.equal(nested.child.killed, false, "two open tool calls hold the watchdog");
+    nested.child.stdout.write(toolEnd("inner"));
+    await sleep(600);
+    assert.equal(nested.child.killed, false, "one open tool call still holds the watchdog");
+    nested.child.stdout.write(toolEnd("outer"));
+    assert.equal((await settledWithin(nestedRun, 3000, "idle timeout")).stopReason, "timeout", "silence outside any tool call is still a stall");
+    assert.ok(nested.kills.includes("SIGTERM"));
+
+    const silent = fakeIdleChild();
+    const silentRun = module.runSingleAgent(ws, agents, "scout", "no tool event", undefined, undefined, undefined, undefined, () => silent.child);
+    assert.equal((await settledWithin(silentRun, 3000, "idle timeout")).stopReason, "timeout", "a child that never emits anything is still a stall");
+
+    // The cases above use six of the eight scouts one request allows (the ceiling itself, so it
+    // cannot be raised here), so the rest start a fresh request scope.
+    await __delegation.newTurn();
+
+    // (d) stderr rearms the watchdog on its own path; a warning printed while a tool is open must
+    // not restart it either.
+    const stderrChild = fakeIdleChild();
+    const stderrRun = module.runSingleAgent(ws, agents, "scout", "stderr during tool", undefined, undefined, undefined, undefined, () => {
+      stderrChild.child.stdout.write(toolStart("t1"));
+      return stderrChild.child;
+    });
+    await sleep(150);
+    stderrChild.child.stderr.write("warn\n");
+    await sleep(600);
+    assert.equal(stderrChild.child.killed, false, "stderr during an open tool call must not rearm the idle watchdog");
+    stderrChild.child.stdout.write(toolEnd("t1"));
+    stderrChild.child.emit("close", 0);
+    assert.equal((await stderrRun).exitCode, 0);
+
+    // (e) an event with no id falls back to a count: it holds the watchdog, and its matching end
+    // releases it.
+    const unnamed = fakeIdleChild();
+    const unnamedRun = module.runSingleAgent(ws, agents, "scout", "unnamed tool", undefined, undefined, undefined, undefined, () => {
+      unnamed.child.stdout.write(jsonLine({ type: "tool_execution_start" }));
+      return unnamed.child;
+    });
+    await sleep(600);
+    assert.equal(unnamed.child.killed, false, "an id-less tool call still holds the watchdog");
+    unnamed.child.stdout.write(jsonLine({ type: "tool_execution_end" }));
+    assert.equal((await settledWithin(unnamedRun, 3000, "idle timeout")).stopReason, "timeout", "the matching id-less end re-arms the watchdog");
+
+    // (f) only a top-level `type` of exactly the event name counts: a message that merely carries
+    // the string, or a bare JSON string, must not close an open call.
+    const lookalike = fakeIdleChild();
+    const lookalikeRun = module.runSingleAgent(ws, agents, "scout", "lookalike line", undefined, undefined, undefined, undefined, () => {
+      lookalike.child.stdout.write(toolStart("t1"));
+      return lookalike.child;
+    });
+    await sleep(50);
+    lookalike.child.stdout.write(jsonLine({ type: "message_end", toolCallId: "t1", text: "tool_execution_end", note: { x: "tool_execution_end" } }));
+    lookalike.child.stdout.write(JSON.stringify("tool_execution_end") + "\n");
+    await sleep(600);
+    assert.equal(lookalike.child.killed, false, "a line that only quotes the event name must not close an open call");
+    lookalike.child.stdout.write(toolEnd("t1"));
+    lookalike.child.emit("close", 0);
+    assert.equal((await lookalikeRun).exitCode, 0);
+  } finally {
+    restoreIdleShort();
+    restoreRetries();
+  }
+
+  // (g) the wall-clock ceiling is independent of tool activity.
+  const restoreIdleOff = setEnv("PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS", "0");
+  const restoreWallShort = setEnv("PI_KIT_SUBAGENT_MAX_RUNTIME_MS", "200");
+  const restoreRetriesB = setEnv("PI_KIT_SUBAGENT_RETRIES", "0");
+  try {
+    const walled = fakeIdleChild();
+    const walledRun = module.runSingleAgent(ws, agents, "scout", "wall during tool", undefined, undefined, undefined, undefined, () => {
+      walled.child.stdout.write(toolStart("t1"));
+      return walled.child;
+    });
+    assert.equal((await settledWithin(walledRun, 3000, "wall-clock kill")).stopReason, "wall-clock");
+  } finally {
+    restoreIdleOff();
+    restoreWallShort();
+    restoreRetriesB();
+  }
+
+  // (h) tracking the tool stream must not let an unterminated line past the stream cap.
+  const restoreCap = setEnv("PI_KIT_SUBAGENT_STREAM_CAP_BYTES", String(64 * 1024));
+  const restoreIdleLong = setEnv("PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS", "60000");
+  const restoreWallOff = setEnv("PI_KIT_SUBAGENT_MAX_RUNTIME_MS", "0");
+  const restoreRetriesC = setEnv("PI_KIT_SUBAGENT_RETRIES", "0");
+  try {
+    const capped = fakeIdleChild();
+    const cappedRun = module.runSingleAgent(ws, agents, "scout", "line cap", undefined, undefined, undefined, undefined, () => {
+      capped.child.stdout.write(toolStart("t1") + "x".repeat(70 * 1024));
+      return capped.child;
+    });
+    assert.equal((await settledWithin(cappedRun, 3000, "stream-cap kill")).stopReason, "stream-cap");
+  } finally {
+    restoreCap();
+    restoreIdleLong();
+    restoreWallOff();
+    restoreRetriesC();
+  }
   fs.mkdirSync(path.join(ws, ".pi", "agents"), { recursive: true });
   fs.writeFileSync(path.join(ws, ".pi", "agents", "scout.md"), "---\nname: scout\ndescription: fixture\ntools: read\n---\nscout\n");
   const pi = fakePi(); module.default(pi.api);

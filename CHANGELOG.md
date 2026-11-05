@@ -89,6 +89,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A subagent running a long silent tool call is no longer killed with `stopReason: "timeout"`: the idle
+  watchdog is held from `tool_execution_start` until the matching `tool_execution_end` and rearms for a
+  full timeout after the last open call ends. A child silent outside a tool is still killed. The
+  wall-clock ceiling is now the only limit on a tool call that never ends, so
+  `PI_KIT_SUBAGENT_MAX_RUNTIME_MS=0` leaves a hung tool unbounded (`tests/subagent-progress-smoke.ts`).
+
 - `pi-autonomy start` from a desktop terminal no longer fails its boundary probe with "make mountpoint
   /run/notify ... Read-only file system": every container-engine call drops `NOTIFY_SOCKET`, which a
   terminal inherits from the user's systemd manager and which makes podman mount the socket into the

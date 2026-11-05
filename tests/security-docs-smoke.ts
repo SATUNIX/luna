@@ -195,7 +195,7 @@ export function referenceProblems(page: string, md: string): string[] {
 function resolves(value: unknown, ref: string): boolean {
   let cur: unknown = value;
   for (const part of ref.split(".")) {
-    const m = /^([A-Za-z0-9_]+)(?:\[([A-Za-z0-9_-]+)\])?$/.exec(part);
+    const m = /^([A-Za-z0-9_-]+)(?:\[([A-Za-z0-9_-]+)\])?$/.exec(part);
     if (!m?.[1] || !isRecord(cur) || !Object.hasOwn(cur, m[1])) return false;
     cur = cur[m[1]];
     if (m[2] !== undefined) {

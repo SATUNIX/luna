@@ -96,6 +96,11 @@
     "npm": {
       "required_reviewers": ["SATUNIX"],
       "tag_policies": ["v*"]
+    },
+    "github-pages": {
+      "required_reviewers": [],
+      "tag_policies": [],
+      "branch_policies": ["main"]
     }
   }
 }

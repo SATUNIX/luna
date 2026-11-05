@@ -7,7 +7,10 @@ extensions, skills, prompts, themes and agent definitions in one pi package
 package still uses, so commands and settings are unchanged.
 
 <p align="center">
-  <img src="assets/luna.gif" alt="Animated overview: Luna, the pi agent system" width="760">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/luna-hero-dark.svg">
+    <img src="assets/luna-hero.svg" alt="Luna, the pi agent system: a pi session in which reads, edits and tests are allowed, a destructive delete is denied and a force push waits for approval" width="100%">
+  </picture>
 </p>
 
 Use this guide if you want to:

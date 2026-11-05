@@ -14,3 +14,5 @@ __pycache__/
 HANDOFF.md
 /public-build/
 coverage/
+# packages/core/build-site.ts output (docs/website.md).
+/_site/

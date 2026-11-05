@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Luna, the pi agent system</title>
+  <meta name="description" content="Luna is an opinionated distribution of the pi coding agent: a permission gate for tool calls, governed delegation, verification, durable memory and profiles, in one pi package.">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&amp;family=Martian+Mono:wght@400;500;600&amp;display=swap">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+  <a class="skip micro" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Luna home">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor"/><circle class="cut" cx="16" cy="9" r="8"/></svg>
+      Luna
+    </a>
+    <nav class="micro" aria-label="Site">
+      <a href="#install">Install</a>
+      <a class="optional" href="#how">How it works</a>
+      <a class="optional" href="#profiles">Profiles</a>
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/SATUNIX/luna">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="title">
+      <svg class="reg tl" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M0 12h24M12 0v24" stroke="currentColor" stroke-width="1.2"/></svg>
+      <svg class="reg tr" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M0 12h24M12 0v24" stroke="currentColor" stroke-width="1.2"/></svg>
+      <svg class="reg bl" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M0 12h24M12 0v24" stroke="currentColor" stroke-width="1.2"/></svg>
+      <svg class="reg br" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M0 12h24M12 0v24" stroke="currentColor" stroke-width="1.2"/></svg>
+      <div class="hero-grid">
+        <div>
+          <p class="micro">The pi agent system · public beta</p>
+          <h1 class="display" id="title">Luna</h1>
+          <p class="lede"><strong>An opinionated distribution of the pi coding agent.</strong> A permission gate for tool calls, governed delegation to sub-agents, verification, durable memory and bounded recovery, chosen together as profiles. One pi package, installed once.</p>
+          <div class="actions">
+            <a class="button primary" href="#install">Install {{TAG}}</a>
+            <a class="button" href="docs/">Read the docs</a>
+            <a class="button" href="https://github.com/SATUNIX/luna">Source on GitHub</a>
+          </div>
+        </div>
+        <figure class="figure">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/luna-session-dark.svg">
+            <img src="assets/luna-session.svg" width="560" height="412" alt="A pi session under Luna: reads, edits and tests are allowed, a reviewer sub-agent is delegated, rm -rf ~ is denied, a force push waits for your approval, and the checks finish with recorded evidence.">
+          </picture>
+        </figure>
+      </div>
+    </section>
+
+    <div class="statusbar micro" role="list" aria-label="Release facts">
+      <span role="listitem"><b>Release</b>{{TAG}}</span>
+      <span role="listitem"><b>pi</b>0.85.1 or newer</span>
+      <span role="listitem"><b>Node.js</b>22.19 or newer</span>
+      <span role="listitem"><b>Package</b>@satunix/pi-system</span>
+      <span role="listitem"><b>Licence</b>MIT</span>
+    </div>
+
+    <div class="band">
+      <p>Guard rails, not a sandbox.</p>
+      <div class="plate">The tool firewall gates every call and records every decision, but it is not an isolation boundary. Read what it does and does not protect in the <a href="docs/security/">security model</a>.</div>
+    </div>
+
+    <section class="section" id="install" aria-labelledby="install-title">
+      <header>
+        <p class="micro">01 · Install</p>
+        <h2 id="install-title">Install once.</h2>
+        <p>Needs Node.js 22.19 or newer, git and pi 0.85.1 or newer.</p>
+      </header>
+      <div class="body">
+        <ol class="steps">
+          <li><div class="step">
+            <h4>Install pi</h4>
+<pre><span class="p">$ </span>npm install -g @earendil-works/pi-coding-agent</pre>
+          </div></li>
+          <li><div class="step">
+            <h4>Install Luna from the release tag</h4>
+<pre><span class="p">$ </span>pi install git:github.com/SATUNIX/luna@{{TAG}}</pre>
+          </div></li>
+          <li><div class="step">
+            <h4>Start pi</h4>
+<pre><span class="p">$ </span>pi
+<span class="c"># first start: the balanced profile is applied; /reload when asked</span>
+<span class="c"># no models listed? sign in with /login</span></pre>
+          </div></li>
+        </ol>
+        <p class="note">The repository is public, so no credentials are involved. Other channels, the scripted installer, uninstalling and troubleshooting are in <a href="docs/INSTALL/">Installation</a> and <a href="docs/getting-started/">Getting started</a>.</p>
+        <div class="wrap">
+          <table>
+            <thead><tr><th scope="col">Channel</th><th scope="col">Command</th><th scope="col">For</th></tr></thead>
+            <tbody>
+              <tr><td>Release</td><td><code>pi install git:github.com/SATUNIX/luna@{{TAG}}</code></td><td>Normal use. The tag is the release.</td></tr>
+              <tr><td>Notes</td><td><a href="https://github.com/SATUNIX/luna/releases">GitHub Releases</a></td><td>Release notes and source archives for each tag.</td></tr>
+              <tr><td>Installer</td><td><code>node packages/core/install.ts --channel latest --profile balanced</code></td><td>The profile chosen up front, or a scripted install, from a clone.</td></tr>
+              <tr><td>Checkout</td><td><code>node packages/core/install.ts --profile balanced --yes</code></td><td>Developing Luna: pi loads the checkout in place.</td></tr>
+              <tr><td>Upgrade</td><td><code>/update</code></td><td>Inside pi: what pi, Luna and packages can update to.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="how" aria-labelledby="how-title">
+      <header>
+        <p class="micro">02 · How it works</p>
+        <h2 id="how-title">Gated, bounded, verified.</h2>
+        <p>Three rules hold in every profile that loads them.</p>
+      </header>
+      <div class="body ideas">
+        <article class="card">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/luna-firewall-dark.svg">
+            <img src="assets/luna-firewall.svg" width="1200" height="460" loading="lazy" alt="Three tool calls meet the Luna firewall: a read is allowed, a force push waits for your approval, and rm -rf ~ is denied; each decision lands in the audit record.">
+          </picture>
+          <div class="text">
+            <span class="micro tag">Tool firewall</span>
+            <h3>Every tool call meets the gate.</h3>
+            <p>The firewall parses each call into its effects and tiers it: routine work is allowed, riskier calls ask you, critical ones are denied, and every decision goes to the audit record. See the <a href="docs/autonomy-gate/">autonomy gate</a>.</p>
+          </div>
+        </article>
+        <article class="card">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/luna-delegation-dark.svg">
+            <img src="assets/luna-delegation.svg" width="1200" height="460" loading="lazy" alt="The lead agent delegates a bounded search to a scout and a diff to a reviewer while its budget meter drains, then reports back with evidence.">
+          </picture>
+          <div class="text">
+            <span class="micro tag">Delegation guard</span>
+            <h3>Delegation stays bounded.</h3>
+            <p>A lead agent hands sub-agents a bounded question and integrates what comes back. The delegation guard decides what each child loads, reserves its budget before it starts, and checks inside the child that its protections loaded. See <a href="docs/agent-orchestration/">agent orchestration</a>.</p>
+          </div>
+        </article>
+        <article class="card">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/luna-verify-dark.svg">
+            <img src="assets/luna-verify.svg" width="1200" height="420" loading="lazy" alt="A change goes to the checks; lint fails on the first pass and loops back for a fix, then tests, lint and types pass and the work is marked done.">
+          </picture>
+          <div class="text">
+            <span class="micro tag">Verify gate</span>
+            <h3>Nothing counts as done unverified.</h3>
+            <p><code>/verify</code> and the agent's <code>verify_completion</code> tool run the project's check command and an isolated, read-only reviewer against the definition of done, and record the verdict. A review that did not run never reads as a pass. See <a href="docs/concepts/">concepts</a>.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="profiles" aria-labelledby="profiles-title">
+      <header>
+        <p class="micro">03 · Profiles</p>
+        <h2 id="profiles-title">One package, seven shapes.</h2>
+        <p>A profile chooses which extensions, skills and prompts load, and the firewall mode. Switch with <code>/profile</code>.</p>
+      </header>
+      <div class="body">
+        <figure class="figure">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="assets/luna-profiles-dark.svg">
+            <img src="assets/luna-profiles.svg" width="1200" height="300" loading="lazy" alt="The seven profiles highlighted in turn: quick, balanced, long-horizon, autonomous, self-improving, pentest and lite.">
+          </picture>
+        </figure>
+        <div class="wrap">
+          <table>
+            <thead><tr><th scope="col">Profile</th><th scope="col">For</th></tr></thead>
+            <tbody>
+              <tr><td>quick</td><td>Fast edits with the safety guards and checkpoints, no ceremony.</td></tr>
+              <tr><td>balanced</td><td>Everyday work with verification and context helpers (the default).</td></tr>
+              <tr><td>long-horizon</td><td>Multi-hour work: goals, task graph, branches, delegation.</td></tr>
+              <tr><td>autonomous</td><td>Long-running sessions, including unattended runs in a container.</td></tr>
+              <tr><td>self-improving</td><td>Research use: adds memory services, dual review and skill mining (experimental).</td></tr>
+              <tr><td>pentest</td><td>Authorised security engagements: strict firewall policy, scope and rules of engagement.</td></tr>
+              <tr><td>lite</td><td>Small local models and short contexts.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">What each profile loads is generated in the <a href="docs/capability-matrix/">capability matrix</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="docs" aria-labelledby="docs-title">
+      <header>
+        <p class="micro">04 · Documentation</p>
+        <h2 id="docs-title">Read before you trust it.</h2>
+        <p>The documentation describes what the code does now, and names the test that pins each claim.</p>
+      </header>
+      <div class="body">
+        <div class="tiles">
+          <a href="docs/getting-started/"><strong>Getting started</strong><span>Install, first start, choosing a profile.</span><b class="micro">Guide</b></a>
+          <a href="docs/concepts/"><strong>Concepts</strong><span>What Luna adds to pi, and why.</span><b class="micro">Guide</b></a>
+          <a href="docs/security/"><strong>Security model</strong><span>What the firewall does and does not protect.</span><b class="micro">Security</b></a>
+          <a href="docs/effort/"><strong>Effort</strong><span>How hard the agent works and how much it delegates.</span><b class="micro">Guide</b></a>
+          <a href="docs/web-console/"><strong>Web console</strong><span>The local, token-authenticated console.</span><b class="micro">Guide</b></a>
+          <a href="docs/autonomy/"><strong>Autonomous runs</strong><span>Unattended work inside a container boundary.</span><b class="micro">Guide</b></a>
+          <a href="docs/reference/"><strong>Interface reference</strong><span>Commands, tools, variables and schemas.</span><b class="micro">Reference</b></a>
+          <a href="docs/beta/"><strong>Beta status</strong><span>What is and is not covered in this release.</span><b class="micro">Project</b></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="beta" aria-labelledby="beta-title">
+      <header>
+        <p class="micro">05 · Status</p>
+        <h2 id="beta-title">A public beta.</h2>
+      </header>
+      <div class="body">
+        <div class="callout" role="note">
+          <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M12 3L2 21h20L12 3zM12 10v5M12 17.5v1.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter"/></svg>
+          <div>
+            <h3>Tested, not stable.</h3>
+            <p>Expect rough edges. Read <a href="docs/beta/">Beta status</a> for what is and is not covered, report problems in the <a href="https://github.com/SATUNIX/luna/issues/new/choose">issue tracker</a>, and report vulnerabilities privately as <a href="https://github.com/SATUNIX/luna/blob/main/SECURITY.md">SECURITY.md</a> describes.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div>
+      <svg class="barcode" viewBox="0 0 240 32" aria-hidden="true"><path fill="currentColor" d="M0 0h2v32H0zM5 0h1v32H5zM9 0h3v32H9zM15 0h1v32h-1zM18 0h1v32h-1zM21 0h2v32h-2zM26 0h4v32h-4zM33 0h1v32h-1zM36 0h2v32h-2zM41 0h2v32h-2zM46 0h1v32h-1zM49 0h3v32h-3zM55 0h1v32h-1zM58 0h1v32h-1zM61 0h2v32h-2zM66 0h1v32h-1zM69 0h3v32h-3zM75 0h2v32h-2zM80 0h1v32h-1zM83 0h1v32h-1zM86 0h2v32h-2zM91 0h1v32h-1zM94 0h3v32h-3zM100 0h1v32h-1zM103 0h1v32h-1zM106 0h2v32h-2zM111 0h4v32h-4zM118 0h1v32h-1zM121 0h2v32h-2zM126 0h2v32h-2zM131 0h1v32h-1zM134 0h3v32h-3zM140 0h1v32h-1zM143 0h1v32h-1zM146 0h2v32h-2zM151 0h1v32h-1zM154 0h3v32h-3zM160 0h2v32h-2zM165 0h1v32h-1zM168 0h1v32h-1zM171 0h2v32h-2zM176 0h1v32h-1zM179 0h3v32h-3zM185 0h1v32h-1zM188 0h1v32h-1zM191 0h2v32h-2zM196 0h4v32h-4zM203 0h1v32h-1zM206 0h2v32h-2zM211 0h2v32h-2zM216 0h1v32h-1zM219 0h3v32h-3zM225 0h1v32h-1zM228 0h1v32h-1zM231 0h2v32h-2zM236 0h1v32h-1z"/></svg>
+      <p>Luna {{TAG}} · MIT licence, © SATUNIX. Vendored third-party code is credited in <a href="https://github.com/SATUNIX/luna/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>.</p>
+    </div>
+    <nav class="micro" aria-label="Footer">
+      <a href="docs/">Docs</a>
+      <a href="https://github.com/SATUNIX/luna/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/SATUNIX/luna/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/SATUNIX/luna/blob/main/SECURITY.md">Security</a>
+    </nav>
+  </footer>
+</body>
+</html>

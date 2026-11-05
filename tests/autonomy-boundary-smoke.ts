@@ -23,7 +23,7 @@ import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { runPaths } from "../packages/autonomy/lib/paths.ts";
 import * as dk from "../packages/autonomy/lib/docker.ts";
 import { assertRunArgs, inspectRunArgs } from "../packages/autonomy/lib/containment.ts";
-import { DockerRuntime, limitProblems } from "../packages/autonomy/lib/runtime.ts";
+import { DockerRuntime, engineEnv, limitProblems } from "../packages/autonomy/lib/runtime.ts";
 import { RunStore } from "../packages/autonomy/lib/store.ts";
 
 const { check, done } = makeChecker("autonomy-boundary-smoke");
@@ -495,6 +495,32 @@ await check("resource limits: a --memory or --cpus of 0 (no limit, to the engine
   const args = dk.agentRunArgs(cfg, rt.p, { n: 1, attempt: 1 });
   assert.doesNotThrow(() => assertRunArgs(args, { roots: rt.roots, networks: [rt.names.net], role: "worker" }), "containment alone lets it through");
   assert.throws(() => rt.checked(args, { networks: [rt.names.net], role: "worker" }), /refusing to start worker: --memory 0 is not a positive size.*--cpus 0 is not a positive number/);
+});
+
+await check("engine calls never pass NOTIFY_SOCKET (podman would mount it at /run/notify on the read-only root)", () => {
+  assert.deepEqual(engineEnv({ K: "v" }, { PATH: "/bin", NOTIFY_SOCKET: "/run/user/1000/systemd/notify" }), { PATH: "/bin", K: "v" });
+  assert.equal(engineEnv({ NOTIFY_SOCKET: "x" }, {})["NOTIFY_SOCKET"], undefined, "not even when a caller passes it");
+  // A real engine call: a fake engine that records the environment it was started with.
+  const good = resolveContract(implementRaw({ runtime: RUNTIME }), { effort: testEffort });
+  assert.ok(good.ok, JSON.stringify(good.problems));
+  const cfg = runtimeConfig(good.contract, { namePrefix: "pi-autonomy-test-notify" });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-notify-"));
+  fs.writeFileSync(path.join(dir, cfg.engine), `#!/bin/sh\nenv > "${path.join(dir, "env")}"\necho ok\n`, { mode: 0o755 });
+  const saved = process.env["NOTIFY_SOCKET"];
+  const savedPath = process.env["PATH"];
+  process.env["NOTIFY_SOCKET"] = "/run/user/1000/systemd/notify";
+  process.env["PATH"] = `${dir}${path.delimiter}${savedPath ?? ""}`;
+  try {
+    const rt = new DockerRuntime({ contract: good.contract, cfg, store: new RunStore(good.contract.run, { home: os.tmpdir() }), env: {} });
+    assert.equal(rt.cli(["version"]), "ok");
+    const seen = fs.readFileSync(path.join(dir, "env"), "utf8");
+    assert.doesNotMatch(seen, /^NOTIFY_SOCKET=/m, "the engine did not see NOTIFY_SOCKET");
+    assert.match(seen, /^PATH=/m, "the rest of the environment is passed");
+  } finally {
+    if (saved === undefined) delete process.env["NOTIFY_SOCKET"]; else process.env["NOTIFY_SOCKET"] = saved;
+    process.env["PATH"] = savedPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await check("image allowlist: the last-line check refuses an image that is neither the worker image nor a contract service image", () => {

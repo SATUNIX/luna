@@ -404,14 +404,18 @@ try {
     });
     await finding("a vault workflow keeps a partial run", async () => {
       const vault = path.join(ws, "vault");
+      // The slug walks up to the nearest .git, so give it one: a .git another process leaves above the temp root must not move it.
+      const vaulted = path.join(ws, "vaulted");
+      fs.mkdirSync(path.join(vaulted, ".git"), { recursive: true });
       const restore = setEnv("PI_KIT_VAULT", vault);
       try {
         const parsed = yamlMod.parseWorkflow(`---\nname: kept\ndescription: test\nvault: true\nsteps:\n  - id: a\n    agent: scout\n    task: "fail now"\n    continue_on_error: true\n---\n`, path.join(project, "kept.md"), "user");
         assert.ok(parsed.workflow);
         const fake = fakeSpawner(() => ({ fail: "provider down" }));
-        const state = await yamlMod.executeWorkflow(parsed.workflow, yamlMod.newRunState(parsed.workflow, {}), { cwd: project, agents, spawnChild: fake.spawn, registry: new RunRegistry(), launchKind: "user" });
+        const state = await yamlMod.executeWorkflow(parsed.workflow, yamlMod.newRunState(parsed.workflow, {}), { cwd: vaulted, agents, spawnChild: fake.spawn, registry: new RunRegistry(), launchKind: "user" });
         assert.equal(state.status, "partial");
-        assert.ok(fs.existsSync(path.join(vault, "Projects", "project", "Workflows", state.id)));
+        assert.deepEqual(fs.readdirSync(path.join(vault, "Projects")), ["vaulted"]);
+        assert.ok(fs.existsSync(path.join(vault, "Projects", "vaulted", "Workflows", state.id)));
       } finally {
         restore();
       }

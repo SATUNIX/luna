@@ -10,6 +10,7 @@ import { discoverAgents, type AgentConfig } from "./agents.ts";
 import { agentDir } from "./config.ts";
 import { CONTROL_ACTIONS, controlRun, runControls } from "./control.ts";
 import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
+import { producedResult } from "./run-contract.ts";
 import {
   discoverWorkflows,
   executeWorkflow,
@@ -303,7 +304,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
       if (params.resume) {
         const s = loadState(cwd, params.resume);
         if (!s) return textResult(`No run "${params.resume}".`, true);
-        if (s.status === "passed" || s.status === "partial") return textResult(`Run ${s.id} already ${s.status}.`);
+        if (producedResult(s.status)) return textResult(`Run ${s.id} already ${s.status}.`);
         resume = s;
       }
       const report = (t: string) => {
@@ -320,7 +321,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
         const dir = path.join(runsRoot(cwd), r.state.id);
         // A parsed workflow always has at least one step.
         const last = r.workflow.steps[r.workflow.steps.length - 1];
-        const tail = r.state.status === "passed" || r.state.status === "partial" ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflow resume ${r.state.id}` : "";
+        const tail = producedResult(r.state.status) ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflow resume ${r.state.id}` : "";
         return textResult(`${summarizeRun(r.state, r.workflow)}\n\nRun directory: ${dir}${tail}`, r.state.status === "failed");
       } finally {
         try {

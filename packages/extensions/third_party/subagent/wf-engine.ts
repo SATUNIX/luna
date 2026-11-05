@@ -44,14 +44,15 @@ import { subagentStateDir } from "./logging.ts";
 import { redact, REDACTION_POLICY } from "./redact.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
 import { deriveOutcome, type RunStatus, type StepResult } from "./run-contract.ts";
-import { runRegistry, type RunModel, type RunRegistry } from "./run-model.ts";
+import { runRegistry, terminalPhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
 import { launchDigest, runAgent, type RunOverrides } from "./runner.ts";
 import { StructuredSchemaError } from "./structured-output/check.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
 import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, type WorktreeOutcome } from "./worktree.ts";
-import { appendFileSafe, ensureDirSafe, piWorkspaceOptions, writeFileSafe } from "./shared/safe-fs.ts";
+import { ensurePrivateDir, runsRoot, writePrivate } from "./workflow.ts";
+import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
 export const MAX_AGENTS_PER_RUN = 1000;
 export const MAX_CONCURRENCY = 16;
@@ -163,19 +164,6 @@ export type StartResult =
 
 // ---------------------------------------------------------------------------------------------
 // Run files
-
-export const scriptRunsRoot = (cwd: string): string => path.join(cwd, ".pi", "workflows", "runs");
-
-// Run directories live under <workspace>/.pi/, so nothing on the way is followed through a
-// committed symlink (./shared/safe-fs.ts; tests/workspace-symlink-smoke.ts).
-function ensurePrivateDir(dir: string): void {
-  ensureDirSafe(dir, { ...piWorkspaceOptions(dir), dirMode: 0o700 });
-  fs.chmodSync(dir, 0o700);
-}
-
-function writePrivate(file: string, text: string): void {
-  writeFileSafe(file, text, piWorkspaceOptions(file, 0o600));
-}
 
 function appendPrivate(file: string, line: string): void {
   appendFileSafe(file, line, piWorkspaceOptions(file, 0o600));
@@ -536,8 +524,6 @@ interface AgentOpts {
 function parseOpts(raw: Record<string, unknown> | null): AgentOpts {
   const opts: AgentOpts = {};
   if (!raw) return opts;
-  // The prelude's verdict on a call it could not send: see agent() in wf-runner.mjs.
-  if (typeof raw.invalid === "string") throw new TypeError(raw.invalid);
   const str = (k: string): string | undefined => {
     const v = raw[k];
     if (v === undefined || v === null) return undefined;
@@ -691,7 +677,7 @@ interface Frame {
 export function startScriptRun(spec: ScriptSpec, args: unknown, opts: EngineOptions): StartResult {
   const effort = opts.effort === undefined ? effortRegistry() : opts.effort;
   if (!effort) return { ok: false, error: "Refused: workflow runs need the effort extension (it budgets their agents); it is in every shipped profile." };
-  const runsDir = opts.runsDir ?? scriptRunsRoot(opts.cwd);
+  const runsDir = opts.runsDir ?? runsRoot(opts.cwd);
   let previous: RunJournal = { entries: [], unknown: [] };
   if (opts.resumeFrom !== undefined) {
     const prior = readScriptRun(runsDir, opts.resumeFrom);
@@ -765,7 +751,8 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   let worktreeIndex = 0;
   let outputTokens = 0;
   // One entry per agent() call, in call order, opened as "unknown" until the call ends.
-  const steps: StepResult[] = [];
+  // A set, so a retired refusal leaves the record without a search and the rest keep their order.
+  const steps = new Set<StepResult>();
   const settle = (step: StepResult, execution: StepResult["execution"], code?: string, text?: string): void => {
     step.execution = execution;
     if (code !== undefined) step.reason = { code, text: redact(text ?? code).slice(0, STEP_TEXT_CAP) };
@@ -773,14 +760,21 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   // A refusal costs the script one round trip, so past the cap a further one is counted, not kept.
   // One of each kind stays, so the outcome reads the same.
   let dropped = 0;
-  const refusalHeld = new Set<boolean>();
+  let requiredRefusalHeld = false;
+  let optionalRefusalHeld = false;
   const retire = (step: StepResult): void => {
     if (step.execution !== "blocked") return;
-    if (steps.length > STEP_CAP && refusalHeld.has(step.required)) {
-      steps.splice(steps.lastIndexOf(step), 1);
+    if (steps.size > STEP_CAP && (step.required ? requiredRefusalHeld : optionalRefusalHeld)) {
+      steps.delete(step);
       dropped++;
     }
-    refusalHeld.add(step.required);
+    if (step.required) requiredRefusalHeld = true;
+    else optionalRefusalHeld = true;
+  };
+  const openStep = (stepId: string, required: boolean): StepResult => {
+    const step: StepResult = { stepId, execution: "unknown", required, usage: { agents: 0, outputTokens: 0 } };
+    steps.add(step);
+    return step;
   };
 
   const appendRow = (row: Record<string, unknown>): number => {
@@ -1032,10 +1026,9 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     }
   };
 
-  // The one place every agent() call passes, so the record holds whatever the script does with the result.
+  // Every agent() call the prelude sends passes here (refusedHook takes the rest), so the record holds whatever the script does with the result.
   const agentHook = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame): Promise<unknown> => {
-    const step: StepResult = { stepId: `agent() call ${String(steps.length + 1)}`, execution: "unknown", required: rawOpts?.required === true, usage: { agents: 0, outputTokens: 0 } };
-    steps.push(step);
+    const step = openStep(`agent() call ${String(steps.size + 1)}`, rawOpts?.required === true);
     let value: unknown;
     try {
       value = await agentCall(prompt, rawOpts, frame, step);
@@ -1055,6 +1048,13 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     return value;
   };
 
+  // An agent() call the prelude would not send is still a step: the script could catch the throw.
+  const refusedHook = (reason: string, required: boolean): void => {
+    const step = openStep(`agent() call ${String(steps.size + 1)}`, required);
+    settle(step, "blocked", "options", reason);
+    retire(step);
+  };
+
   // One script (the run's, or a nested workflow()'s) in its own sandbox process; nested scripts share
   // this run's concurrency cap, agent counter, abort signal and budget.
   const sandbox = (frameSpec: ScriptSpec, frameArgs: unknown, frame: Frame, workflow: (ref: string | { scriptPath: string }, childArgs: unknown) => Promise<unknown>) =>
@@ -1069,6 +1069,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       budget: { total, spent: () => outputTokens },
       hooks: {
         agent: (prompt, o) => agentHook(prompt, o, frame),
+        refused: refusedHook,
         workflow: (ref, childArgs) => workflow(ref, childArgs),
         log: (text) => note(frame, text),
         phase: (title) => {
@@ -1082,8 +1083,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     if (!opts.resolveWorkflow) throw new Error("workflow(): nested workflows are not available here");
     const named = typeof ref === "string" ? ref : ref.scriptPath;
     // A script can catch a nested failure, so the nested run gets a record of its own, like an agent() call.
-    const step: StepResult = { stepId: `workflow ${named.slice(0, 200)}`, execution: "unknown", required: false, usage: { agents: 0, outputTokens: 0 } };
-    steps.push(step);
+    const step = openStep(`workflow ${named.slice(0, 200)}`, false);
     let child: ScriptSpec;
     try {
       child = await opts.resolveWorkflow(ref, spec.name);
@@ -1122,9 +1122,9 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   }
   // A skip of a best-effort call is a decision to go on, so it is no omission; a required one stays,
   // or a skip could turn it into `passed`. A call still open was stopped with the run.
-  const settled = steps.filter((s) => s.execution !== "skipped" || s.required).map((s): StepResult => (s.execution === "unknown" ? { ...s, execution: "cancelled", reason: { code: "run-ended", text: "still running when the run ended" } } : s));
+  const settled = [...steps].filter((s) => s.execution !== "skipped" || s.required).map((s): StepResult => (s.execution === "unknown" ? { ...s, execution: "cancelled", reason: { code: "run-ended", text: "still running when the run ended" } } : s));
   const value = result?.ok ? result.value : undefined;
-  const { status, omissions } = deriveOutcome(settled, { threw: engineError !== undefined || (result?.ok === false && !stopped), stopped, value });
+  const { status, omissions } = deriveOutcome(settled, { errored: engineError !== undefined || (result?.ok === false && !stopped), stopped, hasResult: value !== null && value !== undefined });
   const omissionCount = omissions.length + dropped;
   const failure = status === "failed" && result?.ok ? stepFailure(omissions, omissionCount) : undefined;
   const scriptError = result?.ok === false ? { error: result.error, errorKind: result.kind } : undefined;
@@ -1136,7 +1136,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     ...(omissions.length > 0 ? { omissions, omissionCount } : {}),
     ...(reuseRejected.size > 0 ? { reuseRejected: [...reuseRejected].map((reason) => `reuse.rejected{${reason}}: ${REUSE_REJECTED[reason]}`) } : {}),
   };
-  for (const p of run.snapshot().phases) if (p.status === "running") run.setPhaseStatus(p.id, status === "passed" || status === "partial" ? "passed" : "aborted");
+  for (const id of run.runningPhases()) run.setPhaseStatus(id, terminalPhaseStatus(status));
   run.finish(status, outcome.error);
   const omitted = omissions.slice(0, OMISSIONS_KEPT).map(({ stepId, execution, required, reason }) => ({ stepId: redact(stepId), execution, required, ...(reason ? { reason: { code: reason.code, text: redact(reason.text) } } : {}) }));
   rc.writeRun(status, { launched, cached, outputTokens, ...(outcome.error ? { error: redact(outcome.error) } : {}), ...(omitted.length > 0 ? { omissions: omitted, omissionCount } : {}), log: narrator.map(redact) });

@@ -21,7 +21,7 @@ import { agentDir, toText } from "./config.ts";
 import type { AgentConfig } from "./agents.ts";
 import { mapWithConcurrencyLimit, runAgent, type RunOverrides } from "./runner.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
-import { deriveOutcome, type RunStatus, type StepResult } from "./run-contract.ts";
+import { deriveOutcome, RUN_STATUSES, type Execution, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, type PhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
 import { redact, REDACTION_POLICY } from "./redact.ts";
 import { RunControl } from "./control.ts";
@@ -63,7 +63,8 @@ export interface WorkflowDef {
   file: string;
 }
 
-export type StepStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "aborted";
+export const STEP_STATUSES = ["pending", "running", "passed", "failed", "skipped", "aborted"] as const;
+export type StepStatus = (typeof STEP_STATUSES)[number];
 
 const ID = /^[a-z][a-z0-9_-]{0,40}$/;
 
@@ -326,12 +327,12 @@ const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops inc
 // applied to a directory or file that already exists.
 // Run directories live under <workspace>/.pi/, so nothing on the way is followed through a
 // committed symlink (./shared/safe-fs.ts; tests/workspace-symlink-smoke.ts).
-function ensurePrivateDir(dir: string): void {
+export function ensurePrivateDir(dir: string): void {
   ensureDirSafe(dir, { ...piWorkspaceOptions(dir), dirMode: 0o700 });
   fs.chmodSync(dir, 0o700);
 }
 
-function writePrivate(file: string, text: string): void {
+export function writePrivate(file: string, text: string): void {
   writeFileSafe(file, text, piWorkspaceOptions(file, 0o600));
 }
 
@@ -365,15 +366,15 @@ function saveState(dir: string, state: RunState): void {
   writePrivate(path.join(dir, "state.json"), JSON.stringify(redactedState(state), null, 2));
 }
 
-const RUN_STATES: ReadonlySet<string> = new Set(["running", "passed", "partial", "failed", "interrupted"]);
-const STEP_STATUSES: ReadonlySet<string> = new Set(["pending", "running", "passed", "failed", "skipped", "aborted"]);
+const RUN_STATES: ReadonlySet<string> = new Set(RUN_STATUSES);
+const STEP_STATES: ReadonlySet<string> = new Set(STEP_STATUSES);
 
 function isStepState(value: unknown): value is StepState {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const s = value as Record<string, unknown>;
   return (
     typeof s.status === "string" &&
-    STEP_STATUSES.has(s.status) &&
+    STEP_STATES.has(s.status) &&
     typeof s.attempts === "number" &&
     Number.isFinite(s.attempts) &&
     typeof s.cost === "number" &&
@@ -691,6 +692,9 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
 // A stale "running" in a resumed state.json is a step that never finished: it shows as pending.
 const phaseStatus = (s: StepStatus | undefined): PhaseStatus => (s === undefined || s === "running" ? "pending" : s);
 
+// What a step that reached the executor did; `pending` and `skipped` are not reported.
+const STEP_EXECUTION: Readonly<Record<Exclude<StepStatus, "pending" | "skipped">, Execution>> = { running: "unknown", passed: "completed", failed: "failed", aborted: "cancelled" };
+
 /**
  * One StepResult for each leaf step that ran, from its latest attempt, so a gate that missed and then
  * passed reads as completed. A skip is not an omission: a `when` skip is the plan working, and an
@@ -701,8 +705,7 @@ export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
   for (const step of w.steps.flatMap((s) => s.parallel ?? [s])) {
     const st = state.steps[step.id];
     if (!st || st.status === "pending" || st.status === "skipped") continue;
-    const execution = st.status === "passed" ? "completed" : st.status === "failed" ? "failed" : st.status === "aborted" ? "cancelled" : "unknown";
-    out.push({ stepId: step.id, execution, required: !step.continueOnError, ...(st.error ? { reason: { code: "step", text: st.error } } : {}), usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
+    out.push({ stepId: step.id, execution: STEP_EXECUTION[st.status], required: !step.continueOnError, ...(st.error ? { reason: { code: "step", text: st.error } } : {}), usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
   }
   return out;
 }
@@ -748,8 +751,7 @@ async function executeSteps(w: WorkflowDef, state: RunState, opts: RunOptions, r
   });
   const finish = (end: RunFinish) => {
     offControl();
-    // A YAML run has no return value to lose: its result is the step files, so `value` is always present.
-    const { status } = deriveOutcome(stepResults(w, state), { threw: end.error !== undefined, stopped: end.stopped === true, value: true });
+    const { status } = deriveOutcome(stepResults(w, state), { errored: end.error !== undefined, stopped: end.stopped === true, hasResult: true });
     state.status = status;
     state.error = end.stopped ? "cancelled" : end.error;
     state.paused = undefined;

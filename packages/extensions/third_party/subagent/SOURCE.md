@@ -187,3 +187,11 @@
     every end row with `ok: false`, and cached rows do not move the base. `wf-tool.ts` names refused
     reuse in the completion message (`tests/workflow-kernel-regress-smoke.ts`,
     `tests/workflow-resume-smoke.ts`).
+  - **One home for run statuses and refusals (2026-11-05):** `run-contract.ts` holds `RUN_STATUSES`,
+    `producedResult` and `resumable`, and `run-model.ts` holds `terminalPhaseStatus`; `STEP_STATUSES`
+    is a const array in `workflow.ts`, whose `stepResults` maps statuses through one table. A bad
+    `agent()` call is a `refused` op (`wf-runner.mjs`, `wf-sandbox.ts`) that records the step in
+    `wf-engine.ts`, replacing the `raw.invalid` branch, so a script's own `opts.invalid` is an unknown
+    option and launches. `runsRoot`, `ensurePrivateDir` and `writePrivate` have one copy, in
+    `workflow.ts`. No other change to outcomes, refusals, launches or grants
+    (`tests/workflow-hooks-smoke.ts`, `tests/workflow-sandbox-smoke.ts`).

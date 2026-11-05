@@ -34,6 +34,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   generated `open-tool-calls.ts` replace the copies. A tool-event line is parsed once, and the console
   poll lists the pending directory once. An over-range timeout is still refused at once
   (`tests/firewall-overlay-queue-smoke.ts`).
+- Run statuses, step statuses, the resume rule and the run file helpers each have one definition, in
+  `run-contract.ts`, `run-model.ts` and `workflow.ts`, and a bad `agent()` call is recorded through its
+  own `refused` route. Outcomes, refusals, launches and grants are unchanged, with one exception: a
+  script's own `invalid` option on `agent()` is now an ordinary unknown option, so that call launches
+  (`tests/workflow-hooks-smoke.ts`, `tests/workflow-sandbox-smoke.ts`).
 - The project is named **Luna** in the README and documentation. The pi package keeps the name
   `@satunix/pi-system`, so install commands, settings entries and environment variables are
   unchanged.

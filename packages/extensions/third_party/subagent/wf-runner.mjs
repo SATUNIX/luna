@@ -50,10 +50,10 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
   const agent = async (prompt, opts) => {
     // A bad call goes to the host too: it records a step for every agent(), and the throw it sends
     // back is one a catch or parallel() can swallow without hiding the call.
-    const refused = (invalid) => {
+    const refused = (reason) => {
       let required = false;
       try { required = opts?.required === true; } catch (_) { /* a throwing getter requires nothing */ }
-      return call("agent", { prompt: "", opts: { required, invalid } });
+      return call("refused", { reason, required });
     };
     if (typeof prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
     if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) return refused("agent(prompt, opts): opts must be an object");

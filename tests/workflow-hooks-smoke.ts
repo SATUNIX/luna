@@ -171,6 +171,9 @@ try {
     assert.deepEqual(badCalls.fake.seen.map((x) => x.task), ["fine"], "and launches nothing");
     const seenByScript = await run(`const seen = []; for (const bad of [() => agent(undefined), () => agent("x", []), () => agent("x", (() => { const o = {}; o.self = o; return o })()), () => agent("y".repeat(1100000))]) { try { await bad() } catch (e) { seen.push(e.message) } } return seen`, failing);
     assert.deepEqual(value(seenByScript.outcome, "partial"), ["agent(prompt, opts): prompt must be a string", "agent(prompt, opts): opts must be an object", "agent(prompt, opts): opts must be JSON-serialisable", "the call's arguments exceed 1 MiB"], "the script still sees why");
+    const stray = await run(`return await agent("x", { invalid: "not the prelude" })`, failing);
+    assert.equal(stray.outcome.status, "passed", "a script's opts.invalid is an ordinary unknown option");
+    assert.equal(stray.fake.seen.length, 1);
     assert.equal(key({ required: true }), key({}), "required changes the outcome, not the launch, so it leaves the journal key alone");
 
     // A later success does not close an omission: a retry loop cannot launder a failure.
@@ -279,17 +282,16 @@ try {
     // The contract's table, first match wins.
     const { deriveOutcome } = await loadModule<typeof ContractModule>("vendor/subagent/run-contract.ts");
     const step = (execution: ContractModule.Execution, required = false): ContractModule.StepResult => ({ stepId: "s", execution, required, usage: { agents: 1, outputTokens: 0 } });
-    const clean = { threw: false, stopped: false, value: 1 };
-    const status = (steps: ContractModule.StepResult[], end: Partial<typeof clean> | { value: unknown } = {}): string => deriveOutcome(steps, { ...clean, ...end }).status;
+    const clean = { errored: false, stopped: false, hasResult: true };
+    const status = (steps: ContractModule.StepResult[], end: Partial<typeof clean> = {}): string => deriveOutcome(steps, { ...clean, ...end }).status;
     assert.equal(status([step("completed")]), "passed");
     assert.equal(status([]), "passed", "no steps at all is a script that needed none");
-    assert.equal(status([step("failed")], { value: null }), "failed");
-    assert.equal(status([step("failed")], { value: undefined }), "failed");
-    assert.equal(status([step("completed")], { value: null }), "passed", "a null value alone is not an omission");
+    assert.equal(status([step("failed")], { hasResult: false }), "failed");
+    assert.equal(status([step("completed")], { hasResult: false }), "passed", "no result alone is not an omission");
     assert.equal(status([step("failed")]), "partial");
     assert.equal(status([step("failed", true)]), "failed");
-    assert.equal(status([step("completed")], { threw: true }), "failed");
-    assert.equal(status([step("failed", true)], { threw: true, stopped: true }), "interrupted", "stopped wins");
+    assert.equal(status([step("completed")], { errored: true }), "failed");
+    assert.equal(status([step("failed", true)], { errored: true, stopped: true }), "interrupted", "stopped wins");
     for (const e of ["failed", "cancelled", "blocked", "skipped", "unknown"] as const) assert.equal(deriveOutcome([step("completed"), step(e)], clean).omissions.length, 1, `${e} is an omission`);
     ok("the host derives every run's status: a required failure fails it whatever the script hid, an omission makes it partial, a gate miss and a when skip do not, and every surface agrees");
   }

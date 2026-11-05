@@ -18,6 +18,12 @@ import type { UsageStats } from "./types.ts";
 export type { RunStatus };
 export type RunKind = "yaml" | "script";
 export type PhaseStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "aborted";
+
+const TERMINAL_PHASE_STATUS: Readonly<Record<Exclude<RunStatus, "running">, PhaseStatus>> = { passed: "passed", partial: "passed", failed: "aborted", interrupted: "aborted" };
+
+/** What a phase still running when the run ended reads as. */
+export const terminalPhaseStatus = (status: Exclude<RunStatus, "running">): PhaseStatus => TERMINAL_PHASE_STATUS[status];
+
 export type AgentStatus = "running" | "passed" | "failed" | "skipped" | "aborted";
 
 export interface AgentRecord {
@@ -172,6 +178,11 @@ export class RunModel {
 
   hasPhase(id: string): boolean {
     return this.phases.has(id);
+  }
+
+  /** The ids of the phases still running, in phase order. */
+  runningPhases(): string[] {
+    return [...this.phases.values()].filter((p) => p.status === "running").map((p) => p.id);
   }
 
   /** Record an agent launch; returns its id within the run. Unknown phases are created. */

@@ -148,9 +148,11 @@ try {
     // 5. 1 MiB caps.
     expectError(await run(mode, `return "x".repeat(1100000)`), "limit", /exceeds 1 MiB/, "result cap");
     // agent() sends the host the refusal, not the call, so the host can record the step.
-    const refusing = { agent: (_prompt: string, o: Record<string, unknown> | null) => Promise.reject(new Error(String(o?.invalid))) };
-    const bigCall = await run(mode, `try { await agent("y".repeat(1100000)) } catch (e) { return e.message }`, { hooks: refusing });
+    const refusals: Array<[string, boolean]> = [];
+    const refusing = { agent: () => Promise.reject(new Error("no call reaches this hook")), refused: (reason: string, required: boolean) => { refusals.push([reason, required]); } };
+    const bigCall = await run(mode, `try { await agent("y".repeat(1100000), { required: true }) } catch (e) { return e.message }`, { hooks: refusing });
     assert.deepEqual(bigCall, { ok: true, value: "the call's arguments exceed 1 MiB" });
+    assert.deepEqual(refusals, [["the call's arguments exceed 1 MiB", true]]);
     const bigWorkflow = await run(mode, `try { await workflow("w", "y".repeat(1100000)) } catch (e) { return e.message }`);
     assert.deepEqual(bigWorkflow, { ok: true, value: "the call's arguments exceed 1 MiB" });
     const bigReply = await run(mode, `try { await agent("x") } catch (e) { return e.message }`, { hooks: { agent: () => Promise.resolve("r".repeat(1100000)) } });

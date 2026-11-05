@@ -21,25 +21,50 @@ export interface StepResult {
   ref?: string;
 }
 
-export type RunStatus = "running" | "passed" | "partial" | "failed" | "interrupted";
+export const RUN_STATUSES = ["running", "passed", "partial", "failed", "interrupted"] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
 /** How the run's own control flow ended, apart from its steps. */
 export interface RunEnd {
-  threw: boolean;
+  /** The run itself ended on an error: the script or the engine threw, or the YAML executor stopped on one. */
+  errored: boolean;
   stopped: boolean;
-  value: unknown;
+  /** The run has something to show for its omissions. A YAML run's result is its step files, so it always has. */
+  hasResult: boolean;
 }
 
 /**
- * The run's status, first match wins: stopped is `interrupted`; a throw or a required step that did
- * not complete is `failed`; omissions with no value is `failed`; omissions with a value is
- * `partial`; otherwise `passed`. An omission is any step that did not complete: a later success does
- * not close it, so a retry loop cannot launder a failure.
+ * The run's status, first match wins: stopped is `interrupted`; an error or a required step that did
+ * not complete is `failed`; omissions with no result is `failed`; omissions with a result is
+ * `partial`; otherwise `passed`. An omission is any step that did not complete. Each agent() call is
+ * a step of its own, so a later success does not close it and a script's retry loop cannot launder a
+ * failure. A YAML gate loop reruns one step, which reports its latest attempt (stepResults in
+ * workflow.ts), so a gate that passes on a later loop reads as completed.
  */
 export function deriveOutcome(steps: readonly StepResult[], end: RunEnd): { status: Exclude<RunStatus, "running">; omissions: StepResult[] } {
   const omissions = steps.filter((s) => s.execution !== "completed");
   if (end.stopped) return { status: "interrupted", omissions };
-  if (end.threw || omissions.some((s) => s.required)) return { status: "failed", omissions };
+  if (end.errored || omissions.some((s) => s.required)) return { status: "failed", omissions };
   if (omissions.length === 0) return { status: "passed", omissions };
-  return { status: end.value === null || end.value === undefined ? "failed" : "partial", omissions };
+  return { status: end.hasResult ? "partial" : "failed", omissions };
+}
+
+/** Whether a finished run has a result to hand over. */
+export const producedResult = (status: RunStatus): boolean => status === "passed" || status === "partial";
+
+// A script that does not compile or load fails the same way every time.
+const SCRIPT_REFUSED: ReadonlySet<string> = new Set(["syntax", "integrity", "protocol"]);
+// A resume starts with fresh limits and reuses the prefix, so these two refusals can clear.
+const REFUSALS_THAT_CLEAR: ReadonlySet<string> = new Set(["budget", "agent-limit"]);
+
+// A resume replays a journaled result, so one too large to return would be too large again.
+const canRetry = (o: StepResult): boolean => (o.execution !== "blocked" && o.reason?.code !== "result-too-large") || REFUSALS_THAT_CLEAR.has(o.reason?.code ?? "");
+
+/** Whether a resume of a finished script run could end differently: a refusal the next run would meet again needs an edit, not a resume. */
+export function resumable(o: { status: Exclude<RunStatus, "running">; errorKind?: string | undefined; omissions?: readonly StepResult[] | undefined }): boolean {
+  if (o.status === "passed") return false;
+  if (o.status === "interrupted") return true;
+  if (SCRIPT_REFUSED.has(o.errorKind ?? "")) return false;
+  const omissions = o.omissions ?? [];
+  return omissions.length > 0 ? omissions.some(canRetry) : o.status === "failed";
 }

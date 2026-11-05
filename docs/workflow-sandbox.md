@@ -41,11 +41,11 @@ repeats). The VM's globals are the standard built-ins plus:
 
 | Global | Behaviour |
 | --- | --- |
-| `agent(prompt, opts?)` | Calls the host's `agent` hook with `{prompt, opts}` and resolves to its result. It rejects with the hook's error message. A call the prelude cannot send (a prompt that is not a string, bad `opts`, more than 1 MiB) also goes to the hook, as `{prompt: "", opts: {required, invalid}}`, so the host records it and rejects with `invalid`. The budget is the host's to enforce. |
+| `agent(prompt, opts?)` | Calls the host's `agent` hook with `{prompt, opts}` and resolves to its result. It rejects with the hook's error message. A call the prelude cannot send (a prompt that is not a string, bad `opts`, more than 1 MiB, or what a `toJSON()` left of them) goes to the host's `refused` hook with the reason, whether it was required and its label, so the host records a step, and it rejects with the reason. The budget is the host's to enforce. |
 | `parallel(thunks)` | Runs every thunk; a thunk that throws resolves to `null`. At most 4096 thunks. |
 | `pipeline(items, ...stages)` | Each item goes through every stage on its own, with no barrier between stages. Each stage gets `(previous, item, index)`, and a stage that throws turns that item into `null`. At most 4096 items. |
 | `log(text)`, `phase(title)` | Passed to the host's `log` and `phase` hooks, cut to 4096 characters. After 10,000 calls, further calls are dropped. |
-| `workflow(nameOrRef, args?)` | Calls the host's `workflow` hook. Without one it rejects with `workflow() is not available here`. |
+| `workflow(nameOrRef, args?)` | Calls the host's `workflow` hook. Without one it rejects with `workflow() is not available here`. A call the prelude cannot send goes to the `refused` hook, as for `agent()`. |
 | `budget` | A frozen `{total, spent(), remaining()}`: a mirror of the host's budget, updated before each hook result arrives. |
 | `args` | The run's arguments, deep-frozen, or `undefined` if none were passed. |
 
@@ -56,11 +56,10 @@ reassigned or redefined.
 Only strings cross between the host and the VM. The VM's own `JSON.parse` reads every result, so
 no object from the host realm reaches the script. Each message from the runner is checked against
 a TypeBox schema, and the `agent()` and `workflow()` payloads against their own schemas. Anything
-else ends the run with kind `protocol`. A script can reach the payload checks through the shipped
-runner: an `agent()` options object or a `workflow()` argument whose `toJSON()` returns `undefined`
-drops that field from the payload, and the run ends with kind `protocol`. The smoke
-`tests/workflow-sandbox-smoke.ts` tests both. No test sends a malformed runner line to the
-message schema.
+else ends the run with kind `protocol`. The prelude reads back what it stringified, so an `agent()`
+options object or a `workflow()` argument whose `toJSON()` reshapes it is refused into the script
+and does not reach those checks (`tests/workflow-sandbox-smoke.ts`). No test sends a malformed
+runner line to the message schema.
 
 A hook result that `JSON.stringify` cannot encode (a BigInt, a function, a cycle) makes that
 `agent()` or `workflow()` call reject with "the hook's result is not JSON-serialisable". A hook

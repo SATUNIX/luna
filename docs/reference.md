@@ -406,7 +406,7 @@ Extension `subagent`. Run a JavaScript workflow script in the background: determ
 
 ### `workflow_control`
 
-Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (stop its agents; the run ends interrupted and can be resumed with workflow_run {resume}), or skip (stop the agents running now, record their steps as skipped, and go on).
+Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (stop its agents; the run ends interrupted and can be resumed with workflow_run {resume}), or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).
 
 | Parameter | Type | Description |
 |---|---|---|

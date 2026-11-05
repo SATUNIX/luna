@@ -66,6 +66,8 @@ while (true) {
           phase: 'Find',
           agentType: 'reviewer',
           schema: FINDINGS,
+          // The first pass over each dimension is the deliverable; a later round only goes deeper.
+          required: round === 1,
         }),
       ),
     )

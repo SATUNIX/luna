@@ -145,7 +145,8 @@ export function standingBudget(): number | null {
   }
 }
 
-const omissionLine = (o: StepResult): string => `${o.stepId} ${o.execution}${o.required ? " (required)" : ""}${o.reason ? `: ${o.reason.text}` : ""}`;
+// Each part alone: over the whole line, redaction reads the word after a label like secret-scan as its value.
+const omissionLine = (o: StepResult): string => `${redact(o.stepId)} ${o.execution}${o.required ? " (required)" : ""}${o.reason ? `: ${redact(o.reason.text)}` : ""}`;
 
 /** The completion message: status, counts, kept worktrees, paths, and the error, omissions and value inside the fence. */
 export function formatCompletion(o: RunOutcome): string {
@@ -170,7 +171,7 @@ export function formatCompletion(o: RunOutcome): string {
     const named = o.omissions.slice(0, OMISSIONS_NAMED);
     const count = o.omissionCount ?? o.omissions.length;
     const head = count > named.length ? [`${String(count)} steps did not complete; the first ${String(named.length)}:`] : [];
-    lines.push("", untrusted("workflow-omissions", redact([...head, ...named.map(omissionLine)].join("\n")), ERROR_TEXT_CAP));
+    lines.push("", untrusted("workflow-omissions", [...head, ...named.map(omissionLine)].join("\n"), ERROR_TEXT_CAP));
   }
   if (producedResult(o.status)) lines.push("", untrusted("workflow-result", redact(valueText), RESULT_TEXT_CAP));
   return lines.join("\n");

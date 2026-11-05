@@ -47,19 +47,29 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
     spent: () => H.spent(),
     remaining: () => (total === null ? Infinity : Math.max(0, total - H.spent())),
   });
+  // A call that is not sent goes to the host all the same: it records a step for every call, and the
+  // throw it sends back is one a catch or parallel() can swallow without hiding the call.
+  const nameOf = (read) => {
+    try { const v = read(); return typeof v === "string" ? v.slice(0, 200) : undefined; } catch (_) { return undefined; }
+  };
   const agent = async (prompt, opts) => {
-    // A bad call goes to the host too: it records a step for every agent(), and the throw it sends
-    // back is one a catch or parallel() can swallow without hiding the call.
     const refused = (reason) => {
+      // A malformed required asks for one, as the host reads it; a throwing getter requires nothing.
       let required = false;
-      try { required = opts?.required === true; } catch (_) { /* a throwing getter requires nothing */ }
-      return call("refused", { reason, required });
+      try { const r = opts?.required; required = r !== undefined && r !== null && r !== false; } catch (_) { /* no value to read */ }
+      const label = nameOf(() => opts?.label);
+      return call("refused", label === undefined ? { reason, required } : { reason, required, label });
     };
     if (typeof prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
     if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) return refused("agent(prompt, opts): opts must be an object");
     let text;
     try { text = stringify({ prompt, opts: opts === undefined ? null : opts }); } catch (_) { return refused("agent(prompt, opts): opts must be JSON-serialisable"); }
-    if (text !== undefined && text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    if (typeof text !== "string") return refused("agent(prompt, opts): opts must be JSON-serialisable");
+    if (text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    // A toJSON decides what stringify wrote, so the host's schema is checked against that.
+    const sent = parse(text);
+    if (typeof sent?.prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
+    if (sent.opts === undefined || (sent.opts !== null && (typeof sent.opts !== "object" || isArray(sent.opts)))) return refused("agent(prompt, opts): opts must be an object");
     return send("agent", text);
   };
   const items = (name, list) => {
@@ -85,9 +95,17 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
   const log = (text) => { H.emit("log", String(text)); };
   const phase = (title) => { H.emit("phase", String(title)); };
   const workflow = async (ref, childArgs) => {
-    const ok = typeof ref === "string" || (ref !== null && typeof ref === "object" && typeof ref.scriptPath === "string");
-    if (!ok) throw new TypeError("workflow(nameOrRef, args): expected a name or {scriptPath}");
-    return call("workflow", { ref: typeof ref === "string" ? ref : { scriptPath: ref.scriptPath }, args: childArgs === undefined ? null : childArgs });
+    const name = nameOf(() => (typeof ref === "string" ? ref : ref?.scriptPath));
+    const refused = (reason) => call("refused", name === undefined ? { reason, required: false, op: "workflow" } : { reason, required: false, op: "workflow", label: name });
+    if (name === undefined) return refused("workflow(nameOrRef, args): expected a name or {scriptPath}");
+    let text;
+    try { text = stringify({ ref: typeof ref === "string" ? ref : { scriptPath: ref.scriptPath }, args: childArgs === undefined ? null : childArgs }); } catch (_) { return refused("workflow(nameOrRef, args): args must be JSON-serialisable"); }
+    if (typeof text !== "string") return refused("workflow(nameOrRef, args): args must be JSON-serialisable");
+    if (text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    const sent = parse(text);
+    if (sent?.args === undefined) return refused("workflow(nameOrRef, args): args must be JSON-serialisable");
+    if (typeof sent.ref !== "string" && typeof sent.ref?.scriptPath !== "string") return refused("workflow(nameOrRef, args): expected a name or {scriptPath}");
+    return send("workflow", text);
   };
   const args = argsJson === undefined ? undefined : deepFreeze(parse(argsJson));
   const globals = { agent, parallel, pipeline, log, phase, workflow, budget, args };

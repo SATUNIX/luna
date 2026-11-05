@@ -18,7 +18,7 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow status [run-id]` | Recent runs, or one run's steps |
 | `/workflows [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
 | `/workflow pause <run-id>` | Pause a live run: it starts no new agents (see [Pausing, stopping and skipping](#pausing-stopping-and-skipping)) |
-| `/workflow skip <run-id>` | Stop the agents running now, record their steps as `skipped`, and go on |
+| `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
 | `/workflow resume <run-id>` | Unpause a live paused run; otherwise continue an interrupted or failed run from its current step |
 | `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, or `{resume: "<run-id>"}` |
@@ -40,7 +40,7 @@ refused with the list of live ones.
 | `pause` | The executor waits at its scheduler gate before it launches any agent, so a paused run starts no new agents. Agents already running keep running and finish. `state.json` gets `"paused": true` while it lasts, and the run model shows `paused`. |
 | `resume` | Opens the gate; the next step launches. For a run that is not live, use `workflow_run {resume}` or `/workflow resume` instead. |
 | `stop` | Aborts the run's AbortController, which stops its running agents. The run ends `interrupted` and can be resumed. A step that was waiting at a paused gate never launches and keeps its old status. |
-| `skip` | Stops only the agents running now (each agent has its own AbortController under the run's). Their steps are recorded as `skipped` with the error "skipped by operator", and the run goes on: a later `when` sees `skipped`, and a parallel group whose members were skipped passes. A skipped step's `outputs:` check does not run. Skip never passes a review gate: a skipped gate step, or a skipped member of a group that has a `gate`, fails that gate, so the run loops back to `retry` (while `max_loops` lasts) or ends `failed`, and the step after the gate does not run. With nothing running, `skip` is refused. |
+| `skip` | Stops only the agents running now (each agent has its own AbortController under the run's). Their steps are recorded as `skipped` with the error "skipped by operator" (or "skipped by the agent" through the `workflow_control` tool), and the run goes on: a later `when` sees `skipped`, and a parallel group whose members were skipped passes. A skipped step's `outputs:` check does not run. Skip never passes a review gate: a skipped gate step, or a skipped member of a group that has a `gate`, fails that gate, so the run loops back to `retry` (while `max_loops` lasts) or ends `failed`, and the step after the gate does not run. The governed agent's skip of a required step is an omission, so the run reads `partial`; an operator's is not (`tests/workflow-hooks-smoke.ts`, r01). With nothing running, `skip` is refused. |
 
 `workflow_control` is allowed by the shipped firewall policy as `process_control`, like
 `subagent_stop`.
@@ -194,8 +194,8 @@ steps:
 | `model`, `thinking` | Per-step model (`provider/id`) and thinking level. The default is the role's `model:`, else the session model. |
 | `max_runtime` | Wall-clock limit for this step: `90s`, `20m`, `2h`. |
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
-| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. |
-| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. |
+| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member. |
+| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
@@ -226,9 +226,9 @@ steps/<id>.md       every step's final answer (what {{steps.<id>.output}} reads)
 Every step's subagent is told the run directory and the files already in it, so tasks can
 say "write your findings to `findings.md`" and later steps can use `{{file:findings.md}}`.
 Read-only roles (scout, planner) can't write files. Use their `{{steps.<id>.output}}`
-instead. With `vault: true`, a passed run is copied to
+instead. With `vault: true`, a run that reaches its last step, `passed` or `partial`, is copied to
 `~/.pi/vault/Projects/<project>/Workflows/<run-id>/`, so it can be picked up from another
-session or opened in Obsidian.
+session or opened in Obsidian. (`tests/workflow-hooks-smoke.ts`)
 
 ### Redaction and file modes
 
@@ -270,7 +270,9 @@ whole state is treated as corrupt.
   a run reports `partial`, and the rule is in [Run status](script-workflows.md#run-status).
   A gate that misses and then passes stays `passed`. (`tests/workflow-hooks-smoke.ts`)
 - Gates loop back to `retry`, and every step from there to the gate runs again.
-- A run is capped at 60 step executions, counting loops.
+- A run is capped at 60 step executions, counting loops. Each member of a parallel group is an
+  execution, and a group that would pass the cap fails the run before any member starts
+  (`tests/workflow-hooks-smoke.ts`, r06).
 - Resuming re-runs the interrupted step (in a parallel group, only the members that hadn't
   passed) and continues from there. `inputs` and finished outputs are kept.
 - Subagents in a workflow get the same governed launch as any subagent: `--no-extensions` plus
@@ -368,7 +370,7 @@ passed on the installed pi). It has two views:
 | Key | Effect |
 | --- | --- |
 | `x` | Stop the run. Asks first, inside the panel, with "No, keep it running" highlighted; Enter on it or Esc keeps the run, and only "Stop the run" stops it, through the same `controlRun` as `workflow_control`. A run that is not live has nothing to stop. |
-| `k` | Skip the selected agent when it is running: it is cut off, recorded as `skipped` (its `agent()` call returns `null` in a script run) and the run goes on; other running agents are not touched. A finished agent, or a run that is not live, has nothing to skip. |
+| `k` | Skip the selected agent when it is running: it is cut off and recorded as `skipped` (its `agent()` call returns `null` in a script run, and a required one fails that run); other running agents are not touched. A finished agent, or a run that is not live, has nothing to skip. |
 | `p` | Pause a live run, or resume it when it is paused (`controlRun`). The footer shows `p resume` while paused, for YAML and script runs. |
 | `s` | Save the run's workflow into the project's `.pi/workflows/`. Asks first with "No, don't save" highlighted; when the file already exists the second choice is "Overwrite …", so an overwrite is No-first too. A YAML run's definition is copied under the same file name; the copy is a project workflow, so it overrides the Luna or user workflow of the same name in this project and goes through the [trust prompt](#trusting-a-project-workflow) when it runs. A script run's script is saved as `.pi/workflows/<name>.js` only while the file still hashes to the sha256 of the script the run executed (checked when `s` is pressed and again at the write), and that digest is then trusted ("Trust this digest", in every project); for a script run the question names the sha256 and the second choice is "Save and trust …" or "Overwrite … and trust it", so the saved script runs without the trust prompt until the file changes. A run of a project workflow has nothing to save. The save is refused when `.pi`, `.pi/workflows` or the target file is a symlink (or not a directory / regular file), so a planted link cannot redirect the write outside the project. |
 | `Esc` | Back from a run to the list, then close the panel. In a stop or save choice, Esc means No. |

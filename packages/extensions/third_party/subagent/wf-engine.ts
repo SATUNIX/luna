@@ -15,8 +15,14 @@
  *   agent (what the finished agents that spent output cost on average, or the whole remainder
  *   before any has) the call waits for a live agent to finish, holding its slot, and takes the
  *   pause gate again; once `budget.total` is reached agent() throws. The check is an estimate, so a run
- *   can pass `budget.total` by at most what its live agents spend.
- * - workflow(nameOrRef, args) runs another script inline, one level deep.
+ *   can pass `budget.total` by at most what its live agents spend. The same checks run once more as
+ *   the last step before each launch, after the checkout lock or the worktree slot, and every retry
+ *   of a launch takes them again, so a wait there cannot outrun a pause, a stop or the budget.
+ * - A script's calls stop with that script: one it left behind waits for nothing more and its running
+ *   agent is stopped, and the end of the run waits for those, within RUN_END_DRAIN_MS.
+ * - workflow(nameOrRef, args) runs another script inline, one level deep, in a sandbox slot of its own.
+ * - Past STEP_CAP refused calls the run fails (kind "limit"): a refusal costs a script one round trip,
+ *   and only a launch meets the agent limit.
  * - Every agent call is journaled (journal.jsonl in the run's transcript directory): a `run` row with
  *   the checkout's fingerprint, a `started` row before each launch, an end row after it. A resumed run
  *   (resumeFrom) reuses the longest unchanged prefix of agent() calls, keyed by
@@ -48,7 +54,7 @@ import { runRegistry, terminalPhaseStatus, type RunModel, type RunRegistry } fro
 import { launchDigest, type RunOverrides } from "./runner.ts";
 import { StructuredSchemaError } from "./structured-output/check.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
-import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
+import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type RefusedCall, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, type WorktreeOutcome } from "./worktree.ts";
 import { delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
@@ -63,7 +69,10 @@ const BUDGET_POLL_MS = 50;
 // What a script can make the host keep, in step with the sandbox's log cap and the narrator.
 const STEP_CAP = 10_000;
 const STEP_TEXT_CAP = 1000;
+const OPTION_TEXT_CAP = 200;
 const OMISSIONS_KEPT = 200;
+// How long the end of a run waits for the calls it stopped, so that a stuck child cannot hold it.
+const RUN_END_DRAIN_MS = 10_000;
 export const OMISSIONS_NAMED = 20;
 
 /** The default per-run concurrency: min(16, available CPUs - 2), at least 1. */
@@ -129,6 +138,8 @@ export interface EngineOptions {
   resumeFrom?: string | undefined;
   /** Where run directories live; defaults to <cwd>/.pi/workflows/runs. */
   runsDir?: string | undefined;
+  /** Test seam: how long the end of a run waits for what it stopped (RUN_END_DRAIN_MS). */
+  drainMs?: number | undefined;
 }
 
 export interface RunOutcome {
@@ -148,7 +159,7 @@ export interface RunOutcome {
   outputTokens: number;
   /** The agent() calls and nested runs that did not complete, in call order. */
   omissions?: StepResult[] | undefined;
-  /** How many steps did not complete; past STEP_CAP this exceeds `omissions`. */
+  /** How many steps did not complete; run.json keeps the first OMISSIONS_KEPT of them. */
   omissionCount?: number | undefined;
   /** Worktrees kept because their agent changed something (never merged). */
   keptWorktrees: WorktreeOutcome[];
@@ -520,6 +531,9 @@ interface AgentOpts {
   agentType?: string;
 }
 
+/** Anything but an absent or false `required` asks for it: a malformed one is refused, and a required refusal fails the run. */
+const wantsRequired = (required: unknown): boolean => required !== undefined && required !== null && required !== false;
+
 function parseOpts(raw: Record<string, unknown> | null): AgentOpts {
   const opts: AgentOpts = {};
   if (!raw) return opts;
@@ -530,10 +544,12 @@ function parseOpts(raw: Record<string, unknown> | null): AgentOpts {
     return v;
   };
   const label = str("label");
-  if (label !== undefined) opts.label = label.slice(0, 200);
+  if (label !== undefined) opts.label = label.slice(0, OPTION_TEXT_CAP);
   const phase = str("phase");
-  if (phase !== undefined) opts.phase = phase.slice(0, 200);
+  if (phase !== undefined) opts.phase = phase.slice(0, OPTION_TEXT_CAP);
   const model = str("model");
+  // Refused, not cut: a shortened name could be another model.
+  if (model !== undefined && model.length > OPTION_TEXT_CAP) throw new TypeError(`agent(prompt, opts): opts.model is longer than ${String(OPTION_TEXT_CAP)} characters`);
   if (model !== undefined) opts.model = model;
   const effort = str("effort");
   if (effort !== undefined) {
@@ -547,7 +563,7 @@ function parseOpts(raw: Record<string, unknown> | null): AgentOpts {
   }
   const agentType = str("agentType");
   if (agentType !== undefined) opts.agentType = agentType;
-  if (raw.required !== undefined && raw.required !== null && typeof raw.required !== "boolean") throw new TypeError("agent(prompt, opts): opts.required must be a boolean");
+  if (wantsRequired(raw.required) && typeof raw.required !== "boolean") throw new TypeError("agent(prompt, opts): opts.required must be a boolean");
   if (raw.schema !== undefined && raw.schema !== null) opts.schema = raw.schema;
   return opts;
 }
@@ -580,7 +596,13 @@ function editsFiles(role: AgentConfig): boolean {
 const launchOverrides = (o: AgentOpts, model: string | undefined): RunOverrides => ({ model, thinking: o.effort ? EFFORT_TO_THINKING[o.effort] : undefined, appendSystemPrompt: WORKFLOW_AGENT_NOTE });
 
 /** The launch was refused before a child ran (firewall, effort, or a role with no usable tool). */
-class LaunchRefused extends Error {}
+class LaunchRefused extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
 
 export const WORKFLOW_AGENT_NOTE = [
   "## Workflow agent",
@@ -633,6 +655,7 @@ class Semaphore {
 
 /** Over what the sandbox carries back from a hook (encodeResult in wf-sandbox.ts). */
 const tooLarge = (value: unknown): boolean => (JSON.stringify(value) ?? "").length > LINE_CAP;
+const RESULT_TOO_LARGE = "the agent's result exceeds 1 MiB";
 
 const requiredMessage = (s: StepResult): string => `required step ${s.stepId} did not complete (${s.execution}${s.reason ? `: ${s.reason.text}` : ""})`;
 
@@ -650,6 +673,8 @@ interface Frame {
   nested: boolean;
   phase: string;
 }
+
+type WorkflowHook = (ref: string | { scriptPath: string }, args: unknown, signal: AbortSignal) => Promise<unknown>;
 
 /**
  * Starts a script run in the background. Returns at once with the run id and its paths; `done`
@@ -718,6 +743,8 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   // Pause and resume show in the run model (the /workflows panel) while the run is live.
   const offControl = control.onChange((paused) => run.setPaused(paused));
   const sem = new Semaphore(opts.concurrency ?? defaultConcurrency());
+  // A nested script is a sandbox of its own, whatever its agents are doing, so it has slots of its own.
+  const nestedSem = new Semaphore(opts.concurrency ?? defaultConcurrency());
   const maxAgents = opts.maxAgents ?? MAX_AGENTS_PER_RUN;
   const fingerprint = await workspaceFingerprint(opts.cwd, rc.runsDir);
   const cache = new ResumeCache(rc.previous, fingerprint, opts.cwd);
@@ -732,25 +759,16 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   let worktreeIndex = 0;
   let outputTokens = 0;
   // One entry per agent() call, in call order, opened as "unknown" until the call ends.
-  // A set, so a retired refusal leaves the record without a search and the rest keep their order.
   const steps = new Set<StepResult>();
   const settle = (step: StepResult, execution: StepResult["execution"], code?: string, text?: string): void => {
     step.execution = execution;
     if (code !== undefined) step.reason = { code, text: redact(text ?? code).slice(0, STEP_TEXT_CAP) };
   };
-  // A refusal costs the script one round trip, so past the cap a further one is counted, not kept.
-  // One of each kind stays, so the outcome reads the same.
-  let dropped = 0;
-  let requiredRefusalHeld = false;
-  let optionalRefusalHeld = false;
-  const retire = (step: StepResult): void => {
-    if (step.execution !== "blocked") return;
-    if (steps.size > STEP_CAP && (step.required ? requiredRefusalHeld : optionalRefusalHeld)) {
-      steps.delete(step);
-      dropped++;
-    }
-    if (step.required) requiredRefusalHeld = true;
-    else optionalRefusalHeld = true;
+  // A refusal costs the script one round trip and meets no limit of its own, so past the cap it ends the run.
+  const flooded = new AbortController();
+  let refusals = 0;
+  const countRefusal = (step: StepResult): void => {
+    if (step.execution === "blocked" && ++refusals > STEP_CAP) flooded.abort();
   };
   const openStep = (stepId: string, required: boolean): StepResult => {
     const step: StepResult = { stepId, execution: "unknown", required, usage: { agents: 0, outputTokens: 0 } };
@@ -785,34 +803,77 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   };
   for (const row of cache.unknownEffects) narrator.push(`${row.label} of the earlier run has an unknown effect: no writer runs in this checkout`);
 
-  const launch = async (role: AgentConfig, prompt: string, o: AgentOpts, model: string | undefined, frame: Frame, label: string, phase: string, step: StepResult): Promise<{ value: unknown; result?: SingleResult | undefined; worktree?: WorktreeOutcome | undefined; workspace?: string | undefined }> => {
+  // Set when the run ends on its own, so a call that end cuts off does not read as an operator's stop.
+  let runEnded = false;
+  /** A call cut off before its result: by a stop, or by the end of the script that made it. */
+  const cancel = (step: StepResult): void => {
+    if (control.stopped && !runEnded) settle(step, "cancelled", "stopped");
+    else settle(step, "cancelled", "run-ended", "stopped with the script that made the call");
+  };
+
+  type Launched = { value: unknown; result?: SingleResult | undefined; worktree?: WorktreeOutcome | undefined; workspace?: string | undefined };
+  /** How a launch gets past admission and gives its place back: agentCall's `begin` and `free`. */
+  interface Admission {
+    begin(signal: AbortSignal): Promise<boolean>;
+    free(): void;
+  }
+
+  const launch = async (role: AgentConfig, prompt: string, o: AgentOpts, model: string | undefined, frame: Frame, label: string, phase: string, step: StepResult, signal: AbortSignal, admission: Admission): Promise<Launched> => {
     const writer = isWriter(role);
     const id = run.agentStart({ label, phase, role: role.name, model, ...(frame.nested ? { group: frame.name } : {}) });
     const handle = control.agent(label, id);
+    // A skip, a stop, or the end of the script that made the call.
+    const cut = AbortSignal.any([signal, handle.signal]);
     let result: SingleResult | undefined;
     let worktree: WorktreeOutcome | undefined;
     let workspace: string | undefined;
+    const end = (): { usage?: SingleResult["usage"]; model?: string | undefined; subagentRunId?: string | undefined } => (result ? { usage: result.usage, model: result.model, subagentRunId: result.runId } : {});
+    const stoppedShort = (): Launched => {
+      if (handle.skipped()) {
+        settle(step, "skipped", "operator");
+        run.agentEnd(id, { ...end(), status: "skipped" });
+      } else {
+        cancel(step);
+        run.agentEnd(id, { ...end(), status: "aborted" });
+      }
+      return { value: null, result, worktree, workspace };
+    };
     try {
       // The run's own concurrency cap keeps the ledger's per-run limit free; should it still be full, this waits.
-      const once = (cwd: string): Promise<SingleResult> =>
-        runAgentWithSlot({
-          defaultCwd: opts.cwd,
-          cwd,
-          agents: opts.agents,
-          agentName: role.name,
-          task: prompt,
-          signal: handle.signal,
-          parentModel: opts.parentModel,
-          spawnChild: opts.spawnChild,
-          launchKind: "workflow",
-          workflowRun: { runId: rc.runId, runToken: rc.runToken },
-          overrides: launchOverrides(o, model),
-          ...(o.schema !== undefined ? { schema: o.schema } : {}),
-          onUpdate: (t) => run.agentUpdate(id, { activity: t }),
-          onUsage: (usage, m) => run.agentUpdate(id, { usage, model: m }),
-        });
+      const once = async (cwd: string): Promise<SingleResult> => {
+        result = await runAgentWithSlot(
+          {
+            defaultCwd: opts.cwd,
+            cwd,
+            agents: opts.agents,
+            agentName: role.name,
+            task: prompt,
+            signal: cut,
+            parentModel: opts.parentModel,
+            spawnChild: opts.spawnChild,
+            launchKind: "workflow",
+            workflowRun: { runId: rc.runId, runToken: rc.runToken },
+            overrides: launchOverrides(o, model),
+            ...(o.schema !== undefined ? { schema: o.schema } : {}),
+            onUpdate: (t) => run.agentUpdate(id, { activity: t }),
+            onUsage: (usage, m) => run.agentUpdate(id, { usage, model: m }),
+          },
+          {
+            before: async () => {
+              if (!(await admission.begin(cut))) throw new Error("the call was cut off before it started");
+            },
+            // Charged here, so nothing that fails after the child ran can lose its spend.
+            ran: (r) => {
+              outputTokens += r.usage.output;
+              step.usage.outputTokens += r.usage.output;
+            },
+            denied: () => admission.free(),
+          },
+        );
+        return result;
+      };
       if (o.isolation === "worktree") {
-        const tree = await createWorkflowWorktree({ cwd: opts.cwd, runId: rc.runId, index: ++worktreeIndex, signal: handle.signal });
+        const tree = await createWorkflowWorktree({ cwd: opts.cwd, runId: rc.runId, index: ++worktreeIndex, signal: cut });
         try {
           result = await once(tree.path);
         } finally {
@@ -830,40 +891,37 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
         if (writer) workspace = await workspaceFingerprint(opts.cwd, rc.runsDir);
       }
     } catch (error) {
-      run.agentEnd(id, { status: "failed", error: error instanceof Error ? error.message : String(error) });
+      // Cut off in a wait for a slot, the checkout or admission: no child ran, so nothing failed.
+      if (result === undefined && cut.aborted && step.execution === "unknown") return stoppedShort();
+      run.agentEnd(id, { ...end(), status: "failed", error: error instanceof Error ? error.message : String(error) });
       throw error;
     } finally {
       handle.done();
     }
-    outputTokens += result.usage.output;
-    step.usage.outputTokens = result.usage.output;
-    const end = { usage: result.usage, model: result.model, subagentRunId: result.runId };
-    if (handle.skipped()) {
-      settle(step, "skipped", "operator");
-      run.agentEnd(id, { ...end, status: "skipped" });
-      return { value: null, result, worktree, workspace };
-    }
-    if (result.stopReason === "aborted" || control.stopped) {
-      settle(step, "cancelled", "stopped");
-      run.agentEnd(id, { ...end, status: "aborted" });
-      return { value: null, result, worktree, workspace };
-    }
+    if (handle.skipped() || result.stopReason === "aborted" || cut.aborted) return stoppedShort();
     if (result.stopReason === "denied") {
-      run.agentEnd(id, { ...end, status: "failed", error: result.errorMessage });
-      throw new LaunchRefused(result.errorMessage ?? "the agent launch was refused");
+      run.agentEnd(id, { ...end(), status: "failed", error: result.errorMessage });
+      throw new LaunchRefused(result.deniedCode === "total" ? "agent-limit" : "denied", result.errorMessage ?? "the agent launch was refused");
     }
     if (isFailedResult(result)) {
       const why = result.errorMessage ?? `exit ${String(result.exitCode)}`;
       settle(step, "failed", "error", why);
-      run.agentEnd(id, { ...end, status: "failed", error: why });
+      run.agentEnd(id, { ...end(), status: "failed", error: why });
       note(frame, `${label}: failed (${why.slice(0, 200)}); agent() returns null`);
       return { value: null, result, worktree, workspace };
     }
     const value = o.schema !== undefined ? (result.structured ?? null) : result.finalOutput || getResultOutput(result);
+    if (tooLarge(value)) {
+      // The sandbox could not carry it back. A failure here, before the journal, so a resume runs the step again.
+      settle(step, "failed", "result-too-large", RESULT_TOO_LARGE);
+      run.agentEnd(id, { ...end(), status: "failed", error: RESULT_TOO_LARGE });
+      note(frame, `${label}: the result exceeds 1 MiB; agent() returns null`);
+      return { value: null, result, worktree, workspace };
+    }
     const why = value === null ? (result.structuredErrors ?? []).slice(0, 3).join("; ") : undefined;
     if (value === null) settle(step, "failed", "no-structured-output", why || "the agent submitted no structured output");
     else settle(step, "completed");
-    run.agentEnd(id, { ...end, status: value === null ? "failed" : "passed", error: why });
+    run.agentEnd(id, { ...end(), status: value === null ? "failed" : "passed", error: why });
     return { value, result, worktree, workspace };
   };
 
@@ -874,17 +932,19 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   };
 
   /**
-   * Admission (decision 14), run while the call already holds its slot: the pause gate, a stop, the
-   * agent limit, then the budget wait, and only then the reservation. It returns false when the run
-   * was stopped while waiting. The gate is held again after every wait, so a pause that arrives
-   * while this call is waiting for budget still holds the launch. The checks and the reservation
-   * are one synchronous block with no await between them, so calls that were queued together cannot
-   * all pass a check before any of them has reserved.
+   * Admission (decision 14), run while the call holds its slot: the pause gate, a stop, the agent
+   * limit, then the budget wait. It runs twice. A first pass, with no reservation, keeps a call that
+   * would be held or refused from taking the checkout lock or making a worktree; then `reserve`, the
+   * last step before a launch, because those waits can outlast any check made before them. It returns
+   * false when `signal` ended the wait. The gate is held again after every wait, so a pause that
+   * arrives while this call is waiting for budget still holds the launch. The checks and the
+   * reservation are one synchronous block with no await between them, so calls that were queued
+   * together cannot all pass a check before any of them has reserved.
    */
-  const reserve = async (step: StepResult): Promise<boolean> => {
+  const admit = async (step: StepResult, signal: AbortSignal, reserve: boolean): Promise<boolean> => {
     for (;;) {
-      await control.gate();
-      if (control.stopped) return false;
+      await control.gate(signal);
+      if (signal.aborted) return false;
       if (launched >= maxAgents) throw refuse(step, "agent-limit", `agent limit reached: this run has started ${String(launched)} agents (limit ${String(maxAgents)})`);
       if (total === null) break;
       if (outputTokens >= total) throw refuse(step, "budget", `budget exhausted: ${String(outputTokens)} of ${String(total)} output tokens spent`);
@@ -892,18 +952,21 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       // whole remainder. A refused launch or an empty reply has no finished output, so it cannot lower this to 0.
       const estimate = finishedAgents > 0 ? outputTokens / finishedAgents : total - outputTokens;
       if (outputTokens + liveAgents * estimate < total) break;
-      await delay(BUDGET_POLL_MS, control.signal);
+      await delay(BUDGET_POLL_MS, signal);
     }
-    liveAgents++;
-    launched++;
+    if (reserve) {
+      liveAgents++;
+      launched++;
+    }
     return true;
   };
 
-  const agentCall = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame, step: StepResult): Promise<unknown> => {
+  const agentCall = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame, step: StepResult, signal: AbortSignal): Promise<unknown> => {
     let o: AgentOpts;
     try {
       o = parseOpts(rawOpts);
     } catch (error) {
+      if (typeof rawOpts?.label === "string") step.stepId = rawOpts.label.slice(0, OPTION_TEXT_CAP);
       settle(step, "blocked", "options", error instanceof Error ? error.message : String(error));
       throw error;
     }
@@ -954,39 +1017,55 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     }
     // Admission (decision 14): the slot comes first, then every check, so a fan-out waiting in the
     // queue cannot pass them all before any of it has spent anything. Every exit below releases it.
-    if (!(await sem.acquire(control.signal))) {
-      settle(step, "cancelled", "stopped");
+    if (!(await sem.acquire(signal))) {
+      cancel(step);
       return null;
     }
     let reserved = false;
-    try {
-      if (!(await reserve(step))) {
-        settle(step, "cancelled", "stopped");
-        return null;
-      }
+    let started: number | undefined;
+    const free = (): void => {
+      if (!reserved) return;
+      reserved = false;
+      liveAgents = Math.max(0, liveAgents - 1);
+      launched = Math.max(0, launched - 1);
+      step.usage.agents = 0;
+    };
+    const begin = async (cut: AbortSignal): Promise<boolean> => {
+      if (!(await admit(step, cut, true))) return false;
       reserved = true;
       step.usage.agents = 1;
-      const started = journalStart({ key, label, role: role.name, writer, ...(o.isolation === "worktree" ? { isolated: true } : {}) });
+      started ??= journalStart({ key, label, role: role.name, writer, ...(o.isolation === "worktree" ? { isolated: true } : {}) });
+      return true;
+    };
+    try {
+      if (!(await admit(step, signal, false))) {
+        cancel(step);
+        return null;
+      }
       try {
-        const r = await launch(role, prompt, o, model, frame, label, phase, step);
+        const r = await launch(role, prompt, o, model, frame, label, phase, step, signal, { begin, free });
+        // Cut off before it started: no row says it began, so none says it ended.
+        if (started === undefined) return null;
         const tree = r.worktree;
         const fingerprintOfKept = tree?.status === "kept" ? await keptTree(tree.path, opts.cwd) : undefined;
         journal({
           key, label, phase, role: role.name, ok: r.value !== null, value: r.value, writer, definition, started,
           ...(r.workspace !== undefined ? { workspace: r.workspace } : {}),
           ...(tree ? { worktree: { branch: tree.branch, head: tree.head, status: tree.status, ...(tree.status === "kept" ? { path: tree.path, tree: fingerprintOfKept } : {}) } } : {}),
-          outputTokens: r.result?.usage.output ?? 0, subagentRunId: r.result?.runId,
-          ...(r.value === null && r.result?.errorMessage ? { error: r.result.errorMessage } : {}),
+          outputTokens: step.usage.outputTokens, subagentRunId: r.result?.runId,
+          ...(r.value === null && (r.result?.errorMessage ?? step.reason?.text) ? { error: r.result?.errorMessage ?? step.reason?.text } : {}),
         });
         step.ref = String(seq);
         return r.value;
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
-        journal({ key, label, phase, role: role.name, ok: false, value: null, writer, definition, started, outputTokens: 0, error: text });
-        step.ref = String(seq);
-        if (error instanceof LaunchRefused) settle(step, "blocked", "denied", text);
+        if (started !== undefined) {
+          journal({ key, label, phase, role: role.name, ok: false, value: null, writer, definition, started, outputTokens: step.usage.outputTokens, error: text });
+          step.ref = String(seq);
+        }
+        if (error instanceof LaunchRefused) settle(step, "blocked", error.code, text);
         else if (error instanceof StructuredSchemaError) settle(step, "blocked", "schema", text);
-        else settle(step, "failed", "error", text);
+        else if (step.execution === "unknown") settle(step, "failed", "error", text);
         if (error instanceof StructuredSchemaError) throw new Error(`agent(): ${error.message}`, { cause: error });
         throw error;
       }
@@ -1000,37 +1079,43 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   };
 
   // Every agent() call the prelude sends passes here (refusedHook takes the rest), so the record holds whatever the script does with the result.
-  const agentHook = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame): Promise<unknown> => {
-    const step = openStep(`agent() call ${String(steps.size + 1)}`, rawOpts?.required === true);
+  const agentHook = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame, signal: AbortSignal): Promise<unknown> => {
+    const step = openStep(`agent() call ${String(steps.size + 1)}`, wantsRequired(rawOpts?.required));
     let value: unknown;
     try {
-      value = await agentCall(prompt, rawOpts, frame, step);
-      // The sandbox would throw this into the script, where a catch or parallel() could hide it.
-      if (step.execution === "completed" && tooLarge(value)) {
-        settle(step, "failed", "result-too-large", "the agent's result exceeds 1 MiB");
-        note(frame, `${step.stepId}: the result exceeds 1 MiB; agent() returns null`);
-        value = null;
-      }
+      value = await agentCall(prompt, rawOpts, frame, step, signal);
     } catch (error) {
       if (step.execution === "unknown") settle(step, "failed", "error", error instanceof Error ? error.message : String(error));
       throw error;
     } finally {
-      retire(step);
+      countRefusal(step);
     }
     if (step.required && step.execution !== "completed" && !control.stopped) throw new Error(requiredMessage(step));
     return value;
   };
 
-  // An agent() call the prelude would not send is still a step: the script could catch the throw.
-  const refusedHook = (reason: string, required: boolean): void => {
-    const step = openStep(`agent() call ${String(steps.size + 1)}`, required);
-    settle(step, "blocked", "options", reason);
-    retire(step);
+  // A call the prelude would not send is still a step: the script could catch the throw.
+  const refusedHook = (call: RefusedCall): void => {
+    const nested = call.op === "workflow";
+    const named = call.label?.slice(0, OPTION_TEXT_CAP);
+    const stepId = nested ? `workflow ${named ?? "(no name)"}` : (named ?? `agent() call ${String(steps.size + 1)}`);
+    const step = openStep(stepId, call.required);
+    settle(step, "blocked", nested ? "workflow-refused" : "options", call.reason);
+    countRefusal(step);
+  };
+
+  // Every hook still running, for the end of the run to wait on.
+  const inFlight = new Set<Promise<unknown>>();
+  const track = <T>(work: Promise<T>): Promise<T> => {
+    inFlight.add(work);
+    const untrack = (): void => { inFlight.delete(work); };
+    work.then(untrack, untrack);
+    return work;
   };
 
   // One script (the run's, or a nested workflow()'s) in its own sandbox process; nested scripts share
-  // this run's concurrency cap, agent counter, abort signal and budget.
-  const sandbox = (frameSpec: ScriptSpec, frameArgs: unknown, frame: Frame, workflow: (ref: string | { scriptPath: string }, childArgs: unknown) => Promise<unknown>) =>
+  // this run's concurrency cap, agent counter, abort signal and budget. `scope` ends with the script that called.
+  const sandbox = (frameSpec: ScriptSpec, frameArgs: unknown, frame: Frame, workflow: WorkflowHook, scope?: AbortSignal) =>
     runWorkflowScript({
       source: frameSpec.source,
       args: frameArgs,
@@ -1038,12 +1123,12 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       ...(opts.sandbox.support ? { support: opts.sandbox.support } : {}),
       ...(opts.sandbox.quickjs ? { quickjs: opts.sandbox.quickjs } : {}),
       ...(opts.sandbox.limits ? { limits: opts.sandbox.limits } : {}),
-      signal: control.signal,
+      signal: AbortSignal.any([control.signal, flooded.signal, ...(scope ? [scope] : [])]),
       budget: { total, spent: () => outputTokens },
       hooks: {
-        agent: (prompt, o) => agentHook(prompt, o, frame),
+        agent: (prompt, o, signal) => track(agentHook(prompt, o, frame, AbortSignal.any([control.signal, signal]))),
         refused: refusedHook,
-        workflow: (ref, childArgs) => workflow(ref, childArgs),
+        workflow: (ref, childArgs, signal) => track(workflow(ref, childArgs, AbortSignal.any([control.signal, signal]))),
         log: (text) => note(frame, text),
         phase: (title) => {
           frame.phase = frame.nested ? `▸ ${frame.name} · ${title}` : title;
@@ -1052,53 +1137,71 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
         },
       },
     });
-  const nestedWorkflow = async (ref: string | { scriptPath: string }, childArgs: unknown): Promise<unknown> => {
-    if (!opts.resolveWorkflow) throw new Error("workflow(): nested workflows are not available here");
+  const nestedWorkflow = async (ref: string | { scriptPath: string }, childArgs: unknown, signal: AbortSignal, depth: number): Promise<unknown> => {
     const named = typeof ref === "string" ? ref : ref.scriptPath;
     // A script can catch a nested failure, so the nested run gets a record of its own, like an agent() call.
-    const step = openStep(`workflow ${named.slice(0, 200)}`, false);
+    const step = openStep(`workflow ${named.slice(0, OPTION_TEXT_CAP)}`, false);
+    const refused = (text: string): Error => {
+      settle(step, "blocked", "workflow-refused", text);
+      countRefusal(step);
+      return new Error(text);
+    };
+    if (!opts.resolveWorkflow) throw refused("workflow(): nested workflows are not available here");
+    if (depth > 1) throw refused("workflow(): nesting is one level only; a nested workflow cannot call workflow()");
     let child: ScriptSpec;
     try {
       child = await opts.resolveWorkflow(ref, spec.name);
     } catch (error) {
-      settle(step, "blocked", "workflow-refused", error instanceof Error ? error.message : String(error));
-      retire(step);
-      throw error;
+      throw refused(error instanceof Error ? error.message : String(error));
     }
-    const group = `▸ ${child.name}`;
-    run.phase(group, group, "running");
-    const r = await sandbox(child, childArgs, { name: child.name, nested: true, phase: "" }, () => Promise.reject(new Error("workflow(): nesting is one level only; a nested workflow cannot call workflow()")));
-    run.setPhaseStatus(group, r.ok ? "passed" : "failed");
-    if (!r.ok) {
-      settle(step, r.kind === "aborted" ? "cancelled" : "failed", r.kind, r.error);
-      throw new Error(`workflow ${child.name} failed (${r.kind}): ${r.error}`);
+    if (!(await nestedSem.acquire(signal))) {
+      cancel(step);
+      throw new Error(`workflow ${child.name} was stopped before it started`);
     }
-    settle(step, "completed");
-    return r.value;
+    try {
+      const group = `▸ ${child.name}`;
+      run.phase(group, group, "running");
+      const r = await sandbox(child, childArgs, { name: child.name, nested: true, phase: "" }, (deeper, deeperArgs, deeperSignal) => nestedWorkflow(deeper, deeperArgs, deeperSignal, depth + 1), signal);
+      run.setPhaseStatus(group, r.ok ? "passed" : "failed");
+      if (!r.ok) {
+        settle(step, r.kind === "aborted" ? "cancelled" : "failed", r.kind, r.error);
+        throw new Error(`workflow ${child.name} failed (${r.kind}): ${r.error}`);
+      }
+      settle(step, "completed");
+      return r.value;
+    } finally {
+      nestedSem.release();
+    }
   };
 
   let result: Awaited<ReturnType<typeof sandbox>> | undefined;
   let engineError: string | undefined;
   let stopped = false;
   try {
-    result = await sandbox(spec, args, { name: spec.name, nested: false, phase: spec.phases[0]?.title ?? "" }, nestedWorkflow);
+    result = await sandbox(spec, args, { name: spec.name, nested: false, phase: spec.phases[0]?.title ?? "" }, (ref, childArgs, signal) => nestedWorkflow(ref, childArgs, signal, 1));
+    if (flooded.signal.aborted && !result.ok) result = { ok: false, kind: "limit", error: `the script made more than ${String(STEP_CAP)} refused calls` };
     // Read before the stop below, which ends a run that finished normally.
     stopped = control.stopped || (!result.ok && result.kind === "aborted");
   } catch (error) {
     engineError = `engine error: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
     // A script that returned without awaiting its agents leaves calls running or waiting for
-    // admission, which hold a slot but are not running yet: stop them with the run.
+    // admission: stop them with the run, and wait for them, so that their tokens and kept worktrees
+    // reach the outcome. The wait is bounded, because a child can ignore its kill.
+    runEnded = !control.stopped;
     if (!control.stopped) control.act("stop");
+    let drained: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.allSettled(inFlight), new Promise((resolve) => { drained = setTimeout(resolve, opts.drainMs ?? RUN_END_DRAIN_MS); })]);
+    clearTimeout(drained);
     offControl();
     close();
   }
   // A skip of a best-effort call is a decision to go on, so it is no omission; a required one stays,
-  // or a skip could turn it into `passed`. A call still open was stopped with the run.
+  // or a skip could turn it into `passed`. A call still open was stuck past the wait above.
   const settled = [...steps].filter((s) => s.execution !== "skipped" || s.required).map((s): StepResult => (s.execution === "unknown" ? { ...s, execution: "cancelled", reason: { code: "run-ended", text: "still running when the run ended" } } : s));
   const value = result?.ok ? result.value : undefined;
   const { status, omissions } = deriveOutcome(settled, { errored: engineError !== undefined || (result?.ok === false && !stopped), stopped, hasResult: value !== null && value !== undefined });
-  const omissionCount = omissions.length + dropped;
+  const omissionCount = omissions.length;
   const failure = status === "failed" && result?.ok ? stepFailure(omissions, omissionCount) : undefined;
   const scriptError = result?.ok === false ? { error: result.error, errorKind: result.kind } : undefined;
   const outcome: RunOutcome = {
@@ -1112,6 +1215,6 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   for (const id of run.runningPhases()) run.setPhaseStatus(id, terminalPhaseStatus(status));
   run.finish(status, outcome.error);
   const omitted = omissions.slice(0, OMISSIONS_KEPT).map(({ stepId, execution, required, reason }) => ({ stepId: redact(stepId), execution, required, ...(reason ? { reason: { code: reason.code, text: redact(reason.text) } } : {}) }));
-  rc.writeRun(status, { launched, cached, outputTokens, ...(outcome.error ? { error: redact(outcome.error) } : {}), ...(omitted.length > 0 ? { omissions: omitted, omissionCount } : {}), log: narrator.map(redact) });
+  rc.writeRun(status, { launched, cached, outputTokens, ...(outcome.error ? { error: redact(outcome.error) } : {}), ...(omitted.length > 0 ? { omissions: omitted, omissionCount } : {}), ...(kept.length > 0 ? { keptWorktrees: kept.map(({ path: tree, branch, reason }) => ({ path: tree, branch, ...(reason ? { reason: redact(reason) } : {}) })) } : {}), log: narrator.map(redact) });
   return outcome;
 }

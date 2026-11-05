@@ -53,18 +53,31 @@ export function deriveOutcome(steps: readonly StepResult[], end: RunEnd): { stat
 export const producedResult = (status: RunStatus): boolean => status === "passed" || status === "partial";
 
 // A script that does not compile or load fails the same way every time.
-const SCRIPT_REFUSED: ReadonlySet<string> = new Set(["syntax", "integrity", "protocol"]);
+const SCRIPT_REFUSED: ReadonlySet<string> = new Set(["syntax", "integrity"]);
 // A resume starts with fresh limits and reuses the prefix, so these two refusals can clear.
 const REFUSALS_THAT_CLEAR: ReadonlySet<string> = new Set(["budget", "agent-limit"]);
+// How a run ends because of its steps or its own code, which its omissions then judge: a thrown refusal
+// reads "script", and "limit" is a result too big or a flood of refusals. Any other kind can clear by itself.
+const ENDED_BY_ITS_STEPS: ReadonlySet<string> = new Set(["required", "omitted", "limit", "script"]);
 
-// A resume replays a journaled result, so one too large to return would be too large again.
-const canRetry = (o: StepResult): boolean => (o.execution !== "blocked" && o.reason?.code !== "result-too-large") || REFUSALS_THAT_CLEAR.has(o.reason?.code ?? "");
+const canRetry = (o: StepResult): boolean => {
+  const code = o.reason?.code ?? "";
+  if (SCRIPT_REFUSED.has(code)) return false;
+  return o.execution !== "blocked" || REFUSALS_THAT_CLEAR.has(code);
+};
 
-/** Whether a resume of a finished script run could end differently: a refusal the next run would meet again needs an edit, not a resume. */
+/**
+ * Whether a resume of a finished script run could end differently, judging the failure that ended it
+ * and then its omissions. A script that does not compile, or a required step refused the same way
+ * again, needs an edit; a crash can clear, whatever else the run left out.
+ */
 export function resumable(o: { status: Exclude<RunStatus, "running">; errorKind?: string | undefined; omissions?: readonly StepResult[] | undefined }): boolean {
   if (o.status === "passed") return false;
   if (o.status === "interrupted") return true;
-  if (SCRIPT_REFUSED.has(o.errorKind ?? "")) return false;
+  const kind = o.errorKind ?? "";
+  if (SCRIPT_REFUSED.has(kind)) return false;
   const omissions = o.omissions ?? [];
+  if (omissions.some((s) => s.required && !canRetry(s))) return false;
+  if (kind !== "" && !ENDED_BY_ITS_STEPS.has(kind)) return true;
   return omissions.length > 0 ? omissions.some(canRetry) : o.status === "failed";
 }

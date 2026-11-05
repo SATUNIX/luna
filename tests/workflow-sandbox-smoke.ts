@@ -149,7 +149,7 @@ try {
     expectError(await run(mode, `return "x".repeat(1100000)`), "limit", /exceeds 1 MiB/, "result cap");
     // agent() sends the host the refusal, not the call, so the host can record the step.
     const refusals: Array<[string, boolean]> = [];
-    const refusing = { agent: () => Promise.reject(new Error("no call reaches this hook")), refused: (reason: string, required: boolean) => { refusals.push([reason, required]); } };
+    const refusing = { agent: () => Promise.reject(new Error("no call reaches this hook")), refused: ({ reason, required }: { reason: string; required: boolean }) => { refusals.push([reason, required]); } };
     const bigCall = await run(mode, `try { await agent("y".repeat(1100000), { required: true }) } catch (e) { return e.message }`, { hooks: refusing });
     assert.deepEqual(bigCall, { ok: true, value: "the call's arguments exceed 1 MiB" });
     assert.deepEqual(refusals, [["the call's arguments exceed 1 MiB", true]]);
@@ -169,9 +169,9 @@ try {
     const odd = await run(mode, `try { await agent("x"); return "resolved" } catch (e) { return e.message }`, { hooks: { agent: () => Promise.reject(badRejection) }, limits: { idleMs: 3000 } });
     assert.deepEqual(odd, { ok: true, value: "the hook failed with a value that cannot be shown" });
     ok(`${mode}: a hook result JSON cannot encode (BigInt, function, cycle) or a rejection whose message getter throws rejects agent() instead of hanging the run`);
-    expectError(await run(mode, `await agent("x", { toJSON() { return undefined } }); return 1`), "protocol", /malformed agent\(\) call/, "opts dropped by toJSON");
-    expectError(await run(mode, `await workflow("child", { toJSON() { return undefined } }); return 1`, { hooks: { ...echo, workflow: () => Promise.resolve(1) } }), "protocol", /malformed workflow\(\) call/, "workflow args dropped by toJSON");
-    ok(`${mode}: an agent() or workflow() payload that a toJSON() reshapes past the prelude's checks ends the run with kind protocol`);
+    expectError(await run(mode, `await agent("x", { toJSON() { return undefined } }); return 1`), "script", /opts must be an object/, "opts dropped by toJSON");
+    expectError(await run(mode, `await workflow("child", { toJSON() { return undefined } }); return 1`, { hooks: { ...echo, workflow: () => Promise.resolve(1) } }), "script", /args must be JSON-serialisable/, "workflow args dropped by toJSON");
+    ok(`${mode}: an agent() or workflow() payload that a toJSON() reshapes is refused into the script, so it cannot end the run`);
 
     // Host-to-runner lines carrying U+2028/U+2029 (readline splits on both).
     const sep = "a\u2028b\u2029c";

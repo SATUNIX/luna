@@ -67,10 +67,18 @@ export const DEFAULT_LIMITS: SandboxLimits = {
   addressSpaceBytes: 16 * 1024 * 1024 * 1024,
 };
 
+/** What the prelude could read from a call it refused: `op` is unset for agent(), and `label` names the step. */
+export interface RefusedCall {
+  reason: string;
+  required: boolean;
+  label?: string | undefined;
+  op?: "workflow" | undefined;
+}
+
 export interface WorkflowHooks {
   agent(prompt: string, opts: Record<string, unknown> | null, signal: AbortSignal): Promise<unknown>;
-  /** An agent() call the sandbox would not send: the script gets `reason` as a throw once this returns. */
-  refused?(reason: string, required: boolean): void;
+  /** A call the sandbox would not send: the script gets `reason` as a throw once this returns. */
+  refused?(call: RefusedCall): void;
   workflow?(ref: string | { scriptPath: string }, args: unknown, signal: AbortSignal): Promise<unknown>;
   log?(text: string): void;
   phase?(title: string): void;
@@ -260,7 +268,7 @@ const RunnerMessage = Type.Union([
 ]);
 type RunnerMessage = Static<typeof RunnerMessage>;
 const AgentPayload = Type.Object({ prompt: Type.String(), opts: Type.Union([Type.Null(), Type.Record(Type.String(), Type.Unknown())]) }, { additionalProperties: false });
-const RefusedPayload = Type.Object({ reason: Type.String(), required: Type.Boolean() }, { additionalProperties: false });
+const RefusedPayload = Type.Object({ reason: Type.String(), required: Type.Boolean(), label: Type.Optional(Type.String()), op: Type.Optional(Type.Literal("workflow")) }, { additionalProperties: false });
 const WorkflowPayload = Type.Object({
   ref: Type.Union([Type.String(), Type.Object({ scriptPath: Type.String() }, { additionalProperties: false })]),
   args: Type.Unknown(),
@@ -467,7 +475,7 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
               return;
             }
             reply(msg.id, Promise.resolve().then(() => {
-              opts.hooks.refused?.(payload.reason, payload.required);
+              opts.hooks.refused?.(payload);
               throw new Error(payload.reason);
             }));
           } else {

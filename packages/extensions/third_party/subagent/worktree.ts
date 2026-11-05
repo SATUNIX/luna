@@ -209,9 +209,19 @@ export async function finishWorkflowWorktree(tree: WorkflowWorktree, opts: { jou
     const inTree = ["--git-dir", tree.gitDir, "--work-tree", tree.path, ...SAFE_GIT];
     // `--ignore-submodules=dirty` never enters a nested repo (whose config, e.g. a clean filter, the
     // agent controls) but still reports a gitlink that was staged or moved to another commit.
-    const status = await runGit([...inTree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"], tree.path);
-    const head = await runGit([...inTree, "rev-parse", "HEAD"], tree.path);
-    const commits = head === tree.baseCommit ? 0 : Number(await runGit([...inTree, "rev-list", "--count", `${tree.baseCommit}..${head}`], tree.path)) || 0;
+    let status: string;
+    let head: string;
+    let commits: number;
+    try {
+      status = await runGit([...inTree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"], tree.path);
+      head = await runGit([...inTree, "rev-parse", "HEAD"], tree.path);
+      commits = head === tree.baseCommit ? 0 : Number(await runGit([...inTree, "rev-list", "--count", `${tree.baseCommit}..${head}`], tree.path)) || 0;
+    } catch (error) {
+      // A worktree git cannot read may still hold the agent's work, so it is kept, and named.
+      const outcome: WorktreeOutcome = { ...base, status: "kept", head: "", dirty: true, commits: 0, reason: `not inspected: ${error instanceof Error ? error.message : String(error)}`, at: new Date().toISOString() };
+      if (opts.journalFile) appendJournal(opts.journalFile, outcome);
+      return outcome;
+    }
     const dirty = status.length > 0;
     if (!dirty && head === tree.baseCommit) {
       const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));

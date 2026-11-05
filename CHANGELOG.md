@@ -143,6 +143,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A workflow's limits now hold at the moment an agent starts. The pause and the budget are checked last, after
+  the checkout lock and the worktree-slot wait; output is charged as soon as a child ends, including when
+  a later step throws; a script's leftover calls stop with that script; and a run waits for stopped calls
+  before reporting, so their tokens and kept worktrees are recorded (`tests/workflow-hooks-smoke.ts`).
+- A failed workflow can no longer read `passed`. An oversized result is refused before it is journaled, so
+  resume does not reuse it, and a model's skip of a required YAML step reads `partial`. An operator's skip keeps
+  its meaning. Shipped kit scripts mark their final deliverable `required` (`tests/workflow-hooks-smoke.ts`).
+- **Migration:** a `gate` on a parallel member and a `when` on a parallel group were ignored, so a rejecting
+  review could read `passed`. They are now refused at parse time; move the check onto a step after the group.
+  Group members count against the run's execution ceiling (`tests/workflow-hooks-smoke.ts`).
 - A resumed workflow no longer replays results that stopped being true. A journaled call is reused only
   when the checkout still matches what the earlier run left, reads included, and when the call would
   launch the same thing: tools, model, thinking, skills and their text, extensions, effort, runtime and

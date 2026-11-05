@@ -15,6 +15,8 @@
 //      interrupted (inside a nested workflow() as well).
 //  12. outcome (run-contract.ts): the host derives a run's status from what each step did, whatever the script hid;
 //      refusals are omissions, so most of the cases above end partial; every surface agrees; YAML runs the same way.
+//  13. the S4 and S5 review findings: admission is the last step before a launch, a script's leftovers stop with it,
+//      the end of a run waits for what it stopped, every refused call is a named step, and refusals have a limit.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -96,7 +98,328 @@ async function runYaml(steps: string, reply: (s: Spawned) => FakeReply) {
   return { state, workflow: parsed.workflow, snapshot: registry.get(state.id), fake };
 }
 
+const makeRepo = (): string => {
+  const repo = fs.mkdtempSync(path.join(ws, "repo-"));
+  const git = (...a: string[]): void => { execFileSync("git", a, { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } }); };
+  git("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(repo, ".gitignore"), ".pi/\n");
+  fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  return repo;
+};
+
 try {
+  // 13. The S4 and S5 review findings, one case each. Each reports alone, so that one red run names them all.
+  {
+    const misses: string[] = [];
+    const finding = async (id: string, fn: () => Promise<void>): Promise<void> => {
+      try {
+        await fn();
+        console.log(`  OK: ${id}`);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        misses.push(id);
+        console.log(`  MISS: ${id}: ${text.split("\n").slice(0, 3).join(" ")}`);
+      }
+    };
+    const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    const until = async (cond: () => boolean, ms = 20_000): Promise<void> => {
+      for (let i = 0; i < ms / 10 && !cond(); i++) await wait(10);
+      assert.ok(cond(), "timed out");
+    };
+    const live = (source: string, reply: (s: Spawned) => FakeReply, extra: Partial<Options> = {}) => {
+      const fake = fakeSpawner(reply);
+      const controls = new controlMod.ControlRegistry();
+      const started = engine.startScriptRun(spec(source), undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: fake.spawn, controls, ...extra });
+      assert.ok(started.ok);
+      return { started, fake, controls };
+    };
+    const planner = `agentType: "planner"`;
+    const readJson = (file: string): unknown => JSON.parse(fs.readFileSync(file, "utf8"));
+    const field = (value: unknown, key: string): unknown => (typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined);
+    const codes = (o: EngineModule.RunOutcome): Array<[string, string | undefined]> | undefined => o.omissions?.map((s) => [s.execution, s.reason?.code]);
+    const outcomeOf = (o: Partial<EngineModule.RunOutcome>): EngineModule.RunOutcome => ({ runId: "wf-x", name: "n", status: "failed", scriptPath: "/s.js", transcriptDir: "/t", journalPath: "/j", launched: 1, cached: 0, outputTokens: 1, keptWorktrees: [], ...o });
+    const omitted = (execution: ContractModule.Execution, code: string, required = false): ContractModule.StepResult => ({ stepId: "s", execution, required, reason: { code, text: code }, usage: { agents: 0, outputTokens: 0 } });
+    const canResume = (o: Partial<EngineModule.RunOutcome>): boolean => /Resume with workflow/.test(formatCompletion(outcomeOf(o)));
+    const parseYaml = (steps: string) => yamlMod.parseWorkflow(`---\nname: outcome-test\ndescription: test\nsteps:\n${steps}---\n`, path.join(project, "outcome-test.md"), "user");
+    const skipYaml = async (origin: ControlModule.ControlOrigin, continueOnError = false) => {
+      const parsed = parseYaml(`  - id: must\n    agent: scout\n    task: "must do"\n${continueOnError ? "    continue_on_error: true\n" : ""}  - id: after\n    agent: scout\n    task: "after"\n`);
+      assert.ok(parsed.workflow);
+      const controls = new controlMod.ControlRegistry();
+      const state = yamlMod.newRunState(parsed.workflow, {});
+      const { control, close } = controls.open(state.id);
+      const fake = fakeSpawner((s) => (s.task.startsWith("must") ? { text: "x", delayMs: 2000 } : { text: "ok" }));
+      const running = yamlMod.executeWorkflow(parsed.workflow, state, { cwd: project, agents, spawnChild: fake.spawn, registry: new RunRegistry(), launchKind: "user", control });
+      await until(() => fake.seen.length > 0);
+      assert.equal(controlMod.controlRun(state.id, "skip", controls, origin).ok, true);
+      const final = await running;
+      close();
+      return { final, workflow: parsed.workflow };
+    };
+
+    await finding("r01 an agent's skip of a required YAML step is an omission, an operator's keeps today's meaning", async () => {
+      const agentSkip = await skipYaml("agent");
+      assert.equal(agentSkip.final.status, "partial");
+      assert.deepEqual(yamlMod.stepResults(agentSkip.workflow, agentSkip.final).filter((s) => s.execution !== "completed").map((s) => [s.stepId, s.execution, s.required]), [["must", "skipped", false]]);
+      assert.equal(yamlMod.loadState(project, agentSkip.final.id)?.status, "partial", "state.json agrees");
+      assert.equal((await skipYaml("operator")).final.status, "passed");
+      assert.equal((await skipYaml("agent", true)).final.status, "passed", "a best-effort step may be skipped");
+    });
+    await finding("r02 a writer waiting on the checkout lock does not start during a pause", async () => {
+      const { started, fake, controls } = live(`return await parallel([() => agent("w1"), () => agent("w2")])`, (s) => ({ text: s.task, delayMs: 300 }), { cwd: makeRepo(), concurrency: 2 });
+      await until(() => fake.seen.length > 0);
+      controlMod.controlRun(started.runId, "pause", controls);
+      await wait(900);
+      assert.equal(fake.seen.length, 1, "only the first writer started before the pause");
+      controlMod.controlRun(started.runId, "resume", controls);
+      assert.deepEqual(value(await started.done), ["w1", "w2"]);
+    });
+    await finding("r02b r11 a pause holds a worktree agent past its slot wait; a skip or stop in the wait is that, not a failure", async () => {
+      const repo = makeRepo();
+      const holders = live(`return await parallel(Array.from({ length: 16 }, (_, i) => () => agent("h" + i, { isolation: "worktree" })))`, () => ({ text: "ok", delayMs: 2500 }), { cwd: repo, concurrency: 16 });
+      await until(() => holders.fake.seen.length === 16, 30_000);
+      const waiter = `let r; try { r = await agent("waiter", { isolation: "worktree" }) } catch (e) { return "threw: " + e.message } return r`;
+      const paused = live(waiter, (s) => ({ text: s.task }), { cwd: repo });
+      const skipped = live(waiter, (s) => ({ text: s.task }), { cwd: repo });
+      const stopped = live(waiter, (s) => ({ text: s.task }), { cwd: repo });
+      await until(() => [paused, skipped, stopped].every((r) => r.controls.get(r.started.runId)?.running().length === 1));
+      controlMod.controlRun(paused.started.runId, "pause", paused.controls);
+      assert.equal(controlMod.controlRun(skipped.started.runId, "skip", skipped.controls).ok, true);
+      assert.equal(controlMod.controlRun(stopped.started.runId, "stop", stopped.controls).ok, true);
+      const skip = await skipped.started.done;
+      const stop = await stopped.started.done;
+      await holders.started.done;
+      await wait(300);
+      assert.equal(paused.fake.seen.length, 0, "the slot came free during the pause");
+      controlMod.controlRun(paused.started.runId, "resume", paused.controls);
+      assert.equal(value(await paused.started.done), "waiter");
+      assert.deepEqual([skip.status, skip.value, skip.omissions ?? [], skipped.fake.seen.length], ["passed", null, [], 0], "a skip of a best-effort call is no omission and no throw");
+      assert.deepEqual([stop.status, codes(stop), stopped.fake.seen.length], ["interrupted", [["cancelled", "stopped"]], 0]);
+    });
+    await finding("r16 writers queued on the lock are checked against the budget when their turn comes", async () => {
+      let n = 0;
+      const r = await run(`return await parallel([1, 2, 3, 4, 5, 6].map((i) => () => agent("w" + i)))`, () => (++n === 1 ? { text: "ok", output: 1 } : { text: "ok", output: 1000 }), { cwd: makeRepo(), concurrency: 4, budgetTotal: 100 });
+      assert.equal(r.fake.seen.length, 2);
+      assert.equal(r.outcome.outputTokens, 1001);
+      assert.ok(codes(r.outcome)?.every(([e, c]) => e === "blocked" && c === "budget"), JSON.stringify(codes(r.outcome)));
+    });
+    await finding("r03 r03b a script's leftover calls stop with that script", async () => {
+      const order: string[] = [];
+      const returned = await run(`const v = await workflow("n"); const c = await agent("parent"); return [v, c]`, (s) => { order.push(s.task); return { text: s.task, delayMs: 200 }; }, { concurrency: 1, resolveWorkflow: async () => spec(`agent("n1"); agent("n2"); return "early"`, "n") });
+      assert.deepEqual(value(returned.outcome, "partial"), ["early", "parent"]);
+      assert.ok(!order.includes("n2"), order.join());
+      order.length = 0;
+      const died = await run(`let r; try { r = await workflow("child") } catch (e) { r = "caught" } await agent("parent", { ${planner} }); return r`, (s) => { order.push(s.task); return { text: s.task, delayMs: 200 }; }, { concurrency: 1, resolveWorkflow: async () => spec(`agent("n1", { ${planner} }); agent("n2", { ${planner} }); agent("n3", { ${planner} }); throw new Error("boom")`, "child") });
+      assert.deepEqual(value(died.outcome, "partial"), "caught");
+      assert.ok(!order.includes("n2") && !order.includes("n3"), order.join());
+    });
+    await finding("r23 calls sent just before the return are stopped, not started, charged and killed", async () => {
+      const r = await run(`agent("a", { ${planner} }); agent("b", { ${planner} }); agent("c", { ${planner} }); return 1`, () => ({ text: "ok", delayMs: 500 }), { concurrency: 4 });
+      assert.equal(value(r.outcome, "partial"), 1);
+      // A call the host reads before the script's end may start; it is stopped with the script, and the rest never start.
+      assert.ok(r.outcome.launched < 3, `launched ${String(r.outcome.launched)}`);
+      assert.equal(r.outcome.outputTokens, 0);
+      assert.deepEqual(codes(r.outcome), [["cancelled", "run-ended"], ["cancelled", "run-ended"], ["cancelled", "run-ended"]]);
+    });
+    await finding("r04 r04b the resume line judges the failure that ended the run as well as the omissions", async () => {
+      assert.equal(canResume({ error: "x", errorKind: "crash", omissions: [omitted("blocked", "model-refused")] }), true, "a crash keeps it");
+      assert.equal(canResume({ error: "x", errorKind: "required", omissions: [omitted("blocked", "unknown-role", true), omitted("failed", "error")] }), false, "a required refusal comes back");
+      assert.equal(canResume({ status: "partial", omissions: [omitted("failed", "syntax")] }), false, "a nested script that does not compile fails the same way");
+      assert.equal(canResume({ status: "partial", omissions: [omitted("blocked", "agent-limit")] }), true, "a new scope clears the per-run total");
+      assert.equal(canResume({ error: "x", errorKind: "syntax", omissions: [omitted("failed", "error")] }), false);
+      assert.equal(canResume({ error: "x", errorKind: "protocol" }), true, "a hook result the host could not deliver is transient");
+      assert.equal(canResume({ error: "x", errorKind: "limit", omissions: [omitted("blocked", "options")] }), false, "a refused flood comes back");
+    });
+    await finding("r06 a group's members count against the execution ceiling", async () => {
+      const members = Array.from({ length: 80 }, (_, i) => `      - id: m${String(i)}\n        agent: scout\n        task: "t${String(i)}"\n`).join("");
+      const r = await runYaml(`  - id: g\n    parallel:\n${members}`, () => ({ text: "ok" }));
+      assert.equal(r.fake.seen.length, 0);
+      assert.equal(r.state.status, "failed");
+      assert.match(r.state.error ?? "", /60 step executions/);
+    });
+    await finding("r07 r08 a gate on a parallel member and a when on a parallel group are refused at parse time", async () => {
+      const member = parseYaml(`  - id: g\n    parallel:\n      - id: review\n        agent: scout\n        task: "review"\n        gate:\n          pass: APPROVED\n`);
+      assert.match(member.errors.join(), /review.*gate/);
+      const group = parseYaml(`  - id: first\n    agent: scout\n    task: "first"\n  - id: g\n    when:\n      step: first\n      status: failed\n    parallel:\n      - id: fixup\n        agent: scout\n        task: "fixup"\n`);
+      assert.match(group.errors.join(), /g: .*when/);
+    });
+    await finding("r09 an oversized result is a failure from the start: journal, panel and resume", async () => {
+      const repo = makeRepo();
+      const src = `return await agent("x", { ${planner}, required: true })`;
+      const first = await run(src, () => ({ text: "-----BEGIN " + `PRIVATE KEY-----\n${"A".repeat(1_200_000)}` }), { cwd: repo });
+      assert.equal(first.outcome.status, "failed");
+      assert.equal(first.snapshot?.agents[0]?.status, "failed", "the panel row agrees");
+      const rows = fs.readFileSync(first.outcome.journalPath, "utf8").trim().split("\n").map((l): unknown => JSON.parse(l));
+      assert.equal(field(rows.find((r) => field(r, "key") !== undefined && field(r, "event") === undefined), "ok"), false, "journaled as failed");
+      const second = await run(src, () => ({ text: "fresh" }), { cwd: repo, resumeFrom: first.started.runId });
+      assert.deepEqual([value(second.outcome), second.outcome.cached, second.fake.seen.length], ["fresh", 0, 1]);
+      assert.match(formatCompletion(first.outcome), /Resume with workflow/, "a resume launches it again");
+    });
+    await finding("r10 spend and the worktree survive a finish that cannot read the worktree", async () => {
+      const spoil = (s: Spawned): FakeReply => {
+        const gitdir = fs.readFileSync(path.join(s.cwd, ".git"), "utf8").replace("gitdir:", "").trim();
+        fs.writeFileSync(path.join(gitdir, "index"), "garbage");
+        return { text: "done", output: 500 };
+      };
+      const r = await run(`return await agent("x", { isolation: "worktree" })`, spoil, { cwd: makeRepo(), concurrency: 1 });
+      assert.equal(r.outcome.outputTokens, 500);
+      assert.equal(value(r.outcome), "done");
+      assert.match(r.outcome.keptWorktrees[0]?.reason ?? "", /not inspected/);
+    });
+    await finding("r12 a group's cost counts once", async () => {
+      const step = (cost: number, attempts: number): WorkflowModule.StepState => ({ status: "passed", attempts, runIds: [], cost });
+      const state: WorkflowModule.RunState = { version: 1, id: "r", workflow: "w", workflowFile: "w.md", inputs: {}, status: "passed", cursor: 0, loops: {}, steps: { g: step(3, 0), a: step(1, 1), b: step(2, 1) }, startedAt: "", updatedAt: "", executions: 2 };
+      assert.match(yamlMod.summarizeRun(state), /\$3\.0000/);
+    });
+    await finding("r19 a rerun step drops its old error", async () => {
+      let tries = 0;
+      const r = await runYaml(`  - id: a\n    agent: scout\n    task: "a"\n    continue_on_error: true\n  - id: c\n    agent: scout\n    task: "c"\n    gate:\n      pass: OK\n      retry: a\n      max_loops: 2\n`, (s) => (s.task.startsWith("a") ? (tries++ === 0 ? { fail: "boom" } : { text: "fine" }) : { text: tries > 1 ? "OK" : "NO" }));
+      assert.equal(r.state.status, "passed");
+      assert.equal(r.state.steps.a?.error, undefined);
+    });
+    await finding("r20 an executor throw leaves state.json failed, and a bad outputTokens does not load", async () => {
+      const parsed = parseYaml(`  - id: a\n    agent: scout\n    task: "a"\n`);
+      assert.ok(parsed.workflow);
+      const state = yamlMod.newRunState(parsed.workflow, {});
+      const dir = path.join(yamlMod.runsRoot(project), state.id);
+      const fake = fakeSpawner(() => {
+        fs.rmSync(path.join(dir, "steps"), { recursive: true, force: true });
+        fs.writeFileSync(path.join(dir, "steps"), "x");
+        return { text: "ok" };
+      });
+      await assert.rejects(yamlMod.executeWorkflow(parsed.workflow, state, { cwd: project, agents, spawnChild: fake.spawn, registry: new RunRegistry(), launchKind: "user" }));
+      assert.equal(yamlMod.loadState(project, state.id)?.status, "failed");
+      const onDisk = readJson(path.join(dir, "state.json"));
+      assert.ok(typeof onDisk === "object" && onDisk !== null);
+      const saved = field(field(onDisk, "steps"), "a");
+      assert.ok(typeof saved === "object" && saved !== null);
+      Reflect.set(saved, "outputTokens", "many");
+      fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(onDisk));
+      assert.equal(yamlMod.loadState(project, state.id), null);
+    });
+    await finding("r13 nested sandboxes have slots of their own", async () => {
+      const r = await run(`return await parallel(["a", "b"].map((n) => () => workflow("child", { n })))`, (s) => ({ text: s.task, delayMs: 50 }), { concurrency: 1, resolveWorkflow: async () => spec(`await agent(args.n + "1"); return await agent(args.n + "2")`, "child") });
+      assert.deepEqual(r.fake.seen.map((s) => s.task), ["a1", "a2", "b1", "b2"], "one nested script at a time");
+    });
+    await finding("r14 r15 the end of a run waits for what it stopped", async () => {
+      const usage = { input: 5, output: 700, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } };
+      const base = fakeSpawner((s) => (s.task.startsWith("slow") ? { text: "late", delayMs: 5000 } : { text: "fast", output: 10, delayMs: 200 }));
+      const spawn: FakeSpawn = (command, args, options) => {
+        const child = base.spawn(command, args, options);
+        let task = "";
+        child.stdin.on("data", (d: Buffer) => { task += d.toString(); });
+        child.stdin.on("end", () => { if (task.includes("slow")) child.stdout.write(`${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "turn 1" }], stopReason: "toolUse", usage } })}\n`); });
+        return child;
+      };
+      const r = await run(`agent("slow", { ${planner} }); return await agent("fast", { ${planner} })`, () => ({}), { spawnChild: spawn, concurrency: 4 });
+      assert.equal(r.outcome.outputTokens, 710);
+      assert.equal(field(readJson(path.join(r.outcome.transcriptDir, "run.json")), "outputTokens"), 710);
+      assert.deepEqual(r.outcome.omissions?.map((o) => o.usage.outputTokens), [700]);
+
+      const repo = makeRepo();
+      const stopping = live(`return await agent("w", { isolation: "worktree" })`, (s) => { fs.writeFileSync(path.join(s.cwd, "work.txt"), "half done\n"); return { text: "late", delayMs: 5000 }; }, { cwd: repo });
+      await until(() => stopping.fake.seen.length === 1);
+      await wait(100);
+      controlMod.controlRun(stopping.started.runId, "stop", stopping.controls);
+      const stopped = await stopping.started.done;
+      assert.equal(stopped.keptWorktrees.length, 1);
+      assert.match(formatCompletion(stopped), /Kept worktree/);
+      assert.equal(field(field(readJson(path.join(stopped.transcriptDir, "run.json")), "keptWorktrees"), "length"), 1);
+
+      const stuck = fakeSpawner((s) => ({ text: s.task, delayMs: s.task === "slow" ? 1500 : 100 }));
+      const unkillable: FakeSpawn = (command, args, options) => Object.assign(stuck.spawn(command, args, options), { kill: () => true });
+      const bounded = await run(`agent("slow", { ${planner} }); return await agent("quick", { ${planner} })`, () => ({}), { spawnChild: unkillable, concurrency: 2, drainMs: 100 });
+      assert.deepEqual(bounded.outcome.omissions?.map((o) => o.reason?.text), ["still running when the run ended"], "a stuck child cannot hold the end of the run");
+    });
+    await finding("r17 r25 a refused workflow() or agent() call is a step, under its label, and a malformed required counts", async () => {
+      const resolveWorkflow = async (): Promise<EngineModule.ScriptSpec> => spec(`let m = "none"; try { await workflow("deeper") } catch (e) { m = e.message } return m`, "child");
+      for (const source of [`await parallel([() => workflow("audit", "x".repeat(1200000))]); return "done"`, `const a = {}; a.a = a; await parallel([() => workflow("audit", a)]); return "done"`, `await parallel([() => workflow(42)]); return "done"`, `await parallel([() => workflow("audit", { toJSON: () => undefined })]); return "done"`]) {
+        const r = await run(source, () => ({ text: "x" }), { resolveWorkflow });
+        assert.equal(r.outcome.status, "partial", source);
+        assert.deepEqual(codes(r.outcome), [["blocked", "workflow-refused"]], source);
+      }
+      const deeper = await run(`return await workflow("child")`, () => ({ text: "x" }), { resolveWorkflow });
+      assert.equal(deeper.outcome.status, "partial");
+      assert.deepEqual(codes(deeper.outcome), [["blocked", "workflow-refused"]]);
+      assert.equal(deeper.outcome.omissions?.[0]?.stepId, "workflow deeper");
+      const big = await run(`await workflow("audit", "x".repeat(1200000)).catch(() => null); return "done"`, () => ({ text: "x" }), { resolveWorkflow });
+      assert.equal(big.outcome.omissions?.[0]?.stepId, "workflow audit", "the refusal keeps its name");
+
+      const malformed = await run(`return await parallel([() => agent("deploy", { required: "true", ${planner} }), () => agent("notes", { ${planner} })])`, () => ({ text: "ok" }));
+      assert.equal(malformed.outcome.status, "failed");
+      assert.deepEqual(malformed.outcome.omissions?.map((o) => [o.execution, o.required]), [["blocked", true]]);
+      const prelude = await run(`return await parallel([() => agent(undefined, { required: "yes", label: "named" }), () => agent("notes", { ${planner} })])`, () => ({ text: "ok" }));
+      assert.equal(prelude.outcome.status, "failed");
+      assert.deepEqual(prelude.outcome.omissions?.map((o) => [o.stepId, o.required]), [["named", true]]);
+      const parsed = await run(`return await parallel([() => agent("deploy", { required: "true", label: "deploy-prod", ${planner} }), () => agent("notes", { ${planner} })])`, () => ({ text: "ok" }));
+      assert.equal(parsed.outcome.status, "failed");
+      assert.deepEqual(parsed.outcome.omissions?.map((o) => [o.stepId, o.required]), [["deploy-prod", true]], "a call that fails its options keeps its label");
+      for (const bad of [`model: "m".repeat(201)`, `isolation: "elsewhere"`]) {
+        const r = await run(`await agent("x", { ${bad}, label: "named", ${planner} }).catch(() => null); return "done"`, () => ({ text: "ok" }));
+        assert.deepEqual(r.outcome.omissions?.map((o) => o.stepId), ["named"], bad);
+      }
+      const long = await run(`await agent("x", { required: "true", label: "l".repeat(5000), ${planner} }).catch(() => null); return "done"`, () => ({ text: "ok" }));
+      assert.equal(long.outcome.omissions?.[0]?.stepId.length, 200, "the label is capped as a parsed one is");
+    });
+    await finding("r18 what stringify really produced decides, so toJSON cannot end the run as protocol", async () => {
+      for (const opts of [`{ toJSON: () => undefined }`, `{ toJSON: () => 7 }`, `{ toJSON: () => [1] }`]) {
+        const r = await run(`return await parallel([() => agent("x", ${opts}), () => agent("fine", { ${planner} })])`, () => ({ text: "ok", delayMs: 50 }));
+        assert.deepEqual(value(r.outcome, "partial"), [null, "ok"], opts);
+        assert.deepEqual(codes(r.outcome), [["blocked", "options"]], opts);
+      }
+    });
+    await finding("r21 a refused loop fails the run past STEP_CAP refusals", async () => {
+      for (const [source, extra] of [[`await agent("first", { ${planner} }); for (;;) { try { await agent("again", { ${planner} }) } catch (e) {} }`, { budgetTotal: 5 }], [`for (;;) { try { await agent(undefined) } catch (e) {} }`, {}], [`for (;;) { await agent("x", { model: "gone/none" }) }`, { availableModels: () => [] }]] as const) {
+        const r = await run(source, () => ({ text: "ok" }), extra);
+        assert.equal(r.outcome.status, "failed", source);
+        assert.equal(r.outcome.errorKind, "limit", source);
+        assert.match(r.outcome.error ?? "", /10000 refused calls/);
+      }
+    });
+    await finding("r22 a model string is capped like a label", async () => {
+      const r = await run(`const m = "m".repeat(1000000); for (let i = 0; i < 10; i++) await agent("x", { model: m }).catch(() => null); return "done"`, () => ({ text: "ok" }), { availableModels: () => [] });
+      assert.equal(value(r.outcome, "partial"), "done");
+      assert.ok(fs.statSync(path.join(r.outcome.transcriptDir, "run.json")).size < 100_000);
+      assert.ok(fs.statSync(r.outcome.journalPath).size < 100_000);
+    });
+    await finding("r24 children that report no output hold a budgeted run to one agent at a time, and nothing else does", async () => {
+      const fan = `return await parallel([1, 2, 3].map((i) => () => agent("p" + i, { ${planner} })))`;
+      const silent = await run(fan, () => ({ text: "ok", output: 0, delayMs: 100 }), { concurrency: 3, budgetTotal: 15 });
+      assert.equal(silent.fake.maxLive(), 1);
+      assert.equal(value(silent.outcome, "passed") !== undefined, true);
+      const unbudgeted = await run(fan, () => ({ text: "ok", output: 0, delayMs: 100 }), { concurrency: 3 });
+      assert.equal(unbudgeted.fake.maxLive(), 3);
+    });
+    await finding("a label like secret-scan keeps its omission line", async () => {
+      const text = formatCompletion(outcomeOf({ status: "partial", value: "v", omissions: [{ ...omitted("failed", "error"), stepId: "secret-scan" }] }));
+      assert.match(text, /secret-scan failed: error/);
+    });
+    await finding("the skip message does not promise that the run goes on", async () => {
+      const control = new controlMod.ControlRegistry().open("wf-y").control;
+      const handle = control.agent("a", "a1");
+      const asked = control.act("skip", "agent");
+      assert.doesNotMatch(asked.message, /goes on/);
+      assert.equal(handle.skipOrigin(), "agent");
+    });
+    await finding("a vault workflow keeps a partial run", async () => {
+      const vault = path.join(ws, "vault");
+      const restore = setEnv("PI_KIT_VAULT", vault);
+      try {
+        const parsed = yamlMod.parseWorkflow(`---\nname: kept\ndescription: test\nvault: true\nsteps:\n  - id: a\n    agent: scout\n    task: "fail now"\n    continue_on_error: true\n---\n`, path.join(project, "kept.md"), "user");
+        assert.ok(parsed.workflow);
+        const fake = fakeSpawner(() => ({ fail: "provider down" }));
+        const state = await yamlMod.executeWorkflow(parsed.workflow, yamlMod.newRunState(parsed.workflow, {}), { cwd: project, agents, spawnChild: fake.spawn, registry: new RunRegistry(), launchKind: "user" });
+        assert.equal(state.status, "partial");
+        assert.ok(fs.existsSync(path.join(vault, "Projects", "project", "Workflows", state.id)));
+      } finally {
+        restore();
+      }
+    });
+    assert.deepEqual(misses, [], "every review finding holds");
+    ok("the S4 and S5 review findings hold");
+  }
+
   // 12. Outcome. Listed first so that every case reports at once while a defect is present.
   {
     const failing = (s: Spawned): FakeReply => (s.task.startsWith("fail") ? { fail: "provider down" } : { text: s.task });
@@ -219,7 +542,7 @@ try {
     const oversized = await run(`return await parallel([() => agent("big"), () => agent("fine")])`, big);
     assert.deepEqual(value(oversized.outcome, "partial"), [null, "ok"]);
     assert.deepEqual(oversized.outcome.omissions?.map((o) => [o.execution, o.required, o.reason?.code]), [["failed", false, "result-too-large"]]);
-    assert.ok(!/Resume with/.test(formatCompletion(oversized.outcome)), "a resume replays the same journaled result");
+    assert.match(formatCompletion(oversized.outcome), /Resume with workflow/, "journaled as a failure, so a resume launches it again");
     const oversizedRequired = await run(`let seen; try { await agent("big", { required: true }) } catch (e) { seen = e.message } return seen ?? "went on"`, big);
     assert.equal(oversizedRequired.outcome.status, "failed", "a required result over the cap fails the run although the throw was caught");
     assert.equal(oversizedRequired.outcome.errorKind, "required");
@@ -241,26 +564,29 @@ try {
     // What a script can make the host keep is bounded, like every other sandbox channel.
     const flood = await run(`let n = 0; while (n++ < 20000) { try { await agent(undefined) } catch {} } return null`, failing);
     assert.equal(flood.outcome.status, "failed");
-    assert.equal(flood.outcome.errorKind, "omitted");
-    assert.match(flood.outcome.error ?? "", /no result, and 20000 steps did not complete: .* and 19980 more$/);
-    assert.equal((flood.outcome.error ?? "").split(": ")[1]?.split(", ").length, 20, "the error names twenty steps");
-    assert.equal(flood.outcome.omissionCount, 20000);
-    assert.ok((flood.outcome.omissions?.length ?? 0) <= 10000, "steps stay bounded");
+    assert.equal(flood.outcome.errorKind, "limit", "a refusal costs one round trip, so past the cap the run ends");
+    assert.match(flood.outcome.error ?? "", /more than 10000 refused calls/);
+    assert.equal(flood.outcome.omissionCount, 10001);
+    assert.equal(flood.outcome.omissions?.length, 10001);
     const floodJson: unknown = JSON.parse(fs.readFileSync(path.join(flood.started.transcriptDir, "run.json"), "utf8"));
     assert.ok(typeof floodJson === "object" && floodJson !== null);
     const floodList: unknown = Reflect.get(floodJson, "omissions");
     assert.ok(Array.isArray(floodList));
-    assert.deepEqual([floodList.length, Reflect.get(floodJson, "omissionCount")], [200, 20000]);
-    assert.match(formatCompletion(flood.outcome), /<untrusted source="workflow-omissions">[\s\S]*?```\n20000 steps did not complete; the first 20:/);
+    assert.deepEqual([floodList.length, Reflect.get(floodJson, "omissionCount")], [200, 10001]);
+    assert.match(formatCompletion(flood.outcome), /<untrusted source="workflow-omissions">[\s\S]*?```\n10001 steps did not complete; the first 20:/);
+    const emptyHanded = await run(`let n = 0; while (n++ < 3) { try { await agent(undefined) } catch {} } return null`, failing);
+    assert.equal(emptyHanded.outcome.errorKind, "omitted");
+    assert.match(emptyHanded.outcome.error ?? "", /no result, and 3 steps did not complete/);
     const requiredFlood = await run(`let n = 0; while (n++ < 10100) { try { await agent(undefined, { required: true }) } catch {} } return "went on"`, failing);
-    assert.equal(requiredFlood.outcome.status, "failed", "a dropped required refusal still fails the run");
-    assert.equal(requiredFlood.outcome.omissionCount, 10100);
-    assert.ok((requiredFlood.outcome.omissions?.length ?? 0) <= 10000);
+    assert.equal(requiredFlood.outcome.status, "failed", "a required refusal fails the run past the cap as well");
     const hugeRefusal = await run(`await agent("x", { agentType: "z".repeat(500000) }).catch(() => null); return "went on"`, failing);
-    assert.ok((hugeRefusal.outcome.omissions?.[0]?.reason?.text.length ?? 0) <= 1000, "a refusal keeps a bounded reason");
+    assert.equal(value(hugeRefusal.outcome, "partial"), "went on");
+    const hugeReason = hugeRefusal.outcome.omissions?.[0]?.reason;
+    assert.ok(hugeReason, "the refusal is on the record");
+    assert.ok(hugeReason.text.length <= 1000, "a refusal keeps a bounded reason");
 
     // Agents still running when the script returns are stopped with the run, and that is an omission.
-    const orphan = await run(`agent("slow"); await agent("fine", { label: "quick" }); return "done"`, (s) => ({ text: s.task, delayMs: s.task === "slow" ? 2000 : 0 }));
+    const orphan = await run(`agent("slow"); await agent("fine", { label: "quick" }); return "done"`, (s) => ({ text: s.task, delayMs: s.task === "slow" ? 2000 : 0 }), { concurrency: 2 });
     assert.deepEqual([value(orphan.outcome, "partial"), orphan.outcome.omissions?.map((o) => [o.execution, o.reason?.code])], ["done", [["cancelled", "run-ended"]]]);
 
     // The YAML surfaces.
@@ -561,7 +887,7 @@ try {
     for (let i = 0; i < 200 && budgetPauseFake.seen.length < 1; i++) await wait(10);
     assert.equal(controlMod.controlRun(budgetPause.runId, "pause", controls).ok, true);
     await wait(900);
-    assert.deepEqual(budgetPauseFake.seen.map((x) => x.task), ["b1"], "a call waiting for budget does not launch while the run is paused");
+    assert.equal(budgetPauseFake.seen.length, 1, "a call waiting for budget does not launch while the run is paused");
     assert.equal(controlMod.controlRun(budgetPause.runId, "resume", controls).ok, true);
     const budgetPauseDone = await budgetPause.done;
     assert.deepEqual(value(budgetPauseDone, "partial"), ["b1", "b2", null], "the call goes on after the resume, and the third is refused by the budget");

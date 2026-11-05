@@ -95,6 +95,7 @@ function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
     const members: StepDef[] = raw.parallel.map((s: unknown, i: number) => parseStep(s, `${where}.parallel[${i}]`, errors));
     step.parallel = members;
     for (const inner of members) if (inner.parallel) errors.push(`${where}: parallel groups cannot nest`);
+    for (const inner of members) if (inner.gate) errors.push(`${where}: parallel member ${inner.id}: a gate belongs on the group, not on a member`);
     if (!members.length) errors.push(`${where}: parallel group is empty`);
   } else {
     step.agent = raw.agent ? toText(raw.agent) : raw.skill ? "implementer" : undefined;
@@ -117,6 +118,7 @@ function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
     const w = isObject(raw.when) ? raw.when : {};
     const status = Array.isArray(w.status) ? w.status.map(toText) : [toText(w.status ?? "passed")];
     step.when = { step: toText(w.step ?? ""), status: status as StepStatus[] };
+    if (step.parallel) errors.push(`${where}: ${id}: a parallel group cannot take when; put it on each member`);
   }
   if (raw.gate) {
     const g = isObject(raw.gate) ? raw.gate : {};
@@ -381,6 +383,7 @@ function isStepState(value: unknown): value is StepState {
     Number.isFinite(s.attempts) &&
     typeof s.cost === "number" &&
     Number.isFinite(s.cost) &&
+    (s.outputTokens === undefined || (typeof s.outputTokens === "number" && Number.isFinite(s.outputTokens))) &&
     Array.isArray(s.runIds) &&
     s.runIds.every((r) => typeof r === "string")
   );
@@ -480,9 +483,10 @@ export function renderTemplate(template: string, ctx: { inputs: Record<string, s
 // treats such a step, or such a member of its group, as a failed verdict, so skipping never
 // bypasses a gate. A step skipped by its own `when` is the workflow's choice and is not counted.
 export const SKIPPED_BY_OPERATOR = "skipped by operator";
+export const SKIPPED_BY_AGENT = "skipped by the agent";
 export const SKIPPED_ON_RESUME = "skipped on resume";
 function skippedByControl(st: StepState | undefined): boolean {
-  return st?.status === "skipped" && (st.error === SKIPPED_BY_OPERATOR || st.error === SKIPPED_ON_RESUME);
+  return st?.status === "skipped" && (st.error === SKIPPED_BY_OPERATOR || st.error === SKIPPED_BY_AGENT || st.error === SKIPPED_ON_RESUME);
 }
 
 function gatePasses(pattern: string, output: string): boolean {
@@ -672,14 +676,24 @@ export function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** What the script engine does around each attempt: admit it, charge it, give its place back on a denial. */
+export interface SlotHooks {
+  before: () => Promise<void>;
+  ran: (result: SingleResult) => void;
+  denied: () => void;
+}
+
 /**
  * runAgent for a workflow step: a "concurrency" denial means the run's slots are full, so it waits
  * for one instead of failing the step. Both workflow engines launch through this.
  */
-export async function runAgentWithSlot(options: RunAgentOptions & { signal: AbortSignal }): Promise<SingleResult> {
+export async function runAgentWithSlot(options: RunAgentOptions & { signal: AbortSignal }, hooks?: SlotHooks): Promise<SingleResult> {
   for (;;) {
+    await hooks?.before();
     const r = await runAgent(options);
+    hooks?.ran(r);
     if (r.deniedCode !== "concurrency" || options.signal.aborted) return r;
+    hooks?.denied();
     await delay(DENIAL_POLL_MS, options.signal);
   }
 }
@@ -693,6 +707,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
     const wanted = Array.isArray(step.when.status) ? step.when.status : [step.when.status];
     if (!dep || !wanted.includes(dep)) {
       st.status = "skipped";
+      delete st.error;
       st.endedAt = new Date().toISOString();
       tele.run.agentSkipped(start);
       return st;
@@ -712,6 +727,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   await opts.control.gate();
   if (opts.control.stopped) return st;
   st.status = "running";
+  delete st.error;
   st.attempts++;
   st.startedAt = new Date().toISOString();
   state.executions++;
@@ -762,7 +778,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   st.endedAt = new Date().toISOString();
   if (handle.skipped()) {
     st.status = "skipped";
-    st.error = SKIPPED_BY_OPERATOR;
+    st.error = handle.skipOrigin() === "agent" ? SKIPPED_BY_AGENT : SKIPPED_BY_OPERATOR;
     settle("skipped");
     return st;
   }
@@ -799,12 +815,15 @@ const STEP_EXECUTION: Readonly<Record<Exclude<StepStatus, "pending" | "skipped">
 /**
  * One StepResult for each leaf step that ran, from its latest attempt, so a gate that missed and then
  * passed reads as completed. A skip is not an omission: a `when` skip is the plan working, and an
- * operator's skip is a decision to go on. Neither is a step that never reached the executor.
+ * operator's skip is a decision to go on. Neither is a step that never reached the executor. The one
+ * exception is the governed agent's skip of a required step, which is an omission, not `required`:
+ * the agent cannot turn it into `passed`, and the run keeps what the other steps did.
  */
 export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
   const out: StepResult[] = [];
   for (const step of w.steps.flatMap((s) => s.parallel ?? [s])) {
     const st = state.steps[step.id];
+    if (st?.status === "skipped" && st.error === SKIPPED_BY_AGENT && !step.continueOnError) out.push({ stepId: step.id, execution: "skipped", required: false, reason: { code: "agent-skip", text: st.error }, usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
     if (!st || st.status === "pending" || st.status === "skipped") continue;
     out.push({ stepId: step.id, execution: STEP_EXECUTION[st.status], required: !step.continueOnError, ...(st.error ? { reason: { code: "step", text: st.error } } : {}), usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
   }
@@ -829,6 +848,17 @@ export async function executeWorkflow(w: WorkflowDef, state: RunState, options: 
     const final = await executeSteps(w, state, opts, run);
     if (final.status !== "running") run.finish(final.status, final.error);
     return final;
+  } catch (error) {
+    // A thrown invariant or a failed write: the run is over, so state.json must not read as live.
+    state.status = deriveOutcome(stepResults(w, state), { errored: true, stopped: false, hasResult: true }).status;
+    state.error = `executor error: ${error instanceof Error ? error.message : String(error)}`;
+    state.paused = undefined;
+    try {
+      saveState(path.join(runsRoot(opts.cwd), state.id), state);
+    } catch {
+      /* the write may be what failed; the caller gets the throw */
+    }
+    throw error;
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     // An executor error (a thrown invariant) must not leave the run looking live.
@@ -887,6 +917,7 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       const group: StepState = state.steps[step.id] ?? { status: "pending", attempts: 0, runIds: [], cost: 0 };
       state.steps[step.id] = group;
       const todo = unfinishedMembers(step, state);
+      if (state.executions + todo.length > MAX_EXECUTIONS) return finish({ error: `stopped before group ${step.id}: its ${todo.length} step(s) would pass ${MAX_EXECUTIONS} step executions (loop safety limit)` });
       group.status = "running";
       group.startedAt = new Date().toISOString();
       saveState(runDir, state);
@@ -964,7 +995,8 @@ function copyToVault(cwd: string, runDir: string, state: RunState): void {
 export function summarizeRun(state: RunState, w?: WorkflowDef): string {
   const steps = state.steps ?? {};
   const order = w ? w.steps.flatMap((s) => [s.id, ...(s.parallel ?? []).map((p) => `  ${p.id}`)]) : Object.keys(steps);
-  const cost = Object.values(steps).reduce((a, s) => a + (s.cost || 0), 0);
+  // A group's own entry repeats its members' cost and has no attempts of its own.
+  const cost = Object.values(steps).reduce((a, s) => a + (s.attempts > 0 ? s.cost || 0 : 0), 0);
   const lines = order.map((label) => {
     const id = label.trim();
     const st = steps[id];

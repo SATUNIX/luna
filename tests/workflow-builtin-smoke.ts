@@ -181,6 +181,22 @@ try {
     ok("understand: areas cut by maxAreas at scope time are logged, returned as notRead and named to the synthesiser");
   }
 
+  // 3b. Every built-in's final deliverable is required, so losing it fails the run instead of reading partial.
+  {
+    const deliverable = (write: RegExp, reply: (s: Spawned) => FakeReply) => (s: Spawned): FakeReply => (write.test(s.task) ? { fail: "provider down" } : reply(s));
+    const understood = await runBuiltin("understand", { question: "Q?" }, deliverable(/^Write a map/, (s) => (s.task.startsWith("List the subsystems") ? { structured: { areas: [{ name: "alpha", paths: ["src/a"] }] } } : s.task.startsWith("Below are independent reads") ? { structured: { missing: [] } } : { structured: { summary: "s", keyFiles: [] } })));
+    assert.deepEqual([understood.outcome.status, understood.outcome.errorKind], ["failed", "script"]);
+    assert.ok(understood.outcome.omissions?.some((o) => o.required && o.stepId === "synthesize"));
+    const swept = await runBuiltin("research-sweep", { question: "Q?" }, deliverable(/^Answer the question/, (s) => (s.task.startsWith("Find the sources") ? { structured: { sources: [{ ref: "a", why: "b" }] } } : s.task.startsWith("Read this source") ? { structured: { facts: [] } } : { structured: { gaps: [] } })));
+    assert.equal(swept.outcome.status, "failed");
+    assert.ok(swept.outcome.omissions?.some((o) => o.required && o.stepId === "synthesize"));
+    const panel = await runBuiltin("design-panel", { problem: "p", angles: ["only"] }, deliverable(/^Write the final design/, () => ({ text: "ONE" })));
+    assert.equal(panel.outcome.status, "failed");
+    const reviewed = await runBuiltin("review-changes", { dimensions: ["correctness"], maxRounds: 1 }, () => ({ fail: "provider down" }));
+    assert.equal(reviewed.outcome.status, "failed", "a dimension no reviewer read in the first round is no review");
+    ok("understand, research-sweep, design-panel and review-changes fail when their deliverable is lost");
+  }
+
   // 4. review-changes
   {
     const A = { file: "f.ts", line: 1, summary: "A", failure: "a" };

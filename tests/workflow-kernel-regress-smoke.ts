@@ -276,8 +276,7 @@ await scenario("F3-control", "serial calls stop at maxAgents 2 and at an output 
 
 await scenario("F3a", "5 parallel agents, concurrency 1, maxAgents 2", async (p) => {
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", delayMs: 10 }), concurrency: 1, maxAgents: 2 });
-  // "partial" once a queued call is refused, "passed" while the defect launches them all: neither fails the run.
-  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  assert.equal(r.outcome.status, "partial", `the queued calls past the limit are refused: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("most live at once", r.fake.maxLive());
@@ -290,8 +289,7 @@ await scenario("F3a", "5 parallel agents, concurrency 1, maxAgents 2", async (p)
 await scenario("F3b", "5 parallel agents of 10 output tokens, concurrency 1, output budget 15", async (p) => {
   // A serial loop under this budget launches 2 and spends 20 (F3-control); a queue must not do worse than that.
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", output: 10, delayMs: 10 }), concurrency: 1, budgetTotal: 15 });
-  // "partial" once a queued call is refused, "passed" while the defect launches them all: neither fails the run.
-  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  assert.equal(r.outcome.status, "partial", `the queued calls past the limit are refused: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("output tokens spent", r.outcome.outputTokens);
@@ -302,7 +300,7 @@ await scenario("F3b", "5 parallel agents of 10 output tokens, concurrency 1, out
 await scenario("F3c", "the same fan-out at concurrency 4 and an output budget of 15 launches at most 2", async (p) => {
   // A call must hold a slot before it checks the budget: otherwise all five read 0 spent and all of them launch.
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", output: 10, delayMs: 20 }), concurrency: 4, budgetTotal: 15 });
-  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  assert.equal(r.outcome.status, "partial", `the queued calls past the limit are refused: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("output tokens spent", r.outcome.outputTokens);
@@ -325,7 +323,7 @@ await scenario("F3e", "a first agent that spends nothing does not lower the esti
   // Decision 14's mean is over finished output: a call that spent none must not admit the rest of the fan-out at once.
   let replies = 0;
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => (replies++ === 0 ? { text: "ok", output: 0 } : { text: "ok", output: 10, delayMs: 150 }), concurrency: 4, budgetTotal: 15 });
-  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  assert.equal(r.outcome.status, "partial", `the queued calls past the limit are refused: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("output tokens spent", r.outcome.outputTokens);
@@ -346,7 +344,7 @@ await scenario("F3d", "a nested workflow()'s fan-out is held by the same agent l
     maxAgents: 2,
     resolveWorkflow: async () => spec(NESTED_FAN_OUT, "fan-out"),
   });
-  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  assert.equal(r.outcome.status, "partial", `the queued calls past the limit are refused: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.atMost(r.fake.seen.length, 2, "children spawned under maxAgents 2 inside a nested workflow()");

@@ -105,13 +105,30 @@ does an unknown name.
 
 - **Concurrency**: at most `min(16, CPUs - 2)` agents of one run at once (at least 1); nested
   scripts share it. The effort ledger's own per-run limit (16) sits above it; if the ledger still
-  reports `concurrency`, the agent waits for a slot.
+  reports `concurrency`, the agent waits for a slot and goes through admission again.
+- **Nested scripts**: as many at once as agents, in slots of their own, so that a fan-out of
+  `workflow()` calls cannot start one sandbox each (`tests/workflow-hooks-smoke.ts`, r13).
 - **Agents per run**: 1000 launches. The next `agent()` throws. Cached calls do not count.
+- **Refused calls**: a refusal costs a script one round trip and starts nothing, so only this limit
+  meets a loop of them. Past 10,000 refused calls the run fails with kind `limit`
+  (`tests/workflow-hooks-smoke.ts`, r21).
+- **`opts.model`**: at most 200 characters; a longer one is refused (r22). `label` and `phase` are cut
+  to 200.
 - **Budget**: `budget.total` is null unless the engine is given a total. The tool gives the
   budget set with `/effort ultracode --budget N` while standing mode is on
   (`tests/effort-standing-smoke.ts`), and none otherwise, so such a run has no ceiling. With a total, `budget.spent()` is the output tokens of the run's
   agents (nested ones included, not the main conversation), and `agent()` throws `budget exhausted`
-  once it reaches the total.
+  once it reaches the total. The total is where a run stops starting agents, not a ceiling on what it
+  spends: a run can pass it by what its live agents spend (`tests/workflow-kernel-regress-smoke.ts`, F3b, F3c).
+- **Admission**: a call takes its concurrency slot first, then is checked in this order: the pause
+  gate, a stop, the agent limit, the budget. The same checks run again as the last step before each
+  launch, after the wait for the checkout lock or a worktree slot, and before a launch is retried,
+  so none of those waits can outrun a pause or a spent budget (`tests/workflow-hooks-smoke.ts`,
+  r02, r02b, r16). A budgeted call waits, holding its slot, while `spent + live agents × estimate`
+  would reach the total. The estimate is the mean output of the finished agents that reported any,
+  and before one has it is the whole remainder, so a budgeted run starts its first agents one at a
+  time. Children that report no output never set an estimate, so they hold a budgeted run to one
+  agent at a time for its whole length; a run with no total is not affected (r24).
 - Each agent is a `workflow` launch in the [effort ledger](effort.md#script-workflows): it runs at
   E1, it counts toward the run's 1000 and the session's 2000 workflow agents, and any denial other
   than `concurrency` throws into the script.
@@ -209,7 +226,9 @@ best-of-N fan-out) each get their own. The first call with no match runs live, a
 call after it. The same script with the same args, on an unchanged checkout and roles, reuses every
 call.
 
-- A failed, skipped or refused call is journaled with `ok: false` and never reused.
+- A launched call that failed, was skipped or was denied at launch is journaled with `ok: false`, a
+  call over the 1 MiB result cap included, and so is a refused model. A call refused for its options
+  or role, refused at admission, or cut off before it started has no row. None of these is reused.
 - The fingerprint is `HEAD` plus the tree of the whole working copy, untracked files included,
   built in a scratch index seeded from the real one. The workflow runs directory
   (`.pi/workflows/runs`), `.pi/worktrees` and the agent logs (`.pi/subagent`) are left out, so a repo
@@ -243,8 +262,10 @@ An unknown run id is refused. (`tests/workflow-resume-smoke.ts`)
 
 ## Run status
 
-The host derives a run's status from what each step did, in `sub/run-contract.ts`, so a script's
-return value or a caught throw cannot change it. The first row that matches wins:
+The host derives a run's status from what each step did, in
+`packages/extensions/third_party/subagent/run-contract.ts`, so a caught throw cannot change it, and
+the script's return value only decides between `partial` and `failed`. The first row that matches
+wins:
 
 | Condition | Status |
 | --- | --- |
@@ -254,17 +275,22 @@ return value or a caught throw cannot change it. The first row that matches wins
 | A step did not complete | `partial`: the value is kept and the steps are named |
 | Otherwise | `passed` |
 
-Every `agent()` call is a step, launched or refused. So is every nested `workflow()` that
-reaches the host, including a name that does not resolve (`blocked`); a `workflow()` call refused
-before that (a reference of the wrong type, arguments over 1 MiB, a second nesting level) only throws
-into the script. An agent whose result exceeds 1 MiB is a `failed` step: a
-best-effort call returns `null` and a required one throws, and a resume replays the same journaled
-result. A later success does not close an omission, so a retry loop cannot turn a failure into `passed`. A
-best-effort agent skipped through `workflow_control` is not an omission, because the skip is a
-decision to go on; a required one is, and fails the run. An agent still running when the script
-returns reads `cancelled`. Past 10,000 steps a further refused call is counted, not kept; `run.json`
-keeps the first 200 omissions and `omissionCount` holds the total. YAML workflows use [the same rule](workflows.md#execution-rules), except that an
-operator's skip of a YAML step is never an omission (`tests/workflow-control-smoke.ts`).
+Every `agent()` and `workflow()` call is a step, launched or refused: a bad reference, arguments
+over 1 MiB or that JSON cannot hold, a name that does not resolve and a second nesting level are all
+`blocked` steps, under the call's `label` or name when it has one. A malformed `required` (such as the
+string `"true"`) counts as required, so it fails the run. An agent whose result exceeds 1 MiB is a
+`failed` step: a best-effort call returns `null`, a required one throws, and a resume runs it again.
+Each `agent()` call is a step of its own, so a later success does not close an omission, and a
+script's retry loop cannot turn a failure into `passed`. A best-effort agent skipped through
+`workflow_control` is not an omission, because the skip is a decision to go on; a required one is,
+and fails the run. An agent still running when its script ends reads `cancelled`. `run.json` keeps
+the first 200 omissions and `omissionCount` holds the total.
+
+YAML workflows use [the same rule](workflows.md#execution-rules), with two differences. A step that
+a gate runs again reports its latest attempt, so a gate loop can close a failure of a best-effort
+step. An operator's skip of a YAML step is not an omission; the governed agent's skip of a required
+one, through the `workflow_control` tool, is, and the run reads `partial`
+(`tests/workflow-control-smoke.ts`, `tests/workflow-hooks-smoke.ts`, r01).
 (`tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`)
 
 ## Completion
@@ -272,8 +298,9 @@ operator's skip of a YAML step is never an omission (`tests/workflow-control-smo
 When the run ends, the tool posts a `luna-workflow-result` message with `deliverAs: "followUp"` and
 `triggerTurn: true`. It names the status, the counts of launched and reused agents, output tokens,
 kept worktrees, the journal and script paths. A run that did not pass says how to resume it only
-when a resume can help: an interrupted run always does, while omissions that are all refusals the
-next run would meet again, such as bad options or an unknown role, need an edit instead. The value of a `passed` or `partial` run (JSON, or the string as is) is redacted and placed
+when a resume can help: an interrupted run or a crash always does, while a script that does not
+compile, a required step refused, or omissions that are all refusals the next run would meet again,
+such as bad options or an unknown role, need an edit instead (`tests/workflow-hooks-smoke.ts`, r04). The value of a `passed` or `partial` run (JSON, or the string as is) is redacted and placed
 inside an `<untrusted source="workflow-result">` fence, cut to 20,000 characters, with any ` ``` `
 inside turned into `'''` so it cannot close the fence. A run with omissions names them in an `<untrusted source="workflow-omissions">` fence. Outside the fences a run that
 did not pass names only its status and error kind; the error text, which can carry script or agent
@@ -287,8 +314,17 @@ is idle, it starts a turn at once. No test here pins pi's ordering.
 
 `workflow_control {runId, action}` pauses (no new agents start), resumes, stops (the run ends
 `interrupted`) or skips the agents running now (they resolve to `null`, and a `required` one throws
-and fails the run). If a script returns while agents it did not await are still running, they are
-stopped. (`tests/workflow-hooks-smoke.ts`)
+and fails the run). A skip or stop that reaches an agent waiting for the checkout or a worktree slot
+is that skip or stop, not a failure (r11).
+
+A script's calls stop with that script, nested or top-level. One still waiting never starts, and a
+running agent is stopped, so a nested script that throws cannot leave work running beside the retry
+that caught it (r03, r03b; r23 for calls sent just before the return). A call the host read before
+the script ended may already have started; it is stopped and costs what it spent. The end of a run
+waits up to 10 seconds for what it stopped, so that their tokens and kept worktrees reach `run.json`,
+the outcome and the completion message; a child that ignores its kill is left out, and its step
+reads `cancelled` (r14, r15, with the fake child reporting usage and then taking the kill).
+(`tests/workflow-hooks-smoke.ts`)
 
 ## Built-in script workflows
 

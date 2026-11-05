@@ -203,3 +203,7 @@
     concurrency wait is `runAgentWithSlot`, shared with `wf-engine.ts`. `workflow-tools.ts` passes
     the launch through, `runner.ts` only corrects a comment, and firewall decisions are unchanged
     (`tests/workflow-builtin-smoke.ts`).
+  - **Admission at launch (2026-11-06):** `wf-engine.ts` and `workflow.ts` share `runAgentWithSlot`
+    with hooks that admit and charge each attempt. A run waits for stopped calls before reporting,
+    results are capped before the journal, and refused or nested calls meet the step and sandbox
+    limits (`tests/workflow-hooks-smoke.ts`).

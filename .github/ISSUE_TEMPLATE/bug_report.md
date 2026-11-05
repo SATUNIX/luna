@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something in the kit does not behave as its documentation says
+about: Something in Luna does not behave as its documentation says
 labels: bug
 ---
 

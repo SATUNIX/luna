@@ -24,7 +24,7 @@ How to read the columns:
 named file, test, script, workflow job or required check does not exist, or when a required
 check is not one `.github/expected-settings.json` declares.
 
-## Agent boundary (the kit)
+## Agent boundary (Luna)
 
 | ID | Control | Code | Test | npm script | CI job | Required check |
 |---|---|---|---|---|---|---|
@@ -49,7 +49,7 @@ check is not one `.github/expected-settings.json` declares.
 |---|---|---|---|---|---|---|
 | C-15 | Workspace state writes never follow a committed symbolic link | `packages/core/shared/safe-fs.ts` | `tests/workspace-symlink-smoke.ts` | `smoke:workspace-symlink` | `ci.yml:verify` | `ci-complete` |
 | C-16 | Generated copies of the shared helpers match their source | `packages/core/gen-shared.ts` | `tests/redaction-corpus-smoke.ts` | `smoke:redaction-corpus` | `ci.yml:verify` | `ci-complete` |
-| C-17 | One linear secret-redaction table for everything the kit stores | `packages/core/shared/redact.ts` | `tests/redaction-corpus-smoke.ts` | `smoke:redaction-corpus` | `ci.yml:verify` | `ci-complete` |
+| C-17 | One linear secret-redaction table for everything Luna stores | `packages/core/shared/redact.ts` | `tests/redaction-corpus-smoke.ts` | `smoke:redaction-corpus` | `ci.yml:verify` | `ci-complete` |
 | C-18 | A regular expression from repository content is checked before it is compiled | `packages/core/shared/safe-regex.ts` | `tests/skill-routing-smoke.ts` | `smoke:skill-routing` | `ci.yml:verify` | `ci-complete` |
 | C-19 | Lint bans: no shell spawning, `exec`, `vm`, `eval`, HTML sinks, raw extension writes, non-literal `RegExp` or casts of parsed JSON outside reviewed allowlists | `eslint.config.ts` | `tests/typescript-coverage-smoke.ts` | `test:lint` | `ci.yml:verify` | `ci-complete` |
 | C-20 | Untrusted JSON is checked by guards before use | `packages/core/lib/guard.ts` | `tests/untrusted-input-guards-smoke.ts` | `smoke:untrusted-input-guards` | `ci.yml:verify` | `ci-complete` |

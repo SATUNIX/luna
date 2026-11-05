@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "control-center",
-  "summary": "One navigable control centre for the kit: /kit (and its /helpers alias, plus alt+m) opens a searchable hub of levels and pages — profile, effort, thinking, security, autonomy, work, session, connect and system. Rows show their current value where a process registry publishes one, fall back to the typed command, and hold back any change that lowers oversight until a confirmation the terminal alone can answer.",
+  "summary": "One navigable control centre for Luna: /kit (and its /helpers alias, plus alt+m) opens a searchable hub of levels and pages — profile, effort, thinking, security, autonomy, work, session, connect and system. Rows show their current value where a process registry publishes one, fall back to the typed command, and hold back any change that lowers oversight until a confirmation the terminal alone can answer.",
   "category": "ui",
   "tier": "T1",
   "layer": 6,

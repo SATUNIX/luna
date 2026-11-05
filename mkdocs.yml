@@ -1,5 +1,5 @@
-site_name: Pi System
-site_description: Docs for the Pi System extension kit and its profiles.
+site_name: Luna
+site_description: Docs for Luna, the pi agent system, and its profiles.
 docs_dir: docs
 site_dir: site
 theme:

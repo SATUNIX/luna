@@ -1,12 +1,12 @@
 # Security model
 
-This page states what the pi-system safety boundary **guarantees** and, just as important, what it
+This page states what Luna's safety boundary **guarantees** and, just as important, what it
 **does not**. It is a default-deny **guard rail**, not a sandbox. The reporting process is in
 `SECURITY.md` at the repository root.
 
 What the boundary protects, from whom, is in the [Threat model](threat-model.md); every control,
 with its code, test and CI job, is in [Security controls](security-controls.md); the rules a
-change to the kit follows are in the [Secure development standard](security-standard.md). What to
+change to Luna follows are in the [Secure development standard](security-standard.md). What to
 do when something goes wrong is in [Incident response](incident-response.md).
 
 The [Security level](security-level.md) control adjusts implemented firewall approval mechanisms,
@@ -80,7 +80,7 @@ engagement is configured (both `engagement/scope.yaml` and `engagement/roe.yaml`
 complete). Set `PI_ALLOW_DIRECT_TOOLS=1` to force-allow direct tools mid-engagement (operator
 override, still audited), or `=0` to force MCP-only lockdown without a configured engagement.
 
-The kit's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
+Luna's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
 `record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools) are exempt
 from MCP-only mode: they do not touch a pentest target and are already gated by `tool-firewall`.
 
@@ -336,14 +336,14 @@ are pinned by `tests/governance-smoke.ts`.
   the pentest governance layer's job (scope and rules of engagement), and in unattended runs the
   container's network is the stop, because package-manager and opaque-tool traffic cannot be
   attributed to a host.
-- **The kit's own sources are ordinary files in a kit checkout.** When the workspace is a source
-  checkout of this kit (for example the one a live install was made from), an agent edit to
+- **Luna's own sources are ordinary files in a kit checkout.** When the workspace is a source
+  checkout of Luna (for example the one a live install was made from), an agent edit to
   `packages/extensions/src/tool-firewall/`, `packages/extensions/third_party/protected-paths/` or
   `packages/extensions/src/secret-guard/` is classed like any other source edit (low); only
   `tool-firewall/default-policy.json` is a safety control among them
   (`tests/firewall-shell-smoke.ts`). If pi loads the extensions from that checkout, review such
   diffs before the next session.
-- **Companion tools outside the kit's classification.** A pi package that registers its own shell
+- **Companion tools outside Luna's classification.** A pi package that registers its own shell
   or edit tools (for example the optional `pi-lean-ctx`) needs an exact policy entry or operator
   approval. Shell-looking fields are also analysed, but cannot authorise an unknown tool's
   other effects. `secret-guard` matches the built-in tool names. An explicitly allowed external
@@ -373,9 +373,9 @@ are pinned by `tests/governance-smoke.ts`.
 
 ## Workspace file writes
 
-A cloned repository is untrusted content, and git stores symbolic links, so any path the kit
+A cloned repository is untrusted content, and git stores symbolic links, so any path Luna
 writes under a workspace (`<workspace>/.pi/...`, `AGENTS.md`, `TODO.md`) may be a committed link to
-a file elsewhere. The kit's own state writes go through one helper, `packages/core/shared/safe-fs.ts`,
+a file elsewhere. Luna's own state writes go through one helper, `packages/core/shared/safe-fs.ts`,
 copied into each extension that writes (`npm run gen:shared`; `npm run verify` fails when a copy
 differs). For a write under the workspace it:
 
@@ -416,9 +416,9 @@ Not covered:
 - The human console's request files are still written with plain `fs` calls, and are on the ESLint
   allowlist as a known gap.
 
-## The kit installer and install markers
+## The Luna installer and install markers
 
-`/profile` and the first-run auto-profile run the kit's installer
+`/profile` and the first-run auto-profile run Luna's installer
 (`node <kit root>/packages/core/install.ts`). A project install keeps its marker in
 `.pi/.pi-kit.json`, which a cloned repository can commit, so the marker never chooses where that
 installer comes from. The kit root is `PI_KIT_ROOT` when set, otherwise the marker's `kitSource`
@@ -446,7 +446,7 @@ operator's own marker names is trusted.
 
 ## Redaction
 
-Text the kit stores or sends to a memory service passes through one secret-redaction table,
+Text Luna stores or sends to a memory service passes through one secret-redaction table,
 `packages/core/shared/redact.ts`, copied byte for byte into each consumer: the memory vault,
 `/save` snapshots, the firewall's feedback records, autonomy notebooks, workflow run files (on top
 of their own rules), role-runner telemetry and memories sent to mem0. It replaces private keys,
@@ -477,7 +477,7 @@ skill triggers.
 
 ## Decisions and their compensating controls
 
-Some behaviour is an operator decision rather than a default the kit would otherwise choose. Each
+Some behaviour is an operator decision rather than a default Luna would otherwise choose. Each
 is recorded with its risk and the controls that compensate for it.
 
 | Decision | Risk | Compensating controls | Record |

@@ -1,7 +1,7 @@
-# pi-system
+# Luna
 
 <p align="center">
-  <img src="docs/assets/pi-system-logo.png" alt="pi-system logo" width="320">
+  <img src="docs/assets/luna.gif" alt="Animated overview: Luna, the pi agent system" width="760">
 </p>
 
 <p align="center">
@@ -13,10 +13,14 @@
   <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a>
 </p>
 
-**pi-system** is an opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi):
+**Luna** is an opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi):
 a permission gate for tool calls, governed delegation to sub-agents, verification, durable memory,
 bounded recovery, a status bar, and an installer that ties them together as **profiles**. It is
 one pi package, installed once.
+
+**Renamed.** This project was previously published as **pi-system**; it is now **Luna**. The pi
+package is still named `@satunix/pi-system`, so install commands, settings entries and environment
+variables are unchanged.
 
 > **Beta.** This is a public beta. It is tested, but it is not a stable release: expect rough
 > edges, read [Beta status](docs/beta.md) for what is and is not covered, and report problems in
@@ -33,12 +37,12 @@ pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 pi
 ```
 
-The first time pi starts with the kit it applies the `balanced` profile and asks you to `/reload`.
+The first time pi starts with Luna, it applies the `balanced` profile and asks you to `/reload`.
 Sign in to a model provider with `/login` if pi reports no models. Details, other channels and
 troubleshooting: [Getting started](docs/getting-started.md), [Installation](docs/INSTALL.md).
 
-Upgrading from a private-GitLab install? See [Migration](docs/migration.md): install the public kit
-and run its installer, which keeps your profile and hand edits and never contacts the retired
+Upgrading from a private-GitLab install? See [Migration](docs/migration.md): install the public Luna
+package and run its installer, which keeps your profile and hand edits and never contacts the retired
 source. (An old checkout cannot migrate itself.)
 
 ## Use
@@ -48,7 +52,7 @@ source. (An old checkout cannot migrate itself.)
 | Open the control centre | `/kit`, `/helpers` or `alt+m` ([Control centre](docs/control-center.md)) |
 | Switch profile | `/profile` (picker) or `/profile lite` |
 | Choose how hard the agent works and how much it delegates | `/effort` or `/effort thorough` ([Effort](docs/effort.md)) |
-| See what pi, the kit and packages can update to | `/update` ([Updates](docs/updates.md)) |
+| See what pi, Luna and packages can update to | `/update` ([Updates](docs/updates.md)) |
 | Review or revoke remembered approvals | `/firewall list`, `/firewall revoke <id>` ([Security](docs/security.md)) |
 | Change the status bar | `/footer light`, `/footer default`, `/footer heavy` ([Status bar](docs/status-bar-and-costs.md)) |
 | Open the local web console | `/console` ([Web console](docs/web-console.md)) |
@@ -78,7 +82,7 @@ engine and is optional. See [Autonomous runs](docs/autonomy.md).
 
 ## Repository layout
 
-The workspace layout is for development; users install the kit as one pi package.
+The workspace layout is for development; users install Luna as one pi package.
 
 | Package | What it is |
 |---|---|
@@ -99,7 +103,7 @@ npm test                # everything CI runs (the same as npm run check:all)
 npm run coverage        # the same, with line and branch coverage measured
 ```
 
-`AGENTS.md` is what the shipped agent reads about using the kit; `CLAUDE.md` is for people and
+`AGENTS.md` is what the shipped agent reads about using Luna; `CLAUDE.md` is for people and
 agents developing this repository. Start the documentation at [`docs/index.md`](docs/index.md) and
 see [`CONTRIBUTING.md`](CONTRIBUTING.md) to add an extension. Security reports: [`SECURITY.md`](SECURITY.md).
 
@@ -116,6 +120,6 @@ see [`CONTRIBUTING.md`](CONTRIBUTING.md) to add an extension. Security reports: 
 Licence: MIT, © SATUNIX. Vendored third-party code is credited in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-This GitHub repository is where pi-system is developed and released; pull requests are welcome
+This GitHub repository is where Luna is developed and released; pull requests are welcome
 (see [`CONTRIBUTING.md`](CONTRIBUTING.md)). The GitLab mirror and private-lineage export pipeline are archived.
 See [repository topology](docs/repository-topology.md) for the release and contribution flow.

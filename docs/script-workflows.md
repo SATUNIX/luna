@@ -236,7 +236,7 @@ running, they are stopped; no test pins that.
 
 ## Built-in script workflows
 
-The kit ships five script workflows in `packages/kit/workflows/`. Each is a worked example of a
+Luna ships five script workflows in `packages/kit/workflows/`. Each is a worked example of a
 pattern from the `workflow-authoring` skill (`packages/kit/skills/workflow-authoring/SKILL.md`),
 the Luna port of the workflow authoring reference. Run one with `workflow({name, args})`. Every
 one of them that has a required argument fails before launching any agent when it is missing.

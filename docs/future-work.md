@@ -105,7 +105,7 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
 
 - **A profile switch cannot undo** package payloads that `pi install` already fetched, a
   concurrent write to pi's settings, or a hard kill of pi part-way through. Rollback restores the
-  settings files it snapshotted. The verifier may also roll back a good switch where the kit's
+  settings files it snapshotted. The verifier may also roll back a good switch where Luna's
   entry cannot be identified (symlinked or unusual npm layouts); git and npm delivery of `/profile`
   are less exercised than local mode.
 - **`lite` and small windows.** pi's default compaction reserve (16384 tokens) on a 32k window makes

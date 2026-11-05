@@ -1,8 +1,8 @@
-# pi-system container
+# Luna container
 
 Deployable Pi coding agent. A minimal Alpine container that runs
 `@earendil-works/pi-coding-agent` with the `pi_system_governance` MCP server, seeded pi config,
-and engagement scaffolding. Behaviour and skills are installed from the `pi-system` monorepo.
+and engagement scaffolding. Behaviour and skills are installed from the Luna monorepo.
 
 ## Runtime shape
 
@@ -42,7 +42,7 @@ The image has two build modes controlled by the `BUILD_MODE` ARG.
 
 ### Dev mode (default)
 
-The kit is mounted from a local clone and installed at container start. Edits to the kit are
+Luna is mounted from a local clone and installed at container start. Edits to Luna are
 applied on the next `pi-agent` launch without rebuilding.
 
 ```sh
@@ -59,7 +59,7 @@ docker compose -f capability/compose/compose.yaml \
 
 ### Release mode
 
-The kit is baked into the image at a pinned git ref. No runtime mount needed.
+Luna is baked into the image at a pinned git ref. No runtime mount needed.
 
 ```sh
 # Build with default ref (main)
@@ -129,7 +129,7 @@ for example to add a package that pi would install at the next start; only the a
 
 ## CI
 
-The root [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the kit verify gate and
+The root [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs Luna's verify gate and
 test suite. Container builds are exercised by `docker build --build-arg BUILD_MODE=dev .` plus the
 governance MCP smoke test.
 

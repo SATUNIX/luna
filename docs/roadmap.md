@@ -1,6 +1,6 @@
 # Roadmap
 
-Direction for the kit. It states intent, not a schedule, and is revised when the code changes.
+Direction for Luna. It states intent, not a schedule, and is revised when the code changes.
 What the current release contains is in [Beta status](beta.md) and `CHANGELOG.md`; open problems
 are in [Future work](future-work.md).
 
@@ -9,7 +9,7 @@ are in [Future work](future-work.md).
 - `@satunix/pi-system` is **one package**. Profiles, not separate packages, choose what loads;
   `lite` is the small-model profile.
 - Releases are git tags on the public repository: `next` follows `main`, `latest` follows release
-  tags, and `/update` keeps pi, the kit and linked packages current, verifying each step. npm
+  tags, and `/update` keeps pi, Luna and linked packages current, verifying each step. npm
   delivery is built and tested but not enabled ([Releasing](releasing.md#npm-publication-optional)).
 - A safety mechanism changes only with its tests. Documentation is a release criterion: a feature
   is not done until the page that describes it is true.
@@ -43,7 +43,7 @@ In rough priority order:
 
 ## Not planned
 
-- Turning the firewall into a sandbox. Containment is the container's job; the kit offers a
+- Turning the firewall into a sandbox. Containment is the container's job; Luna offers a
   hardened container for autonomous runs and documents what it does and does not stop.
 - Treating effort as a security control. It is a cost and behaviour policy.
 - Scheduled or routine runs inside pi itself: pi has no native trigger. An external scheduler

@@ -1,10 +1,10 @@
-# pi-system — Capability Docs
+# Luna — Capability Docs
 
-Deployable pi coding agent with governed kit profiles installed from `pi-system`.
+Deployable pi coding agent with governed kit profiles installed from Luna.
 
-Use `capability/compose/compose.yaml` as the canonical Pi System compose entrypoint. The root `docker-compose.yml` is a compatibility entrypoint and must stay behaviorally equivalent except for build context relativity.
+Use `capability/compose/compose.yaml` as the canonical Luna compose entrypoint. The root `docker-compose.yml` is a compatibility entrypoint and must stay behaviorally equivalent except for build context relativity.
 
-Environment defaults live in `capability/env/defaults.env`; Pi System overlays may override non-secret values such as `APP_PORT`, `PI_AGENT_DATA_ROOT`, `PI_AGENT_IMAGE`, and `PI_KIT_PROFILE`. Runtime state is stored below `/srv/data/pi-system`.
+Environment defaults live in `capability/env/defaults.env`; Luna overlays may override non-secret values such as `APP_PORT`, `PI_AGENT_DATA_ROOT`, `PI_AGENT_IMAGE`, and `PI_KIT_PROFILE`. Runtime state is stored below `/srv/data/pi-system`.
 
 Rollback: redeploy the previous image tag or environment overlay. Runtime state lives in the data root, not in the container.
 

@@ -1,15 +1,21 @@
-# Pi System
+# Luna
 
-`@satunix/pi-system` is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
-extensions, skills, prompts, themes and agent definitions in one pi package, with **profiles** that
-choose what loads. This is a beta; read [Beta status](beta.md) first.
+Luna is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
+extensions, skills, prompts, themes and agent definitions in one pi package
+(`@satunix/pi-system`), with **profiles** that choose what loads. This is a beta; read
+[Beta status](beta.md) first. Luna was previously published as **pi-system**, the name the pi
+package still uses, so commands and settings are unchanged.
+
+<p align="center">
+  <img src="assets/luna.gif" alt="Animated overview: Luna, the pi agent system" width="760">
+</p>
 
 Use this guide if you want to:
 
-- install the kit and choose a profile, including `lite` for small local models
+- install Luna and choose a profile, including `lite` for small local models
 - choose how hard the agent works and how much it delegates ([Effort](effort.md))
 - understand what the tool firewall does and does not protect ([Security model](security.md))
-- keep pi, the kit and linked packages up to date ([Updates](updates.md))
+- keep pi, Luna and linked packages up to date ([Updates](updates.md))
 - run long tasks unattended in a container ([Autonomous runs](autonomy.md))
 - read the status bar, or configure model pricing ([Status bar and costs](status-bar-and-costs.md))
 - build your own extension ([Writing extensions](WRITING_EXTENSIONS.md))
@@ -26,8 +32,8 @@ Use this guide if you want to:
 
 ## Plain terms
 
-- The **kit** is the one package, installed from `github.com/SATUNIX/luna`.
-- A **profile** chooses which of the kit's extensions, skills and prompts load. Switch with `/profile`.
+- **Luna** is the one package, installed from `github.com/SATUNIX/luna`.
+- A **profile** chooses which of Luna's extensions, skills and prompts load. Switch with `/profile`.
 - A **channel** is what you follow: `latest` (release tags), `next` (`main`), or a pinned version.
 - **Effort** is a per-task dial (E1 to E5) for depth of work and delegation. It is not a
   permission and not a model setting.

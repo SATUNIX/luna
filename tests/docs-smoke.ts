@@ -226,6 +226,11 @@ assert.match(
 const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 assert.equal(readmeBadgeVersion(readme), pkg.version, "README version badge must match package.json (release.ts updates both)");
 assert.equal(readmeBadgeAltVersion(readme), pkg.version, "README version badge alt text must match package.json (release.ts updates both)");
+// The README hero is an HTML image, which no Markdown link checker sees; check it here.
+const hero = /<img src="(docs\/assets\/[^"]+\.gif)" alt="[^"]+"/.exec(readme);
+const heroSrc = hero?.[1];
+assert.ok(heroSrc, "README must show a GIF hero from docs/assets");
+assert.ok(fs.existsSync(path.join(ROOT, heroSrc)), `README hero image is missing: ${heroSrc}`);
 assert.equal(readmeBadgeVersion(setReadmeBadgeVersion(readme, "1.2.3-rc_1.4")), "1.2.3-rc_1.4");
 assert.equal(readmeBadgeAltVersion(setReadmeBadgeVersion(readme, "1.2.3-rc_1.4")), "1.2.3-rc_1.4");
 assert.equal(setReadmeBadgeVersion(readme, pkg.version), readme);

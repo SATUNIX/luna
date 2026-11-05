@@ -1,12 +1,12 @@
 # Concepts
 
-The vocabulary the rest of the documentation uses: what the kit is, the rules its extensions
+The vocabulary the rest of the documentation uses: what Luna is, the rules its extensions
 follow, and how capability tiers, layers and profiles relate. Nothing here is a promise of
 future work; see [Roadmap](roadmap.md) for that.
 
-## What the kit is
+## What Luna is
 
-Pi System is an **opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi)**:
+Luna is an **opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi)**:
 extensions, skills, prompt templates, themes, profiles and an installer. It adds what pi
 deliberately leaves out of its core (a permission gate, delegation, durable memory, verification,
 recovery, observability) and packages it so one command installs a coherent set.
@@ -15,8 +15,8 @@ Two properties shape everything else:
 
 - **The harness matters as much as the model.** Reliability comes from decomposition, durable
   state, verification, bounded recovery and observability around the model, not from prompting
-  alone. The kit is that surrounding harness.
-- **Local first, portable.** The kit installs onto any pi installation with `pi install`. It does
+  alone. Luna is that surrounding harness.
+- **Local first, portable.** Luna installs onto any pi installation with `pi install`. It does
   not depend on a particular model, provider, container or host, and it never sends anything
   anywhere on its own.
 
@@ -38,7 +38,7 @@ Every extension and profile follows these. `npm run verify` enforces the mechani
    same governance as its parent.
 8. **Scale the machinery to the task.** A quick fix must not pay long-horizon overhead; that is what
    [profiles](profiles.md) and [effort](effort.md) are for.
-9. **General capability lives in the kit; domain rules compose on top.** A domain extension (for
+9. **General capability lives in Luna; domain rules compose on top.** A domain extension (for
    example pentest scope and rules of engagement) composes a general one and never reimplements it.
    Per-engagement values live in the engagement configuration, not in the capability layer.
 10. **Extensions are self-contained.** No extension imports another; cross-extension contracts go
@@ -87,13 +87,13 @@ agent delegates without changing what is installed.
 ```mermaid
 flowchart LR
     operator([Operator]) --> pi[pi runtime]
-    pi --> kit[Kit extensions]
+    pi --> kit[Luna extensions]
     kit -->|governed child processes| child[Delegated workers]
     kit -->|read-only accounting| trace[(Trace and cost ledgers)]
     pi --> provider[Model provider]
     kit -. optional .-> container[Hardened autonomy container]
 ```
 
-The kit runs inside pi's process. Delegated workers are separate pi processes that the kit
+Luna runs inside pi's process. Delegated workers are separate pi processes that Luna
 launches under the same governance as their parent. The autonomy runner is a separate, optional
 component that runs a whole session inside a hardened container.

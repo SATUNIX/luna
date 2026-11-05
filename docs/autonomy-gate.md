@@ -474,7 +474,7 @@ When, and only when, all of that holds, the firewall enters **unattended** mode:
 is the boundary, so there are no approval prompts and no judge calls inside the zone, and
 low, medium and high actions run. What still applies:
 
-- **Refused, always** (HARD DENY): everything critical; tampering with the kit's controls
+- **Refused, always** (HARD DENY): everything critical; tampering with Luna's controls
   (settings, the firewall's config, approvals and audit state, policy files, the contract,
   `PI_KIT_*` safety and `PI_KIT_UNATTENDED*` variables, `pi --no-extensions`); destructive
   system actions; credential-exfiltration chains, including a secret read in one call and a
@@ -575,7 +575,7 @@ session". It is the regression and tuning tool:
 
 ## Limits
 
-Where the gate sits among the kit's trust boundaries, and what it is not meant to stop, is in the
+Where the gate sits among Luna's trust boundaries, and what it is not meant to stop, is in the
 [threat model](threat-model.md).
 
 This is still a decision gate, not a sandbox. An allowed call runs with the agent's full

@@ -1,7 +1,7 @@
 # Distribution support and compatibility
 
-Pi-system curates upstream Pi, profiles and extensions as one distribution. Upstream Pi owns
-the agent engine, provider clients and extension API; pi-system owns selection, integration,
+Luna curates upstream Pi, profiles and extensions as one distribution. Upstream Pi owns
+the agent engine, provider clients and extension API; Luna owns selection, integration,
 governance and lifecycle tooling. It is independently maintained and does not imply upstream
 endorsement. [Architecture](ARCHITECTURE.md) describes the package and runtime boundaries.
 

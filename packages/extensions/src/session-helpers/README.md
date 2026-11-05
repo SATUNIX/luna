@@ -1,12 +1,12 @@
 # session-helpers
 
-Session-control helpers layered on top of the kit's autonomous behaviour: the `/profile` switch, the
+Session-control helpers layered on top of Luna's autonomous behaviour: the `/profile` switch, the
 `/compaction` view, a cheatsheet, and the one hook that keeps the effective compaction state visible.
 It is in every profile, so every profile can see and fix its own configuration.
 
 ## Why
 
-The kit is designed to run autonomously. Operators still need to see and change what is loaded and
+Luna is designed to run autonomously. Operators still need to see and change what is loaded and
 whether pi will keep the context under control, and `pi` ships no `/clear` and no one-stop command list.
 This extension fills those gaps. It changes nothing on its own except publishing state and warning once.
 
@@ -15,7 +15,7 @@ This extension fills those gaps. It changes nothing on its own except publishing
 | Command | What it does |
 | --- | --- |
 | `/clear` | **Guidance only — does not clear anything.** Explains `/compact` (shrink context, keep thread), `/new` (fresh session), and `/fork` (branch). |
-| `/kit`, `/helpers` | The cheatsheet of pi built-ins plus the kit helpers. |
+| `/kit`, `/helpers` | The cheatsheet of pi built-ins plus Luna helpers. |
 | `/profile` | Switch the profile, all-or-nothing (below). `/profile` picker, `/profile <name>`, `/profile list`, `/profile status`. |
 | `/compaction` | `status` (default without a UI) shows whether pi auto-compaction is really on, at what token count it triggers, the kit trigger, and why it is degraded. `on` / `off` write pi's global `compaction.enabled` and reload; `trigger on\|off` toggles the kit's fixed-budget trigger. |
 
@@ -64,10 +64,10 @@ kit; `shared/kit-source.ts`) → this module's own location. Two layouts are sup
 4. Any failure — exception, kill, timeout, non-zero exit, missing completion line, corrupt or mismatching
    result, or a failed reload — restores every snapshot byte-for-byte, removes stray lock/tmp files and says
    what happened. If a restore itself fails, the original bytes are saved to a temp directory and named.
-   The snapshots cover files only: a `pi install` the installer already ran (a companion, or the kit when
+   The snapshots cover files only: a `pi install` the installer already ran (a companion, or Luna when
    it was not registered) is not undone, so the message names each one instead of saying nothing was
    changed (`tests/profile-transaction-smoke.ts`, `tests/profile-safety-smoke.ts`). `/profile` passes
-   `--no-migrate`, so a switch never moves the kit off a retired or previous source: the installer stops
+   `--no-migrate`, so a switch never moves Luna off a retired or previous source: the installer stops
    before any change and names `/update kit` and the Migration guide instead, and no `pi remove` can
    delete a clone that this rollback would point settings back at (`tests/profile-transaction-smoke.ts`,
    `tests/distribution-smoke.ts`).

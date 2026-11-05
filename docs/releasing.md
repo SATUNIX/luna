@@ -1,6 +1,6 @@
 # Releasing
 
-pi-system is delivered from its public git repository, `github.com/SATUNIX/luna`. pi
+Luna is delivered from its public git repository, `github.com/SATUNIX/luna`. pi
 installs it straight from there, so **a pushed `vX.Y.Z` tag is the release**: there is no package
 registry in between.
 
@@ -147,9 +147,9 @@ them with every other operator-only step. In short:
 ## What a release contains
 
 The whole repository at the tag. pi runs `npm install --omit=dev --legacy-peer-deps` in its copy,
-which fetches the kit's one runtime dependency from the npm registry ([Supply chain](supply-chain.md), "What
-installing the kit pulls in"). Companion packages (`pi-lens`,
-`pi-readseek`) are separate pi packages from npm, registered by the installer at the kit's
+which fetches Luna's one runtime dependency from the npm registry ([Supply chain](supply-chain.md), "What
+installing Luna pulls in"). Companion packages (`pi-lens`,
+`pi-readseek`) are separate pi packages from npm, registered by the installer at Luna's
 reviewed pins in `packages/core/sources.json`.
 
 `npm run smoke:package` (part of `check:all`) packs the repository exactly as `npm publish`

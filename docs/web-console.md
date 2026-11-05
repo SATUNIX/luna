@@ -78,7 +78,7 @@ log. `/console stop` removes that file.
 - **Whoever holds the token, or a linked phone, starts sessions with your authority.** A new
   session runs `pi --mode rpc` as you, in a folder the caller names, with your installed profile,
   so the tool firewall and its approvals apply as they do at a terminal. The agents offered for a
-  session come from your agent directory and the kit's (`PI_CONSOLE_PROJECT_AGENTS`), never from
+  session come from your agent directory and Luna's (`PI_CONSOLE_PROJECT_AGENTS`), never from
   the folder the session starts in, and pi in RPC mode loads a folder's own project resources only
   if you trusted that folder. Continuing a saved session is accepted only for an absolute path to
   a `.jsonl` regular file inside pi's sessions directory, after symbolic links are resolved, that

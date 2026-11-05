@@ -11,7 +11,7 @@ import { nodeRuntime } from "./shared/node-runtime.ts";
 // Self-containment rule: import only node:* builtins and the pi peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
 //
-// kit-update tells the user when pi, the pi-system kit, or a package linked to it can be
+// kit-update tells the user when pi, Luna, or a package linked to it can be
 // updated, and `/update` applies it. It drives pi's own package manager (`pi update`,
 // `pi install`) rather than reimplementing it, then re-applies the active profile with the
 // kit's installer so a new release's extensions and reviewed companion pins take effect.
@@ -1208,7 +1208,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("update", {
     description:
-      "Check for and apply updates to pi, the pi-system kit (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|X.Y.Z>`.",
+      "Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|X.Y.Z>`.",
     getArgumentCompletions: (prefix: string) =>
       ["status", "all", "kit", "pi", "packages", "channel latest", "channel next"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, c) => {

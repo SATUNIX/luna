@@ -1,7 +1,7 @@
 # CLAUDE.md: working conventions for developing this repository
 
-This file is for people and agents working **on** `pi-system`. It is distinct from `AGENTS.md`,
-which is what the *shipped pi agent itself* reads about installing and using the kit. Put
+This file is for people and agents working **on** Luna. It is distinct from `AGENTS.md`,
+which is what the *shipped pi agent itself* reads about installing and using Luna. Put
 guidance for the shipped agent in `AGENTS.md`, guidance for contributors here, and anything a
 user needs in `docs/`. pi loads only the first of `AGENTS.md` and `CLAUDE.md`, so a pi agent
 working here never sees this file unless it reads it: the safety rules below are repeated in
@@ -80,6 +80,6 @@ For documentation changes also run `python -m mkdocs build --strict` and `npm ru
 
 ## Autonomous runs
 
-`packages/autonomy` runs the kit's own agent unattended inside a container boundary. Its design
+`packages/autonomy` runs Luna's own agent unattended inside a container boundary. Its design
 and operator steps are in `docs/autonomy.md`; changes to the boundary, the run contract or the
 approval rules need their tests updated in the same change.

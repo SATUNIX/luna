@@ -8,7 +8,7 @@ Before starting Pi, run the offline readiness gate:
 python3 scripts/validate-runtime-readiness.py
 ```
 
-Expected output is a series of `OK:` lines and either `Runtime readiness checks passed` or `Runtime readiness passed with ... warning(s)`. A missing host `/srv/data/pi-system` warning is acceptable for local repo validation when Pi System or the container will create the data root.
+Expected output is a series of `OK:` lines and either `Runtime readiness checks passed` or `Runtime readiness passed with ... warning(s)`. A missing host `/srv/data/pi-system` warning is acceptable for local repo validation when Luna or the container will create the data root.
 
 ```sh
 docker compose -f capability/compose/compose.yaml --env-file capability/env/defaults.env up -d --build
@@ -17,7 +17,7 @@ docker exec -it pi-system-pi-agent-1 pi-agent
 
 ## Kit Package
 
-This capability installs behavior from `pi-system`.
+This capability installs behavior from Luna.
 
 Use the full kit profiles by setting `PI_KIT_PROFILE`:
 
@@ -27,7 +27,7 @@ PI_KIT_PROFILE=balanced docker compose -f capability/compose/compose.yaml --env-
 
 `quick` is the smallest general profile and `balanced` is the default. `long-horizon`, `autonomous`, and `self-improving` are for longer or more advanced sessions. `lite` is for small local models and tight context limits.
 
-Profiles, extension building, status bar costs, and searchable docs live in `docs/index.md` of the kit repository.
+Profiles, extension building, status bar costs, and searchable docs live in `docs/index.md` of the Luna repository.
 
 ## Model Configuration
 
@@ -39,7 +39,7 @@ http://host.docker.internal:11434/v1
 
 The default model id is `gemma4:latest` in `overlays/pi/models.json`. Override provider settings with `OLLAMA_BASE_URL`, `overlays/pi/settings.json`, and `overlays/pi/models.json`.
 
-Local model cost is `0` by default. The kit GitOps status bar can display non-zero pricing when configured through `.pi-kit/costs.json`, `~/.pi/agent/pi-kit/costs.json`, or `PI_KIT_COST_*_PER_MTOK`.
+Local model cost is `0` by default. The Luna GitOps status bar can display non-zero pricing when configured through `.pi-kit/costs.json`, `~/.pi/agent/pi-kit/costs.json`, or `PI_KIT_COST_*_PER_MTOK`.
 
 Start with an alternate model:
 
@@ -53,7 +53,7 @@ To check Ollama before an interactive session:
 python3 scripts/validate-runtime-readiness.py --check-model-endpoint
 ```
 
-An unreachable endpoint is a warning by default. For deployment gates that must prove local model reachability, add `--require-model-endpoint`; failures then need Ollama started, `OLLAMA_BASE_URL` corrected, or the Pi System model overlay fixed before launch.
+An unreachable endpoint is a warning by default. For deployment gates that must prove local model reachability, add `--require-model-endpoint`; failures then need Ollama started, `OLLAMA_BASE_URL` corrected, or the Luna model overlay fixed before launch.
 
 ## Engagement Files
 
@@ -118,7 +118,7 @@ For small local models or tight context limits, use `.pi/settings.small-context.
 
 Start recovery or continuation by calling `pi_system_governance.state_summary` with `max_items` no higher than 5. Use `.pi/prompts/code-compact.md`, `.pi/prompts/pentest-compact.md`, or `.pi/prompts/agent-checkpoint.md` so handoffs stay in stable `task_state` or `pentest_state` blocks.
 
-For the kit's `lite` profile, see `docs/profiles.md` in the kit repository.
+For Luna's `lite` profile, see `docs/profiles.md` in the Luna repository.
 
 ## Troubleshooting
 
@@ -130,7 +130,7 @@ python3 scripts/validate-scope-roe.py
 python3 scripts/validate-engagement-overlays.py
 ```
 
-If runtime readiness warns that `/srv/data/pi-system` is missing on a Windows or local checkout, treat it as host-only when Docker/Pi System will create the bind path before runtime. Container health and ledger validation are the deployment checks.
+If runtime readiness warns that `/srv/data/pi-system` is missing on a Windows or local checkout, treat it as host-only when Docker/Luna will create the bind path before runtime. Container health and ledger validation are the deployment checks.
 
 For deeper incident steps, use `RUNBOOK.md`.
 

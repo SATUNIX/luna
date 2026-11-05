@@ -128,23 +128,12 @@ function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
   return step;
 }
 
-export function parseWorkflow(content: string, file: string, source: WorkflowDef["source"]): { workflow?: WorkflowDef; errors: string[] } {
-  const errors: string[] = [];
-  let fm: Record<string, unknown>;
-  try {
-    fm = parseFrontmatter(content).frontmatter;
-  } catch (error) {
-    return { errors: [`${file}: invalid YAML frontmatter: ${String(error)}`] };
-  }
-  const name = toText(fm.name ?? path.basename(file, ".md"));
-  if (!ID.test(name)) errors.push(`name "${name}" must match ${ID}`);
-  const inputs: WorkflowDef["inputs"] = {};
-  if (isObject(fm.inputs)) {
-    for (const [k, v] of Object.entries(fm.inputs)) {
-      inputs[k] = isObject(v) ? { description: v.description === undefined ? undefined : toText(v.description), required: v.required === true, default: v.default !== undefined ? toText(v.default) : undefined } : { description: toText(v ?? "") };
-    }
-  }
-  const steps: StepDef[] = Array.isArray(fm.steps) ? fm.steps.map((s: unknown, i: number) => parseStep(s, `steps[${i}]`, errors)) : [];
+/**
+ * The step list of a saved workflow or an inline plan (plan.ts): each step parsed, ids unique across
+ * the whole workflow, references resolved. Problems go to `errors`; the steps are usable without any.
+ */
+export function parseSteps(raw: unknown, errors: string[]): StepDef[] {
+  const steps: StepDef[] = Array.isArray(raw) ? raw.map((s: unknown, i: number) => parseStep(s, `steps[${i}]`, errors)) : [];
   if (!steps.length) errors.push("steps: at least one step is required");
   // Ids are unique across the whole workflow (parallel members included); references resolve.
   const order: string[] = [];
@@ -161,6 +150,26 @@ export function parseWorkflow(content: string, file: string, source: WorkflowDef
     if (retry && !earlier.has(retry) && retry !== s.id) errors.push(`step ${s.id}: gate.retry "${retry}" must name this or an earlier top-level step`);
     if (retry && !steps.slice(0, i + 1).some((x: StepDef) => x.id === retry)) errors.push(`step ${s.id}: gate.retry must be a top-level step`);
   });
+  return steps;
+}
+
+export function parseWorkflow(content: string, file: string, source: WorkflowDef["source"]): { workflow?: WorkflowDef; errors: string[] } {
+  const errors: string[] = [];
+  let fm: Record<string, unknown>;
+  try {
+    fm = parseFrontmatter(content).frontmatter;
+  } catch (error) {
+    return { errors: [`${file}: invalid YAML frontmatter: ${String(error)}`] };
+  }
+  const name = toText(fm.name ?? path.basename(file, ".md"));
+  if (!ID.test(name)) errors.push(`name "${name}" must match ${ID}`);
+  const inputs: WorkflowDef["inputs"] = {};
+  if (isObject(fm.inputs)) {
+    for (const [k, v] of Object.entries(fm.inputs)) {
+      inputs[k] = isObject(v) ? { description: v.description === undefined ? undefined : toText(v.description), required: v.required === true, default: v.default !== undefined ? toText(v.default) : undefined } : { description: toText(v ?? "") };
+    }
+  }
+  const steps = parseSteps(fm.steps, errors);
   if (errors.length) return { errors: errors.map((e) => `${path.basename(file)}: ${e}`) };
   return { workflow: { name, description: toText(fm.description ?? ""), inputs, steps, vault: fm.vault === true, source, file }, errors };
 }
@@ -319,12 +328,14 @@ export interface RunState {
   paused?: true | undefined;
   // Effort run scopes this model-started run has opened (runScopeId); absent on other runs.
   scopes?: number | undefined;
+  // An inline plan's run: its definition is the run directory's plan.json, not a workflow file.
+  plan?: true | undefined;
 }
 
 export const runsRoot = (cwd: string) => path.join(cwd, ".pi", "workflows", "runs");
 const MAX_OUTPUT_IN_STATE = 4000;
 const MAX_FILE_INCLUDE = 64 * 1024;
-const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops included)
+export const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops included)
 
 // Run files hold prompts and agent output, so the run directory is 0700 and its files 0600. The
 // modes are set explicitly as well, because mkdir/write modes are masked by the umask and are not
@@ -409,7 +420,8 @@ function isRunState(value: unknown): value is RunState {
     Object.values(s.loops).every((n) => typeof n === "number") &&
     isRecord(s.steps) &&
     Object.values(s.steps).every(isStepState) &&
-    (s.scopes === undefined || (typeof s.scopes === "number" && Number.isInteger(s.scopes) && s.scopes >= 0))
+    (s.scopes === undefined || (typeof s.scopes === "number" && Number.isInteger(s.scopes) && s.scopes >= 0)) &&
+    (s.plan === undefined || s.plan === true)
   );
 }
 
@@ -444,8 +456,10 @@ export class TemplateError extends Error {}
 
 // {{inputs.x}}  {{steps.<id>.output}}  {{steps.<id>.status}}  {{file:rel/path}}  {{run.dir}}
 // {{run.id}}  {{loop}}.  A trailing "?" makes a missing value empty instead of an error.
+export const TEMPLATE_EXPR = /\{\{\s*([^}]+?)\s*\}\}/g;
+
 export function renderTemplate(template: string, ctx: { inputs: Record<string, string>; state: RunState; runDir: string; loop: number }): string {
-  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_m, exprRaw: string) => {
+  return template.replace(TEMPLATE_EXPR, (_m, exprRaw: string) => {
     const optional = exprRaw.endsWith("?");
     const expr = optional ? exprRaw.slice(0, -1).trim() : exprRaw;
     const missing = (what: string) => {
@@ -635,7 +649,7 @@ function listRunFiles(runDir: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, rel: string) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (e.name === "state.json" || e.name.endsWith(".tmp")) continue;
+      if (e.name === "state.json" || e.name === "plan.json" || e.name.endsWith(".tmp")) continue;
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) walk(path.join(dir, e.name), r);
       else out.push(r);

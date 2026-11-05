@@ -1,7 +1,9 @@
 /**
  * Workflows — tool and command registration (`workflow_run`, `workflow_status`, `workflow_control`,
- * `/workflow`). Pause, resume, stop and skip of a live run all go through control.ts.
+ * `/workflow`). Pause, resume, stop and skip of a live run all go through control.ts. A plan as data
+ * (`workflow_run {steps}`) compiles through plan.ts and runs like a saved workflow.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
@@ -10,10 +12,15 @@ import { discoverAgents, type AgentConfig } from "./agents.ts";
 import { agentDir } from "./config.ts";
 import { CONTROL_ACTIONS, controlRun, runControls } from "./control.ts";
 import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
+import { compilePlan, planRefusal, PLAN_DESCRIPTION, type PlanError } from "./plan.ts";
+import { redact } from "./redact.ts";
 import { producedResult } from "./run-contract.ts";
+import { duplicateRefusal, liveRuns, runIdentity } from "./run-model.ts";
+import { resolveSkillFile } from "./skills.ts";
 import { effortRegistry } from "./wf-engine.ts";
 import {
   discoverWorkflows,
+  ensurePrivateDir,
   executeWorkflow,
   listRuns,
   loadState,
@@ -25,6 +32,7 @@ import {
   summarizeRun,
   workflowDigest,
   worstCaseAgents,
+  writePrivate,
   SKIPPED_ON_RESUME,
   type ExecuteOptions,
   type RunState,
@@ -241,38 +249,27 @@ function parseKv(args: string[]): Record<string, string> {
   return out;
 }
 
+/** How a run is started; every kind of start takes the same options. */
+interface StartOptions {
+  signal?: AbortSignal | undefined;
+  onProgress?: (t: string) => void;
+  launchKind?: "user";
+  spawnChild?: SpawnChild | undefined;
+}
+
+type Started = { error: string; state?: undefined; workflow?: undefined } | { error?: undefined; state: RunState; workflow: WorkflowDef };
+
 /**
- * Start or resume a YAML workflow. A run you typed is a "user" launch. Any other is the model's: it
- * opens an effort run scope first, charged the run's worst case, so a run that cannot be afforded is
- * refused here with nothing started. Its agents then launch as kind "workflow" in that scope.
+ * Run a definition. A live run doing the same work is refused first. A run you typed is a "user"
+ * launch. Any other is the model's: it opens an effort run scope, charged the run's worst case, so a
+ * run that cannot be afforded is refused here with nothing started. Its agents then launch as kind
+ * "workflow" in that scope. `before` runs once the run may go ahead, ahead of any launch.
  */
-export async function startWorkflow(
-  ctx: ToolContext,
-  name: string,
-  inputsGiven: Record<string, string>,
-  opts: { resume?: RunState | undefined; signal?: AbortSignal | undefined; onProgress?: (t: string) => void; launchKind?: "user"; spawnChild?: SpawnChild | undefined },
-): Promise<{ error: string; state?: undefined; workflow?: undefined } | { error?: undefined; state: RunState; workflow: WorkflowDef }> {
+async function launchRun(ctx: ToolContext, w: WorkflowDef, state: RunState, agents: AgentConfig[], identity: string, opts: StartOptions, before?: () => void): Promise<Started> {
   const cwd = ctx.cwd ?? process.cwd();
-  const { workflows, scripts } = discoverWorkflows(cwd);
-  const w = workflows.find((x) => x.name === name);
-  if (!w) {
-    if (scripts.some((x) => x.name === name)) return { error: `Workflow "${name}" is a script workflow; run it with the workflow tool ({name: "${name}"}).` };
-    return { error: `Unknown workflow "${name}".\n${listText(cwd)}` };
-  }
-  const trust = await trustError(w, workflowDigest(w), ctx);
-  if (trust) return { error: trust };
-  const agents = discoverAgents(cwd, "user").agents;
-  if (opts.resume) {
-    if (runControls.has(opts.resume.id)) return { error: `Run ${opts.resume.id} is still live in this session; use workflow_control {runId: "${opts.resume.id}", action: "resume"} to unpause it.` };
-    const gate = await resumeWriterGate(w, opts.resume, agents, ctx);
-    if (gate) return { error: gate };
-  }
-  let state = opts.resume;
-  if (!state) {
-    const { inputs, missing } = resolveInputs(w, inputsGiven);
-    if (missing.length) return { error: `Missing required input(s) for ${name}: ${missing.join(", ")}. Inputs: ${Object.entries(w.inputs).map(([k, v]) => `${k}${v.required ? "*" : ""} (${v.description ?? ""})`).join("; ")}` };
-    state = newRunState(w, inputs);
-  }
+  // Nothing awaits from this check to the hold below, so two calls cannot both pass it.
+  const live = liveRuns.find(identity);
+  if (live) return { error: duplicateRefusal(live) };
   let launch: Pick<ExecuteOptions, "launchKind" | "workflowRun" | "concurrency"> = { launchKind: "user" };
   if (opts.launchKind !== "user") {
     const effort = effortRegistry();
@@ -283,6 +280,8 @@ export async function startWorkflow(
     state.scopes = (state.scopes ?? 0) + 1;
     launch = { launchKind: "workflow", workflowRun: { runId, runToken: scope.runToken }, ...(scope.maxConcurrent === undefined ? {} : { concurrency: scope.maxConcurrent }) };
   }
+  before?.();
+  const release = liveRuns.hold(identity, { runId: state.id, name: w.name });
   // The run's control (pause/resume/stop/skip); the tool call's signal (Esc) stops it.
   const { control, close } = runControls.open(state.id, opts.signal);
   try {
@@ -290,7 +289,112 @@ export async function startWorkflow(
     return { state: final, workflow: w };
   } finally {
     close();
+    release();
   }
+}
+
+/** Why a resume cannot go on, or null: the run is still live, or an interrupted writer needs an answer. */
+async function resumeError(w: WorkflowDef, state: RunState, agents: readonly AgentConfig[], ctx: ToolContext): Promise<string | null> {
+  if (runControls.has(state.id)) return `Run ${state.id} is still live in this session; use workflow_control {runId: "${state.id}", action: "resume"} to unpause it.`;
+  return resumeWriterGate(w, state, agents, ctx);
+}
+
+/** Start or resume a YAML workflow, or resume a plan's run. */
+export async function startWorkflow(ctx: ToolContext, name: string, inputsGiven: Record<string, string>, opts: StartOptions & { resume?: RunState | undefined }): Promise<Started> {
+  if (opts.resume?.plan) return resumePlan(ctx, opts.resume, opts);
+  const cwd = ctx.cwd ?? process.cwd();
+  const { workflows, scripts } = discoverWorkflows(cwd);
+  const w = workflows.find((x) => x.name === name);
+  if (!w) {
+    if (scripts.some((x) => x.name === name)) return { error: `Workflow "${name}" is a script workflow; run it with the workflow tool ({name: "${name}"}).` };
+    return { error: `Unknown workflow "${name}".\n${listText(cwd)}` };
+  }
+  const digest = workflowDigest(w);
+  const trust = await trustError(w, digest, ctx);
+  if (trust) return { error: trust };
+  const agents = discoverAgents(cwd, "user").agents;
+  if (opts.resume) {
+    const refused = await resumeError(w, opts.resume, agents, ctx);
+    if (refused) return { error: refused };
+  }
+  let state = opts.resume;
+  if (!state) {
+    const { inputs, missing } = resolveInputs(w, inputsGiven);
+    if (missing.length) return { error: `Missing required input(s) for ${name}: ${missing.join(", ")}. Inputs: ${Object.entries(w.inputs).map(([k, v]) => `${k}${v.required ? "*" : ""} (${v.description ?? ""})`).join("; ")}` };
+    state = newRunState(w, inputs);
+  }
+  return launchRun(ctx, w, state, agents, runIdentity("yaml", digest, state.inputs), opts);
+}
+
+const PLAN_FILE = "plan.json";
+const planFile = (cwd: string, runId: string): string => path.join(runsRoot(cwd), runId, PLAN_FILE);
+const sha256 = (data: string | Buffer): string => crypto.createHash("sha256").update(data).digest("hex");
+
+// The SHA-256 of each plan.json this process wrote. Any other plan (from an earlier session, or
+// rewritten: a run directory is in the workspace, and an agent can write there) is gated on resume
+// like a project workflow, because a plan is delegated work with no firewall question of its own.
+const sessionPlans = new Map<string, string>();
+
+/** The steps as given, secrets redacted like every run file, for a resume to compile again. */
+function savePlan(cwd: string, runId: string, steps: unknown): void {
+  const text = JSON.stringify({ version: 1, steps }, (_key, value: unknown) => (typeof value === "string" ? redact(value) : value), 2);
+  ensurePrivateDir(path.dirname(planFile(cwd, runId)));
+  writePrivate(planFile(cwd, runId), text);
+  sessionPlans.set(runId, sha256(text));
+}
+
+/** Skills that resolve nowhere: a child would otherwise start without them and say nothing. */
+function missingSkill(w: WorkflowDef, cwd: string): PlanError | undefined {
+  for (const [i, step] of w.steps.entries()) {
+    for (const [j, leaf] of (step.parallel ?? [step]).entries()) {
+      const name = leaf.skills?.find((s) => !resolveSkillFile(s, cwd));
+      if (name !== undefined) return { path: `steps[${i}]${step.parallel ? `.parallel[${j}]` : ""}.skills`, problem: `no skill is named "${name.slice(0, 40)}".`, fix: "Name an installed skill, or leave it out." };
+    }
+  }
+  return undefined;
+}
+
+/** Compile a plan and run it through the same executor as a YAML workflow. */
+export async function startPlan(ctx: ToolContext, steps: unknown, inputs: Record<string, string>, opts: StartOptions): Promise<Started> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const agents = discoverAgents(cwd, "user").agents;
+  const compiled = compilePlan(steps, agents, Object.keys(inputs));
+  if (!compiled.ok) return { error: planRefusal(compiled.errors) };
+  const { workflow } = compiled;
+  const noSkill = missingSkill(workflow, cwd);
+  if (noSkill) return { error: planRefusal([noSkill]) };
+  const state = newRunState(workflow, inputs);
+  state.plan = true;
+  return launchRun(ctx, workflow, state, agents, runIdentity("plan", JSON.stringify(workflow.steps), inputs), opts, () => {
+    savePlan(cwd, state.id, steps);
+  });
+}
+
+/** Resume a plan's run from its plan.json, never from a saved workflow of the same name. */
+async function resumePlan(ctx: ToolContext, state: RunState, opts: StartOptions): Promise<Started> {
+  const cwd = ctx.cwd ?? process.cwd();
+  const file = planFile(cwd, state.id);
+  let bytes: Buffer;
+  let saved: unknown;
+  try {
+    bytes = fs.readFileSync(file);
+    saved = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    return { error: `Run ${state.id} cannot be resumed: its ${PLAN_FILE} is missing or unreadable (${error instanceof Error ? error.message : String(error)}). Start a new run.` };
+  }
+  const digest = sha256(bytes);
+  if (sessionPlans.get(state.id) !== digest) {
+    const trust = await trustError({ name: state.workflow, description: `The inline plan of run ${state.id}.`, source: "project", file }, digest, ctx);
+    if (trust) return { error: trust };
+  }
+  const agents = discoverAgents(cwd, "user").agents;
+  const steps: unknown = typeof saved === "object" && saved !== null ? Reflect.get(saved, "steps") : undefined;
+  const compiled = compilePlan(steps, agents, Object.keys(state.inputs));
+  if (!compiled.ok) return { error: `Run ${state.id}: ${PLAN_FILE} no longer compiles. ${planRefusal(compiled.errors)}` };
+  const { workflow } = compiled;
+  const refused = await resumeError(workflow, state, agents, ctx);
+  if (refused) return { error: refused };
+  return launchRun(ctx, workflow, state, agents, runIdentity("plan", JSON.stringify(workflow.steps), state.inputs), opts);
 }
 
 const liveTag = (id: string): string => {
@@ -298,7 +402,12 @@ const liveTag = (id: string): string => {
   return c ? (c.paused ? " (active, paused)" : " (active)") : "";
 };
 
-export function registerWorkflowTools(pi: ExtensionAPI): void {
+export interface WorkflowToolDeps {
+  /** Test seam: the child spawner the tool's runs use. */
+  spawnChild?: SpawnChild;
+}
+
+export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps = {}): void {
   // Workflows orchestrate subagents; a subagent child never starts one itself.
   if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
 
@@ -306,17 +415,20 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
     name: "workflow_run",
     label: "Workflow",
     description:
-      "Run a saved workflow: a deterministic chain of subagent/skill steps with a shared run directory, review gates and resume. " +
-      'Use name "list" to see available workflows and their inputs. Prefer a matching workflow over hand-building subagent chains.',
-    promptSnippet: "Run a saved multi-step subagent workflow (list, or run by name with inputs)",
+      "Run a workflow: subagent steps with a shared run directory, review gates and resume. Pass exactly one of: name (a saved workflow; \"list\" shows them and their inputs), steps (a plan as data) or resume (a run id). " +
+      PLAN_DESCRIPTION +
+      " Prefer this over hand-building subagent chains.",
+    promptSnippet: "Run a saved workflow, or an inline plan of subagent steps",
     parameters: Type.Object({
-      name: Type.String({ description: 'Workflow name, or "list"' }),
-      inputs: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Workflow inputs, e.g. {goal: \"...\"}" })),
-      resume: Type.Optional(Type.String({ description: "Run id to resume instead of starting a new run" })),
+      name: Type.Optional(Type.String({ description: 'Saved workflow name, or "list"' })),
+      steps: Type.Optional(Type.Array(Type.Unknown(), { description: "An inline plan: the steps to run" })),
+      inputs: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Inputs, e.g. {goal: \"...\"}" })),
+      resume: Type.Optional(Type.String({ description: "Run id to resume" })),
     }),
     async execute(_id, params, signal, onUpdate, rawCtx) {
       const ctx: ToolContext = rawCtx;
       const cwd = ctx.cwd ?? process.cwd();
+      if ([params.name, params.steps, params.resume].filter((v) => v !== undefined).length !== 1) return textResult('Pass exactly one of name, steps or resume ({name: "list"} shows the saved workflows).', true);
       if (params.name === "list") return textResult(listText(cwd));
       let resume: RunState | undefined;
       if (params.resume) {
@@ -334,7 +446,8 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
         }
       };
       try {
-        const r = await startWorkflow(ctx, resume?.workflow ?? params.name, params.inputs ?? {}, { resume, signal, onProgress: report });
+        const start = { signal, onProgress: report, spawnChild: deps.spawnChild };
+        const r = await (params.steps === undefined ? startWorkflow(ctx, resume?.workflow ?? params.name ?? "", params.inputs ?? {}, { ...start, resume }) : startPlan(ctx, params.steps, params.inputs ?? {}, start));
         if (r.error !== undefined) return textResult(r.error, true);
         const dir = path.join(runsRoot(cwd), r.state.id);
         // A parsed workflow always has at least one step.

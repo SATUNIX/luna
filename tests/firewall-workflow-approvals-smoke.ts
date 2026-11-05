@@ -318,6 +318,31 @@ const openFor = (runId: string): Prompt[] => prompts.filter((p) => !p.done && p.
   ok("firewall: a workflow child's request names its run and action hash; a console denial sticks across calls, in that checkout only");
 }
 
+// ---- 4. an inline plan is an ordinary workflow_run call to the firewall ---------------------------
+{
+  const plan = { steps: [{ agent: "scout", task: "look at it" }] };
+  const decide = async (): Promise<unknown> => {
+    const register = await loadExtension("extensions/tool-firewall/index.ts");
+    const pi = fakePi();
+    register(pi.api, { complete: null });
+    return pi.handlers.get("tool_call")({ toolName: "workflow_run", input: plan }, { hasUI: false, ui: {}, cwd: ws });
+  };
+  assert.equal(await decide(), undefined, "the shipped policy allows workflow_run, plan or not");
+  const policy: unknown = JSON.parse(fs.readFileSync(new URL("../packages/extensions/src/tool-firewall/default-policy.json", import.meta.url), "utf8"));
+  const tools: unknown = Reflect.get(Object(policy), "tools");
+  Reflect.set(Object(tools), "workflow_run", { decision: "deny", risk_class: "delegation" });
+  const policyFile = path.join(ws, "deny-workflow-run.json");
+  fs.writeFileSync(policyFile, JSON.stringify(policy));
+  const restorePolicy = setEnv("PI_KIT_FIREWALL_POLICY", policyFile);
+  try {
+    const denied = await decide();
+    assert.equal(Reflect.get(Object(denied), "block"), true, "workflow_run: deny denies an inline plan");
+  } finally {
+    restorePolicy();
+  }
+  ok("firewall: workflow_run sees an inline plan as before: the shipped policy allows it, workflow_run: deny denies it");
+}
+
 await hpi.handlers.get("session_shutdown")({}, { cwd: ws, hasUI: true, ui });
 runE.close();
 runF.close();

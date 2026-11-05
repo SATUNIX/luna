@@ -415,13 +415,14 @@ Extension `subagent`. Control a live workflow run in this session: pause (start 
 
 ### `workflow_run`
 
-Extension `subagent`. Run a saved workflow: a deterministic chain of subagent/skill steps with a shared run directory, review gates and resume. Use name "list" to see available workflows and their inputs. Prefer a matching workflow over hand-building subagent chains.
+Extension `subagent`. No description.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `name` | string | Workflow name, or "list" |
-| `inputs?` | record | Workflow inputs, e.g. {goal: "..."} |
-| `resume?` | string | Run id to resume instead of starting a new run |
+| `name?` | string | Saved workflow name, or "list" |
+| `steps?` | unknown[] | An inline plan: the steps to run |
+| `inputs?` | record | Inputs, e.g. {goal: "..."} |
+| `resume?` | string | Run id to resume |
 
 ### `workflow_status`
 

@@ -511,7 +511,7 @@ steps:
     };
     const run = pi.tools.get("workflow_run");
     const s1 = writeInterrupted();
-    const headless = await run.execute("r1", { name: "writer", resume: s1.id }, undefined, undefined, { cwd: ws, hasUI: false });
+    const headless = await run.execute("r1", { resume: s1.id }, undefined, undefined, { cwd: ws, hasUI: false });
     assert.equal(headless.isError, true);
     assert.match(textOf(headless), /Blocked: .*writer step\(s\) edit/, "a headless resume of an interrupted writer is refused");
     const prompts: string[][] = [];
@@ -528,13 +528,13 @@ steps:
       },
     });
     for (const answer of ["No, leave the run interrupted", undefined]) {
-      const r = await run.execute("r2", { name: "writer", resume: s1.id }, undefined, undefined, ui(answer));
+      const r = await run.execute("r2", { resume: s1.id }, undefined, undefined, ui(answer));
       assert.equal(r.isError, true);
       assert.match(textOf(r), /Cancelled: run .* stays interrupted/, `answer ${String(answer)} cancels`);
     }
     assert.deepEqual(prompts[0], ["No, leave the run interrupted", "Re-run the interrupted step(s)", "Skip the interrupted step(s)"], "No is the first (default) option");
     assert.deepEqual([...T.RESUME_WRITER_CHOICES], prompts[0]);
-    const skipped = await run.execute("r3", { name: "writer", resume: s1.id }, undefined, undefined, ui("Skip the interrupted step(s)"));
+    const skipped = await run.execute("r3", { resume: s1.id }, undefined, undefined, ui("Skip the interrupted step(s)"));
     assert.match(textOf(skipped), /passed/, "Skip marks the step skipped and the run goes on (here: to the end, nothing launched)");
     const after = I.loadState(ws, s1.id);
     assert.equal(after?.steps.edit?.status, "skipped");

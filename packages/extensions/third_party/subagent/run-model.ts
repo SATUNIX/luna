@@ -12,6 +12,7 @@
  * names, counters and error text. Listeners (a panel, a status line) subscribe; a throwing
  * listener is ignored so telemetry can never break a run.
  */
+import crypto from "node:crypto";
 import type { RunStatus } from "./run-contract.ts";
 import type { UsageStats } from "./types.ts";
 
@@ -345,3 +346,37 @@ export class RunRegistry {
 
 /** The process-wide registry the executors feed. */
 export const runRegistry = new RunRegistry();
+
+/** A live run as a refusal names it. */
+export interface LiveRun {
+  runId: string;
+  name: string;
+}
+
+/** What makes two runs the same work: what kind they are, the definition's digest or text, and their arguments. */
+export function runIdentity(kind: RunKind | "plan", definition: string, args: unknown): string {
+  return crypto.createHash("sha256").update(JSON.stringify([kind, definition, args ?? null])).digest("hex");
+}
+
+/** The runs of this process that hold an identity. A refused run never starts, so `start` replacing a run id is not this check. */
+export class LiveRuns {
+  private readonly held = new Map<string, LiveRun>();
+
+  find(identity: string): LiveRun | undefined {
+    return this.held.get(identity);
+  }
+
+  /** Hold an identity while a run is live; the returned function releases it. */
+  hold(identity: string, run: LiveRun): () => void {
+    this.held.set(identity, run);
+    return () => {
+      if (this.held.get(identity) === run) this.held.delete(identity);
+    };
+  }
+}
+
+/** The process-wide live identities both engines' tools check before a start. */
+export const liveRuns = new LiveRuns();
+
+export const duplicateRefusal = (live: LiveRun): string =>
+  `Refused: run ${live.runId} (${live.name}) is already doing this work. Follow it with workflow_status {id: "${live.runId}"}, or stop it with workflow_control {runId: "${live.runId}", action: "stop"} and start again.`;

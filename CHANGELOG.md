@@ -50,6 +50,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   sequential step now leaves it `running`, so a resume cannot rerun a writer without asking.
   `/workflow run` and approved scripts are unchanged. See [Effort](docs/effort.md#plan-allowance)
   (`tests/effort-smoke.ts`, `tests/workflow-builtin-smoke.ts`).
+- **Authority change:** `workflow_run` now takes a plan as data. `name` is optional and exactly one of
+  `name`, `steps` or `resume` is required, so `{name, resume}` is refused. A plan may only narrow
+  tools; it cannot set a model, thinking, extensions, a runtime or a skill, and a plan with a bad
+  reference, role, target or a worst case over the execution limit is refused before anything
+  launches, with no run directory. A plan is charged like a saved workflow, and resuming one whose
+  `plan.json` this process did not write asks the operator, or needs a digest grant when headless.
+  A live plan, YAML or script run with the same digest and arguments now refuses a duplicate and
+  names the live run (`tests/workflow-plan-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`).
 - The project is named **Luna** in the README and documentation. The pi package keeps the name
   `@satunix/pi-system`, so install commands, settings entries and environment variables are
   unchanged.

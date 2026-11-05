@@ -18,6 +18,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./agents.ts";
 import { isSecretReadPath, untrusted } from "./fence.ts";
 import { redact } from "./redact.ts";
+import { duplicateRefusal, liveRuns, runIdentity } from "./run-model.ts";
 import { producedResult, resumable, type StepResult } from "./run-contract.ts";
 import type { ToolContext } from "./types.ts";
 import { OMISSIONS_NAMED, startScriptRun, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
@@ -244,6 +245,11 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
       const mode = await sandbox.prepare(sandboxUi(ctx));
       if (!mode.ok) return textResult(mode.error, true);
       const budget = standingBudget();
+      const digest = crypto.createHash("sha256").update(spec.source, "utf8").digest("hex");
+      // Nothing awaits from this check to the hold below, so two calls cannot both pass it.
+      const identity = runIdentity("script", digest, params.args);
+      const live = liveRuns.find(identity);
+      if (live) return textResult(duplicateRefusal(live), true);
       const started = startScriptRun(spec, params.args, {
         cwd,
         ...(budget !== null ? { budgetTotal: budget } : {}),
@@ -266,8 +272,10 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
       });
       if (!started.ok) return textResult(started.error, true);
       // startScriptRun saved spec.source (UTF-8) as the run's script.js.
-      sessionRuns.set(started.runId, crypto.createHash("sha256").update(spec.source, "utf8").digest("hex"));
+      sessionRuns.set(started.runId, digest);
+      const release = liveRuns.hold(identity, { runId: started.runId, name: spec.name });
       void started.done.then((outcome) => {
+        release();
         const content = formatCompletion(outcome);
         try {
           pi.sendMessage(

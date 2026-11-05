@@ -443,6 +443,13 @@ SOFTWARE.
     with hooks that admit and charge each attempt. A run waits for stopped calls before reporting,
     results are capped before the journal, and refused or nested calls meet the step and sandbox
     limits (`tests/workflow-hooks-smoke.ts`).
+  - **Plans as data (2026-11-06):** `plan.ts` is new and compiles a `workflow_run {steps}` plan
+    through `parseSteps`, which `workflow.ts` extracts from `parseWorkflow` with saved YAML
+    unchanged. `workflow-tools.ts` makes `name` optional, takes exactly one of `name`, `steps` or
+    `resume`, and shares `launchRun` between `startPlan` and `startWorkflow`; `plan.json` holds the
+    redacted steps and a resume compiles it again. `liveRuns` in `run-model.ts` refuses a live
+    duplicate plan, YAML or script run, and `wf-tool.ts` applies it. `registerWorkflowTools` takes a
+    `spawnChild` test seam, as `wf-tool.ts` does (`tests/workflow-plan-smoke.ts`).
 
 ### `todo`
 

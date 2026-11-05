@@ -646,12 +646,22 @@ export function artFiles(): Map<string, string> {
   return out;
 }
 
+/** A file's text, or null when it does not exist: one read, no separate existence check. */
+function readIfPresent(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function main(argv: readonly string[]): number {
   const check = argv.includes("--check");
   let stale = 0;
   for (const [name, body] of artFiles()) {
     const file = path.join(ART_DIR, name);
-    const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    const current = readIfPresent(file);
     if (current === body) continue;
     if (check) {
       console.error(`stale: docs/assets/${name} (run node packages/core/readme-art.ts)`);

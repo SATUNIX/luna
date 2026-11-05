@@ -45,16 +45,27 @@ export function siteFiles(root = WORKSPACE_ROOT): Map<string, string> {
   const { version, tag } = release(root);
   const out = new Map<string, string>();
   const website = path.join(root, "website");
-  for (const name of fs.readdirSync(website).sort()) {
-    const file = path.join(website, name);
-    if (!fs.statSync(file).isFile()) throw new Error(`website/${name}: only flat files are published`);
-    const text = fs.readFileSync(file, "utf8");
+  // Directory entries carry their type, so nothing is checked and then opened separately.
+  for (const entry of fs.readdirSync(website, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))) {
+    const name = entry.name;
+    if (!entry.isFile()) throw new Error(`website/${name}: only flat files are published`);
+    const text = fs.readFileSync(path.join(website, name), "utf8");
     out.set(name, name.endsWith(".html") ? fill(text, { TAG: tag, VERSION: version }, `website/${name}`) : text);
   }
   const assets = path.join(root, "docs", "assets");
   for (const name of fs.readdirSync(assets).filter((n) => /^luna-[a-z-]+\.svg$/.test(n)).sort()) out.set(`assets/${name}`, fs.readFileSync(path.join(assets, name), "utf8"));
   out.set(".nojekyll", "");
   return out;
+}
+
+/** A directory's entries, or none when it does not exist. */
+function listIfPresent(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 function main(argv: readonly string[]): number {
@@ -64,8 +75,10 @@ function main(argv: readonly string[]): number {
     console.error("usage: node packages/core/build-site.ts [--out <dir>]");
     return 2;
   }
-  // A fresh directory only: the build never deletes or overwrites what it did not write.
-  if (fs.existsSync(out) && fs.readdirSync(out).length > 0) {
+  // A fresh directory only: the build never deletes or overwrites what it did not write. The
+  // directory is listed once (missing counts as empty), and every file is created with "wx", so a
+  // file that appears after this check fails the build instead of being overwritten.
+  if (listIfPresent(out).length > 0) {
     console.error(`build-site: ${out} is not empty; remove it first`);
     return 1;
   }

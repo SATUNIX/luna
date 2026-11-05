@@ -1,8 +1,8 @@
-# pi-system container — agent instructions
+# Luna container — agent instructions
 
-This package (`packages/container/`) is the Pi System deployment wrapper: the Dockerfile, compose
+This package (`packages/container/`) is the Luna deployment wrapper: the Dockerfile, compose
 files, environment defaults, overlays, engagement templates, and validation scripts that package
-upstream Pi with the `pi-system` kit. Use the `wrapper-runtime-maintainer` skill when working here.
+upstream Pi with the Luna kit. Use the `wrapper-runtime-maintainer` skill when working here.
 
 ## Key rules
 

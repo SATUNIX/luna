@@ -151,7 +151,7 @@
   - **Safe writes and shared redaction (2026-10-24):** run files, logs, the live state and the
     worktree journal are written through the generated `shared/safe-fs.ts` (no symbolic link
     followed under the workspace; temporary prompt files are created exclusively), `redact.ts`
-    applies the kit's shared table (`shared/redact.ts`) after its own rules, and workflow gate
+    applies Luna's shared table (`shared/redact.ts`) after its own rules, and workflow gate
     patterns and structured-output patterns use the shared `shared/safe-regex.ts` check
     (`tests/workspace-symlink-smoke.ts`, `tests/redaction-corpus-smoke.ts`, `tests/workflow-smoke.ts`).
   - **Idle watchdog held during tool calls (2026-11-05):** `child-process.ts` tracks open calls from

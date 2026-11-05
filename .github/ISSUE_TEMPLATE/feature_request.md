@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a change to the kit, a profile or an extension
+about: Suggest a change to Luna, a profile or an extension
 labels: enhancement
 ---
 

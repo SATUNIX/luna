@@ -5,7 +5,7 @@
 - Date: 2026-07-03
 - Changes (reimplementation, not a verbatim port):
   - Upstream injects its compression directive by returning `{ systemPrompt }` from
-    `before_agent_start`. That is **forbidden** in this kit — `packages/core/verify.ts` lint 5b reserves
+    `before_agent_start`. That is **forbidden** in Luna — `packages/core/verify.ts` lint 5b reserves
     system-prompt assembly to `extensions/context-sieve`. Rewritten to instead write a
     `.pi/ctx-contributions/sessions/<session-id>/caveman.json` contribution (the flat
     `.pi/ctx-contributions/caveman.json` when pi exposes no session id) that context-sieve assembles

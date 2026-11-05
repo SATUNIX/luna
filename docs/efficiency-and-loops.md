@@ -1,6 +1,6 @@
 # Efficiency and Loops
 
-How the kit helps the agent do more with fewer tool calls, and recover when it starts
+How Luna helps the agent do more with fewer tool calls, and recover when it starts
 looping — especially on small local models.
 
 ## The problem
@@ -75,7 +75,7 @@ Manual trigger: `/recover`. Ships in `long-horizon`/`autonomous`/`self-improving
 
 The detection thresholds are first-principles defaults, validated against **scripted
 fixtures** in the eval harness (`packages/core/eval/fixtures.ts`) rather than mined from live sessions
-— this kit is hardened offline, so no live-session `.pi/trace.jsonl` corpus was used to fit
+— Luna is hardened offline, so no live-session `.pi/trace.jsonl` corpus was used to fit
 them. The reasoning:
 
 | Signal | Env | Default | Rationale |
@@ -133,7 +133,7 @@ against published values (Newcombe 1998), pins the verdicts, including the repor
 figures (3/13 vs 14/22 and 10/21 vs 10/29, both inconclusive), and drives fake arms and the
 command line with a temp HOME and agent dir.
 
-**Not covered:** nothing in the kit records a results file from real runs yet, and no model has
+**Not covered:** nothing in Luna records a results file from real runs yet, and no model has
 been measured.
 
 ## Quick reference

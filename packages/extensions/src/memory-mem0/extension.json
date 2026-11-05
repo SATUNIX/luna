@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "memory-mem0",
-  "summary": "Mem0-compatible memory tools backed by the kit memory MCP server by default, with legacy mem0 REST support behind PI_KIT_MEMORY_BACKEND=mem0.",
+  "summary": "Mem0-compatible memory tools backed by the Luna memory MCP server by default, with legacy mem0 REST support behind PI_KIT_MEMORY_BACKEND=mem0.",
   "category": "memory",
   "tier": "T1-T4",
   "layer": 3,

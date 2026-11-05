@@ -226,6 +226,16 @@ assert.match(
 const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
 assert.equal(readmeBadgeVersion(readme), pkg.version, "README version badge must match package.json (release.ts updates both)");
 assert.equal(readmeBadgeAltVersion(readme), pkg.version, "README version badge alt text must match package.json (release.ts updates both)");
+// The README's illustrations are HTML images, which no Markdown link checker sees; check them
+// here. The hero is an SVG from docs/assets with alt text, and every image or <picture> source
+// under docs/assets that the README names exists (tests/site-smoke.ts checks the files themselves).
+const hero = /<img src="(docs\/assets\/[^"]+\.svg)" alt="[^"]+"/.exec(readme);
+const heroSrc = hero?.[1];
+assert.ok(heroSrc, "README must show an SVG hero from docs/assets");
+for (const ref of readme.matchAll(/(?:src|srcset)="(docs\/assets\/[^"]+)"/g)) {
+  const file = ref[1] ?? "";
+  assert.ok(fs.existsSync(path.join(ROOT, file)), `README image is missing: ${file}`);
+}
 assert.equal(readmeBadgeVersion(setReadmeBadgeVersion(readme, "1.2.3-rc_1.4")), "1.2.3-rc_1.4");
 assert.equal(readmeBadgeAltVersion(setReadmeBadgeVersion(readme, "1.2.3-rc_1.4")), "1.2.3-rc_1.4");
 assert.equal(setReadmeBadgeVersion(readme, pkg.version), readme);

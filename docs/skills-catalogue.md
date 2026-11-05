@@ -64,8 +64,8 @@ their one-line description in context; the other 34 are surfaced on demand by
 
 ## Kit maintainers
 - **governance-extension-maintainer** — Maintain the Pi pentest-governance extension and controlled evidence/approval tools.
-- **validation-test-maintainer** — Keep the kit's validation checks aligned with required profile and runtime contracts.
-- **wrapper-runtime-maintainer** — Maintain the Pi System container wrapper without forking upstream Pi core.
+- **validation-test-maintainer** — Keep Luna's validation checks aligned with required profile and runtime contracts.
+- **wrapper-runtime-maintainer** — Maintain the Luna container wrapper without forking upstream Pi core.
 
 ## Lite profile subset
 

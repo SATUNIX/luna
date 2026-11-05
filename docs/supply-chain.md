@@ -1,11 +1,11 @@
 # Supply chain
 
-How the kit sources third-party code, what installing it pulls in, and how dependencies are
+How Luna sources third-party code, what installing it pulls in, and how dependencies are
 updated. The CI checks that enforce this are listed in [CI security](ci-security.md), and how a
 vulnerability in a dependency is rated, fixed or accepted is in
 [Vulnerability management](vulnerability-management.md).
 
-## What installing the kit pulls in
+## What installing Luna pulls in
 
 Runtime dependencies (`dependencies` in `package.json`): `quickjs-wasi`. It is pinned to an
 exact version, resolved through `package-lock.json`, and the workflow sandbox checks the digest
@@ -43,7 +43,7 @@ licence with its copyright holder and year.
 
 External pi packages are pinned to an exact version and reviewed before enabling. They are
 `reference` mode: the installer registers each one as its own pi package at the pinned version
-when a selected profile includes it. None is bundled into the kit package. The review text in
+when a selected profile includes it. None is bundled into the Luna package. The review text in
 `sources.json` records what each one does, and which newer versions were evaluated and why they
 were not adopted.
 
@@ -61,7 +61,7 @@ fetched from npm at start; `validate-pentest-env.sh` checks the pins agree. See 
 ### pi-mcp-adapter review
 
 The pin is based on the unpacked 6.0.0 tarball, an npm install of it, and the adapter loaded into
-pi 1.4.0 in the built container image. This check was run by hand; no test in the kit loads the
+pi 1.4.0 in the built container image. This check was run by hand; no test in Luna loads the
 adapter (`packages/container/README.md` describes what the image configures).
 
 - **Manifest and install.** MIT, Node >=20, one pi extension (`index.ts`) and a `pi-mcp-adapter`
@@ -85,7 +85,7 @@ adapter (`packages/container/README.md` describes what the image configures).
   `mcp.json` was ignored. The overlay therefore moves to `mcp-adapter.json` and the image sets
   `PI_MCP_CONFIG_MODE=exclusive` and `MCP_DIRECT_TOOLS=__none__`; with them the tool surface is
   `mcp` alone, as with 2.8.0, and `mcp` calls to both bundled servers succeed with and without
-  MCP-only mode. The kit's tool firewall has no entry for `mcp` or `mcp__*`, so both are unknown
+  MCP-only mode. Luna's tool firewall has no entry for `mcp` or `mcp__*`, so both are unknown
   tools and ask. It treats a project's `.pi/mcp-adapter.json`, which 3.0.0 and later read, as a
   safety-control file, as it does `.pi/mcp.json` (`tests/firewall-shell-smoke.ts`).
 - **Behaviour changes since 2.8.0.** 3.0.0 starts project-defined servers only after project trust
@@ -96,7 +96,7 @@ adapter (`packages/container/README.md` describes what the image configures).
   `engagement/tool-policy.json` is unchanged.
 
 Native-binary risk is contained by exact version pins, `reference` (not bundle) mode, and the
-`review` field per source. A kit release that changes a pin moves companions on the next
+`review` field per source. A Luna release that changes a pin moves companions on the next
 `/update`.
 
 ### Companion downloads at run time
@@ -111,13 +111,13 @@ installs only on exactly `1` (`tests/tool-firewall-smoke.ts`). Tools already on 
 
 The pinned pi-lens 4.4.4 honours both switches, including managed tool refreshes
 (`dist/index.js:31908`, `:32844`, `:32968`, `:33057`, `:37129`, `:80154` in that package).
-`tests/tool-firewall-smoke.ts` pins the kit's defaults and preserves explicit operator values.
-It tests the kit, not the companion's implementation of those switches.
+`tests/tool-firewall-smoke.ts` pins Luna's defaults and preserves explicit operator values.
+It tests Luna, not the companion's implementation of those switches.
 
 These switches do not disable missing tree-sitter grammar downloads. Those have a separate
 project-trust gate (`dist/index.js:56547`) and check SHA-256 only when the grammar has a matching
 manifest entry (`:53837`). Vendored grammars refuse a download fallback. This is not a promise
-of an offline companion; no test in the kit executes these download paths.
+of an offline companion; no test in Luna executes these download paths.
 
 ### pi-lens registration review
 
@@ -157,7 +157,7 @@ The new explicit path inputs are `symbol_search.paths`, `effective_config.file` 
 `lens_diagnostic_mark.filePath`; existing firewall fields cover them. `lens_diagnostics`
 adds `analysisRoot` alongside `path` and `paths`; the firewall checks all three. The new
 `project_report` and activator accept no paths. `read_symbol` adds an optional `kind` selector,
-covered by the kit's adapter. Mutation helpers require approval for every call; the firewall
+covered by Luna's adapter. Mutation helpers require approval for every call; the firewall
 also checks `lsp_navigation.newFilePath` and the paths of `ast_grep_replace` and
 `lens_diagnostic_mark` as write targets (`tests/firewall-shell-smoke.ts`). Activation grants no authority to
 execute the activated tools; their individual calls still pass through the firewall.
@@ -186,8 +186,8 @@ sandbox a companion's code or its diagnostic subprocesses, and a read-only polic
 is not process isolation. Active diagnostic scans can launch configured local analysers.
 
 The profile JSON selects the companion as a whole: `balanced` includes `pi-lens` and has
-no per-tool filter. Installer filters scope the kit's own extensions/skills/prompts, not
-a separately registered companion's tools. No kit test claims a diagnostics-only pi-lens
+no per-tool filter. Installer filters scope Luna's own extensions/skills/prompts, not
+a separately registered companion's tools. No Luna test claims a diagnostics-only pi-lens
 surface in balanced. The policy decisions above apply wherever its tools are exposed.
 
 4.4.4's manifest is MIT (`package.json:92`), has native ast-grep dependencies (`:128`), and
@@ -220,7 +220,7 @@ CI fails on a high or critical `npm audit` advisory in any lockfile, on an inval
 signature or attestation (`npm audit signatures`), on any OSV-Scanner finding in the tree and, for
 pull requests, on a new dependency with a high-severity advisory ([CI security](ci-security.md#gating)).
 The dev tree includes `mermaid` and `jsdom`, used only by `npm run docs:mermaid` to check that the
-documentation's diagrams parse; they are never installed by a user of the kit.
+documentation's diagrams parse; they are never installed by a user of Luna.
 
 Findings that no available update clears (the autonomy image's Debian packages, the upstream
 gitleaks binary CI runs, vendored bundles audit tools cannot see) are recorded, with their owner,
@@ -284,11 +284,11 @@ Not covered: the pin is the companion's own tarball, not its dependency tree, wh
 at install time; a root with no lockfile entry for the companion is a warning, not a failure; and
 `pi update` or a manual `pi install` bypasses these checks. pi-lens's `@ast-grep/cli` dependency
 has an install step that is skipped as a result; its launcher script falls back without it and
-prints a warning (seen in a static review of the package; no kit test runs it).
+prints a warning (seen in a static review of the package; no Luna test runs it).
 
 ## pi versions
 
-The kit supports `@earendil-works/pi-coding-agent` **0.85.1 and newer** (its `peerDependencies`
+Luna supports `@earendil-works/pi-coding-agent` **0.85.1 and newer** (its `peerDependencies`
 floor) on Node 22.19 or newer, which is pi's own requirement. The dev dependency pins the version
 the whole suite is tested against, **1.4.0**. CI's `pi-compat` matrix runs the check suite at the
 floor, **0.85.1**, and at the last pi 0.x release, **0.99.2**; both must pass. The lane installs
@@ -316,7 +316,7 @@ It also ships no `tsserver`, only `tsc`.
 
 pi 1.x no longer publishes a shrinkwrap, so its own dependencies are hoisted beside it instead of
 nested under it, and since 1.2 `before_agent_start` also fires for runs an extension starts with a
-custom message; such an event carries no `prompt`, and the kit's handlers treat only a user prompt
+custom message; such an event carries no `prompt`, and Luna's handlers treat only a user prompt
 as the operator's request. pi's extension documentation states that calls a tool makes through
 `ctx.executeTool()`, as codemode and tool search do, go through the same `tool_call` and
 `tool_result` handlers as model-issued calls; nothing in this repository tests nested calls yet.

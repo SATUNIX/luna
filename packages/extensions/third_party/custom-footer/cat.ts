@@ -33,25 +33,24 @@ export type CatAnimation = {
 export const CAT_WIDTH = 7;
 
 export const ANIMATIONS: Record<CatState, CatAnimation> = {
-  idle: { frames: ["=^..^="], intervalMs: 1000, mode: "loop", label: "Ready", colour: "muted" },
-  thinking: { frames: ["=^o.^=", "=^.o^=", "=^..^=", "=^.o^=", "=^o.^=", "=^..^="], intervalMs: 320, mode: "loop", label: "Thinking", colour: "accent" },
-  crunching: { frames: ["=^..^=", "=^.:^=", "=^::^=", "=^:.^=", "=^..^="], intervalMs: 220, mode: "loop", label: "Crunching", colour: "accent" },
-  working: { frames: ["=^..^=", "=^o.^=", "=^oo^=", "=^.o^=", "=^..^="], intervalMs: 280, mode: "loop", label: "Working", colour: "accent" },
-  tool: { frames: ["=^..^=", "=^>.^=", "=^>>^=", "=^.>^=", "=^..^="], intervalMs: 240, mode: "loop", label: "Running tool", colour: "accent" },
-  streaming: { frames: ["=^..^=", "=^.^=", "=^..^=", "=^.^="], intervalMs: 550, mode: "loop", label: "Responding", colour: "muted" },
-  waiting: { frames: ["=^..^=", "=^...^=", "=^..^=", "=^...^="], intervalMs: 700, mode: "loop", label: "Waiting", colour: "muted" },
-  waiting_for_user: { frames: ["=^..^=", "=^?^=", "=^..^=", "=^?^="], intervalMs: 800, mode: "loop", label: "Waiting for input", colour: "warning" },
-  checking: { frames: ["=^?.^=", "=^.?^=", "=^?.^="], intervalMs: 350, mode: "loop", label: "Checking action", colour: "warning" },
-  success: { frames: ["=^..^=", "=^.^=", "=^-^=", "=^.^="], intervalMs: 200, mode: "once", label: "Complete", colour: "success" },
-  warning: { frames: ["=^..^=", "=^!!^=", "=^..^=", "=^!!^=", "=^!^="], intervalMs: 220, mode: "once", label: "Warning", colour: "warning" },
-  denied: { frames: ["=^..^=", "=^>.<^=", "=^#.#^=", "=^>.<^="], intervalMs: 220, mode: "once", label: "Action denied", colour: "error" },
-  error: { frames: ["=^x.x^=", "=^X.x^=", "=^x.X^=", "=^X.X^=", "=^x.x^="], intervalMs: 160, mode: "once", label: "Error", colour: "error" },
-  retrying: { frames: ["=^x.^=", "=^..^=", "=^.x^=", "=^..^="], intervalMs: 400, mode: "loop", label: "Retrying", colour: "warning" },
-  cancelled: { frames: ["=^..^=", "=^-.-^=", "=^---^=", "=^-.-^="], intervalMs: 220, mode: "once", label: "Cancelled", colour: "muted" },
-  sleeping: { frames: ["=^-.-^=", "=^---^=", "=^-.-^=", "=^-.-^="], intervalMs: 1200, mode: "loop", label: "Resting", colour: "dim" },
-  alert: { frames: ["=^o.o^=", "=^O.O^=", "=^o.o^=", "=^O.O^="], intervalMs: 250, mode: "once", label: "Attention required", colour: "error" },
+  idle: { frames: ["=^o.o^=", "=^o.o^=", "=^o.o^=", "=^o.o^=", "=^-.-^=", "=^o.o^="], intervalMs: 1050, mode: "loop", label: "Ready", colour: "muted" },
+  thinking: { frames: ["=^o.o^=", "=^o.O^=", "=^O.o^=", "=^o.O^=", "=^-.-^=", "=^o.o^="], intervalMs: 350, mode: "loop", label: "Thinking", colour: "accent" },
+  crunching: { frames: ["=^o.o^=", "=^o:o^=", "=^o#o^=", "=^o:o^=", "=^o.o^=", "=^-.-^="], intervalMs: 190, mode: "loop", label: "Crunching", colour: "accent" },
+  working: { frames: ["=^o.o^=", "=^>.o^=", "=^>.<^=", "=^o.<^=", "=^o.o^="], intervalMs: 275, mode: "loop", label: "Working", colour: "accent" },
+  tool: { frames: ["=^o.o^=", "=^>o>^=", "=^>>>^=", "=^<o<^=", "=^<<<^=", "=^o.o^="], intervalMs: 165, mode: "loop", label: "Running tool", colour: "accent" },
+  streaming: { frames: ["=^o.o^=", "=^o-o^=", "=^o~o^=", "=^o-o^="], intervalMs: 245, mode: "loop", label: "Responding", colour: "muted" },
+  waiting: { frames: ["=^o.o^=", "=^o.o^=", "=^-.-^=", "=^o.o^=", "=^o_o^="], intervalMs: 850, mode: "loop", label: "Waiting", colour: "muted" },
+  waiting_for_user: { frames: ["=^o.o^=", "=^o?o^=", "=^o.o^=", "=^o?o^=", "=^-.-^="], intervalMs: 650, mode: "loop", label: "Waiting for input", colour: "warning" },
+  checking: { frames: ["=^?.o^=", "=^o.?^=", "=^?.?^=", "=^o.o^="], intervalMs: 310, mode: "loop", label: "Checking action", colour: "warning" },
+  success: { frames: ["=^o.o^=", "=^>w<^=", "=^o.o^="], intervalMs: 215, mode: "once", label: "Complete", colour: "success" },
+  warning: { frames: ["=^o.o^=", "=^!.!^=", "=^O.O^=", "=^!.!^="], intervalMs: 230, mode: "once", label: "Warning", colour: "warning" },
+  denied: { frames: ["=^o.o^=", "=^>.<^=", "=^#.#^=", "=^>.<^="], intervalMs: 245, mode: "once", label: "Action denied", colour: "error" },
+  error: { frames: ["=^o.o^=", "=^x.x^=", "=^X.X^=", "=^x_x^=", "=^X.X^="], intervalMs: 145, mode: "once", label: "Error", colour: "error" },
+  retrying: { frames: ["=^x.x^=", "=^o.x^=", "=^o.o^=", "=^x.o^=", "=^o.o^="], intervalMs: 335, mode: "loop", label: "Retrying", colour: "warning" },
+  cancelled: { frames: ["=^o.o^=", "=^-.-^=", "=^_._^=", "=^-.-^="], intervalMs: 260, mode: "once", label: "Cancelled", colour: "muted" },
+  sleeping: { frames: ["=^-.-^=", "=^_._^=", "=^-.-^=", "=^z.z^=", "=^-.-^="], intervalMs: 1150, mode: "loop", label: "Resting", colour: "dim" },
+  alert: { frames: ["=^o.o^=", "=^O.O^=", "=^!.!^=", "=^O.O^=", "=^o.o^="], intervalMs: 170, mode: "once", label: "Attention required", colour: "error" },
 };
-
 /**
  * Highest first. When several signals are active the first one in this list wins, not the most
  * recent event, so a late `streaming` signal cannot hide an approval prompt or a failure.

@@ -1,0 +1,269 @@
+/*
+ * The documentation in the Proof style, over mkdocs' built-in theme (Bootstrap 5): paper and ink,
+ * 2px rules, square corners, mono labels, tight grotesk headings and one loud colour (lime).
+ * Light and dark follow the theme's data-bs-theme switch. The website shares these tokens
+ * (website/site.css); see docs/website.md.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Martian+Mono:wght@400;500;600&display=swap");
+
+:root,
+[data-bs-theme="light"] {
+  --p-bg: #ececea;
+  --p-surface: #f5f5f3;
+  --p-fg: #000000;
+  --p-muted: #55554f;
+  --p-rule: #000000;
+  --p-hair: rgba(0, 0, 0, 0.2);
+  --p-accent: #c4ff0d;
+  --p-on-accent: #000000;
+  --p-link: #4f00ff;
+  --p-inv-bg: #000000;
+  --p-inv-fg: #ececea;
+  --p-code-bg: #000000;
+  --p-code-fg: #ececea;
+  --p-sans: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --p-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bs-body-bg: var(--p-bg);
+  --bs-body-color: var(--p-fg);
+  --bs-secondary-color: var(--p-muted);
+  --bs-tertiary-bg: var(--p-surface);
+  --bs-link-color: var(--p-link);
+  --bs-link-color-rgb: 79, 0, 255;
+  --bs-link-hover-color: var(--p-on-accent);
+  --bs-border-color: var(--p-rule);
+  --bs-border-radius: 0;
+  --bs-border-radius-sm: 0;
+  --bs-border-radius-lg: 0;
+  --bs-body-font-family: var(--p-sans);
+  --bs-font-monospace: var(--p-mono);
+  --bs-code-color: inherit;
+}
+
+[data-bs-theme="dark"] {
+  --p-bg: #000000;
+  --p-surface: #111111;
+  --p-fg: #ececea;
+  --p-muted: #a3a39d;
+  --p-rule: #ececea;
+  --p-hair: rgba(236, 236, 234, 0.25);
+  --p-link: #c4ff0d;
+  --p-inv-bg: #ececea;
+  --p-inv-fg: #000000;
+  --p-code-bg: #111111;
+  --bs-link-color-rgb: 196, 255, 13;
+}
+
+body {
+  background: var(--p-bg);
+  color: var(--p-fg);
+  font-family: var(--p-sans);
+}
+
+* {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+a:hover {
+  background: var(--p-accent);
+  color: var(--p-on-accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--p-link) !important;
+  outline-offset: 2px;
+}
+
+/* Top bar: paper, a 2px rule, mono uppercase navigation; the brand is an ink tile. */
+.navbar.bg-primary {
+  background: var(--p-bg) !important;
+  border-bottom: 2px solid var(--p-rule);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.navbar .navbar-brand {
+  background: var(--p-inv-bg);
+  color: var(--p-inv-fg) !important;
+  padding: 10px 16px;
+  margin-right: 8px;
+  font: 800 20px/1 var(--p-sans);
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+
+.navbar .navbar-brand:hover {
+  background: var(--p-accent);
+  color: var(--p-on-accent) !important;
+}
+
+.navbar .nav-link,
+.navbar .navbar-nav .nav-link {
+  color: var(--p-fg) !important;
+  font: 600 11px/1.5 var(--p-mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 16px 12px !important;
+}
+
+.navbar .nav-link:hover,
+.navbar .nav-link.active {
+  background: var(--p-accent);
+  color: var(--p-on-accent) !important;
+}
+
+.navbar-toggler {
+  border: 2px solid var(--p-rule);
+}
+
+[data-bs-theme="light"] .navbar-toggler-icon {
+  filter: invert(1);
+}
+
+.dropdown-menu {
+  background: var(--p-surface);
+  border: 2px solid var(--p-rule);
+  padding: 0;
+}
+
+.dropdown-item {
+  color: var(--p-fg);
+  font-size: 14px;
+  border-bottom: 1px solid var(--p-hair);
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus,
+.dropdown-item.active {
+  background: var(--p-accent);
+  color: var(--p-on-accent);
+}
+
+.dropdown-header {
+  font: 600 11px/1.5 var(--p-mono);
+  text-transform: uppercase;
+  color: var(--p-muted);
+}
+
+/* Sidebar table of contents. */
+.bs-sidebar.card {
+  background: var(--p-surface) !important;
+  border: 2px solid var(--p-rule);
+}
+
+.bs-sidebar .nav > li > a {
+  color: var(--p-fg);
+  border-left: 0;
+}
+
+.bs-sidebar .nav > li > a:hover,
+.bs-sidebar .nav > .active > a {
+  background: var(--p-accent);
+  color: var(--p-on-accent);
+  border-left: 0;
+}
+
+/* Headings: tight, heavy, negatively tracked. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--p-sans);
+  font-weight: 700;
+  color: var(--p-fg);
+}
+
+h1 {
+  font-size: clamp(32px, 4.4vw, 56px);
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--p-rule);
+  margin-bottom: 24px;
+}
+
+h2 {
+  font-size: 28px;
+  letter-spacing: -0.03em;
+  padding-top: 24px;
+  border-top: 2px solid var(--p-rule);
+  margin-top: 40px;
+}
+
+h3 {
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.col-md-9[role="main"] {
+  max-width: 64rem;
+}
+
+/* Code: ink grounds, paper text; inline code is bordered. */
+pre,
+pre code {
+  background: var(--p-code-bg) !important;
+  color: var(--p-code-fg) !important;
+  font: 400 12.5px/1.75 var(--p-mono);
+  border: 2px solid var(--p-rule);
+}
+
+pre code {
+  border: 0;
+}
+
+:not(pre) > code {
+  font-size: 0.78em;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  padding: 1px 4px;
+}
+
+/* Tables: a 2px frame, an inverted header, hairline rows. */
+table,
+.table {
+  --bs-table-bg: var(--p-surface);
+  --bs-table-color: var(--p-fg);
+  --bs-table-border-color: var(--p-hair);
+  border: 2px solid var(--p-rule);
+  font-size: 14px;
+}
+
+table th,
+.table th,
+.table > thead > tr > th {
+  background: var(--p-inv-bg) !important;
+  color: var(--p-inv-fg) !important;
+  font: 600 11px/1.5 var(--p-mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+blockquote {
+  border-left: 0;
+  border: 2px solid var(--p-rule);
+  background: var(--p-surface);
+  padding: 16px 24px;
+}
+
+hr {
+  border-top: 2px solid var(--p-rule);
+  opacity: 1;
+}
+
+.modal-content {
+  background: var(--p-surface);
+  border: 2px solid var(--p-rule);
+}
+
+.form-control {
+  background: var(--p-surface);
+  color: var(--p-fg);
+  border: 2px solid var(--p-rule);
+}
+
+footer {
+  border-top: 2px solid var(--p-rule);
+  color: var(--p-muted);
+}

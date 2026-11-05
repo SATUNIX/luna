@@ -1,6 +1,6 @@
 # Getting started
 
-pi-system is one pi package. You install it once, then a **profile** chooses which of its
+Luna is one pi package. You install it once, then a **profile** chooses which of its
 extensions load. It is delivered from its public git repository, `github.com/SATUNIX/luna`:
 releases are `vX.Y.Z` tags and the `next` channel follows `main`.
 
@@ -16,17 +16,17 @@ This is a **beta**. See [Beta status](beta.md) for what that means.
 npm install -g @earendil-works/pi-coding-agent
 ```
 
-The kit supports pi **0.85.1 and newer**; the version it is tested against is pinned in
+Luna supports pi **0.85.1 and newer**; the version it is tested against is pinned in
 `package.json` (currently 1.4.0). See [Supply chain](supply-chain.md#pi-versions).
 
-## 2. Install the kit
+## 2. Install Luna
 
 ```sh
 pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna` and runs
-`npm install --omit=dev` there, as it does for every git package. The kit has no runtime npm
+`npm install --omit=dev` there, as it does for every git package. Luna has no runtime npm
 dependencies of its own, so this reads nothing beyond git.
 
 To follow `main` instead of a release, leave the tag off:
@@ -46,7 +46,7 @@ node packages/core/install.ts --channel latest --profile lite
 
 `--channel latest` needs at least one release tag; until the first tag exists the installer stops
 with a message saying so, and `--channel next` follows `main`. The installer keeps exactly one copy
-of the kit registered, so this replaces a `pi install` copy rather than adding a second one.
+of Luna registered, so this replaces a `pi install` copy rather than adding a second one.
 
 ## 3. Start pi
 
@@ -56,7 +56,7 @@ pi
 
 The first time pi starts in a folder it asks whether to trust it (pi's own prompt: trusting lets
 the project's `.pi/` settings and extensions load). If pi warns `No models available`, run
-`/login` to sign in to a provider or add an API key; the kit works with any provider pi supports.
+`/login` to sign in to a provider or add an API key; Luna works with any provider pi supports.
 
 Then:
 
@@ -84,11 +84,11 @@ back if anything fails; nothing is reinstalled. The exact contents are in the ge
 
 ## 5. Staying up to date
 
-Once a day the kit checks in the background whether pi, the kit or a linked package can be
+Once a day Luna checks in the background whether pi, Luna or a linked package can be
 updated, and tells you. Run `/update` to apply updates. Every step is verified afterwards, and a
 failed step is reported as failed. See [Updates](updates.md).
 
-## Working on the kit itself
+## Working on Luna itself
 
 Register a checkout in place instead: edits take effect on `/reload`.
 

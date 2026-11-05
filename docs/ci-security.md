@@ -102,6 +102,10 @@ and the fix adds it as a fixed case to the matching example-based suite, as
 - The default token is read-only (`permissions: contents: read`); a job that needs more asks for it
   itself. Only the release jobs get `contents: write` (to create a GitHub Release) or
   `id-token: write` (npm trusted publishing), and only behind the explicit `dry-run == false` guard.
+  The one other exception is the website's `deploy` job in `pages.yml`, which gets `pages: write`
+  and `id-token: write` for `actions/deploy-pages`, runs only on `main` (the workflow has no
+  pull-request trigger), in the `github-pages` environment, and checks out no code
+  ([Website](website.md#deployment)).
 - `actions/checkout` never persists credentials.
 - `npm ci --ignore-scripts` everywhere: no dependency lifecycle script runs in CI.
 - The release jobs use no dependency cache and only act on a tag whose commit is on `main` and
@@ -255,6 +259,7 @@ administrator's login, because several settings are visible only to administrato
 | Secret scanning and push protection (non-provider patterns and validity checks are off: they need GitHub Secret Protection, which this repository does not have) | `security_and_analysis` | The push-protection row in [Gating](#gating) |
 | Dependabot alerts and security updates | `vulnerability_alerts`, `security_and_analysis` | Alerts on `main` ([Vulnerability management](vulnerability-management.md)) |
 | The `npm` environment: required reviewer, `v*` tags only | `environments.npm` | The optional npm publish in `release.yml` |
+| The `github-pages` environment: deploys from `main` only | `environments.github-pages` | The website deployment in `pages.yml` |
 
 These are not in the file and are set once: the dependency graph (`dependency-review` fails
 without it), code scanning (the SARIF uploads), and private vulnerability reporting (the route

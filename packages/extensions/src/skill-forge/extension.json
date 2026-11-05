@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "skill-forge",
-  "summary": "Deterministically mines trace-ledger sessions to synthesise a candidate SKILL.md into .pi/skill-proposals/ (never a live model, never auto-installed), scores the kit against the eval harness for a real regression baseline, and archives superseded skills. Powers the self-improvement loop.",
+  "summary": "Deterministically mines trace-ledger sessions to synthesise a candidate SKILL.md into .pi/skill-proposals/ (never a live model, never auto-installed), scores Luna against the eval harness for a real regression baseline, and archives superseded skills. Powers the self-improvement loop.",
   "category": "execution",
   "tier": "T4",
   "layer": 6,

@@ -54,7 +54,9 @@ export const ExpectedSchema = object({
   fork_pr_approval_policy: string(),
   security_and_analysis: record(string()),
   vulnerability_alerts: boolean(),
-  environments: record(object({ required_reviewers: array(string()), tag_policies: array(string()) })),
+  // Deployment rules: reviewers, and the tags and branches an environment deploys from (a
+  // `branch_policies` list for an environment that deploys from a branch, such as github-pages).
+  environments: record(object({ required_reviewers: array(string()), tag_policies: array(string()), branch_policies: optional(array(string())) })),
 });
 export type Expected = Infer<typeof ExpectedSchema>;
 
@@ -89,7 +91,7 @@ export interface Live {
   fork_pr_approval_policy: unknown;
   security_and_analysis: Record<string, unknown>;
   vulnerability_alerts: boolean;
-  environments: Record<string, { required_reviewers: string[]; tag_policies: string[]; custom_branch_policies: unknown } | null>;
+  environments: Record<string, { required_reviewers: string[]; tag_policies: string[]; branch_policies: string[]; custom_branch_policies: unknown } | null>;
 }
 
 /** Read every setting the expected file names. GET requests only. */
@@ -142,10 +144,9 @@ export function collectLive(get: Get, expected: Expected): Live {
       .flatMap((r) => list(field(r, "reviewers")).map((x) => text(field(field(x, "reviewer"), "login") ?? field(field(x, "reviewer"), "name"))));
     const policy = field(env.data, "deployment_branch_policy");
     const custom = field(policy, "custom_branch_policies");
-    const tags = custom === true
-      ? list(field(ok(`${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies`), "branch_policies")).filter((p) => field(p, "type") === "tag").map((p) => text(field(p, "name")))
-      : [];
-    environments[name] = { required_reviewers: reviewers.sort(), tag_policies: tags.sort(), custom_branch_policies: custom };
+    const policies = custom === true ? list(field(ok(`${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies`), "branch_policies")) : [];
+    const named = (type: string): string[] => policies.filter((p) => (field(p, "type") ?? "branch") === type).map((p) => text(field(p, "name"))).sort();
+    environments[name] = { required_reviewers: reviewers.sort(), tag_policies: named("tag"), branch_policies: named("branch"), custom_branch_policies: custom };
   }
   return {
     rulesets,
@@ -199,7 +200,8 @@ export function drift(expected: Expected, live: Live): string[] {
     if (!got) { out.push(`environment ${name}: missing`); continue; }
     differ(`environment ${name}: required_reviewers`, [...want.required_reviewers].sort(), got.required_reviewers);
     differ(`environment ${name}: tag_policies`, [...want.tag_policies].sort(), got.tag_policies);
-    if (got.custom_branch_policies !== true) out.push(`environment ${name}: deployment is not limited to the tag policies`);
+    differ(`environment ${name}: branch_policies`, [...(want.branch_policies ?? [])].sort(), got.branch_policies);
+    if (got.custom_branch_policies !== true) out.push(`environment ${name}: deployment is not limited to its tag and branch policies`);
   }
   return out;
 }

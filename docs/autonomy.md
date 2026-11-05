@@ -324,7 +324,10 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
     `templateOptions.integration.controlPaths` (globs, for example the scripts your checks run) or
     the `scripts` of any `package.json` is not merged, and no model is asked, unless
     `templateOptions.integration.allowControlChanges` is `true` (which `plan` warns about). This
-    applies with the review turned off too. Package-manager configuration is `.npmrc`, `.yarnrc`,
+    applies with the review turned off too. The one exception: the root `package.json` may gain new
+    `smoke:<name>` scripts whose whole command is `node tests/<name>-smoke.ts`, with every existing
+    script unchanged, so a cycle can add a test (`check:all` fails on a test no script names); the new
+    test file is listed to the reviewer like any other. Package-manager configuration is `.npmrc`, `.yarnrc`,
     `.yarnrc.yml`, `.yarn/plugins/`, `.yarn/releases/`, `.pnpmfile.*`, `pnpm-workspace.yaml` and
     `bunfig.toml` at any depth: it can change what every `npm run` executes;
   - a diff longer than 60,000 characters (lockfiles excluded) is not merged; it is never cut down

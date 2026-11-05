@@ -42,6 +42,7 @@ import { runRegistry, type AgentRecord, type AgentStatus, type PhaseRecord, type
 import type { ToolContext } from "./types.ts";
 import { META_NAME } from "./wf-meta.ts";
 import { rememberDigest } from "./workflow-tools.ts";
+import { holdInput } from "./shared/input-owner.ts";
 
 // --- formatting -------------------------------------------------------------------------------
 
@@ -720,45 +721,52 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
     }
     return;
   }
-  await ctx.ui.custom<undefined>(
-    (tui, theme, keybindings, done) => {
-      let closed = false;
-      const offRegistry = registry.subscribe(() => tui.requestRender());
-      // Elapsed times tick while the panel is open.
-      const timer = setInterval(() => tui.requestRender(), 1000);
-      timer.unref?.();
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        clearInterval(timer);
-        offRegistry();
-      };
-      const panel = new WorkflowPanel(
-        {
-          registry,
-          narrator: narration,
-          cwd,
-          paint: themePaint(theme),
-          requestRender: () => tui.requestRender(),
-          close: () => {
-            cleanup();
-            done(undefined);
+  // While the panel is open it owns the keyboard: an approval prompt would take focus from it and
+  // keys typed here could answer the card. The hold is released on every exit (done, Esc, throw).
+  const release = holdInput("the workflow panel");
+  try {
+    await ctx.ui.custom<undefined>(
+      (tui, theme, keybindings, done) => {
+        let closed = false;
+        const offRegistry = registry.subscribe(() => tui.requestRender());
+        // Elapsed times tick while the panel is open.
+        const timer = setInterval(() => tui.requestRender(), 1000);
+        timer.unref?.();
+        const cleanup = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(timer);
+          offRegistry();
+        };
+        const panel = new WorkflowPanel(
+          {
+            registry,
+            narrator: narration,
+            cwd,
+            paint: themePaint(theme),
+            requestRender: () => tui.requestRender(),
+            close: () => {
+              cleanup();
+              done(undefined);
+            },
           },
-        },
-        runId,
-      );
-      return {
-        render: (width: number) => panel.render(width),
-        invalidate: () => {},
-        handleInput: (data: string) => {
-          const key = keyOf(data, keybindings);
-          if (key) panel.press(key);
-        },
-        dispose: cleanup,
-      };
-    },
-    supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
-  );
+          runId,
+        );
+        return {
+          render: (width: number) => panel.render(width),
+          invalidate: () => {},
+          handleInput: (data: string) => {
+            const key = keyOf(data, keybindings);
+            if (key) panel.press(key);
+          },
+          dispose: cleanup,
+        };
+      },
+      supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
+    );
+  } finally {
+    release();
+  }
 }
 
 // --- status line ------------------------------------------------------------------------------

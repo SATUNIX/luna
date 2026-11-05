@@ -89,6 +89,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A human prompt no longer opens under the control-center hub or the workflow panel. A new input-owner
+  registry (`whenInputFree`, generated into each package) holds firewall approvals, child approvals,
+  `ask_human` and the pentest action approval until the overlay closes. These cards start on an
+  affirmative choice, so Enter typed into the overlay used to answer them. A hold adds a wait and
+  grants nothing: an abort during the hold blocks the action, a deferred card gets only the time left
+  on its request, and an expired request is dropped before the hold check (V-02,
+  `tests/firewall-overlay-queue-smoke.ts`, `tests/governance-smoke.ts`).
 - Both no-delegation controls now cover the `workflow` tool: E1 hides it with the other
   delegation tools and `openRunScope()` refuses with code `tier` when the tier's maximum total is 0,
   so a pi without active-tool control launches nothing either, and an engagement blocks it like

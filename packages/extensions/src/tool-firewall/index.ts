@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFileSafe, rotateFileSafe, writeFileSafe } from "./shared/safe-fs.ts";
+import { inputHeld, whenInputFree } from "./shared/input-owner.ts";
 import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
@@ -1135,6 +1136,21 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     if (!ctx?.hasUI && policyName === "pentest" && tier === "high") return blocked(`tool-firewall: denied ${toolName} [${TAG.hard_deny}] — ${summary}. The pentest policy does not approve high-impact actions without an interactive operator.`, "policy", "hard_deny");
 
     if (uncertain) audit({ event: "tool_escalated", outcome: "uncertain", why: uncertainWhy, toolName, actionHash: hash, operator: ctx?.hasUI ? "interactive" : "console" });
+
+    // An open overlay owns the keyboard (V-02): pi's `select`/`confirm` pushes a dialog and calls
+    // `tui.setFocus`, so a card shown meanwhile takes focus from the box and keys typed into it can
+    // answer the card. Wait for the overlay to close with one notice, outside `boundedPrompt`, so the
+    // prompt timeout only starts when the card is actually shown. The broker path below is unchanged.
+    if (ctx?.hasUI && (typeof ctx.ui?.select === "function" || typeof ctx.ui?.confirm === "function")) {
+      const holder = inputHeld();
+      if (holder) {
+        ctx.ui?.notify?.(`tool-firewall: ${toolName} is waiting for approval; close ${holder} to see it.`, "warning");
+        // Re-check after each wait: another overlay can take the keyboard before the card is shown.
+        while (inputHeld()) {
+          if ((await whenInputFree(ctx?.signal)) === "aborted") return noAnswer("aborted", "prompt", 0);
+        }
+      }
+    }
 
     if (ctx?.hasUI && typeof ctx.ui?.select === "function") {
       const res = await boundedPrompt(ctx, (o) => ctx.ui.select(card, choices, o));

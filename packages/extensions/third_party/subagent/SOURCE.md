@@ -160,3 +160,6 @@
     tool call is no longer killed with `stopReason: "timeout"`. It rearms for a full timeout after
     the last end, a limit that has fired is not rearmed, and the wall-clock ceiling still applies
     (`tests/subagent-progress-smoke.ts`).
+  - **Workflow panel holds input (2026-11-05):** `wf-panel.ts` takes a hold from the generated
+    `shared/input-owner.ts` while the panel is open, so a human prompt waits for it to close
+    (`tests/firewall-overlay-queue-smoke.ts`).

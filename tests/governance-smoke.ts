@@ -236,6 +236,45 @@ async function testBrokerResolvesWhenAuditFails() {
   }
 }
 
+// 7b. V-02: an open overlay owns the keyboard. The pentest card starts on Yes, so a key typed into the
+// overlay must not reach it: the card waits for the hold to end, and an abort during the hold blocks.
+async function testApprovalWaitsForHeldInput() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-held-input-"));
+  writeCompleteEngagement(workspace);
+  const restoreDataRoot = setEnv("PENTEST_DATA_ROOT", path.join(workspace, "pentest-data"));
+  const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+  try {
+    await withCwd(workspace, async () => {
+      const pi = await loadGovernance(workspace);
+      let confirms = 0;
+      const ctx = { hasUI: true, ui: { confirm: async () => { confirms++; return true; } } };
+      const input = { tool: "remote_request", url: "https://example.test/" };
+
+      const release = holdInput("the test box");
+      let settled = false;
+      const call = (pi.handlers.get("tool_call")({ toolName: "mcp", input }, ctx) as Promise<Decision | undefined>).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(confirms, 0, "the card must not appear while an overlay holds input");
+      assert.equal(settled, false, "the tool call must stay unresolved while input is held");
+      release();
+      assert.equal((await call)?.block, undefined, "after the hold the operator's answer decides");
+      assert.equal(confirms, 1, "the card is shown once, after the hold");
+
+      const held = holdInput("the test box");
+      const abort = new AbortController();
+      const aborted = pi.handlers.get("tool_call")({ toolName: "mcp", input, signal: abort.signal }, ctx) as Promise<Decision | undefined>;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      abort.abort();
+      const result = await aborted;
+      held();
+      assert.equal(result?.block, true, "aborting while input is held must block");
+      assert.equal(confirms, 1, "an aborted request never shows the card");
+    });
+  } finally {
+    restoreDataRoot();
+  }
+}
+
 // 8. F3 regression: `tool-policy.json` containing the JSON literal `null` is not a
 // valid policy object. Pre-fix loadPolicy returned it verbatim, so metadataFor did
 // `policy.tools` on null and the tool_call handler threw a TypeError. It must instead
@@ -288,6 +327,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["env templates are not protected paths", testEnvTemplatesAreNotProtectedPaths],
   ["broker settles, and blocks the action, when the audit chain is corrupt", testBrokerResolvesWhenAuditFails],
   ["an unauditable allow fails closed; read-only tools stay available", testUnauditableAllowFailsClosed],
+  ["a held overlay defers the pentest approval and an abort blocks it", testApprovalWaitsForHeldInput],
   ["null tool-policy.json falls back to the default empty policy", testNullPolicyFallsBackToEmptyPolicy],
 ];
 

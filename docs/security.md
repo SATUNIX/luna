@@ -135,9 +135,16 @@ are pinned by `tests/governance-smoke.ts`.
    say-so.** A high action runs without the operator only as an exact repeat of an approval you
    gave. A judge block whose confidence is not high goes to the operator rather than being final,
    and an unsure judge never becomes an allow.
-6. **Nothing waits forever.** An approval card, the human console and the judge all have
-   timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
-   `UNCERTAIN` and nothing runs. Aborting ends every wait.
+6. **Nothing waits forever unattended.** An approval card, the human console and the judge all
+   have timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
+   `UNCERTAIN` and nothing runs. While an overlay you opened (the hub or the workflow panel) is
+   open, a firewall approval, session or brokered, a pentest action approval and an `ask_human`
+   question wait for you to close it. The trust prompts for project-local agents and project workflows, the resume prompt for
+   interrupted writer steps and the reduced-sandbox prompt are not held yet. The timeout of a session
+   approval or question starts when the card is shown. A brokered child request is deferred and
+   keeps its console timeout, so it can expire behind the overlay and fail closed, and a card shown
+   after the wait runs only for the time left. Aborting ends every wait
+   (`tests/firewall-overlay-queue-smoke.ts`, `tests/governance-smoke.ts`).
 7. **Every child agent is at least as protected as its parent.** `delegation-guard` starts a child
    only with the protections the parent registered; inside the child it checks that they loaded
    and otherwise blocks every tool and exits with code 78. This applies to grandchildren and to

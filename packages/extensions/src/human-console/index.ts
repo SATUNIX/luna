@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
+import { inputHeld, whenInputFree } from "./shared/input-owner.ts";
 
 const POLL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 900000;
@@ -238,6 +239,11 @@ export default function humanConsole(pi: ExtensionAPI) {
       audit(ctx.cwd, { event: offer.reason === "sticky_deny" ? "workflow_approval_sticky_deny" : "workflow_approval_run_grant", runId: run.runId, id: run.id, actionHash: run.hash });
       return;
     }
+    // No card while an overlay owns the keyboard (see processOne); give the slot back and retry.
+    if (inputHeld()) {
+      runBroker.abandon(run);
+      return;
+    }
     let settled = false;
     try {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}`;
@@ -288,12 +294,24 @@ export default function humanConsole(pi: ExtensionAPI) {
         await processRunApproval(ctx, file, request, run, digest);
         return;
       }
-      const timeoutMs = requestedTimeout(request, DEFAULT_TIMEOUT_MS);
+      // A deferred request may have run out behind an overlay. Its requester has failed closed, so
+      // there is nothing to ask; this runs before the hold check so that the drop is not held up.
+      const deadline = deadlineOf(request);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        try { fs.unlinkSync(file); } catch { /* already removed */ }
+        return;
+      }
+      // An open overlay owns the keyboard (V-02): `select` would take focus from it, and keys typed
+      // into it could answer a child's card. Leave the pending file for a later poll; the requester's
+      // own deadline still fails closed. The check is per request, not per scan, so that a run grant
+      // or a sticky deny, which needs no card, is not stalled behind the workflow panel.
+      if (inputHeld()) return;
+      // The card runs for the time left, not the full timeout: past the deadline an answer is discarded.
       let result: Answer;
-      if (request.kind === "approval") result = await answerApproval(ctx, request, timeoutMs);
-      else result = await answerQuestion(ctx, request, undefined, timeoutMs);
-      const createdMs = Date.parse(String(request.createdAt)) || Date.now();
-      if (Date.now() > createdMs + (timeoutMs ?? DEFAULT_TIMEOUT_MS)) {
+      if (request.kind === "approval") result = await answerApproval(ctx, request, remainingMs);
+      else result = await answerQuestion(ctx, request, undefined, remainingMs);
+      if (Date.now() >= deadline) {
         // The requester gave up at its deadline (brokerRequest unlinks both files in its
         // finally); do not recreate an orphan resolved file. Drop the pending file too so
         // the watcher does not re-answer it forever.
@@ -346,8 +364,12 @@ export default function humanConsole(pi: ExtensionAPI) {
     let answer: string | null;
     // An interactive question is bounded too: a UI that never answers (a closed terminal, an RPC client that ignores
     // the request) must not park the agent for ever. Without a timeoutMs of its own it gets the console's timeout.
-    if (ctx.hasUI && ctx.ui) answer = (await answerQuestion(ctx, { kind: "question", ...params }, signal, requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)))).answer;
-    else {
+    if (ctx.hasUI && ctx.ui) {
+      // An open overlay owns the keyboard here too (see processOne): `select` would take focus and Enter
+      // would return the first option as the human's answer. The timeout starts when the card is shown.
+      if ((await whenInputFree(signal)) === "aborted") return { content: [{ type: "text" as const, text: "No human answered in time." }], details: { answer: null } };
+      answer = (await answerQuestion(ctx, { kind: "question", ...params }, signal, requestedTimeout(params, Math.max(1, Number(process.env.PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS)))).answer;
+    } else {
       const id = crypto.randomUUID(); audit(ctx.cwd, { event: "ask_human_pending", id });
       const outcome = await brokerRequest(ctx.cwd, { id, kind: "question", requester: requester(ctx), ...params }, signal);
       answer = outcome.answer;

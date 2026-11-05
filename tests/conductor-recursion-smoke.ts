@@ -205,8 +205,8 @@ async function testSiblingDelegationToolsAreBlocked(): Promise<void> {
   try {
     const { pi } = await setup(ws);
     const module = await loadModule<ConductorModule>("extensions/conductor/index.ts");
-    assert.deepEqual([...module.ENGAGEMENT_BLOCKED_TOOLS], ["subagent", "workflow_run", "dual_review"]);
-    for (const toolName of ["workflow_run", "dual_review"]) {
+    assert.deepEqual([...module.ENGAGEMENT_BLOCKED_TOOLS], ["subagent", "workflow_run", "workflow", "dual_review"]);
+    for (const toolName of ["workflow_run", "workflow", "dual_review"]) {
       const decision = await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} });
       assert.deepEqual(decision, { block: true, reason: `conductor: an engagement is active, so ${toolName} is blocked; use dispatch_specialist for bounded delegation` });
     }
@@ -220,7 +220,7 @@ async function testSiblingDelegationToolsAreBlocked(): Promise<void> {
     assert.equal(engagement(ws).phase, "close-out", notes.map((note) => note.message).join("; "));
     for (const toolName of module.ENGAGEMENT_BLOCKED_TOOLS) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is allowed again once the engagement is closed`);
     fs.rmSync(path.join(ws, ".pi", "engagement", "engagement.json"));
-    for (const toolName of ["workflow_run", "dual_review"]) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is only constrained during an engagement`);
+    for (const toolName of ["workflow_run", "workflow", "dual_review"]) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is only constrained during an engagement`);
   } finally { rmWorkspace(ws); }
 }
 

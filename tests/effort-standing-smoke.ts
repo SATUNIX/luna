@@ -24,7 +24,7 @@ import type * as PolicyModule from "../packages/extensions/src/effort/policy.ts"
 import type * as WfTool from "../packages/extensions/third_party/subagent/wf-tool.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
-type EffortView = Omit<typeof EffortModule, "default"> & { default: (api: FakePi["api"] & { appendEntry: (t: string, d?: unknown) => void }) => void };
+type EffortView = Omit<typeof EffortModule, "default"> & { default: (api: FakePi["api"] & { appendEntry: (t: string, d?: unknown) => void; setActiveTools: (names: string[]) => void }) => void };
 
 interface FirewallDecision { block?: boolean; reason?: string }
 type FwHandler = (event: object, ctx: object) => Promise<FirewallDecision | undefined>;
@@ -58,7 +58,8 @@ interface Entry { type: "custom"; customType: string; data: unknown }
 async function boot({ hasUI = true, answer = (o: string[]): string | undefined => o[0], tools = ["read", "bash", "subagent", "workflow"], entries = [] as Entry[], reason = "startup" } = {}) {
   const pi = fakePi();
   const appended: Entry[] = [...entries];
-  mod.default({ ...pi.api, getActiveTools: () => tools, appendEntry: (customType: string, data?: unknown) => { appended.push({ type: "custom", customType, data }); } });
+  let activeTools = [...tools];
+  mod.default({ ...pi.api, getActiveTools: () => [...activeTools], setActiveTools: (names: string[]) => { activeTools = [...names]; }, appendEntry: (customType: string, data?: unknown) => { appended.push({ type: "custom", customType, data }); } });
   const notes: Note[] = [];
   const selects: Array<{ title: string; options: string[] }> = [];
   let aborts = 0;
@@ -82,7 +83,7 @@ async function boot({ hasUI = true, answer = (o: string[]): string | undefined =
   const command = (args: string): Promise<unknown> => pi.commands.get("effort").handler(args, ctx);
   const turn = async (event: Record<string, unknown> = { messageType: "user", prompt: "go" }) => pi.handlers.get("before_agent_start")({ systemPrompt: "BASE", ...event }, ctx);
   const wake = () => turn({ messageType: "custom", message: { customType: "luna-workflow-result", content: "done", display: true } });
-  return { notes, selects, command, turn, wake, registry, appended, aborts: () => aborts, last: () => notes.at(-1)?.m ?? "" };
+  return { notes, selects, command, turn, wake, registry, appended, activeTools: () => [...activeTools], aborts: () => aborts, last: () => notes.at(-1)?.m ?? "" };
 }
 
 const yes = (options: string[]): string | undefined => options.find((o) => o.startsWith("Yes"));
@@ -204,6 +205,22 @@ const tests: Record<string, () => void | Promise<void>> = {
     const r = await noTool.turn();
     assert.doesNotMatch(promptOf(r), /standing mode/, "no workflow tool: no standing block");
     assert.equal(messageOf(r), null);
+  },
+
+  "ultracode from E1 counts the workflow tool effort hid itself, and the next turn restores it": async () => {
+    fresh();
+    const s = await boot({ answer: yes });
+    await s.command("minimal");
+    await s.turn();
+    assert.equal(s.activeTools().includes("workflow"), false, "E1 hid the tool");
+    await s.command("ultracode");
+    assert.equal(s.registry().standing().on, true);
+    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the switch-on notice");
+    await s.command("ultracode status");
+    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the status line");
+    const prompt = promptOf(await s.turn());
+    assert.ok(s.activeTools().includes("workflow"), "the next turn restored the tool");
+    assert.match(prompt, /standing mode/);
   },
 
   "off returns to opt-in and revokes the pre-authorisation; a lower tier turns it off too": async () => {

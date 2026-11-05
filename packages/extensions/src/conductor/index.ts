@@ -65,7 +65,7 @@ const LOCK_STALE_MS = 60_000;
 // pi directly and evade the wrapper-owned durable reservation boundary.
 const SPECIALIST_ALLOWED_TOOLS = new Set(["read", "grep", "find", "ls", "write", "edit"]);
 const DEFAULT_PROTECTED_PATHS = [".env", ".git/", "node_modules/"];
-export const ENGAGEMENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set(["subagent", "workflow_run", "dual_review"]);
+export const ENGAGEMENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set(["subagent", "workflow_run", "workflow", "dual_review"]);
 
 function engagementFile(cwd: string): string {
   return path.join(cwd, ".pi", "engagement", "engagement.json");

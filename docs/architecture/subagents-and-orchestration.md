@@ -146,8 +146,8 @@ flowchart TD
   (`tests/conductor-validator-smoke.ts`, `tests/conductor-recursion-smoke.ts`). `dual-review` sends
   its reviewer prompt and diff the same way (`tests/dual-review-smoke.ts`).
 - **Other delegation tools.** While `.pi/engagement/engagement.json` holds an engagement record whose
-  phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run` and
-  `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
+  phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run`, `workflow`
+  and `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
   child. Advancing the engagement to `close-out` with `/engagement phase close-out` lifts the block. In
   a headless session the only delegation path while the block holds is a specialist whose digest is in
   `PI_KIT_TRUSTED_PROJECT_ROLES` (`tests/conductor-recursion-smoke.ts`).
@@ -237,6 +237,7 @@ readable ledger, it runs unbudgeted rather than not at all. It never skips the p
 |---|---|---|---|
 | `subagent` tool (single, parallel, chain) | `discretionary` | isolated | Each task or chain step reserves its own slot. The `effort` argument can ask for a lower tier. |
 | `workflow_run` tool | `discretionary` | isolated | Hidden together with `subagent` at E1. |
+| `workflow` tool | `workflow` | isolated | Hidden at E1; `openRunScope` refuses a run at a tier with maximum total 0 (code `tier`), so E1 launches nothing even without active-tool control. |
 | `/workflow run` and `/workflow resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
 | Completion reviewer (`/verify`, `verify_completion`) | `mandatory` | isolated | Role `reviewer`, read-only, tools `read,grep,find,ls`. |
 | `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tool list is non-empty and names only `read`, `grep`, `find` and `ls`, the same rule as `subagent` (`tests/conductor-specialist-bounds-smoke.ts`). |
@@ -276,7 +277,7 @@ flowchart TD
 ```
 
 If the policy or the ledger cannot be read, discretionary, recovery and user launches are refused.
-At E1 the `subagent` and `workflow_run` tools are taken out of the prompt for the turn, because they
+At E1 the `subagent`, `workflow_run` and `workflow` tools are taken out of the prompt for the turn, because they
 could only be refused, and they return while the recovery budget is open or once a higher tier is
 chosen.
 

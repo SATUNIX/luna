@@ -667,7 +667,7 @@ const tests: Record<string, () => void | Promise<void>> = {
     const w = world();
     try {
       const b = boot();
-      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "subagent_status", "subagent_stop"];
+      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "workflow_status", "workflow_control", "subagent_status", "subagent_stop"];
       const calls: string[][] = [];
       let current = [...active];
       const api: ToolControlApi = b.pi.api;
@@ -676,8 +676,8 @@ const tests: Record<string, () => void | Promise<void>> = {
       saveDefault("minimal");
       await b.start();
       await b.turn();
-      assert.ok(!current.includes("subagent") && !current.includes("workflow_run"), "delegation tools are hidden at E1");
-      assert.ok(current.includes("subagent_status") && current.includes("subagent_stop"), "the read/stop tools stay so running children can still be inspected and stopped");
+      assert.ok(!current.includes("subagent") && !current.includes("workflow_run") && !current.includes("workflow"), "delegation tools are hidden at E1");
+      assert.ok(current.includes("subagent_status") && current.includes("subagent_stop") && current.includes("workflow_status") && current.includes("workflow_control"), "the read/stop tools stay so running children can still be inspected and stopped");
       assert.equal(calls.length, 1);
       await b.turn(); // no change, no churn
       assert.equal(calls.length, 1, "setActiveTools is not called again when nothing changed");
@@ -685,23 +685,63 @@ const tests: Record<string, () => void | Promise<void>> = {
       current = current.filter((t) => t !== "edit");
       await b.command("standard");
       await b.turn();
-      assert.ok(current.includes("subagent") && current.includes("workflow_run"), "raising effort restores them at the next turn");
+      assert.ok(current.includes("subagent") && current.includes("workflow_run") && current.includes("workflow"), "raising effort restores them at the next turn");
       assert.ok(!current.includes("edit"), "tools this extension did not remove stay removed");
       // recovery opens the delegation tools even at E1 (read-only scouts), then closes again
       await b.command("minimal");
       await b.turn();
-      assert.ok(!current.includes("subagent"));
+      assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       b.registry().setRecoveryActive(true);
-      assert.ok(current.includes("subagent"), "recovery makes the tool available");
+      assert.ok(current.includes("subagent") && current.includes("workflow"), "recovery makes the delegation tools available");
       b.registry().setRecoveryActive(false);
       await b.turn();
-      assert.ok(!current.includes("subagent"));
+      assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       // a pi without active-tool control is fine
       const bare = boot();
       const bareApi: ToolControlApi = bare.pi.api;
       delete bareApi.getActiveTools;
       await bare.start();
       await bare.turn();
+    } finally { w.cleanup(); }
+  },
+
+  // S2: a script-workflow run scope is refused at E1, so E1 launches nothing even on a pi without
+  // active-tool control. Recovery restores the workflow tool but not the scope, and a user-typed
+  // /workflow run is a "user" launch, which the tier does not bound.
+  "E1 refuses a workflow run scope, and a user-directed workflow launch still works": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("minimal");
+      await b.start();
+      await b.turn();
+      // The registry is per extension instance: keep this one, because booting another replaces the global.
+      const reg = b.registry();
+      const scope = reg.openRunScope("e1-run");
+      assert.equal(scope.ok, false);
+      assert.equal(scope.code, "tier");
+      assert.match(scope.reason, /E1 Minimal does not delegate/);
+      assert.match(scope.reason, /\/effort/);
+      // A pi without active-tool control cannot hide the tool, so the scope refusal is the boundary.
+      const bare = boot();
+      const bareApi: ToolControlApi = bare.pi.api;
+      delete bareApi.getActiveTools;
+      delete bareApi.setActiveTools;
+      saveDefault("minimal");
+      await bare.start();
+      await bare.turn();
+      assert.equal(bare.registry().openRunScope("e1-bare").ok, false, "no active-tool control: the scope still refuses");
+      // Recovery restores the workflow tool, but a run scope still refuses at E1.
+      reg.setRecoveryActive(true);
+      assert.equal(reg.openRunScope("e1-recovery").ok, false, "recovery does not open a run scope at E1");
+      reg.setRecoveryActive(false);
+      // /workflow run is a user launch: it is not the agent's own initiative, so E1 allows it.
+      const user = reg.reserve({ kind: "user", role: "worker" });
+      assert.equal(user.ok, true, "a user-directed workflow launch is not blocked by the tier");
+      // Raising effort opens a script-workflow run scope.
+      await b.command("standard");
+      await b.turn();
+      assert.equal(reg.openRunScope("e3-run").ok, true);
     } finally { w.cleanup(); }
   },
 

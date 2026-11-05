@@ -118,7 +118,7 @@ export interface EffortRegistry {
   /**
    * Open a script-workflow run's scope in this session's workflow ledger. The scope is pinned: it
    * outlives the per-turn ledger rotation, so a background run keeps its count across user turns.
-   * Refused in child processes and when the policy is unavailable.
+   * Refused in child processes, when the policy is unavailable, and at a tier that allows no child invocations (code "tier").
    */
   openRunScope(runId: string): RunScope;
   /**
@@ -136,7 +136,7 @@ function unbudgeted(childTier: string): Reservation {
 }
 
 /** Tools through which the model starts children of its own accord. Hidden while the tier allows none. */
-export const DELEGATION_TOOLS = ["subagent", "workflow_run"];
+export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow"];
 
 const USAGE_REFRESH_MS = 2000;
 const LEDGER_KEEP_MS = 24 * 60 * 60 * 1000;
@@ -397,7 +397,7 @@ export default function (pi: ExtensionAPI) {
 
   /**
    * Keep the model-launchable delegation tools out of the prompt while the tier allows no
-   * delegation (E1): their descriptions cost about 850 tokens a turn and could only ever be
+   * delegation (E1): their descriptions cost about 1,200 tokens a turn and could only ever be
    * refused. They come back at the next user turn after a higher tier is chosen, and while the
    * trusted recovery extension has recovery active (recovery may start read-only scouts). Only
    * tools this extension removed are ever restored; a tool the profile or operator removed stays
@@ -482,10 +482,13 @@ export default function (pi: ExtensionAPI) {
 
   const topTier = (): string | null => policy?.tiers[policy.tiers.length - 1]?.id ?? null;
 
-  /** Whether the workflow tool is in the active tool set (the standing block is shown only then). */
+  /**
+   * Whether the workflow tool is in the active tool set (the standing block is shown only then), or
+   * is out of it only because this extension hid it at E1 and will restore it next turn.
+   */
   function workflowToolActive(): boolean {
     try {
-      return pi.getActiveTools().includes(WORKFLOW_TOOL);
+      return pi.getActiveTools().includes(WORKFLOW_TOOL) || hidden.has(WORKFLOW_TOOL);
     } catch {
       return false;
     }
@@ -521,6 +524,9 @@ export default function (pi: ExtensionAPI) {
     openRunScope(runId: string): RunScope {
       if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
       if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so a workflow run cannot be budgeted.` };
+      // A tier that allows no child invocations cannot budget a run, so it refuses before any launch.
+      // This is the boundary on a pi without active-tool control, where the workflow tool stays visible.
+      if (limitsFor(active.tier).maxTotal === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
       if (runFiles.has(runId)) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" already has a scope; a run id is opened once` };
       let file: string;
       try {

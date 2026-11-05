@@ -89,6 +89,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Both no-delegation controls now cover the `workflow` tool: E1 hides it with the other
+  delegation tools and `openRunScope()` refuses with code `tier` when the tier's maximum total is 0,
+  so a pi without active-tool control launches nothing either, and an engagement blocks it like
+  `subagent`. A typed `/workflow run` still works at E1, `workflow_status` and `workflow_control` stay
+  active, and `/effort ultracode` from E1 counts the tool effort hid itself as available
+  (`tests/effort-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`).
+
 - A subagent running a long silent tool call is no longer killed with `stopReason: "timeout"`: the idle
   watchdog is held from `tool_execution_start` until the matching `tool_execution_end` and rearms for a
   full timeout after the last open call ends. A child silent outside a tool is still killed. The

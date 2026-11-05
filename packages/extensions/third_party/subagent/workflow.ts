@@ -51,6 +51,8 @@ export interface StepDef {
   gate?: { pass: string; retry: string; maxLoops: number };
   continueOnError?: boolean;
   parallel?: StepDef[];
+  // The step's answer is more steps, or its result (inline plans only; plan.ts).
+  expand?: boolean;
 }
 
 export interface WorkflowDef {
@@ -83,7 +85,7 @@ const strList = (v: unknown): string[] | undefined =>
 // always accepted. The frontmatter is outside data, so every field is checked before use.
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
+function parseStep(raw: unknown, where: string, errors: string[], inline: boolean): StepDef {
   if (!isObject(raw)) {
     errors.push(`${where}: a step must be a mapping`);
     return { id: "invalid" };
@@ -91,8 +93,10 @@ function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
   const id = toText(raw.id ?? "");
   if (!ID.test(id)) errors.push(`${where}: id "${id}" must match ${ID}`);
   const step: StepDef = { id };
+  if (raw.expand !== undefined && !inline) errors.push(`${where}: expand works only in an inline plan`);
+  if (raw.expand === true) step.expand = true;
   if (Array.isArray(raw.parallel)) {
-    const members: StepDef[] = raw.parallel.map((s: unknown, i: number) => parseStep(s, `${where}.parallel[${i}]`, errors));
+    const members: StepDef[] = raw.parallel.map((s: unknown, i: number) => parseStep(s, `${where}.parallel[${i}]`, errors, inline));
     step.parallel = members;
     for (const inner of members) if (inner.parallel) errors.push(`${where}: parallel groups cannot nest`);
     for (const inner of members) if (inner.gate) errors.push(`${where}: parallel member ${inner.id}: a gate belongs on the group, not on a member`);
@@ -131,9 +135,10 @@ function parseStep(raw: unknown, where: string, errors: string[]): StepDef {
 /**
  * The step list of a saved workflow or an inline plan (plan.ts): each step parsed, ids unique across
  * the whole workflow, references resolved. Problems go to `errors`; the steps are usable without any.
+ * `inline` is a plan's: only a plan may use `expand`, whose result nobody reviewed.
  */
-export function parseSteps(raw: unknown, errors: string[]): StepDef[] {
-  const steps: StepDef[] = Array.isArray(raw) ? raw.map((s: unknown, i: number) => parseStep(s, `steps[${i}]`, errors)) : [];
+export function parseSteps(raw: unknown, errors: string[], options: { inline?: boolean } = {}): StepDef[] {
+  const steps: StepDef[] = Array.isArray(raw) ? raw.map((s: unknown, i: number) => parseStep(s, `steps[${i}]`, errors, options.inline === true)) : [];
   if (!steps.length) errors.push("steps: at least one step is required");
   // Ids are unique across the whole workflow (parallel members included); references resolve.
   const order: string[] = [];
@@ -305,6 +310,12 @@ export interface StepState {
   outputTokens?: number;
   startedAt?: string;
   endedAt?: string;
+  // An `expand` step: its answer has been acted on, so a resume never reads it again.
+  expanded?: true | undefined;
+  // An `expand` step: why the host refused its steps; the run reports the omission.
+  omitted?: string | undefined;
+  // An `expand` step: what was wrong with its first answer, told to the one resample.
+  expandMiss?: string | undefined;
 }
 
 export interface RunState {
@@ -359,6 +370,12 @@ function writeStepOutput(runDir: string, id: string, output: string): string {
   return text;
 }
 
+/** A step's answer on disk whole, and capped in state.json, which every save rewrites. */
+function keepOutput(st: StepState, runDir: string, id: string, output: string): void {
+  const text = writeStepOutput(runDir, id, output);
+  st.output = text.length > MAX_OUTPUT_IN_STATE ? `${text.slice(0, MAX_OUTPUT_IN_STATE)}…` : text;
+}
+
 // The persisted copy: inputs, step outputs and errors go through redact() first. The in-memory
 // state is left as it is, so a run that is not resumed keeps its own inputs.
 function redactedState(state: RunState): RunState {
@@ -368,6 +385,8 @@ function redactedState(state: RunState): RunState {
     const copy: StepState = { ...st };
     if (st.output !== undefined) copy.output = redact(st.output);
     if (st.error !== undefined) copy.error = redact(st.error);
+    if (st.omitted !== undefined) copy.omitted = redact(st.omitted);
+    if (st.expandMiss !== undefined) copy.expandMiss = redact(st.expandMiss);
     steps[id] = copy;
   }
   const inputs = Object.fromEntries(Object.entries(state.inputs).map(([k, v]) => [k, redact(v)]));
@@ -396,7 +415,10 @@ function isStepState(value: unknown): value is StepState {
     Number.isFinite(s.cost) &&
     (s.outputTokens === undefined || (typeof s.outputTokens === "number" && Number.isFinite(s.outputTokens))) &&
     Array.isArray(s.runIds) &&
-    s.runIds.every((r) => typeof r === "string")
+    s.runIds.every((r) => typeof r === "string") &&
+    (s.expanded === undefined || s.expanded === true) &&
+    (s.omitted === undefined || typeof s.omitted === "string") &&
+    (s.expandMiss === undefined || typeof s.expandMiss === "string")
   );
 }
 
@@ -473,7 +495,8 @@ export function renderTemplate(template: string, ctx: { inputs: Record<string, s
       const v = ctx.inputs[expr.slice(7)];
       return v !== undefined && v !== "" ? v : missing("input not provided");
     }
-    const stepRef = expr.match(/^steps\.([a-z][a-z0-9_-]*)\.(output|status)$/);
+    // An expanded step's id carries its parent's (`split.a`).
+    const stepRef = expr.match(/^steps\.([a-z][a-z0-9_.-]*)\.(output|status)$/);
     if (stepRef) {
       const [, stepId = "", field] = stepRef;
       const st = ctx.state.steps[stepId];
@@ -522,7 +545,9 @@ function gatePasses(pattern: string, output: string): boolean {
 // ---------------------------------------------------------------------------------------------
 // Worst case and run scope
 
-const leafCount = (step: StepDef): number => step.parallel?.length ?? 1;
+// An `expand` step counts its one resample. A plan's gate never rewinds over one (plan.ts), so this
+// adds nothing to a gated segment.
+const leafCount = (step: StepDef): number => step.parallel?.length ?? (step.expand ? 2 : 1);
 
 /**
  * The most agents a run can still launch, retries of a failed launch aside: each step once, plus
@@ -531,7 +556,8 @@ const leafCount = (step: StepDef): number => step.parallel?.length ?? 1;
  *
  * With `state`, only what is left: the steps from the cursor, the unpassed members of an interrupted
  * group there, and the gates a run from here can still reach, which includes one behind the cursor
- * when a later gate can rewind past it.
+ * when a later gate can rewind past it. An `expand` step's steps are not known yet: each expansion
+ * is charged when it arrives, and from then on is counted here.
  */
 export function worstCaseAgents(w: WorkflowDef, state?: RunState): number {
   const cursor = state?.cursor ?? 0;
@@ -550,7 +576,8 @@ export function worstCaseAgents(w: WorkflowDef, state?: RunState): number {
   }
   let total = 0;
   for (const [i, step] of w.steps.entries()) {
-    if (i >= cursor) total += i === cursor && step.parallel && state ? unfinishedMembers(step, state).length : leafCount(step);
+    const answered = state?.steps[step.id]?.status === "passed" && step.expand;
+    if (i >= cursor && !answered) total += i === cursor && step.parallel && state ? unfinishedMembers(step, state).length : leafCount(step);
     const target = retryIndex(step);
     if (i >= reach && target >= 0) total += left(step) * w.steps.slice(target, i + 1).reduce((sum, s) => sum + leafCount(s), 0);
   }
@@ -582,6 +609,17 @@ export function runScopeId(state: RunState): string {
 // ---------------------------------------------------------------------------------------------
 // Executor
 
+/**
+ * What the host did with an `expand` step's answer. `invalid` carries what the resample is told;
+ * `refused` launches nothing and is reported as an omission; `spliced` steps are already in the run.
+ */
+export type ExpansionVerdict = { kind: "done"; text: string } | { kind: "spliced"; steps: StepDef[] } | { kind: "refused"; reason: string } | { kind: "invalid"; note: string };
+
+/** How a plan's run turns an `expand` step's answer into steps (workflow-tools.ts). */
+export interface ExpansionHost {
+  settle(parent: StepDef, output: string): ExpansionVerdict;
+}
+
 export interface ExecuteOptions {
   cwd: string;
   agents: AgentConfig[];
@@ -599,6 +637,8 @@ export interface ExecuteOptions {
   // Pause/resume/stop/skip for this run (control.ts). Without one the run gets its own; `signal`
   // still stops it either way.
   control?: RunControl | undefined;
+  // Set on a plan's run: what an `expand` step's answer does. Saved workflows have no `expand`.
+  expansion?: ExpansionHost | undefined;
 }
 
 // Inside the executor the run's control is always present.
@@ -644,6 +684,10 @@ const BLACKBOARD_NOTE = (runDir: string, files: string[]) =>
   ]
     .filter(Boolean)
     .join("\n");
+
+const EXPAND_NOTE =
+  "\n\n## Your answer\nYour final answer is exactly one JSON object and nothing else: {\"steps\":[...]} and the host runs those steps next, or {\"done\":\"the result\"} if no more steps are needed. " +
+  "A step is {id?, agent?, task, tools?, when?, gate?, continue_on_error?, expand?} or {id?, parallel: [steps], gate?}. tools only narrow what you have. You cannot start agents yourself; the steps are how you ask.";
 
 function listRunFiles(runDir: string): string[] {
   const out: string[] = [];
@@ -730,6 +774,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   let task: string;
   try {
     task = renderTemplate(step.task ?? "", { inputs: state.inputs, state, runDir, loop });
+    if (st.expandMiss !== undefined) task = `${task}\n\n${st.expandMiss}`;
   } catch (error) {
     st.status = "failed";
     st.error = error instanceof Error ? error.message : String(error);
@@ -756,7 +801,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
     skills: step.skills,
     extensions: step.extensions,
     maxRuntimeMs: step.maxRuntimeMs,
-    appendSystemPrompt: BLACKBOARD_NOTE(runDir, listRunFiles(runDir)),
+    appendSystemPrompt: BLACKBOARD_NOTE(runDir, listRunFiles(runDir)) + (step.expand ? EXPAND_NOTE : ""),
   };
   const agentId = tele.run.agentStart(start);
   const handle = opts.control.agent(step.id, agentId);
@@ -787,8 +832,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   if (result.runId) st.runIds.push(result.runId);
   st.cost += result.usage.cost;
   st.outputTokens = (st.outputTokens ?? 0) + result.usage.output;
-  const output = writeStepOutput(runDir, step.id, result.finalOutput || getResultOutput(result));
-  st.output = output.length > MAX_OUTPUT_IN_STATE ? `${output.slice(0, MAX_OUTPUT_IN_STATE)}…` : output;
+  keepOutput(st, runDir, step.id, result.finalOutput || getResultOutput(result));
   st.endedAt = new Date().toISOString();
   if (handle.skipped()) {
     st.status = "skipped";
@@ -831,7 +875,8 @@ const STEP_EXECUTION: Readonly<Record<Exclude<StepStatus, "pending" | "skipped">
  * passed reads as completed. A skip is not an omission: a `when` skip is the plan working, and an
  * operator's skip is a decision to go on. Neither is a step that never reached the executor. The one
  * exception is the governed agent's skip of a required step, which is an omission, not `required`:
- * the agent cannot turn it into `passed`, and the run keeps what the other steps did.
+ * the agent cannot turn it into `passed`, and the run keeps what the other steps did. An expansion
+ * the host refused is an omission too: the step itself ran, the work it asked for did not.
  */
 export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
   const out: StepResult[] = [];
@@ -840,6 +885,7 @@ export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
     if (st?.status === "skipped" && st.error === SKIPPED_BY_AGENT && !step.continueOnError) out.push({ stepId: step.id, execution: "skipped", required: false, reason: { code: "agent-skip", text: st.error }, usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
     if (!st || st.status === "pending" || st.status === "skipped") continue;
     out.push({ stepId: step.id, execution: STEP_EXECUTION[st.status], required: !step.continueOnError, ...(st.error ? { reason: { code: "step", text: st.error } } : {}), usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
+    if (st.omitted !== undefined) out.push({ stepId: step.id, execution: "skipped", required: false, reason: { code: "expand-refused", text: st.omitted }, usage: { agents: 0, outputTokens: 0 } });
   }
   return out;
 }
@@ -911,6 +957,49 @@ async function executeSteps(w: WorkflowDef, state: RunState, opts: RunOptions, r
   }
 }
 
+/**
+ * Act on an `expand` step's answer, once. An invalid answer gets one resample, told what was wrong; a
+ * second miss fails the step, as does a miss with no execution left to resample with. Everything but that failure leaves the step passed, because the step
+ * did its work: `done` becomes its output, `refused` an omission, and spliced steps are ordinary
+ * steps of this run from here on, so stop, failure and the journal need nothing new.
+ */
+async function settleExpansion(step: StepDef, first: StepState, state: RunState, opts: RunOptions, run: RunModel, runDir: string, loop: number): Promise<StepState> {
+  let st = first;
+  while (st.status === "passed" && !st.expanded) {
+    const verdict: ExpansionVerdict = opts.expansion?.settle(step, fs.readFileSync(path.join(runDir, "steps", `${step.id}.md`), "utf8")) ?? { kind: "refused", reason: "this run cannot expand a step" };
+    if (verdict.kind === "invalid") {
+      if (st.expandMiss !== undefined) {
+        st.status = "failed";
+        st.error = `no usable answer after a resample. ${verdict.note}`;
+        break;
+      }
+      if (state.executions >= MAX_EXECUTIONS) {
+        st.status = "failed";
+        st.error = `no resample: the run is at ${MAX_EXECUTIONS} step executions (loop safety limit). ${verdict.note}`;
+        break;
+      }
+      // Pending until the resample starts: a stop before then must not read the old answer again.
+      st.expandMiss = verdict.note;
+      st.status = "pending";
+      saveState(runDir, state);
+      st = await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
+      saveState(runDir, state);
+      continue;
+    }
+    st.expanded = true;
+    if (verdict.kind === "done") keepOutput(st, runDir, step.id, verdict.text);
+    else if (verdict.kind === "refused") st.omitted = verdict.reason;
+    else {
+      for (const leaf of verdict.steps.flatMap((s) => [s, ...(s.parallel ?? [])])) state.steps[leaf.id] = { status: "pending", attempts: 0, runIds: [], cost: 0 };
+      for (const added of verdict.steps) run.phase(added.id, added.id, "pending");
+      opts.onProgress?.(`${state.workflow} · ${step.id} · expanded into ${String(verdict.steps.length)} step(s)`);
+    }
+    delete st.expandMiss;
+    saveState(runDir, state);
+  }
+  return st;
+}
+
 /** How the executor's loop ended: stopped, stopped on an error, or (neither) off the last step. */
 interface RunFinish {
   stopped?: boolean;
@@ -961,8 +1050,11 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       run.setPhaseStatus(step.id, "running");
       // A gate step skipped by the resume prompt stays at the cursor so its gate can fail below.
       const prior = state.steps[step.id];
-      const st = step.gate && prior?.status === "skipped" && prior.error === SKIPPED_ON_RESUME ? prior : await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
+      // An `expand` step that already answered is never asked again: a kill landed before its answer was acted on.
+      const kept = (step.gate && prior?.status === "skipped" && prior.error === SKIPPED_ON_RESUME) || (step.expand && prior?.status === "passed");
+      let st = kept && prior ? prior : await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
       saveState(runDir, state);
+      if (step.expand) st = await settleExpansion(step, st, state, opts, run, runDir, loop);
       run.setPhaseStatus(step.id, phaseStatus(st.status));
       if (st.status === "aborted" || opts.control.stopped) return finish({ stopped: true });
       if (st.status === "failed" && !step.continueOnError) failed = `step ${step.id} failed: ${st.error}`;
@@ -1014,7 +1106,7 @@ export function summarizeRun(state: RunState, w?: WorkflowDef): string {
   const lines = order.map((label) => {
     const id = label.trim();
     const st = steps[id];
-    return `${label.startsWith("  ") ? "    " : "  "}${id}: ${st?.status ?? "pending"}${st?.attempts && st.attempts > 1 ? ` ×${st.attempts}` : ""}${st?.error ? ` — ${st.error.slice(0, 160)}` : ""}`;
+    return `${label.startsWith("  ") ? "    " : "  "}${id}: ${st?.status ?? "pending"}${st?.attempts && st.attempts > 1 ? ` ×${st.attempts}` : ""}${st?.error ? ` — ${st.error.slice(0, 160)}` : ""}${st?.omitted ? ` — omitted: ${st.omitted.slice(0, 200)}` : ""}`;
   });
   const launched = Object.values(steps).reduce((a, s) => a + s.attempts, 0);
   const outputTokens = Object.values(steps).reduce((a, s) => a + (s.outputTokens ?? 0), 0);

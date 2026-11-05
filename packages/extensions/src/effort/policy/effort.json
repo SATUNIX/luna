@@ -14,6 +14,10 @@
     "workflowTotalPerRun": 1000,
     "workflowSessionTotal": 2000
   },
+  "strategy": {
+    "$comment": "How far work may be reshaped while it runs. expandDepth is how many generations of expansion one inline plan may reach: a step with expand answers with more steps, which may themselves expand. Each generation is ordinary steps in the same run, charged to the same allowance, and process depth stays 1.",
+    "expandDepth": 3
+  },
   "recovery": {
     "$comment": "A separate, small budget so a minimal-effort session can still recover from being stuck. It is only spendable while the trusted recovery extension has recovery active (the model cannot switch it on), only for read-only roles, and it never adds to the discretionary budget.",
     "maxInvocations": 2,

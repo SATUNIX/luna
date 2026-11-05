@@ -12,7 +12,7 @@ import { discoverAgents, type AgentConfig } from "./agents.ts";
 import { agentDir } from "./config.ts";
 import { CONTROL_ACTIONS, controlRun, runControls } from "./control.ts";
 import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
-import { compilePlan, planRefusal, PLAN_DESCRIPTION, type PlanError } from "./plan.ts";
+import { compileExpansion, compilePlan, generationOf, parseExpandAnswer, planRefusal, PLAN_DESCRIPTION, resampleNote, spliceExpansion, type PlanError } from "./plan.ts";
 import { redact } from "./redact.ts";
 import { producedResult } from "./run-contract.ts";
 import { duplicateRefusal, liveRuns, runIdentity } from "./run-model.ts";
@@ -33,8 +33,10 @@ import {
   workflowDigest,
   worstCaseAgents,
   writePrivate,
+  MAX_EXECUTIONS,
   SKIPPED_ON_RESUME,
   type ExecuteOptions,
+  type ExpansionHost,
   type RunState,
   type StepDef,
   type ScriptWorkflowDef,
@@ -259,18 +261,36 @@ interface StartOptions {
 
 type Started = { error: string; state?: undefined; workflow?: undefined } | { error?: undefined; state: RunState; workflow: WorkflowDef };
 
+/** One expansion as a step asked for it; a resume compiles it again. */
+interface Expansion {
+  parent: string;
+  steps: unknown;
+}
+
+/** What plan.json holds: the plan as given, and each expansion in the order it happened. */
+interface PlanRun {
+  steps: unknown;
+  expansions: Expansion[];
+}
+
+/** Charge an expansion's worst case to the run: null, or why it cannot be afforded. */
+type ChargeExpansion = (planned: number) => string | null;
+
 /**
  * Run a definition. A live run doing the same work is refused first. A run you typed is a "user"
  * launch. Any other is the model's: it opens an effort run scope, charged the run's worst case, so a
  * run that cannot be afforded is refused here with nothing started. Its agents then launch as kind
- * "workflow" in that scope. `before` runs once the run may go ahead, ahead of any launch.
+ * "workflow" in that scope. A plan's run saves plan.json when `fresh`, once the run may go ahead and
+ * ahead of any launch, and gets its expansion host. A typed resume has no scope to charge, so it
+ * refuses a new expansion: no one saw those steps. What the run already charged replays.
  */
-async function launchRun(ctx: ToolContext, w: WorkflowDef, state: RunState, agents: AgentConfig[], identity: string, opts: StartOptions, before?: () => void): Promise<Started> {
+async function launchRun(ctx: ToolContext, w: WorkflowDef, state: RunState, agents: AgentConfig[], identity: string, opts: StartOptions, plan?: { run: PlanRun; fresh?: true }): Promise<Started> {
   const cwd = ctx.cwd ?? process.cwd();
   // Nothing awaits from this check to the hold below, so two calls cannot both pass it.
   const live = liveRuns.find(identity);
   if (live) return { error: duplicateRefusal(live) };
   let launch: Pick<ExecuteOptions, "launchKind" | "workflowRun" | "concurrency"> = { launchKind: "user" };
+  let charge: ChargeExpansion = () => "a typed resume has no run scope to charge it to";
   if (opts.launchKind !== "user") {
     const effort = effortRegistry();
     if (!effort) return { error: "Refused: workflow runs need the effort extension (it budgets their agents); it is in every shipped profile." };
@@ -278,14 +298,20 @@ async function launchRun(ctx: ToolContext, w: WorkflowDef, state: RunState, agen
     const scope = effort.openRunScope(runId, { planned: worstCaseAgents(w, state) });
     if (!scope.ok) return { error: `Refused: the workflow run could not be budgeted (${scope.code}): ${scope.reason}` };
     state.scopes = (state.scopes ?? 0) + 1;
-    launch = { launchKind: "workflow", workflowRun: { runId, runToken: scope.runToken }, ...(scope.maxConcurrent === undefined ? {} : { concurrency: scope.maxConcurrent }) };
+    const { runToken } = scope;
+    launch = { launchKind: "workflow", workflowRun: { runId, runToken }, ...(scope.maxConcurrent === undefined ? {} : { concurrency: scope.maxConcurrent }) };
+    charge = (planned) => {
+      const charged = effort.chargeRunScope?.(runId, runToken, planned) ?? { ok: false, code: "run-scope", reason: "the effort extension cannot charge an expansion" };
+      return charged.ok ? null : charged.reason;
+    };
   }
-  before?.();
+  if (plan?.fresh) savePlan(cwd, state.id, plan.run);
   const release = liveRuns.hold(identity, { runId: state.id, name: w.name });
   // The run's control (pause/resume/stop/skip); the tool call's signal (Esc) stops it.
   const { control, close } = runControls.open(state.id, opts.signal);
   try {
-    const final = await executeWorkflow(w, state, { cwd, agents, control, parentModel: parentModelOf(ctx), onProgress: opts.onProgress, spawnChild: opts.spawnChild, ...launch });
+    const expansion = plan ? expansionHost(cwd, w, state, agents, plan.run, charge) : undefined;
+    const final = await executeWorkflow(w, state, { cwd, agents, control, parentModel: parentModelOf(ctx), onProgress: opts.onProgress, spawnChild: opts.spawnChild, expansion, ...launch });
     return { state: final, workflow: w };
   } finally {
     close();
@@ -336,8 +362,8 @@ const sha256 = (data: string | Buffer): string => crypto.createHash("sha256").up
 const sessionPlans = new Map<string, string>();
 
 /** The steps as given, secrets redacted like every run file, for a resume to compile again. */
-function savePlan(cwd: string, runId: string, steps: unknown): void {
-  const text = JSON.stringify({ version: 1, steps }, (_key, value: unknown) => (typeof value === "string" ? redact(value) : value), 2);
+function savePlan(cwd: string, runId: string, plan: PlanRun): void {
+  const text = JSON.stringify({ version: 1, steps: plan.steps, expansions: plan.expansions }, (_key, value: unknown) => (typeof value === "string" ? redact(value) : value), 2);
   ensurePrivateDir(path.dirname(planFile(cwd, runId)));
   writePrivate(planFile(cwd, runId), text);
   sessionPlans.set(runId, sha256(text));
@@ -354,6 +380,66 @@ function missingSkill(w: WorkflowDef, cwd: string): PlanError | undefined {
   return undefined;
 }
 
+const DEFAULT_EXPAND_DEPTH = 3;
+
+/**
+ * What an `expand` step's answer does to its run. Validation, then the bounds, then the charge, then
+ * plan.json, then the splice: nothing launches before the charge, and a kill after the save replays
+ * the expansion rather than asking the step again. An over-bound expansion is refused, not resampled:
+ * the same steps would be refused again, and the agent that started the run can replan.
+ */
+function expansionHost(cwd: string, w: WorkflowDef, state: RunState, agents: readonly AgentConfig[], plan: PlanRun, charge: ChargeExpansion): ExpansionHost {
+  const limit = effortRegistry()?.expandDepth?.() ?? DEFAULT_EXPAND_DEPTH;
+  return {
+    settle(parent, output) {
+      const answer = parseExpandAnswer(output);
+      if (answer.kind === "invalid") return { kind: "invalid", note: resampleNote(answer.error) };
+      if (answer.kind === "done") return answer;
+      if (generationOf(parent.id) >= limit) return { kind: "refused", reason: `expansion refused: step ${parent.id} is at the expansion depth limit of ${String(limit)}` };
+      const built = compileExpansion(answer.steps, parent, agents, Object.keys(state.inputs));
+      const error = built.ok ? missingSkill(built.workflow, cwd) : built.errors[0];
+      if (error || !built.ok) return { kind: "invalid", note: resampleNote(error ?? { path: "steps", problem: "the plan is invalid.", fix: "Check it." }) };
+      const worst = state.executions + worstCaseAgents(w, state) + built.worstCaseAgents;
+      if (worst > MAX_EXECUTIONS) return { kind: "refused", reason: `expansion refused: this run could reach ${String(worst)} agents, over its limit of ${String(MAX_EXECUTIONS)}` };
+      const refused = charge(built.worstCaseAgents);
+      if (refused) return { kind: "refused", reason: `expansion refused: ${refused}` };
+      plan.expansions.push({ parent: parent.id, steps: answer.steps });
+      savePlan(cwd, state.id, plan);
+      spliceExpansion(w, parent.id, built.steps);
+      return { kind: "spliced", steps: built.steps };
+    },
+  };
+}
+
+/** A plan.json's recorded expansions; anything malformed is reported, never skipped. */
+function savedExpansions(saved: unknown): Expansion[] | null {
+  const list: unknown = typeof saved === "object" && saved !== null ? Reflect.get(saved, "expansions") : undefined;
+  if (list === undefined) return [];
+  if (!Array.isArray(list)) return null;
+  const entries: unknown[] = list;
+  const out: Expansion[] = [];
+  for (const entry of entries) {
+    const parent: unknown = typeof entry === "object" && entry !== null ? Reflect.get(entry, "parent") : undefined;
+    if (typeof parent !== "string") return null;
+    out.push({ parent, steps: Reflect.get(Object(entry), "steps") });
+  }
+  return out;
+}
+
+/** Put a resumed run's expansions back in order, under the same rules as when they arrived. Null, or what is wrong. */
+function replayExpansions(w: WorkflowDef, state: RunState, agents: readonly AgentConfig[], expansions: readonly Expansion[]): string | null {
+  for (const { parent, steps } of expansions) {
+    const step = w.steps.find((s) => s.id === parent);
+    if (!step?.expand) return `an expansion names ${parent.slice(0, 40)}, which is not a step with expand`;
+    const built = compileExpansion(steps, step, agents, Object.keys(state.inputs));
+    if (!built.ok) return planRefusal(built.errors);
+    spliceExpansion(w, parent, built.steps);
+    const st = state.steps[parent];
+    if (st) st.expanded = true;
+  }
+  return null;
+}
+
 /** Compile a plan and run it through the same executor as a YAML workflow. */
 export async function startPlan(ctx: ToolContext, steps: unknown, inputs: Record<string, string>, opts: StartOptions): Promise<Started> {
   const cwd = ctx.cwd ?? process.cwd();
@@ -365,9 +451,7 @@ export async function startPlan(ctx: ToolContext, steps: unknown, inputs: Record
   if (noSkill) return { error: planRefusal([noSkill]) };
   const state = newRunState(workflow, inputs);
   state.plan = true;
-  return launchRun(ctx, workflow, state, agents, runIdentity("plan", JSON.stringify(workflow.steps), inputs), opts, () => {
-    savePlan(cwd, state.id, steps);
-  });
+  return launchRun(ctx, workflow, state, agents, runIdentity("plan", JSON.stringify(workflow.steps), inputs), opts, { run: { steps, expansions: [] }, fresh: true });
 }
 
 /** Resume a plan's run from its plan.json, never from a saved workflow of the same name. */
@@ -392,9 +476,14 @@ async function resumePlan(ctx: ToolContext, state: RunState, opts: StartOptions)
   const compiled = compilePlan(steps, agents, Object.keys(state.inputs));
   if (!compiled.ok) return { error: `Run ${state.id}: ${PLAN_FILE} no longer compiles. ${planRefusal(compiled.errors)}` };
   const { workflow } = compiled;
+  // The plan as first given names the run: its expansions are what the run did, not what it was asked.
+  const identity = runIdentity("plan", JSON.stringify(workflow.steps), state.inputs);
+  const expansions = savedExpansions(saved);
+  const unusable = expansions ? replayExpansions(workflow, state, agents, expansions) : `its ${PLAN_FILE} lists expansions it cannot read`;
+  if (unusable !== null || !expansions) return { error: `Run ${state.id}: ${unusable ?? PLAN_FILE}` };
   const refused = await resumeError(workflow, state, agents, ctx);
   if (refused) return { error: refused };
-  return launchRun(ctx, workflow, state, agents, runIdentity("plan", JSON.stringify(workflow.steps), state.inputs), opts);
+  return launchRun(ctx, workflow, state, agents, identity, opts, { run: { steps, expansions } });
 }
 
 const liveTag = (id: string): string => {
@@ -415,9 +504,9 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     name: "workflow_run",
     label: "Workflow",
     description:
-      "Run a workflow: subagent steps with a shared run directory, review gates and resume. Pass exactly one of: name (a saved workflow; \"list\" shows them and their inputs), steps (a plan as data) or resume (a run id). " +
+      "Run a workflow: subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; \"list\" shows them), steps (a plan as data) or resume (a run id). " +
       PLAN_DESCRIPTION +
-      " Prefer this over hand-building subagent chains.",
+      " Prefer this to subagent chains.",
     promptSnippet: "Run a saved workflow, or an inline plan of subagent steps",
     parameters: Type.Object({
       name: Type.Optional(Type.String({ description: 'Saved workflow name, or "list"' })),
@@ -572,7 +661,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
         // Commands run outside a turn: the workflow runs in the background, drives the footer,
         // and posts its summary into the session when done so the agent can pick it up.
         notify(`workflow ${name}: started${resume ? ` (resuming ${resume.id})` : ""}. /workflow status to follow, /workflow stop <id> to stop.`);
-        void startWorkflow(ctx, name, inputs, { resume, launchKind: "user", onProgress: (t) => {
+        void startWorkflow(ctx, name, inputs, { resume, launchKind: "user", spawnChild: deps.spawnChild, onProgress: (t) => {
           ctx.ui?.setStatus?.("workflow", t.slice(0, 120));
         } })
           .then((r) => {

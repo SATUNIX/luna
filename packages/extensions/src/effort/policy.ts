@@ -52,6 +52,8 @@ export interface EffortPolicy {
   sharedPromptFile: string;
   ceilings: TierLimits;
   workflow: WorkflowLimits;
+  /** How far work may be reshaped while it runs. */
+  strategy: { expandDepth: number };
   recovery: { maxInvocations: number; maxConcurrent: number; roles: string[] };
   /** No tier's memento.maxGenerations may exceed this. */
   memento: { maxGenerationsCeiling: number };
@@ -99,6 +101,15 @@ function workflowProblems(value: unknown): string[] {
   if (isCount(c) && isCount(run) && c > run) problems.push("workflow.workflowConcurrent cannot exceed workflow.workflowTotalPerRun");
   if (isCount(run) && isCount(session) && run > session) problems.push("workflow.workflowTotalPerRun cannot exceed workflow.workflowSessionTotal");
   return problems;
+}
+
+const DEFAULT_EXPAND_DEPTH = 3;
+
+/** The strategy block's problems (empty when valid; it may be left out); mirrors packages/core/lib/effort.ts. */
+function strategyProblems(value: unknown): string[] {
+  if (value === undefined) return [];
+  const depth = isRecord(value) ? value.expandDepth : undefined;
+  return isCount(depth) && depth >= 1 ? [] : ["strategy.expandDepth must be a positive integer"];
 }
 
 /** The workflow limits when they are valid; null otherwise. */
@@ -190,8 +201,10 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   const ceilings = limitsOf(policy.ceilings);
   problems.push(...workflowProblems(policy.workflow));
   const workflow = workflowOf(policy.workflow);
+  problems.push(...strategyProblems(policy.strategy));
   problems.push(...workflowAgentsProblems(rawTiers));
   problems.push(...mementoProblems(policy.memento, rawTiers));
+  const depth = isRecord(policy.strategy) ? policy.strategy.expandDepth : undefined;
   const mementoCeiling = isRecord(policy.memento) ? policy.memento.maxGenerationsCeiling : undefined;
   const r = isRecord(recovery) ? recovery : null;
   const roles = r?.roles;
@@ -202,7 +215,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   }
   return {
     problems,
-    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
+    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, strategy: { expandDepth: isCount(depth) ? depth : DEFAULT_EXPAND_DEPTH }, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
   };
 }
 

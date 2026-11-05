@@ -373,6 +373,32 @@ export function openRun(file: string, runId: string, now = Date.now(), newToken:
   }
 }
 
+/**
+ * Charge more to an open planned run: a plan's expansion, which the host only knows once a step has
+ * answered. The same allowance and the same run: over the allowance, or past what the run's cap can
+ * still start, is refused with nothing charged. Only the holder of the run's token can charge it.
+ */
+export function chargeRun(file: string, runId: string, runToken: string, plan: RunPlan): { ok: true } | Denial {
+  if (!isCount(plan.planned)) return deny("invalid", "a planned run's worst case must be a non-negative whole number of agents");
+  try {
+    return withLock(file, () => {
+      const data = readLedger(file);
+      if (!data) return deny("no-ledger", "the workflow ledger is missing or unreadable, so the expansion cannot be budgeted");
+      const wf = data.workflow;
+      const run = wf && Object.hasOwn(wf.runs, runId) ? wf.runs[runId] : undefined;
+      if (!wf || run?.cap === undefined || !tokenMatches(run.tokenHash, runToken)) return deny("run-scope", "no open planned workflow run matches this request (unknown run id or wrong run token)");
+      const planned = wf.plannedUsed ?? 0;
+      const allowance = Math.min(plan.allowance, run.cap);
+      if (planned + plan.planned > allowance || run.used + plan.planned > allowance) return deny("plan-allowance", `up to ${plan.planned} more agents; ${plan.label} allows ${allowance} a request (${planned} planned, ${run.used} started here). Plan less, or ask for more with /effort.`);
+      wf.plannedUsed = planned + plan.planned;
+      writeLedger(file, data);
+      return { ok: true as const };
+    });
+  } catch (error) {
+    return deny("no-ledger", `the workflow ledger could not be updated (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
 /** A new user request: plans may be charged again. Failing leaves the charge, which only refuses more. */
 export function resetPlanned(file: string): void {
   try {

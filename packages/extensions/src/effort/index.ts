@@ -126,6 +126,13 @@ export interface EffortRegistry {
    */
   openRunScope(runId: string, options?: { planned?: number }): RunScope;
   /**
+   * Charge a plan's expansion to the run scope it belongs to, against the same allowance. The ledger
+   * checks the run token; past the allowance is refused with code "plan-allowance".
+   */
+  chargeRunScope(runId: string, runToken: string, planned: number): { ok: true } | { ok: false; code: string; reason: string };
+  /** How many generations a plan may expand (strategy.expandDepth); null without a policy. */
+  expandDepth(): number | null;
+  /**
    * Reserve a slot for one agent of a workflow run. A "concurrency" denial is waited out (polling
    * until a slot frees or `signal` aborts); every other denial throws a WorkflowLedgerError.
    */
@@ -546,6 +553,16 @@ export default function (pi: ExtensionAPI) {
       if (!opened.ok) return opened;
       runFiles.set(runId, file);
       return { ok: true, runId, runToken: opened.runToken, ledger: file, maxConcurrent: limitsFor(active.tier).maxConcurrent };
+    },
+    chargeRunScope(runId: string, runToken: string, planned: number) {
+      if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
+      if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so the expansion cannot be budgeted.` };
+      const file = runFiles.get(runId);
+      if (!file) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" has no scope in this session` };
+      return ledger.chargeRun(file, runId, runToken, { planned, allowance: workflowAllowance(policy, active.tier, config.limits), label: label(active.tier) });
+    },
+    expandDepth(): number | null {
+      return policy?.strategy.expandDepth ?? null;
     },
     async reserveWorkflow(input, options = {}) {
       const pollMs = Math.max(10, options.pollMs ?? 250);

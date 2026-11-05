@@ -95,6 +95,10 @@ export interface ScriptSpec {
 
 export interface WorkflowEffort {
   openRunScope(runId: string, options?: { planned: number }): { ok: true; runToken: string; maxConcurrent?: number } | { ok: false; code: string; reason: string };
+  /** Charge an expansion's worst case to an open plan's scope. */
+  chargeRunScope?(runId: string, runToken: string, planned: number): { ok: true } | { ok: false; code: string; reason: string };
+  /** How many generations a plan may expand. */
+  expandDepth?(): number | undefined;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -112,6 +116,19 @@ export function effortRegistry(): WorkflowEffort | null {
       const code = isRecord(r) && typeof r.code === "string" ? r.code : "run-scope";
       const reason = isRecord(r) && typeof r.reason === "string" ? r.reason : "the effort registry did not open a run scope";
       return { ok: false, code, reason };
+    },
+    chargeRunScope(runId, runToken, planned) {
+      const charge: unknown = Reflect.get(registry, "chargeRunScope");
+      const r: unknown = typeof charge === "function" ? Reflect.apply(charge, registry, [runId, runToken, planned]) : undefined;
+      if (isRecord(r) && r.ok === true) return { ok: true };
+      const code = isRecord(r) && typeof r.code === "string" ? r.code : "run-scope";
+      const reason = isRecord(r) && typeof r.reason === "string" ? r.reason : "the effort registry did not charge the expansion";
+      return { ok: false, code, reason };
+    },
+    expandDepth() {
+      const read: unknown = Reflect.get(registry, "expandDepth");
+      const depth: unknown = typeof read === "function" ? Reflect.apply(read, registry, []) : undefined;
+      return typeof depth === "number" ? depth : undefined;
     },
   };
 }

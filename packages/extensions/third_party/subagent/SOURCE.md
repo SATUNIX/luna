@@ -214,3 +214,9 @@
     redacted steps and a resume compiles it again. `liveRuns` in `run-model.ts` refuses a live
     duplicate plan, YAML or script run, and `wf-tool.ts` applies it. `registerWorkflowTools` takes a
     `spawnChild` test seam, as `wf-tool.ts` does (`tests/workflow-plan-smoke.ts`).
+  - **Host-side expansion (2026-11-06):** a plan step in `plan.ts` takes `expand: true`. Its answer
+    is parsed by the host, compiled through `compilePlan` under `Inherited {tools, role}`, charged by
+    `workflow-tools.ts` to the same run scope, saved to `plan.json` and spliced after the parent with
+    prefixed ids in `workflow.ts`, which also replays saved expansions on resume. `wf-engine.ts`
+    gains the effort adapter's expansion charge. A typed resume refuses a new expansion, and
+    `registerWorkflowTools`' `spawnChild` seam reaches `/workflow` (`tests/workflow-plan-smoke.ts`).

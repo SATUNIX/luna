@@ -21,12 +21,60 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
 | `/workflow resume <run-id>` | Unpause a live paused run; otherwise continue an interrupted or failed run from its current step |
-| `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, or `{resume: "<run-id>"}` |
+| `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, `{resume: "<run-id>"}`, or an [inline plan](#inline-plans) as `{steps: [...]}` |
 | `workflow_status` tool | The agent inspects runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
 Esc cancels a `workflow_run` started by the agent. The current step's subagent is stopped,
 the run is marked `interrupted`, and it can be resumed.
+
+## Inline plans
+
+`workflow_run {steps: [...]}` takes the [step fields](#step-fields) as JSON and runs them in the
+same executor as a saved workflow, without a file. A plan cannot set what would widen a step
+(`model`, `thinking`, `extensions`, `max_runtime`, `skill`), `tools` only narrow the role, and a
+refused plan returns the path, the problem and the fix with nothing started.
+(`tests/workflow-plan-smoke.ts`)
+
+### Expanding a plan
+
+A step with `expand: true` asks the host for more steps. Its final answer is one JSON object:
+`{"steps": [...]}`, a plan the host runs next, or `{"done": "the result"}`, which adds nothing and
+becomes the step's output. The child never gains a way to start agents: process depth stays 1, and
+the steps run as ordinary steps of the same run, so stop, failure, gates, status and the summary
+treat them like any other.
+
+- **Ids.** The steps run right after the expanding step, each id prefixed with the parent's:
+  `a` under `split` is `split.a`, and its answer is `steps/split.a.md`. References inside the
+  expansion follow the prefix. A step outside it cannot name an expanded step, and sees a spliced
+  plan as the expanding step's output, so a later step reads expanded results from the run directory.
+- **Inherited restrictions.** The steps compile under every plan rule, and no step may have a tool
+  the expanding step lacks, whether through `tools` or through its role, and like any plan step it
+  cannot be a role that starts agents unless `tools` narrows that away. A `planner` cannot ask for
+  an `implementer` unless the step narrows it to the planner's tools, so a step that should expand
+  into writers has to be able to write. A role's model, thinking, extensions, run time limit and
+  effort must also match the parent role's, so an expansion cannot reach a dearer model by naming
+  a role that sets one, or the session's model by naming one that does not.
+- **Budget.** An `expand` step counts as 2 agents, for its one resample. The host charges each
+  expansion's worst case to the same run scope and [allowance](effort.md#plan-allowance) before
+  anything in it launches, and never past 60 step executions in the run.
+- **Refused and invalid.** An answer that is not valid JSON, or a plan that does not compile, is
+  asked for once more with `{path, problem, fix}` added to the task; a second miss fails the step,
+  and so does a miss when the run has no execution left for the second ask.
+  An expansion past the depth limit, the allowance or the execution limit launches nothing, is
+  recorded as an omission, and the run goes on to end `partial`, so the agent can replan. A typed
+  `/workflow resume` has no run scope to charge, so it refuses a new expansion the same way; it
+  still replays one the run already charged.
+- **Depth.** `strategy.expandDepth` in the effort policy (3 by default) limits the generations one
+  plan may reach.
+- **Resume.** Each expansion is saved in `plan.json` before it runs, so a resume replays it and
+  does not ask the step again. A `plan.json` this process did not write is gated like a
+  [project workflow](#trusting-a-project-workflow).
+
+`expand` goes on a top-level step only. It is refused on a parallel member, with a `gate` on the
+same step, inside a segment a gate can go back over (the step would run twice), and in a saved
+workflow file, where it fails to parse: expansion is for inline plans only.
+(`tests/workflow-plan-smoke.ts`)
 
 ## Pausing, stopping and skipping
 

@@ -27,6 +27,8 @@ const TierLimitsSchema = object({ maxConcurrent: Count, maxTotal: Count, maxScou
 const Positive = number({ integer: true, min: 1 });
 /** Bounds on script-workflow launches (the "workflow" kind), separate from every tier budget. */
 const WorkflowLimitsSchema = object({ workflowConcurrent: Positive, workflowTotalPerRun: Positive, workflowSessionTotal: Positive });
+/** How far work may be reshaped while it runs: expandDepth is the generations one plan may expand. */
+const StrategySchema = object({ expandDepth: Positive });
 const WORKFLOW_KEYS = ["workflowConcurrent", "workflowTotalPerRun", "workflowSessionTotal"] as const;
 const TierSchema = object({
   id: string({ pattern: /^[a-z]+$/ }),
@@ -51,6 +53,7 @@ export const EffortPolicySchema = object({
   sharedPromptFile: string(),
   ceilings: TierLimitsSchema,
   workflow: WorkflowLimitsSchema,
+  strategy: withDefault(StrategySchema, { expandDepth: 3 }),
   recovery: object({ maxInvocations: Count, maxConcurrent: Count, roles: array(string()) }),
   memento: object({ maxGenerationsCeiling: Positive }),
   tiers: array(TierSchema),
@@ -175,6 +178,9 @@ export function validateEffortPolicy(policy: unknown, baseDir = EFFORT_POLICY_DI
     if (isCount(c) && isCount(run) && c > run) problems.push("workflow.workflowConcurrent cannot exceed workflow.workflowTotalPerRun");
     if (isCount(run) && isCount(session) && run > session) problems.push("workflow.workflowTotalPerRun cannot exceed workflow.workflowSessionTotal");
   }
+  const { strategy } = policy;
+  const depth = prop(strategy, "expandDepth");
+  if (strategy !== undefined && !(isCount(depth) && depth >= 1)) problems.push("strategy.expandDepth must be a positive integer");
   problems.push(...workflowAgentsProblems(tiers));
   problems.push(...mementoProblems(policy.memento, tiers));
   const r = policy.recovery;

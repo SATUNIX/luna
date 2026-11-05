@@ -58,6 +58,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `plan.json` this process did not write asks the operator, or needs a digest grant when headless.
   A live plan, YAML or script run with the same digest and arguments now refuses a duplicate and
   names the live run (`tests/workflow-plan-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`).
+- **Authority change:** a plan step may set `expand: true`, so it can answer with more steps
+  (`{"steps":[...]}`) or `{"done":"..."}`. The host checks the answer and splices its steps into the
+  same run, so process depth stays 1. `strategy.expandDepth` in the effort policy limits generations
+  (3 by default). Every expansion is compiled like a plan, charged at its worst case to the run's
+  allowance and saved to `plan.json`, and a resume replays it under the same digest gate. A bad answer
+  is resampled once. An expansion cannot pass its parent's tools, reach a role with different model,
+  thinking, extensions, runtime or effort, or name a role that can start agents unless `tools` narrows
+  it. Over depth, allowance or `MAX_EXECUTIONS` launches nothing, records an omission and ends the run
+  `partial`; a typed `/workflow resume` refuses a new expansion the same way. `expand` is refused with
+  a gate, on a parallel member and in a saved YAML workflow. See
+  [Workflows](docs/workflows.md) (`tests/workflow-plan-smoke.ts`).
 - The project is named **Luna** in the README and documentation. The pi package keeps the name
   `@satunix/pi-system`, so install commands, settings entries and environment variables are
   unchanged.

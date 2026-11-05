@@ -1,8 +1,10 @@
 name: pages
 
 # The project website (docs/website.md): website/ assembled by packages/core/build-site.ts, the
-# documentation built by mkdocs into /docs/. Pull requests build it and upload nothing; a push to
-# main (or a manual run on main) builds it and deploys it to GitHub Pages.
+# documentation built by mkdocs into /docs/. A push to main (or a manual run on main) builds it and
+# deploys it to GitHub Pages. It never runs on a pull request: ci.yml checks the same build there
+# (smoke:site builds the page and checks the illustrations; docs-build runs mkdocs --strict), so no
+# pull request can reach the deploy job's rights (tests/release-workflow-smoke.ts).
 #
 # Actions are pinned to full commit SHAs (Dependabot keeps them current). The token is read-only
 # except in `deploy`, the only job with `pages: write` and `id-token: write` (what
@@ -12,8 +14,6 @@ name: pages
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main, "integration/**"]
   workflow_dispatch:
 
 permissions:
@@ -44,13 +44,13 @@ jobs:
       - run: node packages/core/readme-art.ts --check
       - run: node packages/core/build-site.ts --out _site
       - run: python -m mkdocs build --strict --site-dir _site/docs
-      - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      - if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10

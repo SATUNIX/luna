@@ -103,8 +103,9 @@ and the fix adds it as a fixed case to the matching example-based suite, as
   itself. Only the release jobs get `contents: write` (to create a GitHub Release) or
   `id-token: write` (npm trusted publishing), and only behind the explicit `dry-run == false` guard.
   The one other exception is the website's `deploy` job in `pages.yml`, which gets `pages: write`
-  and `id-token: write` for `actions/deploy-pages`, runs only on `main`, in the `github-pages`
-  environment, and checks out no code ([Website](website.md#deployment)).
+  and `id-token: write` for `actions/deploy-pages`, runs only on `main` (the workflow has no
+  pull-request trigger), in the `github-pages` environment, and checks out no code
+  ([Website](website.md#deployment)).
 - `actions/checkout` never persists credentials.
 - `npm ci --ignore-scripts` everywhere: no dependency lifecycle script runs in CI.
 - The release jobs use no dependency cache and only act on a tag whose commit is on `main` and

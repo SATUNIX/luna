@@ -46,9 +46,11 @@ sees each loop paused on its finished frame.
 
 ## Deployment
 
-`.github/workflows/pages.yml` builds the site on every pull request that touches it (the `build`
-job, which uploads nothing) and deploys it from `main` (the `deploy` job, in the `github-pages`
-environment). The deploy job is the only one with `pages: write` and `id-token: write`.
+`.github/workflows/pages.yml` builds the site and deploys it from `main`, on each push and on a
+manual run (the `deploy` job, in the `github-pages` environment). It never runs on a pull request:
+there, `ci.yml` checks the same build (`smoke:site` builds the page and checks the illustrations,
+`docs-build` runs `mkdocs build --strict`). The deploy job is the only one with `pages: write` and
+`id-token: write`, and it checks out no code. `tests/release-workflow-smoke.ts` pins that shape.
 
 Pages must be enabled once by an administrator: **Settings → Pages → Build and deployment →
 Source: GitHub Actions**, which creates the `github-pages` environment. Its deployment branch rule

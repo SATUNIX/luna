@@ -169,3 +169,7 @@
     in `wf-runner.mjs` cannot send reaches the host as a refused step, the budget check moves from the
     prelude to the host, and a new status `partial` reaches `run.json`, the run model and the panel
     (`tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).
+  - **Admission holds a slot (2026-11-05):** `wf-engine.ts` checks the pause gate, a stop, the agent
+    limit and the budget after taking a slot, and estimates from finished agents that spent output.
+    The end of a run stops calls still waiting for admission
+    (`tests/workflow-kernel-regress-smoke.ts`).

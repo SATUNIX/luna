@@ -11,7 +11,8 @@
 //   8. workflow(): one level of nesting, sharing the run's counters; nesting deeper throws.
 //   9. isolation: "worktree": the agent runs in its own worktree; unchanged ones are removed, changed ones kept.
 //  10. children: launch kind "workflow" at E1, depth 1, no subagent; a run without effort is refused.
-//  11. workflow_control: pause holds new agents, skip makes agent() null, stop ends the run interrupted.
+//  11. workflow_control: pause holds new agents (queued ones too), skip makes agent() null, stop ends the run
+//      interrupted (inside a nested workflow() as well).
 //  12. outcome (run-contract.ts): the host derives a run's status from what each step did, whatever the script hid;
 //      refusals are omissions, so most of the cases above end partial; every surface agrees; YAML runs the same way.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
@@ -538,6 +539,68 @@ try {
     assert.equal(controlMod.controlRun(stopping.runId, "stop", controls).ok, true);
     assert.equal((await stopping.done).status, "interrupted");
     ok("workflow_control: pause holds new agents, skip resolves the running agent to null, stop ends the run interrupted");
+
+    // A pause must hold the calls already queued for a slot, not only the ones that have yet to reach the gate.
+    const queueFake = fakeSpawner((s) => ({ text: s.task, delayMs: 300 }));
+    const queueing = engine.startScriptRun(spec(`return await parallel([1, 2, 3, 4, 5].map((i) => () => agent("q" + i)))`), undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: queueFake.spawn, controls, concurrency: 1 });
+    assert.ok(queueing.ok);
+    for (let i = 0; i < 200 && queueFake.seen.length < 1; i++) await wait(10);
+    assert.equal(controlMod.controlRun(queueing.runId, "pause", controls).ok, true);
+    await wait(900);
+    assert.deepEqual(queueFake.seen.map((x) => x.task), ["q1"], "a call queued for a slot launches nothing while the run is paused");
+    assert.equal(controlMod.controlRun(queueing.runId, "resume", controls).ok, true);
+    assert.deepEqual(value(await queueing.done), ["q1", "q2", "q3", "q4", "q5"], "every queued call runs after the resume");
+    ok("workflow_control: a pause holds the calls queued for a slot, and every one of them runs after the resume");
+
+    // A pause that arrives while a call is waiting for budget must hold its launch too.
+    const budgetPauseFake = fakeSpawner((s) => ({ text: s.task, output: 10, delayMs: 300 }));
+    const budgetPause = engine.startScriptRun(spec(`return await parallel([1, 2, 3].map((i) => () => agent("b" + i)))`), undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: budgetPauseFake.spawn, controls, concurrency: 2, budgetTotal: 15 });
+    assert.ok(budgetPause.ok);
+    for (let i = 0; i < 200 && budgetPauseFake.seen.length < 1; i++) await wait(10);
+    assert.equal(controlMod.controlRun(budgetPause.runId, "pause", controls).ok, true);
+    await wait(900);
+    assert.deepEqual(budgetPauseFake.seen.map((x) => x.task), ["b1"], "a call waiting for budget does not launch while the run is paused");
+    assert.equal(controlMod.controlRun(budgetPause.runId, "resume", controls).ok, true);
+    const budgetPauseDone = await budgetPause.done;
+    assert.deepEqual(value(budgetPauseDone, "partial"), ["b1", "b2", null], "the call goes on after the resume, and the third is refused by the budget");
+    assert.deepEqual([budgetPauseDone.launched, budgetPauseDone.outputTokens], [2, 20], "two launches, as a serial loop under the same budget");
+    ok("workflow_control: a pause during a budget wait holds the launch until the resume");
+
+    // A stop inside a nested workflow() aborts its running agent and starts nothing more.
+    const nestedStopFake = fakeSpawner(() => ({ text: "x", delayMs: 2000 }));
+    const nestedStop = engine.startScriptRun(spec(`return await workflow("child")`), undefined, {
+      cwd: project,
+      agents,
+      sandbox: { mode, support },
+      spawnChild: nestedStopFake.spawn,
+      controls,
+      concurrency: 1,
+      resolveWorkflow: async () => spec(`const out = []\nfor (let i = 0; i < 3; i++) out.push(await agent("n" + i))\nreturn out`, "child"),
+    });
+    assert.ok(nestedStop.ok);
+    for (let i = 0; i < 200 && nestedStopFake.seen.length < 1; i++) await wait(10);
+    assert.equal(controlMod.controlRun(nestedStop.runId, "stop", controls).ok, true);
+    const stoppedNested = await nestedStop.done;
+    assert.equal(stoppedNested.status, "interrupted");
+    assert.equal(stoppedNested.launched, 1, "one agent launched inside the nested run");
+    assert.deepEqual(nestedStopFake.seen.map((x) => x.task), ["n0"], "a stop inside a nested workflow() starts nothing more");
+    assert.ok((stoppedNested.omissions ?? []).length > 0, "the stopped nested run names its omissions");
+    assert.ok((stoppedNested.omissions ?? []).every((o) => o.execution === "cancelled"), "every step the stop cut is cancelled, none completed");
+    ok("workflow_control: a stop during a nested workflow() aborts its running agent, starts nothing more and ends interrupted");
+
+    // A structured retry is one launch, and both of its attempts' output is charged to the run's budget.
+    let schemaReplies = 0;
+    const retryFake = fakeSpawner((s) => (s.task.startsWith("t") ? { text: "t" } : schemaReplies++ === 0 ? { text: "no", output: 10 } : { structured: { a: 1 }, output: 10 }));
+    const retrying = engine.startScriptRun(spec(`let b\nconst a = await agent("s", { schema: { type: "object", properties: { a: { type: "number" } }, required: ["a"] } })\ntry { b = await agent("t") } catch (e) { b = e.message }\nreturn [a, b, budget.spent()]`), undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: retryFake.spawn, controls, concurrency: 1, budgetTotal: 15 });
+    assert.ok(retrying.ok);
+    const retried = await retrying.done;
+    const retriedValue = value(retried, "partial");
+    assert.ok(Array.isArray(retriedValue));
+    assert.deepEqual(retriedValue[0], { a: 1 }, "the retry's structured reply is the value");
+    assert.match(String(retriedValue[1]), /budget exhausted: 20 of 15/, "the next call sees both attempts' output");
+    assert.equal(retriedValue[2], 20, "budget.spent() counts the retried attempt");
+    assert.deepEqual([retried.launched, retried.outputTokens, retryFake.seen.length], [1, 20, 2], "one launch, two children, both charged");
+    ok("workflow budget: a structured retry's output is charged to the run while launched stays 1");
 
     // A skip does not excuse a required step, or the governed model could launder one to `passed`.
     for (const source of [`const v = await agent("slow", { required: true, label: "must" }); return { v }`, `try { await agent("slow", { required: true, label: "must" }) } catch (e) { log(e.message) } return "went on"`]) {

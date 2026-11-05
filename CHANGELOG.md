@@ -108,6 +108,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A workflow's `maxAgents` and `budget.total` now hold across a fan-out. A call takes its slot before
+  it is checked, so queued calls can no longer all pass the checks at once, and a pause reaches a queued
+  call. A run can pass `budget.total` by at most what its live agents spend. A call still waiting for
+  admission when the script returns is stopped and never starts a child
+  (`tests/workflow-kernel-regress-smoke.ts`).
 - A human-console card that runs out on its own timeout no longer writes an answer when its timer fires
   a moment before the deadline. This made `check-all` fail intermittently; the request failed closed
   either way (`tests/firewall-overlay-queue-smoke.ts`).

@@ -10,8 +10,12 @@
  *   required (when true the call throws if the step does not complete, and the run fails even if the
  *   script catches that).
  * - Concurrency is min(16, cpus - 2) agents per run (nested workflow() runs share it), with a
- *   1000-agent lifetime cap. The budget counts the run's output tokens; once `budget.total` is
- *   reached agent() throws.
+ *   1000-agent lifetime cap. A call takes its slot before it is checked (admission): the pause
+ *   gate, a stop, the agent limit, then the budget. While the budget could not pay for one more
+ *   agent (what the finished agents that spent output cost on average, or the whole remainder
+ *   before any has) the call waits for a live agent to finish, holding its slot, and takes the
+ *   pause gate again; once `budget.total` is reached agent() throws. The check is an estimate, so a run
+ *   can pass `budget.total` by at most what its live agents spend.
  * - workflow(nameOrRef, args) runs another script inline, one level deep.
  * - Every agent call is journaled (journal.jsonl in the run's transcript directory). A resumed run
  *   (resumeFrom) reuses the longest unchanged prefix of agent() calls, keyed by
@@ -48,6 +52,8 @@ export const MAX_CONCURRENCY = 16;
 const EFFORT_KEY = Symbol.for("pi-kit.effort");
 const RUN_ID = /^wf-[a-z0-9-]{1,60}$/;
 const DENIAL_POLL_MS = 250;
+// How often a call that a budget cannot yet afford re-checks, while a live agent holds the spend.
+const BUDGET_POLL_MS = 50;
 // What a script can make the host keep, in step with the sandbox's log cap and the narrator.
 const STEP_CAP = 10_000;
 const STEP_TEXT_CAP = 1000;
@@ -608,6 +614,9 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   const cache = new ResumeCache(rc.previous, rc.previous.some((e) => e.writer && e.workspace !== undefined) ? await workspaceFingerprint(opts.cwd, rc.runsDir) : "unused", opts.cwd);
   const kept: WorktreeOutcome[] = [];
   let launched = 0;
+  // Admitted and not yet finished, and the finished agents that spent output: decision 14's budget estimate.
+  let liveAgents = 0;
+  let finishedAgents = 0;
   let cached = 0;
   let seq = 0;
   let calls = 0;
@@ -741,6 +750,32 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     return new Error(text);
   };
 
+  /**
+   * Admission (decision 14), run while the call already holds its slot: the pause gate, a stop, the
+   * agent limit, then the budget wait, and only then the reservation. It returns false when the run
+   * was stopped while waiting. The gate is held again after every wait, so a pause that arrives
+   * while this call is waiting for budget still holds the launch. The checks and the reservation
+   * are one synchronous block with no await between them, so calls that were queued together cannot
+   * all pass a check before any of them has reserved.
+   */
+  const reserve = async (step: StepResult): Promise<boolean> => {
+    for (;;) {
+      await control.gate();
+      if (control.stopped) return false;
+      if (launched >= maxAgents) throw refuse(step, "agent-limit", `agent limit reached: this run has started ${String(launched)} agents (limit ${String(maxAgents)})`);
+      if (total === null) break;
+      if (outputTokens >= total) throw refuse(step, "budget", `budget exhausted: ${String(outputTokens)} of ${String(total)} output tokens spent`);
+      // What one more agent may cost: the mean of the finished agents that spent output, or, before any has, the
+      // whole remainder. A refused launch or an empty reply has no finished output, so it cannot lower this to 0.
+      const estimate = finishedAgents > 0 ? outputTokens / finishedAgents : total - outputTokens;
+      if (outputTokens + liveAgents * estimate < total) break;
+      await delay(BUDGET_POLL_MS, control.signal);
+    }
+    liveAgents++;
+    launched++;
+    return true;
+  };
+
   const agentCall = async (prompt: string, rawOpts: Record<string, unknown> | null, frame: Frame, step: StepResult): Promise<unknown> => {
     let o: AgentOpts;
     try {
@@ -750,7 +785,6 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       throw error;
     }
     if (o.label !== undefined) step.stepId = o.label;
-    if (total !== null && outputTokens >= total) throw refuse(step, "budget", `budget exhausted: ${String(outputTokens)} of ${String(total)} output tokens spent`);
     const roleName = o.agentType === undefined ? DEFAULT_ROLE : (AGENT_TYPE_ALIASES[o.agentType] ?? o.agentType);
     const role = opts.agents.find((a) => a.name === roleName);
     if (!role) throw refuse(step, "unknown-role", `agent(): unknown agentType "${o.agentType ?? roleName}". Roles: ${opts.agents.map((a) => a.name).join(", ")}`);
@@ -787,36 +821,47 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       step.ref = String(seq);
       return hit.value;
     }
-    if (launched >= maxAgents) throw refuse(step, "agent-limit", `agent limit reached: this run has started ${String(launched)} agents (limit ${String(maxAgents)})`);
-    await control.gate();
-    if (control.stopped || !(await sem.acquire(control.signal))) {
+    // Admission (decision 14): the slot comes first, then every check, so a fan-out waiting in the
+    // queue cannot pass them all before any of it has spent anything. Every exit below releases it.
+    if (!(await sem.acquire(control.signal))) {
       settle(step, "cancelled", "stopped");
       return null;
     }
-    launched++;
-    step.usage.agents = 1;
+    let reserved = false;
     try {
-      const r = await launch(role, prompt, o, model, frame, label, phase, step);
-      const tree = r.worktree;
-      journal({
-        key, label, phase, role: role.name, ok: r.value !== null, value: r.value, writer,
-        ...(r.workspace !== undefined ? { workspace: r.workspace } : {}),
-        ...(tree ? { worktree: { branch: tree.branch, head: tree.head, status: tree.status } } : {}),
-        outputTokens: r.result?.usage.output ?? 0, subagentRunId: r.result?.runId,
-        ...(r.value === null && r.result?.errorMessage ? { error: r.result.errorMessage } : {}),
-      });
-      step.ref = String(seq);
-      return r.value;
-    } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
-      journal({ key, label, phase, role: role.name, ok: false, value: null, writer, outputTokens: 0, error: text });
-      step.ref = String(seq);
-      if (error instanceof LaunchRefused) settle(step, "blocked", "denied", text);
-      else if (error instanceof StructuredSchemaError) settle(step, "blocked", "schema", text);
-      else settle(step, "failed", "error", text);
-      if (error instanceof StructuredSchemaError) throw new Error(`agent(): ${error.message}`, { cause: error });
-      throw error;
+      if (!(await reserve(step))) {
+        settle(step, "cancelled", "stopped");
+        return null;
+      }
+      reserved = true;
+      step.usage.agents = 1;
+      try {
+        const r = await launch(role, prompt, o, model, frame, label, phase, step);
+        const tree = r.worktree;
+        journal({
+          key, label, phase, role: role.name, ok: r.value !== null, value: r.value, writer,
+          ...(r.workspace !== undefined ? { workspace: r.workspace } : {}),
+          ...(tree ? { worktree: { branch: tree.branch, head: tree.head, status: tree.status } } : {}),
+          outputTokens: r.result?.usage.output ?? 0, subagentRunId: r.result?.runId,
+          ...(r.value === null && r.result?.errorMessage ? { error: r.result.errorMessage } : {}),
+        });
+        step.ref = String(seq);
+        return r.value;
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        journal({ key, label, phase, role: role.name, ok: false, value: null, writer, outputTokens: 0, error: text });
+        step.ref = String(seq);
+        if (error instanceof LaunchRefused) settle(step, "blocked", "denied", text);
+        else if (error instanceof StructuredSchemaError) settle(step, "blocked", "schema", text);
+        else settle(step, "failed", "error", text);
+        if (error instanceof StructuredSchemaError) throw new Error(`agent(): ${error.message}`, { cause: error });
+        throw error;
+      }
     } finally {
+      if (reserved) {
+        liveAgents = Math.max(0, liveAgents - 1);
+        if (step.usage.outputTokens > 0) finishedAgents++;
+      }
       sem.release();
     }
   };
@@ -903,8 +948,9 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   } catch (error) {
     engineError = `engine error: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
-    // A script that returned without awaiting its agents leaves them running: stop them with the run.
-    if (!control.stopped && control.running().length > 0) control.act("stop");
+    // A script that returned without awaiting its agents leaves calls running or waiting for
+    // admission, which hold a slot but are not running yet: stop them with the run.
+    if (!control.stopped) control.act("stop");
     offControl();
     close();
   }

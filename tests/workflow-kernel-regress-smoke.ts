@@ -4,7 +4,8 @@
 // file reports every case instead of stopping at the first failure.
 //   F1  Resume reuses a read-only result for a changed workspace (a, b) and for a changed role definition (c, d, e).
 //   F2  A kept worktree's result is reused although its uncommitted files changed (a), were discarded (b) or the worktree is gone (c).
-//   F3  A queued fan-out passes the agent-limit (a) and output-budget (b) checks before it holds a slot, so all of it launches.
+//   F3  Admission: a queued fan-out is held by the agent limit and by the output budget, at any concurrency
+//       and inside a nested workflow(), not only when the calls run one at a time (a, b, c, d).
 //   F4  A script that returns a failed required step is reported "passed" (outcome, run.json, run model, completion message).
 // Controls (no defect, they pass today and must keep passing) guard each contract against a fix that overreaches:
 // an unchanged checkout and role still reuse a read, an untouched kept worktree is still reused, serial calls still stop at
@@ -69,7 +70,7 @@ function makeRepo(): string {
   return dir;
 }
 
-const spec = (source: string): EngineModule.ScriptSpec => ({ name: "kernel-regress", description: "test", source: `export const meta = { name: "kernel-regress", description: "test" };\n${source}`, phases: [] });
+const spec = (source: string, name = "kernel-regress"): EngineModule.ScriptSpec => ({ name, description: "test", source: `export const meta = { name: ${JSON.stringify(name)}, description: "test" };\n${source}`, phases: [] });
 
 interface RunArgs {
   repo: string;
@@ -80,6 +81,7 @@ interface RunArgs {
   concurrency?: number;
   maxAgents?: number;
   budgetTotal?: number;
+  resolveWorkflow?: Options["resolveWorkflow"];
 }
 /** One real engine run behind a fake child. The outcome is returned whatever its status. */
 async function run(a: RunArgs) {
@@ -92,6 +94,7 @@ async function run(a: RunArgs) {
     spawnChild: fake.spawn,
     registry,
     resumeFrom: a.resumeFrom,
+    resolveWorkflow: a.resolveWorkflow,
     concurrency: a.concurrency,
     maxAgents: a.maxAgents,
     budgetTotal: a.budgetTotal,
@@ -134,7 +137,7 @@ interface CaseResult {
 const results: CaseResult[] = [];
 
 /** Defects not fixed yet. A fix deletes its own ids in the same change. */
-const KNOWN_RED: ReadonlySet<string> = new Set(["F1a", "F1b", "F1c", "F1d", "F1e", "F2a", "F2b", "F2c", "F3a", "F3b"]);
+const KNOWN_RED: ReadonlySet<string> = new Set(["F1a", "F1b", "F1c", "F1d", "F1e", "F2a", "F2b", "F2c"]);
 
 interface Verdict {
   exit: 0 | 1;
@@ -338,6 +341,60 @@ await scenario("F3b", "5 parallel agents of 10 output tokens, concurrency 1, out
   p.observe("output tokens spent", r.outcome.outputTokens);
   p.atMost(r.outcome.launched, 2, "agents launched under an output budget of 15");
   p.atMost(r.outcome.outputTokens, 20, "output tokens spent under an output budget of 15 (one launch of overshoot, as a serial loop)");
+});
+
+await scenario("F3c", "the same fan-out at concurrency 4 and an output budget of 15 launches at most 2", async (p) => {
+  // A call must hold a slot before it checks the budget: otherwise all five read 0 spent and all of them launch.
+  const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", output: 10, delayMs: 20 }), concurrency: 4, budgetTotal: 15 });
+  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  p.observe("children spawned", r.fake.seen.length);
+  p.observe("outcome.launched", r.outcome.launched);
+  p.observe("output tokens spent", r.outcome.outputTokens);
+  p.atMost(r.fake.seen.length, 2, "children spawned under an output budget of 15 at concurrency 4");
+  p.atMost(r.outcome.launched, 2, "agents launched under an output budget of 15 at concurrency 4");
+  p.atMost(r.outcome.outputTokens, 20, "output tokens spent under an output budget of 15 at concurrency 4 (one launch of overshoot, as a serial loop)");
+});
+
+await scenario("F3f", "a call waiting for admission when the script returns never starts", async (p) => {
+  // The run ends with one call still in the budget wait: it holds a slot but is not a running agent.
+  const r = await run({ repo: makeRepo(), source: `const a = agent("a"); const b = agent("b"); await a; return "x"`, reply: () => ({ text: "ok", output: 1, delayMs: 20 }), concurrency: 4, budgetTotal: 100 });
+  const atDone = r.fake.seen.length;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  p.observe("children at done", atDone);
+  p.observe("children 400 ms later", r.fake.seen.length);
+  p.eq(r.fake.seen.length, atDone, "no child starts after the run has ended");
+});
+
+await scenario("F3e", "a first agent that spends nothing does not lower the estimate to 0", async (p) => {
+  // Decision 14's mean is over finished output: a call that spent none must not admit the rest of the fan-out at once.
+  let replies = 0;
+  const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => (replies++ === 0 ? { text: "ok", output: 0 } : { text: "ok", output: 10, delayMs: 150 }), concurrency: 4, budgetTotal: 15 });
+  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  p.observe("children spawned", r.fake.seen.length);
+  p.observe("outcome.launched", r.outcome.launched);
+  p.observe("output tokens spent", r.outcome.outputTokens);
+  p.observe("most live at once", r.fake.maxLive());
+  p.atMost(r.outcome.launched, 3, "agents launched after one that spent nothing, under an output budget of 15 at concurrency 4");
+  p.atMost(r.outcome.outputTokens, 20, "output tokens spent after one agent that spent nothing, under an output budget of 15 at concurrency 4");
+});
+
+const NESTED_FAN_OUT = `return await parallel([1, 2, 3, 4, 5].map((i) => () => agent("nested " + i, { agentType: "planner" })))`;
+
+await scenario("F3d", "a nested workflow()'s fan-out is held by the same agent limit", async (p) => {
+  // A nested script shares the run's counters; a queued fan-out inside it must not pass the limit either.
+  const r = await run({
+    repo: makeRepo(),
+    source: `return await workflow("fan-out")`,
+    reply: (s) => ({ text: s.task, delayMs: 20 }),
+    concurrency: 4,
+    maxAgents: 2,
+    resolveWorkflow: async () => spec(NESTED_FAN_OUT, "fan-out"),
+  });
+  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  p.observe("children spawned", r.fake.seen.length);
+  p.observe("outcome.launched", r.outcome.launched);
+  p.atMost(r.fake.seen.length, 2, "children spawned under maxAgents 2 inside a nested workflow()");
+  p.atMost(r.outcome.launched, 2, "agents launched under maxAgents 2 inside a nested workflow()");
 });
 
 // ---------------------------------------------------------------------------------------------

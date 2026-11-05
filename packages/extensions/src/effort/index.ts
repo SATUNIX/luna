@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
 import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
-import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
+import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderCard, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
 import type { StandingState } from "./standing.ts";
+import { decide, DEFAULT_STRATEGY, NO_MOVE, PLAN_TOOL, strategyConfig } from "./strategy.ts";
+import type { Decision, Signal, StrategyConfig } from "./strategy.ts";
 import { showWhenFree } from "./shared/input-owner.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer, plus this extension's own
@@ -20,7 +22,8 @@ import { showWhenFree } from "./shared/input-owner.ts";
 //   - one prompt contribution per turn, replaced (never appended twice) at the user-turn boundary,
 //   - the shared delegation ledger every launch point reserves against, at any depth,
 //   - a small registry (globalThis[Symbol.for("pi-kit.effort")]) other extensions read: the footer
-//     for the tier chip, delegation launch points for reservations.
+//     for the tier chip, delegation launch points for reservations, and every caller of the one
+//     decision policy (strategy.ts), which supplies the signal and delivers the text it gets back.
 
 export const REGISTRY_KEY = Symbol.for("pi-kit.effort");
 const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
@@ -133,6 +136,14 @@ export interface EffortRegistry {
   /** How many generations a plan may expand (strategy.expandDepth); null without a policy. */
   expandDepth(): number | null;
   /**
+   * The one decision policy. `report` decides a caller's signal with the tier and the tools in force
+   * here, never the caller's, and queues the card when the move asks for it and this epoch has not
+   * seen it. Null without a policy. A child always gets no move. `card` is true only for the report
+   * that queued it: effort delivers it, at the next prompt. No move changes a tool set, a firewall
+   * decision or a tier, and nothing here touches recovery.
+   */
+  strategy: { report(signal: Signal): Decision | null; config(): StrategyConfig };
+  /**
    * Reserve a slot for one agent of a workflow run. A "concurrency" denial is waited out (polling
    * until a slot frees or `signal` aborts); every other denial throws a WorkflowLedgerError.
    */
@@ -150,6 +161,9 @@ function unbudgeted(childTier: string): Reservation {
 export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist"];
 /** Hidden at such a tier even in recovery: openRunScope refuses them there whatever recovery does. */
 const NO_RUN_SCOPE_TOOLS = ["workflow", "workflow_run"];
+
+/** The hidden message that carries the workflow card on a turn without a standing reminder. */
+const WORKFLOW_CARD_TYPE = "luna-effort-workflow-card";
 
 const USAGE_REFRESH_MS = 2000;
 const LEDGER_KEEP_MS = 24 * 60 * 60 * 1000;
@@ -334,6 +348,9 @@ export default function (pi: ExtensionAPI) {
   let usageAt = 0;
   let warnedLoad = false;
   let recoveryOn = false;
+  // The card's epoch: one showing per session and per compaction, and a showing that waits for the prompt.
+  let cardSeen = false;
+  let cardDue = false;
   // Workflow runs opened by this process, each pinned to the workflow ledger it was opened in.
   const runFiles = new Map<string, string>();
   // Ultracode standing mode: session-only, recorded with appendEntry so a reload or resume restores it.
@@ -506,6 +523,40 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  function planToolActive(): boolean {
+    try {
+      return pi.getActiveTools().includes(PLAN_TOOL);
+    } catch {
+      return false;
+    }
+  }
+
+  function reportSignal(signal: Signal): Decision | null {
+    if (!policy) return null;
+    if (isKitChild()) return NO_MOVE;
+    const tier = tierOf(policy, (active ?? recompute())?.tier);
+    if (!tier) return null;
+    const env = { level: tier.level, standing: standing.on, planTool: planToolActive(), allowance: workflowAllowance(policy, tier.id, config.limits) };
+    const decision = decide(signal, env, strategyConfig(policy.strategy, process.env));
+    if (!decision.card) return decision;
+    if (cardSeen) return { ...decision, card: false };
+    cardSeen = true;
+    cardDue = true;
+    return decision;
+  }
+
+  /** The card when one is waiting; a card that cannot be read is not worth a turn. */
+  function takeCard(): string | null {
+    if (!cardDue) return null;
+    cardDue = false;
+    try {
+      return renderCard();
+    } catch (error) {
+      process.stderr.write(`[effort] could not read the workflow card: ${error instanceof Error ? error.message : String(error)}\n`);
+      return null;
+    }
+  }
+
   function setStanding(next: StandingState): void {
     standing = { ...next, preauthorised: next.on && next.preauthorised };
     if (!standing.on) wakeChain = 0;
@@ -563,6 +614,10 @@ export default function (pi: ExtensionAPI) {
     },
     expandDepth(): number | null {
       return policy?.strategy.expandDepth ?? null;
+    },
+    strategy: {
+      report: reportSignal,
+      config: () => strategyConfig(policy?.strategy ?? DEFAULT_STRATEGY, process.env),
     },
     async reserveWorkflow(input, options = {}) {
       const pollMs = Math.max(10, options.pollMs ?? 250);
@@ -641,11 +696,17 @@ export default function (pi: ExtensionAPI) {
     }
     if (!isChildProcess()) pruneLedgers();
     openScope();
+    cardSeen = cardDue = false;
     const reason = event?.reason;
     restoreStanding(ctx, reason);
     const warnings = [...config.warnings, ...(active?.warnings ?? [])];
     if (warnings.length && reason !== "reload") say(ctx, warnings.join("\n"), "warning");
     notify();
+  });
+
+  // A compaction may drop the card from the conversation, so the next epoch shows it again.
+  pi.on("session_compact", async () => {
+    cardSeen = false;
   });
 
   pi.on("session_shutdown", async () => {
@@ -685,9 +746,14 @@ export default function (pi: ExtensionAPI) {
         process.stderr.write(`[effort] could not read the standing prompt: ${error instanceof Error ? error.message : String(error)}\n`);
       }
     }
-    if (!standingShown) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
-    const reminder = `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.`;
-    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: STANDING_REMINDER_TYPE, content: reminder, display: false } };
+    const planned = event.messageType === "user" ? reportSignal({ trigger: "plan" })?.steer : null;
+    if (planned) body = `${body}\n\n${planned}`;
+    // One hidden message a turn: the card and the standing reminder share it.
+    const card = takeCard();
+    const reminder = standingShown ? `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.` : null;
+    const hidden = [reminder, card].filter((text) => text !== null).join("\n\n");
+    if (!hidden) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
+    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: reminder ? STANDING_REMINDER_TYPE : WORKFLOW_CARD_TYPE, content: hidden, display: false } };
   });
 
   /**

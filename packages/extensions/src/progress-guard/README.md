@@ -67,11 +67,12 @@ no-block and no-system-prompt claims beyond the handlers returning nothing in th
 
 ## Commands
 
-Nothing pins these commands.
+`/boost`, bare and with `status`, is pinned by `tests/progress-guard-agsix-smoke.ts`; nothing pins the others.
 
 | Command | Effect |
 | --- | --- |
 | `/reflect` | Optional manual checkpoint. The recurring-loop checkpoint is injected automatically; use this only when you want one on demand. |
+| `/boost` | Reassess now, through the same entry as `/recover`; counts as a recovery attempt. |
 | `/boost on` | Auto-nudge on detected loops for this session. |
 | `/boost off` | Suggest-only; clears any active nudge. |
 | `/boost status` | Show mode, reads-since-edit, window size, and thresholds. |

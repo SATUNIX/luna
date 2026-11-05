@@ -83,37 +83,39 @@ function isReadOnlyRequest(text: string): boolean {
 
 export const DIRECTIVE_BUDGET_TOKENS = 800;
 
+/** The one line used when the policy gives no directive: without effort, or where `/orchestrate on` overrides its none. */
 export function directive(score: number): string {
-  return [
-    `## Delegation policy (task complexity: ${score})`,
-    "",
-    "The installed orchestration policy authorises delegation at this complexity; complexity alone",
-    "does not grant permission. Follow any user restriction and the current effort budget. Delegate through",
-    "the `subagent` tool (built-in roles: scout, planner, implementer, reviewer) and keep your own",
-    "context lean — let sub-agents hold the detail. Each subagent task must be self-contained (exact",
-    "paths, acceptance criteria, expected output): a subagent cannot see this conversation. Standard flow:",
-    "",
-    "1. **planner** — investigate and produce a concrete plan (read-only). If discovery is heavy, run",
-    "   a **scout** first and pass its findings to the planner.",
-    "2. **implementer** — execute the plan with scoped edits. If the planner marked work units as",
-    "   independent (disjoint files), spawn implementers in **parallel** (subagent `tasks`); otherwise",
-    "   run them one at a time.",
-    "3. **reviewer** — validate the result. It is the final gate: if its Verdict is FAIL, loop back to",
-    "   an implementer with the reviewer's must-fix list. Do NOT report the task done until the",
-    "   reviewer passes.",
-    "",
-    "Prefer chain mode for the simple linear case:",
-    "`subagent({ chain: [ {agent:'planner',task:'…'}, {agent:'implementer',task:'{previous}'}, {agent:'reviewer',task:'{previous}'} ] })`.",
-    "",
-    "If these coordination tools are available (full install), use them: record the planner's work",
-    "units with `task_create` (and `task_next` to hand the next unblocked one to an implementer), and",
-    "call `verify_completion` after review: only a passing trusted verifier completes the board.",
-    "A subagent PASS recorded with `record_verdict` is untrusted. Set `/goal` to survive compaction.",
-    "",
-    "Read the relevant runbook skill's SKILL.md before acting (small models often skip skills",
-    "otherwise) — `skill_search` finds it; e.g. `agent-orchestration`, `task-decomposition`, and",
-    "`self-reflection-and-recovery` if you notice you are looping.",
-  ].join("\n");
+  return `Delegation policy (task complexity: ${score}): delegate through \`subagent\` only within any user restriction and the effort budget, then call \`verify_completion\` if available: a \`record_verdict\` PASS is untrusted.`;
+}
+
+/** What this extension asks of the effort registry. */
+interface StrategyView {
+  report(signal: { trigger: "delegate"; score: number }): { move: string; steer: string | null } | null;
+  config(): { delegateScore: number };
+}
+
+function strategy(): StrategyView | undefined {
+  return ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { strategy?: StrategyView } | undefined)?.strategy;
+}
+
+/** The score that earns a directive: the policy's, with PI_KIT_ORCH_THRESHOLD on top, in one place. Never throws. */
+function threshold(): number {
+  try {
+    return strategy()?.config().delegateScore ?? DEFAULT_THRESHOLD;
+  } catch {
+    return DEFAULT_THRESHOLD;
+  }
+}
+
+/** The directive for this score: the policy's, null when it says none, or the line above without it. Never throws. */
+function delegationDirective(score: number): string | null {
+  try {
+    const decision = strategy()?.report({ trigger: "delegate", score });
+    if (!decision) return directive(score);
+    return decision.steer === null ? null : `## Delegation policy (task complexity: ${score})\n\n${decision.steer}`;
+  } catch {
+    return directive(score);
+  }
 }
 
 // AG-02 fix: docs/agent-orchestration.md's "Manual entry points" section documented
@@ -177,9 +179,6 @@ function writeContributionContent(cwd: string, content: string): void {
   }
 }
 
-function writeDirective(cwd: string, score: number): void {
-  writeContributionContent(cwd, directive(score));
-}
 
 function clearDirective(cwd: string): void {
   try { fs.rmSync(contribFile(cwd), { force: true }); } catch { /* ignore */ }
@@ -206,7 +205,7 @@ function writeClassification(cwd: string, score: number): void {
   try {
     writeFileSafe(
       classificationFile(cwd),
-      JSON.stringify({ score, taskType: score >= DEFAULT_THRESHOLD ? "complex" : "simple", at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
+      JSON.stringify({ score, taskType: score >= threshold() ? "complex" : "simple", at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
       { root: cwd },
     );
   } catch {
@@ -435,16 +434,18 @@ export default function (pi: ExtensionAPI) {
       clearClassification(cwd);
       return;
     }
-    const score = forcedOn ? Math.max(DEFAULT_THRESHOLD, scoreComplexity(text)) : scoreComplexity(text);
+    const score = forcedOn ? Math.max(threshold(), scoreComplexity(text)) : scoreComplexity(text);
     writeClassification(cwd, score);
     if (isReadOnlyRequest(text)) {
       clearDirective(cwd);
       ctx.ui?.setStatus?.("orchestrator", "read-only request");
       return;
     }
-    if ((forcedOn || score >= DEFAULT_THRESHOLD) && pi.getActiveTools().includes("subagent")) {
+    // `/orchestrate on` is the operator's word, so it stands where the policy would say nothing.
+    const steer = (forcedOn || score >= threshold()) && pi.getActiveTools().includes("subagent") ? (delegationDirective(score) ?? (forcedOn ? directive(score) : null)) : null;
+    if (steer !== null) {
       verificationRequired = true;
-      writeDirective(cwd, score);
+      writeContributionContent(cwd, steer);
       ctx.ui?.setStatus?.("orchestrator", `delegating (${score})`);
     } else {
       clearDirective(cwd);
@@ -463,7 +464,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         forcedOn = true; forcedOff = false;
-        writeDirective(dir, DEFAULT_THRESHOLD);
+        writeContributionContent(dir, delegationDirective(threshold()) ?? directive(threshold()));
         ctx.ui.notify("orchestrate: ON (always delegate)", "info");
       } else if (arg === "off") {
         forcedOff = true; forcedOn = false;
@@ -472,10 +473,10 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("orchestrate: OFF (never auto-delegate this session)", "info");
       } else if (arg === "auto" || arg === "") {
         forcedOn = false; forcedOff = false;
-        ctx.ui.notify(`orchestrate: AUTO (threshold ${DEFAULT_THRESHOLD})`, "info");
+        ctx.ui.notify(`orchestrate: AUTO (threshold ${threshold()})`, "info");
       } else if (arg === "status") {
         const mode = forcedOn ? "ON" : forcedOff ? "OFF" : "AUTO";
-        ctx.ui.notify(`orchestrate: ${mode} · threshold ${DEFAULT_THRESHOLD} · built-in roles + ~/.pi/agent/agents`, "info");
+        ctx.ui.notify(`orchestrate: ${mode} · threshold ${threshold()} · built-in roles + ~/.pi/agent/agents`, "info");
       } else {
         ctx.ui.notify(`orchestrate: unknown option "${arg}"`, "error");
       }

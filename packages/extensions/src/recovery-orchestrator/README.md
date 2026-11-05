@@ -26,11 +26,12 @@ same cwd cannot erase or act on it; a session without an id uses the flat
    then the `verify_completion` tool. It names no slash command; forking the session is left to
    the operator (`tests/recovery-grounding-smoke.ts`).
 3. Bounds attempts per signature within one stuck episode (`PI_KIT_RECOVERY_MAX_ATTEMPTS`,
-   default 2). A successful write or edit tool result whose path names a file outside `.pi/` ends
-   the episode and resets the count for every signature, so resolved episodes do not add up to
-   the cap. Writes under `.pi/` (such as filling in the recovery report) and writes naming no
-   path do not reset it, so following the steer still reaches the cap
-   (`tests/recovery-grounding-smoke.ts`). Past the cap it does not enter recovery again: it
+   default 2). Attempts clear on a passing board (a trusted verdict newer than the attempt, every
+   source passing), a user turn, or `quietTurns` (20) turns without that signature, so resolved
+   episodes do not add up to the cap. Writes do not clear them, so a cosmetic edit then a re-stall
+   still reaches it (`tests/recovery-grounding-smoke.ts`). Attempt 2 at E3 or above with
+   `workflow_run` active steers to a split instead of scouts (`tests/workflow-strategy-smoke.ts`).
+   Past the cap it does not enter recovery again: it
    notifies the operator to escalate (dual-review) instead of spawning more (nothing pins the
    wording), emits `pi-kit:recovery-blocked` on the event bus, which stops this session's
    `/loop` (`autonomous-loop`) before it queues another turn, and records the disposition in
@@ -54,8 +55,8 @@ Nothing pins the three limits below; they describe what the code has no path to 
 
 ## Env
 
-- `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default 2) — recovery attempts per signature, between
-  successful writes outside `.pi/`, before giving up to the operator.
+- `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default 2) — recovery attempts per signature, until the
+  attempts clear, before giving up to the operator.
 - `PI_KIT_RECOVERY_SCOUTS` (default 3) — how many fresh scouts the steer asks for (nothing
   pins the default).
 

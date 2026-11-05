@@ -13,11 +13,15 @@ import { createFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 //      injection authority, so we NEVER emit a systemPrompt,
 //   3. bounds attempts per signature and, past the cap, escalates to the operator instead of
 //      spawning further.
+// Which rung an entry takes is the effort extension's one decision policy (its strategy.ts): this
+// file supplies the attempt and keeps the report scaffold. Without effort every entry is scouts.
 // It is NON-DESTRUCTIVE: it only writes report + contribution files; it never edits code or
 // reverts changes. Detection of "fix failed / worse" is delegated to the verifier board.
 
 const CONTRIB_ID = "recovery-orchestrator";
 const MAX_ATTEMPTS = intEnv("PI_KIT_RECOVERY_MAX_ATTEMPTS", 2);
+// Used only without the effort extension; with it these numbers are the policy's.
+const QUIET_TURNS = 20;
 const SCOUTS = intEnv("PI_KIT_RECOVERY_SCOUTS", 3);
 
 function intEnv(name: string, fallback: number): number {
@@ -192,21 +196,76 @@ export function readEscalation(cwd: string, sessionId: string | undefined = curr
   return null;
 }
 
-function boardPassing(cwd: string): boolean {
+// Sources reserved for independent, non-model writers, in parity with verifier-board's
+// isTrustedVerdictSource (self-containment forbids importing it).
+const TRUSTED_SOURCE_PATTERNS: RegExp[] = [/^verify$/i, /^review$/i, /^validator:/i];
+
+/**
+ * The board has answered since `since`: every source passes and a trusted one passed after that
+ * moment. Older passes prove nothing about this stall, or a board green from the start would clear
+ * every attempt on the turn it was made; a missing board or a model's own record_verdict proves
+ * nothing at all.
+ */
+function boardPassedSince(cwd: string, since: number): boolean {
   try {
     const board: unknown = JSON.parse(fs.readFileSync(verdictsPath(cwd), "utf8"));
-    const v = field(board, "verdicts");
-    if (!v || typeof v !== "object") return true;
-    const keys = Object.keys(v);
-    return keys.length === 0 || keys.every((k) => field(field(v, k), "pass") !== false);
+    const verdicts = field(board, "verdicts");
+    if (!isRecord(verdicts)) return false;
+    const sources = Object.keys(verdicts);
+    if (sources.length === 0 || !sources.every((s) => field(verdicts[s], "pass") === true)) return false;
+    const now = Date.now();
+    return sources.some((s) => {
+      const at = field(verdicts[s], "at");
+      const passed = typeof at === "string" ? Date.parse(at) : Number.NaN;
+      return TRUSTED_SOURCE_PATTERNS.some((p) => p.test(s)) && passed >= since && passed <= now;
+    });
   } catch {
-    return true;
+    return false;
   }
 }
 
-function recoveryContent(esc: Escalation, attempt: number, reportRel: string): string {
+/** What this extension asks of the effort registry; the policy's text and numbers live there. */
+interface StrategyView {
+  report(signal: { trigger: "stall"; signature: string; attempt: number }): { move: string; steer: string | null } | null;
+  config(): { maxAttempts: number; quietTurns: number };
+}
+
+function strategy(): StrategyView | undefined {
+  return ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { strategy?: StrategyView } | undefined)?.strategy;
+}
+
+/** The policy's limits, or today's numbers without it. Never throws. */
+function limits(): { maxAttempts: number; quietTurns: number } {
+  try {
+    return strategy()?.config() ?? { maxAttempts: MAX_ATTEMPTS, quietTurns: QUIET_TURNS };
+  } catch {
+    return { maxAttempts: MAX_ATTEMPTS, quietTurns: QUIET_TURNS };
+  }
+}
+
+/** The steer of a `split`, when the policy moves this entry there. Anything else is scouts. Never throws. */
+function splitSteer(signature: string, attempt: number): string | null {
+  try {
+    const decision = strategy()?.report({ trigger: "stall", signature, attempt });
+    return decision?.move === "split" ? decision.steer : null;
+  } catch {
+    return null;
+  }
+}
+
+function splitContent(esc: Escalation, attempt: number, maxAttempts: number, reportRel: string, steer: string): string {
   return [
-    `## recovery-orchestration: stuck on '${esc.signature}' (attempt ${attempt}/${MAX_ATTEMPTS})`,
+    `## recovery-orchestration: stuck on '${esc.signature}' (attempt ${attempt}/${maxAttempts})`,
+    "",
+    `Signal: ${esc.reason} (repeated ${esc.count}×). ${steer}`,
+    "",
+    `Fill in the recovery report at \`${reportRel}\` as you go.`,
+  ].join("\n");
+}
+
+function recoveryContent(esc: Escalation, attempt: number, maxAttempts: number, reportRel: string): string {
+  return [
+    `## recovery-orchestration: stuck on '${esc.signature}' (attempt ${attempt}/${maxAttempts})`,
     "",
     `Signal: ${esc.reason} (repeated ${esc.count}×). Assistance did not break the loop — run the`,
     "deep root-cause pass instead of grinding in this anchored context:",
@@ -232,11 +291,11 @@ function recoveryContent(esc: Escalation, attempt: number, reportRel: string): s
   ].join("\n");
 }
 
-function reportScaffold(esc: Escalation, attempt: number, cwd: string): string {
+function reportScaffold(esc: Escalation, attempt: number, maxAttempts: number, cwd: string): string {
   return [
     `# Recovery report — ${esc.signature}`,
     "",
-    `- Attempt: ${attempt}/${MAX_ATTEMPTS}`,
+    `- Attempt: ${attempt}/${maxAttempts}`,
     `- Failing signature: \`${esc.signature}\``,
     `- Signal: ${esc.reason} (repeated ${esc.count}×)`,
     `- Entered: ${esc.at}`,
@@ -276,15 +335,13 @@ export function planRecovery(
   cwd: string,
   attemptsBySignature: Map<string, number>,
   sessionId: string | undefined = currentSessionId,
+  maxAttempts: number = MAX_ATTEMPTS,
 ): RecoveryPlan {
   const esc = readEscalation(cwd, sessionId);
   if (!esc) return { action: "none" };
-  if (!boardPassing(cwd)) {
-    // board failing corroborates the stuck state; proceed
-  }
   const prior = attemptsBySignature.get(esc.signature) ?? 0;
   const attempt = prior + 1;
-  if (attempt > MAX_ATTEMPTS) return { action: "cap", escalation: esc, attempt };
+  if (attempt > maxAttempts) return { action: "cap", escalation: esc, attempt };
   // Each entry gets its own report: start at the attempt number and take the first free name, so
   // a later episode (attempts restart at 1 after progress) never reuses a filled-in report.
   let n = attempt;
@@ -292,26 +349,6 @@ export function planRecovery(
   while (fs.existsSync(path.join(cwd, nameFor(n))) && n < attempt + 10_000) n++;
   const reportRel = nameFor(n);
   return { action: "enter", escalation: esc, attempt, reportRel };
-}
-
-// A successful write/edit is verified progress: the episode that escalated is over. Same
-// tool-name test as progress-guard's isWrite (duplicated, not imported, so each extension stays
-// independently extractable).
-function isWriteTool(tool: string): boolean {
-  return /^(write|edit|create|apply|str_replace|multi_?edit|patch|insert|append)/i.test(tool) || /write|edit/.test(tool.toLowerCase());
-}
-
-// Only a write to a named file outside `.pi/` counts as progress. The steer itself asks the model
-// to fill in the recovery report under `.pi/recovery/`; if that bookkeeping write reset the count,
-// following the steer would make the cap unreachable. A write naming no path is not counted.
-function isProgressWrite(tool: unknown, input: unknown, isError: unknown, cwd: string): boolean {
-  if (typeof tool !== "string" || !isWriteTool(tool) || isError === true) return false;
-  if (!input || typeof input !== "object") return false;
-  const o: Record<string, unknown> = { ...input };
-  const target = o.path ?? o.file_path ?? o.filePath ?? o.file;
-  if (typeof target !== "string" || target.trim() === "") return false;
-  const rel = path.relative(path.resolve(cwd), path.resolve(cwd, target));
-  return rel !== ".pi" && !rel.startsWith(`.pi${path.sep}`);
 }
 
 function writeContribution(cwd: string, content: string): void {
@@ -333,6 +370,31 @@ function clearContribution(cwd: string): void {
 export default function (pi: ExtensionAPI) {
   let cwd = process.cwd();
   const attemptsBySignature = new Map<string, number>();
+  // What decides that a signature's attempts are over: the turn it was last detected on (quiet
+  // turns count from there) and the moment it last entered (a board pass must be newer than that).
+  const lastEntry = new Map<string, { turn: number; at: number }>();
+  let turn = 0;
+  let sessionCtx: ExtensionContext | undefined;
+  let unsubscribe = (): void => {};
+
+  function noteAttempt(signature: string, attempt: number): void {
+    attemptsBySignature.set(signature, attempt);
+    lastEntry.set(signature, { turn, at: Date.now() });
+  }
+
+  function forget(signature: string): void {
+    attemptsBySignature.delete(signature);
+    lastEntry.delete(signature);
+  }
+
+  // G6: a write proves nothing, because a cosmetic edit then a re-stall is the same stall. Attempts
+  // end on a passing board, on a user turn (below), or after a quiet stretch: "stall" is one fixed
+  // signature, so without the decay unrelated stalls in a long autonomous turn would add up to the cap.
+  function forgetResolved(dir: string, quietTurns: number): void {
+    for (const [signature, entry] of lastEntry) {
+      if (turn - entry.turn >= quietTurns || boardPassedSince(dir, entry.at)) forget(signature);
+    }
+  }
 
   function block(ctx: ExtensionContext, signature: string): void {
     const sessionId = ctx.sessionManager?.getSessionId?.() ?? String(process.pid);
@@ -352,45 +414,61 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd ?? process.cwd();
     currentSessionId = resolveSessionId(ctx.sessionManager);
+    sessionCtx = ctx;
     clearContribution(cwd);
     clearEscalation(cwd); // fresh session starts clean: only its own marker (REL-5)
+    // The bus outlives /reload, so these belong to the session: left to stand, an old instance
+    // would take a bare /boost with its own attempts and a dead context.
+    unsubscribe();
+    const offReassess = pi.events?.on("pi-kit:recovery-reassess", onReassess);
+    const offStallSeen = pi.events?.on("pi-kit:stall-seen", onStallSeen);
+    unsubscribe = () => {
+      offReassess?.();
+      offStallSeen?.();
+    };
   });
 
-  // REL-3: attempts are counted per stuck episode, not per process. progress-guard uses the
-  // fixed signature "stall" for every read stall, so without a reset unrelated, resolved
-  // episodes added up to the cap. A successful write to a file outside .pi/ ends the episode for
-  // every signature; recovery bookkeeping (the report under .pi/recovery/) does not.
-  pi.on("tool_result", async (event, ctx) => {
-    if (isProgressWrite(event.toolName, event.input, event.isError, ctx?.cwd ?? cwd)) attemptsBySignature.clear();
+  pi.on("session_shutdown", async () => { unsubscribe(); });
+
+  // A message from you, not a loop's Continue (source "extension") and not a slash command, which
+  // is how /boost itself reaches here: you have seen the state and said what comes next.
+  pi.on("input", async (event) => {
+    if (event.source === "extension" || event.text?.trim().startsWith("/")) return;
+    attemptsBySignature.clear();
+    lastEntry.clear();
   });
 
-  // Enter recovery at most MAX_ATTEMPTS times per escalated signature within one episode; a
-  // successful write outside .pi/ (above) starts a new episode.
+  // Enter recovery at most maxAttempts times per escalated signature, until forgetResolved ends them.
   pi.on("turn_end", async (_event, ctx) => {
     const c = ctx;
     cwd = c.cwd ?? cwd;
-    const plan = planRecovery(cwd, attemptsBySignature);
+    sessionCtx = c;
+    turn += 1;
+    const { maxAttempts, quietTurns } = limits();
+    forgetResolved(cwd, quietTurns);
+    const plan = planRecovery(cwd, attemptsBySignature, currentSessionId, maxAttempts);
     if (plan.action === "none") return;
 
     if (plan.action === "cap") {
       block(c, plan.escalation.signature);
-      attemptsBySignature.set(plan.escalation.signature, plan.attempt);
+      noteAttempt(plan.escalation.signature, plan.attempt);
       clearEscalation(cwd);
-      const msg = `recovery-orchestrator: '${plan.escalation.signature}' still stuck after ${MAX_ATTEMPTS} recovery attempts — escalate to the operator (or dual-review).`;
+      const msg = `recovery-orchestrator: '${plan.escalation.signature}' still stuck after ${maxAttempts} recovery attempts — escalate to the operator (or dual-review).`;
       writeContribution(cwd, `## recovery: give up gracefully\n\n${msg}`);
       if (c.hasUI) c.ui.notify(msg, "error");
       return;
     }
 
     const { escalation: esc, attempt, reportRel } = plan;
-    attemptsBySignature.set(esc.signature, attempt);
+    noteAttempt(esc.signature, attempt);
     try {
       const reportAbs = path.join(cwd, reportRel);
-      createFileExclusive(reportAbs, reportScaffold(esc, attempt, cwd), { root: cwd }); // created only if absent, in one step
+      createFileExclusive(reportAbs, reportScaffold(esc, attempt, maxAttempts, cwd), { root: cwd }); // created only if absent, in one step
     } catch {
       /* report is best-effort; the steer is the important part */
     }
-    writeContribution(cwd, recoveryContent(esc, attempt, reportRel));
+    const steer = splitSteer(esc.signature, attempt);
+    writeContribution(cwd, steer === null ? recoveryContent(esc, attempt, maxAttempts, reportRel) : splitContent(esc, attempt, maxAttempts, reportRel, steer));
     // Open the small recovery delegation budget (read-only scouts) for this request. Only this trusted
     // code path can: a minimal-effort session may not delegate at will, but it can recover. The budget
     // closes with the next user turn (docs/effort.md).
@@ -398,8 +476,46 @@ export default function (pi: ExtensionAPI) {
       ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { setRecoveryActive?(active: boolean, reason?: string): void } | undefined)?.setRecoveryActive?.(true, `recovery for ${esc.signature}`);
     } catch { /* effort is optional here */ }
     clearEscalation(cwd); // consumed — don't re-enter for the same escalation marker
-    if (c.hasUI) c.ui.notify(`recovery-orchestrator: entered recovery for '${esc.signature}' (attempt ${attempt}/${MAX_ATTEMPTS}). See ${reportRel}.`, "warning");
+    if (c.hasUI) c.ui.notify(`recovery-orchestrator: entered recovery for '${esc.signature}' (attempt ${attempt}/${maxAttempts}). See ${reportRel}.`, "warning");
   });
+
+  // The operator's way in, from the marker a caller just wrote: /recover, and a bare /boost.
+  function enterNow(c: ExtensionContext, dir: string, signature: string): void {
+    const { maxAttempts, quietTurns } = limits();
+    forgetResolved(dir, quietTurns);
+    const plan = planRecovery(dir, attemptsBySignature, currentSessionId, maxAttempts);
+    if (plan.action === "enter") {
+      noteAttempt(plan.escalation.signature, plan.attempt);
+      try {
+        createFileExclusive(path.join(dir, plan.reportRel), reportScaffold(plan.escalation, plan.attempt, maxAttempts, dir), { root: dir }); // created only if absent, in one step
+      } catch { /* ignore */ }
+      const steer = splitSteer(plan.escalation.signature, plan.attempt);
+      writeContribution(dir, steer === null ? recoveryContent(plan.escalation, plan.attempt, maxAttempts, plan.reportRel) : splitContent(plan.escalation, plan.attempt, maxAttempts, plan.reportRel, steer));
+      clearEscalation(dir);
+      if (c.hasUI) c.ui.notify(`recovery-orchestrator: recovery queued for '${signature}'. See ${plan.reportRel}.`, "info");
+    } else if (plan.action === "cap") {
+      block(c, signature);
+      clearEscalation(dir);
+      writeContribution(dir, `## Recovery blocked\nRecovery budget exhausted for '${signature}'. Report the blocker; await an operator decision. Do not retry unchanged recovery.`);
+      if (c.hasUI) c.ui.notify(`recovery-orchestrator: '${signature}' has hit the attempt cap — escalate to the operator.`, "warning");
+    }
+  }
+
+  // Bare /boost in progress-guard has written its marker; the self-containment rule means an event,
+  // not an import. Without this listener the next turn_end consumes the marker instead.
+  function onReassess(data: unknown): void {
+    const dir = field(data, "cwd");
+    const signature = field(data, "signature");
+    if (sessionCtx && typeof dir === "string" && typeof signature === "string") enterNow(sessionCtx, dir, signature);
+  }
+
+  // progress-guard detected the signature again, so its quiet stretch starts over. `at` stays the
+  // last entry: a detection says nothing about the board.
+  function onStallSeen(data: unknown): void {
+    const signature = field(data, "signature");
+    const entry = typeof signature === "string" ? lastEntry.get(signature) : undefined;
+    if (entry) entry.turn = turn;
+  }
 
   pi.registerCommand("recover", {
     description: "Manually trigger recovery-orchestration for the current stuck state (/recover [signature]).",
@@ -417,21 +533,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         /* ignore */
       }
-      const plan = planRecovery(dir, attemptsBySignature);
-      if (plan.action === "enter") {
-        attemptsBySignature.set(plan.escalation.signature, plan.attempt);
-        try {
-          createFileExclusive(path.join(dir, plan.reportRel), reportScaffold(plan.escalation, plan.attempt, dir), { root: dir }); // created only if absent, in one step
-        } catch { /* ignore */ }
-        writeContribution(dir, recoveryContent(plan.escalation, plan.attempt, plan.reportRel));
-        clearEscalation(dir);
-        if (c.hasUI) c.ui.notify(`recovery-orchestrator: recovery queued for '${signature}'. See ${plan.reportRel}.`, "info");
-      } else if (plan.action === "cap") {
-        block(c, signature);
-        clearEscalation(dir);
-        writeContribution(dir, `## Recovery blocked\nRecovery budget exhausted for '${signature}'. Report the blocker; await an operator decision. Do not retry unchanged recovery.`);
-        if (c.hasUI) c.ui.notify(`recovery-orchestrator: '${signature}' has hit the attempt cap — escalate to the operator.`, "warning");
-      }
+      enterNow(c, dir, signature);
     },
   });
 }

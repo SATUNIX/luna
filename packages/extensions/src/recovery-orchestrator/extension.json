@@ -6,7 +6,7 @@
   "tier": "T2-T4",
   "layer": 5,
   "entry": "index.ts",
-  "hooks": ["session_start", "tool_result", "turn_end"],
+  "hooks": ["session_start", "session_shutdown", "input", "turn_end"],
   "registers": { "tools": [], "commands": ["recover"] },
   "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
   "enabledByDefault": true,

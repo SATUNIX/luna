@@ -10,6 +10,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- One decision policy now chooses what a stall, a large task or a large diff turns into: a pure
+  `decide()` in `src/effort/strategy.ts`, tuned by the `strategy` block of `policy/effort.json`, in
+  place of nudges each source wrote for itself. Progress-guard, recovery, the orchestrator and
+  dual-review deliver what it returns, and a move never touches a tool set, a firewall decision or a
+  tier. `strategy.delegateScore` is the one threshold for the directive and for provider-router's
+  classification; `PI_KIT_ORCH_THRESHOLD` still overrides it. At level 3 or above, with `workflow_run`
+  active, a second recovery attempt becomes a split, and a workflow card comes once per epoch, never
+  in a child (`docs/effort.md`, `tests/workflow-strategy-smoke.ts`,
+  `tests/orchestrate-commands-smoke.ts`, `tests/dual-review-smoke.ts`).
+- **Recovery attempts survive a write.** An edit outside `.pi` no longer clears them, so a cosmetic edit
+  cannot get round the cap. They clear on a user turn, on a board pass from a trusted source newer
+  than the attempt, or after `quietTurns` turns in which the stall did not fire. Bare `/boost` now
+  reassesses and spends an attempt; `/boost status` shows the state, and the hub's Auto-boost row
+  sends that. Recovery's bus listeners follow the session, so a stale instance cannot take `/boost`
+  after `/reload` (`tests/workflow-strategy-smoke.ts`, `tests/recovery-grounding-smoke.ts`,
+  `tests/control-center-smoke.ts`).
 - Holding prompts behind an open overlay now covers every prompt an agent can raise on its own: the
   project-agent, specialist and project-workflow trust prompts, the resume prompts and the
   reduced-sandbox and wake-chain questions join approvals and `ask_human`. A hold and its card share one

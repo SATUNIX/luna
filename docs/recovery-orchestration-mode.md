@@ -7,8 +7,10 @@
 > enters this deep mode once per signature: it writes a recovery report scaffold and steers the
 > §2 flow via a `context-sieve` contribution (never a system prompt). It is non-destructive
 > (plans and steers; the repair is a delegated `implementer` after a checkpoint) and bounded to
-> `PI_KIT_RECOVERY_MAX_ATTEMPTS` per signature; a successful write or edit to a named file outside
-> `.pi/` resets the count, and writes to the recovery report do not (`tests/recovery-grounding-smoke.ts`). The
+> `PI_KIT_RECOVERY_MAX_ATTEMPTS` per signature. Attempts clear on a passing board (a trusted verdict
+> newer than the attempt, every source passing), a user turn, or `quietTurns` (20) turns without that
+> signature; writes do not clear them (`tests/recovery-grounding-smoke.ts`). Attempt 2 at E3 or above
+> with `workflow_run` active steers to a split instead of scouts (`tests/workflow-strategy-smoke.ts`). The
 > steer names only tools the model can call: `subagent` stands in for the `/fork` of step 2 (a task
 > given a digest of the history) and the `verify_completion` tool for re-verifying, since `/fork`
 > and `/verify` are operator commands (`tests/recovery-grounding-smoke.ts`). Manual trigger:
@@ -69,9 +71,13 @@ regresses, is not detected as a trigger; see [Future work](future-work.md#delega
 ### Anti-trigger / debounce
 - It enters recovery at most once per escalation marker: the marker is consumed on entry, and a
   marker that names another session is ignored (`tests/recovery-grounding-smoke.ts`).
-- Attempts per signature are capped at `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default `2`) until a
-  successful write or edit to a named file outside `.pi/`; past the cap it tells the operator to
-  escalate instead of entering again (`tests/recovery-grounding-smoke.ts`).
+- Attempts per signature are capped at `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default `2`) until
+  they clear: on a passing board (a trusted verdict newer than the attempt, every source passing),
+  a user turn, or `quietTurns` (20) turns without that signature. Writes do not clear them. Past the
+  cap it tells the operator to escalate instead of entering again
+  (`tests/recovery-grounding-smoke.ts`).
+- Attempt 2 at E3 or above with `workflow_run` active steers to a split, not to more scouts
+  (`tests/workflow-strategy-smoke.ts`).
 
 ## 4. Mapping onto existing kit primitives
 
@@ -143,7 +149,7 @@ test pins the lifetime.
 
 ## 8. Shape
 
-`recovery-orchestrator` is an extension: it hooks `session_start`, `tool_result` and `turn_end`,
+`recovery-orchestrator` is an extension: it hooks `session_start`, `input` and `turn_end`,
 keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
 steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers `/recover`.
 The steer names the `recovery-debugging` skill, which covers recovering from a broken state by

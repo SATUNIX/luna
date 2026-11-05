@@ -284,9 +284,10 @@ each `workflow` call is asked until you answer Yes to `/effort ultracode` again.
 
 - **Prompt.** While the `workflow` tool is in the active tool set, `policy/standing.md`, with the
   size guideline and the budget filled in, is added inside the one effort block, and each turn
-  carries a one-line hidden reminder message. The effort extension injects these itself, as it
-  does its tier text: this is the one exception to context-sieve being the only injector of
-  turn guidance.
+  carries a hidden reminder message, which may also carry the workflow card (see
+  [Decision policy](#decision-policy)). The effort extension injects these itself, as it does its
+  tier text: the standing text, the plan sentence and the card are effort's one exception to
+  context-sieve being the only injector of turn guidance.
 - **Size** is a soft guideline in the prompt; nothing enforces it. The engine's own limits (1000
   agents a run, the [workflow ledger](#script-workflows)) still apply.
 - **Budget** becomes `budget.total` of every run the `workflow` tool starts while standing mode is
@@ -308,6 +309,35 @@ Tests: `tests/effort-standing-smoke.ts` (`npm run smoke:effort-standing`).
 
 Not covered: the hidden reminder is one more message in the session for every turn while standing
 mode is on, and the wake-chain cap applies only while standing mode is on.
+
+## Decision policy
+
+One pure function, `decide` in `src/effort/strategy.ts`, chooses what a stall, a large task or a
+large diff turns into. A move only chooses words: it never changes a tool set, a firewall decision
+or a tier. Effort supplies the tier and the tool activity, never the caller, and a child always
+gets no move.
+
+The numbers are the `strategy` block of `policy/effort.json`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `planMinTier` | 5 | Level from which each user message is told to plan. |
+| `splitMinTier` | 3 | Level from which a task is shaped as a plan: a directive names `workflow_run`, a repeated stall or FAIL becomes a split, and a large diff suggests `review-changes`. |
+| `delegateScore` | 3 | Complexity score that earns a directive. `PI_KIT_ORCH_THRESHOLD` overrides it. |
+| `reviewLines` | 400 | Changed lines of a large diff. |
+| `stallAfter` | 2 | Detections of one signal before recovery is called. `PI_KIT_GUARD_ESCALATE` overrides it. |
+| `quietTurns` | 20 | Turns without a signature after which its attempts clear. |
+| `maxAttempts` | 2 | Recovery attempts before the operator is called. `PI_KIT_RECOVERY_MAX_ATTEMPTS` overrides it. |
+| `expandDepth` | 3 | Generations of expansion one inline plan may reach. |
+
+- **Plan sentence.** At level 5, or in standing mode, with `workflow_run` active, each user message
+  adds one sentence to the effort block telling the agent to run substantial work as a plan.
+- **Workflow card.** A short guide to `workflow_run`, sent with the first move that asks for it (a
+  plan or a split). It is shown once per epoch: `session_start` and `session_compact` each start a
+  new one. It is never shown in a child. It goes out as one hidden message, joined to the standing
+  reminder when there is one.
+
+Tests: `tests/workflow-strategy-smoke.ts` (`npm run smoke:workflow-strategy`).
 
 ## Autonomous runs
 

@@ -142,7 +142,7 @@ export const ROWS: RowDef[] = [
   { id: "approvals.auto", label: "Approvals → auto", page: "autonomy", kind: "action", legacy: "/auto on", risk: "weakening", asksItself: true, description: "Switches approvals to automatic (a model judge decides)" },
   { id: "firewall", label: "Remembered approvals", page: "autonomy", kind: "action", legacy: "/firewall" },
   { id: "loop", label: "Loop", page: "autonomy", kind: "action", legacy: "/loop", unavailableReason: "loaded only in the long-horizon and autonomous profiles" },
-  { id: "boost", label: "Auto-boost", page: "autonomy", kind: "action", legacy: "/boost" },
+  { id: "boost", label: "Auto-boost", page: "autonomy", kind: "action", legacy: "/boost status" },
   { id: "autonomy", label: "Container runs", page: "autonomy", kind: "action", legacy: "/autonomy", unavailableReason: "loaded only in the autonomous profile" },
 
   // --- work ---

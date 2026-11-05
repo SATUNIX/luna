@@ -27,8 +27,8 @@ const TierLimitsSchema = object({ maxConcurrent: Count, maxTotal: Count, maxScou
 const Positive = number({ integer: true, min: 1 });
 /** Bounds on script-workflow launches (the "workflow" kind), separate from every tier budget. */
 const WorkflowLimitsSchema = object({ workflowConcurrent: Positive, workflowTotalPerRun: Positive, workflowSessionTotal: Positive });
-/** How far work may be reshaped while it runs: expandDepth is the generations one plan may expand. */
-const StrategySchema = object({ expandDepth: Positive });
+/** The decision policy's numbers (the effort extension's strategy.ts); expandDepth is the generations one plan may expand. */
+const StrategySchema = object({ planMinTier: Positive, splitMinTier: Positive, delegateScore: Positive, reviewLines: Positive, stallAfter: Positive, quietTurns: Positive, maxAttempts: Positive, expandDepth: Positive });
 const WORKFLOW_KEYS = ["workflowConcurrent", "workflowTotalPerRun", "workflowSessionTotal"] as const;
 const TierSchema = object({
   id: string({ pattern: /^[a-z]+$/ }),
@@ -53,7 +53,7 @@ export const EffortPolicySchema = object({
   sharedPromptFile: string(),
   ceilings: TierLimitsSchema,
   workflow: WorkflowLimitsSchema,
-  strategy: withDefault(StrategySchema, { expandDepth: 3 }),
+  strategy: withDefault(StrategySchema, { planMinTier: 5, splitMinTier: 3, delegateScore: 3, reviewLines: 400, stallAfter: 2, quietTurns: 20, maxAttempts: 2, expandDepth: 3 }),
   recovery: object({ maxInvocations: Count, maxConcurrent: Count, roles: array(string()) }),
   memento: object({ maxGenerationsCeiling: Positive }),
   tiers: array(TierSchema),
@@ -108,6 +108,27 @@ function workflowAgentsProblems(tiers: unknown[]): string[] {
     if (previous !== null && n < previous) problems.push(`tiers[${index}].workflowAgents must not fall below the previous tier's`);
     previous = n;
   });
+  return problems;
+}
+
+const STRATEGY_TIER_KEYS = ["planMinTier", "splitMinTier"] as const;
+const STRATEGY_COUNT_KEYS = ["delegateScore", "reviewLines", "stallAfter", "quietTurns", "maxAttempts", "expandDepth"] as const;
+
+/**
+ * The strategy block's problems (empty when valid; it may be left out). Mirrors the effort
+ * extension's policy.ts strategyProblems (tests/workflow-strategy-smoke.ts compares them).
+ */
+function strategyProblems(value: unknown): string[] {
+  if (value === undefined) return [];
+  const problems: string[] = [];
+  for (const key of STRATEGY_TIER_KEYS) {
+    const level = prop(value, key);
+    if (!isCount(level) || level < 1 || level > 5) problems.push(`strategy.${key} must be a tier level from 1 to 5`);
+  }
+  for (const key of STRATEGY_COUNT_KEYS) {
+    const n = prop(value, key);
+    if (!isCount(n) || n < 1) problems.push(`strategy.${key} must be a positive integer`);
+  }
   return problems;
 }
 
@@ -178,9 +199,7 @@ export function validateEffortPolicy(policy: unknown, baseDir = EFFORT_POLICY_DI
     if (isCount(c) && isCount(run) && c > run) problems.push("workflow.workflowConcurrent cannot exceed workflow.workflowTotalPerRun");
     if (isCount(run) && isCount(session) && run > session) problems.push("workflow.workflowTotalPerRun cannot exceed workflow.workflowSessionTotal");
   }
-  const { strategy } = policy;
-  const depth = prop(strategy, "expandDepth");
-  if (strategy !== undefined && !(isCount(depth) && depth >= 1)) problems.push("strategy.expandDepth must be a positive integer");
+  problems.push(...strategyProblems(policy.strategy));
   problems.push(...workflowAgentsProblems(tiers));
   problems.push(...mementoProblems(policy.memento, tiers));
   const r = policy.recovery;

@@ -15,7 +15,14 @@
     "workflowSessionTotal": 2000
   },
   "strategy": {
-    "$comment": "How far work may be reshaped while it runs. expandDepth is how many generations of expansion one inline plan may reach: a step with expand answers with more steps, which may themselves expand. Each generation is ordinary steps in the same run, charged to the same allowance, and process depth stays 1.",
+    "$comment": "The one decision policy (strategy.ts): what a stall, a large task or a large diff turns into. A move only chooses words: it never changes a tool set, a firewall decision or a tier. planMinTier is the level from which each user message is told to plan (standing mode too); splitMinTier the level from which a task is shaped as a plan, so a directive names workflow_run, a repeated stall or FAIL becomes a split, and a large diff suggests review-changes; delegateScore the complexity score that earns a directive; reviewLines the changed lines of a large diff. stallAfter is the detections of one signal before recovery is called (PI_KIT_GUARD_ESCALATE overrides it), maxAttempts the recovery attempts before the operator is (PI_KIT_RECOVERY_MAX_ATTEMPTS overrides it), and quietTurns the turns without a signature after which its attempts clear. expandDepth is how many generations of expansion one inline plan may reach: a step with expand answers with more steps, which may themselves expand. Each generation is ordinary steps in the same run, charged to the same allowance, and process depth stays 1.",
+    "planMinTier": 5,
+    "splitMinTier": 3,
+    "delegateScore": 3,
+    "reviewLines": 400,
+    "stallAfter": 2,
+    "quietTurns": 20,
+    "maxAttempts": 2,
     "expandDepth": 3
   },
   "recovery": {

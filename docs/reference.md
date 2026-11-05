@@ -21,7 +21,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/auto` | `tool-firewall` | Auto mode: /auto [status\|on\|off\|explain [n]\|learned\|forget <sig>\|learn on\|off\|stats\|profile [rebuild\|reset]\|check <command>] | [autonomy-gate](autonomy-gate.md) |
 | `/auto-mode` | `tool-firewall` | Alias of /auto | [autonomy-gate](autonomy-gate.md) |
 | `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|boundary\|reconfigure. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
-| `/boost` | `progress-guard` | Auto-boost control: /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
+| `/boost` | `progress-guard` | Auto-boost control: /boost reassesses now; /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |
 | `/caveman` | `caveman` | Toggle/set output compression: /caveman [on\|off\|lite\|full\|ultra\|micro\|status] | [control-center](control-center.md) |
 | `/clear` | `session-helpers` | How to reset context (pi has no native /clear). Non-destructive: prints guidance only. | [control-center](control-center.md) |

@@ -9,6 +9,7 @@
   "hooks": [
     "session_start",
     "session_shutdown",
+    "session_compact",
     "before_agent_start"
   ],
   "registers": {

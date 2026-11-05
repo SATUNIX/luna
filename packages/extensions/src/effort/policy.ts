@@ -11,6 +11,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_STRATEGY } from "./strategy.ts";
+import type { StrategyConfig } from "./strategy.ts";
 
 export interface TierLimits {
   maxConcurrent: number;
@@ -52,8 +54,8 @@ export interface EffortPolicy {
   sharedPromptFile: string;
   ceilings: TierLimits;
   workflow: WorkflowLimits;
-  /** How far work may be reshaped while it runs. */
-  strategy: { expandDepth: number };
+  /** The decision policy's numbers, and how far work may be reshaped while it runs. */
+  strategy: StrategyConfig;
   recovery: { maxInvocations: number; maxConcurrent: number; roles: string[] };
   /** No tier's memento.maxGenerations may exceed this. */
   memento: { maxGenerationsCeiling: number };
@@ -103,13 +105,36 @@ function workflowProblems(value: unknown): string[] {
   return problems;
 }
 
-const DEFAULT_EXPAND_DEPTH = 3;
+const STRATEGY_TIER_KEYS = ["planMinTier", "splitMinTier"] as const;
+const STRATEGY_COUNT_KEYS = ["delegateScore", "reviewLines", "stallAfter", "quietTurns", "maxAttempts", "expandDepth"] as const;
 
-/** The strategy block's problems (empty when valid; it may be left out); mirrors packages/core/lib/effort.ts. */
+/**
+ * The strategy block's problems (empty when valid; it may be left out, and then every number is its
+ * default). Mirrors packages/core/lib/effort.ts strategyProblems (tests/workflow-strategy-smoke.ts compares them).
+ */
 function strategyProblems(value: unknown): string[] {
   if (value === undefined) return [];
-  const depth = isRecord(value) ? value.expandDepth : undefined;
-  return isCount(depth) && depth >= 1 ? [] : ["strategy.expandDepth must be a positive integer"];
+  const problems: string[] = [];
+  const at = (key: string): unknown => (isRecord(value) ? value[key] : undefined);
+  for (const key of STRATEGY_TIER_KEYS) {
+    const level = at(key);
+    if (!isCount(level) || level < 1 || level > 5) problems.push(`strategy.${key} must be a tier level from 1 to 5`);
+  }
+  for (const key of STRATEGY_COUNT_KEYS) {
+    const n = at(key);
+    if (!isCount(n) || n < 1) problems.push(`strategy.${key} must be a positive integer`);
+  }
+  return problems;
+}
+
+/** The strategy numbers when the block is valid; the defaults when it is left out. */
+function strategyOf(value: unknown): StrategyConfig | null {
+  if (value === undefined) return { ...DEFAULT_STRATEGY };
+  if (!isRecord(value) || strategyProblems(value).length) return null;
+  const { planMinTier, splitMinTier, delegateScore, reviewLines, stallAfter, quietTurns, maxAttempts, expandDepth } = value;
+  return isCount(planMinTier) && isCount(splitMinTier) && isCount(delegateScore) && isCount(reviewLines) && isCount(stallAfter) && isCount(quietTurns) && isCount(maxAttempts) && isCount(expandDepth)
+    ? { planMinTier, splitMinTier, delegateScore, reviewLines, stallAfter, quietTurns, maxAttempts, expandDepth }
+    : null;
 }
 
 /** The workflow limits when they are valid; null otherwise. */
@@ -204,18 +229,18 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   problems.push(...strategyProblems(policy.strategy));
   problems.push(...workflowAgentsProblems(rawTiers));
   problems.push(...mementoProblems(policy.memento, rawTiers));
-  const depth = isRecord(policy.strategy) ? policy.strategy.expandDepth : undefined;
+  const strategy = strategyOf(policy.strategy);
   const mementoCeiling = isRecord(policy.memento) ? policy.memento.maxGenerationsCeiling : undefined;
   const r = isRecord(recovery) ? recovery : null;
   const roles = r?.roles;
   if (!r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) problems.push("recovery needs maxInvocations, maxConcurrent and roles");
   if (problems.length) return { problems, policy: null };
-  if (typeof def !== "string" || typeof sharedPromptFile !== "string" || !ceilings || !workflow || !isCount(mementoCeiling) || !r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) {
+  if (typeof def !== "string" || typeof sharedPromptFile !== "string" || !ceilings || !workflow || !strategy || !isCount(mementoCeiling) || !r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) {
     return { problems: ["effort policy is malformed"], policy: null };
   }
   return {
     problems,
-    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, strategy: { expandDepth: isCount(depth) ? depth : DEFAULT_EXPAND_DEPTH }, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
+    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, strategy, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
   };
 }
 
@@ -316,6 +341,13 @@ export function renderStanding(size: number, budget: number | null, dir = policy
   const text = fs.readFileSync(path.join(dir, STANDING_PROMPT_FILE), "utf8").trim();
   const budgetText = budget === null ? "none set (`budget.total` is null)" : `${String(budget)} output tokens (\`budget.total\`); \`agent()\` throws once it is spent`;
   return text.replaceAll("{{size}}", String(size)).replaceAll("{{budget}}", budgetText);
+}
+
+/** The workflow card beside the tier prompts, shown once an epoch (docs/effort.md, "Decision policy"). */
+export const WORKFLOW_CARD_FILE = "workflow-card.md";
+
+export function renderCard(dir = policyDir()): string {
+  return fs.readFileSync(path.join(dir, WORKFLOW_CARD_FILE), "utf8").trim();
 }
 
 export const PROMPT_START = "<!-- pi-kit:effort -->";

@@ -40,10 +40,11 @@ export type Compiled = { ok: true; workflow: WorkflowDef; worstCaseAgents: numbe
 
 /** The tool's own account of a plan; kept here so the rules and their text change together. */
 export const PLAN_DESCRIPTION =
-  "A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {id?, parallel: [steps], gate?}. agent defaults to implementer. tools only narrow the role. " +
-  "{previous} is the prior step's output; {{steps.<id>.output}} any earlier step's. when: {step, status} runs on an earlier result. " +
-  "gate: {pass, retry, max_loops?} loops to retry until the output has pass; retry's task gets the review. " +
-  'expand: true: its answer is {"steps":[...]} to run next, or {"done":"text"}.';
+  "A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. " +
+  "outputs are files to write relative to the run directory. " +
+  "{previous} is the prior step's output; {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. " +
+  "gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. " +
+  'expand answers {"steps":[...]} or {"done":"text"}.';
 
 const EXAMPLE = 'Example: {"steps":[{"task":"..."}]}';
 const REFUSAL_CAP = 300;
@@ -58,6 +59,7 @@ const STATUSES: ReadonlySet<string> = new Set(STEP_STATUSES);
 const TOOL_NAME = /^[A-Za-z][\w-]*$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9._-]*$/i; // as skills.ts resolves them
 const GATE_REGEX = /^\/(.+)\/([a-z]*)$/; // as workflow.ts reads a gate's pass
+const PATH_SHAPE = /^\S+$/; // an output is a path in the run directory, not prose
 const MAX_LOOPS = 10;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -158,7 +160,10 @@ function checkLists(entry: Entry, scope: Scope): void {
   const { skills, outputs, continue_on_error: keepGoing, id, expand } = entry.raw;
   if (id !== undefined && typeof id !== "string") scope.errors.push(planError(`${entry.at}.id`, "id must be text.", 'Use an id like "review".'));
   if (skills !== undefined && !(isStrings(skills) && skills.every((s) => SKILL_NAME.test(s)))) scope.errors.push(planError(`${entry.at}.skills`, "skills must be a list of skill names.", 'Use ["workflow-authoring"], or leave skills out.'));
+  // An output is a path the step writes in the run directory, so the check that later fails a step for
+  // a missing file can never read as false when the text was prose all along.
   if (outputs !== undefined && !isStrings(outputs)) scope.errors.push(planError(`${entry.at}.outputs`, "outputs must be a list of file names.", 'Use ["report.md"], or leave outputs out.'));
+  else if (outputs !== undefined) for (const o of outputs) if (!PATH_SHAPE.test(o)) scope.errors.push(planError(`${entry.at}.outputs`, `${shown(o)} is prose, not a path in the run directory.`, 'Name a file the step writes, e.g. "report.md".'));
   if (keepGoing !== undefined && typeof keepGoing !== "boolean") scope.errors.push(planError(`${entry.at}.continue_on_error`, "continue_on_error must be true or false.", "Use true, or leave it out."));
   if (expand !== undefined && typeof expand !== "boolean") scope.errors.push(planError(`${entry.at}.expand`, "expand must be true or false.", "Use true, or leave it out."));
 }
@@ -177,12 +182,18 @@ function checkWhen(entry: Entry, scope: Scope): void {
   if (statuses.length === 0 || !statuses.every((s) => typeof s === "string" && STATUSES.has(s))) scope.errors.push(planError(`${at}.status`, `${shown(when.status)} is not a step status.`, "Use passed, failed or skipped."));
 }
 
+/** An example gate naming a real step id in this plan, for a refusal's fix. */
+function gateExample(scope: Scope, entry: Entry): string {
+  const id = scope.tops[scope.expands.lastIndexOf(true, entry.index) + 1] ?? ""; // a gate cannot go back over an expand
+  return id ? `Use {"pass": "PASS", "retry": "${id}"}.` : 'Use {"pass": "PASS", "retry": "<step id>"}.';
+}
+
 function checkGate(entry: Entry, scope: Scope): void {
   const { gate } = entry.raw;
   if (gate === undefined || entry.member) return;
   const at = `${entry.at}.gate`;
   if (!isRecord(gate)) {
-    scope.errors.push(planError(at, "gate must be a mapping.", 'Use {"pass": "PASS", "retry": "build"}.'));
+    scope.errors.push(planError(at, "gate must be a mapping.", gateExample(scope, entry)));
     return;
   }
   for (const key of Object.keys(gate)) if (!GATE_FIELDS.has(key)) scope.errors.push(planError(`${at}.${key}`, "this field is not part of a gate.", "Use only pass, retry and max_loops."));
@@ -201,7 +212,7 @@ function checkGate(entry: Entry, scope: Scope): void {
       if (!safe) scope.errors.push(planError(`${at}.pass`, `${shown(pass)} is not a safe pattern, so the gate could never pass.`, "Use plain text or a simpler pattern."));
     }
   }
-  if (typeof retry !== "string" || !scope.tops.slice(0, entry.index + 1).includes(retry)) scope.errors.push(planError(`${at}.retry`, `${shown(retry)} is not this or an earlier top-level step.`, "Name the step to redo; give it an id."));
+  if (typeof retry !== "string" || !scope.tops.slice(0, entry.index + 1).includes(retry)) scope.errors.push(planError(`${at}.retry`, `${shown(retry)} is not this or an earlier top-level step.`, gateExample(scope, entry)));
   // A rewind would run an `expand` step twice, and its steps are already in the run.
   const target = typeof retry === "string" ? scope.tops.indexOf(retry) : -1;
   if (target >= 0 && scope.expands.slice(target, entry.index + 1).some(Boolean)) scope.errors.push(planError(`${at}.retry`, "a gate cannot go back over a step with expand.", "Gate the steps inside the expansion instead."));

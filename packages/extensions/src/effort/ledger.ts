@@ -360,7 +360,14 @@ export function openRun(file: string, runId: string, now = Date.now(), newToken:
       if (Object.hasOwn(data.workflow.runs, runId)) return deny("run-scope", `workflow run "${runId}" already has a scope; a run id is opened once`);
       if (plan) {
         const planned = data.workflow.plannedUsed ?? 0;
-        if (planned + plan.planned > plan.allowance) return deny("plan-allowance", `this workflow can start up to ${plan.planned} agents, and ${plan.label} allows ${plan.allowance} planned agents a request (${planned} already planned). Run a smaller workflow, or ask the user to raise effort with /effort.`);
+        if (planned + plan.planned > plan.allowance) {
+          const remaining = plan.allowance - planned;
+          const why =
+            remaining <= 0
+              ? `no workflow of any size fits this request: ${plan.label} allows ${plan.allowance} planned agents a request and ${planned} are already planned. The allowance renews on the next user message; raise it with /effort.`
+              : `this workflow can start up to ${plan.planned} agents, but only up to ${remaining} more would fit this request: ${plan.label} allows ${plan.allowance} planned agents a request (${planned} already planned). Plan fewer agents, or raise effort with /effort.`;
+          return deny("plan-allowance", why);
+        }
         data.workflow.plannedUsed = planned + plan.planned;
       }
       const runToken = newToken();
@@ -389,7 +396,17 @@ export function chargeRun(file: string, runId: string, runToken: string, plan: R
       if (!wf || run?.cap === undefined || !tokenMatches(run.tokenHash, runToken)) return deny("run-scope", "no open planned workflow run matches this request (unknown run id or wrong run token)");
       const planned = wf.plannedUsed ?? 0;
       const allowance = Math.min(plan.allowance, run.cap);
-      if (planned + plan.planned > allowance || run.used + plan.planned > allowance) return deny("plan-allowance", `up to ${plan.planned} more agents; ${plan.label} allows ${allowance} a request (${planned} planned, ${run.used} started here). Plan less, or ask for more with /effort.`);
+      if (planned + plan.planned > allowance || run.used + plan.planned > allowance) {
+        const inRequest = allowance - planned;
+        const inRun = allowance - run.used;
+        const why =
+          inRequest <= 0
+            ? `no workflow of any size fits this request: ${plan.label} allows ${allowance} a request and ${planned} are already planned. The allowance renews on the next user message; raise it with /effort.`
+            : inRun <= 0
+              ? `this run has started ${run.used} of its ${allowance} agents, so it cannot expand; a new plan can still start up to ${inRequest}.`
+              : `up to ${Math.min(inRequest, inRun)} more agents would fit: ${plan.label} allows ${allowance} a request (${planned} planned, ${run.used} started here). Plan less, or raise effort with /effort.`;
+        return deny("plan-allowance", why);
+      }
       wf.plannedUsed = planned + plan.planned;
       writeLedger(file, data);
       return { ok: true as const };

@@ -162,6 +162,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Plans now fail for reasons the tools explain. `outputs` are paths relative to the run directory:
+  prose is refused at compile, and a miss names the directory checked. A gate refusal names a real
+  step id, and the text says the host adds the review to the retry step. The allowance refusals say
+  what would fit: a size only when one fits, "no workflow of any size" with when it renews, and a run
+  at its own cap says so and names what a new plan could start. A plan's resume refusal says "plan",
+  and the gate is as strict as before (`tests/workflow-plan-smoke.ts`, `tests/effort-smoke.ts`).
+- A parallel plan or workflow member that settled is saved at once, so a host kill no longer loses it
+  and a resume re-runs only what is left (`tests/workflow-plan-smoke.ts`).
+- `docs/reference.md` documents `workflow_run` from its source instead of "No description."; the
+  generator now resolves an imported constant (`tests/workflow-plan-smoke.ts`).
 - A workflow's limits now hold at the moment an agent starts. The pause and the budget are checked last, after
   the checkout lock and the worktree-slot wait; output is charged as soon as a child ends, including when
   a later step throws; a script's leftover calls stop with that script; and a run waits for stopped calls

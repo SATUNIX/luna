@@ -768,6 +768,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
       delete st.error;
       st.endedAt = new Date().toISOString();
       tele.run.agentSkipped(start);
+      saveState(runDir, state);
       return st;
     }
   }
@@ -779,6 +780,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
     st.status = "failed";
     st.error = error instanceof Error ? error.message : String(error);
     tele.run.agentEnd(tele.run.agentStart(start), { status: "failed", error: st.error });
+    saveState(runDir, state);
     return st;
   }
   // The scheduler gate: a paused run launches no new agent. A stop while waiting launches nothing
@@ -834,34 +836,41 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   st.outputTokens = (st.outputTokens ?? 0) + result.usage.output;
   keepOutput(st, runDir, step.id, result.finalOutput || getResultOutput(result));
   st.endedAt = new Date().toISOString();
+  // A member of a parallel group settles while its siblings still run, and the group saves only once
+  // they all have: write now, so a host kill loses nothing that finished. saveState writes the whole
+  // state synchronously, so two settles cannot interleave or lose a member.
+  const settled = (): StepState => {
+    saveState(runDir, state);
+    return st;
+  };
   if (handle.skipped()) {
     st.status = "skipped";
     st.error = handle.skipOrigin() === "agent" ? SKIPPED_BY_AGENT : SKIPPED_BY_OPERATOR;
     settle("skipped");
-    return st;
+    return settled();
   }
   if (result.stopReason === "aborted" || opts.control.stopped) {
     st.status = "aborted";
     st.error = "cancelled";
     settle("aborted");
-    return st;
+    return settled();
   }
   if (isFailedResult(result)) {
     st.status = "failed";
     st.error = result.errorMessage || result.stderr.slice(0, 500) || `exit ${result.exitCode}`;
     settle("failed");
-    return st;
+    return settled();
   }
   const missingOutputs = (step.outputs ?? []).filter((o) => !fs.existsSync(path.join(runDir, o)));
   if (missingOutputs.length) {
     st.status = "failed";
-    st.error = `declared output(s) not written: ${missingOutputs.join(", ")}`;
+    st.error = `declared output(s) not written in ${runDir}: ${missingOutputs.join(", ")}`;
     settle("failed");
-    return st;
+    return settled();
   }
   st.status = "passed";
   settle("passed");
-  return st;
+  return settled();
 }
 
 // A stale "running" in a resumed state.json is a step that never finished: it shows as pending.

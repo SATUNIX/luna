@@ -62,7 +62,8 @@ treat them like any other.
   asked for once more with `{path, problem, fix}` added to the task; a second miss fails the step,
   and so does a miss when the run has no execution left for the second ask.
   An expansion past the depth limit, the allowance or the execution limit launches nothing, is
-  recorded as an omission, and the run goes on to end `partial`, so the agent can replan. A typed
+  recorded as an omission, and the run goes on to end `partial`, so the agent can replan within
+  what is left of the allowance, or once it renews on the next user message. A typed
   `/workflow resume` has no run scope to charge, so it refuses a new expansion the same way; it
   still replays one the run already charged.
 - **Depth.** `strategy.expandDepth` in the effort policy (3 by default) limits the generations one

@@ -84,7 +84,10 @@ export function trustedDigests(): string[] {
 }
 
 /** What the trust gate needs to know about a workflow, YAML or script. */
-export type Gated = Pick<WorkflowDef, "name" | "description" | "source" | "file">;
+export type Gated = Pick<WorkflowDef, "name" | "description" | "source" | "file"> & {
+  /** An inline plan: gated like a project workflow, but its card and refusals say "plan". */
+  inlinePlan?: true;
+};
 
 /** Record a "Trust this digest" grant (also used by the /workflows panel for a script it saved). */
 export function rememberDigest(digest: string, w: Gated): void {
@@ -117,14 +120,17 @@ export async function trustError(w: Gated, digest: string, ctx: ToolContext, cal
   if (w.source !== "project") return null;
   const envGrants = (process.env.PI_KIT_TRUSTED_WORKFLOWS ?? "").split(";").map((d) => d.trim());
   if (envGrants.includes(digest) || trustedDigests().includes(digest)) return null;
-  if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: project workflow "${w.name}" needs interactive approval or a digest grant (sha256 ${digest} in PI_KIT_TRUSTED_WORKFLOWS, or trusted earlier with "Trust this digest").`;
+  // An inline plan is gated as strictly as a project workflow; only the subject's name tells the
+  // operator which of the two they are approving.
+  const what = w.inlinePlan ? "plan" : "project workflow";
+  if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: ${what} "${w.name}" needs interactive approval or a digest grant (sha256 ${digest} in PI_KIT_TRUSTED_WORKFLOWS, or trusted earlier with "Trust this digest").`;
   // A tool raises this card, and a script can raise it mid-run: under an open overlay it waits.
   const select = ctx.ui.select.bind(ctx.ui);
   const asked = await askFree(ctx, {
     what: `workflow ${w.name}: waiting for approval`,
-    show: (card) => select(`Run project workflow "${w.name}"${calledFrom ? ` (called by workflow "${calledFrom}")` : ""}? ${w.description}\nSource: ${w.file}\nsha256: ${digest}\nOnly run workflows from repositories you trust.`, [...TRUST_CHOICES], card),
+    show: (card) => select(`Run ${what} "${w.name}"${calledFrom ? ` (called by workflow "${calledFrom}")` : ""}? ${w.description}\nSource: ${w.file}\nsha256: ${digest}\nOnly run workflows from repositories you trust.`, [...TRUST_CHOICES], card),
   });
-  if (asked.kind !== "shown") return `Blocked: no operator approved project workflow "${w.name}".`;
+  if (asked.kind !== "shown") return `Blocked: no operator approved ${what} "${w.name}".`;
   const choice = asked.value;
   if (choice === TRUST_CHOICES[1]) return null;
   if (choice === TRUST_CHOICES[2]) {
@@ -135,7 +141,7 @@ export async function trustError(w: Gated, digest: string, ctx: ToolContext, cal
     }
     return null;
   }
-  return "Cancelled: project workflow not approved.";
+  return `Cancelled: ${what} not approved.`;
 }
 
 // Resuming a run that was stopped while a writing step ran re-runs that step on top of whatever it
@@ -468,7 +474,7 @@ async function resumePlan(ctx: ToolContext, state: RunState, opts: StartOptions)
   }
   const digest = sha256(bytes);
   if (sessionPlans.get(state.id) !== digest) {
-    const trust = await trustError({ name: state.workflow, description: `The inline plan of run ${state.id}.`, source: "project", file }, digest, ctx);
+    const trust = await trustError({ name: state.workflow, description: `The inline plan of run ${state.id}.`, source: "project", file, inlinePlan: true }, digest, ctx);
     if (trust) return { error: trust };
   }
   const agents = discoverAgents(cwd, "user").agents;
@@ -507,7 +513,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
       "Run a workflow: subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; \"list\" shows them), steps (a plan as data) or resume (a run id). " +
       PLAN_DESCRIPTION +
       " Prefer this to subagent chains.",
-    promptSnippet: "Run a saved workflow, or an inline plan of subagent steps",
+    promptSnippet: "Run a saved workflow or an inline plan",
     parameters: Type.Object({
       name: Type.Optional(Type.String({ description: 'Saved workflow name, or "list"' })),
       steps: Type.Optional(Type.Array(Type.Unknown(), { description: "An inline plan: the steps to run" })),

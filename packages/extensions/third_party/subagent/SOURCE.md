@@ -220,3 +220,8 @@
     prefixed ids in `workflow.ts`, which also replays saved expansions on resume. `wf-engine.ts`
     gains the effort adapter's expansion charge. A typed resume refuses a new expansion, and
     `registerWorkflowTools`' `spawnChild` seam reaches `/workflow` (`tests/workflow-plan-smoke.ts`).
+  - **Gate D1 fixes (2026-11-06):** `plan.ts` refuses prose in `outputs`, names a real step id after
+    the last expand in a gate refusal, and says who fills `{previous}`. `workflow.ts` saves state as
+    each parallel member settles, so a resume re-runs only what is left, and a missed output names
+    the directory checked. `workflow-tools.ts` says "plan" in a plan's resume refusal, under the same
+    gate (`tests/workflow-plan-smoke.ts`).

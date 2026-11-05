@@ -811,6 +811,33 @@ const tests: Record<string, () => void | Promise<void>> = {
     } finally { w.cleanup(); }
   },
 
+  "an expansion's refusal says what would fit: some room, none in the request, or none left in this run": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const run = b.registry().openRunScope("grow", { planned: 5 });
+      assert.ok(run.ok, "a plan within the allowance opens");
+      const charge = (planned: number) => ledgerMod.chargeRun(run.ledger, "grow", run.runToken, { planned, allowance: 8, label: "E3 Standard" });
+      const room = charge(4);
+      assert.equal(codeOf(room), "plan-allowance");
+      assert.match(room.ok ? "" : room.reason, /up to 3 more agents would fit/);
+      assert.ok(charge(3).ok, "a refused charge spent nothing, so the size it named fits");
+      const spent = charge(1);
+      assert.equal(codeOf(spent), "plan-allowance");
+      assert.match(spent.ok ? "" : spent.reason, /no workflow of any size fits this request/);
+      assert.match(spent.ok ? "" : spent.reason, /renews on the next user message/);
+      for (let i = 0; i < 8; i++) assert.equal(ledgerMod.reserve(run.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "grow", runToken: run.runToken }, Date.now() + i, () => `g${String(i)}`).ok, true);
+      ledgerMod.resetPlanned(run.ledger);
+      const full = charge(1);
+      assert.equal(codeOf(full), "plan-allowance", "a renewed request does not lift the run's own cap");
+      assert.match(full.ok ? "" : full.reason, /this run has started 8 of its 8 agents, so it cannot expand; a new plan can still start up to 8/);
+      assert.doesNotMatch(full.ok ? "" : full.reason, /no workflow of any size fits/, "a new workflow would fit, so this must not say none does");
+    } finally { w.cleanup(); }
+  },
+
   // E1 stays closed through the allowance key, and a tier the operator set to no delegation stays closed too.
   "an operator's maxTotal 0 refuses a run scope at any tier": async () => {
     const w = world();

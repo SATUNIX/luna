@@ -11,6 +11,11 @@
 //   7. Resume comes from plan.json; a changed plan.json is gated; a saved workflow of the same name is ignored.
 //   8. A live duplicate (plan, YAML, script) is refused, naming the live run.
 //   9. expand: a step answers with more steps; the host validates, charges, prefixes, splices and persists.
+//  10. outputs are run-directory paths: prose is refused at compile and a miss names the directory.
+//  11. A parallel member that finished is on disk before the run ends, so a resume does not re-run it.
+//  12. With the allowance spent the refusal says nothing fits, and names a size only when one fits.
+//  13. A gate refusal's fix names a real step id; the tool text says who fills {previous}.
+//  14. A plan's resume trust refusal says "plan"; the reference generator documents the tool from its source.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -112,6 +117,7 @@ async function until(what: string, test: () => boolean): Promise<void> {
   throw new Error(`timed out waiting for: ${what}`);
 }
 const statusIn = (text: string): string => /· run \S+ · (\w+)/.exec(text)?.[1] ?? `no status in: ${text}`;
+const runIdIn = (text: string): string => /· run (\S+) ·/.exec(text)?.[1] ?? "";
 const liveRun = (): string => workflowMod.listRuns(project, 50).find((r) => r.status === "running")?.id ?? "";
 const argOf = (s: Spawned, flag: string): string | undefined => s.args[s.args.indexOf(flag) + 1];
 
@@ -272,6 +278,49 @@ await check("what would widen is refused: tools past the role, model, thinking, 
   assert.equal(fake.seen.length, 0);
 });
 
+await check("outputs are paths in the run directory: prose is refused at compile, and a miss names the directory checked", async () => {
+  assert.match(plan.PLAN_DESCRIPTION, /outputs/, "the tool says what outputs are");
+  assert.match(plan.PLAN_DESCRIPTION, /relative to the run directory/);
+  const prose = plan.compilePlan([leaf({ outputs: ["the report"] })], roles);
+  assert.equal(prose.ok, false, "prose is not a path");
+  if (!prose.ok) {
+    assert.match(prose.errors[0]?.path ?? "", /^steps\[0\]\.outputs$/, JSON.stringify(prose.errors));
+    assert.ok(prose.errors[0]?.fix, JSON.stringify(prose.errors));
+  }
+  await session();
+  useFake(() => ({ text: "must not run" }));
+  assert.equal((await call({ steps: [leaf({ outputs: ["the report"] })] })).isError, true);
+  assert.equal(fake.seen.length, 0);
+  // A saved workflow accepts what it always did; only the failure message is clearer.
+  assert.deepEqual(workflowMod.parseWorkflow("---\nname: saved\nsteps:\n  - { id: one, agent: scout, task: t, outputs: the report }\n---\n", "saved.md", "user").errors, []);
+  useFake(() => ({ text: "no file written" }));
+  const missing = await call({ steps: [leaf({ outputs: ["report.md"] })] });
+  assert.equal(statusIn(textOf(missing)), "failed", textOf(missing));
+  const runId = runIdIn(textOf(missing));
+  const dir = path.join(workflowMod.runsRoot(project), runId);
+  const saved: unknown = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
+  const stepState: unknown = Reflect.get(Object(Reflect.get(Object(saved), "steps")), "step-1");
+  assert.equal(Reflect.get(Object(stepState), "error"), `declared output(s) not written in ${dir}: report.md`);
+  assert.match(textOf(missing), /declared output\(s\) not written/);
+});
+
+await check("a gate refusal's fix shows a real step id, and the tool text says who fills {previous}", () => {
+  const retry = plan.compilePlan([{ id: "draft", task: "write" }, { task: "review", gate: { pass: "PASS", retry: "nope" } }], roles);
+  assert.equal(retry.ok, false);
+  if (!retry.ok) {
+    assert.match(retry.errors[0]?.path ?? "", /^steps\[1\]\.gate\.retry$/, JSON.stringify(retry.errors));
+    assert.match(retry.errors[0]?.fix ?? "", /draft/, `the fix names a step the plan has: ${JSON.stringify(retry.errors)}`);
+  }
+  const shape = plan.compilePlan([{ id: "draft", task: "write" }, { task: "review", gate: "check" }], roles);
+  assert.equal(shape.ok, false);
+  if (!shape.ok) assert.match(shape.errors[0]?.fix ?? "", /draft/, `the fix names a step the plan has: ${JSON.stringify(shape.errors)}`);
+  const overExpand = plan.compilePlan([{ id: "plan", task: "t", expand: true }, { id: "x", task: "y" }, { task: "r", gate: { pass: "P", retry: "nope" } }], roles);
+  assert.equal(overExpand.ok, false);
+  if (!overExpand.ok) assert.match(overExpand.errors[0]?.fix ?? "", /"retry": "x"/, `the fix never names a step past an expand: ${JSON.stringify(overExpand.errors)}`);
+  assert.match(plan.PLAN_DESCRIPTION, /host adds the review to the retry step/, "a model need not add it to the retry step");
+  assert.match(plan.PLAN_DESCRIPTION, /continue_on_error/, "a recovery plan needs it, and nothing else teaches it");
+});
+
 await check("tools may narrow a role, and the child gets exactly that list", async () => {
   const c = plan.compilePlan([{ agent: "reviewer", task: "t", tools: ["read", "grep"] }], roles);
   assert.ok(c.ok, JSON.stringify(c));
@@ -299,6 +348,30 @@ await check("the worst case is charged before any launch: over the allowance is 
   assert.equal(second.isError, true, "6 of 8 are planned, so 3 more are refused");
   await userTurn();
   assert.equal(statusIn(textOf(await call({ steps: [{ agent: "scout", task: "again" }] }))), "passed");
+});
+
+await check("with the allowance spent the refusal says no workflow of any size fits and that it renews; a size is named only when one would fit", async () => {
+  const userTurn = await session();
+  useFake(() => ({ text: "ok" }));
+  const sized = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ id: `s${String(i + 1)}`, agent: "scout", task: "t" }));
+  // 8 planned agents a request at E3: 6, then 2 exactly fills it.
+  const six = await call({ steps: sized(6) });
+  assert.equal(statusIn(textOf(six)), "passed", textOf(six));
+  const three = await call({ steps: sized(3) });
+  assert.equal(three.isError, true);
+  assert.match(textOf(three), /up to 2/, `the size that still fits: ${textOf(three)}`);
+  assert.doesNotMatch(textOf(three), /no workflow of any size/);
+  assert.match(textOf(three), /\/effort/);
+  const two = await call({ steps: sized(2) });
+  assert.equal(statusIn(textOf(two)), "passed", textOf(two));
+  const one = await call({ steps: sized(1) });
+  assert.equal(one.isError, true);
+  assert.match(textOf(one), /no workflow of any size fits/);
+  assert.match(textOf(one), /next user message/, "it says when the allowance comes back");
+  assert.doesNotMatch(textOf(one), /smaller workflow|Run less/, `no advice that cannot be followed: ${textOf(one)}`);
+  assert.equal(fake.seen.length, 8, "nothing was launched for the refusals");
+  await userTurn();
+  assert.equal(statusIn(textOf(await call({ steps: sized(1) }))), "passed", "a user turn renews it");
 });
 
 await check("skills on one step reach that child only; an unknown skill is refused", async () => {
@@ -342,6 +415,33 @@ await check("the tool signal aborts an inline plan's running agent", async () =>
   assert.equal(fake.seen.length, 1);
 });
 
+await check("a parallel member that settled is on disk before the next one does, so a resume does not re-run it", async () => {
+  await session();
+  useFake((s) => (s.task === "hang here" ? { delayMs: 60_000 } : { text: "quick", delayMs: 5 }));
+  const steps = [{ parallel: [{ id: "a", agent: "scout", task: "quick" }, { id: "b", agent: "scout", tools: ["read"], task: "hang here" }, { id: "c", agent: "scout", task: "also quick" }] }];
+  const done = call({ steps });
+  await until("the members to start", () => fake.seen.length === 3);
+  const runId = liveRun();
+  const statePath = path.join(workflowMod.runsRoot(project), runId, "state.json");
+  const stepField = (id: string, field: string): unknown => {
+    const saved: unknown = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const value: unknown = Reflect.get(Object(Reflect.get(Object(saved), "steps")), id);
+    return Reflect.get(Object(value), field);
+  };
+  await until("both quick members to say passed on disk", () => stepField("a", "status") === "passed" && stepField("c", "status") === "passed");
+  for (const id of ["a", "c"]) {
+    const runIds: unknown = stepField(id, "runIds");
+    assert.ok(Array.isArray(runIds) && runIds.length > 0, `${id} kept its child's run id: ${JSON.stringify(runIds)}`);
+  }
+  assert.equal(stepField("b", "status"), "running", "the hung member is still running");
+  await control(runId, "stop");
+  assert.equal(statusIn(textOf(await done)), "interrupted");
+  useFake(() => ({ text: "resumed" }));
+  const r = await call({ resume: runId });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.deepEqual(fake.seen.map((s) => s.task), ["hang here"], "only the member that had not passed ran again");
+});
+
 await check("a plan run resumes from plan.json: passed steps are not rerun, and only what is left is charged", async () => {
   fs.mkdirSync(path.join(agentDir, "workflows"), { recursive: true });
   fs.writeFileSync(path.join(agentDir, "workflows", "plan.md"), "---\nname: plan\ndescription: a saved workflow that shares the name\nsteps:\n  - { id: saved, agent: scout, task: the saved one }\n---\n");
@@ -364,7 +464,7 @@ await check("a plan run resumes from plan.json: passed steps are not rerun, and 
   }
 });
 
-await check("a resume whose plan.json changed is gated like a project workflow; a missing or broken one is refused", async () => {
+await check("a resume whose plan.json changed is gated as strictly as a project workflow, and the refusal says plan; a missing or broken one is refused", async () => {
   const { done, runId } = await hanging([{ id: "only", agent: "scout", task: "hang here" }]);
   await control(runId, "stop");
   await done;
@@ -376,6 +476,8 @@ await check("a resume whose plan.json changed is gated like a project workflow; 
   const changed = await call({ resume: runId });
   assert.equal(changed.isError, true);
   assert.match(textOf(changed), /interactive approval or a digest grant/);
+  assert.match(textOf(changed), /plan/, textOf(changed));
+  assert.doesNotMatch(textOf(changed), /project workflow/, `an inline plan is not a project workflow: ${textOf(changed)}`);
   fs.writeFileSync(file, "{ not json");
   assert.match(textOf(await call({ resume: runId })), /plan\.json/);
   fs.rmSync(file);
@@ -464,7 +566,6 @@ await check("the redirect errors name real tools", async () => {
 const asJson = (value: unknown): string => JSON.stringify(value);
 const toolsOf = (s: Spawned): string => argOf(s, "--tools") ?? "";
 const lastDir = (runId: string): string => path.join(workflowMod.runsRoot(project), runId);
-const runIdIn = (text: string): string => /· run (\S+) ·/.exec(text)?.[1] ?? "";
 const leaves = (n: number, more: Record<string, unknown> = {}): unknown[] => Array.from({ length: n }, (_, i) => ({ id: `l${String(i + 1)}`, agent: "scout", task: `leaf ${String(i + 1)}`, ...more }));
 
 await check("expand is a plan field: a plan with expand: true compiles, and the schema no longer refuses it", () => {
@@ -899,6 +1000,23 @@ await check("saved YAML parses as before: parseSteps is the same validator, and 
   assert.equal(parsed.workflow?.steps[0]?.maxRuntimeMs, 300_000);
   const bad = workflowMod.parseWorkflow("---\nname: saved\nsteps:\n  - { id: one, agent: scout, task: t }\n  - { id: one, task: t2, gate: { pass: x, retry: nope } }\n---\n", "saved.md", "user");
   assert.deepEqual(bad.errors, ['saved.md: steps[1]: needs agent: or skill:', "saved.md: duplicate step ids: one", 'saved.md: step one: gate.retry "nope" must name this or an earlier top-level step', "saved.md: step one: gate.retry must be a top-level step"]);
+});
+
+await check('the reference generator documents workflow_run from its source, not "No description."', async () => {
+  const reference = await loadModule<{ referenceContent(): string }>("packages/core/reference.ts");
+  const page = reference.referenceContent();
+  const at = page.indexOf("### `workflow_run`");
+  assert.ok(at > 0, "the page lists workflow_run");
+  const next = page.indexOf("\n### ", at + 1);
+  const section = page.slice(at, next < 0 ? undefined : next);
+  assert.doesNotMatch(section, /No description\./, section);
+  assert.match(section, /relative to the run directory/, "the description comes from plan.ts");
+});
+
+await check("docs/workflows.md qualifies replanning after a refused expansion with the allowance", () => {
+  const page = fs.readFileSync(path.join(ROOT, "docs", "workflows.md"), "utf8");
+  assert.doesNotMatch(page, /so the agent can replan\./);
+  assert.match(page, /replan[^.]*renews on the next user message/);
 });
 
 delegation.cleanup();

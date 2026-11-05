@@ -1,0 +1,668 @@
+/*
+ * The Luna website in the Proof style: paper and ink, hard 2px rules, square corners, mono labels,
+ * tight grotesk headlines and one loud colour (lime). Tokens mirror the Proof design system; dark
+ * is a full remap. No transitions: interactive things invert on hover.
+ */
+:root {
+  --bg: #ececea;
+  --surface: #f5f5f3;
+  --fg: #000000;
+  --muted: #55554f;
+  --rule: #000000;
+  --hair: rgba(0, 0, 0, 0.2);
+  --accent: #c4ff0d;
+  --on-accent: #000000;
+  --link: #4f00ff;
+  --focus: #4f00ff;
+  --inv-bg: #000000;
+  --inv-fg: #ececea;
+  --code-bg: #000000;
+  --code-fg: #ececea;
+  --code-dim: #8e8e8e;
+  --success: #005f73;
+  --warning: #9a4f00;
+  --danger: #c41e00;
+  --sans: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --b: 2px;
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 16px;
+  --s4: 24px;
+  --s5: 40px;
+  --s6: 64px;
+  --s7: 96px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: #111111;
+    --fg: #ececea;
+    --muted: #a3a39d;
+    --rule: #ececea;
+    --hair: rgba(236, 236, 234, 0.25);
+    --link: #c4ff0d;
+    --focus: #c4ff0d;
+    --inv-bg: #ececea;
+    --inv-fg: #000000;
+    --code-bg: #111111;
+    --success: #4dd6e8;
+    --warning: #ffb020;
+    --danger: #ff6a4d;
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-padding-top: 64px;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 16px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A 7% paper grain, decorative. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.07;
+  background-image: radial-gradient(var(--fg) 0.6px, transparent 0.6px);
+  background-size: 4px 4px;
+  z-index: 100;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+code {
+  font: 400 0.78em var(--mono);
+  border: 1px solid currentColor;
+  padding: 1px 4px;
+}
+
+.micro {
+  font: 600 11px/1.5 var(--mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  left: var(--s3);
+  top: var(--s3);
+  z-index: 200;
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: var(--s2) var(--s3);
+}
+
+/* Topbar */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: stretch;
+  height: 52px;
+  background: var(--bg);
+  border-bottom: var(--b) solid var(--rule);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 0 var(--s3);
+  background: var(--inv-bg);
+  color: var(--inv-fg);
+  text-decoration: none;
+  font: 800 20px/1 var(--sans);
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+
+.brand:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.brand svg {
+  width: 22px;
+  height: 22px;
+}
+
+.brand .cut {
+  fill: var(--inv-bg);
+}
+
+.brand:hover .cut {
+  fill: var(--accent);
+}
+
+.topbar nav {
+  display: flex;
+  margin-left: auto;
+  overflow-x: auto;
+}
+
+.topbar nav a {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--s3);
+  border-left: var(--b) solid var(--rule);
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topbar nav a:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Hero */
+.hero {
+  position: relative;
+  padding: var(--s6) var(--s4) var(--s5);
+  border-bottom: var(--b) solid var(--rule);
+}
+
+.hero .reg {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  color: var(--fg);
+}
+
+.hero .reg.tl { top: var(--s3); left: var(--s3); }
+.hero .reg.tr { top: var(--s3); right: var(--s3); }
+.hero .reg.bl { bottom: var(--s3); left: var(--s3); }
+.hero .reg.br { bottom: var(--s3); right: var(--s3); }
+
+.hero-grid {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: var(--s5);
+  align-items: center;
+}
+
+.display {
+  margin: 0;
+  font: 800 clamp(96px, 15vw, 220px)/0.82 var(--sans);
+  font-variation-settings: "wdth" 112;
+  letter-spacing: -0.05em;
+  text-transform: uppercase;
+}
+
+.lede {
+  max-width: 44ch;
+  margin: var(--s4) 0 0;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.lede strong {
+  color: var(--fg);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 44px;
+  padding: 0 var(--s4);
+  border: var(--b) solid var(--rule);
+  background: var(--surface);
+  color: var(--fg);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.button:hover {
+  background: var(--inv-bg);
+  color: var(--inv-fg);
+}
+
+.button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--on-accent);
+}
+
+.button.primary:hover {
+  background: var(--inv-bg);
+  color: var(--inv-fg);
+  border-color: var(--rule);
+}
+
+.figure {
+  margin: 0;
+  border: var(--b) solid var(--rule);
+}
+
+/* An illustration carries its own 2px frame; let it sit on the frame around it, not inside it. */
+.figure img,
+.card img {
+  width: calc(100% + 2 * var(--b));
+  max-width: none;
+  margin: calc(-1 * var(--b));
+}
+
+/* Status bar */
+.statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: var(--b) solid var(--rule);
+  background: var(--surface);
+}
+
+.statusbar span {
+  flex: 1 1 auto;
+  padding: var(--s2) var(--s3);
+  border-right: 1px solid var(--hair);
+  white-space: nowrap;
+}
+
+.statusbar b {
+  color: var(--muted);
+  font-weight: 600;
+  margin-right: var(--s2);
+}
+
+/* Banner: the lime band with its paper plate */
+.band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s5) var(--s4);
+  background: var(--accent);
+  color: var(--on-accent);
+  border-bottom: var(--b) solid var(--rule);
+  background-image: repeating-linear-gradient(90deg, var(--on-accent) 0 1px, transparent 1px 8px);
+  background-size: 100% 8px;
+  background-repeat: no-repeat;
+  background-position: bottom;
+}
+
+.band p {
+  margin: 0;
+  font: 800 clamp(32px, 4.4vw, 56px)/0.98 var(--sans);
+  letter-spacing: -0.035em;
+}
+
+.plate {
+  background: #ececea;
+  color: #000000;
+  border: var(--b) solid #000000;
+  border-radius: 14px;
+  padding: var(--s3) var(--s4);
+  max-width: 40ch;
+  font-size: 15px;
+}
+
+.plate a {
+  color: #000000;
+}
+
+/* Sections: a narrow head column and a body 2.6x wider */
+.section {
+  display: grid;
+  grid-template-columns: 1fr 2.6fr;
+  gap: var(--s5);
+  padding: var(--s6) var(--s4);
+  border-bottom: var(--b) solid var(--rule);
+}
+
+.section > header h2 {
+  margin: var(--s2) 0 0;
+  font: 700 clamp(32px, 4.4vw, 56px)/0.98 var(--sans);
+  letter-spacing: -0.035em;
+}
+
+.section > header p {
+  color: var(--muted);
+  max-width: 32ch;
+}
+
+.section .body {
+  min-width: 0;
+  max-width: 900px;
+}
+
+.section .body > p {
+  max-width: 64ch;
+}
+
+h3 {
+  margin: 0 0 var(--s2);
+  font: 700 28px/1.1 var(--sans);
+  letter-spacing: -0.03em;
+}
+
+/* Steps */
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+  border: var(--b) solid var(--rule);
+}
+
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  border-bottom: 1px solid var(--hair);
+  background: var(--surface);
+}
+
+.steps li:last-child {
+  border-bottom: 0;
+}
+
+.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  padding: var(--s3);
+  font: 600 11px/1.5 var(--mono);
+  border-right: var(--b) solid var(--rule);
+}
+
+.steps .step {
+  padding: var(--s3);
+  min-width: 0;
+}
+
+.steps h4 {
+  margin: 0 0 var(--s2);
+  font: 700 20px/1.15 var(--sans);
+  letter-spacing: -0.02em;
+}
+
+pre {
+  margin: 0;
+  padding: var(--s3);
+  overflow-x: auto;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font: 400 12.5px/1.75 var(--mono);
+  border: var(--b) solid var(--rule);
+}
+
+pre .p {
+  color: var(--accent);
+  user-select: none;
+}
+
+pre .c {
+  color: var(--code-dim);
+}
+
+.note {
+  margin-top: var(--s3);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Data table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  border: var(--b) solid var(--rule);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+th {
+  background: var(--inv-bg);
+  color: var(--inv-fg);
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  font: 600 11px/1.5 var(--mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+td {
+  padding: var(--s2) var(--s3);
+  border-top: 1px solid var(--hair);
+  vertical-align: top;
+}
+
+td:first-child {
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+td code {
+  overflow-wrap: anywhere;
+}
+
+/* Under 600px a table becomes a list of rows: subject first, then each cell below it. */
+@media (max-width: 600px) {
+  table,
+  tbody,
+  tr,
+  td {
+    display: block;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tr {
+    padding: var(--s2) 0;
+    border-top: 1px solid var(--hair);
+  }
+
+  tr:first-child {
+    border-top: 0;
+  }
+
+  td {
+    border-top: 0;
+    padding: 2px var(--s3);
+  }
+}
+
+.wrap {
+  overflow-x: auto;
+  margin-top: var(--s4);
+}
+
+/* Cards of the three ideas */
+.ideas {
+  display: grid;
+  gap: var(--s4);
+}
+
+.card {
+  border: var(--b) solid var(--rule);
+  background: var(--surface);
+}
+
+.card .text {
+  padding: var(--s4);
+  border-top: var(--b) solid var(--rule);
+}
+
+.card .text p {
+  margin: 0;
+  max-width: 64ch;
+}
+
+.card .tag {
+  display: inline-block;
+  margin-bottom: var(--s2);
+  padding: 2px var(--s1);
+  border: 1px solid currentColor;
+}
+
+/* Tile grid of documentation links */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  border-top: var(--b) solid var(--rule);
+  border-left: var(--b) solid var(--rule);
+}
+
+.tiles a {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 140px;
+  padding: var(--s3);
+  border-right: var(--b) solid var(--rule);
+  border-bottom: var(--b) solid var(--rule);
+  background: var(--surface);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.tiles a:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.tiles a:hover .micro,
+.tiles a:hover span {
+  color: var(--on-accent);
+}
+
+.tiles strong {
+  font: 700 20px/1.15 var(--sans);
+  letter-spacing: -0.02em;
+}
+
+.tiles span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tiles .micro {
+  margin-top: auto;
+  color: var(--muted);
+}
+
+/* Callout */
+.callout {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--s3);
+  padding: var(--s4);
+  border: var(--b) solid var(--warning);
+  background: var(--surface);
+}
+
+.callout svg {
+  color: var(--warning);
+}
+
+.callout p {
+  margin: var(--s2) 0 0;
+}
+
+/* Footer */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: var(--s5) var(--s4) var(--s6);
+  margin-top: var(--s6);
+  border-top: var(--b) solid var(--rule);
+}
+
+.footer .barcode {
+  width: 240px;
+  height: 32px;
+  color: var(--fg);
+}
+
+.footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+}
+
+@media (max-width: 900px) {
+  .hero-grid,
+  .section {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding: var(--s5) var(--s3);
+  }
+
+  .section {
+    gap: var(--s4);
+    padding: var(--s5) var(--s3);
+  }
+
+  .band {
+    padding: var(--s4) var(--s3);
+  }
+
+  .topbar nav a.optional {
+    display: none;
+  }
+}

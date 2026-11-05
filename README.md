@@ -1,7 +1,10 @@
 # Luna
 
 <p align="center">
-  <img src="docs/assets/luna.gif" alt="Animated overview: Luna, the pi agent system" width="760">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-hero-dark.svg">
+    <img src="docs/assets/luna-hero.svg" alt="Luna, the pi agent system: a pi session in which reads, edits and tests are allowed, a destructive delete is denied and a force push waits for approval" width="100%">
+  </picture>
 </p>
 
 <p align="center">
@@ -17,6 +20,14 @@
 a permission gate for tool calls, governed delegation to sub-agents, verification, durable memory,
 bounded recovery, a status bar, and an installer that ties them together as **profiles**. It is
 one pi package, installed once.
+
+<p align="center">
+  <a href="https://satunix.github.io/luna/"><b>Website</b></a> ·
+  <a href="https://satunix.github.io/luna/docs/">Documentation</a> ·
+  <a href="docs/getting-started.md">Getting started</a> ·
+  <a href="https://github.com/SATUNIX/luna/releases">Releases</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
 **Renamed.** This project was previously published as **pi-system**; it is now **Luna**. The pi
 package is still named `@satunix/pi-system`, so install commands, settings entries and environment
@@ -45,6 +56,44 @@ Upgrading from a private-GitLab install? See [Migration](docs/migration.md): ins
 package and run its installer, which keeps your profile and hand edits and never contacts the retired
 source. (An old checkout cannot migrate itself.)
 
+## How it works
+
+**Every tool call meets the gate.** The tool firewall parses each call into its effects and tiers
+it: routine work is allowed, riskier calls ask you, critical ones are denied, and every decision
+goes to the audit record. It is a guard rail, not a sandbox ([Security model](docs/security.md),
+[Autonomy gate](docs/autonomy-gate.md)).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-firewall-dark.svg">
+    <img src="docs/assets/luna-firewall.svg" alt="Three tool calls meet the Luna firewall: a read is allowed, a force push waits for your approval, and rm -rf ~ is denied; each decision lands in the audit record" width="100%">
+  </picture>
+</p>
+
+**Delegation stays bounded.** A lead agent hands sub-agents a bounded question and integrates
+what comes back. `delegation-guard` decides what each child loads, reserves its budget before it
+starts (and refuses one over budget), and checks inside the child that its protections loaded
+([Agent orchestration](docs/agent-orchestration.md)).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-delegation-dark.svg">
+    <img src="docs/assets/luna-delegation.svg" alt="The lead agent delegates a bounded search to a scout and a diff to a reviewer while its budget meter drains, then reports back with evidence" width="100%">
+  </picture>
+</p>
+
+**Nothing counts as done unverified.** `/verify` and the agent's `verify_completion` tool run the
+project's check command and an isolated, read-only reviewer against the definition of done, and
+record the verdict. A failure goes back for a fix, and a review that did not run never reads as a
+pass (`verify-gate`, in every profile but `quick`; [Concepts](docs/concepts.md)).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-verify-dark.svg">
+    <img src="docs/assets/luna-verify.svg" alt="A change goes to the checks; lint fails on the first pass and loops back for a fix, then tests, lint and types pass and the work is marked done" width="100%">
+  </picture>
+</p>
+
 ## Use
 
 | Want to | Do |
@@ -63,6 +112,13 @@ A profile chooses which extensions, skills and prompts load, and the firewall mo
 verified, with configuration rollback on reported failures. Whole-update crash recovery and
 concurrent profile switches have limits described in [Updates](docs/updates.md). Lists and counts are
 generated in the [capability matrix](docs/capability-matrix.md).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-profiles-dark.svg">
+    <img src="docs/assets/luna-profiles.svg" alt="The seven profiles highlighted in turn: quick, balanced, long-horizon, autonomous, self-improving, pentest and lite" width="100%">
+  </picture>
+</p>
 
 | Profile | For |
 |---|---|

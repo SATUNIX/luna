@@ -21,6 +21,7 @@ import { agentDir, toText } from "./config.ts";
 import type { AgentConfig } from "./agents.ts";
 import { mapWithConcurrencyLimit, runAgent, type RunOverrides } from "./runner.ts";
 import { getResultOutput, isFailedResult } from "./result.ts";
+import { deriveOutcome, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, type PhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
 import { redact, REDACTION_POLICY } from "./redact.ts";
 import { RunControl } from "./control.ts";
@@ -288,6 +289,8 @@ export interface StepState {
   output?: string; // truncated copy; the full text is steps/<id>.md
   error?: string;
   cost: number;
+  /** Output tokens across every attempt; absent on older runs. */
+  outputTokens?: number;
   startedAt?: string;
   endedAt?: string;
 }
@@ -298,7 +301,7 @@ export interface RunState {
   workflow: string;
   workflowFile: string;
   inputs: Record<string, string>;
-  status: "running" | "passed" | "failed" | "interrupted";
+  status: RunStatus;
   cursor: number; // index into steps of the next top-level step to run
   loops: Record<string, number>;
   steps: Record<string, StepState>;
@@ -362,7 +365,7 @@ function saveState(dir: string, state: RunState): void {
   writePrivate(path.join(dir, "state.json"), JSON.stringify(redactedState(state), null, 2));
 }
 
-const RUN_STATES: ReadonlySet<string> = new Set(["running", "passed", "failed", "interrupted"]);
+const RUN_STATES: ReadonlySet<string> = new Set(["running", "passed", "partial", "failed", "interrupted"]);
 const STEP_STATUSES: ReadonlySet<string> = new Set(["pending", "running", "passed", "failed", "skipped", "aborted"]);
 
 function isStepState(value: unknown): value is StepState {
@@ -651,6 +654,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
     tele.run.agentEnd(agentId, { status, usage: result.usage, model: result.model, subagentRunId: result.runId, error: st.error });
   if (result.runId) st.runIds.push(result.runId);
   st.cost += result.usage.cost;
+  st.outputTokens = (st.outputTokens ?? 0) + result.usage.output;
   const output = writeStepOutput(runDir, step.id, result.finalOutput || getResultOutput(result));
   st.output = output.length > MAX_OUTPUT_IN_STATE ? `${output.slice(0, MAX_OUTPUT_IN_STATE)}…` : output;
   st.endedAt = new Date().toISOString();
@@ -686,6 +690,22 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
 
 // A stale "running" in a resumed state.json is a step that never finished: it shows as pending.
 const phaseStatus = (s: StepStatus | undefined): PhaseStatus => (s === undefined || s === "running" ? "pending" : s);
+
+/**
+ * One StepResult for each leaf step that ran, from its latest attempt, so a gate that missed and then
+ * passed reads as completed. A skip is not an omission: a `when` skip is the plan working, and an
+ * operator's skip is a decision to go on. Neither is a step that never reached the executor.
+ */
+export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
+  const out: StepResult[] = [];
+  for (const step of w.steps.flatMap((s) => s.parallel ?? [s])) {
+    const st = state.steps[step.id];
+    if (!st || st.status === "pending" || st.status === "skipped") continue;
+    const execution = st.status === "passed" ? "completed" : st.status === "failed" ? "failed" : st.status === "aborted" ? "cancelled" : "unknown";
+    out.push({ stepId: step.id, execution, required: !step.continueOnError, ...(st.error ? { reason: { code: "step", text: st.error } } : {}), usage: { agents: st.attempts, outputTokens: st.outputTokens ?? 0 } });
+  }
+  return out;
+}
 
 /**
  * Run (or resume) a workflow. Returns the final state; never throws for step failures.
@@ -726,10 +746,12 @@ async function executeSteps(w: WorkflowDef, state: RunState, opts: RunOptions, r
     run.setPaused(paused);
     if (state.status === "running") saveState(runDir, state);
   });
-  const finish = (status: RunState["status"], error?: string) => {
+  const finish = (end: RunFinish) => {
     offControl();
+    // A YAML run has no return value to lose: its result is the step files, so `value` is always present.
+    const { status } = deriveOutcome(stepResults(w, state), { threw: end.error !== undefined, stopped: end.stopped === true, value: true });
     state.status = status;
-    state.error = error;
+    state.error = end.stopped ? "cancelled" : end.error;
     state.paused = undefined;
     run.setPaused(false);
     saveState(runDir, state);
@@ -742,11 +764,17 @@ async function executeSteps(w: WorkflowDef, state: RunState, opts: RunOptions, r
   }
 }
 
-async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: RunModel, runDir: string, finish: (status: RunState["status"], error?: string) => RunState): Promise<RunState> {
+/** How the executor's loop ended: stopped, stopped on an error, or (neither) off the last step. */
+interface RunFinish {
+  stopped?: boolean;
+  error?: string;
+}
+
+async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: RunModel, runDir: string, finish: (end: RunFinish) => RunState): Promise<RunState> {
   while (state.cursor < w.steps.length) {
     await opts.control.gate();
-    if (opts.control.stopped) return finish("interrupted", "cancelled");
-    if (state.executions >= MAX_EXECUTIONS) return finish("failed", `stopped after ${MAX_EXECUTIONS} step executions (loop safety limit)`);
+    if (opts.control.stopped) return finish({ stopped: true });
+    if (state.executions >= MAX_EXECUTIONS) return finish({ error: `stopped after ${MAX_EXECUTIONS} step executions (loop safety limit)` });
     const step = w.steps[state.cursor];
     if (!step) throw new Error(`workflow ${w.name}: no step at position ${state.cursor}`);
     const loop = step.gate ? (state.loops[step.id] ?? 0) : Object.values(state.loops).reduce((a, b) => Math.max(a, b), 0);
@@ -774,7 +802,7 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       if (results.some((r) => r.status === "aborted") || opts.control.stopped) {
         group.status = "aborted";
         run.setPhaseStatus(step.id, "aborted");
-        return finish("interrupted", "cancelled");
+        return finish({ stopped: true });
       }
       const bad = step.parallel.filter((inner, i) => results[i]?.status === "failed" && !inner.continueOnError);
       group.status = bad.length ? "failed" : "passed";
@@ -790,10 +818,10 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       const st = step.gate && prior?.status === "skipped" && prior.error === SKIPPED_ON_RESUME ? prior : await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
       saveState(runDir, state);
       run.setPhaseStatus(step.id, phaseStatus(st.status));
-      if (st.status === "aborted" || opts.control.stopped) return finish("interrupted", "cancelled");
+      if (st.status === "aborted" || opts.control.stopped) return finish({ stopped: true });
       if (st.status === "failed" && !step.continueOnError) failed = `step ${step.id} failed: ${st.error}`;
     }
-    if (failed) return finish("failed", failed);
+    if (failed) return finish({ error: failed });
 
     // Review gate: a failing verdict loops back (bounded); exhausting the loops fails the run.
     const { gate } = step;
@@ -805,7 +833,7 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
         gated.status = "failed";
         run.setPhaseStatus(step.id, "failed");
         const why = skipped ? "was skipped before its verdict" : `did not pass after ${used} loop(s) (needs "${gate.pass}")`;
-        if (!gate.retry || used >= gate.maxLoops) return finish("failed", `gate ${step.id} ${why}`);
+        if (!gate.retry || used >= gate.maxLoops) return finish({ error: `gate ${step.id} ${why}` });
         state.loops[step.id] = used + 1;
         state.cursor = w.steps.findIndex((s) => s.id === gate.retry);
         opts.onProgress?.(`${state.workflow} · gate ${step.id} failed → back to ${gate.retry} (loop ${used + 1}/${gate.maxLoops})`);
@@ -816,7 +844,7 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
     state.cursor++;
     saveState(runDir, state);
   }
-  finish("passed");
+  finish({});
   if (w.vault) copyToVault(opts.cwd, runDir, state);
   return state;
 }
@@ -841,5 +869,7 @@ export function summarizeRun(state: RunState, w?: WorkflowDef): string {
     const st = steps[id];
     return `${label.startsWith("  ") ? "    " : "  "}${id}: ${st?.status ?? "pending"}${st?.attempts && st.attempts > 1 ? ` ×${st.attempts}` : ""}${st?.error ? ` — ${st.error.slice(0, 160)}` : ""}`;
   });
-  return [`workflow ${state.workflow} · run ${state.id} · ${state.status}${state.error ? ` — ${state.error}` : ""}${cost ? ` · $${cost.toFixed(4)}` : ""}`, ...lines].join("\n");
+  const launched = Object.values(steps).reduce((a, s) => a + s.attempts, 0);
+  const outputTokens = Object.values(steps).reduce((a, s) => a + (s.outputTokens ?? 0), 0);
+  return [`workflow ${state.workflow} · run ${state.id} · ${state.status}${state.error ? ` — ${state.error}` : ""}${cost ? ` · $${cost.toFixed(4)}` : ""}`, `Agents: ${launched} launched; ${outputTokens} output tokens.`, ...lines].join("\n");
 }

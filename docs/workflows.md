@@ -196,7 +196,7 @@ steps:
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
 | `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. |
 | `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. |
-| `continue_on_error` | A failure of this step doesn't fail the run. |
+| `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
 ### Templates
@@ -266,7 +266,9 @@ whole state is treated as corrupt.
 
 ## Execution rules
 
-- Steps run top to bottom. A failing step fails the run, unless it has `continue_on_error`.
+- Steps run top to bottom. A failing step fails the run, unless it has `continue_on_error`; such
+  a run reports `partial`, and the rule is in [Run status](script-workflows.md#run-status).
+  A gate that misses and then passes stays `passed`. (`tests/workflow-hooks-smoke.ts`)
 - Gates loop back to `retry`, and every step from there to the gate runs again.
 - A run is capped at 60 step executions, counting loops.
 - Resuming re-runs the interrupted step (in a parallel group, only the members that hadn't
@@ -299,8 +301,8 @@ While a workflow runs, the subagent extension keeps an in-process record of it, 
   template fails is a `failed` agent that never launched. In a script run an agent can also be
   marked `cached` (answered from a resumed run's journal) and carry the `group` (the nested
   `workflow()` it ran in), and a phase can name its `parent` group phase.
-- **Runs.** A run records its kind (`yaml` or `script`), name, the workflow's description, definition file and source (kit, user or project), status (`running`, `passed`, `failed`,
-  `interrupted`), whether it is paused, elapsed time, the usage summed over its agents and a
+- **Runs.** A run records its kind (`yaml` or `script`), name, the workflow's description, definition file and source (kit, user or project), status (`running`, `passed`, `partial`,
+  `failed`, `interrupted`), whether it is paused, elapsed time, the usage summed over its agents and a
   count of approvals (`noteApproval`). A script run also records its sandbox mode, `budget.total`
   and the sha256 of the script it executed. A resumed run keeps its id,
   and its record starts again with this execution's agents. When a run ends, any agent still

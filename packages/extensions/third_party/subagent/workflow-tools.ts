@@ -290,7 +290,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
       if (params.resume) {
         const s = loadState(cwd, params.resume);
         if (!s) return textResult(`No run "${params.resume}".`, true);
-        if (s.status === "passed") return textResult(`Run ${s.id} already passed.`);
+        if (s.status === "passed" || s.status === "partial") return textResult(`Run ${s.id} already ${s.status}.`);
         resume = s;
       }
       const report = (t: string) => {
@@ -307,7 +307,7 @@ export function registerWorkflowTools(pi: ExtensionAPI): void {
         const dir = path.join(runsRoot(cwd), r.state.id);
         // A parsed workflow always has at least one step.
         const last = r.workflow.steps[r.workflow.steps.length - 1];
-        const tail = r.state.status === "passed" ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflow resume ${r.state.id}` : "";
+        const tail = r.state.status === "passed" || r.state.status === "partial" ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflow resume ${r.state.id}` : "";
         return textResult(`${summarizeRun(r.state, r.workflow)}\n\nRun directory: ${dir}${tail}`, r.state.status === "failed");
       } finally {
         try {

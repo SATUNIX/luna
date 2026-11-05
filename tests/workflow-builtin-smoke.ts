@@ -91,10 +91,12 @@ async function runBuiltin(name: string, args: unknown, reply: (s: Spawned) => Fa
   const logLines = list(field(runJson, "log")).map(String);
   return { outcome, fake, logLines };
 }
-const passed = (o: EngineModule.RunOutcome): unknown => {
-  assert.equal(o.status, "passed", `run ${o.status}: ${o.error ?? ""}`);
+const passed = (o: EngineModule.RunOutcome, status: EngineModule.RunOutcome["status"] = "passed"): unknown => {
+  assert.equal(o.status, status, `run ${o.status}: ${o.error ?? ""}`);
   return o.value;
 };
+/** A built-in whose best-effort branch failed still shows its value, and the run names the omission. */
+const partial = (o: EngineModule.RunOutcome): unknown => passed(o, "partial");
 const tasksMatching = (seen: Spawned[], re: RegExp): Spawned[] => seen.filter((s) => re.test(s.task));
 
 try {
@@ -209,7 +211,7 @@ try {
       if (s.task.startsWith("Write the final design")) return { text: "FINAL" };
       return { fail: "unexpected prompt" };
     });
-    const v = passed(outcome);
+    const v = partial(outcome);
     assert.equal(field(v, "design"), "FINAL");
     assert.match(String(field(v, "winner")), /^risk first/);
     assert.deepEqual(list(field(v, "ranking")).map((r) => field(r, "score")), [9, 5], "a repeated or out-of-range draft index is ignored");

@@ -58,12 +58,12 @@ git("add", "-A");
 git("commit", "-q", "-m", "base");
 
 const spec = (source: string): EngineModule.ScriptSpec => ({ name: "resume-test", description: "test", source: `export const meta = { name: "resume-test", description: "test" };\n${source}`, phases: [] });
-async function run(source: string, reply: (s: Spawned) => FakeReply, resumeFrom?: string, args?: unknown, cwd = repo) {
+async function run(source: string, reply: (s: Spawned) => FakeReply, resumeFrom?: string, args?: unknown, cwd = repo, status: EngineModule.RunOutcome["status"] = "passed") {
   const fake = fakeSpawner(reply);
   const started = engine.startScriptRun(spec(source), args, { cwd, agents, sandbox: { mode, support }, spawnChild: fake.spawn, ...(resumeFrom ? { resumeFrom } : {}) });
   if (!started.ok) throw new Error(started.error);
   const outcome = await started.done;
-  assert.equal(outcome.status, "passed", `${outcome.status}: ${outcome.error ?? ""}`);
+  assert.equal(outcome.status, status, `${outcome.status}: ${outcome.error ?? ""}`);
   return { started, outcome, fake, journal: engine.readJournal(started.journalPath) };
 }
 const read = { agentType: "planner" };
@@ -119,7 +119,7 @@ try {
 
   // 4. A failed call is never reused.
   let fail = true;
-  const flaky = await run(`return [await agent("a", ${JSON.stringify(read)}), await agent("b", ${JSON.stringify(read)})]`, (s) => (s.task === "a" && fail ? { fail: "provider down" } : { text: s.task }));
+  const flaky = await run(`return [await agent("a", ${JSON.stringify(read)}), await agent("b", ${JSON.stringify(read)})]`, (s) => (s.task === "a" && fail ? { fail: "provider down" } : { text: s.task }), undefined, undefined, repo, "partial");
   assert.deepEqual(flaky.outcome.value, [null, "b"]);
   assert.equal(flaky.journal.find((e) => e.label.endsWith("#1"))?.ok, false);
   fail = false;

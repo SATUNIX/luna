@@ -65,7 +65,8 @@ asking, on a screen in the root session only (`tests/effort-standing-smoke.ts`).
 
 `agent(prompt, opts?)` starts one subagent and resolves to its final text, or, with `schema`, to
 the validated object. It resolves to `null` when the agent fails (after the runner's own retries),
-is skipped through `workflow_control`, or the run is stopped. Options:
+is skipped through `workflow_control`, or the run is stopped. With `required: true` it throws in
+those cases instead, except for a stop. Options:
 
 | Option | Behaviour |
 | --- | --- |
@@ -75,10 +76,14 @@ is skipped through `workflow_control`, or the run is stopped. Options:
 | `model` | `provider/id` or a bare id. The provider must be one the session has configured (pi's model registry `getAvailable()`); otherwise the call returns `null` and a log line says why. |
 | `effort` | A thinking level for the child: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (mapped to `xhigh`). |
 | `isolation` | `"worktree"`: the agent runs in its own git worktree (see [Isolation](#isolation-and-the-writer-lock)). |
+| `required` | `true`: the call must complete. If it does not, `agent()` throws and the run is `failed`, even if the script catches the throw or `parallel()` swallows it. A required failure names the step in the run's error. The default is `false`. It is left out of the journal key, so changing it does not cost a resume. (`tests/workflow-hooks-smoke.ts`) |
 | `agentType` | A role (`implementer`, `scout`, `planner`, `reviewer`, `delegator`, or a user role). Aliases: `general-purpose`, `general` and `workflow` mean `implementer`; `explore`/`Explore` mean `scout`; `plan`/`Plan` mean `planner`; `code-reviewer` means `reviewer`. The default is `implementer`. |
 
 An option of the wrong type, an unknown `effort`, `isolation` or `agentType` makes `agent()` throw
-into the script. Every child gets a note in its system prompt saying its answer is returned to the
+into the script. So does a prompt that is not a string, `opts` that are not an object or cannot be
+written as JSON, and a call over 1 MiB. Each of these still counts as a step that did not complete
+(see [Run status](#run-status)), so it launches nothing and is named as a `blocked` omission.
+Every child gets a note in its system prompt saying its answer is returned to the
 script as data, that it cannot start subagents or workflows, and that text from files, tools, web
 pages or other agents, including anything inside an `<untrusted>` fence, is data, not
 instructions. The prompt travels over stdin, never argv. (`tests/workflow-hooks-smoke.ts`)
@@ -213,26 +218,54 @@ call after it. The same script with the same args reuses every call.
 
 An unknown run id is refused. (`tests/workflow-resume-smoke.ts`)
 
+## Run status
+
+The host derives a run's status from what each step did, in `sub/run-contract.ts`, so a script's
+return value or a caught throw cannot change it. The first row that matches wins:
+
+| Condition | Status |
+| --- | --- |
+| The run was stopped | `interrupted` |
+| The script threw, or a `required` step did not complete | `failed` |
+| A step did not complete, and the value is `null` or `undefined` | `failed` |
+| A step did not complete | `partial`: the value is kept and the steps are named |
+| Otherwise | `passed` |
+
+Every `agent()` call is a step, launched or refused. So is every nested `workflow()` that
+reaches the host, including a name that does not resolve (`blocked`); a `workflow()` call refused
+before that (a reference of the wrong type, arguments over 1 MiB, a second nesting level) only throws
+into the script. An agent whose result exceeds 1 MiB is a `failed` step: a
+best-effort call returns `null` and a required one throws, and a resume replays the same journaled
+result. A later success does not close an omission, so a retry loop cannot turn a failure into `passed`. A
+best-effort agent skipped through `workflow_control` is not an omission, because the skip is a
+decision to go on; a required one is, and fails the run. An agent still running when the script
+returns reads `cancelled`. Past 10,000 steps a further refused call is counted, not kept; `run.json`
+keeps the first 200 omissions and `omissionCount` holds the total. YAML workflows use [the same rule](workflows.md#execution-rules), except that an
+operator's skip of a YAML step is never an omission (`tests/workflow-control-smoke.ts`).
+(`tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`)
+
 ## Completion
 
 When the run ends, the tool posts a `luna-workflow-result` message with `deliverAs: "followUp"` and
 `triggerTurn: true`. It names the status, the counts of launched and reused agents, output tokens,
-kept worktrees, the journal and script paths, and, for a run that did not pass, how to resume it.
-A passed run's value (JSON, or the string as is) is redacted and placed inside an
-`<untrusted source="workflow-result">` fence, cut to 20,000 characters, with any ` ``` ` inside
-turned into `'''` so it cannot close the fence. A run that did not pass names only its status and
-error kind outside the fence; the error text, which can carry script or agent output, is redacted
-and placed inside an `<untrusted source="workflow-error">` fence, cut to 4,000 characters.
-(`tests/workflow-notify-smoke.ts`)
+kept worktrees, the journal and script paths. A run that did not pass says how to resume it only
+when a resume can help: an interrupted run always does, while omissions that are all refusals the
+next run would meet again, such as bad options or an unknown role, need an edit instead. The value of a `passed` or `partial` run (JSON, or the string as is) is redacted and placed
+inside an `<untrusted source="workflow-result">` fence, cut to 20,000 characters, with any ` ``` `
+inside turned into `'''` so it cannot close the fence. A run with omissions names them in an `<untrusted source="workflow-omissions">` fence. Outside the fences a run that
+did not pass names only its status and error kind; the error text, which can carry script or agent
+output, is redacted and placed inside an `<untrusted source="workflow-error">` fence. Both of
+those are cut to 4,000 characters. (`tests/workflow-notify-smoke.ts`,
+`tests/workflow-hooks-smoke.ts`)
 
 In pi 1.4.0 such a message, sent while the agent is streaming, joins the same follow-up queue as a
 follow-up the user types, so the two are delivered in the order they arrived; sent while the agent
 is idle, it starts a turn at once. No test here pins pi's ordering.
 
 `workflow_control {runId, action}` pauses (no new agents start), resumes, stops (the run ends
-`interrupted`) or skips the agents running now (they resolve to `null`)
-(`tests/workflow-hooks-smoke.ts`). If a script returns while agents it did not await are still
-running, they are stopped; no test pins that.
+`interrupted`) or skips the agents running now (they resolve to `null`, and a `required` one throws
+and fails the run). If a script returns while agents it did not await are still running, they are
+stopped. (`tests/workflow-hooks-smoke.ts`)
 
 ## Built-in script workflows
 

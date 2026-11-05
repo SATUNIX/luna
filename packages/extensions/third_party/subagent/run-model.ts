@@ -3,19 +3,20 @@
  * events that feed it.
  *
  * A run has ordered phases and the agents launched in them. Each agent records its label, phase,
- * model, token usage, elapsed time and status. The YAML executor (workflow.ts) feeds it today:
- * every top-level step is a phase and every step execution (a parallel member, a gate loop's
- * re-run) is one agent. The API is engine-neutral (`kind`, phases created on demand by id), so
- * a script engine can feed the same model later.
+ * model, token usage, elapsed time and status. Both engines feed it. In the YAML executor
+ * (workflow.ts) every top-level step is a phase and every step execution (a parallel member, a gate
+ * loop's re-run) is one agent; in the script engine (wf-engine.ts) phases come from the script and
+ * every launched or reused agent() call is one agent. A run's status is derived by run-contract.ts.
  *
  * Nothing here is written to disk: records hold no prompts or outputs, only labels, ids, model
  * names, counters and error text. Listeners (a panel, a status line) subscribe; a throwing
  * listener is ignored so telemetry can never break a run.
  */
+import type { RunStatus } from "./run-contract.ts";
 import type { UsageStats } from "./types.ts";
 
+export type { RunStatus };
 export type RunKind = "yaml" | "script";
-export type RunStatus = "running" | "passed" | "failed" | "interrupted";
 export type PhaseStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "aborted";
 export type AgentStatus = "running" | "passed" | "failed" | "skipped" | "aborted";
 

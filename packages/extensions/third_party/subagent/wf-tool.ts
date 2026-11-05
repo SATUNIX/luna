@@ -18,8 +18,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./agents.ts";
 import { isSecretReadPath, untrusted } from "./fence.ts";
 import { redact } from "./redact.ts";
+import type { StepResult } from "./run-contract.ts";
 import type { ToolContext } from "./types.ts";
-import { startScriptRun, scriptRunsRoot, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
+import { OMISSIONS_NAMED, startScriptRun, scriptRunsRoot, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
 import { parseScriptMeta } from "./wf-meta.ts";
 import { SandboxSession } from "./wf-sandbox.ts";
 import { MAX_SCRIPT_BYTES, discoverWorkflows, workflowDirs } from "./workflow.ts";
@@ -144,7 +145,26 @@ export function standingBudget(): number | null {
   }
 }
 
-/** The completion message: status, counts, kept worktrees, paths, and the error and value inside the fence. */
+// A script that does not compile or load fails the same way every time.
+const SCRIPT_REFUSED: ReadonlySet<string> = new Set(["syntax", "integrity", "protocol"]);
+// A resume starts with fresh limits and reuses the prefix, so these two refusals can clear.
+const REFUSALS_THAT_CLEAR: ReadonlySet<string> = new Set(["budget", "agent-limit"]);
+
+// A resume replays a journaled result, so one too large to return would be too large again.
+const canRetry = (o: StepResult): boolean => (o.execution !== "blocked" && o.reason?.code !== "result-too-large") || REFUSALS_THAT_CLEAR.has(o.reason?.code ?? "");
+
+/** Whether a resume could end differently: a refusal the next run would meet again needs an edit, not a resume. */
+function resumeCanHelp(o: RunOutcome): boolean {
+  if (o.status === "passed") return false;
+  if (o.status === "interrupted") return true;
+  if (SCRIPT_REFUSED.has(o.errorKind ?? "")) return false;
+  const omissions = o.omissions ?? [];
+  return omissions.length > 0 ? omissions.some(canRetry) : o.status === "failed";
+}
+
+const omissionLine = (o: StepResult): string => `${o.stepId} ${o.execution}${o.required ? " (required)" : ""}${o.reason ? `: ${o.reason.text}` : ""}`;
+
+/** The completion message: status, counts, kept worktrees, paths, and the error, omissions and value inside the fence. */
 export function formatCompletion(o: RunOutcome): string {
   let valueText: string;
   try {
@@ -158,11 +178,17 @@ export function formatCompletion(o: RunOutcome): string {
     ...o.keptWorktrees.map((w) => `Kept worktree ${w.path} on branch ${w.branch} (${w.reason ?? "changed"}); it is not merged: review it yourself.`),
     `Journal: ${o.journalPath}`,
     `Script: ${o.scriptPath}`,
-    ...(o.status === "passed" ? [] : [`Resume with workflow {scriptPath: "${o.scriptPath}", resumeFromRunId: "${o.runId}"}.`]),
+    ...(resumeCanHelp(o) ? [`Resume with workflow {scriptPath: "${o.scriptPath}", resumeFromRunId: "${o.runId}"}.`] : []),
   ];
-  // The error can carry script or agent text, so it is fenced like the value.
+  // The error and the omissions can carry script or agent text, so they are fenced like the value.
   if (o.error) lines.push("", untrusted("workflow-error", redact(o.error), ERROR_TEXT_CAP));
-  if (o.status === "passed") lines.push("", untrusted("workflow-result", redact(valueText), RESULT_TEXT_CAP));
+  if (o.omissions?.length) {
+    const named = o.omissions.slice(0, OMISSIONS_NAMED);
+    const count = o.omissionCount ?? o.omissions.length;
+    const head = count > named.length ? [`${String(count)} steps did not complete; the first ${String(named.length)}:`] : [];
+    lines.push("", untrusted("workflow-omissions", redact([...head, ...named.map(omissionLine)].join("\n")), ERROR_TEXT_CAP));
+  }
+  if (o.status === "passed" || o.status === "partial") lines.push("", untrusted("workflow-result", redact(valueText), RESULT_TEXT_CAP));
   return lines.join("\n");
 }
 

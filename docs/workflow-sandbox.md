@@ -41,7 +41,7 @@ repeats). The VM's globals are the standard built-ins plus:
 
 | Global | Behaviour |
 | --- | --- |
-| `agent(prompt, opts?)` | Calls the host's `agent` hook with `{prompt, opts}` and resolves to its result. It rejects with the hook's error message. Once `budget.total` is set and `budget.spent()` has reached it, it throws `budget exhausted`. |
+| `agent(prompt, opts?)` | Calls the host's `agent` hook with `{prompt, opts}` and resolves to its result. It rejects with the hook's error message. A call the prelude cannot send (a prompt that is not a string, bad `opts`, more than 1 MiB) also goes to the hook, as `{prompt: "", opts: {required, invalid}}`, so the host records it and rejects with `invalid`. The budget is the host's to enforce. |
 | `parallel(thunks)` | Runs every thunk; a thunk that throws resolves to `null`. At most 4096 thunks. |
 | `pipeline(items, ...stages)` | Each item goes through every stage on its own, with no barrier between stages. Each stage gets `(previous, item, index)`, and a stage that throws turns that item into `null`. At most 4096 items. |
 | `log(text)`, `phase(title)` | Passed to the host's `log` and `phase` hooks, cut to 4096 characters. After 10,000 calls, further calls are dropped. |

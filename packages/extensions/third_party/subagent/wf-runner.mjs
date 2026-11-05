@@ -24,7 +24,7 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
   "use strict";
   const parse = JSON.parse, stringify = JSON.stringify, freeze = Object.freeze, define = Object.defineProperty;
   const keys = Object.keys, isArray = Array.isArray, all = Promise.all.bind(Promise), then = Promise.prototype.then;
-  const MAX_ITEMS = 4096;
+  const MAX_ITEMS = 4096, MAX_CALL = 1024 * 1024;
   const disabled = (what) => function () {
     throw new Error(what + " is not available in workflow scripts: it would make resume non-deterministic. Pass timestamps in through args and vary prompts by index instead.");
   };
@@ -40,17 +40,27 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
       return String(e);
     } catch (_) { return "unprintable error"; }
   };
-  const call = (op, payload) => then.call(H.call(op, stringify(payload)), (s) => parse(s));
+  const send = (op, text) => then.call(H.call(op, text), (s) => parse(s));
+  const call = (op, payload) => send(op, stringify(payload));
   const budget = freeze({
     total,
     spent: () => H.spent(),
     remaining: () => (total === null ? Infinity : Math.max(0, total - H.spent())),
   });
   const agent = async (prompt, opts) => {
-    if (typeof prompt !== "string") throw new TypeError("agent(prompt, opts): prompt must be a string");
-    if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) throw new TypeError("agent(prompt, opts): opts must be an object");
-    if (total !== null && H.spent() >= total) throw new Error("budget exhausted: " + H.spent() + " of " + total + " output tokens spent");
-    return call("agent", { prompt, opts: opts === undefined ? null : opts });
+    // A bad call goes to the host too: it records a step for every agent(), and the throw it sends
+    // back is one a catch or parallel() can swallow without hiding the call.
+    const refused = (invalid) => {
+      let required = false;
+      try { required = opts?.required === true; } catch (_) { /* a throwing getter requires nothing */ }
+      return call("agent", { prompt: "", opts: { required, invalid } });
+    };
+    if (typeof prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
+    if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) return refused("agent(prompt, opts): opts must be an object");
+    let text;
+    try { text = stringify({ prompt, opts: opts === undefined ? null : opts }); } catch (_) { return refused("agent(prompt, opts): opts must be JSON-serialisable"); }
+    if (text !== undefined && text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    return send("agent", text);
   };
   const items = (name, list) => {
     if (!isArray(list)) throw new TypeError(name + ": expected an array");

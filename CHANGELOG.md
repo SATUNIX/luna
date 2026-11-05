@@ -89,6 +89,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A workflow run's status now comes from what its steps did, not from whether the script returned. A
+  failed required step no longer reads `passed` in the outcome, `run.json`, the run model or the
+  completion message. New status `partial`: the value is shown with its omissions named. New
+  `agent(prompt, {required: true})` throws when the step does not complete and fails the run even if
+  the throw is caught. YAML runs report the same way, so a `continue_on_error` failure is `partial`
+  (F4, `tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).
 - A human prompt no longer opens under the control-center hub or the workflow panel. A new input-owner
   registry (`whenInputFree`, generated into each package) holds firewall approvals, child approvals,
   `ask_human` and the pentest action approval until the overlay closes. These cards start on an

@@ -163,3 +163,9 @@
   - **Workflow panel holds input (2026-11-05):** `wf-panel.ts` takes a hold from the generated
     `shared/input-owner.ts` while the panel is open, so a human prompt waits for it to close
     (`tests/firewall-overlay-queue-smoke.ts`).
+  - **Run status from step results (2026-11-05):** new `run-contract.ts` holds `StepResult` and
+    `deriveOutcome`, the only source of a run's status in `wf-engine.ts` and `workflow.ts`. Every
+    `agent()` and nested `workflow()` records a result, `agent()` gains `required`, a call the prelude
+    in `wf-runner.mjs` cannot send reaches the host as a refused step, the budget check moves from the
+    prelude to the host, and a new status `partial` reaches `run.json`, the run model and the panel
+    (`tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).

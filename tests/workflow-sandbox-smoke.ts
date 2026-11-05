@@ -109,11 +109,12 @@ try {
     assert.deepEqual(phases, ["Scan"]);
     assert.deepEqual(seen.slice(0, 2), [{ label: "x" }, null]);
     ok(`${mode}: agent/parallel/pipeline/log/phase/args/budget behave as documented; 4096-item cap; hook errors reject`);
-    const exhausted = await run(mode, `try { await agent("x"); return "ran" } catch (e) { return e.message }`, { budget: { total: 5, spent: () => 5 } });
-    assert.ok(exhausted.ok && typeof exhausted.value === "string" && /^budget exhausted/.test(exhausted.value), JSON.stringify(exhausted));
+    // The refusal itself is the host's (wf-engine.ts), so that it reaches the run's record; the call still gets there.
+    const exhausted = await run(mode, `return [await agent("x"), budget.spent(), budget.remaining()]`, { hooks: echo, budget: { total: 5, spent: () => 5 } });
+    assert.deepEqual(exhausted, { ok: true, value: [{ text: "did: x" }, 5, 0] }, JSON.stringify(exhausted));
     const noArgs = await run(mode, `return typeof args`);
     assert.deepEqual(noArgs, { ok: true, value: "undefined" });
-    ok(`${mode}: agent() throws once the budget is spent; args is undefined when none are passed`);
+    ok(`${mode}: a spent budget reads 0 remaining and agent() still reaches the host; args is undefined when none are passed`);
     const lines: string[] = [];
     const logged = await run(mode, `log("x".repeat(5000)); for (let i = 0; i < 10005; i++) log("n" + i); return 1`, { hooks: { ...echo, log: (text) => lines.push(text) } });
     assert.deepEqual(logged, { ok: true, value: 1 });
@@ -146,8 +147,12 @@ try {
 
     // 5. 1 MiB caps.
     expectError(await run(mode, `return "x".repeat(1100000)`), "limit", /exceeds 1 MiB/, "result cap");
-    const bigCall = await run(mode, `try { await agent("y".repeat(1100000)) } catch (e) { return e.message }`);
+    // agent() sends the host the refusal, not the call, so the host can record the step.
+    const refusing = { agent: (_prompt: string, o: Record<string, unknown> | null) => Promise.reject(new Error(String(o?.invalid))) };
+    const bigCall = await run(mode, `try { await agent("y".repeat(1100000)) } catch (e) { return e.message }`, { hooks: refusing });
     assert.deepEqual(bigCall, { ok: true, value: "the call's arguments exceed 1 MiB" });
+    const bigWorkflow = await run(mode, `try { await workflow("w", "y".repeat(1100000)) } catch (e) { return e.message }`);
+    assert.deepEqual(bigWorkflow, { ok: true, value: "the call's arguments exceed 1 MiB" });
     const bigReply = await run(mode, `try { await agent("x") } catch (e) { return e.message }`, { hooks: { agent: () => Promise.resolve("r".repeat(1100000)) } });
     assert.deepEqual(bigReply, { ok: true, value: "the hook's result exceeds 1 MiB" });
     ok(`${mode}: results, call arguments and hook results over 1 MiB are refused`);

@@ -87,6 +87,7 @@ export function tone(status: AgentStatus | PhaseStatus | RunStatus): Tone {
       return "bad";
     case "aborted":
     case "interrupted":
+    case "partial":
       return "warn";
     case "skipped":
     case "pending":

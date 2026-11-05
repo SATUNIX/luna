@@ -134,7 +134,7 @@ interface CaseResult {
 const results: CaseResult[] = [];
 
 /** Defects not fixed yet. A fix deletes its own ids in the same change. */
-const KNOWN_RED: ReadonlySet<string> = new Set(["F1a", "F1b", "F1c", "F1d", "F1e", "F2a", "F2b", "F2c", "F3a", "F3b", "F4a", "F4b"]);
+const KNOWN_RED: ReadonlySet<string> = new Set(["F1a", "F1b", "F1c", "F1d", "F1e", "F2a", "F2b", "F2c", "F3a", "F3b"]);
 
 interface Verdict {
   exit: 0 | 1;
@@ -310,14 +310,15 @@ const SERIAL = `const out = []
 
 await scenario("F3-control", "serial calls stop at maxAgents 2 and at an output budget of 15 (20 spent)", async (p) => {
   const limited = await run({ repo: makeRepo(), source: SERIAL, reply: () => ({ text: "ok" }), maxAgents: 2 });
-  p.eq([limited.outcome.status, limited.outcome.launched, limited.fake.seen.length], ["passed", 2, 2], "maxAgents stops a serial loop");
+  p.eq([limited.outcome.status, limited.outcome.launched, limited.fake.seen.length], ["partial", 2, 2], "maxAgents stops a serial loop");
   const budgeted = await run({ repo: makeRepo(), source: SERIAL, reply: () => ({ text: "ok", output: 10 }), budgetTotal: 15 });
-  p.eq([budgeted.outcome.status, budgeted.outcome.launched, budgeted.outcome.outputTokens], ["passed", 2, 20], "the budget stops a serial loop once 15 is passed");
+  p.eq([budgeted.outcome.status, budgeted.outcome.launched, budgeted.outcome.outputTokens], ["partial", 2, 20], "the budget stops a serial loop once 15 is passed");
 }, true);
 
 await scenario("F3a", "5 parallel agents, concurrency 1, maxAgents 2", async (p) => {
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", delayMs: 10 }), concurrency: 1, maxAgents: 2 });
-  assert.equal(r.outcome.status, "passed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  // "partial" once a queued call is refused, "passed" while the defect launches them all: neither fails the run.
+  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("most live at once", r.fake.maxLive());
@@ -330,7 +331,8 @@ await scenario("F3a", "5 parallel agents, concurrency 1, maxAgents 2", async (p)
 await scenario("F3b", "5 parallel agents of 10 output tokens, concurrency 1, output budget 15", async (p) => {
   // A serial loop under this budget launches 2 and spends 20 (F3-control); a queue must not do worse than that.
   const r = await run({ repo: makeRepo(), source: FAN_OUT, reply: () => ({ text: "ok", output: 10, delayMs: 10 }), concurrency: 1, budgetTotal: 15 });
-  assert.equal(r.outcome.status, "passed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
+  // "partial" once a queued call is refused, "passed" while the defect launches them all: neither fails the run.
+  assert.notEqual(r.outcome.status, "failed", `${r.outcome.status}: ${r.outcome.error ?? ""}`);
   p.observe("children spawned", r.fake.seen.length);
   p.observe("outcome.launched", r.outcome.launched);
   p.observe("output tokens spent", r.outcome.outputTokens);
@@ -341,10 +343,10 @@ await scenario("F3b", "5 parallel agents of 10 output tokens, concurrency 1, out
 // ---------------------------------------------------------------------------------------------
 // F4: a failed required step
 
-await scenario("F4-control", "a failed best-effort branch in parallel() is null and does not fail the run", async (p) => {
+await scenario("F4-control", "a failed best-effort branch in parallel() is null and the run reads partial", async (p) => {
   const r = await run({ repo: makeRepo(), source: `return await parallel([() => agent("fail"), () => agent("fine")])`, reply: (s) => (s.task === "fail" ? { fail: "provider down" } : { text: "FINE" }) });
   p.eq(r.outcome.value, [null, "FINE"], "the failed branch is null and the other branch's value is kept");
-  p.differs(r.outcome.status, "failed", "a best-effort omission fails the run");
+  p.eq(r.outcome.status, "partial", "a best-effort omission leaves the value and reads partial");
 }, true);
 
 await scenario("F4a", "return await agent() of a failing child: the run's status", async (p) => {

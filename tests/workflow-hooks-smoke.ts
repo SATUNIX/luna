@@ -12,6 +12,8 @@
 //   9. isolation: "worktree": the agent runs in its own worktree; unchanged ones are removed, changed ones kept.
 //  10. children: launch kind "workflow" at E1, depth 1, no subagent; a run without effort is refused.
 //  11. workflow_control: pause holds new agents, skip makes agent() null, stop ends the run interrupted.
+//  12. outcome (run-contract.ts): the host derives a run's status from what each step did, whatever the script hid;
+//      refusals are omissions, so most of the cases above end partial; every surface agrees; YAML runs the same way.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -26,12 +28,16 @@ import type * as RunModelModule from "../packages/extensions/third_party/subagen
 import type * as ControlModule from "../packages/extensions/third_party/subagent/control.ts";
 import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type * as PanelModule from "../packages/extensions/third_party/subagent/wf-panel.ts";
+import type * as ToolModule from "../packages/extensions/third_party/subagent/wf-tool.ts";
+import type * as WorkflowModule from "../packages/extensions/third_party/subagent/workflow.ts";
+import type * as ContractModule from "../packages/extensions/third_party/subagent/run-contract.ts";
 import { fakeSpawner, type FakeReply, type FakeSpawn, type Spawned } from "./workflow-fakes.ts";
 
 type Options = Omit<EngineModule.EngineOptions, "spawnChild"> & { spawnChild: FakeSpawn };
 interface EngineView {
   startScriptRun(spec: EngineModule.ScriptSpec, args: unknown, opts: Options): EngineModule.StartResult;
   defaultConcurrency(): number;
+  callKey: typeof EngineModule.callKey;
   WORKFLOW_AGENT_NOTE: string;
   MAX_AGENTS_PER_RUN: number;
   resolveModel: typeof EngineModule.resolveModel;
@@ -52,6 +58,11 @@ const { RunRegistry } = await loadModule<typeof RunModelModule>("vendor/subagent
 const sandboxMod = await loadModule<typeof SandboxModule>("vendor/subagent/wf-sandbox.ts");
 const controlMod = await loadModule<typeof ControlModule>("vendor/subagent/control.ts");
 const panelMod = await loadModule<typeof PanelModule>("vendor/subagent/wf-panel.ts");
+const { formatCompletion } = await loadModule<typeof ToolModule>("vendor/subagent/wf-tool.ts");
+type WorkflowView = Omit<typeof WorkflowModule, "executeWorkflow"> & {
+  executeWorkflow(w: WorkflowModule.WorkflowDef, state: WorkflowModule.RunState, opts: Omit<WorkflowModule.ExecuteOptions, "spawnChild"> & { spawnChild: FakeSpawn }): Promise<WorkflowModule.RunState>;
+};
+const yamlMod = await loadModule<WorkflowView>("vendor/subagent/workflow.ts");
 const support = sandboxMod.detectSupport();
 const mode: SandboxModule.SandboxMode = support.bwrap ? "full" : "reduced";
 console.log(`  (sandbox mode: ${mode})`);
@@ -70,12 +81,218 @@ async function run(source: string, reply: (s: Spawned) => FakeReply, extra: Part
   const outcome = await started.done;
   return { started, outcome, fake, registry, snapshot: registry.get(started.runId) };
 }
-const value = (o: EngineModule.RunOutcome): unknown => {
-  assert.equal(o.status, "passed", `run ${o.status}: ${o.error ?? ""}`);
+const value = (o: EngineModule.RunOutcome, status: EngineModule.RunOutcome["status"] = "passed"): unknown => {
+  assert.equal(o.status, status, `run ${o.status}: ${o.error ?? ""}`);
   return o.value;
 };
+/** One YAML run behind a fake child. */
+async function runYaml(steps: string, reply: (s: Spawned) => FakeReply) {
+  const parsed = yamlMod.parseWorkflow(`---\nname: outcome-test\ndescription: test\nsteps:\n${steps}---\n`, path.join(project, "outcome-test.md"), "user");
+  assert.ok(parsed.workflow, parsed.errors.join("; "));
+  const registry = new RunRegistry();
+  const fake = fakeSpawner(reply);
+  const state = await yamlMod.executeWorkflow(parsed.workflow, yamlMod.newRunState(parsed.workflow, {}), { cwd: project, agents, spawnChild: fake.spawn, registry, launchKind: "user" });
+  return { state, workflow: parsed.workflow, snapshot: registry.get(state.id), fake };
+}
 
 try {
+  // 12. Outcome. Listed first so that every case reports at once while a defect is present.
+  {
+    const failing = (s: Spawned): FakeReply => (s.task.startsWith("fail") ? { fail: "provider down" } : { text: s.task });
+    const inParallel = await run(`return await parallel([() => agent("fail", { required: true }), () => agent("fine")])`, failing);
+    const nested = await run(
+      `try { await workflow("inner") } catch (e) { log(e.message) }
+       return "survived"`,
+      failing,
+      { resolveWorkflow: async () => spec(`return await agent("fail", { required: true })`, "inner") },
+    );
+    const continued = await runYaml(
+      `  - id: flaky
+    agent: scout
+    task: "fail now"
+    continue_on_error: true
+  - id: after
+    agent: scout
+    task: "fine"
+`,
+      failing,
+    );
+    let reviews = 0;
+    const gated = await runYaml(
+      `  - id: work
+    agent: implementer
+    task: "work"
+  - id: review
+    agent: reviewer
+    task: "review"
+    gate: { pass: APPROVED, retry: work, max_loops: 2 }
+`,
+      (s) => ({ text: s.task === "review" && ++reviews === 1 ? "NOT YET" : "APPROVED", output: 7 }),
+    );
+    assert.deepEqual(
+      { inParallel: inParallel.outcome.status, nested: nested.outcome.status, continued: continued.state.status, gated: gated.state.status },
+      { inParallel: "failed", nested: "failed", continued: "partial", gated: "passed" },
+      "the host's derived status of a required failure in parallel(), one in a nested workflow(), a continue_on_error failure and a gate that passes on its second loop",
+    );
+
+    // The required failure is named although the script saw no throw; a best-effort sibling kept its value.
+    assert.equal(inParallel.outcome.errorKind, "required");
+    assert.match(inParallel.outcome.error ?? "", /required step implementer #1 did not complete \(failed: provider down\)/);
+    assert.equal(nested.outcome.value, "survived", "the script itself ended normally");
+    assert.deepEqual(nested.outcome.omissions?.map((o) => [o.execution, o.required]), [["failed", false], ["failed", true]], "the nested run and the agent inside it are both named, in call order");
+    const serial = await run(`let seen; try { await agent("fail", { required: true }) } catch (e) { seen = e.message } await agent("fine"); return seen`, failing);
+    assert.match(String(serial.outcome.value), /required step implementer #1 did not complete/, "a required agent throws, it does not return null");
+    assert.equal(serial.outcome.status, "failed", "catching the throw does not launder the failure");
+    assert.equal(serial.fake.seen.length, 2);
+    const badRequired = await run(`try { await agent("x", { required: "yes" }) } catch (e) { return e.message }`, failing);
+    assert.match(String(badRequired.outcome.value), /opts\.required must be a boolean/);
+    assert.equal(badRequired.fake.seen.length, 0);
+    const key = (opts: Record<string, unknown>): string => engine.callKey("p", opts);
+    // A call the sandbox cannot pass on is still one step: it reaches the host, so no catch can hide it.
+    const circularOpts = `(() => { const o = { required: true }; o.self = o; return o })()`;
+    const refusedRequired = [
+      `parallel([() => agent(undefined, { required: true }), () => agent("fine")])`,
+      `parallel([() => agent(42, { required: true }), () => agent("fine")])`,
+      `parallel([() => agent("x", ${circularOpts}), () => agent("fine")])`,
+      `parallel([() => agent("y".repeat(1100000), { required: true }), () => agent("fine")])`,
+      `pipeline([1], () => agent(undefined, { required: true }))`,
+      `(async () => { try { await agent(42, { required: true }) } catch (e) { log(e.message) } return "went on" })()`,
+    ];
+    for (const call of refusedRequired) {
+      const r = await run(`return await ${call}`, failing);
+      assert.equal(r.outcome.status, "failed", `${call}: a required call the sandbox refused fails the run`);
+      assert.equal(r.outcome.errorKind, "required", call);
+      assert.deepEqual(r.outcome.omissions?.map((o) => [o.execution, o.required, o.reason?.code]), [["blocked", true, "options"]], call);
+    }
+    const badCalls = await run(`return await parallel([() => agent(undefined), () => agent("x", 7), () => agent("x", (() => { const o = {}; o.self = o; return o })()), () => agent("x", { get required() { throw new Error("no") }, self: 1n }), () => agent("fine")])`, failing);
+    assert.deepEqual(value(badCalls.outcome, "partial"), [null, null, null, null, "fine"]);
+    assert.deepEqual(badCalls.outcome.omissions?.map((o) => [o.execution, o.required, o.reason?.code]), Array.from({ length: 4 }, () => ["blocked", false, "options"]), "a best-effort bad call is a named omission");
+    assert.deepEqual(badCalls.fake.seen.map((x) => x.task), ["fine"], "and launches nothing");
+    const seenByScript = await run(`const seen = []; for (const bad of [() => agent(undefined), () => agent("x", []), () => agent("x", (() => { const o = {}; o.self = o; return o })()), () => agent("y".repeat(1100000))]) { try { await bad() } catch (e) { seen.push(e.message) } } return seen`, failing);
+    assert.deepEqual(value(seenByScript.outcome, "partial"), ["agent(prompt, opts): prompt must be a string", "agent(prompt, opts): opts must be an object", "agent(prompt, opts): opts must be JSON-serialisable", "the call's arguments exceed 1 MiB"], "the script still sees why");
+    assert.equal(key({ required: true }), key({}), "required changes the outcome, not the launch, so it leaves the journal key alone");
+
+    // A later success does not close an omission: a retry loop cannot launder a failure.
+    const retried = await run(
+      `let n = 0, out = null
+       while (out === null && n < 2) { n++; out = await agent(n === 1 ? "fail" : "fine") }
+       return out`,
+      failing,
+    );
+    assert.deepEqual([value(retried.outcome, "partial"), retried.outcome.omissions?.map((o) => o.execution)], ["fine", ["failed"]]);
+
+    // Every surface says the same thing about a partial run.
+    const partial = await run(`return await parallel([() => agent("fail"), () => agent("fine", { label: "good" })])`, failing);
+    assert.deepEqual(value(partial.outcome, "partial"), [null, "fine"]);
+    const runJson: unknown = JSON.parse(fs.readFileSync(path.join(partial.started.transcriptDir, "run.json"), "utf8"));
+    assert.ok(typeof runJson === "object" && runJson !== null);
+    assert.equal(Reflect.get(runJson, "status"), "partial");
+    assert.deepEqual(Reflect.get(runJson, "omissions"), [{ stepId: "implementer #1", execution: "failed", required: false, reason: { code: "error", text: "provider down" } }]);
+    assert.equal(partial.snapshot?.status, "partial");
+    const text = formatCompletion(partial.outcome);
+    assert.match(text, /^Workflow hooks-test \(run wf-[a-z0-9-]+\) partial\.\n/);
+    assert.match(text, /<untrusted source="workflow-result">[\s\S]*"fine"/, "a partial run shows its value");
+    assert.match(text, /<untrusted source="workflow-omissions">[\s\S]*implementer #1 failed: provider down/, "and names what is missing");
+    assert.match(text, /Resume with workflow/, "resume retries a failed step");
+    assert.equal(panelMod.tone("partial"), "warn");
+    assert.ok(panelMod.renderText(partial.registry, new panelMod.Narrator()).includes("partial"), "the panel renders partial");
+
+    // The resume line appears only when a resume can help.
+    const refused = await run(`await agent("x", { agentType: "wizard" }).catch(() => null); return "went on"`, failing);
+    assert.deepEqual([value(refused.outcome, "partial"), refused.outcome.omissions?.map((o) => [o.execution, o.reason?.code])], ["went on", [["blocked", "unknown-role"]]]);
+    assert.ok(!/Resume with/.test(formatCompletion(refused.outcome)), "the same refusal would come back");
+    const syntax = await run(`return (`, failing);
+    assert.equal(syntax.outcome.status, "failed");
+    assert.ok(!/Resume with/.test(formatCompletion(syntax.outcome)), "a script that does not compile cannot be resumed");
+
+    // Failed, with an omission and no value.
+    const empty = await run(`return await agent("fail")`, failing);
+    assert.equal(empty.outcome.errorKind, "omitted");
+    assert.match(empty.outcome.error ?? "", /no result, and 1 step did not complete: implementer #1/);
+
+    // A result the sandbox cannot carry back is an omission too, so a swallowed throw cannot hide it.
+    const big = (s: Spawned): FakeReply => ({ text: s.task === "big" ? "x".repeat(1_100_000) : "ok" });
+    const oversized = await run(`return await parallel([() => agent("big"), () => agent("fine")])`, big);
+    assert.deepEqual(value(oversized.outcome, "partial"), [null, "ok"]);
+    assert.deepEqual(oversized.outcome.omissions?.map((o) => [o.execution, o.required, o.reason?.code]), [["failed", false, "result-too-large"]]);
+    assert.ok(!/Resume with/.test(formatCompletion(oversized.outcome)), "a resume replays the same journaled result");
+    const oversizedRequired = await run(`let seen; try { await agent("big", { required: true }) } catch (e) { seen = e.message } return seen ?? "went on"`, big);
+    assert.equal(oversizedRequired.outcome.status, "failed", "a required result over the cap fails the run although the throw was caught");
+    assert.equal(oversizedRequired.outcome.errorKind, "required");
+    assert.match(String(oversizedRequired.outcome.value), /required step implementer #1 did not complete \(failed: the agent's result exceeds 1 MiB\)/);
+    const oversizedNested = await run(
+      `try { await workflow("inner") } catch (e) { log(e.message) }
+       return "went on"`,
+      big,
+      { resolveWorkflow: async () => spec(`return "y".repeat(1100000)`, "inner") },
+    );
+    assert.equal(oversizedNested.outcome.status, "partial", "a nested result over the cap is an omission");
+    assert.deepEqual(oversizedNested.outcome.omissions?.map((o) => [o.execution, o.reason?.code]), [["failed", "limit"]], "the runner refuses it before the host sees a value");
+
+    // Run files keep a redacted label, like the log lines and the completion fence.
+    const secret = ["sk", "ant", "api03", "A".repeat(95)].join("-");
+    const leaky = await run(`return await parallel([() => agent("fail", { label: ${JSON.stringify(secret)} }), () => agent("fine")])`, failing);
+    for (const file of ["run.json", "journal.jsonl"]) assert.ok(!fs.readFileSync(path.join(leaky.started.transcriptDir, file), "utf8").includes(secret), `${file} holds no secret-shaped label`);
+
+    // What a script can make the host keep is bounded, like every other sandbox channel.
+    const flood = await run(`let n = 0; while (n++ < 20000) { try { await agent(undefined) } catch {} } return null`, failing);
+    assert.equal(flood.outcome.status, "failed");
+    assert.equal(flood.outcome.errorKind, "omitted");
+    assert.match(flood.outcome.error ?? "", /no result, and 20000 steps did not complete: .* and 19980 more$/);
+    assert.equal((flood.outcome.error ?? "").split(": ")[1]?.split(", ").length, 20, "the error names twenty steps");
+    assert.equal(flood.outcome.omissionCount, 20000);
+    assert.ok((flood.outcome.omissions?.length ?? 0) <= 10000, "steps stay bounded");
+    const floodJson: unknown = JSON.parse(fs.readFileSync(path.join(flood.started.transcriptDir, "run.json"), "utf8"));
+    assert.ok(typeof floodJson === "object" && floodJson !== null);
+    const floodList: unknown = Reflect.get(floodJson, "omissions");
+    assert.ok(Array.isArray(floodList));
+    assert.deepEqual([floodList.length, Reflect.get(floodJson, "omissionCount")], [200, 20000]);
+    assert.match(formatCompletion(flood.outcome), /<untrusted source="workflow-omissions">[\s\S]*?```\n20000 steps did not complete; the first 20:/);
+    const requiredFlood = await run(`let n = 0; while (n++ < 10100) { try { await agent(undefined, { required: true }) } catch {} } return "went on"`, failing);
+    assert.equal(requiredFlood.outcome.status, "failed", "a dropped required refusal still fails the run");
+    assert.equal(requiredFlood.outcome.omissionCount, 10100);
+    assert.ok((requiredFlood.outcome.omissions?.length ?? 0) <= 10000);
+    const hugeRefusal = await run(`await agent("x", { agentType: "z".repeat(500000) }).catch(() => null); return "went on"`, failing);
+    assert.ok((hugeRefusal.outcome.omissions?.[0]?.reason?.text.length ?? 0) <= 1000, "a refusal keeps a bounded reason");
+
+    // Agents still running when the script returns are stopped with the run, and that is an omission.
+    const orphan = await run(`agent("slow"); await agent("fine", { label: "quick" }); return "done"`, (s) => ({ text: s.task, delayMs: s.task === "slow" ? 2000 : 0 }));
+    assert.deepEqual([value(orphan.outcome, "partial"), orphan.outcome.omissions?.map((o) => [o.execution, o.reason?.code])], ["done", [["cancelled", "run-ended"]]]);
+
+    // The YAML surfaces.
+    assert.deepEqual(continued.snapshot?.status, "partial", "the run model agrees");
+    assert.equal(continued.state.steps.flaky?.status, "failed");
+    assert.equal(continued.state.steps.after?.status, "passed");
+    const onDisk = yamlMod.loadState(project, continued.state.id);
+    assert.equal(onDisk?.status, "partial", "state.json agrees and still loads");
+    assert.match(yamlMod.summarizeRun(continued.state, continued.workflow), /· partial/);
+    assert.match(yamlMod.summarizeRun(gated.state, gated.workflow), /^Agents: 4 launched; 28 output tokens\.$/m, "a YAML completion reports agents and output tokens");
+    const requiredYaml = await runYaml(`  - id: must\n    agent: scout\n    task: "fail now"\n`, failing);
+    assert.equal(requiredYaml.state.status, "failed");
+    assert.match(requiredYaml.state.error ?? "", /step must failed: provider down/);
+    const whenSkip = await runYaml(`  - id: first\n    agent: scout\n    task: "fine"\n  - id: maybe\n    agent: scout\n    task: "fine"\n    when: { step: first, status: failed }\n`, failing);
+    assert.equal(whenSkip.state.status, "passed", "a when skip is the plan working, not an omission");
+    const group = await runYaml(`  - id: fan\n    parallel:\n      - id: p1\n        agent: scout\n        task: "fail now"\n        continue_on_error: true\n      - id: p2\n        agent: scout\n        task: "fine"\n`, failing);
+    assert.equal(group.state.status, "partial", "a parallel member is a step of its own");
+
+    // The contract's table, first match wins.
+    const { deriveOutcome } = await loadModule<typeof ContractModule>("vendor/subagent/run-contract.ts");
+    const step = (execution: ContractModule.Execution, required = false): ContractModule.StepResult => ({ stepId: "s", execution, required, usage: { agents: 1, outputTokens: 0 } });
+    const clean = { threw: false, stopped: false, value: 1 };
+    const status = (steps: ContractModule.StepResult[], end: Partial<typeof clean> | { value: unknown } = {}): string => deriveOutcome(steps, { ...clean, ...end }).status;
+    assert.equal(status([step("completed")]), "passed");
+    assert.equal(status([]), "passed", "no steps at all is a script that needed none");
+    assert.equal(status([step("failed")], { value: null }), "failed");
+    assert.equal(status([step("failed")], { value: undefined }), "failed");
+    assert.equal(status([step("completed")], { value: null }), "passed", "a null value alone is not an omission");
+    assert.equal(status([step("failed")]), "partial");
+    assert.equal(status([step("failed", true)]), "failed");
+    assert.equal(status([step("completed")], { threw: true }), "failed");
+    assert.equal(status([step("failed", true)], { threw: true, stopped: true }), "interrupted", "stopped wins");
+    for (const e of ["failed", "cancelled", "blocked", "skipped", "unknown"] as const) assert.equal(deriveOutcome([step("completed"), step(e)], clean).omissions.length, 1, `${e} is an omission`);
+    ok("the host derives every run's status: a required failure fails it whatever the script hid, an omission makes it partial, a gate miss and a when skip do not, and every surface agrees");
+  }
+
   // 1. agent()
   {
     const r = await run(`return await agent("summarise the repo")`, (s) => ({ text: `answer to: ${s.task}` }));
@@ -99,7 +316,7 @@ try {
        return { a, b, failed }`,
       (s) => (s.task === "boom" ? { fail: "provider down" } : { text: s.task.toUpperCase() }),
     );
-    assert.deepEqual(value(r.outcome), { a: ["SCAN X", "SCAN Y", "SCAN Z"], b: ["STAGE2 STAGE1 1 1 0", "STAGE2 STAGE1 2 2 1"], failed: [null, "FINE"] });
+    assert.deepEqual(value(r.outcome, "partial"), { a: ["SCAN X", "SCAN Y", "SCAN Z"], b: ["STAGE2 STAGE1 1 1 0", "STAGE2 STAGE1 2 2 1"], failed: [null, "FINE"] });
     const snap = r.snapshot;
     assert.ok(snap);
     assert.deepEqual(snap.phases.map((p) => p.id).filter((id) => id === "Scan" || id === "Stage"), ["Scan", "Stage"]);
@@ -109,7 +326,7 @@ try {
     const runJson: unknown = JSON.parse(fs.readFileSync(path.join(r.started.transcriptDir, "run.json"), "utf8"));
     assert.ok(typeof runJson === "object" && runJson !== null);
     assert.deepEqual(Reflect.get(runJson, "log"), ["scanned 3", "implementer #8: failed (provider down); agent() returns null"]);
-    assert.equal(Reflect.get(runJson, "status"), "passed");
+    assert.equal(Reflect.get(runJson, "status"), "partial");
     const panel = panelMod.renderText(r.registry, new panelMod.Narrator());
     assert.match(panel, /Workflows \(1 run/, "the /workflows panel lists the script run");
     assert.ok(panel.includes(r.started.runId) && panel.includes("hooks-test"), "the panel shows the script run's id and name");
@@ -128,7 +345,7 @@ try {
        return { good, bad }`,
       () => ({ structured: { verdict: "pass" }, text: "ignored" }),
     );
-    const v = value(r.outcome);
+    const v = value(r.outcome, "partial");
     assert.ok(typeof v === "object" && v !== null);
     assert.deepEqual(Reflect.get(v, "good"), { verdict: "pass" });
     assert.match(String(Reflect.get(v, "bad")), /root must have "type": "object"/);
@@ -146,7 +363,7 @@ try {
       (s) => ({ text: s.task }),
       { availableModels: () => [{ provider: "local", id: "small" }] },
     );
-    assert.deepEqual(value(r.outcome), [null, "y", "z"]);
+    assert.deepEqual(value(r.outcome, "partial"), [null, "y", "z"]);
     assert.equal(r.fake.seen.length, 2);
     for (const child of r.fake.seen) assert.equal(child.args[child.args.indexOf("--model") + 1], "local/small");
     const log: unknown = Reflect.get(Object(JSON.parse(fs.readFileSync(path.join(r.started.transcriptDir, "run.json"), "utf8"))), "log");
@@ -168,7 +385,7 @@ try {
        return out`,
       (s) => ({ text: s.task }),
     );
-    const v = value(r.outcome);
+    const v = value(r.outcome, "partial");
     assert.ok(Array.isArray(v));
     assert.deepEqual(v.slice(0, 3), ["e", "t", "p"]);
     assert.match(String(v[3]), /opts\.effort must be one of/);
@@ -193,7 +410,8 @@ try {
       () => ({ text: "t", output: 10 }),
       { budgetTotal: 15 },
     );
-    assert.deepEqual(value(r.outcome), { got: ["t", "t", "budget exhausted: 20 of 15 output tokens spent"], spent: 20, total: 15, remaining: 0 });
+    assert.deepEqual(value(r.outcome, "partial"), { got: ["t", "t", "budget exhausted: 20 of 15 output tokens spent"], spent: 20, total: 15, remaining: 0 });
+    assert.deepEqual(r.outcome.omissions?.map((o) => [o.execution, o.reason?.code]), [["blocked", "budget"]], "the refusal reaches the host: the check left the prelude");
     assert.equal(r.outcome.outputTokens, 20);
     const none = await run(`return [budget.total, budget.remaining() === Infinity]`, () => ({}));
     assert.deepEqual(value(none.outcome), [null, true]);
@@ -212,7 +430,8 @@ try {
       () => ({ text: "n" }),
       { maxAgents: 3 },
     );
-    assert.deepEqual(value(capped.outcome), ["n", "n", "n", "agent limit reached: this run has started 3 agents (limit 3)"]);
+    assert.deepEqual(value(capped.outcome, "partial"), ["n", "n", "n", "agent limit reached: this run has started 3 agents (limit 3)"]);
+    assert.deepEqual(capped.outcome.omissions?.map((o) => [o.execution, o.reason?.code]), [["blocked", "agent-limit"]]);
     assert.equal(engine.defaultConcurrency(), Math.max(1, Math.min(16, os.availableParallelism() - 2)));
     assert.equal(engine.MAX_AGENTS_PER_RUN, 1000);
     ok("concurrency is capped per run (default min(16, cpus - 2)) and the run's agent lifetime cap throws");
@@ -233,7 +452,7 @@ try {
       (s) => ({ text: s.task }),
       { resolveWorkflow: async (ref) => { if (ref === "child") return { ...child, phases: [] }; throw new Error(`Unknown script workflow "${typeof ref === "string" ? ref : ref.scriptPath}".`); } },
     );
-    assert.deepEqual(value(r.outcome), { v: { a: "inner 7", deeper: "workflow(): nesting is one level only; a nested workflow cannot call workflow()" }, missing: 'Unknown script workflow "nope".' });
+    assert.deepEqual(value(r.outcome, "partial"), { v: { a: "inner 7", deeper: "workflow(): nesting is one level only; a nested workflow cannot call workflow()" }, missing: 'Unknown script workflow "nope".' });
     assert.ok(r.snapshot?.phases.some((p) => p.id === "▸ child"), "the nested run shows as a ▸ group");
     assert.ok(r.snapshot?.agents.some((a) => a.phase === "▸ child · Inner"), "its phases sit under the group");
     assert.equal(r.outcome.launched, 1, "the nested agent counts toward the run");
@@ -290,7 +509,8 @@ try {
   // 10b. A role left with no tool once subagent is dropped is refused, not widened to every tool.
   {
     const r = await run(`try { await agent("x", { agentType: "lonely" }); return "ran" } catch (e) { return e.message }`, () => ({ text: "x" }));
-    assert.match(String(value(r.outcome)), /role "lonely" has no tool a workflow agent may use/);
+    assert.match(String(value(r.outcome, "partial")), /role "lonely" has no tool a workflow agent may use/);
+    assert.deepEqual(r.outcome.omissions?.map((o) => [o.execution, o.reason?.code]), [["blocked", "denied"]]);
     assert.equal(r.fake.seen.length, 0);
     ok("a role whose only tool is subagent is refused rather than run with every tool");
   }
@@ -318,6 +538,20 @@ try {
     assert.equal(controlMod.controlRun(stopping.runId, "stop", controls).ok, true);
     assert.equal((await stopping.done).status, "interrupted");
     ok("workflow_control: pause holds new agents, skip resolves the running agent to null, stop ends the run interrupted");
+
+    // A skip does not excuse a required step, or the governed model could launder one to `passed`.
+    for (const source of [`const v = await agent("slow", { required: true, label: "must" }); return { v }`, `try { await agent("slow", { required: true, label: "must" }) } catch (e) { log(e.message) } return "went on"`]) {
+      const skipFake = fakeSpawner((s) => ({ text: s.task, delayMs: 2000 }));
+      const skipping = engine.startScriptRun(spec(source), undefined, { cwd: project, agents, sandbox: { mode, support }, spawnChild: skipFake.spawn, controls });
+      assert.ok(skipping.ok);
+      for (let i = 0; i < 200 && skipFake.seen.length < 1; i++) await wait(10);
+      assert.equal(controlMod.controlRun(skipping.runId, "skip", controls).ok, true);
+      const skipped = await skipping.done;
+      assert.equal(skipped.status, "failed", source);
+      assert.match(skipped.error ?? "", /required step must did not complete \(skipped: operator\)/);
+      assert.deepEqual(skipped.omissions?.map((x) => [x.stepId, x.execution, x.required]), [["must", "skipped", true]]);
+    }
+    ok("workflow_control: a skipped required agent throws into the script and fails the run, named, even if the script catches it");
   }
 
   console.log(`\nworkflow-hooks-smoke: ${checks} checks passed`);

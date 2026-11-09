@@ -7,7 +7,7 @@
   "layer": 4,
   "entry": "index.ts",
   "hooks": ["session_start", "session_shutdown"],
-  "registers": { "tools": ["subagent", "subagent_status", "subagent_stop", "workflow_run", "workflow_status", "workflow_control", "workflow", "StructuredOutput"], "commands": ["subagents", "subagent-stop", "workflow", "workflows"] },
+  "registers": { "tools": ["subagent", "workflow_run", "workflow_status", "workflow_control", "workflow", "StructuredOutput"], "commands": ["subagents", "subagent-stop", "workflow", "workflows"] },
   "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],

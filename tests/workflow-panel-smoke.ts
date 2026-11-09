@@ -14,12 +14,11 @@
 //      nothing to save.
 //   7. a real YAML run (the executor with a fake child) feeds the panel: description, agents,
 //      tokens, models and narration show.
-//   8. outside the TUI /workflows prints text (notify in RPC, stderr without UI); in the TUI it
+//   8. outside the TUI the panel prints text (notify in RPC, stderr without UI); in the TUI it
 //      opens a custom component (an overlay on pi 1.3.0 or newer) whose esc closes it and stops
-//      its timer.
+//      its timer. `/workflows panel [id]` is the command that opens it (workflow-tools.ts).
 //   9. the copied supportsOverlay agrees with control-center's and is true from 1.3.0 only; the
-//      extension registers
-//      /workflows, and not in a subagent child.
+//      extension registers /workflows and /workflow, and neither in a subagent child.
 //  Script runs (E5 slice S10):
 //  10. render: a nested workflow() shows as a `▸ <name>` group in Phases (with its phases under it)
 //      and in Agents; a journal answer has the ◆ dot and a cached count; badges for
@@ -434,7 +433,7 @@ try {
     ok("a YAML run feeds the panel: description, agents, models, tokens, narration");
   }
 
-  // 8. Text outside the TUI; an overlay in the TUI.
+  // 8. Text outside the TUI; an overlay in the TUI (opened by `/workflows panel`).
   {
     const registry = new RM.RunRegistry(clock);
     const narrator = new P.Narrator();
@@ -499,15 +498,21 @@ try {
     const pi = fakePi();
     I.default(pi.api);
     assert.ok(pi.commands.find("workflows"), "/workflows is registered");
+    assert.ok(pi.commands.find("workflow"), "/workflow is registered as its alias");
+    // The whole extension, so the child guard that lives in workflow-tools.ts is the one under test.
     const child = fakePi();
     const restoreChild = setEnv("PI_KIT_INTERNAL_CHILD", "1");
     try {
-      P.registerWorkflowPanel(child.api);
+      I.default(child.api);
     } finally {
       restoreChild();
     }
-    assert.equal(child.commands.find("workflows"), undefined, "a subagent child has no panel");
-    ok("supportsOverlay matches control-center; /workflows registered, not in a child");
+    assert.equal(child.commands.find("workflows"), undefined, "a subagent child has no /workflows");
+    assert.equal(child.commands.find("workflow"), undefined, "a subagent child has no /workflow alias");
+    for (const name of ["workflow_run", "workflow", "workflow_status", "workflow_control"]) {
+      assert.equal(child.tools.find(name), undefined, `a subagent child has no ${name} tool`);
+    }
+    ok("supportsOverlay matches control-center; /workflows and its alias registered, and neither they nor the workflow tools reach a child");
   }
 
 

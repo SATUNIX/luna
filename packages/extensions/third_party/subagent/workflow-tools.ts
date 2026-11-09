@@ -1,16 +1,21 @@
 /**
  * Workflows — tool and command registration (`workflow_run`, `workflow_status`, `workflow_control`,
- * `/workflow`). Pause, resume, stop and skip of a live run all go through control.ts. A plan as data
+ * `/workflows` and its alias `/workflow`). Pause, resume, stop and skip of a live run all go
+ * through control.ts; the status list and the stop path read run-query.ts, so a background
+ * subagent, a finished script run and a finished YAML run appear together. A plan as data
  * (`workflow_run {steps}`) compiles through plan.ts and runs like a saved workflow.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, type AgentConfig } from "./agents.ts";
 import { agentDir } from "./config.ts";
-import { CONTROL_ACTIONS, controlRun, runControls } from "./control.ts";
+import { CONTROL_ACTIONS, controlRun, runControls, type ControlOrigin, type ControlResult } from "./control.ts";
+import { subagentStateDir } from "./logging.ts";
+import { describeRun, formatRunList, MAX_RUN_LIST, queryRuns } from "./run-query.ts";
+import { hasSubagentRun, isValidRunId, stopTargets } from "./status.ts";
 import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
 import { compileExpansion, compilePlan, generationOf, parseExpandAnswer, planRefusal, PLAN_DESCRIPTION, resampleNote, spliceExpansion, type PlanError } from "./plan.ts";
 import { redact } from "./shared/redact.ts";
@@ -22,7 +27,6 @@ import {
   discoverWorkflows,
   ensurePrivateDir,
   executeWorkflow,
-  listRuns,
   loadState,
   newRunState,
   readScript,
@@ -570,10 +574,36 @@ async function resumePlan(ctx: ToolContext, state: RunState, opts: StartOptions)
   return launchRun(ctx, workflow, state, agents, identity, opts, { run: { steps, expansions } });
 }
 
-const liveTag = (id: string): string => {
-  const c = runControls.get(id);
-  return c ? (c.paused ? " (active, paused)" : " (active)") : "";
-};
+/** A panel opener, bound by wf-panel.ts: the `/workflows` command's `panel` subcommand. */
+export type WorkflowPanelOpener = (ctx: ExtensionContext, runId?: string) => Promise<void>;
+
+let panelOpener: WorkflowPanelOpener | undefined;
+
+export function bindWorkflowPanelOpener(fn: WorkflowPanelOpener): void {
+  panelOpener = fn;
+}
+
+// One stop path for the tool and the command: a live workflow run goes through control.ts, a
+// background subagent (live here or an orphan recorded in runs.jsonl) through status.ts. An id
+// that is neither keeps control.ts's "No live run" answer.
+function stopRun(cwd: string, id: string, origin: ControlOrigin): ControlResult {
+  const dir = subagentStateDir(cwd);
+  if (!runControls.has(id) && hasSubagentRun(dir, id)) return stopTargets(dir, id);
+  return controlRun(id, "stop", runControls, origin);
+}
+
+// `stop all`: every live workflow run of this session, then every live or orphaned subagent.
+function stopEveryRun(cwd: string, origin: ControlOrigin): string {
+  const lines: string[] = [];
+  for (const id of runControls.ids()) {
+    const r = controlRun(id, "stop", runControls, origin);
+    if (r.ok) lines.push(r.message);
+  }
+  lines.push(stopTargets(subagentStateDir(cwd), "all").message);
+  return lines.join("\n");
+}
+
+const COMMAND_USAGE = "/workflows | list | status [id] | panel [id] | run <name> key=value… | resume <id> | pause <id> | skip <id> | stop <id|all>";
 
 export interface WorkflowToolDeps {
   /** Test seam: the child spawner the tool's runs use. */
@@ -640,17 +670,25 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
   pi.registerTool({
     name: "workflow_status",
     label: "Workflow status",
-    description: "Show recent workflow runs, or one run's step-by-step state (with id).",
-    promptSnippet: "Inspect workflow runs",
-    parameters: Type.Object({ id: Type.Optional(Type.String()) }),
+    description:
+      "List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. " +
+      "With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.",
+    promptSnippet: "Inspect workflow and subagent runs",
+    parameters: Type.Object({
+      id: Type.Optional(Type.String({ description: "One run's id; without it, the newest runs of every format" })),
+      limit: Type.Optional(Type.Number({ description: "How many runs to list (default 20, max 100)" })),
+      tail: Type.Optional(Type.Number({ description: "Lines of a background subagent's log to show with id (default 40)" })),
+    }),
     async execute(_id, params, _signal, _onUpdate, rawCtx) {
       const cwd = rawCtx.cwd ?? process.cwd();
-      if (params.id) {
-        const s = loadState(cwd, params.id);
-        return s ? textResult(`${summarizeRun(s)}\n\nRun directory: ${path.join(runsRoot(cwd), s.id)}`) : textResult(`No run "${params.id}".`, true);
+      if (params.id !== undefined) {
+        // The id is model-supplied and is joined into a filesystem path: check it before reading.
+        if (!isValidRunId(params.id)) return textResult("Invalid run id.", true);
+        const text = describeRun(cwd, params.id, { tail: params.tail });
+        return text ? textResult(text) : textResult(`No run "${params.id}".`, true);
       }
-      const runs = listRuns(cwd, 10);
-      return textResult(runs.length ? runs.map((r) => `- ${r.id}: ${r.status}${liveTag(r.id)}${r.error ? ` — ${r.error.slice(0, 120)}` : ""}`).join("\n") : "No workflow runs yet.");
+      const limit = Math.max(1, Math.min(Number(params.limit) || 20, MAX_RUN_LIST));
+      return textResult(formatRunList(queryRuns(cwd), limit));
     },
   });
 
@@ -659,114 +697,170 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     label: "Workflow control",
     description:
       "Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), " +
-      "stop (stop its agents; the run ends interrupted and can be resumed with workflow_run {resume}), or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).",
-    promptSnippet: "Pause, resume, stop or skip within a live workflow run",
+      "stop (a live run's agents stop and it ends interrupted, resumable with workflow_run {resume}; a background subagent run id stops that child; all stops every live run and every background subagent, orphans included), " +
+      "or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).",
+    promptSnippet: "Pause, resume, stop or skip a live workflow run or a background subagent",
     parameters: Type.Object({
-      runId: Type.String({ description: "The live run's id (workflow_status lists active runs)" }),
+      runId: Type.Optional(Type.String({ description: "The live run's id, or a background subagent run id (workflow_status lists both)" })),
       action: Type.Union(CONTROL_ACTIONS.map((a) => Type.Literal(a)), { description: CONTROL_ACTIONS.join(" | ") }),
+      all: Type.Optional(Type.Boolean({ description: 'With action "stop": stop every live workflow run and every background subagent, orphans included' })),
     }),
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, rawCtx) {
+      const cwd = rawCtx.cwd ?? process.cwd();
+      if (params.all === true) {
+        if (params.action !== "stop") return textResult('all is only used with action "stop".', true);
+        return textResult(stopEveryRun(cwd, "agent"));
+      }
+      if (!params.runId) return textResult('Give a runId, or all: true with action "stop" (workflow_status lists runs).', true);
+      if (params.action === "stop") {
+        const r = stopRun(cwd, params.runId, "agent");
+        return textResult(r.message, !r.ok);
+      }
       // The governed agent asks here: it cannot lift a pause the console's safety stop holds for the operator.
       const r = controlRun(params.runId, params.action, runControls, "agent");
       return textResult(r.message, !r.ok);
     },
   });
 
-  pi.registerCommand("workflow", {
-    description: "Workflows: /workflow list | run <name> key=value… | status [id] | resume <id> | pause <id> | skip <id> | stop <id>",
-    getArgumentCompletions: (prefix: string) => {
-      const words = prefix.trimStart().split(/\s+/);
-      if (words.length <= 1) return ["list", "run ", "status", "resume ", "pause ", "skip ", "stop "].filter((v) => v.startsWith(words[0] ?? "")).map((v) => ({ value: v, label: v.trim() }));
-      if (words[0] === "run" && words.length === 2) {
-        const { workflows } = discoverWorkflows(process.cwd());
-        return workflows.filter((w) => w.name.startsWith(words[1] ?? "")).map((w) => ({ value: `run ${w.name} `, label: w.name, description: w.description }));
-      }
-      return null;
-    },
-    handler: async (args, rawCtx) => {
-      const ctx = rawCtx;
-      const cwd = ctx.cwd ?? process.cwd();
-      const [sub = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
-      const notify = (m: string, l: "info" | "warning" | "error" = "info") => {
-        ctx.ui.notify(m, l);
-      };
-      if (sub === "list") {
-        notify(listText(cwd));
+  // One command for both names: `/workflows` is the surface, `/workflow` is its alias. Bare
+  // `/workflows` lists runs of every format, past runs included; `list` keeps showing the saved
+  // workflow definitions, and `panel` opens the live TUI panel.
+  const runCommand = async (args: string, rawCtx: ExtensionContext): Promise<void> => {
+    const ctx = rawCtx;
+    const cwd = ctx.cwd ?? process.cwd();
+    const [sub = "", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+    const notify = (m: string, l: "info" | "warning" | "error" = "info"): void => {
+      if (ctx.ui?.notify) ctx.ui.notify(m, l);
+      else process.stderr.write(`${m}\n`);
+    };
+    if (!sub) {
+      notify(formatRunList(queryRuns(cwd)));
+      return;
+    }
+    if (sub === "list") {
+      notify(listText(cwd));
+      return;
+    }
+    if (sub === "panel") {
+      if (!panelOpener) {
+        notify("The workflow panel is not available in this session.", "warning");
         return;
       }
-      if (sub === "status") {
-        const id = rest[0];
-        if (id) {
-          const s = loadState(cwd, id);
-          notify(s ? `${summarizeRun(s)}\nRun directory: ${path.join(runsRoot(cwd), s.id)}` : `No run "${id}".`);
+      await panelOpener(ctx, rest[0]);
+      return;
+    }
+    if (sub === "status") {
+      const id = rest[0];
+      if (!id) {
+        notify(formatRunList(queryRuns(cwd)));
+        return;
+      }
+      if (!isValidRunId(id)) {
+        notify("Invalid run id.", "error");
+        return;
+      }
+      const text = describeRun(cwd, id);
+      notify(text ?? `No run "${id}".`, text ? "info" : "error");
+      return;
+    }
+    if (sub === "stop" && rest[0] === "all") {
+      notify(stopEveryRun(cwd, "operator"));
+      return;
+    }
+    if (sub === "stop") {
+      const r = stopRun(cwd, rest[0] ?? "", "operator");
+      notify(r.message, r.ok ? "info" : "warning");
+      return;
+    }
+    // A live run is controlled through control.ts; `resume` of a run that is not live
+    // continues it from its state.json below.
+    if (sub === "pause" || sub === "skip" || (sub === "resume" && runControls.has(rest[0] ?? ""))) {
+      const r = controlRun(rest[0] ?? "", sub);
+      notify(r.message, r.ok ? "info" : "warning");
+      return;
+    }
+    if (sub === "run" || sub === "resume") {
+      let name = rest[0];
+      let inputs = parseKv(rest.slice(1));
+      let resume: RunState | undefined;
+      if (sub === "resume") {
+        const s = loadState(cwd, rest[0] ?? "");
+        if (!s) {
+          notify(`No run "${rest[0] ?? ""}".`, "error");
           return;
         }
-        const runs = listRuns(cwd, 10);
-        notify(runs.length ? runs.map((r) => `${r.id}: ${r.status}${liveTag(r.id)}`).join("\n") : "No workflow runs yet.");
-        return;
-      }
-      // A live run is controlled through control.ts; `resume` of a run that is not live
-      // continues it from its state.json below.
-      if (sub === "stop" || sub === "pause" || sub === "skip" || (sub === "resume" && runControls.has(rest[0] ?? ""))) {
-        const r = controlRun(rest[0] ?? "", sub);
-        notify(r.message, r.ok ? "info" : "warning");
-        return;
-      }
-      if (sub === "run" || sub === "resume") {
-        let name = rest[0];
-        let inputs = parseKv(rest.slice(1));
-        let resume: RunState | undefined;
-        if (sub === "resume") {
-          const s = loadState(cwd, rest[0] ?? "");
-          if (!s) {
-            notify(`No run "${rest[0] ?? ""}".`, "error");
-            return;
-          }
-          resume = s;
-          name = s.workflow;
-        } else if (!name) {
-          const { workflows } = discoverWorkflows(cwd);
-          if (!ctx.hasUI || !ctx.ui.select || !workflows.length) {
-            notify(listText(cwd));
-            return;
-          }
-          const pick = await ctx.ui.select("Run workflow", workflows.map((w) => `${w.name} — ${w.description}`));
-          if (!pick) return;
-          const [picked = ""] = pick.split(" — ");
-          name = picked;
-          const w = workflows.find((x) => x.name === picked);
-          if (!w) throw new Error(`workflow ${picked}: not found`);
-          for (const [k, spec] of Object.entries(w.inputs)) {
-            const v = ctx.ui.input ? await ctx.ui.input(`${name}: ${k}${spec.required ? " (required)" : ""}`, spec.description) : undefined;
-            if (v === undefined && spec.required) return;
-            if (v) inputs = { ...inputs, [k]: v };
-          }
+        resume = s;
+        name = s.workflow;
+      } else if (!name) {
+        const { workflows } = discoverWorkflows(cwd);
+        if (!ctx.hasUI || !ctx.ui.select || !workflows.length) {
+          notify(listText(cwd));
+          return;
         }
-        // Commands run outside a turn: the workflow runs in the background, drives the footer,
-        // and posts its summary into the session when done so the agent can pick it up.
-        notify(`workflow ${name}: started${resume ? ` (resuming ${resume.id})` : ""}. /workflow status to follow, /workflow stop <id> to stop.`);
-        void startWorkflow(ctx, name, inputs, { resume, launchKind: "user", spawnChild: deps.spawnChild, onProgress: (t) => {
-          ctx.ui?.setStatus?.("workflow", t.slice(0, 120));
-        } })
-          .then((r) => {
-            try {
-              ctx.ui?.setStatus?.("workflow", undefined);
-            } catch {
-              /* session may be gone */
-            }
-            const text = r.error !== undefined ? `workflow ${name}: ${r.error}` : `${summarizeRun(r.state, r.workflow)}\nRun directory: ${path.join(runsRoot(cwd), r.state.id)}`;
-            try {
-              pi.sendMessage({ customType: "workflow-result", content: text, display: true }, { deliverAs: "followUp", triggerTurn: false });
-            } catch {
-              notify(text, r.error || r.state?.status !== "passed" ? "warning" : "info");
-            }
-          })
-          .catch((error: unknown) => {
-            notify(`workflow ${name} crashed: ${String(error)}`, "error");
-          });
-        return;
+        const pick = await ctx.ui.select("Run workflow", workflows.map((w) => `${w.name} — ${w.description}`));
+        if (!pick) return;
+        const [picked = ""] = pick.split(" — ");
+        name = picked;
+        const w = workflows.find((x) => x.name === picked);
+        if (!w) throw new Error(`workflow ${picked}: not found`);
+        for (const [k, spec] of Object.entries(w.inputs)) {
+          const v = ctx.ui.input ? await ctx.ui.input(`${name}: ${k}${spec.required ? " (required)" : ""}`, spec.description) : undefined;
+          if (v === undefined && spec.required) return;
+          if (v) inputs = { ...inputs, [k]: v };
+        }
       }
-      notify(`Unknown subcommand "${sub}". /workflow list | run <name> key=value… | status [id] | resume <id> | pause <id> | skip <id> | stop <id>`, "error");
-    },
+      // Commands run outside a turn: the workflow runs in the background, drives the footer,
+      // and posts its summary into the session when done so the agent can pick it up.
+      notify(`workflow ${name}: started${resume ? ` (resuming ${resume.id})` : ""}. /workflows status to follow, /workflows stop <id> to stop.`);
+      void startWorkflow(ctx, name, inputs, { resume, launchKind: "user", spawnChild: deps.spawnChild, onProgress: (t) => {
+        ctx.ui?.setStatus?.("workflow", t.slice(0, 120));
+      } })
+        .then((r) => {
+          try {
+            ctx.ui?.setStatus?.("workflow", undefined);
+          } catch {
+            /* session may be gone */
+          }
+          const text = r.error !== undefined ? `workflow ${name}: ${r.error}` : `${summarizeRun(r.state, r.workflow)}\nRun directory: ${path.join(runsRoot(cwd), r.state.id)}`;
+          try {
+            pi.sendMessage({ customType: "workflow-result", content: text, display: true }, { deliverAs: "followUp", triggerTurn: false });
+          } catch {
+            notify(text, r.error || r.state?.status !== "passed" ? "warning" : "info");
+          }
+        })
+        .catch((error: unknown) => {
+          notify(`workflow ${name} crashed: ${String(error)}`, "error");
+        });
+      return;
+    }
+    notify(`Unknown subcommand "${sub}". ${COMMAND_USAGE}`, "error");
+  };
+
+  const completions = (prefix: string) => {
+    const words = prefix.trimStart().split(/\s+/);
+    if (words.length <= 1) return ["list", "panel ", "run ", "status", "resume ", "pause ", "skip ", "stop "].filter((v) => v.startsWith(words[0] ?? "")).map((v) => ({ value: v, label: v.trim() }));
+    if (words[0] === "run" && words.length === 2) {
+      const { workflows } = discoverWorkflows(process.cwd());
+      return workflows.filter((w) => w.name.startsWith(words[1] ?? "")).map((w) => ({ value: `run ${w.name} `, label: w.name, description: w.description }));
+    }
+    if (["status", "panel", "pause", "skip", "resume", "stop"].includes(words[0] ?? "") && words.length === 2) {
+      const ids = queryRuns(process.cwd())
+        .filter((r) => r.id.startsWith(words[1] ?? ""))
+        .map((r) => ({ value: `${words[0]} ${r.id}`, label: r.id, description: `${r.format}: ${r.name} (${r.status})` }));
+      const all = words[0] === "stop" && "all".startsWith(words[1] ?? "") ? [{ value: "stop all", label: "all" }] : [];
+      return [...all, ...ids];
+    }
+    return null;
+  };
+
+  pi.registerCommand("workflows", {
+    description: `Every workflow and subagent run, live or finished: list them, show one, stop one or all. ${COMMAND_USAGE}`,
+    getArgumentCompletions: completions,
+    handler: runCommand,
+  });
+  pi.registerCommand("workflow", {
+    description: `Alias of /workflows. ${COMMAND_USAGE}`,
+    getArgumentCompletions: completions,
+    handler: runCommand,
   });
 }

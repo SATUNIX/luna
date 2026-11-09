@@ -10,6 +10,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **One query and one control surface for every run.** `workflow_status` lists and shows script,
+  YAML and background subagent runs, finished ones too, and a step's id still shows its log.
+  `workflow_control` stops a background subagent by id, or everything with `all: true`.
+  `subagent_status` and `subagent_stop` are removed, with their entries in both policy files.
+  Bare `/workflows` now lists runs instead of opening the panel; the panel is `/workflows panel [id]`,
+  and `/workflows <run-id>` is now `/workflows status <id>`. `/workflow` is an alias of the same
+  commands. A `workflow_run` plan with `inputs` no longer fails with "not extensible" (`docs/workflows.md`,
+  `tests/run-query-smoke.ts`, `tests/workflow-control-smoke.ts`, `tests/workflow-plan-smoke.ts`).
 - One decision policy now chooses what a stall, a large task or a large diff turns into: a pure
   `decide()` in `src/effort/strategy.ts`, tuned by the `strategy` block of `policy/effort.json`, in
   place of nudges each source wrote for itself. Progress-guard, recovery, the orchestrator and

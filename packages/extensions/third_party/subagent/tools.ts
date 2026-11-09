@@ -3,24 +3,23 @@
  *
  * Tools:
  *   - `subagent`         dispatch in single / parallel / chain mode
- *   - `subagent_status`  inspect recent runs and tail a run log
- *   - `subagent_stop`    stop running / orphaned children (safety kill switch)
  * Commands:
  *   - `/subagents`       check in on running + recent runs
  *   - `/subagent-stop`   stop one, or all, running children
  *
+ * Runs are inspected and stopped through `workflow_status` and `workflow_control` (run-query.ts,
+ * workflow-tools.ts); both commands stay until the surface trim, and the stop command reuses the
+ * same stop path.
  * Mode handlers are extracted so `execute` stays a thin router.
  */
-import fs from "node:fs";
-import path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, staleProjectRoleCopies, type AgentConfig, type AgentScope } from "./agents.ts";
 import { projectRoleDigest, runAgent, mapWithConcurrencyLimit } from "./runner.ts";
 import { getFinalOutput, getResultOutput, isFailedResult, substitutePrevious, truncate } from "./result.ts";
 import { subagentStateDir } from "./logging.ts";
-import { collectRuns, formatRunTable } from "./status.ts";
-import { stopAllLive, stopLive, stopRecordedRun, recordStop } from "./live.ts";
+import { collectRuns, formatRunTable, stopTargets } from "./status.ts";
+import { stopAllLive } from "./live.ts";
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
 import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
@@ -45,57 +44,6 @@ const SubagentParams = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Working directory (single mode)" })),
   effort: Type.Optional(Type.String({ description: "Effort tier for the child (single mode); never above yours" })),
 });
-
-const SubagentStatusParams = Type.Object({
-  limit: Type.Optional(Type.Number({ description: "How many recent runs to list (default 10, max 100)" })),
-  id: Type.Optional(Type.String({ description: "Show the tail of one run's log by id" })),
-  tail: Type.Optional(Type.Number({ description: "Lines of log to show for id (default 40)" })),
-});
-
-const SubagentStopParams = Type.Object({
-  id: Type.Optional(Type.String({ description: "Run id to stop" })),
-  all: Type.Optional(Type.Boolean({ description: "Stop every running subagent" })),
-});
-
-function isValidRunId(id: string): boolean {
-  return /^[A-Za-z0-9._-]+$/.test(id) && !id.includes("..");
-}
-
-// Stop live children (in-process) and recorded orphans (registry pid), or list what is
-// running. Shared by the `subagent_stop` tool and the `/subagent-stop` command.
-function stopTargets(dir: string, target: string | undefined): { text: string; ok: boolean } {
-  const rows = collectRuns(dir);
-  const running = rows.filter((r) => r.status === "running");
-  if (!target) {
-    return {
-      text: running.length
-        ? `Running subagents (${running.length}):\n\n${formatRunTable(running)}\n\nStop one with /subagent-stop <id>, or all with /subagent-stop all.`
-        : "No running subagents.",
-      ok: true,
-    };
-  }
-  if (target === "all") {
-    const liveCount = stopAllLive();
-    let orphanCount = 0;
-    for (const r of running) {
-      if (!r.live && r.pid && stopRecordedRun(r.pid)) {
-        recordStop(dir, r.id);
-        orphanCount++;
-      }
-    }
-    return { text: `Stopped ${liveCount} live and ${orphanCount} orphaned subagent(s).`, ok: true };
-  }
-  if (!isValidRunId(target)) return { text: "Invalid run id.", ok: false };
-  const row = rows.find((r) => r.id === target);
-  if (!row) return { text: `No run "${target}".`, ok: false };
-  if (row.end) return { text: `Run "${target}" already finished (${row.status}).`, ok: true };
-  if (stopLive(target)) return { text: `Stop sent to running subagent ${target}.`, ok: true };
-  if (row.pid && stopRecordedRun(row.pid)) {
-    recordStop(dir, target);
-    return { text: `Stop sent to orphaned subagent ${target} (pid ${row.pid}).`, ok: true };
-  }
-  return { text: `Could not stop ${target}: no live handle and no killable pid.`, ok: false };
-}
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], details: undefined, ...(isError ? { isError: true } : {}) };
@@ -229,7 +177,7 @@ async function runChainMode(
     const task = substitutePrevious(step.task, previous);
     const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: step.agent, task, cwd: step.cwd, step: i + 1, signal, overrides: step.effort ? { effort: step.effort } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel });
     if (r.detached) {
-      return textResult(`Chain detached at step ${i + 1} (${step.agent}): running in the background (run ${r.runId ?? "?"}). Follow it with subagent_status id=${r.runId ?? "<run>"}.`);
+      return textResult(`Chain detached at step ${i + 1} (${step.agent}): running in the background (run ${r.runId ?? "?"}). Follow it with workflow_status {id: "${r.runId ?? "<run>"}"} or /workflows status ${r.runId ?? "<run>"}.`);
     }
     if (isFailedResult(r)) {
       return textResult(`Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(r)}${logSuffix(r)}`, true);
@@ -347,7 +295,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
         }
         const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: params.agent as string, task: params.task as string, cwd: params.cwd, signal, overrides: params.effort ? { effort: params.effort } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel, background });
         if (r.detached) {
-          return textResult(`Subagent ${r.agent} running in the background (detached). run: ${r.runId ?? "?"}\nFollow with subagent_status id=${r.runId ?? "<run>"}; stop with subagent_stop id=${r.runId ?? "<run>"}.`);
+          return textResult(`Subagent ${r.agent} running in the background (detached). run: ${r.runId ?? "?"}\nFollow with workflow_status {id: "${r.runId ?? "<run>"}"}; stop with workflow_control {runId: "${r.runId ?? "<run>"}", action: "stop"}.`);
         }
         if (isFailedResult(r)) {
           return textResult(`Agent ${r.stopReason || "failed"}: ${getResultOutput(r)}${logSuffix(r)}`, true);
@@ -357,53 +305,6 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
         reportUpdate.close();
         clearStatus(ctx);
       }
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_status",
-    label: "Subagent status",
-    description:
-      "List recent subagent runs (status, agent, duration, log path) from .pi/subagent/runs.jsonl, or tail one run's log. " +
-      "Use this to see live progress (`tail -f` the log path) and to recover results after a child was killed or a parent abort.",
-    promptSnippet: "Inspect recent subagent runs and their logs",
-    parameters: SubagentStatusParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, rawCtx) {
-      const ctx: ToolContext = rawCtx;
-      const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      if (params.id) {
-        const id = params.id;
-        // The id is model-supplied and is joined into a filesystem path; reject anything
-        // that could traverse out of the state dir before reading.
-        if (!isValidRunId(id)) return textResult("Invalid run id.", true);
-        const logPath = path.join(dir, `${id}.log`);
-        if (!fs.existsSync(logPath)) return textResult(`No log for run "${id}" under ${dir}.`, true);
-        const lines = fs.readFileSync(logPath, "utf8").split(/\r?\n/);
-        const tail = Math.max(1, Math.min(Number(params.tail) || 40, 1000));
-        return textResult(`## ${id}\n\n\`\`\`\n${lines.slice(-tail).join("\n")}\n\`\`\``);
-      }
-      const runs = collectRuns(dir);
-      if (runs.length === 0) return textResult(`No subagent runs recorded under ${dir}.`);
-      const limit = Math.max(1, Math.min(Number(params.limit) || 10, 100));
-      const running = runs.filter((r) => r.status === "running").length;
-      return textResult(`Recent subagent runs (${runs.length}, ${running} running):\n\n${formatRunTable(runs, limit)}\n\nUse \`subagent_status id=<run>\` to tail a log.`);
-    },
-  });
-
-  pi.registerTool({
-    name: "subagent_stop",
-    label: "Subagent stop",
-    description:
-      "Safety kill switch for subagents. With no id and all unset, lists running runs; with id, stops that run; " +
-      "with all=true, stops every running run. Stops in-process children and orphaned children recorded in the run registry.",
-    promptSnippet: "Stop running subagents",
-    parameters: SubagentStopParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, rawCtx) {
-      const ctx: ToolContext = rawCtx;
-      const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      const target = params.all ? "all" : params.id ? params.id : undefined;
-      const result = stopTargets(dir, target);
-      return textResult(result.text, !result.ok);
     },
   });
 
@@ -437,7 +338,7 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
         }
       }
       const result = stopTargets(dir, target);
-      ctx.ui?.notify?.(result.text, result.ok ? "info" : "error");
+      ctx.ui?.notify?.(result.message, result.ok ? "info" : "error");
     },
   });
 }

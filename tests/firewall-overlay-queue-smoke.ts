@@ -876,7 +876,7 @@ try {
     const { session } = await createAgentSession({ cwd: ws, agentDir: reloadHome, modelRuntime, tools: ["read"], resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(ws) });
     try {
       await session.bindExtensions({ uiContext: parkedUi as unknown as ExtensionUIContext, mode: "tui" });
-      for (const command of ["/kit", "/workflows"]) {
+      for (const command of ["/kit", "/workflows panel"]) {
         void session.prompt(command).catch(() => {});
         await until(() => owner.inputHeld() !== undefined);
         assert.ok(owner.inputHeld(), `${command} holds input`);

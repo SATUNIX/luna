@@ -16,7 +16,8 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow list` | Available workflows and their inputs (`*` = required) |
 | `/workflow run feature goal="add rate limiting to /api/orders"` | Start a run in the background. The footer shows progress, and the summary is posted into the session when it finishes. `/workflow run` with no name opens a picker. |
 | `/workflow status [run-id]` | Recent runs, or one run's steps |
-| `/workflows [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
+| `/workflows` | Every run of this workspace, of every format, live or finished |
+| `/workflows panel [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
 | `/workflow pause <run-id>` | Pause a live run: it starts no new agents (see [Pausing, stopping and skipping](#pausing-stopping-and-skipping)) |
 | `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
@@ -93,8 +94,7 @@ refused with the list of live ones.
 | `stop` | Aborts the run's AbortController, which stops its running agents. The run ends `interrupted` and can be resumed. A step that was waiting at a paused gate never launches and keeps its old status. |
 | `skip` | Stops only the agents running now (each agent has its own AbortController under the run's). Their steps are recorded as `skipped` with the error "skipped by operator" (or "skipped by the agent" through the `workflow_control` tool), and the run goes on: a later `when` sees `skipped`, and a parallel group whose members were skipped passes. A skipped step's `outputs:` check does not run. Skip never passes a review gate: a skipped gate step, or a skipped member of a group that has a `gate`, fails that gate, so the run loops back to `retry` (while `max_loops` lasts) or ends `failed`, and the step after the gate does not run. The governed agent's skip of a required step is an omission, so the run reads `partial`; an operator's is not (`tests/workflow-hooks-smoke.ts`, r01). With nothing running, `skip` is refused. |
 
-`workflow_control` is allowed by the shipped firewall policy as `process_control`, like
-`subagent_stop`.
+`workflow_control` is allowed by the shipped firewall policy as `process_control`.
 
 ### Resuming an interrupted writer step
 
@@ -314,7 +314,8 @@ rules are copies, because extensions are self-contained. `npm run verify` and
 input, and that a run's files are redacted and have the right modes.
 
 Each step is an ordinary subagent run, so it also has a log under `.pi/subagent/`
-(`/subagents`, `subagent_status id=<run>`). The step's run ids are recorded in
+(`/subagents`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
+its id still shows its log and `workflow_control` can stop it. The step's run ids are recorded in
 `state.json`. A corrupt or wrong-shape `state.json` is ignored and not listed by
 `/workflow status`, rather than crashing the status listing. The persisted state must
 also carry a non-negative integer `cursor` and a finite `executions` count, or it is
@@ -391,9 +392,11 @@ Checked by `tests/workflow-telemetry-smoke.ts` (`npm run smoke:workflow-telemetr
 
 ## The /workflows panel
 
-`/workflows` shows the workflow runs of this pi session, read from the run model above
-(`wf-panel.ts`). Runs started in another pi process are not shown; use `/workflow status` for
-those. The panel is modelled on Claude Code's workflow panel and shows YAML runs and
+Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`).
+`/workflows panel [run-id]` opens the panel, which shows the workflow runs of this pi session, read from the
+run model above (`wf-panel.ts`). Runs started in another pi process are not shown there; use
+`/workflows` or `workflow_status` for those, and `workflow_status {id}` and `workflow_control` for
+a step's log and to stop it. The panel is modelled on Claude Code's workflow panel and shows YAML runs and
 [script workflow](script-workflows.md) runs (started by the `workflow` tool) alike; both can be
 saved with `s`.
 
@@ -401,9 +404,9 @@ In the TUI it opens as an overlay on pi 1.3.0 or newer (on older pi, as a plain 
 the control-center hub's rule; `tests/workflow-panel-smoke.ts` checks the rule and the options
 passed on the installed pi). It has two views:
 
-- **Run list** (`/workflows`): one row per run, newest first, with a status dot, name, status,
+- **Run list** (`/workflows panel`): one row per run, newest first, with a status dot, name, status,
   done/total agents, elapsed time and run id. ↑↓ select, Enter opens a run, Esc closes the panel.
-- **Run view** (Enter on a run, or `/workflows <run-id>`):
+- **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds
     the badges that apply: `sandbox: reduced` when the script ran in the reduced sandbox,
@@ -438,7 +441,7 @@ passed on the installed pi). It has two views:
 | `s` | Save the run's workflow into the project's `.pi/workflows/`. Asks first with "No, don't save" highlighted; when the file already exists the second choice is "Overwrite …", so an overwrite is No-first too. A YAML run's definition is copied under the same file name; the copy is a project workflow, so it overrides the Luna or user workflow of the same name in this project and goes through the [trust prompt](#trusting-a-project-workflow) when it runs. A script run's script is saved as `.pi/workflows/<name>.js` only while the file still hashes to the sha256 of the script the run executed (checked when `s` is pressed and again at the write), and that digest is then trusted ("Trust this digest", in every project); for a script run the question names the sha256 and the second choice is "Save and trust …" or "Overwrite … and trust it", so the saved script runs without the trust prompt until the file changes. A run of a project workflow has nothing to save. The save is refused when `.pi`, `.pi/workflows` or the target file is a symlink (or not a directory / regular file), so a planted link cannot redirect the write outside the project. |
 | `Esc` | Back from a run to the list, then close the panel. In a stop or save choice, Esc means No. |
 
-Outside the TUI (RPC, `pi -p`, JSON mode) `/workflows [run-id]` prints the same content as text
+Outside the TUI (RPC, `pi -p`, JSON mode) `/workflows panel [run-id]` prints the same content as text
 (as a notification when the mode has a UI, otherwise on stderr): the list followed by every run,
 or the one run asked for. The text lists each failed agent's error under it. A subagent child
 does not register `/workflows`.

@@ -54,7 +54,7 @@ export interface SingleResult {
   errorMessage?: string | undefined;
   step?: number | undefined;
   logPath?: string | undefined;
-  // The run id (the log filename stem). Surfaced so the TUI, subagent_status, and the
+  // The run id (the log filename stem). Surfaced so the TUI, workflow_status and the
   // operator can reference a live run without re-deriving it from the log path.
   runId?: string | undefined;
   // True when the parent stopped waiting on a detached run; the child keeps working and

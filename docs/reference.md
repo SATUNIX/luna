@@ -68,8 +68,8 @@ describes. Commands are for the operator: the model cannot call them.
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
-| `/workflow` | `subagent` | Workflows: /workflow list \| run <name> key=value… \| status [id] \| resume <id> \| pause <id> \| skip <id> \| stop <id> | [workflows](workflows.md) |
-| `/workflows` | `subagent` | Workflow runs panel: /workflows [run-id] (header, phases, agents, narrator; k skip · x stop · p pause · s save) | [workflows](workflows.md) |
+| `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
+| `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
 ## Tools
 
@@ -307,18 +307,6 @@ Extension `subagent`. Delegate tasks to specialized subagents with isolated cont
 
 Parameters: built from a shared schema; see the extension source.
 
-### `subagent_status`
-
-Extension `subagent`. List recent subagent runs (status, agent, duration, log path) from .pi/subagent/runs.jsonl, or tail one run's log. Use this to see live progress (`tail -f` the log path) and to recover results after a child was killed or a parent abort.
-
-Parameters: built from a shared schema; see the extension source.
-
-### `subagent_stop`
-
-Extension `subagent`. Safety kill switch for subagents. With no id and all unset, lists running runs; with id, stops that run; with all=true, stops every running run. Stops in-process children and orphaned children recorded in the run registry.
-
-Parameters: built from a shared schema; see the extension source.
-
 ### `task_clear`
 
 Extension `task-graph`. Remove every task from the shared task graph, to start a new plan or mission in the same project.
@@ -406,12 +394,13 @@ Extension `subagent`. Run a JavaScript workflow script in the background: determ
 
 ### `workflow_control`
 
-Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (stop its agents; the run ends interrupted and can be resumed with workflow_run {resume}), or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).
+Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (a live run's agents stop and it ends interrupted, resumable with workflow_run {resume}; a background subagent run id stops that child; all stops every live run and every background subagent, orphans included), or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).
 
 | Parameter | Type | Description |
 |---|---|---|
-| `runId` | string | The live run's id (workflow_status lists active runs) |
+| `runId?` | string | The live run's id, or a background subagent run id (workflow_status lists both) |
 | `action` | union | — |
+| `all?` | boolean | With action "stop": stop every live workflow run and every background subagent, orphans included |
 
 ### `workflow_run`
 
@@ -426,11 +415,13 @@ Extension `subagent`. Run subagent steps with a shared directory, gates and resu
 
 ### `workflow_status`
 
-Extension `subagent`. Show recent workflow runs, or one run's step-by-step state (with id).
+Extension `subagent`. List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `id?` | string | — |
+| `id?` | string | One run's id; without it, the newest runs of every format |
+| `limit?` | number | How many runs to list (default 20, max 100) |
+| `tail?` | number | Lines of a background subagent's log to show with id (default 40) |
 
 ## Environment variables
 

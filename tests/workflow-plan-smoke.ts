@@ -610,6 +610,22 @@ await check("expand: {steps:[a,b]} runs a and b by the host at process depth 1 w
   assert.match(status, /split\.b: passed/);
 });
 
+await check("a plan with inputs runs when its arguments are frozen, as the firewall leaves them", async () => {
+  await session();
+  useFake(() => ({ text: "ok" }));
+  const freeze = (value: unknown): void => {
+    if (typeof value !== "object" || value === null) return;
+    Object.values(value).forEach(freeze);
+    Object.freeze(value);
+  };
+  // The shape of the dogfood call that returned "#<Object> is not extensible".
+  const args = { steps: [leaf({ id: "implement", task: "implement S9 in {{inputs.worktree}}" }), leaf({ id: "review", task: "review S9" })], inputs: { slice: "S9", worktree: "/tmp/S9" } };
+  freeze(args);
+  const text = textOf(await call(args));
+  assert.equal(statusIn(text), "passed", text);
+  assert.equal(workflowMod.loadState(project, runIdIn(text))?.inputs.slice, "S9");
+});
+
 await check('expand: {"done":"x"} ends with no expansion and passes; later steps read x', async () => {
   await session();
   useFake((s) => (s.task.includes("split it") ? { text: asJson({ done: "x marks it" }) } : { text: "ok" }));

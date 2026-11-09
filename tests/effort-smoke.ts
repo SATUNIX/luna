@@ -755,7 +755,7 @@ const tests: Record<string, () => void | Promise<void>> = {
     const w = world();
     try {
       const b = boot();
-      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist", "workflow_status", "workflow_control", "subagent_status", "subagent_stop"];
+      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist", "workflow_status", "workflow_control"];
       const calls: string[][] = [];
       let current = [...active];
       const api: ToolControlApi = b.pi.api;
@@ -767,7 +767,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.ok(!current.includes("subagent") && !current.includes("workflow_run") && !current.includes("workflow"), "delegation tools are hidden at E1");
       // Both can only be refused at E1, and a refused dispatch_specialist still spends an engagement slot.
       assert.ok(!current.includes("dual_review") && !current.includes("dispatch_specialist"), "dual_review and dispatch_specialist are hidden at E1");
-      assert.ok(current.includes("subagent_status") && current.includes("subagent_stop") && current.includes("workflow_status") && current.includes("workflow_control"), "the read/stop tools stay so running children can still be inspected and stopped");
+      assert.ok(current.includes("workflow_status") && current.includes("workflow_control"), "the one read/stop pair stays so running children and runs can still be inspected and stopped");
       assert.equal(calls.length, 1);
       await b.turn(); // no change, no churn
       assert.equal(calls.length, 1, "setActiveTools is not called again when nothing changed");

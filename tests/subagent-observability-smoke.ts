@@ -5,7 +5,8 @@
 //   1. Every run writes a log file and returns its path on the result.
 //   2. The log contains the child stream, stderr, and a lifecycle end marker.
 //   3. Stored message text is bounded while the full stream stays in the log.
-//   4. The run registry records start+end, and `subagent_status` lists/tails by id.
+//   4. The run registry records start+end, and `workflow_status` lists the run and tails its log by
+//      id (a background subagent is one run format of the one query).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -92,7 +93,7 @@ try {
   // ...but the full final answer is preserved for chain mode and success output.
   assert.equal(result.finalOutput, big, "finalOutput must hold the complete final answer");
 
-  // 4. registry + subagent_status
+  // 4. registry + workflow_status
   const registry = path.join(ws, ".pi", "subagent", "runs.jsonl");
   assert.ok(fs.existsSync(registry), "run registry must exist");
   const records = fs.readFileSync(registry, "utf8").trim().split("\n").map((l) => JSON.parse(l) as RunRecord);
@@ -102,14 +103,14 @@ try {
   const runId = path.basename(result.logPath).replace(/\.log$/, "");
   const pi = fakePi();
   module.default(pi.api);
-  const listed = await pi.tools.get("subagent_status").execute("s", {}, undefined, undefined, { cwd: ws });
+  const listed = await pi.tools.get("workflow_status").execute("s", {}, undefined, undefined, { cwd: ws });
   assert.match(textOf(listed), /scout/);
   assert.match(textOf(listed), new RegExp(runId));
-  const tailed = await pi.tools.get("subagent_status").execute("s", { id: runId, tail: 5 }, undefined, undefined, { cwd: ws });
+  const tailed = await pi.tools.get("workflow_status").execute("s", { id: runId, tail: 5 }, undefined, undefined, { cwd: ws });
   assert.match(textOf(tailed), /# end status=end/);
 
   // 5. a model-supplied run id cannot traverse out of the state dir
-  const traversal = await pi.tools.get("subagent_status").execute("s", { id: "../../etc/passwd" }, undefined, undefined, { cwd: ws });
+  const traversal = await pi.tools.get("workflow_status").execute("s", { id: "../../etc/passwd" }, undefined, undefined, { cwd: ws });
   assert.equal(traversal.isError, true, "path-traversal id must be rejected");
   assert.match(textOf(traversal), /Invalid run id/);
 
@@ -118,13 +119,13 @@ try {
   assert.equal(parallel.isError, true, "0/N parallel batch must be an error");
   assert.match(textOf(parallel), /0\/1 succeeded/);
 
-  // 7. stop control: a live child can be stopped via the subagent_stop tool, and the run
-  //    reports stopReason "stopped" rather than a generic abort.
+  // 7. stop control: a live child can be stopped through workflow_control, and the run reports
+  //    stopReason "stopped" rather than a generic abort.
   const runningPromise = module.runSingleAgent(ws, agents, "scout", "long-running", undefined, undefined, undefined, undefined,
     fakeChild(() => { /* never closes on its own; only the stop kills it */ }));
-  const runningList = await pi.tools.get("subagent_stop").execute("stop-list", {}, undefined, undefined, { cwd: ws });
-  assert.match(textOf(runningList), /Running subagents \(1\)/);
-  const stopped = await pi.tools.get("subagent_stop").execute("stop-all", { all: true }, undefined, undefined, { cwd: ws });
+  const runningList = await pi.tools.get("workflow_status").execute("s", {}, undefined, undefined, { cwd: ws });
+  assert.match(textOf(runningList), /running \(active\)/);
+  const stopped = await pi.tools.get("workflow_control").execute("c", { all: true, action: "stop" }, undefined, undefined, { cwd: ws });
   assert.match(textOf(stopped), /Stopped 1 live/);
   const stoppedResult = await runningPromise;
   assert.equal(stoppedResult.stopReason, "stopped");
@@ -137,7 +138,7 @@ try {
   await pi.commands.get("subagents").handler("", { cwd: ws, ui: { notify: (m: string) => notices.push(m) } });
   assert.ok(notices.some((n) => /subagents/.test(n) && /total/.test(n)), "/subagents must report a run summary");
 
-  console.log("[subagent-observability-smoke] run logs, bounded messages, registry, subagent_status, subagent_stop and commands verified");
+  console.log("[subagent-observability-smoke] run logs, bounded messages, registry, workflow_status, workflow_control and commands verified");
 } finally {
   restoreIsolation();
   rmWorkspace(ws);

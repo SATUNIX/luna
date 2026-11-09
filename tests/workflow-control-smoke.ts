@@ -18,7 +18,8 @@
 //   7. resuming a run whose writer step was interrupted asks a No-first select (never confirm);
 //      headless is refused; "No" and Esc cancel; "Skip" marks it skipped and goes on; "Re-run"
 //      keeps it; read-only steps and steps that never launched ask nothing.
-//   8. both firewall policy copies allow workflow_control as process_control and stay identical.
+//   8. both firewall policy copies allow workflow_status as read_only and workflow_control as
+//      process_control, stay identical, and no longer name the removed subagent tools.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -582,9 +583,12 @@ steps:
     assert.equal(a, b, "the two policy copies are byte-identical");
     const policy: unknown = JSON.parse(a);
     const tools: unknown = typeof policy === "object" && policy !== null ? Reflect.get(policy, "tools") : undefined;
-    const rule: unknown = typeof tools === "object" && tools !== null ? Reflect.get(tools, "workflow_control") : undefined;
-    assert.deepEqual(rule, { decision: "allow", risk_class: "process_control" });
-    ok("both firewall policies allow workflow_control as process_control");
+    const rule = (name: string): unknown => (typeof tools === "object" && tools !== null ? Reflect.get(tools, name) : undefined);
+    assert.deepEqual(rule("workflow_status"), { decision: "allow", risk_class: "read_only" });
+    assert.deepEqual(rule("workflow_control"), { decision: "allow", risk_class: "process_control" });
+    assert.equal(rule("subagent_status"), undefined, "subagent_status left both policies");
+    assert.equal(rule("subagent_stop"), undefined, "subagent_stop left both policies");
+    ok("both firewall policies allow workflow_status read_only and workflow_control process_control, and drop the removed tools");
   }
 
   // 9. A script run records who skipped a step, as a YAML run does.

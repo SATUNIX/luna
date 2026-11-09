@@ -209,7 +209,8 @@ Each run has a directory `<cwd>/.pi/workflows/runs/<runId>/` (mode 0700, files 0
 `script.js` (what ran), `run.json` (status, counts, error, log lines), `journal.jsonl` and, when
 worktrees were used, `worktrees.jsonl`. Values, errors and log lines go through the
 [workflow redaction](workflows.md) rules before they are written; the live value returned to the
-script is not redacted, and a result redaction changed is not replayed. Script runs do not appear in `workflow_status`, which lists YAML runs.
+script is not redacted, and a result redaction changed is not replayed. Script runs appear in
+`workflow_status` and `/workflows`, labelled `script`.
 (`tests/workflow-hooks-smoke.ts`, `tests/workflow-resume-smoke.ts`)
 
 ## Resume
@@ -375,12 +376,12 @@ that the skill covers the built-ins and the Luna notes.
   call cannot pass one.
 - The built-ins' prompts and result shapes are checked with fake agents only; no test runs them
   against a model.
-- A run's result reaches the conversation only as the follow-up message. `/workflows` shows the
+- A run's result reaches the conversation only as the follow-up message. `/workflows panel` shows the
   live run (phases, agents, `▸` groups for nested workflows, `◆` for journal answers) in the
   session that started it; see [The /workflows panel](workflows.md#the-workflows-panel).
 - Completion turns chained one after another are capped (5, then a question) only while ultracode
   standing mode is on ([Ultracode](effort.md#ultracode)).
-- `workflow_status` and `/workflow` do not list or start script runs.
+- `workflow_status` and `/workflows` list script runs; `/workflow run` does not start them.
 - The checkout fingerprint is taken after each writer; changes made meanwhile by agents that do not
   take the writer lock (a `bash`-capable role) are attributed to whichever writer finished last.
 - The run-scoped approval rules apply only to requests that reach the console. A medium action the

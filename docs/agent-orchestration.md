@@ -131,7 +131,7 @@ A subagent is a long-lived child process; the parent must never be wedged by one
 - **Live TUI footer** — the tool sets a persistent `subagent` status line (agent, step, turn,
   elapsed, last tool + target, run id) for the duration and clears it on finish.
 
-The main agent can inspect and stop runs with `subagent_status` / `subagent_stop` (and the
+The main agent can inspect and stop runs with `workflow_status` / `workflow_control` (and the
 `/subagents` / `/subagent-stop` commands); every run also writes `.pi/subagent/<id>.log` and
 `.pi/subagent/runs.jsonl`. Run ids carry a random suffix (parallel runs of one role no longer
 collide), the registry is compacted to the last 500 runs, and a run whose process died is shown

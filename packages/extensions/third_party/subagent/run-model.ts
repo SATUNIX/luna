@@ -38,7 +38,7 @@ export interface AgentRecord {
   startedAt: number;
   endedAt?: number | undefined;
   elapsedMs: number; // live for a running agent, frozen once it ends
-  subagentRunId?: string | undefined; // the subagent log id, for subagent_status / stop
+  subagentRunId?: string | undefined; // the subagent log id, for workflow_status / workflow_control
   activity?: string | undefined; // the last progress line
   error?: string | undefined;
   cached?: true | undefined; // answered from a resumed run's journal; nothing was launched

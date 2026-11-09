@@ -797,7 +797,7 @@ function projectSlug(cwd: string): string {
 export function newRunState(w: WorkflowDef, inputs: Record<string, string>): RunState {
   const now = new Date();
   const id = `${now.toISOString().replace(/[:.]/g, "-")}-${w.name}-${crypto.randomBytes(2).toString("hex")}`;
-  return ownState({ version: 1, id, workflow: w.name, workflowFile: w.file, inputs, status: "running", cursor: 0, loops: {}, steps: {}, startedAt: now.toISOString(), updatedAt: now.toISOString(), executions: 0 });
+  return ownState({ version: 1, id, workflow: w.name, workflowFile: w.file, inputs: { ...inputs }, status: "running", cursor: 0, loops: {}, steps: {}, startedAt: now.toISOString(), updatedAt: now.toISOString(), executions: 0 });
 }
 
 function ownState(state: RunState): RunState {

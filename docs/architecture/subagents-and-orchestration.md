@@ -11,7 +11,7 @@ never above its parent's. A launch that cannot meet the contract is refused, and
 without a protection its parent has blocks every tool call and exits with code 78. Roles run in
 single, parallel or chain mode, and chain threads each step's output into the next step through a
 `{previous}` placeholder. Background and detached runs report back through follow-up messages, while
-Esc, `session_shutdown` and `subagent_stop` provide cancel and kill paths. On top of this, the
+Esc, `session_shutdown` and `workflow_control` provide cancel and kill paths. On top of this, the
 `orchestrator` extension is a context and steering layer, and the `task-graph`, `verifier-board` and
 `human-console` extensions share file contracts under `.pi/` to plan work, record independent
 verdicts and broker approvals.
@@ -82,7 +82,7 @@ The file contracts, and who touches them:
 
 | File | Written by | Read by |
 |---|---|---|
-| `.pi/subagent/<run id>.log`, `.pi/subagent/runs.jsonl` | `subagent` runner | `subagent_status`, `/subagents`, `subagent_stop` |
+| `.pi/subagent/<run id>.log`, `.pi/subagent/runs.jsonl` | `subagent` runner | `workflow_status`, `/subagents`, `workflow_control` |
 | `<agent dir>/pi-kit/effort/ledgers/<scope>.json` | `effort` (root opens it, every descendant reserves in it) | `effort`, `/effort status` |
 | `.pi/task-graph.json` | `task-graph` tools | `task-graph` tools, `verify-gate` (definition of done) |
 | `.pi/verdicts.json` | `verifier-board`, `verify-gate`, `conductor` validator | `orchestrator`, `verifier-board` |
@@ -372,7 +372,7 @@ flowchart TD
 A spawned child is cancel-by-default: the parent's abort signal is passed to the child, so Esc kills
 it as an `aborted` run. `background: true` and `PI_KIT_SUBAGENT_DETACH_SIGNAL=1` restore detach. Idle,
 stream-cap and wall-clock budgets each end the run with a distinct `KillReason`, the operator can stop
-runs with `subagent_stop` or `/subagent-stop`, and `session_shutdown` stops all live children. Every
+runs with `workflow_control` or `/subagent-stop`, and `session_shutdown` stops all live children. Every
 kill sends SIGTERM and escalates to SIGKILL after five seconds.
 
 Only a transient failure is retried: a spawn failure, or a non-zero exit with no usable output, up
@@ -413,7 +413,7 @@ stateDiagram-v2
     Running --> Idle
     Running --> Cap
     Running --> Wall
-    Running --> Stopped: subagent_stop, /subagent-stop or session_shutdown
+    Running --> Stopped: workflow_control, /subagent-stop or session_shutdown
     Aborted --> Kill
     Idle --> Kill
     Cap --> Kill
@@ -478,7 +478,7 @@ goal or repository revision.
 - `packages/extensions/third_party/subagent/launch.ts`: the launcher side of the contract, `prepareChildLaunch`, read-only and scout role checks.
 - `packages/extensions/third_party/subagent/runner.ts`: `runAgent`: argv, model selection, per-attempt reservation and settling, env vars, budgets, cancel and retry.
 - `packages/extensions/third_party/subagent/child-process.ts`: spawn, stdin delivery, JSONL streaming, kill escalation, byte caps.
-- `packages/extensions/third_party/subagent/tools.ts`: the `subagent` tool, mode validation, trust gate, nesting check, `subagent_stop` and `settledNotifier`.
+- `packages/extensions/third_party/subagent/tools.ts`: the `subagent` tool, mode validation, trust gate, nesting check and `settledNotifier`.
 - `packages/extensions/third_party/subagent/agents.ts`: `discoverAgents`, kit, user and project directories, name precedence and shadowed names.
 - `packages/extensions/third_party/subagent/result.ts`: `substitutePrevious` and `classifyFailure` (a denied or exit 78 launch is fatal).
 - `packages/extensions/third_party/subagent/logging.ts`: run ids, `.pi/subagent/<runId>.log` and `.pi/subagent/runs.jsonl`.

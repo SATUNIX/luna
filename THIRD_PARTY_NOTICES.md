@@ -481,6 +481,14 @@ SOFTWARE.
     child to the step's role name and, where there is one, its numeric step, and `extension.json`
     declares the name. The tool firewall and the human console validate the label before it reaches
     a card (`tests/firewall-workflow-approvals-smoke.ts`).
+  - **One query and control surface (2026-11-09):** `run-query.ts` is new: a read-only merge of
+    `run.json`, `state.json`, the `runs.jsonl` rows that belong to no run and the live registry.
+    `workflow_status` reads every format and resolves a step's child by id, `workflow_control` stops
+    a background subagent or `all`, and `workflow.ts` copies a plan's inputs, which the firewall
+    leaves frozen. `subagent_status` and `subagent_stop` are removed from `tools.ts` and
+    `extension.json` (`tests/run-query-smoke.ts`, `tests/workflow-control-smoke.ts`,
+    `tests/workflow-panel-smoke.ts`, `tests/subagent-observability-smoke.ts`,
+    `tests/workflow-plan-smoke.ts`).
 
 ### `todo`
 

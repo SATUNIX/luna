@@ -225,9 +225,8 @@ async function testReloadLeavesNoListener(): Promise<void> {
     await s.recovery.handlers.get("session_start")({}, s.ctx);
     assert.equal(bus.count(REASSESS), 1, "a second session_start replaces the listener");
     assert.equal(bus.count("pi-kit:stall-seen"), 1);
-    const recover = s.recovery.commands.get("recover");
-    await recover.handler("manual", s.ctx);
-    await recover.handler("manual", s.ctx);
+    await s.guard.commands.get("boost").handler("", s.ctx);
+    await s.guard.commands.get("boost").handler("", s.ctx);
     assert.match(steerOf(s.ws), /attempt 2\//, "the old instance has spent both attempts");
 
     await s.recovery.handlers.get("session_shutdown")({}, s.ctx);

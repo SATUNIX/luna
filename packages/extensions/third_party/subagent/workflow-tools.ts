@@ -619,8 +619,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     label: "Workflow",
     description:
       "Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; \"list\" shows them), steps (a plan as data) or resume (a run id). " +
-      PLAN_DESCRIPTION +
-      " Prefer this to subagent chains.",
+      PLAN_DESCRIPTION,
     promptSnippet: "Run a saved workflow or an inline plan",
     parameters: Type.Object({
       name: Type.Optional(Type.String({ description: 'Saved workflow name, or "list"' })),

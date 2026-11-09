@@ -97,6 +97,11 @@ const workflowMod = await loadModule<typeof WorkflowModule>("vendor/subagent/wor
 const agentsMod = await loadModule<typeof AgentsModule>("vendor/subagent/agents.ts");
 const effortMod = await loadModule<{ default: (api: ReturnType<typeof fakePi>["api"]) => void }>("extensions/effort/index.ts");
 
+// A spawning role for the widening checks. The shipped `delegator` was retired in S13, so the
+// case uses a custom user role that names `subagent`.
+const spawnRoleDir = path.join(process.env.PI_CODING_AGENT_DIR ?? agentDir, "agents");
+fs.mkdirSync(spawnRoleDir, { recursive: true });
+fs.writeFileSync(path.join(spawnRoleDir, "spawner.md"), "---\nname: spawner\ndescription: a role that delegates\ntools: read, subagent\n---\nDo the task.\n");
 const roles = agentsMod.discoverAgents(project, "user").agents;
 const ctx = { cwd: project, hasUI: false };
 const call = (params: Record<string, unknown>, signal?: AbortSignal) => tool.execute("t", params, signal, undefined, ctx);
@@ -702,7 +707,7 @@ await check("an expansion cannot widen: model, tools past the parent's, or a rol
   await refuses({ tools: ["read", "grep"] }, { agent: "scout", task: "t", tools: ["read", "bash"] }, /bash.*parent/);
   await refuses({ agent: "planner" }, { task: "write it" }, /every tool|parent/);
   await refuses({ agent: "planner" }, { agent: "scout", task: "t" }, /bash.*parent/);
-  await refuses({}, { agent: "delegator", task: "t" }, /delegator can start agents/);
+  await refuses({}, { agent: "spawner", task: "t" }, /spawner can start agents/);
   await session();
   useFake((s) => (s.task.includes("split it") ? { text: asJson({ steps: [{ agent: "scout", tools: ["read"], task: "narrow" }] }) } : { text: "ok" }));
   const r = await call({ steps: [{ id: "split", agent: "planner", task: "split it", expand: true }] });
@@ -881,10 +886,10 @@ await check("a typed resume refuses a new expansion: it ends partial with nothin
 
 await check("a typed resume cannot launch a role that starts agents: it is resampled, then the step fails", async () => {
   const runId = await interruptedAt([{ id: "split", task: "split it", expand: true }]);
-  const posted = await typedResume(runId, () => ({ text: asJson({ steps: [{ agent: "delegator", task: "must not run" }] }) }));
+  const posted = await typedResume(runId, () => ({ text: asJson({ steps: [{ agent: "spawner", task: "must not run" }] }) }));
   assert.match(posted, /· failed/, posted);
   assert.equal(fake.seen.length, 2, "the step and its resample");
-  assert.match(fake.seen[1]?.task ?? "", /delegator can start agents/);
+  assert.match(fake.seen[1]?.task ?? "", /spawner can start agents/);
   for (const seen of fake.seen) {
     assert.doesNotMatch(toolsOf(seen), /subagent/);
     assert.doesNotMatch(seen.task, /must not run/);
@@ -994,8 +999,8 @@ await check("where expand may not go: a parallel member, with a gate, inside a g
     assert.ok(!compiled.ok, JSON.stringify(steps));
     assert.match(plan.planRefusal(compiled.errors), why);
   };
-  refused([{ agent: "delegator", task: "t" }], /delegator can start agents/);
-  assert.ok(plan.compilePlan([{ agent: "delegator", task: "t", tools: ["read"] }], roles).ok, "tools that narrow it are fine");
+  refused([{ agent: "spawner", task: "t" }], /spawner can start agents/);
+  assert.ok(plan.compilePlan([{ agent: "spawner", task: "t", tools: ["read"] }], roles).ok, "tools that narrow it are fine");
   refused([{ parallel: [{ task: "t", expand: true }] }], /member/);
   refused([{ task: "t", expand: "yes" }], /expand must be/);
   refused([{ id: "a", task: "t", expand: true, gate: { pass: "x", retry: "a" } }], /gate/);

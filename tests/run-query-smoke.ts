@@ -393,8 +393,12 @@ const agents: AgentConfig[] = [{ name: "scout", description: "fixture", tools: [
   assert.equal(rule("subagent_stop"), undefined, "subagent_stop is gone from the policy");
   assert.equal(pi.tools.find("subagent_status"), undefined, "subagent_status is no longer registered");
   assert.equal(pi.tools.find("subagent_stop"), undefined, "subagent_stop is no longer registered");
-  assert.ok(pi.commands.get("subagents") && pi.commands.get("subagent-stop"), "/subagents and /subagent-stop still work");
-  ok("workflow_status is read_only and workflow_control process_control; the removed tools leave both policies");
+  assert.equal(pi.commands.find("subagents"), undefined, "/subagents is removed");
+  assert.equal(pi.commands.find("subagent-stop"), undefined, "/subagent-stop is removed");
+  const notes: string[] = [];
+  await pi.commands.get("workflows").handler("", { cwd: ws, hasUI: false, ui: { notify: (m: string) => notes.push(m) } });
+  assert.match(notes.join("\n"), new RegExp(SUBAGENT_ID), "/workflows still lists the background subagent");
+  ok("workflow_status is read_only and workflow_control process_control; the removed tools and commands are gone and /workflows still lists runs");
 }
 
 console.log(`[run-query-smoke] one query over every run format verified (${checks} groups)`);

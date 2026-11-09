@@ -46,7 +46,8 @@ export interface ChildRunOptions {
   args: string[];
   // Written to the child's stdin and then closed. pi's print mode merges piped stdin into the
   // initial prompt, so the task travels here instead of as one argv string: a single argument
-  // is capped at 128 KiB on Linux (MAX_ARG_STRLEN), which a chain's {previous} output exceeds.
+  // is capped at 128 KiB on Linux (MAX_ARG_STRLEN), which a large task or a prior step's output
+  // can exceed.
   stdin?: string | undefined;
   cwd: string;
   env: Record<string, string | undefined>;

@@ -499,6 +499,12 @@ SOFTWARE.
     `packages/core/shared/fingerprint.ts` that verify-gate also uses. `wf-engine.ts` keeps its
     exported wrapper, which still excludes the runs root and the agent log directory, so resume
     behaviour is unchanged (`tests/workflow-resume-smoke.ts`, `tests/verify-failclosed-smoke.ts`).
+  - **Delegation surface trim (2026-11-10):** `tools.ts` drops `chain` mode (`runChainMode`,
+    `substitutePrevious`, the `chain` parameter) and the ignored `confirmProjectAgents` parameter,
+    and `index.ts` no longer registers `/subagents` or `/subagent-stop`. `config.ts` sets
+    `DEFAULT_MAX_DEPTH` to 1; `PI_KIT_SUBAGENT_MAX_DEPTH` still raises it. The `subagent` and
+    `workflow` tool text is shorter (`tests/subagent-roles-isolation-smoke.ts`,
+    `tests/subagent-observability-smoke.ts`, `tests/delegation-guard-smoke.ts`).
 
 ### `todo`
 

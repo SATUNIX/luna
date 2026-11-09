@@ -31,7 +31,7 @@ it.
   kit-authored hint.
 - **`trigger-compact`'s mid-run resume** sends a visible user message and has been tested only
   with fakes. It never runs inside child sessions.
-- **Recovery triggers only on a progress-guard escalation or `/recover`.** A verification that
+- **Recovery triggers only on a progress-guard escalation or a bare `/boost`.** A verification that
   still fails after an edit, or a check that regresses, does not start recovery. Closing this needs
   a single "worse" signal (a test count, a checkpoint diff or a `verifier-board` verdict flip) and
   a settled definition of "the same problem" for the signature. Whether scouts should run on a

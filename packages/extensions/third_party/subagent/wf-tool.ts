@@ -211,17 +211,16 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
     name: "workflow",
     label: "Workflow script",
     description:
-      "Run a JavaScript workflow script in the background: deterministic multi-agent orchestration with agent(), parallel(), pipeline(), phase(), log(), args, budget and workflow(). " +
-      "Pass exactly one of script (inline source starting with `export const meta = {name, description, phases}`), scriptPath (a script saved by an earlier run, or in a workflow directory) or name (a registered script workflow). " +
-      "Returns runId, scriptPath and transcriptDir at once; the result arrives later as a follow-up message. Resume an interrupted run with {scriptPath, resumeFromRunId}; to change the script, pass the edited source as script with resumeFromRunId (a rewritten run script needs the operator's approval). " +
-      "Only use it when the user asked for a workflow or multi-agent orchestration.",
-    promptSnippet: "Run a JavaScript multi-agent workflow script in the background",
+      "Run a JavaScript workflow script in the background (deterministic orchestration: agent(), parallel(), pipeline(), phase(), log(), args, budget, workflow()). " +
+      "Pass exactly one of script (inline, starting `export const meta = {name, description, phases}`), scriptPath or name (registered). " +
+      "Returns runId and scriptPath at once; the result follows as a message. Resume with {scriptPath or edited script, resumeFromRunId}; an edited script needs operator approval.",
+    promptSnippet: "Run a multi-agent workflow script",
     parameters: Type.Object({
-      script: Type.Optional(Type.String({ description: "Inline workflow script (plain JavaScript, starting with export const meta = {...})" })),
-      scriptPath: Type.Optional(Type.String({ description: "Path of a workflow script: one an earlier run saved, or one in a workflow directory" })),
-      name: Type.Optional(Type.String({ description: "Name of a registered script workflow" })),
-      args: Type.Optional(Type.Unknown({ description: "Value passed to the script as `args` (a JSON value, not a JSON-encoded string)" })),
-      resumeFromRunId: Type.Optional(Type.String({ description: "Run id whose journal's unchanged prefix of agent() calls is reused" })),
+      script: Type.Optional(Type.String({ description: "Inline script (plain JavaScript)" })),
+      scriptPath: Type.Optional(Type.String({ description: "A saved run script or workflow-directory script" })),
+      name: Type.Optional(Type.String({ description: "Registered script workflow" })),
+      args: Type.Optional(Type.Unknown({ description: "The script's `args`: a JSON value, not a string" })),
+      resumeFromRunId: Type.Optional(Type.String({ description: "Run whose unchanged agent() prefix is reused" })),
     }),
     async execute(_id, params, _signal, _onUpdate, rawCtx) {
       const ctx: ToolContext = rawCtx;

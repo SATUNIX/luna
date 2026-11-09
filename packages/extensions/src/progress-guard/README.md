@@ -50,13 +50,12 @@ in `suggest`.
 
 Once the **same signature keeps recurring** (`PI_KIT_GUARD_ESCALATE`, default 2 firings), the
 stronger **review/delegate checkpoint** is injected **unconditionally** — in either mode and
-with no `/reflect` or `/boost` needed. It is written as a `context-sieve` contribution *and*
+with no command needed. It is written as a `context-sieve` contribution *and*
 as a `.pi/recovery/sessions/<session id>/escalation.json` marker (`.pi/recovery/escalation.json`
 for a session without an id) so this session's `recovery-orchestrator`, and no other session's,
 can act on it (`tests/recovery-grounding-smoke.ts`). It is also delivered inside the looping run
 the same way as the light nudge, on the episode's first escalation and then at most once per
-cooldown (`tests/progress-guard-agsix-smoke.ts`). This is the
-automatic replacement for the manual `/reflect` step. Escalation counts every firing turn, not
+cooldown (`tests/progress-guard-agsix-smoke.ts`). Escalation counts every firing turn, not
 just the ones the cooldown let a nudge through, so a slowly-repeating stall can still escalate,
 and the marker is written once per stuck episode (`tests/progress-guard-agsix-smoke.ts`).
 
@@ -71,8 +70,7 @@ no-block and no-system-prompt claims beyond the handlers returning nothing in th
 
 | Command | Effect |
 | --- | --- |
-| `/reflect` | Optional manual checkpoint. The recurring-loop checkpoint is injected automatically; use this only when you want one on demand. |
-| `/boost` | Reassess now, through the same entry as `/recover`; counts as a recovery attempt. |
+| `/boost` | Reassess now, through the same recovery entry the escalation uses; counts as a recovery attempt. |
 | `/boost on` | Auto-nudge on detected loops for this session. |
 | `/boost off` | Suggest-only; clears any active nudge. |
 | `/boost status` | Show mode, reads-since-edit, window size, and thresholds. |

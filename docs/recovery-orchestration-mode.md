@@ -13,8 +13,8 @@
 > with `workflow_run` active steers to a split instead of scouts (`tests/workflow-strategy-smoke.ts`). The
 > steer names only tools the model can call: `subagent` stands in for the `/fork` of step 2 (a task
 > given a digest of the history) and the `verify_completion` tool for re-verifying, since `/fork`
-> and `/verify` are operator commands (`tests/recovery-grounding-smoke.ts`). Manual trigger:
-> `/recover`. While recovery is active it opens the separate recovery budget in the [effort ledger](effort.md#how-delegation-is-budgeted)
+> and `/verify` are operator commands (`tests/recovery-grounding-smoke.ts`). A bare `/boost`
+> enters the same flow on demand. While recovery is active it opens the separate recovery budget in the [effort ledger](effort.md#how-delegation-is-budgeted)
 > (two read-only scouts), so a session at the lowest effort can still get help when stuck. The
 > `npm run eval` recovery fixtures cover it. This document is the specification of the method the
 > extension drives.
@@ -63,10 +63,11 @@ hand.
 Nothing else triggers it. A verification that still fails after an edit, or a check that
 regresses, is not detected as a trigger; see [Future work](future-work.md#delegation-and-recovery).
 
-### Manual
-- `/recover [signature]` enters the same flow on demand (signature `manual` when none is
-  given), writing the report scaffold and the steering contribution
-  (`tests/ctx-contributions-smoke.ts`). It is the only recovery command.
+### On demand
+- A bare `/boost` in `progress-guard` writes the marker and enters the same flow on demand
+  (signature `manual` when no signature is detected), writing the report scaffold and the
+  steering contribution (`tests/ctx-contributions-smoke.ts`). There is no separate recovery
+  command.
 
 ### Anti-trigger / debounce
 - It enters recovery at most once per escalation marker: the marker is consumed on entry, and a
@@ -126,7 +127,7 @@ single big context; blur them and you just pay more tokens for the same anchored
 
 The recovery-orchestrator's steering contribution is intentionally session-scoped. It is written
 when recovery is entered or the attempt cap is hit (`writeContribution` in
-`recovery-orchestrator/index.ts`, from the `turn_end` hook and the `/recover` command) and is
+`recovery-orchestrator/index.ts`, from the `turn_end` hook and `/boost`) and is
 cleared only on `session_start`, so it can persist for the rest of the session. It does not
 repeat verbatim within a session because `context-sieve`'s message dedup suppresses an unchanged
 contribution until compaction, comparing each contribution on its own
@@ -151,7 +152,7 @@ test pins the lifetime.
 
 `recovery-orchestrator` is an extension: it hooks `session_start`, `session_shutdown`, `input`
 and `turn_end`, keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
-steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers `/recover`.
+steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers no command.
 The steer names the `recovery-debugging` skill, which covers recovering from a broken state by
 hand. Open design questions (signature definition, a "worse" metric, scout independence, fork
 automation, a budget ceiling) are listed in [Future work](future-work.md#delegation-and-recovery).

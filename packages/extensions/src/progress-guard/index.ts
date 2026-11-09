@@ -274,8 +274,9 @@ export default function (pi: ExtensionAPI) {
     return `progress-guard: ${reason}. ${steer ?? NO_POLICY_LINE} Recent actions: ${digest()}`;
   }
 
-  // Bare /boost: this moment, not the next detection. It goes in as /recover does, through the same
-  // marker; recovery-orchestrator acts on the event, or on the marker at its next turn_end.
+  // Bare /boost: this moment, not the next detection. It goes in through the same marker the
+  // automatic escalation uses; recovery-orchestrator acts on the event, or on the marker at its
+  // next turn_end.
   function reassess(dir: string, signature: string): void {
     writeContribution(dir, guidance("reassessment asked for", reportToPolicy({ trigger: "boost" })?.steer ?? null));
     writeEscalation(dir, signature, "operator invoked /boost", 1);
@@ -383,10 +384,9 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Autonomous review/delegate injection (no /reflect, no mode switch): once the same
-    // signature keeps recurring, inject the stronger checkpoint via context-sieve AND write
-    // the recovery marker so recovery-orchestrator can act on it. This is the automatic
-    // replacement for the manual /reflect step.
+    // Autonomous review/delegate injection (no reminder command, no mode switch): once the
+    // same signature keeps recurring, inject the stronger checkpoint via context-sieve AND write
+    // the recovery marker so recovery-orchestrator can act on it.
     if (decision.move === "angle") {
       const checkpoint = guidance(reason, decision.steer);
       writeContribution(cwd, checkpoint);
@@ -417,16 +417,6 @@ export default function (pi: ExtensionAPI) {
     }
     // Chain onto the entries earlier turn_end handlers proposed; a returned list replaces them.
     return { entries: [...event.entries, { type: "custom_message", customType: CONTRIB_ID, content: inRun, display: false }] };
-  });
-
-  pi.registerCommand("reflect", {
-    description: "Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?).",
-    handler: async (_args, ctx) => {
-      const c = ctx;
-      const content = guidance("reflection asked for", reportToPolicy({ trigger: "boost" })?.steer ?? null);
-      writeContribution(c.cwd ?? cwd, content);
-      if (c.hasUI) c.ui.notify("progress-guard: reflection checkpoint queued for the next turn.", "info");
-    },
   });
 
   pi.registerCommand("boost", {

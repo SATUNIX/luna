@@ -62,8 +62,8 @@ export interface SingleResult {
   detached?: boolean | undefined;
   // How many attempts were made (1 unless a transient failure was retried).
   attempts?: number | undefined;
-  // The child's final assistant text, kept unbounded so chain mode and success output get
-  // the full deliverable even though the stored message list is bounded for memory.
+  // The child's final assistant text, kept unbounded so a workflow step and the success output
+  // get the full deliverable even though the stored message list is bounded for memory.
   finalOutput?: string | undefined;
   // Only for a run started with a result schema: the StructuredOutput value the host validated
   // itself, or null when no attempt produced a valid one (structuredErrors says why).

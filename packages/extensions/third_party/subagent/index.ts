@@ -4,7 +4,6 @@
  * Modes:
  *   - single:   { agent, task }
  *   - parallel: { tasks: [{ agent, task }, ...] }   (concurrency-limited)
- *   - chain:    { chain: [{ agent, task }, ...] }    ({previous} threads prior output)
  *
  * Each subagent is a separate `pi --mode json -p --no-session` process with its own context
  * window, a selectable parent-model or per-agent-model policy (--model), and tool
@@ -23,7 +22,7 @@
  *   wf-panel.ts       the /workflows panel (TUI overlay, text elsewhere)
  *   wf-engine.ts      the script-workflow engine (agent/parallel/pipeline hooks, journal, resume)
  *   wf-tool.ts        the `workflow` tool (background script runs, completion follow-up)
- *   tools.ts          `subagent` registration and the /subagents commands
+ *   tools.ts          `subagent` registration
  *
  * This is a kit extension (a pi-package resource), NOT a modification of pi core. It is
  * adapted from pi's bundled `examples/extensions/subagent` reference, with the TUI rendering

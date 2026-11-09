@@ -90,7 +90,7 @@ try {
   assert.ok(stored.length < big.length, "stored message text must be bounded");
   assert.match(stored, /stored message truncated/);
   assert.ok(log.length >= big.length, "run log must retain the full stream");
-  // ...but the full final answer is preserved for chain mode and success output.
+  // ...but the full final answer is preserved for workflow steps and success output.
   assert.equal(result.finalOutput, big, "finalOutput must hold the complete final answer");
 
   // 4. registry + workflow_status
@@ -131,12 +131,14 @@ try {
   assert.equal(stoppedResult.stopReason, "stopped");
   assert.match(module.getResultOutput(stoppedResult), /Stopped by operator/);
 
-  // 8. commands are registered and /subagents reports a check-in
-  assert.ok(pi.commands.has("subagents"), "subagents command must be registered");
-  assert.ok(pi.commands.has("subagent-stop"), "subagent-stop command must be registered");
+  // 8. the removed commands are gone, and the surviving /workflows check-in still reports the run
+  assert.equal(pi.commands.find("subagents"), undefined, "/subagents is removed");
+  assert.equal(pi.commands.find("subagent-stop"), undefined, "/subagent-stop is removed");
   const notices: string[] = [];
-  await pi.commands.get("subagents").handler("", { cwd: ws, ui: { notify: (m: string) => notices.push(m) } });
-  assert.ok(notices.some((n) => /subagents/.test(n) && /total/.test(n)), "/subagents must report a run summary");
+  await pi.commands.get("workflows").handler("", { cwd: ws, hasUI: false, ui: { notify: (m: string) => notices.push(m) } });
+  const summary = notices.join("\n");
+  assert.match(summary, new RegExp(runId), "/workflows must report the finished run");
+  assert.match(summary, /scout/, "/workflows must name the run's agent");
 
   console.log("[subagent-observability-smoke] run logs, bounded messages, registry, workflow_status, workflow_control and commands verified");
 } finally {

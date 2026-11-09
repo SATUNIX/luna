@@ -159,13 +159,12 @@ export const ROWS: RowDef[] = [
   { id: "orchestrate", label: "Orchestration", page: "delegation", kind: "action", legacy: "/orchestrate" },
   { id: "orchestrate.plan", label: "Plan only", page: "delegation", kind: "action", legacy: "/orchestrate-plan" },
   { id: "orchestrate.implement-review", label: "Plan → implement → review", page: "delegation", kind: "action", legacy: "/orchestrate-implement-review" },
-  { id: "subagents", label: "Subagents", page: "delegation", kind: "action", valueKey: "subagents", legacy: "/subagents" },
+  { id: "subagents", label: "Subagents", page: "delegation", kind: "action", valueKey: "subagents", legacy: "/workflows" },
   { id: "workflow", label: "Workflows", page: "delegation", kind: "action", legacy: "/workflow" },
   { id: "plan", label: "Plan mode", page: "delegation", kind: "action", legacy: "/plan", unavailableReason: "loaded only in the self-improving profile" },
 
   // --- recovery ---
-  { id: "reflect", label: "Reflect now", page: "recovery", kind: "action", legacy: "/reflect" },
-  { id: "recover", label: "Recover now", page: "recovery", kind: "action", legacy: "/recover", unavailableReason: "loaded only in the long-horizon and autonomous profiles" },
+  { id: "reflect", label: "Reassess now", page: "recovery", kind: "action", legacy: "/boost" },
 
   // --- memory ---
   { id: "remember", label: "Remember", page: "memory", kind: "action", legacy: "/remember" },

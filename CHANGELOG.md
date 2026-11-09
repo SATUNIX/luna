@@ -10,6 +10,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **A smaller delegation surface.** `subagent` keeps single and parallel mode; `chain` mode and the
+  ignored `confirmProjectAgents` parameter are removed, since `workflow_run` covers chains. The
+  `delegator` kit role is removed, and subagents nest one level by default (`DEFAULT_MAX_DEPTH` is 1;
+  `PI_KIT_SUBAGENT_MAX_DEPTH=2` restores a second level). `/subagents`, `/subagent-stop`, `/reflect`
+  and `/recover` are removed: use `workflow_status`, `workflow_control`, `/workflows` and a bare
+  `/boost`. The delegation tool text drops from 6,882 to 4,880 characters
+  (`docs/agent-orchestration.md`, `tests/subagent-roles-isolation-smoke.ts`,
+  `tests/run-query-smoke.ts`).
 - **One query and one control surface for every run.** `workflow_status` lists and shows script,
   YAML and background subagent runs, finished ones too, and a step's id still shows its log.
   `workflow_control` stops a background subagent by id, or everything with `all: true`.

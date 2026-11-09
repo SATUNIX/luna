@@ -18,12 +18,12 @@ your own context lean.
 - **implementer**: executes one scoped unit. Run several in parallel (`tasks`) only when
   their files don't overlap.
 - **reviewer**: validates the result. It's the final gate (Verdict PASS/FAIL).
-- **delegator**: fans a broad task out to other roles (may nest once).
 
 ## Standard flow
 1. (optional) scout → 2. planner → 3. implementer(s) → 4. reviewer. On FAIL, loop back to an
    implementer with the must-fix list. **Don't report done until the reviewer passes.**
-2. Linear shortcut: `subagent({ chain: [{agent:"planner",task:"…"}, {agent:"implementer",task:"{previous}"}, {agent:"reviewer",task:"{previous}"}] })`.
+2. For sequential work with each step's output feeding the next, do not chain `subagent` calls:
+   use a workflow, which threads outputs for you.
 3. For a repeatable multi-step flow, prefer a **workflow** (`workflow_run`, `/workflow list`).
    Workflows run steps deterministically, hand files between steps, loop on review gates and
    can resume after an interruption.
@@ -47,7 +47,7 @@ output.
 ## Control
 - Esc cancels running subagents. `background: true` detaches long single/parallel work;
   you're notified when it finishes.
-- `/subagents` shows runs; `subagent_status id=<run>` tails a log; `/subagent-stop` stops.
+- `/workflows` shows runs; `workflow_status {id}` reads a run; `workflow_control {runId, action}` stops one.
 
 ## When NOT to delegate
 Trivial, single-file or read-only questions: answer directly. Delegation has overhead. Use it

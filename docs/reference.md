@@ -50,16 +50,12 @@ describes. Commands are for the operator: the model cannot call them.
 | `/pentest:status` | `pentest-governance-domain` | Show pentest data-root and governance status | [security](security.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
 | `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
-| `/recover` | `recovery-orchestrator` | Manually trigger recovery-orchestration for the current stuck state (/recover [signature]). | [recovery-orchestration-mode](recovery-orchestration-mode.md) |
-| `/reflect` | `progress-guard` | Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?). | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [control-center](control-center.md) |
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
 | `/security` | `tool-firewall` | /security [off\|relaxed\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
 | `/skills` | `skill-router` | List installed skills: which are listed in the prompt, which are on-demand (skill_search / hints), and their triggers. | [control-center](control-center.md) |
-| `/subagent-stop` | `subagent` | Stop running subagents (safety). /subagent-stop [<id>\|all]; no args lists running runs. | [agent-orchestration](agent-orchestration.md) |
-| `/subagents` | `subagent` | Check in on subagents: running and recent runs with log paths. /subagents [limit] | [agent-orchestration](agent-orchestration.md) |
 | `/tips` | `custom-footer` | Show or hide usage tips while the agent works: /tips on\|off | [control-center](control-center.md) |
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
@@ -303,7 +299,7 @@ Parameters: built from a shared schema; see the extension source.
 
 ### `subagent`
 
-Extension `subagent`. Delegate tasks to specialized subagents with isolated context. Modes: single (agent+task), parallel (tasks array), chain (sequential with {previous} placeholder). Built-in roles: scout, planner, implementer, reviewer, delegator (plus ~/.pi/agent/agents). A subagent cannot see this conversation: make each task self-contained. Esc cancels running subagents; background: true detaches long work. Only a delegator role may delegate further (depth limit PI_KIT_SUBAGENT_MAX_DEPTH, default 2).
+Extension `subagent`. Delegate to subagents with isolated context: one agent+task, or parallel tasks. Roles: scout, planner, implementer, reviewer, plus ~/.pi/agent/agents. A subagent cannot see this conversation: make each task self-contained; background detaches long work.
 
 Parameters: built from a shared schema; see the extension source.
 
@@ -382,15 +378,15 @@ Extension `verify-gate`. Run an independent check that the task is done. It runs
 
 ### `workflow`
 
-Extension `subagent`. Run a JavaScript workflow script in the background: deterministic multi-agent orchestration with agent(), parallel(), pipeline(), phase(), log(), args, budget and workflow(). Pass exactly one of script (inline source starting with `export const meta = {name, description, phases}`), scriptPath (a script saved by an earlier run, or in a workflow directory) or name (a registered script workflow). Returns runId, scriptPath and transcriptDir at once; the result arrives later as a follow-up message. Resume an interrupted run with {scriptPath, resumeFromRunId}; to change the script, pass the edited source as script with resumeFromRunId (a rewritten run script needs the operator's approval). Only use it when the user asked for a workflow or multi-agent orchestration.
+Extension `subagent`. Run a JavaScript workflow script in the background (deterministic orchestration: agent(), parallel(), pipeline(), phase(), log(), args, budget, workflow()). Pass exactly one of script (inline, starting `export const meta = {name, description, phases}`), scriptPath or name (registered). Returns runId and scriptPath at once; the result follows as a message. Resume with {scriptPath or edited script, resumeFromRunId}; an edited script needs operator approval.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `script?` | string | Inline workflow script (plain JavaScript, starting with export const meta = {...}) |
-| `scriptPath?` | string | Path of a workflow script: one an earlier run saved, or one in a workflow directory |
-| `name?` | string | Name of a registered script workflow |
-| `args?` | unknown | Value passed to the script as `args` (a JSON value, not a JSON-encoded string) |
-| `resumeFromRunId?` | string | Run id whose journal's unchanged prefix of agent() calls is reused |
+| `script?` | string | Inline script (plain JavaScript) |
+| `scriptPath?` | string | A saved run script or workflow-directory script |
+| `name?` | string | Registered script workflow |
+| `args?` | unknown | The script's `args`: a JSON value, not a string |
+| `resumeFromRunId?` | string | Run whose unchanged agent() prefix is reused |
 
 ### `workflow_control`
 
@@ -404,7 +400,7 @@ Extension `subagent`. Control a live workflow run in this session: pause (start 
 
 ### `workflow_run`
 
-Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}. Prefer this to subagent chains.
+Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
 
 | Parameter | Type | Description |
 |---|---|---|

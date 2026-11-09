@@ -10,7 +10,7 @@
  * The kit source is what makes `subagent({ agent: "planner" })` work out of the box, headless
  * children included. Before it existed the shipped roles were only copied into each project's
  * .pi/agents, so the default "user" scope found no roles at all and every "both" call needed an
- * interactive trust prompt — which a headless delegator child can never answer.
+ * interactive trust prompt — which a headless child can never answer.
  */
 
 import * as fs from "node:fs";

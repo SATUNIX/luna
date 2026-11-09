@@ -11,7 +11,7 @@ non-trivial**. Works in both the lite and full installs.
 
 | Extension | Role |
 | --- | --- |
-| `subagent` (vendored) | The one delegation engine: single / parallel / chain delegation to role agents in isolated `pi` subprocesses (tool restriction, per-role model, skill preloading), plus [workflows](workflows.md). Every other launcher goes through the same launch contract. |
+| `subagent` (vendored) | The one delegation engine: single or parallel delegation to role agents in isolated `pi` subprocesses (tool restriction, per-role model, skill preloading), plus [workflows](workflows.md). Every other launcher goes through the same launch contract. |
 | `delegation-guard` | The launch contract: decides which extensions a child loads, reserves its budget, and verifies inside the child that its protections loaded. See [Child governance](#child-governance). |
 | `effort` | The [effort tier](effort.md) and the shared delegation ledger every launch reserves against. |
 | `orchestrator` | The autonomy: scores task complexity and, when non-trivial, steers the main agent into the plan → implement → validate flow (via a context-sieve message). |
@@ -24,8 +24,8 @@ non-trivial**. Works in both the lite and full installs.
 
 Resolved in this order, later sources overriding earlier ones by name:
 
-1. **kit**: `packages/kit/agents/*.md` (`scout`, `planner`, `implementer`, `reviewer`,
-   `delegator`). Always available and trusted, including inside headless children.
+1. **kit**: `packages/kit/agents/*.md` (`scout`, `planner`, `implementer`, `reviewer`).
+   Always available and trusted, including inside headless children.
 2. **user**: `~/.pi/agent/agents/*.md`. Copy a kit role here to customise it.
 3. **project**: `.pi/agents/*.md`, only with `agentScope: "project" | "both"`. It needs
    interactive approval, or an exact digest in `PI_KIT_TRUSTED_PROJECT_ROLES`.
@@ -88,7 +88,7 @@ flowchart TD
 
 `PI_KIT_SUBAGENT_EXTENSIONS=a,b` replaces the **companion** list (governance cannot be removed).
 `PI_KIT_SUBAGENT_ISOLATE=0` no longer disables isolation. The task reaches the child over stdin
-(print mode merges it into the prompt), not as one argument, so large chained tasks cannot hit the
+(print mode merges it into the prompt), not as one argument, so large tasks cannot hit the
 128 KiB argument limit.
 
 ## How autonomy works
@@ -120,7 +120,7 @@ A subagent is a long-lived child process; the parent must never be wedged by one
 - **Live heartbeat** — `PI_KIT_SUBAGENT_HEARTBEAT_MS` (default 5 s, 0 disables). Emits elapsed /
   idle / bytes to the parent (and the TUI footer) while the child is silent.
 - **Cancel and background.** Esc (a cancelled tool call) stops the children, so there's no
-  hidden token spend and a chain can't be silently truncated. For long work you don't need
+  hidden token spend and a run's output can't be silently truncated. For long work you don't need
   this turn, pass `background: true` (single or parallel mode). The call returns
   immediately, and the result is delivered to the agent (a session message) and to you (a
   notification) when it finishes. `PI_KIT_SUBAGENT_DETACH_SIGNAL=1` restores the old
@@ -132,7 +132,7 @@ A subagent is a long-lived child process; the parent must never be wedged by one
   elapsed, last tool + target, run id) for the duration and clears it on finish.
 
 The main agent can inspect and stop runs with `workflow_status` / `workflow_control` (and the
-`/subagents` / `/subagent-stop` commands); every run also writes `.pi/subagent/<id>.log` and
+operator surface `/workflows`); every run also writes `.pi/subagent/<id>.log` and
 `.pi/subagent/runs.jsonl`. Run ids carry a random suffix (parallel runs of one role no longer
 collide), the registry is compacted to the last 500 runs, and a run whose process died is shown
 as `orphaned` instead of `running` forever.
@@ -141,7 +141,7 @@ as `orphaned` instead of `running` forever.
 
 `progress-guard` watches the main session for repetition, oscillation, and reads-without-a-write.
 When one signature keeps recurring it injects a review/delegate checkpoint on its own — in either
-mode, no `/reflect` and no mode switch — and writes a per-session
+mode, with no reminder command and no mode switch — and writes a per-session
 `.pi/recovery/sessions/<session id>/escalation.json` for that session's `recovery-orchestrator`
 (`tests/recovery-grounding-smoke.ts`). The reads-since-edit signal defaults to `PI_KIT_GUARD_STALL` (10) and is
 suppressed entirely in a session with no write-capable tool active. See
@@ -149,7 +149,7 @@ suppressed entirely in a session with no write-capable tool active. See
 
 ## Lite vs full
 
-- **Lite ("Plan→Do→Check"):** `planner → implementer → reviewer` chain, in-place, higher threshold.
+- **Lite ("Plan→Do→Check"):** `planner → implementer → reviewer` sequence, in-place, higher threshold.
   Ships `subagent`, `orchestrator`, `goal-core` + the role agents. No external deps.
 - **Full ("Agent Team"):** adds `scout`, parallel implementers in `branch-lab` worktrees, the
   `task-graph` DAG and the `verifier-board` gate.

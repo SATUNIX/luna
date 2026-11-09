@@ -172,7 +172,7 @@ async function testBareBoostReassesses() {
 
     await guard.commands.get("boost").handler("", ctx);
     const steer = fs.readFileSync(path.join(ws, ".pi", "ctx-contributions", "recovery-orchestrator.json"), "utf8");
-    assert.match(steer, /stuck on 'manual' \(attempt 1\//, "bare /boost enters at once, as /recover does");
+    assert.match(steer, /stuck on 'manual' \(attempt 1\//, "bare /boost enters the recovery flow at once");
     assert.ok(!fs.existsSync(path.join(ws, ".pi", "recovery", "escalation.json")), "the marker is consumed");
     assert.ok(notes.some((m) => m.includes("recovery queued")), "the operator is told");
 
@@ -436,7 +436,7 @@ const tests: Array<[string, SmokeTest]> = [
   ["the policy's words reach the run, its none stays silent, and a broken policy is a one-line fallback", testStallFollowsThePolicy],
   ["PI_KIT_GUARD_ESCALATE still sets the threshold without the policy", testEscalateEnvWithoutPolicy],
   ["the nudge texts live in the policy, not here", testNoNudgeTextHere],
-  ["bare /boost reassesses through the /recover entry; status is explicit", testBareBoostReassesses],
+  ["bare /boost reassesses through the recovery entry; status is explicit", testBareBoostReassesses],
   ["a repeatedly-failing edit does not reset progress tracking", testFailedEditDoesNotResetProgress],
   ["a successful write still resets progress tracking", testSuccessfulWriteStillResetsProgress],
   ["the escalation marker is written once per detection episode", testEscalationMarkerWrittenOncePerEpisode],

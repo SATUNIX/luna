@@ -1,24 +1,18 @@
 /**
- * Subagent — tool and command registration.
+ * Subagent — tool registration.
  *
  * Tools:
- *   - `subagent`         dispatch in single / parallel / chain mode
- * Commands:
- *   - `/subagents`       check in on running + recent runs
- *   - `/subagent-stop`   stop one, or all, running children
+ *   - `subagent`         dispatch in single / parallel mode
  *
  * Runs are inspected and stopped through `workflow_status` and `workflow_control` (run-query.ts,
- * workflow-tools.ts); both commands stay until the surface trim, and the stop command reuses the
- * same stop path.
+ * workflow-tools.ts), and the operator surface is `/workflows`.
  * Mode handlers are extracted so `execute` stays a thin router.
  */
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, staleProjectRoleCopies, type AgentConfig, type AgentScope } from "./agents.ts";
 import { projectRoleDigest, runAgent, mapWithConcurrencyLimit } from "./runner.ts";
-import { getFinalOutput, getResultOutput, isFailedResult, substitutePrevious, truncate } from "./result.ts";
-import { subagentStateDir } from "./logging.ts";
-import { collectRuns, formatRunTable, stopTargets } from "./status.ts";
+import { getFinalOutput, getResultOutput, isFailedResult, truncate } from "./result.ts";
 import { stopAllLive } from "./live.ts";
 import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
@@ -26,23 +20,23 @@ import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
 import { askFree } from "./workflow-tools.ts";
 
+// The parallel item's fields mean what the single-mode fields of the same name mean, so only the
+// effort cap is described again: every description is tool text the model pays for on each turn.
 const TaskItem = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
-  task: Type.String({ description: "Task to delegate to the agent" }),
-  cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-  effort: Type.Optional(Type.String({ description: "Effort tier for this child (minimal|focused|standard|thorough|exhaustive); never above yours" })),
+  agent: Type.String(),
+  task: Type.String(),
+  cwd: Type.Optional(Type.String()),
+  effort: Type.Optional(Type.String({ description: "Never above yours" })),
 });
 
 const SubagentParams = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Agent name (single mode)" })),
-  task: Type.Optional(Type.String({ description: "Task (single mode)" })),
-  tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
-  chain: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} run sequentially; use {previous} in task to inject prior output" })),
-  agentScope: Type.Optional(Type.String({ description: 'Role sources beyond the built-in kit roles: "user" (default: ~/.pi/agent/agents), "project" (.pi/agents, needs operator approval), or "both".' })),
-  background: Type.Optional(Type.Boolean({ description: "Single/parallel only: return immediately and let the child run in the background; you are notified when it finishes. Use only for long work you do not need in this turn." })),
-  confirmProjectAgents: Type.Optional(Type.Boolean({ description: "Deprecated and ignored. Project-local agents always need interactive operator approval or an exact PI_KIT_TRUSTED_PROJECT_ROLES digest grant." })),
-  cwd: Type.Optional(Type.String({ description: "Working directory (single mode)" })),
-  effort: Type.Optional(Type.String({ description: "Effort tier for the child (single mode); never above yours" })),
+  agent: Type.Optional(Type.String({ description: "Role name" })),
+  task: Type.Optional(Type.String({ description: "Self-contained task" })),
+  tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel {agent, task} items" })),
+  agentScope: Type.Optional(Type.String({ description: 'Extra role sources: "user" (default), "project" (needs approval) or "both"' })),
+  background: Type.Optional(Type.Boolean({ description: "Run detached; you are notified when it finishes" })),
+  cwd: Type.Optional(Type.String({ description: "Working directory" })),
+  effort: Type.Optional(Type.String({ description: "Effort tier: minimal|focused|standard|thorough|exhaustive; never above yours" })),
 });
 
 function textResult(text: string, isError = false) {
@@ -124,7 +118,7 @@ function resolveParentModel(ctx: ToolContext): string | undefined {
 }
 
 // Nesting guard for a child that itself calls `subagent`.
-function nestingError(): string | null {
+export function nestingError(): string | null {
   const depth = envInt("PI_KIT_SUBAGENT_DEPTH", 0, 0, MAX_DEPTH_CEILING);
   const maxDepth = envInt("PI_KIT_SUBAGENT_MAX_DEPTH", DEFAULT_MAX_DEPTH, 0, MAX_DEPTH_CEILING);
   if (depth < maxDepth) return null;
@@ -141,7 +135,6 @@ async function projectTrustError(
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
   const requested = new Set<string>();
-  if (Array.isArray(params.chain)) for (const s of params.chain as Array<{ agent: string }>) requested.add(s.agent);
   if (Array.isArray(params.tasks)) for (const t of params.tasks as Array<{ agent: string }>) requested.add(t.agent);
   if (typeof params.agent === "string") requested.add(params.agent);
   const trusted = (process.env.PI_KIT_TRUSTED_PROJECT_ROLES ?? "").split(";");
@@ -160,32 +153,6 @@ async function projectTrustError(
   });
   if (asked.kind !== "shown") return "Canceled: no operator approved the project-local agents.";
   return asked.value ? null : "Canceled: project-local agents not approved.";
-}
-
-async function runChainMode(
-  pi: ExtensionAPI,
-  chain: Array<{ agent: string; task: string; cwd?: string; effort?: string }>,
-  ctx: ToolContext,
-  agents: AgentConfig[],
-  signal: AbortSignal | undefined,
-  reportUpdate: (text: string) => void,
-  parentModel: string | undefined,
-  inheritParentModel: boolean,
-) {
-  let previous = "";
-  for (const [i, step] of chain.entries()) {
-    const task = substitutePrevious(step.task, previous);
-    const r = await runAgent({ defaultCwd: ctx.cwd ?? process.cwd(), agents, agentName: step.agent, task, cwd: step.cwd, step: i + 1, signal, overrides: step.effort ? { effort: step.effort } : undefined, onUpdate: reportUpdate, onSettled: settledNotifier(pi, ctx), parentModel, inheritParentModel });
-    if (r.detached) {
-      return textResult(`Chain detached at step ${i + 1} (${step.agent}): running in the background (run ${r.runId ?? "?"}). Follow it with workflow_status {id: "${r.runId ?? "<run>"}"} or /workflows status ${r.runId ?? "<run>"}.`);
-    }
-    if (isFailedResult(r)) {
-      return textResult(`Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(r)}${logSuffix(r)}`, true);
-    }
-    previous = r.finalOutput || getFinalOutput(r.messages);
-  }
-  // `previous` holds the last step's output (finalOutput, else its final message text).
-  return textResult(previous || "(no output)");
 }
 
 async function runParallelMode(
@@ -247,12 +214,10 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     name: "subagent",
     label: "Subagent",
     description:
-      "Delegate tasks to specialized subagents with isolated context. Modes: single (agent+task), " +
-      "parallel (tasks array), chain (sequential with {previous} placeholder). Built-in roles: scout, " +
-      "planner, implementer, reviewer, delegator (plus ~/.pi/agent/agents). A subagent cannot see this " +
-      "conversation: make each task self-contained. Esc cancels running subagents; background: true " +
-      "detaches long work. Only a delegator role may delegate further (depth limit PI_KIT_SUBAGENT_MAX_DEPTH, default 2).",
-    promptSnippet: "Delegate a task to a planner/implementer/reviewer subagent (single, parallel, or chain)",
+      "Delegate to subagents with isolated context: one agent+task, or parallel tasks. Roles: scout, " +
+      "planner, implementer, reviewer, plus ~/.pi/agent/agents. A subagent cannot see this " +
+      "conversation: make each task self-contained; background detaches long work.",
+    promptSnippet: "Delegate tasks to subagent roles",
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, rawCtx) {
@@ -269,16 +234,12 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
       const discovery = discoverAgents(ctx.cwd ?? process.cwd(), scope);
       const agents = discovery.agents;
 
-      const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
       const hasSingle = Boolean(params.agent && params.task);
-      const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+      const modeCount = Number(hasTasks) + Number(hasSingle);
       const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
       if (modeCount !== 1) {
-        return textResult(`Provide exactly one mode (agent+task, tasks, or chain).\nAvailable agents: ${available}`, true);
-      }
-      if (background && hasChain) {
-        return textResult("background is not supported for chain mode (each step needs the previous step's output). Run the chain in the foreground, or background single/parallel tasks.", true);
+        return textResult(`Provide exactly one mode (agent+task, or tasks).\nAvailable agents: ${available}`, true);
       }
 
       if (scope === "project" || scope === "both") {
@@ -287,9 +248,6 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
       }
 
       try {
-        if (params.chain && params.chain.length > 0) {
-          return await runChainMode(pi, params.chain, ctx, agents, signal, reportUpdate, parentModel, inheritParentModel);
-        }
         if (params.tasks && params.tasks.length > 0) {
           return await runParallelMode(pi, params.tasks, ctx, agents, signal, reportUpdate, parentModel, inheritParentModel, background);
         }
@@ -308,37 +266,4 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("subagents", {
-    description: "Check in on subagents: running and recent runs with log paths. /subagents [limit]",
-    handler: async (args, rawCtx) => {
-      const ctx: ToolContext = rawCtx;
-      const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      const rows = collectRuns(dir);
-      const running = rows.filter((r) => r.status === "running").length;
-      const limit = Math.max(1, Math.min(Number((args ?? "").trim()) || 20, 100));
-      const body = rows.length
-        ? `${running} running, ${rows.length} total\n\n${formatRunTable(rows, limit)}\n\n/subagent-stop <id|all> to stop`
-        : "No subagent runs recorded.";
-      ctx.ui?.notify?.(`subagents\n\n${body}`, "info");
-    },
-  });
-
-  pi.registerCommand("subagent-stop", {
-    description: "Stop running subagents (safety). /subagent-stop [<id>|all]; no args lists running runs.",
-    handler: async (args, rawCtx) => {
-      const ctx: ToolContext = rawCtx;
-      const dir = subagentStateDir(ctx.cwd ?? process.cwd());
-      const target = (args ?? "").trim() || undefined;
-      if (target === "all" && ctx.ui?.confirm) {
-        const running = collectRuns(dir).filter((r) => r.status === "running").length;
-        const ok = await ctx.ui.confirm("Stop all subagents?", `This terminates ${running} running subagent(s).`);
-        if (!ok) {
-          ctx.ui?.notify?.("Cancelled.", "info");
-          return;
-        }
-      }
-      const result = stopTargets(dir, target);
-      ctx.ui?.notify?.(result.message, result.ok ? "info" : "error");
-    },
-  });
 }

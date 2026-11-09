@@ -219,7 +219,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
   // depth reaches PI_KIT_SUBAGENT_MAX_DEPTH.
   const childDepth = envInt("PI_KIT_SUBAGENT_DEPTH", 0, 0, MAX_DEPTH_CEILING) + 1;
   // Esc / a parent cancel stops the child: an interrupted delegation must not keep spending
-  // tokens invisibly, and a chain must not be silently truncated behind a "detached" result.
+  // tokens invisibly, and its output must not be silently truncated behind a "detached" result.
   // Long work that should outlive the turn is requested explicitly with `background: true`.
   // PI_KIT_SUBAGENT_DETACH_SIGNAL=1 restores the old detach-on-cancel behaviour.
   const detachOnAbort = envFlag("PI_KIT_SUBAGENT_DETACH_SIGNAL", false);

@@ -7,7 +7,7 @@ An interrupted run can be resumed.
 
 Use a workflow when the same multi-step delegation keeps coming up: plan → implement →
 review, reproduce → fix → verify, or fan out → synthesise. For a one-off delegation, the
-`subagent` tool (single, parallel or chain) is enough.
+`subagent` tool (single or parallel) is enough.
 
 ## Running
 
@@ -207,7 +207,7 @@ inputs:
 vault: false                        # true: copy the finished run into the memory vault
 steps:
   - id: scout                       # unique across the workflow
-    agent: scout                    # a role: scout, planner, implementer, reviewer, delegator, or yours
+    agent: scout                    # a role: scout, planner, implementer, reviewer, or yours
     task: |
       Map the code relevant to: {{inputs.goal}} (look in {{inputs.area}})
   - id: plan
@@ -314,7 +314,7 @@ rules are copies, because extensions are self-contained. `npm run verify` and
 input, and that a run's files are redacted and have the right modes.
 
 Each step is an ordinary subagent run, so it also has a log under `.pi/subagent/`
-(`/subagents`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
+(`/workflows`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
 its id still shows its log and `workflow_control` can stop it. The step's run ids are recorded in
 `state.json`. A corrupt or wrong-shape `state.json` is ignored and not listed by
 `/workflow status`, rather than crashing the status listing. The persisted state must

@@ -409,7 +409,7 @@ differs). For a write under the workspace it:
   renamed over it, keeping the old file's mode, and creates new files with mode 0600.
 
 The writers that use it include the trace ledger, the firewall audit log, `/auto`, goal-core,
-task-graph, verifier-board and verify-gate, `/recover`, self-improvement's `AGENTS.md` edits,
+task-graph, verifier-board and verify-gate, recovery-orchestrator, self-improvement's `AGENTS.md` edits,
 `/save`, todo, the conductor, context-sieve, the workflow run files and the caveman and plan-mode
 contributions. `tests/workspace-symlink-smoke.ts` plants a link at each state file, and `.pi` as a
 link to a directory, drives those writers through their real entry points, and checks that nothing

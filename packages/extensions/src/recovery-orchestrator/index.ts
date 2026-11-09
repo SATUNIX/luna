@@ -177,8 +177,8 @@ export interface Escalation {
   sessionId?: string;
 }
 
-// Only `signature` is checked (as before typing); progress-guard and /recover write the other
-// fields, which are taken on trust from the marker.
+// Only `signature` is checked (as before typing); progress-guard writes the other fields, which
+// are taken on trust from the marker.
 function isEscalation(value: unknown): value is Escalation {
   return isRecord(value) && typeof value.signature === "string";
 }
@@ -479,7 +479,7 @@ export default function (pi: ExtensionAPI) {
     if (c.hasUI) c.ui.notify(`recovery-orchestrator: entered recovery for '${esc.signature}' (attempt ${attempt}/${maxAttempts}). See ${reportRel}.`, "warning");
   });
 
-  // The operator's way in, from the marker a caller just wrote: /recover, and a bare /boost.
+  // The operator's way in, from the marker a caller just wrote: a bare /boost.
   function enterNow(c: ExtensionContext, dir: string, signature: string): void {
     const { maxAttempts, quietTurns } = limits();
     forgetResolved(dir, quietTurns);
@@ -517,23 +517,4 @@ export default function (pi: ExtensionAPI) {
     if (entry) entry.turn = turn;
   }
 
-  pi.registerCommand("recover", {
-    description: "Manually trigger recovery-orchestration for the current stuck state (/recover [signature]).",
-    handler: async (args, ctx) => {
-      const c: ExtensionContext = ctx;
-      const dir = c.cwd ?? cwd;
-      const signature = (args ?? "").trim() || "manual";
-      // Seed an escalation the same way progress-guard would, then enter immediately.
-      try {
-        writeFileSafe(
-          escalationPath(dir),
-          JSON.stringify({ signature, reason: "operator invoked /recover", count: 1, at: new Date().toISOString(), ...(currentSessionId ? { sessionId: currentSessionId } : {}) }),
-          { root: dir },
-        );
-      } catch {
-        /* ignore */
-      }
-      enterNow(c, dir, signature);
-    },
-  });
 }

@@ -1,9 +1,9 @@
 /**
  * Subagent — run status collection, rendering, and stopping.
  *
- * Shared by `run-query.ts` (which `workflow_status` and `/workflows` read), the stop path in
- * `workflow-tools.ts`, and the `/subagents` and `/subagent-stop` commands, so every surface shows
- * the same picture: registry rows merged with the in-process live registry.
+ * Shared by `run-query.ts` (which `workflow_status` and `/workflows` read) and the stop path in
+ * `workflow-tools.ts`, so every surface shows the same picture: registry rows merged with the
+ * in-process live registry.
  */
 import { toText } from "./config.ts";
 import { readRunRegistry } from "./logging.ts";
@@ -71,7 +71,7 @@ export function collectRuns(dir: string): RunRow[] {
 
 /**
  * Stop live children (in-process) and recorded orphans (registry pid), or list what is running.
- * Shared by the `workflow_control` tool, the `/workflows stop` command and `/subagent-stop`.
+ * Shared by the `workflow_control` tool and the `/workflows stop` command.
  */
 export function stopTargets(dir: string, target: string | undefined): { message: string; ok: boolean } {
   const rows = collectRuns(dir);

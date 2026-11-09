@@ -77,7 +77,7 @@ those cases instead, except for a stop. Options:
 | `effort` | A thinking level for the child: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (mapped to `xhigh`). |
 | `isolation` | `"worktree"`: the agent runs in its own git worktree (see [Isolation](#isolation-and-the-writer-lock)). |
 | `required` | `true`: the call must complete. If it does not, `agent()` throws and the run is `failed`, even if the script catches the throw or `parallel()` swallows it. A required failure names the step in the run's error. The default is `false`. It is left out of the journal key, so changing it does not cost a resume. (`tests/workflow-hooks-smoke.ts`) |
-| `agentType` | A role (`implementer`, `scout`, `planner`, `reviewer`, `delegator`, or a user role). Aliases: `general-purpose`, `general` and `workflow` mean `implementer`; `explore`/`Explore` mean `scout`; `plan`/`Plan` mean `planner`; `code-reviewer` means `reviewer`. The default is `implementer`. |
+| `agentType` | A role (`implementer`, `scout`, `planner`, `reviewer`, or a user role). Aliases: `general-purpose`, `general` and `workflow` mean `implementer`; `explore`/`Explore` mean `scout`; `plan`/`Plan` mean `planner`; `code-reviewer` means `reviewer`. The default is `implementer`. |
 
 An option of the wrong type, an unknown `effort`, `isolation` or `agentType` makes `agent()` throw
 into the script. So does a prompt that is not a string, `opts` that are not an object or cannot be

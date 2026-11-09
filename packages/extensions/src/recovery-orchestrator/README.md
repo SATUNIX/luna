@@ -51,7 +51,9 @@ Nothing pins the three limits below; they describe what the code has no path to 
 
 - **Automatic:** `progress-guard` escalation marker (a repeat/oscillation/stall signature
   nudged `PI_KIT_GUARD_ESCALATE` times).
-- **Manual:** `/recover [signature]` (`tests/liveness-containment-smoke.ts`).
+- **On demand:** a bare `/boost` in `progress-guard` writes the same marker and enters the
+  same flow immediately (`tests/liveness-containment-smoke.ts`). There is no separate recovery
+  command.
 
 ## Env
 

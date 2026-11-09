@@ -365,7 +365,7 @@ try {
     fs.mkdirSync(userWorkflows, { recursive: true });
     const members = ["a", "b", "c", "d", "e"].map((id) => `      - { id: ${id}, agent: scout, task: "look at ${id}" }`).join("\n");
     fs.writeFileSync(path.join(userWorkflows, "five.md"), `---\nname: five\ndescription: five at once\nsteps:\n  - id: all\n    parallel:\n${members}\n---\n`);
-    fs.writeFileSync(path.join(userWorkflows, "spawner.md"), "---\nname: spawner\ndescription: a step that names subagent\nsteps:\n  - id: one\n    agent: delegator\n    task: delegate this\n    tools: [read, subagent]\n    extensions: [subagent]\n---\n");
+    fs.writeFileSync(path.join(userWorkflows, "spawner.md"), "---\nname: spawner\ndescription: a step that names subagent\nsteps:\n  - id: one\n    agent: scout\n    task: delegate this\n    tools: [read, subagent]\n    extensions: [subagent]\n---\n");
     let boots = 0;
     /** One session at a tier: its own ledgers, and the turns as pi fires them. */
     const session = async (tier: string) => {

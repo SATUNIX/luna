@@ -43,7 +43,13 @@ try {
   const recovery = fakePi(); attachEvents(recovery.api, events);
   (await loadExtension('extensions/recovery-orchestrator/index.ts'))(recovery.api);
   await recovery.handlers.get('session_start')({}, ctx);
-  for (let i = 0; i < 3; i++) await recovery.commands.get('recover').handler('same-task', ctx);
+  // Each automatic escalation marker is the surviving path; the /recover command is gone.
+  const escalationDir = path.join(ws, '.pi/recovery/sessions/owner-A');
+  fs.mkdirSync(escalationDir, { recursive: true });
+  for (let i = 0; i < 3; i++) {
+    fs.writeFileSync(path.join(escalationDir, 'escalation.json'), JSON.stringify({ signature: 'same-task', reason: 'fixture', count: 1, at: new Date().toISOString(), sessionId: 'owner-A' }));
+    await recovery.handlers.get('turn_end')({}, ctx);
+  }
   await loop.handlers.get('agent_end')({}, ctx);
   assert.equal(loop.steers.length, 21, 'recovery cap disarms same-session automatic loop before more starts');
   const blocked = parseJsonAs(object({ state: string(), sessionId: string() }), fs.readFileSync(path.join(ws, '.pi/recovery/blocked-owner-A.json'), 'utf8'));
@@ -105,8 +111,8 @@ try {
   assert.ok(!fs.existsSync(path.join(researchWs, '.pi/ctx-contributions/progress-guard.json')));
 
   // Write-capable session, suggest mode: a recurring stall must now inject the review/delegate
-  // checkpoint AND write the recovery marker on its own — the automatic replacement for the
-  // manual /reflect, no mode switch required.
+  // checkpoint AND write the recovery marker on its own — no manual command, no mode switch
+  // required.
   const workWs = path.join(ws, 'work'); fs.mkdirSync(workWs);
   const workCtx = { ...ctx, cwd: workWs };
   const guard2 = fakePi(); // getActiveTools includes write/edit -> write-capable

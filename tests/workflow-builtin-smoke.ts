@@ -27,6 +27,7 @@ import path from "node:path";
 import { ROOT, fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
 import type * as AgentsModule from "../packages/extensions/third_party/subagent/agents.ts";
+import type * as ControlModule from "../packages/extensions/third_party/subagent/control.ts";
 import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
 import type * as LedgerModule from "../packages/extensions/src/effort/ledger.ts";
 import type * as FenceModule from "../packages/extensions/third_party/subagent/fence.ts";
@@ -514,6 +515,29 @@ steps:
         assert.equal(statusOf(r), "passed");
         assert.equal(fake.seen.length, 5);
         assert.equal(fake.maxLive(), 1);
+        // The same wait takes a pause: a step denied a slot launches nothing until the run resumes.
+        await session("standard");
+        const controlMod = await loadModule<typeof ControlModule>("vendor/subagent/control.ts");
+        const engineMod = await loadModule<typeof EngineModule>("vendor/subagent/wf-engine.ts");
+        const agentsMod = await loadModule<typeof AgentsModule>("vendor/subagent/agents.ts");
+        const control = new controlMod.RunControl("paused-wait");
+        const held = fakeSpawner(() => ({ text: "seen", delayMs: 40 }));
+        const spawnChild: FakeSpawn = (command, args, options) => Object.assign(held.spawn(command, args, options), { pid: process.pid });
+        const w = workflowMod.discoverWorkflows(project).workflows.find((x) => x.name === "five");
+        assert.ok(w);
+        const opened = engineMod.effortRegistry()?.openRunScope("paused-wait", { planned: 5 });
+        assert.ok(opened?.ok);
+        const executor = await loadModule<{ executeWorkflow(w: WorkflowModule.WorkflowDef, state: WorkflowModule.RunState, options: Omit<WorkflowModule.ExecuteOptions, "spawnChild"> & { spawnChild: FakeSpawn }): Promise<WorkflowModule.RunState> }>("vendor/subagent/workflow.ts");
+        const running = executor.executeWorkflow(w, workflowMod.newRunState(w, {}), { cwd: project, agents: agentsMod.discoverAgents(project, "user").agents, spawnChild, control, launchKind: "workflow", workflowRun: { runId: "paused-wait", runToken: opened.runToken } });
+        const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+        while (held.seen.length === 0) await pause(5);
+        control.act("pause");
+        const seen = held.seen.length;
+        await pause(400);
+        assert.equal(held.seen.length, seen, "no launch while paused");
+        control.act("resume");
+        assert.equal((await running).status, "passed");
+        assert.equal(held.seen.length, 5);
       } finally {
         restorePolicy();
       }

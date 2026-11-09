@@ -63,7 +63,9 @@ treat them like any other.
   and so does a miss when the run has no execution left for the second ask.
   An expansion past the depth limit, the allowance or the execution limit launches nothing, is
   recorded as an omission, and the run goes on to end `partial`, so the agent can replan within
-  what is left of the allowance, or once it renews on the next user message. A typed
+  what is left of the allowance, or once it renews on the next user message. The step stays
+  `passed`, but `when` and `{{steps.<id>.status}}` read it as `skipped`, and its output is the
+  reason, so a later step does not act on work that never happened. A typed
   `/workflow resume` has no run scope to charge, so it refuses a new expansion the same way; it
   still replays one the run already charged.
 - **Depth.** `strategy.expandDepth` in the effort policy (3 by default) limits the generations one
@@ -243,8 +245,8 @@ steps:
 | `model`, `thinking` | Per-step model (`provider/id`) and thinking level. The default is the role's `model:`, else the session model. |
 | `max_runtime` | Wall-clock limit for this step: `90s`, `20m`, `2h`. |
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
-| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member. |
-| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
+| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member (`tests/workflow-hooks-smoke.ts`). |
+| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. A `/regex/` is tested on the last 64 KiB of the output (a substring on all of it), off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
@@ -255,7 +257,7 @@ steps:
 | `{{inputs.<name>}}` | A run input (after defaults) |
 | `{{steps.<id>.output}}` | That step's final answer (for a parallel group: every member's answer under `## <id>`) |
 | `{{steps.<id>.status}}` | `passed`, `failed`, `skipped`, … |
-| `{{file:<path>}}` | A file in the run directory (up to 64 KiB). Paths can't leave the run directory. |
+| `{{file:<path>}}` | A file in the run directory (up to 64 KiB). Paths can't leave the run directory, and anything but a regular file with one link, such as a symbolic link or a FIFO, fails the step, even with `?`. |
 | `{{run.dir}}`, `{{run.id}}`, `{{loop}}` | Run directory, run id, current gate loop |
 
 Add `?` to make a missing value empty instead of an error, for example
@@ -281,7 +283,7 @@ session or opened in Obsidian. (`tests/workflow-hooks-smoke.ts`)
 
 ### Redaction and file modes
 
-The executor redacts secrets before it writes `state.json` or `steps/<id>.md`: the run's
+The executor redacts secrets before it writes `state.json` or `steps/<id>.md` (an `expand` answer waiting to be acted on is the one exception, below): the run's
 `inputs`, each step's answer and the step and run errors. Known secret shapes become
 `[REDACTED]`. These are the rules the trace ledger applies to its targets (authorization headers,
 `password`/`secret`/`token`/`api_key` assignments, `user:password@` in URLs, `sk-` and `gh*_`
@@ -295,6 +297,14 @@ Because a later step's `{{steps.<id>.output}}` reads `steps/<id>.md`, it gets th
 answer. A step's own prompt is built from the in-memory inputs, so it still gets the real input
 values. A resumed run reads its inputs back from `state.json`, though, so it gets the redacted
 ones.
+
+A plan is the definition a resume runs, so `plan.json` is never redacted. A plan or expansion with
+text the kit's secret table matches is refused instead, by field name and never quoting it, and an expansion is resampled once, asked to
+name the credential instead. The table is not the wider redaction above, so a task may say "token"
+or "password" (`tests/workflow-plan-smoke.ts`). An `expand` step's answer is read as the child gave
+it, not from the redacted `steps/<id>.md`. Until the host acts on it, `state.json` holds that answer
+unredacted, if the table leaves it unchanged and it fits in 64 KiB. Otherwise a kill in that window
+loses the answer and a resume asks about the step like an interrupted writer.
 
 The executor creates the run directory and `steps/` with mode 0700 and writes `state.json` and
 `steps/<id>.md` with mode 0600, and it sets those modes again on each write. The redaction
@@ -333,13 +343,17 @@ whole state is treated as corrupt.
   [run scope](effort.md#plan-allowance) and is hidden at E1. The run's worst case (each step, plus
   every gated segment at its full `max_loops`) is charged to the tier's plan allowance before the
   first launch, so a run that does not fit is refused with nothing started, and the reason names
-  `/effort`. The allowance is per user request: 1 at E2, 8 at E3, 16 at E4, 64 at E5. The kit's
+  `/effort`. The kit's
   `bugfix` and `feature` cost 8 and `research` costs 5, so each fits at E3 and above, one to a
   request at E3. A model-started resume opens a new scope and is charged only what has not passed.
-  A parallel group runs at most the tier's `maxConcurrent` at once.
-  (`tests/workflow-builtin-smoke.ts`)
+  A parallel group runs at most the tier's `maxConcurrent` at once, and at 0 it starts nothing and
+  fails the run. In a plan, a group with a member that can edit files runs its members one at a
+  time, because nobody reviewed it; a saved workflow's author decides.
+  (`tests/workflow-builtin-smoke.ts`, `tests/workflow-plan-smoke.ts`)
 - **Steps do not delegate.** An agent of a model-started run has E1 as its tier and cap, and gets
-  neither the `subagent` tool nor its extension, whatever its role or step asks for.
+  neither the `subagent` tool nor its extension, whatever its role or step asks for
+  (`tests/workflow-builtin-smoke.ts`). A plan also refuses a role that loads an extension which
+  starts agents (`tests/workflow-plan-smoke.ts`).
 
 ## Live telemetry
 

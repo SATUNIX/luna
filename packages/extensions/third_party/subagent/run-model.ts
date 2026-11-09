@@ -158,12 +158,20 @@ export class RunModel {
     this.startedAt = now();
   }
 
-  /** Create (or retitle) a phase. Phases keep their first-seen order; `parent` names a group phase. */
-  phase(id: string, title = id, status?: PhaseStatus, parent?: string): PhaseRecord {
+  /**
+   * Create (or retitle) a phase. Phases keep their first-seen order, or come right after the phase
+   * `after` names, as a spliced expansion does; `parent` names a group phase.
+   */
+  phase(id: string, title = id, status?: PhaseStatus, parent?: string, after?: string): PhaseRecord {
     let p = this.phases.get(id);
     if (!p) {
       p = { id, title, status: status ?? "pending", agentIds: [], ...(parent !== undefined ? { parent } : {}) };
-      this.phases.set(id, p);
+      if (after !== undefined && this.phases.has(after)) {
+        const entries = [...this.phases.entries()];
+        entries.splice(entries.findIndex(([key]) => key === after) + 1, 0, [id, p]);
+        this.phases.clear();
+        for (const [key, value] of entries) this.phases.set(key, value);
+      } else this.phases.set(id, p);
     } else {
       p.title = title;
       if (status) p.status = status;
@@ -353,13 +361,23 @@ export interface LiveRun {
   name: string;
 }
 
+/** A value with its object keys sorted at every level, so equal arguments give equal text. */
+function sortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const list: unknown[] = value;
+    return list.map(sortedKeys);
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedKeys(Reflect.get(value, key))]));
+}
+
 /** What makes two runs the same work: what kind they are, the definition's digest or text, and their arguments. */
 export function runIdentity(kind: RunKind | "plan", definition: string, args: unknown): string {
-  return crypto.createHash("sha256").update(JSON.stringify([kind, definition, args ?? null])).digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify([kind, definition, sortedKeys(args ?? null)])).digest("hex");
 }
 
 /** The runs of this process that hold an identity. A refused run never starts, so `start` replacing a run id is not this check. */
-export class LiveRuns {
+class LiveRuns {
   private readonly held = new Map<string, LiveRun>();
 
   find(identity: string): LiveRun | undefined {
@@ -379,4 +397,4 @@ export class LiveRuns {
 export const liveRuns = new LiveRuns();
 
 export const duplicateRefusal = (live: LiveRun): string =>
-  `Refused: run ${live.runId} (${live.name}) is already doing this work. Follow it with workflow_status {id: "${live.runId}"}, or stop it with workflow_control {runId: "${live.runId}", action: "stop"} and start again.`;
+  `Refused: run ${live.runId} (${live.name}) is already doing this work. Wait for it, or stop it with workflow_control {runId: "${live.runId}", action: "stop"} and start again.`;

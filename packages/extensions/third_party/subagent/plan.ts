@@ -13,22 +13,7 @@
  * See docs/workflows.md; tests/workflow-plan-smoke.ts.
  */
 import type { AgentConfig } from "./agents.ts";
-import { compileCheckedRegex } from "./shared/safe-regex.ts";
-import { MAX_EXECUTIONS, parseSteps, STEP_STATUSES, TEMPLATE_EXPR, worstCaseAgents, type StepDef, type WorkflowDef } from "./workflow.ts";
-
-export interface PlanStep {
-  id?: string;
-  agent?: string;
-  task?: string;
-  parallel?: PlanStep[];
-  skills?: string[];
-  tools?: string[];
-  outputs?: string[];
-  when?: { step: string; status: string | string[] };
-  gate?: { pass: string; retry: string; max_loops?: number };
-  continue_on_error?: boolean;
-  expand?: boolean;
-}
+import { compileGate, MAX_EXECUTIONS, MAX_GATE_LOOPS, MAX_ID_LENGTH, parseSteps, STEP_REFERENCE, STEP_STATUSES, TEMPLATE_EXPR, templateExpression, worstCaseAgents, type StepDef, type WorkflowDef } from "./workflow.ts";
 
 export interface PlanError {
   path: string;
@@ -36,13 +21,17 @@ export interface PlanError {
   fix: string;
 }
 
-export type Compiled = { ok: true; workflow: WorkflowDef; worstCaseAgents: number } | { ok: false; errors: PlanError[] };
+/** `overLimit`: the plan is over the run limit, so writing it again in the same size cannot help. */
+export type Compiled = { ok: true; workflow: WorkflowDef; worstCaseAgents: number } | { ok: false; errors: PlanError[]; overLimit?: true };
 
-/** The tool's own account of a plan; kept here so the rules and their text change together. */
+/**
+ * The tool's own account of a plan; kept here so the rules and their text change together. Literal,
+ * because the reference generator reads it from source; a test holds it to workflow.ts's STEP_SHAPE.
+ */
 export const PLAN_DESCRIPTION =
   "A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. " +
   "outputs are files to write relative to the run directory. " +
-  "{previous} is the prior step's output; {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. " +
+  "{previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. " +
   "gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. " +
   'expand answers {"steps":[...]} or {"done":"text"}.';
 
@@ -54,13 +43,14 @@ const LEAF_FIELDS: ReadonlySet<string> = new Set(["id", "agent", "task", "skills
 const GROUP_FIELDS: ReadonlySet<string> = new Set(["id", "parallel", "gate"]);
 const GATE_FIELDS: ReadonlySet<string> = new Set(["pass", "retry", "max_loops"]);
 const WHEN_FIELDS: ReadonlySet<string> = new Set(["step", "status"]);
-const SPAWN_TOOLS: ReadonlySet<string> = new Set(["subagent", "workflow", "workflow_run", "dual_review", "dispatch_specialist"]);
+// DELEGATION_TOOLS in src/effort/index.ts (extensions may not import each other), and every other
+// tool that starts an agent, with the extensions that bring them.
+const SPAWN_TOOLS: ReadonlySet<string> = new Set(["subagent", "workflow", "workflow_run", "dual_review", "dispatch_specialist", "verify_completion", "dispatch_validator"]);
+const SPAWN_EXTENSIONS: ReadonlySet<string> = new Set(["subagent", "verify-gate", "conductor", "dual-review"]);
 const STATUSES: ReadonlySet<string> = new Set(STEP_STATUSES);
 const TOOL_NAME = /^[A-Za-z][\w-]*$/;
 const SKILL_NAME = /^[a-z0-9][a-z0-9._-]*$/i; // as skills.ts resolves them
-const GATE_REGEX = /^\/(.+)\/([a-z]*)$/; // as workflow.ts reads a gate's pass
 const PATH_SHAPE = /^\S+$/; // an output is a path in the run directory, not prose
-const MAX_LOOPS = 10;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string");
@@ -97,6 +87,8 @@ interface Scope {
   before: ReadonlyArray<ReadonlySet<string>>;
   /** Per top-level position: whether the step has `expand`. */
   expands: readonly boolean[];
+  /** Every step with `when`: its output may never exist. */
+  conditional: ReadonlySet<string>;
   /** Set in an expansion: what the expanding step may do. */
   inherited?: Inherited | undefined;
   errors: PlanError[];
@@ -118,6 +110,8 @@ function checkFields(entry: Entry, group: boolean, scope: Scope): void {
 
 function checkTools(entry: Entry, role: AgentConfig | undefined, scope: Scope): void {
   const { tools } = entry.raw;
+  const extension = role?.extensions?.find((e) => SPAWN_EXTENSIONS.has((e.split(/[\\/]/).pop() ?? e).toLowerCase()));
+  if (extension !== undefined && role) scope.errors.push(planError(`${entry.at}.agent`, `${clip(role.name, 20)} loads ${shown(extension)}, which starts agents; a step cannot.`, "Use another role."));
   if (tools === undefined) {
     if (role?.tools?.some((t) => SPAWN_TOOLS.has(t.toLowerCase()))) scope.errors.push(planError(`${entry.at}.agent`, `${clip(role.name, 20)} can start agents; a step cannot.`, "Use another role, or name tools that narrow it."));
     return;
@@ -200,40 +194,29 @@ function checkGate(entry: Entry, scope: Scope): void {
   const { pass, retry, max_loops: loops } = gate;
   if (typeof pass !== "string" || !pass) scope.errors.push(planError(`${at}.pass`, "a gate needs pass: text its output must contain.", 'Use "VERDICT: PASS".'));
   else {
-    const re = GATE_REGEX.exec(pass);
-    if (re) {
-      const [, source = "", flags = ""] = re;
-      let safe = false;
-      try {
-        safe = compileCheckedRegex(source, flags.includes("i") ? flags : `${flags}i`).ok;
-      } catch {
-        /* an invalid pattern is refused below */
-      }
-      if (!safe) scope.errors.push(planError(`${at}.pass`, `${shown(pass)} is not a safe pattern, so the gate could never pass.`, "Use plain text or a simpler pattern."));
-    }
+    if (compileGate(pass)?.ok === false) scope.errors.push(planError(`${at}.pass`, `${shown(pass)} is not a safe pattern, so the gate could never pass.`, "Use plain text or a simpler pattern."));
   }
   if (typeof retry !== "string" || !scope.tops.slice(0, entry.index + 1).includes(retry)) scope.errors.push(planError(`${at}.retry`, `${shown(retry)} is not this or an earlier top-level step.`, gateExample(scope, entry)));
   // A rewind would run an `expand` step twice, and its steps are already in the run.
   const target = typeof retry === "string" ? scope.tops.indexOf(retry) : -1;
   if (target >= 0 && scope.expands.slice(target, entry.index + 1).some(Boolean)) scope.errors.push(planError(`${at}.retry`, "a gate cannot go back over a step with expand.", "Gate the steps inside the expansion instead."));
-  if (loops !== undefined && !(typeof loops === "number" && Number.isInteger(loops) && loops >= 0 && loops <= MAX_LOOPS)) scope.errors.push(planError(`${at}.max_loops`, `max_loops must be a whole number from 0 to ${String(MAX_LOOPS)}.`, "Use 1 or 2."));
+  if (loops !== undefined && !(typeof loops === "number" && Number.isInteger(loops) && loops >= 0 && loops <= MAX_GATE_LOOPS)) scope.errors.push(planError(`${at}.max_loops`, `max_loops must be a whole number from 0 to ${String(MAX_GATE_LOOPS)}.`, "Use 1 or 2."));
 }
 
 function checkTask(entry: Entry, task: string, scope: Scope): void {
   const at = `${entry.at}.task`;
   for (const match of task.matchAll(TEMPLATE_EXPR)) {
-    const raw = match[1] ?? "";
-    const optional = raw.endsWith("?");
-    const expr = optional ? raw.slice(0, -1).trim() : raw;
+    const { expr, optional } = templateExpression(match[1] ?? "");
     if (expr === "run.dir" || expr === "run.id" || expr === "loop" || expr.startsWith("file:")) continue;
     if (expr.startsWith("inputs.")) {
       if (!optional && !scope.inputs.includes(expr.slice(7))) scope.errors.push(planError(at, `{{${clip(expr, 30)}}} names an input nobody gave.`, "Pass it in inputs, or write the text into the task."));
       continue;
     }
-    const step = /^steps\.([a-z][a-z0-9_-]*)\.(?:output|status)$/.exec(expr)?.[1];
+    const [, step, field] = STEP_REFERENCE.exec(expr) ?? [];
     if (step === undefined) scope.errors.push(planError(at, `{{${clip(expr, 30)}}} is not a template expression.`, "Use {previous}, {{steps.<id>.output}} or {{run.dir}}."));
     else if (!scope.known.has(step)) scope.errors.push(planError(at, `{{${clip(expr, 40)}}} names no step in this plan.`, "Use the id of a step in the plan."));
     else if (!optional && !scope.before[entry.index]?.has(step)) scope.errors.push(planError(at, `${clip(step, 30)} has not run yet at this step.`, `Add ? to allow nothing yet: {{${clip(expr, 40)}?}}.`));
+    else if (!optional && field === "output" && scope.conditional.has(step)) scope.errors.push(planError(at, `${clip(step, 30)} has when, so it may leave no output.`, `Add ? to allow nothing: {{${clip(expr, 40)}?}}.`));
   }
   if (entry.index === 0 && /\{previous\}/.test(task)) scope.errors.push(planError(at, "{previous} has no prior step on the first step.", "Remove it, or add a step before this one."));
 }
@@ -283,8 +266,15 @@ function feedGates(steps: unknown[]): void {
     const target = tops.find((s) => s.id === retry);
     if (!target) continue;
     const reference = `steps.${step.id}.output`;
-    for (const leaf of tasksOf(target)) if (typeof leaf.task === "string" && !leaf.task.includes(reference)) leaf.task = `${leaf.task}\n\nThe last review of this work (empty on a first attempt):\n{{${reference}?}}`;
+    const asks = (task: string): boolean => [...task.matchAll(TEMPLATE_EXPR)].some((m) => templateExpression(m[1] ?? "").expr === reference);
+    for (const leaf of tasksOf(target)) if (typeof leaf.task === "string" && !asks(leaf.task)) leaf.task = `${leaf.task}\n\nThe last review of this work (empty on a first attempt):\n{{${reference}?}}`;
   }
+}
+
+/** A member's default id, which must fit the id limit however long its group's is. */
+function memberId(group: string, n: number): string {
+  const suffix = `-${String(n)}`;
+  return `${group.slice(0, MAX_ID_LENGTH - suffix.length)}${suffix}`;
 }
 
 /** A parseSteps message as a plan error. These are the checks the parser keeps for itself. */
@@ -305,6 +295,8 @@ export function compilePlan(steps: unknown, agents: readonly AgentConfig[], inpu
   if (!Array.isArray(steps)) return { ok: false, errors: [planError("steps", "steps must be a list of steps.", "Pass a list.")] };
   const raw: unknown[] = steps;
   if (raw.length === 0) return { ok: false, errors: [planError("steps", "a plan needs at least one step.", "Add a step.")] };
+  const size = raw.reduce((sum: number, step: unknown) => sum + (isRecord(step) && Array.isArray(step.parallel) ? step.parallel.length : 1), 0);
+  if (raw.length > MAX_EXECUTIONS || size > MAX_EXECUTIONS) return { ok: false, overLimit: true, errors: [planError("steps", `the plan exceeds the run limit of ${MAX_EXECUTIONS} steps.`, "Use fewer steps.")] };
   const errors: PlanError[] = [];
   const entries = raw.map((step, index) => {
     const at = `steps[${index}]`;
@@ -323,27 +315,28 @@ export function compilePlan(steps: unknown, agents: readonly AgentConfig[], inpu
     const members: Entry[] = [];
     list.forEach((member, j) => {
       if (!isRecord(member)) errors.push(planError(`${at}.parallel[${j}]`, "a step must be a mapping.", 'Use {"task": "..."}.'));
-      else members.push({ raw: member, at: `${at}.parallel[${j}]`, id: typeof member.id === "string" ? member.id : `${id}-${j + 1}`, index, member: true });
+      else members.push({ raw: member, at: `${at}.parallel[${j}]`, id: typeof member.id === "string" ? member.id : memberId(id, j + 1), index, member: true });
     });
     return { entry, members };
   });
   const idsOf = (e: (typeof entries)[number]): string[] => [...(e.entry ? [e.entry.id] : []), ...(e.members ?? []).map((m) => m.id)];
   const before: Array<ReadonlySet<string>> = entries.map((_, i) => new Set(entries.slice(0, i).flatMap(idsOf)));
-  const scope: Scope = { agents, inputs, known: new Set(entries.flatMap(idsOf)), tops: entries.map((e) => e.entry?.id ?? ""), before, expands: entries.map((e) => e.entry?.raw.expand === true), inherited, errors };
+  const conditional = new Set(entries.flatMap((e) => [...(e.entry ? [e.entry] : []), ...(e.members ?? [])]).filter((e) => e.raw.when !== undefined).map((e) => e.id));
+  const scope: Scope = { agents, inputs, known: new Set(entries.flatMap(idsOf)), conditional, tops: entries.map((e) => e.entry?.id ?? ""), before, expands: entries.map((e) => e.entry?.raw.expand === true), inherited, errors };
   const normal = normalise(scope, entries);
   if (errors.length) return { ok: false, errors };
   feedGates(normal);
   const parsed: string[] = [];
   const parsedSteps = parseSteps(normal, parsed, { inline: true });
   if (parsed.length) return { ok: false, errors: parsed.map(parserError) };
-  const workflow: WorkflowDef = { name: "plan", description: "An inline plan.", inputs: {}, steps: parsedSteps, vault: false, source: "user", file: "plan.json" };
+  const workflow: WorkflowDef = { name: "plan", description: "An inline plan.", inputs: {}, steps: parsedSteps, vault: false, source: "user", file: "" }; // no definition file: plan.json records a run
   const worst = worstCaseAgents(workflow);
   if (!inherited && worst > MAX_EXECUTIONS) return { ok: false, errors: [planError("steps", `the worst case is ${String(worst)} agents, over the run limit of ${String(MAX_EXECUTIONS)}.`, "Use fewer steps or a lower max_loops.")] };
   return { ok: true, workflow, worstCaseAgents: worst };
 }
 
 /** What an `expand` step answered: more steps, its result, or something the host cannot use. */
-export type ExpandAnswer = { kind: "steps"; steps: unknown } | { kind: "done"; text: string } | { kind: "invalid"; error: PlanError };
+type ExpandAnswer = { kind: "steps"; steps: unknown } | { kind: "done"; text: string } | { kind: "invalid"; error: PlanError };
 
 const ANSWER_FIX = 'Answer with only {"steps":[...]} or {"done":"..."}.';
 
@@ -363,20 +356,30 @@ export function parseExpandAnswer(output: string): ExpandAnswer {
   return typeof value.done === "string" ? { kind: "done", text: value.done } : { kind: "invalid", error: planError("answer.done", "done must be text.", ANSWER_FIX) };
 }
 
-const STEP_REFERENCE = /\{\{\s*steps\.([a-z][a-z0-9_-]*)\.(output|status)\s*(\?)?\s*\}\}/g;
+/** A task's references to steps of its expansion, moved under the parent's id. */
+function prefixedTask(task: string, parent: string, ids: ReadonlySet<string>): string {
+  return task.replace(TEMPLATE_EXPR, (whole, raw: string) => {
+    const { expr, optional } = templateExpression(raw);
+    const mark = optional ? "?" : "";
+    const [, step, field] = STEP_REFERENCE.exec(expr) ?? [];
+    if (step !== undefined) return `{{steps.${parent}.${step}.${field ?? ""}${mark}}}`;
+    const file = /^file:\s*steps\/([a-z][a-z0-9_-]*)\.md$/.exec(expr)?.[1];
+    return file !== undefined && ids.has(file) ? `{{file:steps/${parent}.${file}.md${mark}}}` : whole;
+  });
+}
 
 /** A compiled step under its parent's id, with every reference inside the expansion following it. */
-function prefixed(step: StepDef, parent: string): StepDef {
+function prefixed(step: StepDef, parent: string, ids: ReadonlySet<string>): StepDef {
   const under = (id: string): string => `${parent}.${id}`;
   const out: StepDef = { ...step, id: under(step.id) };
-  if (step.task !== undefined) out.task = step.task.replace(STEP_REFERENCE, (_m, id: string, field: string, optional?: string) => `{{steps.${under(id)}.${field}${optional ?? ""}}}`);
+  if (step.task !== undefined) out.task = prefixedTask(step.task, parent, ids);
   if (step.when) out.when = { ...step.when, step: under(step.when.step) };
   if (step.gate) out.gate = { ...step.gate, retry: under(step.gate.retry) };
-  if (step.parallel) out.parallel = step.parallel.map((member) => prefixed(member, parent));
+  if (step.parallel) out.parallel = step.parallel.map((member) => prefixed(member, parent, ids));
   return out;
 }
 
-export type CompiledExpansion = { ok: true; steps: StepDef[]; workflow: WorkflowDef; worstCaseAgents: number } | { ok: false; errors: PlanError[] };
+type CompiledExpansion = { ok: true; steps: StepDef[]; workflow: WorkflowDef; worstCaseAgents: number } | { ok: false; errors: PlanError[]; overLimit?: true };
 
 /**
  * Compile the steps an `expand` step asked for, under what that step may do: the plan's own rules,
@@ -387,18 +390,16 @@ export function compileExpansion(steps: unknown, parent: StepDef, agents: readon
   const role = agents.find((a) => a.name === parent.agent);
   const compiled = compilePlan(steps, agents, inputs, { tools: parent.tools ?? (role?.tools?.length ? role.tools : undefined), role });
   if (!compiled.ok) return compiled;
-  return { ...compiled, steps: compiled.workflow.steps.map((step) => prefixed(step, parent.id)) };
+  const ids = new Set(compiled.workflow.steps.flatMap((step) => [step.id, ...(step.parallel ?? []).map((member) => member.id)]));
+  return { ...compiled, steps: compiled.workflow.steps.map((step) => prefixed(step, parent.id, ids)) };
 }
 
 /** How many expansions deep a step is: 0 in the plan itself. */
 export const generationOf = (id: string): number => id.split(".").length - 1;
 
-/** Splice an expansion in right after its parent; false when the run has no such parent. */
-export function spliceExpansion(w: WorkflowDef, parent: string, steps: readonly StepDef[]): boolean {
-  const at = w.steps.findIndex((s) => s.id === parent);
-  if (at < 0) return false;
-  w.steps.splice(at + 1, 0, ...steps);
-  return true;
+/** Splice an expansion in right after its parent. */
+export function spliceExpansion(w: WorkflowDef, parent: string, steps: readonly StepDef[]): void {
+  w.steps.splice(w.steps.findIndex((s) => s.id === parent) + 1, 0, ...steps);
 }
 
 /** What a resample is told: the one problem, as path, problem and fix. */

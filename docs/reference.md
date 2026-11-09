@@ -415,12 +415,12 @@ Extension `subagent`. Control a live workflow run in this session: pause (start 
 
 ### `workflow_run`
 
-Extension `subagent`. Run a workflow: subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output; {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}. Prefer this to subagent chains.
+Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}. Prefer this to subagent chains.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `name?` | string | Saved workflow name, or "list" |
-| `steps?` | unknown[] | An inline plan: the steps to run |
+| `steps?` | unknown[] | The plan's steps |
 | `inputs?` | record | Inputs, e.g. {goal: "..."} |
 | `resume?` | string | Run id to resume |
 

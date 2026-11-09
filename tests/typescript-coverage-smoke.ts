@@ -25,6 +25,7 @@ const ALLOWED_JS: readonly [RegExp, string][] = [
   [/^packages\/web-ui\/(?:public\/js|mobile\/js|mobile\/dev)\/[^/]+\.js$/, "browser output generated from packages/web-ui/src by build:web (ADR 0002; smoke:web-build checks it)"],
   [/^packages\/core\/install\.mjs$/, "shim: older kit-update code spawns this path after pulling"],
   [/^packages\/extensions\/third_party\/subagent\/wf-runner\.mjs$/, "sandbox runner: plain node runs it inside the workflow sandbox, including from node_modules, where Node will not strip types"],
+  [/^packages\/extensions\/third_party\/subagent\/gate-worker\.mjs$/, "regex gate worker: a plain Worker file with builtin imports only, loaded from git and node_modules installs, where Node will not strip types"],
   [/^packages\/kit\/workflows\/[^/]+\.js$/, "script workflows: the workflow tool runs them as plain JavaScript in the QuickJS sandbox, which does not strip types"],
   [/^packages\/container\/mcp-servers\/(?:governance|memory-mcp)\/index\.js$/, "shim: MCP configs written before the move name index.js"],
   [/^packages\/autonomy\/examples\/implement\/acceptance\/api\.acceptance\.mjs$/, "fixture: an acceptance test that belongs to the example target project"],

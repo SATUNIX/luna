@@ -178,6 +178,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Plans and expansions run the text they were given. An expansion is parsed from the child's own
+  answer, not its redacted copy, and `plan.json` keeps the steps a resume compiles; a plan or
+  expansion the secret table matches is refused by field path, never quoting the value, and an
+  expansion is resampled once before any charge. Run files are read through one bounded read that
+  refuses links and FIFOs, regex gates run in a worker off the host loop on the last 64 KiB of an
+  answer, and a resume gates an answer this process did not see. Argument order no longer defeats
+  the live duplicate refusal, and an expansion may land exactly on `MAX_EXECUTIONS`
+  (`docs/workflows.md`, `tests/workflow-plan-smoke.ts`, `tests/workflow-builtin-smoke.ts`).
 - Plans now fail for reasons the tools explain. `outputs` are paths relative to the run directory:
   prose is refused at compile, and a miss names the directory checked. A gate refusal names a real
   step id, and the text says the host adds the review to the retry step. The allowance refusals say

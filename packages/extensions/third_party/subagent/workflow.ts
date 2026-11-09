@@ -16,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { agentDir, toText } from "./config.ts";
 import type { AgentConfig } from "./agents.ts";
@@ -24,6 +25,7 @@ import { getResultOutput, isFailedResult } from "./result.ts";
 import { deriveOutcome, RUN_STATUSES, type Execution, type RunStatus, type StepResult } from "./run-contract.ts";
 import { runRegistry, type PhaseStatus, type RunModel, type RunRegistry } from "./run-model.ts";
 import { redact, REDACTION_POLICY } from "./redact.ts";
+import { redact as redactExecutionText } from "./shared/redact.ts";
 import { RunControl } from "./control.ts";
 import { parseScriptMeta, type ScriptPhase } from "./wf-meta.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
@@ -68,7 +70,13 @@ export interface WorkflowDef {
 export const STEP_STATUSES = ["pending", "running", "passed", "failed", "skipped", "aborted"] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 
+export const MAX_ID_LENGTH = 41;
 const ID = /^[a-z][a-z0-9_-]{0,40}$/;
+export const MAX_GATE_LOOPS = 10;
+const DEFAULT_GATE_LOOPS = 2;
+
+/** A step's fields, in the words the tool text and an expanding child both read. */
+export const STEP_SHAPE = "{id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}";
 
 function parseDuration(value: unknown): number | undefined {
   if (typeof value === "number") return value > 0 ? value : undefined;
@@ -126,7 +134,11 @@ function parseStep(raw: unknown, where: string, errors: string[], inline: boolea
   }
   if (raw.gate) {
     const g = isObject(raw.gate) ? raw.gate : {};
-    step.gate = { pass: toText(g.pass ?? g.expect ?? ""), retry: toText(g.retry ?? g.on_fail ?? ""), maxLoops: Math.max(0, Math.min(Number(g.max_loops ?? g.maxLoops ?? 2), 10)) };
+    const rawLoops = g.max_loops ?? g.maxLoops ?? DEFAULT_GATE_LOOPS;
+    const maxLoops = typeof rawLoops === "number" || typeof rawLoops === "string" ? Number(rawLoops) : Number.NaN;
+    const loopsOk = Number.isInteger(maxLoops) && maxLoops >= 0 && maxLoops <= MAX_GATE_LOOPS;
+    if (!loopsOk) errors.push(`${where}: gate max_loops must be a whole number from 0 to ${String(MAX_GATE_LOOPS)}`);
+    step.gate = { pass: toText(g.pass ?? g.expect ?? ""), retry: toText(g.retry ?? g.on_fail ?? ""), maxLoops: loopsOk ? maxLoops : DEFAULT_GATE_LOOPS };
     if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text or /regex/ the output must contain)`);
   }
   return step;
@@ -316,6 +328,9 @@ export interface StepState {
   omitted?: string | undefined;
   // An `expand` step: what was wrong with its first answer, told to the one resample.
   expandMiss?: string | undefined;
+  // An `expand` step: its answer as the child gave it, between the child ending and the host acting
+  // on it, so a kill in that window replays it. steps/<id>.md is redacted, so it cannot serve.
+  expandAnswer?: string | undefined;
 }
 
 export interface RunState {
@@ -346,7 +361,55 @@ export interface RunState {
 export const runsRoot = (cwd: string) => path.join(cwd, ".pi", "workflows", "runs");
 const MAX_OUTPUT_IN_STATE = 4000;
 const MAX_FILE_INCLUDE = 64 * 1024;
+const MAX_ANSWER_IN_STATE = MAX_FILE_INCLUDE; // state.json is read back with a limit (loadState)
 export const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops included)
+
+/** A run file that is not there: an optional template reads it as empty. */
+class MissingRunFile extends Error {}
+
+/** A bounded regular run file, with no links on the way down. A failure names the file by its relative path. */
+export function readRunFile(runDir: string, relative: string, maxBytes: number, truncate = false): string {
+  try {
+    return readBoundedRunFile(runDir, relative, maxBytes, truncate);
+  } catch (error) {
+    if (error instanceof TemplateError) throw error;
+    const code = error instanceof Error && "code" in error ? String(error.code) : "unreadable";
+    // ENOTDIR is a parent that is a file: the path does not exist, as for ENOENT.
+    throw code === "ENOENT" || code === "ENOTDIR" ? new MissingRunFile(`${relative} does not exist`) : new TemplateError(`run file ${relative} cannot be read (${code})`);
+  }
+}
+
+function readBoundedRunFile(runDir: string, relative: string, maxBytes: number, truncate: boolean): string {
+  const root = path.resolve(runDir);
+  const file = path.resolve(root, relative);
+  if (!file.startsWith(root + path.sep)) throw new TemplateError("path escapes the run directory");
+  let current = piWorkspaceOptions(file).root ?? root;
+  for (const part of ["", ...path.relative(current, file).split(path.sep)]) {
+    current = path.join(current, part);
+    if (fs.lstatSync(current).isSymbolicLink()) throw new TemplateError("run file path contains a symbolic link");
+  }
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new TemplateError("run file must be a regular file with one link");
+    // On Linux this checks the opened file, including an ancestor swapped since lstat, before reading.
+    const resolved = fs.realpathSync(process.platform === "linux" ? `/proc/self/fd/${fd}` : file);
+    if (!resolved.startsWith(fs.realpathSync(root) + path.sep)) throw new TemplateError("run file escapes the run directory");
+    if (!truncate && stat.size > maxBytes) throw new TemplateError(`run file is larger than ${maxBytes} bytes`);
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const n = fs.readSync(fd, buffer, size, buffer.length - size, null);
+      if (n === 0) break;
+      size += n;
+    }
+    if (size > maxBytes && !truncate) throw new TemplateError(`run file is larger than ${maxBytes} bytes`);
+    const text = buffer.subarray(0, Math.min(size, maxBytes)).toString("utf8");
+    return size > maxBytes ? `${text}\n[... truncated at ${maxBytes} bytes; read ${file} for the rest]` : text;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 // Run files hold prompts and agent output, so the run directory is 0700 and its files 0600. The
 // modes are set explicitly as well, because mkdir/write modes are masked by the umask and are not
@@ -418,7 +481,8 @@ function isStepState(value: unknown): value is StepState {
     s.runIds.every((r) => typeof r === "string") &&
     (s.expanded === undefined || s.expanded === true) &&
     (s.omitted === undefined || typeof s.omitted === "string") &&
-    (s.expandMiss === undefined || typeof s.expandMiss === "string")
+    (s.expandMiss === undefined || typeof s.expandMiss === "string") &&
+    (s.expandAnswer === undefined || typeof s.expandAnswer === "string")
   );
 }
 
@@ -450,8 +514,9 @@ function isRunState(value: unknown): value is RunState {
 export function loadState(cwd: string, id: string): RunState | null {
   if (!/^[A-Za-z0-9._-]+$/.test(id)) return null;
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(runsRoot(cwd), id, "state.json"), "utf8"));
-    return isRunState(parsed) ? parsed : null;
+    // A child can write in the run directory: a link, a FIFO or a huge file reads as no run.
+    const parsed: unknown = JSON.parse(readRunFile(path.join(runsRoot(cwd), id), "state.json", MAX_SCRIPT_BYTES));
+    return isRunState(parsed) ? ownState(parsed) : null;
   } catch {
     return null;
   }
@@ -478,12 +543,26 @@ export class TemplateError extends Error {}
 
 // {{inputs.x}}  {{steps.<id>.output}}  {{steps.<id>.status}}  {{file:rel/path}}  {{run.dir}}
 // {{run.id}}  {{loop}}.  A trailing "?" makes a missing value empty instead of an error.
-export const TEMPLATE_EXPR = /\{\{\s*([^}]+?)\s*\}\}/g;
+export const GATE_REGEX = /^\/(.+)\/([a-z]*)$/;
+export const TEMPLATE_EXPR = /\{\{([^{}]+)\}\}/g;
+// An expanded step's id carries its parent's (`split.a`).
+export const STEP_REFERENCE = /^steps\.([a-z][a-z0-9_.-]*)\.(output|status)$/;
+
+export function templateExpression(raw: string): { expr: string; optional: boolean } {
+  const text = raw.trim();
+  const optional = text.endsWith("?");
+  return { expr: optional ? text.slice(0, -1).trim() : text, optional };
+}
+
+/**
+ * A step's status as a later step reads it. A step whose expansion was refused did its own work, so
+ * it stays passed, but what it asked for never happened, and nothing may read that as done.
+ */
+const resultStatus = (st: StepState | undefined): StepStatus | undefined => (st?.omitted !== undefined ? "skipped" : st?.status);
 
 export function renderTemplate(template: string, ctx: { inputs: Record<string, string>; state: RunState; runDir: string; loop: number }): string {
   return template.replace(TEMPLATE_EXPR, (_m, exprRaw: string) => {
-    const optional = exprRaw.endsWith("?");
-    const expr = optional ? exprRaw.slice(0, -1).trim() : exprRaw;
+    const { expr, optional } = templateExpression(exprRaw);
     const missing = (what: string) => {
       if (optional) return "";
       throw new TemplateError(`template {{${expr}}}: ${what}`);
@@ -495,22 +574,26 @@ export function renderTemplate(template: string, ctx: { inputs: Record<string, s
       const v = ctx.inputs[expr.slice(7)];
       return v !== undefined && v !== "" ? v : missing("input not provided");
     }
-    // An expanded step's id carries its parent's (`split.a`).
-    const stepRef = expr.match(/^steps\.([a-z][a-z0-9_.-]*)\.(output|status)$/);
+    const stepRef = STEP_REFERENCE.exec(expr);
     if (stepRef) {
       const [, stepId = "", field] = stepRef;
       const st = ctx.state.steps[stepId];
-      if (field === "status") return st?.status ?? missing("unknown step");
-      const file = path.join(ctx.runDir, "steps", `${stepId}.md`);
-      return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : missing(`step "${stepId}" has no output yet`);
+      if (field === "status") return resultStatus(st) ?? missing("unknown step");
+      try {
+        return readRunFile(ctx.runDir, `steps/${stepId}.md`, MAX_SCRIPT_BYTES, true);
+      } catch (error) {
+        if (error instanceof MissingRunFile) return missing(`step "${stepId}" has no output yet`);
+        throw error;
+      }
     }
     if (expr.startsWith("file:")) {
       const rel = expr.slice(5).trim();
-      const abs = path.resolve(ctx.runDir, rel);
-      if (!abs.startsWith(ctx.runDir + path.sep)) throw new TemplateError(`template {{${expr}}}: path escapes the run directory`);
-      if (!fs.existsSync(abs)) return missing(`file ${rel} does not exist in the run directory`);
-      const buf = fs.readFileSync(abs);
-      return buf.length > MAX_FILE_INCLUDE ? `${buf.subarray(0, MAX_FILE_INCLUDE).toString("utf8")}\n[... truncated at ${MAX_FILE_INCLUDE} bytes; read ${abs} for the rest]` : buf.toString("utf8");
+      try {
+        return readRunFile(ctx.runDir, rel, MAX_FILE_INCLUDE, true);
+      } catch (error) {
+        if (error instanceof MissingRunFile) return missing(`file ${rel} does not exist in the run directory`);
+        throw error;
+      }
     }
     throw new TemplateError(`template {{${expr}}}: unknown expression`);
   });
@@ -526,20 +609,59 @@ function skippedByControl(st: StepState | undefined): boolean {
   return st?.status === "skipped" && (st.error === SKIPPED_BY_OPERATOR || st.error === SKIPPED_BY_AGENT || st.error === SKIPPED_ON_RESUME);
 }
 
-function gatePasses(pattern: string, output: string): boolean {
-  const re = pattern.match(/^\/(.+)\/([a-z]*)$/);
-  if (re) {
-    const [, source = "", flags = ""] = re;
-    try {
-      // A project workflow is repository content, so its gate pattern goes through the shared
-      // safe-regex check (./shared/safe-regex.ts); a refused pattern fails the gate.
-      const checked = compileCheckedRegex(source, flags.includes("i") ? flags : `${flags}i`);
-      return checked.ok && checked.re.test(output);
-    } catch {
-      return false;
-    }
+/** How a /regex/ gate's pass is read; plan.ts checks it the same way before a run starts. */
+export function compileGate(pattern: string): ReturnType<typeof compileCheckedRegex> | null {
+  const re = GATE_REGEX.exec(pattern);
+  if (!re) return null;
+  const [, source = "", flags = ""] = re;
+  // A project workflow is repository content, so its gate pattern goes through the shared
+  // safe-regex check (./shared/safe-regex.ts); a refused pattern fails the gate.
+  try {
+    return compileCheckedRegex(source, flags.includes("i") ? flags : `${flags}i`);
+  } catch (error) {
+    return { ok: false, problem: error instanceof Error ? error.message : String(error) };
   }
-  return output.toLowerCase().includes(pattern.toLowerCase());
+}
+
+// A checked pattern can still backtrack polynomially, and the host's loop runs every session, so it
+// is tested in a worker that a timer can end. The start-up allowance is apart from the test's.
+const GATE_START_MS = 5000;
+const GATE_TEST_MS = 1000;
+
+/** The worker could not test the gate, which says nothing about the step's work. */
+export class GateError extends Error {}
+
+/** Test a checked pattern in ./gate-worker.mjs. A test that runs out of time misses; a worker that dies is a GateError. */
+function testInWorker(re: RegExp, output: string): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const worker = new Worker(new URL("./gate-worker.mjs", import.meta.url), { workerData: { re, output } });
+    const end = (settle: () => void): void => {
+      clearTimeout(timer);
+      worker.removeAllListeners();
+      worker.on("error", () => undefined); // a terminating worker may still report
+      void worker.terminate();
+      settle();
+    };
+    const died = (why: string): void => end(() => reject(new GateError(why)));
+    let timer = setTimeout(() => died(`the gate worker did not start in ${String(GATE_START_MS)} ms`), GATE_START_MS);
+    worker.on("message", (value: unknown) => {
+      if (value === "ready") {
+        clearTimeout(timer);
+        timer = setTimeout(() => end(() => resolve(false)), GATE_TEST_MS);
+        worker.postMessage("test");
+      } else if (typeof value === "boolean") end(() => resolve(value));
+      else died("the gate worker sent no verdict");
+    });
+    worker.on("error", (error: unknown) => died(`the gate worker failed: ${error instanceof Error ? error.message : String(error)}`));
+    worker.on("exit", (code) => died(`the gate worker exited (${String(code)})`));
+  });
+}
+
+/** Whether a step's answer passes its gate. Verdicts come last, so a long answer is tested on its tail. */
+export async function gatePasses(pattern: string, output: string): Promise<boolean> {
+  const checked = compileGate(pattern);
+  if (!checked) return output.toLowerCase().includes(pattern.toLowerCase());
+  return checked.ok ? testInWorker(checked.re, output.slice(-MAX_FILE_INCLUDE)) : false;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -576,18 +698,30 @@ export function worstCaseAgents(w: WorkflowDef, state?: RunState): number {
   }
   let total = 0;
   for (const [i, step] of w.steps.entries()) {
-    const answered = state?.steps[step.id]?.status === "passed" && step.expand;
-    if (i >= cursor && !answered) total += i === cursor && step.parallel && state ? unfinishedMembers(step, state).length : leafCount(step);
+    if (i >= cursor) total += i === cursor && state ? atCursor(step, state) : leafCount(step);
     const target = retryIndex(step);
     if (i >= reach && target >= 0) total += left(step) * w.steps.slice(target, i + 1).reduce((sum, s) => sum + leafCount(s), 0);
   }
   return total;
 }
 
-/** A parallel group's members to run: all of them, or on resume those that had not passed or been skipped. */
+/** What the step at the cursor can still launch. A pass there launches nothing, unless an expansion is unsettled. */
+function atCursor(step: StepDef, state: RunState): number {
+  if (step.parallel) return unfinishedMembers(step, state).length;
+  const st = state.steps[step.id];
+  if (st?.status !== "passed") return leafCount(step);
+  return step.expand && !st.expanded && st.expandMiss === undefined ? 1 : 0;
+}
+
+/**
+ * A parallel group's members to run: all of them, none of a group that passed and only awaits the
+ * cursor, or on resume those that had not passed or been skipped. A gate's rewind sets its members
+ * back to pending, so a pass from an earlier loop never reads as finished here.
+ */
 function unfinishedMembers(group: StepDef, state: RunState): StepDef[] {
   const members = group.parallel ?? [];
   const status = state.steps[group.id]?.status;
+  if (status === "passed") return [];
   if (status !== "aborted" && status !== "running") return members;
   return members.filter((inner) => !["passed", "skipped"].includes(state.steps[inner.id]?.status ?? "pending"));
 }
@@ -618,6 +752,8 @@ export type ExpansionVerdict = { kind: "done"; text: string } | { kind: "spliced
 /** How a plan's run turns an `expand` step's answer into steps (workflow-tools.ts). */
 export interface ExpansionHost {
   settle(parent: StepDef, output: string): ExpansionVerdict;
+  /** A child's answer this process saw, so a resume can tell it from one written into state.json. */
+  remember(stepId: string, answer: string): void;
 }
 
 export interface ExecuteOptions {
@@ -630,7 +766,7 @@ export interface ExecuteOptions {
   concurrency?: number;
   // "user" when the person typed the command (bounded by platform ceilings only); "workflow" when
   // the model started the run, charged to `workflowRun`, the scope effort opened for it.
-  launchKind?: "discretionary" | "user" | "workflow" | undefined;
+  launchKind?: "user" | "workflow" | undefined;
   workflowRun?: { runId: string; runToken: string } | undefined;
   // The telemetry registry this run reports to (run-model.ts); defaults to the process-wide one.
   registry?: RunRegistry | undefined;
@@ -642,7 +778,7 @@ export interface ExecuteOptions {
 }
 
 // Inside the executor the run's control is always present.
-type RunOptions = ExecuteOptions & { control: RunControl };
+type RunOptions = ExecuteOptions & { control: RunControl; answers: Map<string, string> };
 
 function projectSlug(cwd: string): string {
   let dir = path.resolve(cwd);
@@ -661,7 +797,12 @@ function projectSlug(cwd: string): string {
 export function newRunState(w: WorkflowDef, inputs: Record<string, string>): RunState {
   const now = new Date();
   const id = `${now.toISOString().replace(/[:.]/g, "-")}-${w.name}-${crypto.randomBytes(2).toString("hex")}`;
-  return { version: 1, id, workflow: w.name, workflowFile: w.file, inputs, status: "running", cursor: 0, loops: {}, steps: {}, startedAt: now.toISOString(), updatedAt: now.toISOString(), executions: 0 };
+  return ownState({ version: 1, id, workflow: w.name, workflowFile: w.file, inputs, status: "running", cursor: 0, loops: {}, steps: {}, startedAt: now.toISOString(), updatedAt: now.toISOString(), executions: 0 });
+}
+
+function ownState(state: RunState): RunState {
+  for (const record of [state.steps, state.loops, state.inputs]) Object.setPrototypeOf(record, null);
+  return state;
 }
 
 export function resolveInputs(w: WorkflowDef, given: Record<string, string>): { inputs: Record<string, string>; missing: string[] } {
@@ -672,6 +813,12 @@ export function resolveInputs(w: WorkflowDef, given: Record<string, string>): { 
     if (spec.required && !inputs[k]) missing.push(k);
   }
   return { inputs, missing };
+}
+
+/** A step that can edit files directly, or has every tool: the rule the script engine's writer lock uses. */
+function editsFiles(step: StepDef, agents: readonly AgentConfig[]): boolean {
+  const tools = step.tools?.length ? step.tools : agents.find((a) => a.name === step.agent)?.tools;
+  return !tools?.length || tools.some((t) => t === "write" || t === "edit");
 }
 
 const BLACKBOARD_NOTE = (runDir: string, files: string[]) =>
@@ -687,7 +834,7 @@ const BLACKBOARD_NOTE = (runDir: string, files: string[]) =>
 
 const EXPAND_NOTE =
   "\n\n## Your answer\nYour final answer is exactly one JSON object and nothing else: {\"steps\":[...]} and the host runs those steps next, or {\"done\":\"the result\"} if no more steps are needed. " +
-  "A step is {id?, agent?, task, tools?, when?, gate?, continue_on_error?, expand?} or {id?, parallel: [steps], gate?}. tools only narrow what you have. You cannot start agents yourself; the steps are how you ask.";
+  `A step is ${STEP_SHAPE}. tools only narrow what you have. You cannot start agents yourself; the steps are how you ask.`;
 
 function listRunFiles(runDir: string): string[] {
   const out: string[] = [];
@@ -761,7 +908,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   state.steps[step.id] = st;
   const start = { label: step.id, phase: tele.phase, role: step.agent, model: step.model };
   if (step.when) {
-    const dep = state.steps[step.when.step]?.status;
+    const dep = resultStatus(state.steps[step.when.step]);
     const wanted = Array.isArray(step.when.status) ? step.when.status : [step.when.status];
     if (!dep || !wanted.includes(dep)) {
       st.status = "skipped";
@@ -809,7 +956,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   const handle = opts.control.agent(step.id, agentId);
   let result: SingleResult;
   try {
-    result = await runAgentWithSlot({
+    const launch: RunAgentOptions & { signal: AbortSignal } = {
       defaultCwd: opts.cwd,
       agents: opts.agents,
       agentName: step.agent ?? "", // parseStep requires an agent on every non-parallel step
@@ -825,7 +972,9 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
         opts.onProgress?.(`${state.workflow} · ${step.id} · ${t}`);
       },
       onUsage: (usage, model) => tele.run.agentUpdate(agentId, { usage, model }),
-    });
+    };
+    // A step waiting for a slot takes a pause like any other launch.
+    result = await runAgentWithSlot(launch, { before: () => opts.control.gate(), ran: () => undefined, denied: () => undefined });
   } finally {
     handle.done();
   }
@@ -834,7 +983,9 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   if (result.runId) st.runIds.push(result.runId);
   st.cost += result.usage.cost;
   st.outputTokens = (st.outputTokens ?? 0) + result.usage.output;
-  keepOutput(st, runDir, step.id, result.finalOutput || getResultOutput(result));
+  const answer = result.finalOutput || getResultOutput(result);
+  if (step.expand || step.gate) opts.answers.set(step.id, answer);
+  keepOutput(st, runDir, step.id, answer);
   st.endedAt = new Date().toISOString();
   // A member of a parallel group settles while its siblings still run, and the group saves only once
   // they all have: write now, so a host kill loses nothing that finished. saveState writes the whole
@@ -870,6 +1021,10 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   }
   st.status = "passed";
   settle("passed");
+  if (step.expand) {
+    opts.expansion?.remember(step.id, answer);
+    if (answer.length <= MAX_ANSWER_IN_STATE && redactExecutionText(answer) === answer) st.expandAnswer = answer;
+  }
   return settled();
 }
 
@@ -904,12 +1059,13 @@ export function stepResults(w: WorkflowDef, state: RunState): StepResult[] {
  * Resuming re-runs the step that was interrupted and continues from there.
  */
 export async function executeWorkflow(w: WorkflowDef, state: RunState, options: ExecuteOptions): Promise<RunState> {
+  ownState(state);
   const control = options.control ?? new RunControl(state.id);
   // The caller's signal (Esc on the tool call) stops the run like a `stop` action.
   const onAbort = () => control.act("stop");
   if (options.signal?.aborted) onAbort();
   else options.signal?.addEventListener("abort", onAbort, { once: true });
-  const opts: RunOptions = { ...options, control, signal: control.signal };
+  const opts: RunOptions = { ...options, control, signal: control.signal, answers: new Map() };
   // Telemetry: every top-level step is a phase, listed up front with its saved status.
   const run = (opts.registry ?? runRegistry).start(state.id, "yaml", w.name, { description: w.description, file: w.file, source: w.source });
   for (const step of w.steps) run.phase(step.id, step.id, phaseStatus(state.steps[step.id]?.status));
@@ -919,7 +1075,7 @@ export async function executeWorkflow(w: WorkflowDef, state: RunState, options: 
     return final;
   } catch (error) {
     // A thrown invariant or a failed write: the run is over, so state.json must not read as live.
-    state.status = deriveOutcome(stepResults(w, state), { errored: true, stopped: false, hasResult: true }).status;
+    state.status = "failed";
     state.error = `executor error: ${error instanceof Error ? error.message : String(error)}`;
     state.paused = undefined;
     try {
@@ -972,10 +1128,13 @@ async function executeSteps(w: WorkflowDef, state: RunState, opts: RunOptions, r
  * did its work: `done` becomes its output, `refused` an omission, and spliced steps are ordinary
  * steps of this run from here on, so stop, failure and the journal need nothing new.
  */
-async function settleExpansion(step: StepDef, first: StepState, state: RunState, opts: RunOptions, run: RunModel, runDir: string, loop: number): Promise<StepState> {
-  let st = first;
+async function settleExpansion(step: StepDef, st: StepState, state: RunState, opts: RunOptions, run: RunModel, runDir: string, loop: number): Promise<void> {
   while (st.status === "passed" && !st.expanded) {
-    const verdict: ExpansionVerdict = opts.expansion?.settle(step, fs.readFileSync(path.join(runDir, "steps", `${step.id}.md`), "utf8")) ?? { kind: "refused", reason: "this run cannot expand a step" };
+    const answer = opts.answers.get(step.id) ?? st.expandAnswer;
+    const verdict: ExpansionVerdict = answer === undefined ? { kind: "invalid", note: "The original expansion answer is unavailable; answer again without credentials." } : opts.expansion?.settle(step, answer) ?? { kind: "refused", reason: "this run cannot expand a step" };
+    // Acted on, so it goes at the next save. Until that save a kill replays it, and plan.json decides.
+    delete st.expandAnswer;
+    opts.answers.delete(step.id);
     if (verdict.kind === "invalid") {
       if (st.expandMiss !== undefined) {
         st.status = "failed";
@@ -991,22 +1150,37 @@ async function settleExpansion(step: StepDef, first: StepState, state: RunState,
       st.expandMiss = verdict.note;
       st.status = "pending";
       saveState(runDir, state);
-      st = await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
+      await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
       saveState(runDir, state);
       continue;
     }
     st.expanded = true;
     if (verdict.kind === "done") keepOutput(st, runDir, step.id, verdict.text);
-    else if (verdict.kind === "refused") st.omitted = verdict.reason;
-    else {
+    else if (verdict.kind === "refused") {
+      st.omitted = verdict.reason;
+      keepOutput(st, runDir, step.id, verdict.reason); // the steps it asked for must not read as its result
+    } else {
       for (const leaf of verdict.steps.flatMap((s) => [s, ...(s.parallel ?? [])])) state.steps[leaf.id] = { status: "pending", attempts: 0, runIds: [], cost: 0 };
-      for (const added of verdict.steps) run.phase(added.id, added.id, "pending");
+      let after = step.id;
+      for (const added of verdict.steps) {
+        run.phase(added.id, added.id, "pending", undefined, after);
+        after = added.id;
+      }
       opts.onProgress?.(`${state.workflow} · ${step.id} · expanded into ${String(verdict.steps.length)} step(s)`);
     }
     delete st.expandMiss;
     saveState(runDir, state);
   }
-  return st;
+}
+
+/** A member's answer for its group's output. A child can replace the file, so it is read like any run file. */
+function memberOutput(runDir: string, id: string): string {
+  try {
+    return readRunFile(runDir, `steps/${id}.md`, MAX_SCRIPT_BYTES, true);
+  } catch (error) {
+    if (error instanceof MissingRunFile) return "(no output)";
+    throw error;
+  }
 }
 
 /** How the executor's loop ended: stopped, stopped on an error, or (neither) off the last step. */
@@ -1034,7 +1208,23 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       group.startedAt = new Date().toISOString();
       saveState(runDir, state);
       run.setPhaseStatus(step.id, "running");
-      await mapWithConcurrencyLimit(todo, opts.concurrency ?? 4, (inner) => runStep(inner, state, runDir, loop, opts, { run, phase: step.id }));
+      // Zero means the tier allows no concurrent agents, and the limiter below would read it as one.
+      if (opts.concurrency === 0) return finish({ error: `stopped before group ${step.id}: this tier allows no concurrent agents (maxConcurrent is 0)` });
+      // A plan is not reviewed, so its writers share the checkout one at a time. A saved workflow's
+      // author chose its groups (docs/workflows.md).
+      const oneAtATime = state.plan === true && todo.some((inner) => editsFiles(inner, opts.agents));
+      // A member that fails to write stops the rest: they run on no one's behalf otherwise, and would
+      // rewrite the failed run's state. The group waits for them, so nothing outlives the run.
+      let broke: { error: unknown } | undefined;
+      await mapWithConcurrencyLimit(todo, oneAtATime ? 1 : (opts.concurrency ?? 4), async (inner) => {
+        try {
+          await runStep(inner, state, runDir, loop, opts, { run, phase: step.id });
+        } catch (error) {
+          broke ??= { error };
+          opts.control.act("stop");
+        }
+      });
+      if (broke) throw broke.error;
       const results = step.parallel.map((inner) => {
         const r = state.steps[inner.id];
         if (!r) throw new Error(`workflow ${w.name}: step ${inner.id} has no state`);
@@ -1052,18 +1242,25 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
       group.status = bad.length ? "failed" : "passed";
       run.setPhaseStatus(step.id, group.status);
       // A group's combined output: each member's answer under its id.
-      const combined = step.parallel.map((inner) => `## ${inner.id}\n\n${fs.existsSync(path.join(runDir, "steps", `${inner.id}.md`)) ? fs.readFileSync(path.join(runDir, "steps", `${inner.id}.md`), "utf8") : "(no output)"}`).join("\n\n");
+      let combined: string;
+      try {
+        combined = step.parallel.map((inner) => `## ${inner.id}\n\n${memberOutput(runDir, inner.id)}`).join("\n\n");
+      } catch (error) {
+        return finish({ error: `group ${step.id}: ${error instanceof Error ? error.message : String(error)}` });
+      }
       writeStepOutput(runDir, step.id, combined);
+      if (step.gate) opts.answers.set(step.id, combined); // the gate reads all of it, whatever the file limit
       if (bad.length) failed = `parallel step(s) failed: ${bad.map((b) => `${b.id} (${state.steps[b.id]?.error})`).join("; ")}`;
     } else {
       run.setPhaseStatus(step.id, "running");
-      // A gate step skipped by the resume prompt stays at the cursor so its gate can fail below.
+      // A gate step skipped by the resume prompt stays at the cursor so its gate can fail below. A pass
+      // at the cursor is a kill before the cursor moved: the step finished, so it is not run again,
+      // and an `expand` step that answered is not asked again. A gate's rewind sets passes back to pending.
       const prior = state.steps[step.id];
-      // An `expand` step that already answered is never asked again: a kill landed before its answer was acted on.
-      const kept = (step.gate && prior?.status === "skipped" && prior.error === SKIPPED_ON_RESUME) || (step.expand && prior?.status === "passed");
-      let st = kept && prior ? prior : await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
+      const kept = (step.gate && prior?.status === "skipped" && prior.error === SKIPPED_ON_RESUME) || prior?.status === "passed";
+      const st = kept && prior ? prior : await runStep(step, state, runDir, loop, opts, { run, phase: step.id });
       saveState(runDir, state);
-      if (step.expand) st = await settleExpansion(step, st, state, opts, run, runDir, loop);
+      if (step.expand) await settleExpansion(step, st, state, opts, run, runDir, loop);
       run.setPhaseStatus(step.id, phaseStatus(st.status));
       if (st.status === "aborted" || opts.control.stopped) return finish({ stopped: true });
       if (st.status === "failed" && !step.continueOnError) failed = `step ${step.id} failed: ${st.error}`;
@@ -1075,14 +1272,27 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
     const gated = state.steps[step.id];
     const skipped = gate ? (step.parallel ? step.parallel.map((inner) => state.steps[inner.id]) : [gated]).some(skippedByControl) : false;
     if (gate && gated && (gated.status === "passed" || skipped)) {
-      if (skipped || !gatePasses(gate.pass, fs.readFileSync(path.join(runDir, "steps", `${step.id}.md`), "utf8"))) {
+      let passes: boolean;
+      try {
+        passes = !skipped && (await gatePasses(gate.pass, opts.answers.get(step.id) ?? readRunFile(runDir, `steps/${step.id}.md`, MAX_SCRIPT_BYTES, true)));
+      } catch (error) {
+        // Not a verdict: the step may have passed, so neither a miss nor a pass is true.
+        return finish({ error: `gate ${step.id} could not be tested: ${error instanceof Error ? error.message : String(error)}` });
+      }
+      if (!passes) {
         const used = state.loops[step.id] ?? 0;
         gated.status = "failed";
         run.setPhaseStatus(step.id, "failed");
         const why = skipped ? "was skipped before its verdict" : `did not pass after ${used} loop(s) (needs "${gate.pass}")`;
         if (!gate.retry || used >= gate.maxLoops) return finish({ error: `gate ${step.id} ${why}` });
         state.loops[step.id] = used + 1;
+        const gateAt = state.cursor;
         state.cursor = w.steps.findIndex((s) => s.id === gate.retry);
+        // Everything from the target on runs again, so none of it reads as finished to a resume.
+        for (const redo of w.steps.slice(state.cursor, gateAt + 1).flatMap((s) => [s, ...(s.parallel ?? [])])) {
+          const st = state.steps[redo.id];
+          if (st) st.status = "pending";
+        }
         opts.onProgress?.(`${state.workflow} · gate ${step.id} failed → back to ${gate.retry} (loop ${used + 1}/${gate.maxLoops})`);
         saveState(runDir, state);
         continue;

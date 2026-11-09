@@ -16,16 +16,24 @@
 //  12. With the allowance spent the refusal says nothing fits, and names a size only when one fits.
 //  13. A gate refusal's fix names a real step id; the tool text says who fills {previous}.
 //  14. A plan's resume trust refusal says "plan"; the reference generator documents the tool from its source.
+//  15. Executable text survives persistence, and run files a child can replace are read with limits.
+//  16. A regex gate runs off the host's loop and reads the tail of an answer; a dead worker is reported.
+//  17. Resume, group and expansion edges: passes at the cursor, stale passes, omissions, order, writers.
 // Offline: children are fakes (tests/workflow-fakes.ts) behind the real effort and delegation-guard extensions.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import workerThreads from "node:worker_threads";
 import { ROOT, fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, textOf, tmpWorkspace, type FakePiApi } from "../packages/core/eval/harness.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
 import type * as AgentsModule from "../packages/extensions/third_party/subagent/agents.ts";
 import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
+import type * as PanelModule from "../packages/extensions/third_party/subagent/wf-panel.ts";
 import type * as PlanModule from "../packages/extensions/third_party/subagent/plan.ts";
+import type * as RunModelModule from "../packages/extensions/third_party/subagent/run-model.ts";
 import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type * as WorkflowModule from "../packages/extensions/third_party/subagent/workflow.ts";
 import { fakeSpawner, type FakeReply, type FakeSpawn, type Spawned } from "./workflow-fakes.ts";
@@ -335,12 +343,13 @@ await check("the worst case is charged before any launch: over the allowance is 
   const userTurn = await session();
   useFake(() => ({ text: "VERDICT: PASS" }));
   const big = Array.from({ length: 9 }, (_, i) => ({ id: `s${String(i)}`, agent: "scout", task: "t" }));
-  const before = workflowMod.listRuns(project, 1000).length;
+  const dirs = (): string[] => fs.readdirSync(workflowMod.runsRoot(project)).sort();
+  const before = dirs();
   const over = await call({ steps: big });
   assert.equal(over.isError, true);
   assert.match(textOf(over), /\/effort/);
   assert.equal(fake.seen.length, 0);
-  assert.equal(workflowMod.listRuns(project, 1000).length, before);
+  assert.deepEqual(dirs(), before, "a refused plan leaves no run directory, listed or not");
   // Gated: 2 steps + 2 for each of 2 loops is 6 of 8.
   const gated = [{ id: "a", task: "go" }, { id: "b", agent: "scout", task: "t", gate: { pass: "VERDICT: PASS", retry: "a" } }];
   assert.equal(statusIn(textOf(await call({ steps: gated }))), "passed");
@@ -491,7 +500,8 @@ await check("a live duplicate plan is refused, naming the live run; other work r
   const dup = await call({ steps });
   assert.equal(dup.isError, true);
   assert.ok(textOf(dup).includes(runId), textOf(dup));
-  assert.match(textOf(dup), /workflow_status/);
+  assert.match(textOf(dup), /workflow_control/);
+  assert.doesNotMatch(textOf(dup), /workflow_status/, "it cannot see a script run, and this text is shared");
   assert.match(textOf(dup), /workflow_control/);
   assert.equal(fake.seen.length, 1, "no launch for the duplicate");
   const different = await call({ steps: [{ agent: "scout", task: "other work" }] });
@@ -806,10 +816,13 @@ await check("a kill between the planner's answer and the splice replays its save
   const parent = state.steps.split;
   assert.ok(parent);
   delete parent.expanded;
+  parent.expandAnswer = hangingExpansion({ args: [], env: {}, cwd: "", task: "split it", system: "" }).text;
   delete state.steps["split.a"];
   delete state.steps["split.b"];
   fs.writeFileSync(stateFile, JSON.stringify({ ...state, cursor: 0, status: "interrupted" }));
-  const restore = setEnv("PI_KIT_TRUSTED_WORKFLOWS", crypto.createHash("sha256").update(text).digest("hex"));
+  // The waiting answer is part of what the grant covers.
+  const sha = (data: string): string => crypto.createHash("sha256").update(data).digest("hex");
+  const restore = setEnv("PI_KIT_TRUSTED_WORKFLOWS", sha(JSON.stringify([sha(text), [{ id: "split", answer: parent.expandAnswer }]])));
   try {
     useFake(() => ({ text: "resumed" }));
     const r = await call({ resume: runId });
@@ -913,6 +926,23 @@ await check("an expansion over MAX_EXECUTIONS by itself is refused as an omissio
   assert.match(textOf(r), new RegExp(`omitted: .*${String(workflowMod.MAX_EXECUTIONS)}`));
 });
 
+await check("an expansion landing exactly on MAX_EXECUTIONS runs: the step being settled is not charged a resample it cannot have", async () => {
+  await session("exhaustive");
+  useFake((s) => (s.task.includes("split it") ? { text: asJson({ steps: leaves(workflowMod.MAX_EXECUTIONS - 1) }) } : { text: "ok" }));
+  const r = await call({ steps: [{ id: "split", task: "split it", expand: true }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen.length, workflowMod.MAX_EXECUTIONS);
+});
+
+await check("one leaf past that boundary is still refused as an omission, with only the planner launched", async () => {
+  await session("exhaustive");
+  useFake((s) => (s.task.includes("split it") ? { text: asJson({ steps: leaves(workflowMod.MAX_EXECUTIONS) }) } : { text: "ok" }));
+  const r = await call({ steps: [{ id: "split", task: "split it", expand: true }] });
+  assert.equal(statusIn(textOf(r)), "partial", textOf(r));
+  assert.equal(fake.seen.length, 1, "the planner alone");
+  assert.match(textOf(r), new RegExp(`omitted: .*${String(workflowMod.MAX_EXECUTIONS)}`));
+});
+
 await check("a resample never passes MAX_EXECUTIONS: at the limit the step fails instead", async () => {
   const runId = await interruptedAt([{ id: "split", agent: "planner", task: "split it", expand: true }]);
   const stateFile = path.join(lastDir(runId), "state.json");
@@ -938,6 +968,8 @@ await check("a long done answer is capped in state.json and whole on disk", asyn
   const saved = workflowMod.loadState(project, runId)?.steps.split?.output ?? "";
   assert.ok(saved.length <= 4001, `state.json keeps ${String(saved.length)} characters`);
   assert.equal(fs.readFileSync(path.join(lastDir(runId), "steps", "split.md"), "utf8").length, long.length);
+  const size = fs.statSync(path.join(lastDir(runId), "state.json")).size;
+  assert.ok(size < 16_000, `state.json is ${String(size)} bytes: the answer is not kept once acted on`);
 });
 
 await check("where expand may not go: a parallel member, with a gate, inside a gated segment, or in a saved workflow; no plan step may be a spawning role", () => {
@@ -1017,6 +1049,507 @@ await check("docs/workflows.md qualifies replanning after a refused expansion wi
   const page = fs.readFileSync(path.join(ROOT, "docs", "workflows.md"), "utf8");
   assert.doesNotMatch(page, /so the agent can replan\./);
   assert.match(page, /replan[^.]*renews on the next user message/);
+});
+
+await check("expansion control data uses the original answer, including ordinary security vocabulary", async () => {
+  for (const task of ["audit secret handling", "check token handling", "Fix the password reset flow in auth.ts"]) {
+    await session();
+    useFake((s) => s.task === "split vocabulary" ? { text: JSON.stringify({ steps: [{ id: "a", agent: "scout", task }, { id: "b", agent: "scout", task: "second leaf" }] }) } : { text: "ok" });
+    const r = await call({ steps: [{ id: "split", task: "split vocabulary", expand: true }] });
+    assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+    assert.deepEqual(fake.seen.map((s) => s.task), ["split vocabulary", task, "second leaf"]);
+  }
+  await session();
+  useFake(() => ({ text: JSON.stringify({ done: "the token expired" }) }));
+  const r = await call({ steps: [{ task: "finish vocabulary", expand: true }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen.length, 1, "no redaction-induced resample");
+});
+
+await check("a resumed plan keeps executable task text and never runs a redacted definition", async () => {
+  const task = "Fix the password reset flow in auth.ts, then rotate the token cache";
+  const { done, runId } = await hanging([{ id: "first", agent: "planner", task: "hang here" }, { id: "second", agent: "planner", task }]);
+  await control(runId, "stop");
+  await done;
+  await session();
+  useFake(() => ({ text: "ok" }));
+  const r = await call({ resume: runId });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen[1]?.task, task);
+});
+
+await check("run file templates refuse symlinks in the file and in parent directories", () => {
+  const dir = path.join(ws, "include-run");
+  const outside = path.join(ws, "outside");
+  fs.mkdirSync(dir);
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "answer.md"), "outside contents");
+  fs.symlinkSync(path.join(outside, "answer.md"), path.join(dir, "link.md"));
+  fs.symlinkSync(outside, path.join(dir, "linked-dir"));
+  const compiled = plan.compilePlan([{ task: "t" }], roles);
+  assert.ok(compiled.ok);
+  const state = workflowMod.newRunState(compiled.workflow, {});
+  for (const rel of ["link.md", "linked-dir/answer.md"]) {
+    assert.throws(() => workflowMod.renderTemplate(`{{file:${rel}}}`, { inputs: {}, state, runDir: dir, loop: 0 }), /symlink|symbolic link|outside|escapes/);
+    assert.throws(() => workflowMod.renderTemplate(`{{file:${rel}?}}`, { inputs: {}, state, runDir: dir, loop: 0 }), /symlink|symbolic link|outside|escapes/, "optional suppresses absence only");
+  }
+});
+
+await check("resume refuses an oversized plan before parsing or launching it", async () => {
+  const { done, runId } = await hanging([{ agent: "planner", task: "hang here" }]);
+  await control(runId, "stop");
+  await done;
+  const file = path.join(lastDir(runId), "plan.json");
+  fs.appendFileSync(file, " ".repeat(2 * 1024 * 1024));
+  useFake(() => ({ text: "must not run" }));
+  const r = await call({ resume: runId });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /larger|limit|too large/);
+  assert.equal(fake.seen.length, 0);
+});
+
+const STALL = "/[\\s\\S]*[\\s\\S]*[\\s\\S]*ZZZ/";
+
+await check("a polynomial regex gate cannot stall the host: its timers beat, and the test times out as a miss", async () => {
+  await session();
+  useFake(() => ({ text: "a".repeat(2000) }));
+  let beats = 0;
+  const beat = setInterval(() => { beats++; }, 10);
+  const started = Date.now();
+  const r = await call({ steps: [{ id: "a", agent: "planner", task: "t", gate: { pass: STALL, retry: "a", max_loops: 0 } }] });
+  clearInterval(beat);
+  assert.match(textOf(r), /gate a did not pass/, textOf(r));
+  assert.ok(beats >= 20, `the host timer beat ${String(beats)} times`);
+  assert.ok(Date.now() - started < 8000);
+});
+
+await check("a regex gate passes on a match, as the kit's bugfix and feature gates rely on", async () => {
+  await session();
+  useFake(() => ({ text: "done\nVERDICT: PASS" }));
+  const r = await call({ steps: [{ id: "a", agent: "planner", task: "t", gate: { pass: "/VERDICT:\\s*PASS/", retry: "a", max_loops: 1 } }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen.length, 1, "no loop on a pass");
+});
+
+await check("a regex gate reads the tail of a long answer, where the verdict is", async () => {
+  await session();
+  useFake(() => ({ text: `${"x".repeat(70_000)}\nVERDICT: PASS` }));
+  const r = await call({ steps: [{ id: "a", agent: "planner", task: "t", gate: { pass: "/VERDICT: PASS$/", retry: "a", max_loops: 1 } }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen.length, 1);
+});
+
+await check("the gate worker imports only what loads outside pi's extension loader", () => {
+  const source = fs.readFileSync(path.join(ROOT, "packages", "extensions", "third_party", "subagent", "gate-worker.mjs"), "utf8");
+  const imports = [...source.matchAll(/^import\s[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1] ?? "");
+  assert.ok(imports.length > 0);
+  for (const name of imports) assert.match(name, /^node:/, name);
+  assert.doesNotMatch(source, /\bimport\(/);
+});
+
+await check("a gate worker that dies is a reported run error, not a gate miss", async () => {
+  const Real = workerThreads.Worker;
+  for (const body of ["process.exit(3)", "throw new Error('boom')"]) {
+    workerThreads.Worker = class extends Real {
+      constructor() {
+        super(body, { eval: true });
+      }
+    };
+    syncBuiltinESMExports();
+    try {
+      await session();
+      useFake(() => ({ text: "VERDICT: PASS" }));
+      const r = await call({ steps: [{ id: "a", agent: "planner", task: "t", gate: { pass: "/PASS/", retry: "a", max_loops: 2 } }] });
+      assert.equal(statusIn(textOf(r)), "failed", textOf(r));
+      assert.match(textOf(r), /gate a could not be tested: the gate worker/);
+      assert.equal(fake.seen.length, 1, "a dead worker does not loop the review");
+    } finally {
+      workerThreads.Worker = Real;
+      syncBuiltinESMExports();
+    }
+  }
+});
+
+await check("malformed template whitespace is linear, and a literal {{}} is left alone", () => {
+  const compiled = plan.compilePlan([{ task: "t" }], roles);
+  assert.ok(compiled.ok);
+  const state = workflowMod.newRunState(compiled.workflow, {});
+  const render = (text: string): string => workflowMod.renderTemplate(text, { inputs: {}, state, runDir: ws, loop: 0 });
+  const start = Date.now();
+  render(`{{${" ".repeat(8000)}x`);
+  assert.ok(Date.now() - start < 300, "unclosed whitespace templates are linear");
+  assert.equal(render("<T>{{}}</T>"), "<T>{{}}</T>");
+});
+
+const fifo = (file: string): void => {
+  fs.rmSync(file, { force: true });
+  execFileSync("mkfifo", [file]);
+};
+
+await check("a FIFO in place of a run file refuses at once: {{file:}}, state.json and plan.json", async () => {
+  const dir = path.join(ws, "fifo-run");
+  fs.mkdirSync(dir);
+  fifo(path.join(dir, "pipe"));
+  const compiled = plan.compilePlan([{ task: "t" }], roles);
+  assert.ok(compiled.ok);
+  const state = workflowMod.newRunState(compiled.workflow, {});
+  assert.throws(() => workflowMod.renderTemplate("{{file:pipe?}}", { inputs: {}, state, runDir: dir, loop: 0 }), /regular file/);
+  const { done, runId } = await hanging([{ agent: "planner", task: "hang here" }]);
+  await control(runId, "stop");
+  await done;
+  fifo(path.join(lastDir(runId), "plan.json"));
+  useFake(() => ({ text: "must not run" }));
+  const r = await call({ resume: runId });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /plan\.json is missing or unreadable/);
+  fifo(path.join(lastDir(runId), "state.json"));
+  assert.equal(workflowMod.loadState(project, runId), null);
+  assert.equal(fake.seen.length, 0);
+});
+
+await check("a member's output replaced by a FIFO or a link fails the group; it neither hangs nor pulls a file in", async () => {
+  const outside = path.join(ws, "outside-secret.md");
+  fs.writeFileSync(outside, "outside contents");
+  for (const plant of [fifo, (file: string): void => { fs.rmSync(file, { force: true }); fs.symlinkSync(outside, file); }]) {
+    await session();
+    useFake((s) => {
+      if (s.task !== "slow") return { text: "quick" };
+      setTimeout(() => plant(path.join(lastDir(liveRun()), "steps", "m1.md")), 40);
+      return { text: "slow", delayMs: 120 };
+    });
+    const r = await call({ steps: [{ id: "g", parallel: [{ id: "m1", agent: "planner", task: "quick" }, { id: "m2", agent: "planner", task: "slow" }] }] });
+    assert.equal(statusIn(textOf(r)), "failed", textOf(r));
+    assert.match(textOf(r), /group g: run file/);
+    assert.equal(fs.existsSync(path.join(lastDir(runIdIn(textOf(r))), "steps", "g.md")), false);
+  }
+});
+
+await check("large plans are bounded before per-step reference analysis", () => {
+  const started = Date.now();
+  const c = plan.compilePlan(Array.from({ length: 4000 }, (_, i) => ({ id: `s${i}`, task: "t" })), roles);
+  assert.equal(c.ok, false);
+  assert.ok(Date.now() - started < 150, "refuse before building quadratic reference sets");
+});
+
+await check("required references to conditional outputs are refused before a launch", () => {
+  const c = plan.compilePlan([{ id: "a", task: "t" }, { id: "fix", task: "conditional", when: { step: "a", status: "failed" } }, { task: "use {{steps.fix.output}}" }], roles);
+  assert.equal(c.ok, false);
+  assert.ok(plan.compilePlan([{ id: "a", task: "t" }, { id: "fix", task: "conditional", when: { step: "a", status: "failed" } }, { task: "use {{steps.fix.output?}}" }], roles).ok);
+});
+
+await check("review feedback is added when a task only mentions a reference in prose", async () => {
+  await session();
+  let reviews = 0;
+  useFake((s) => ({ text: s.task.startsWith("review") ? ++reviews === 1 ? "FAIL repair the edge" : "PASS" : "built" }));
+  const r = await call({ steps: [{ id: "build", task: "Fix steps.review.output handling" }, { id: "review", agent: "reviewer", task: "review", gate: { pass: "PASS", retry: "build", max_loops: 1 } }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.match(fake.seen.filter((s) => s.task.startsWith("Fix"))[1]?.task ?? "", /FAIL repair the edge/);
+});
+
+await check("file references to expansion answers follow the parent's prefix", async () => {
+  await session();
+  useFake((s) => s.task === "split files" ? { text: JSON.stringify({ steps: [{ id: "a", agent: "planner", task: "first leaf" }, { id: "b", agent: "planner", task: "use {{file:steps/a.md}}" }] }) } : { text: "leaf result" });
+  const r = await call({ steps: [{ id: "split", task: "split files", expand: true }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.equal(fake.seen[2]?.task, "use leaf result");
+});
+
+await check("YAML max_loops refuses non-numeric, fractional and out-of-range values", () => {
+  for (const value of ["two", "1.5", "-1", "11"]) {
+    const r = workflowMod.parseWorkflow(`---\nname: loops\nsteps:\n  - id: a\n    agent: planner\n    task: t\n    gate: {pass: PASS, retry: a, max_loops: ${value}}\n---\n`, "loops.md", "user");
+    assert.equal(r.workflow, undefined, value);
+    assert.match(r.errors.join("\n"), /max_loops/, value);
+  }
+});
+
+await check("live identities ignore object key ordering at every level", async () => {
+  const models = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts");
+  assert.equal(models.runIdentity("plan", "same", { x: "1", y: { a: 2, b: 3 } }), models.runIdentity("plan", "same", { y: { b: 3, a: 2 }, x: "1" }));
+});
+
+await check("default member ids fit even when their group id reaches the length limit", () => {
+  const c = plan.compilePlan([{ id: "a".repeat(41), parallel: [{ task: "one" }, { task: "two" }] }], roles);
+  assert.ok(c.ok, JSON.stringify(c));
+});
+
+await check("a removed skill refuses resume before a child starts", async () => {
+  const skillDir = path.join(process.env.PI_CODING_AGENT_DIR ?? agentDir, "skills", "temporary-skill");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\nname: temporary-skill\ndescription: test\n---\nSkill body\n");
+  try {
+    const { done, runId } = await hanging([{ agent: "planner", task: "hang here" }, { agent: "planner", task: "needs skill", skills: ["temporary-skill"] }]);
+    await control(runId, "stop");
+    await done;
+    fs.rmSync(skillDir, { recursive: true });
+    useFake(() => ({ text: "must not run" }));
+    const r = await call({ resume: runId });
+    assert.equal(r.isError, true, textOf(r));
+    assert.match(textOf(r), /temporary-skill/);
+    assert.equal(fake.seen.length, 0);
+  } finally {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+  }
+});
+
+await check("passed writers at the cursor survive the pass-to-cursor crash window", async () => {
+  const { done, runId } = await hanging([{ id: "writer", task: "finished writer" }, { id: "later", agent: "planner", task: "hang here" }]);
+  await control(runId, "stop");
+  await done;
+  const state = workflowMod.loadState(project, runId);
+  assert.ok(state);
+  state.cursor = 0;
+  fs.writeFileSync(path.join(lastDir(runId), "state.json"), JSON.stringify(state));
+  useFake(() => ({ text: "resumed" }));
+  const r = await call({ resume: runId });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.deepEqual(fake.seen.map((s) => s.task), ["hang here"]);
+});
+
+await check("an answered expansion still budgets its possible resample on resume", () => {
+  const c = plan.compilePlan([{ id: "split", task: "t", expand: true }], roles);
+  assert.ok(c.ok);
+  const state = workflowMod.newRunState(c.workflow, {});
+  state.steps.split = { status: "passed", attempts: 1, runIds: [], cost: 0 };
+  assert.equal(workflowMod.worstCaseAgents(c.workflow, state), 1);
+});
+
+await check("plan roles cannot load delegation extensions and agent-starting tools", () => {
+  const base = roles.find((r) => r.name === "planner");
+  assert.ok(base);
+  for (const extension of ["subagent", "verify-gate", "conductor"]) {
+    const c = plan.compilePlan([{ agent: "extended", task: "t" }], [{ ...base, name: "extended", tools: undefined, extensions: [extension] }]);
+    assert.equal(c.ok, false, extension);
+  }
+  for (const tool of ["verify_completion", "dispatch_validator"]) assert.equal(plan.compilePlan([{ task: "t", tools: [tool] }], roles).ok, false, tool);
+});
+
+await check("constructor ids are own state keys and never mutate Object", async () => {
+  await session();
+  useFake(() => ({ text: "ok" }));
+  const before = Object.getOwnPropertyDescriptors(Object);
+  const r = await call({ steps: [{ id: "constructor", agent: "planner", task: "safe own key" }, { task: "next" }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object), before);
+});
+
+interface ExecutorView {
+  executeWorkflow(w: WorkflowModule.WorkflowDef, state: WorkflowModule.RunState, options: Omit<WorkflowModule.ExecuteOptions, "spawnChild"> & { spawnChild: FakeSpawn }): Promise<WorkflowModule.RunState>;
+}
+const executor = await loadModule<ExecutorView>("vendor/subagent/workflow.ts");
+const direct = (w: WorkflowModule.WorkflowDef, state: WorkflowModule.RunState, concurrency: number, signal?: AbortSignal): Promise<WorkflowModule.RunState> =>
+  executor.executeWorkflow(w, state, { cwd: project, agents: roles, spawnChild, launchKind: "user", concurrency, signal });
+
+await check("a secret-shaped expansion is resampled once, before any charge, and a plan with one is refused", async () => {
+  const secret = "use api_key=abcdef123456 here";
+  await session();
+  let asked = 0;
+  useFake((s) => (s.task.startsWith("split secrets") ? { text: asJson({ steps: [{ agent: "scout", task: ++asked === 1 ? secret : "clean" }] }) } : { text: "ok" }));
+  const r = await call({ steps: [{ id: "split", task: "split secrets", expand: true }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.match(fake.seen[1]?.task ?? "", /secret-shaped text/);
+  assert.deepEqual(fake.seen.slice(2).map((s) => s.task), ["clean"]);
+  assert.doesNotMatch(fs.readFileSync(path.join(lastDir(runIdIn(textOf(r))), "plan.json"), "utf8"), /abcdef123456/);
+  await session();
+  useFake(() => ({ text: asJson({ steps: [{ agent: "scout", task: secret }] }) }));
+  const twice = await call({ steps: [{ id: "split", task: "split it", expand: true }] });
+  assert.equal(statusIn(textOf(twice)), "failed", textOf(twice));
+  assert.match(textOf(twice), /no usable answer/);
+  const dirs = fs.readdirSync(workflowMod.runsRoot(project)).length;
+  useFake(() => ({ text: "must not run" }));
+  const fresh = await call({ steps: [{ agent: "scout", task: secret }] });
+  assert.equal(fresh.isError, true);
+  assert.match(textOf(fresh), /secret-shaped/);
+  assert.equal(fake.seen.length, 0);
+  assert.equal(fs.readdirSync(workflowMod.runsRoot(project)).length, dirs);
+});
+
+/** A plan stopped at its second step, with state.json as a kill left it: `split` passed, its answer not acted on. */
+async function beforeSettling(answer: string | undefined): Promise<string> {
+  await session();
+  useFake((s) => (s.task.includes("split it") ? { text: answer ?? asJson({ done: "finished" }) } : { delayMs: 60_000 }));
+  const done = call({ steps: [{ id: "split", task: "split it", expand: true }, { id: "after", agent: "planner", task: "hang here" }] });
+  await until("the next step to start", () => fake.seen.length === 2);
+  const runId = liveRun();
+  await control(runId, "stop");
+  await done;
+  const state = workflowMod.loadState(project, runId);
+  const parent = state?.steps.split;
+  assert.ok(state && parent);
+  delete parent.expanded;
+  fs.writeFileSync(path.join(lastDir(runId), "state.json"), JSON.stringify({ ...state, cursor: 0 }));
+  return runId;
+}
+
+await check("an answer this session never saw, written into state.json or the run directory, is gated on resume", async () => {
+  const planted = asJson({ steps: [{ id: "x", task: "planted task" }] });
+  const runId = await beforeSettling(undefined);
+  const file = path.join(lastDir(runId), "state.json");
+  const state = workflowMod.loadState(project, runId);
+  assert.ok(state?.steps.split);
+  state.steps.split.expandAnswer = planted;
+  fs.writeFileSync(file, JSON.stringify(state));
+  fs.writeFileSync(path.join(lastDir(runId), "steps", "split.md"), planted);
+  useFake(() => ({ text: "must not run" }));
+  const r = await call({ resume: runId });
+  assert.equal(r.isError, true, textOf(r));
+  assert.match(textOf(r), /Blocked: plan/);
+  assert.equal(fake.seen.length, 0);
+});
+
+await check("a kill after a done answer replays it from state.json, and with the answer lost the writer is not re-run unasked", async () => {
+  const answer = asJson({ done: "finished" });
+  const runId = await beforeSettling(answer);
+  const file = path.join(lastDir(runId), "state.json");
+  const state = workflowMod.loadState(project, runId);
+  assert.ok(state?.steps.split);
+  state.steps.split.expandAnswer = answer;
+  fs.writeFileSync(file, JSON.stringify(state));
+  useFake(() => ({ text: "next" }));
+  const r = await call({ resume: runId });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.deepEqual(fake.seen.map((s) => s.task), ["hang here"], "the finished step is not relaunched");
+  assert.equal(fs.readFileSync(path.join(lastDir(runId), "steps", "split.md"), "utf8"), "finished");
+  const lost = await beforeSettling(undefined);
+  useFake(() => ({ text: "must not run" }));
+  const refused = await call({ resume: lost });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.match(textOf(refused), /writer step\(s\) split/);
+  assert.equal(fake.seen.length, 0);
+});
+
+await check("a resume runs every member of a gated group's interrupted loop, never a pass from the loop before", async () => {
+  const c = plan.compilePlan([{ id: "g", parallel: [{ id: "m1", agent: "planner", task: "one" }, { id: "m2", agent: "planner", task: "two" }, { id: "m3", agent: "planner", task: "three" }], gate: { pass: "VERDICT: PASS", retry: "g", max_loops: 2 } }], roles);
+  assert.ok(c.ok);
+  const state = workflowMod.newRunState(c.workflow, {});
+  const abort = new AbortController();
+  let launches = 0;
+  useFake(() => {
+    if (++launches === 4) abort.abort();
+    return { text: "VERDICT: FAIL", delayMs: 5 };
+  });
+  assert.equal((await direct(c.workflow, state, 1, abort.signal)).status, "interrupted");
+  const saved = workflowMod.loadState(project, state.id);
+  assert.ok(saved);
+  useFake(() => ({ text: "VERDICT: PASS" }));
+  assert.equal((await direct(c.workflow, saved, 1)).status, "passed");
+  assert.deepEqual(fake.seen.map((s) => s.task.split("\n")[0]), ["one", "two", "three"]);
+});
+
+await check("a plan's writers in one group run one at a time; a group that cannot edit runs together", async () => {
+  await session();
+  useFake(() => ({ text: "ok", delayMs: 20 }));
+  const writers = await call({ steps: [{ id: "w", parallel: [{ task: "add x" }, { task: "add y" }, { task: "add z" }] }] });
+  assert.equal(statusIn(textOf(writers)), "passed", textOf(writers));
+  assert.equal(fake.maxLive(), 1);
+  await session();
+  useFake(() => ({ text: "ok", delayMs: 20 }));
+  const readers = await call({ steps: [{ id: "r", parallel: [{ agent: "planner", task: "look at x" }, { agent: "planner", task: "look at y" }] }] });
+  assert.equal(statusIn(textOf(readers)), "passed", textOf(readers));
+  assert.equal(fake.maxLive(), 2);
+});
+
+await check("a refused expansion reads as skipped to later steps, whose {previous} gets the reason, not the steps", async () => {
+  await session();
+  const leaves = Array.from({ length: 9 }, (_, i) => ({ id: `l${String(i)}`, task: "leaf" }));
+  useFake((s) => (s.task.includes("split it") ? { text: asJson({ steps: leaves }) } : { text: "ok" }));
+  const r = await call({ steps: [{ id: "split", task: "split it", expand: true }, { id: "after", agent: "planner", task: "only if passed", when: { step: "split", status: "passed" } }, { id: "gone", agent: "planner", task: "reads {{steps.split.status}} and {{steps.split.output}}" }] });
+  assert.equal(statusIn(textOf(r)), "partial", textOf(r));
+  const tasks = fake.seen.map((s) => s.task);
+  assert.ok(!tasks.includes("only if passed"), "dependent step skipped");
+  assert.match(tasks.at(-1) ?? "", /^reads skipped and expansion refused/);
+  assert.doesNotMatch(tasks.at(-1) ?? "", /"steps"/);
+});
+
+await check("a parallel group launches nothing when the tier's maxConcurrent is 0", async () => {
+  const c = plan.compilePlan([{ id: "g", parallel: [{ agent: "planner", task: "one" }, { agent: "planner", task: "two" }] }], roles);
+  assert.ok(c.ok);
+  useFake(() => ({ text: "must not run" }));
+  const state = await direct(c.workflow, workflowMod.newRunState(c.workflow, {}), 0);
+  assert.equal(state.status, "failed");
+  assert.match(state.error ?? "", /maxConcurrent is 0/);
+  assert.equal(fake.seen.length, 0);
+});
+
+await check("a member's failed write stops its siblings and fails the run once, with nothing left running", async () => {
+  const c = plan.compilePlan([{ id: "g", parallel: [{ id: "m1", agent: "planner", task: "one" }, { id: "m2", agent: "planner", task: "two" }, { id: "m3", agent: "planner", task: "three" }] }], roles);
+  assert.ok(c.ok);
+  const state = workflowMod.newRunState(c.workflow, {});
+  useFake((s) => {
+    if (s.task === "one") fs.mkdirSync(path.join(lastDir(state.id), "steps", "m1.md", "x"), { recursive: true });
+    return s.task === "one" ? { text: "written over a directory", delayMs: 20 } : { delayMs: 60_000 };
+  });
+  await assert.rejects(direct(c.workflow, state, 2));
+  assert.deepEqual(fake.seen.map((s) => s.task), ["one", "two"], "the queued member never starts");
+  assert.equal(fake.maxLive() >= 1, true);
+  await wait(30);
+  assert.equal(workflowMod.loadState(project, state.id)?.status, "failed");
+  assert.equal(workflowMod.loadState(project, state.id)?.steps.m2?.status, "aborted");
+});
+
+await check("the tool text says what {previous} is after expand; a default member id fits; a plan has no definition file", async () => {
+  assert.match(plan.PLAN_DESCRIPTION, /after expand/);
+  assert.ok(plan.PLAN_DESCRIPTION.includes(workflowMod.STEP_SHAPE), "the tool text and the expanding child read the same step shape");
+  const c = plan.compilePlan([{ task: "t" }], roles);
+  assert.ok(c.ok);
+  assert.equal(c.workflow.file, "");
+  const panel = await loadModule<typeof PanelModule>("vendor/subagent/wf-panel.ts");
+  const models = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts");
+  const registry = new models.RunRegistry();
+  const run = registry.start("r", "yaml", "plan", { file: c.workflow.file, source: "user" });
+  assert.match(panel.planSave(run.snapshot(), project).message ?? "", /no recorded definition file/);
+  for (const id of ["a", "b"]) run.phase(id);
+  run.phase("a.x", "a.x", "pending", undefined, "a");
+  run.phase("a.y", "a.y", "pending", undefined, "a.x");
+  assert.deepEqual(run.snapshot().phases.map((p) => p.id), ["a", "a.x", "a.y", "b"], "an expansion shows where it runs");
+});
+
+await check("a path under a file is missing, not a raw error, and a run file error names no absolute path", () => {
+  const compiled = plan.compilePlan([{ task: "t" }], roles);
+  assert.ok(compiled.ok);
+  const state = workflowMod.newRunState(compiled.workflow, {});
+  const runDir = fs.mkdtempSync(path.join(ws, "enotdir-"));
+  fs.mkdirSync(path.join(runDir, "steps"));
+  fs.writeFileSync(path.join(runDir, "steps", "a.md"), "text");
+  const render = (text: string): string => workflowMod.renderTemplate(text, { inputs: {}, state, runDir, loop: 0 });
+  assert.equal(render("<{{file:steps/a.md/x?}}>"), "<>");
+  assert.throws(() => render("{{file:steps/a.md/x}}"), (error: unknown) => error instanceof workflowMod.TemplateError && !error.message.includes(runDir));
+});
+
+await check("a step output past the read limit reaches a later step truncated; the run goes on", async () => {
+  await session();
+  useFake((s) => (s.task.startsWith("big") ? { text: "x".repeat(1_100_000) } : { text: "ok" }));
+  const r = await call({ steps: [{ id: "a", agent: "scout", task: "big" }, { id: "b", agent: "scout", task: "after {previous}" }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+  assert.match(fake.seen[1]?.task ?? "", /\[\.\.\. truncated at/);
+});
+
+await check("a gated group over the read limit is tested on every member's whole answer and never rejects the call", async () => {
+  await session();
+  useFake((s) => ({ text: `${"y".repeat(700_000)}${s.task.includes("second") ? "END-OF-B" : ""}` }));
+  const r = await call({ steps: [{ id: "g", parallel: [{ id: "a", agent: "scout", task: "first" }, { id: "b", agent: "scout", task: "second" }], gate: { pass: "END-OF-B", retry: "g", max_loops: 0 } }] });
+  assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+});
+
+await check("state.json holds no expand answer once the step has settled", async () => {
+  for (const answer of [{ done: "password hunter2 finished" }, { steps: [{ agent: "scout", task: "password hunter2 next" }] }]) {
+    await session();
+    useFake((s) => (s.task.startsWith("split") ? { text: asJson(answer) } : { text: "ok" }));
+    const r = await call({ steps: [{ id: "split", task: "split it", expand: true }] });
+    assert.equal(statusIn(textOf(r)), "passed", textOf(r));
+    const text = fs.readFileSync(path.join(lastDir(runIdIn(textOf(r))), "state.json"), "utf8");
+    assert.doesNotMatch(text, /expandAnswer/);
+    assert.doesNotMatch(text, /hunter2/);
+  }
+});
+
+await check("a plan refused for secret-shaped text names the field and never the value", async () => {
+  await session();
+  useFake(() => ({ text: "must not run" }));
+  const r = await call({ steps: [{ id: "pk-migration", agent: "scout", task: "t" }] });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /steps\[0\]\.id/);
+  assert.doesNotMatch(textOf(r), /pk-migration/);
+  assert.equal(fake.seen.length, 0);
 });
 
 delegation.cleanup();

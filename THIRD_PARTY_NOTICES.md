@@ -461,6 +461,14 @@ SOFTWARE.
     each parallel member settles, so a resume re-runs only what is left, and a missed output names
     the directory checked. `workflow-tools.ts` says "plan" in a plan's resume refusal, under the same
     gate (`tests/workflow-plan-smoke.ts`).
+  - **Plan, expansion and run file review fixes (2026-11-09):** `plan.ts` and `workflow-tools.ts` use
+    an expansion's answer as the child gave it and refuse a plan or expansion the secret table
+    matches by field path; `plan.json` is no longer redacted, and a resume checks what it trusts.
+    `workflow.ts` adds `readRunFile`, the one bounded read of run files, and `settle` leaves out the
+    resample of the step being settled, so an expansion may land exactly on `MAX_EXECUTIONS`. New
+    `gate-worker.mjs`, builtin imports only, runs regex gates off the host loop on the last 64 KiB of
+    the output. `run-model.ts` hashes run identity with sorted keys (`tests/workflow-plan-smoke.ts`,
+    `tests/workflow-builtin-smoke.ts`).
 
 ### `todo`
 

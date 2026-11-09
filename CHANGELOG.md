@@ -178,6 +178,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- A workflow resume no longer repeats or misreports finished work. A redacted result is never
+  replayed as the real one: a read runs again, and a finished writer that cannot be replayed is
+  refused with code `redacted` on this and every later resume, even when the live read ends the run
+  first. A writer that cannot journal its `started` row is refused with code `journal`. Fingerprints
+  ignore all of `.pi`, see an edit that restores its mtime, leave the real object store untouched and
+  refuse reuse across a nested repository. Worktree finish cannot hang on a fifo or oversized `.git`
+  link, and its errors carry host text only, never git output. Failed and denied launches now count
+  correctly against the agent limit, and a stopped run's writer leaves the checkout queue
+  (`docs/script-workflows.md`, `tests/workflow-resume-smoke.ts`, `tests/workflow-worktree-smoke.ts`,
+  `tests/workflow-control-smoke.ts`).
 - Plan allowances hold under what the review found. A pi that reports no `messageType` renews the
   allowance on each prompt, where it was one-shot per session; a custom message still renews nothing.
   An expansion counts the larger of a run's started and planned agents, so a renewed allowance cannot

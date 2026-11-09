@@ -28,7 +28,9 @@
  *   (resumeFrom) reuses the longest unchanged prefix of agent() calls, keyed by
  *   sha256(canonical {prompt, opts without label or required}). A result is reused only while the
  *   checkout is as the earlier run left it, the launch resolves to the same definition (launchDigest)
- *   and a kept worktree still holds what the agent left; a miss says why (reuse.rejected{reason}).
+ *   and a kept worktree still holds what the agent left; a miss says why (reuse.rejected{reason}). A
+ *   redacted row is never replayed: a read runs live, and a finished writer is refused rather than
+ *   run on its own output.
  * - A `started` row with no end row is an unknown effect. A read or a worktree writer replays. A
  *   main-checkout writer replays only if the checkout is as the run left it; otherwise no
  *   main-checkout writer runs on that state (blocked:unknown-effect), on this resume or a later one.
@@ -56,7 +58,7 @@ import { StructuredSchemaError } from "./structured-output/check.ts";
 import type { SingleResult, SpawnChild } from "./types.ts";
 import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type RefusedCall, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
-import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, type WorktreeOutcome } from "./worktree.ts";
+import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, worktreeGitDir, SAFE_GIT, type WorktreeOutcome } from "./worktree.ts";
 import { delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
 import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
@@ -229,7 +231,11 @@ export interface JournalEntry {
   /** true when the call returned a value; failed, skipped and refused calls are journaled with ok false and never reused. */
   ok: boolean;
   value: unknown;
+  /** `value` differs from what the call returned, so it cannot stand in for it. */
+  redacted?: true | undefined;
   cached?: true | undefined;
+  /** A finished writer copied from the earlier run when this one opened, reached or not, so that no resume can lose it. */
+  heldOver?: true | undefined;
   /** The agent's role could change files (it is not read-only). */
   writer: boolean;
   /** For a writer in the main checkout: the checkout's fingerprint once it finished. */
@@ -273,7 +279,7 @@ function isJournalEntry(v: unknown): v is JournalEntry {
   if (!isRecord(v)) return false;
   const tree = v.worktree;
   const treeOk = tree === undefined || (isRecord(tree) && typeof tree.branch === "string" && typeof tree.head === "string" && (tree.status === "removed" || tree.status === "kept") && optional(tree.path, "string") && optional(tree.tree, "string"));
-  return (v.v === 1 || v.v === 2) && typeof v.seq === "number" && isKey(v.key) && typeof v.ok === "boolean" && typeof v.writer === "boolean" && optional(v.workspace, "string") && optional(v.definition, "string") && optional(v.started, "number") && treeOk;
+  return (v.v === 1 || v.v === 2) && typeof v.seq === "number" && isKey(v.key) && typeof v.ok === "boolean" && typeof v.writer === "boolean" && optional(v.workspace, "string") && optional(v.definition, "string") && optional(v.started, "number") && (v.redacted === undefined || v.redacted === true) && (v.heldOver === undefined || v.heldOver === true) && treeOk;
 }
 
 function isStartedRow(v: unknown): v is StartedRow {
@@ -332,16 +338,21 @@ function newRunId(): string {
 
 // ---------------------------------------------------------------------------------------------
 // The checkout fingerprint (T6): HEAD plus the tree of the whole working copy, untracked files
-// included (ignored ones are not), built in a scratch index so the real index is never touched.
-// The scratch index starts as a copy of the real one, so git need only hash the files whose stat
-// data changed: every run takes a fingerprint, and a read of the whole tree would cost each of them.
+// included (ignored ones are not), built in a scratch index and a scratch object store, so neither
+// the real index nor the repository's objects are touched. The scratch index starts as a copy of
+// the real one, so git hashes only the files that differ from the real index: every run takes a
+// fingerprint, and a read of the whole tree would cost each of them. Nothing refreshes the real
+// index, so a file an earlier writer left is hashed again by every later fingerprint.
 
-const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false"];
 const INDEX_AGE_MARGIN_MS = 2000;
+const OUTPUT_CAP = 16 * 1024 * 1024;
+// One line per tracked file, and running out of room would refuse every reuse in a large checkout.
+const LISTING_CAP = 256 * 1024 * 1024;
+const GITLINK_ENTRY = /(?:^|\0)160000 /;
 
-function git(args: string[], cwd: string, env?: Record<string, string | undefined>): Promise<string> {
+function git(args: string[], cwd: string, env?: Record<string, string | undefined>, maxBuffer = OUTPUT_CAP): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", [...SAFE_GIT, ...args], { cwd, env: env ?? process.env, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile("git", [...SAFE_GIT, ...args], { cwd, env: env ?? process.env, maxBuffer }, (error, stdout, stderr) => {
       if (error) reject(new Error((stderr || error.message).trim()));
       else resolve(stdout.trim());
     });
@@ -361,7 +372,7 @@ async function seedIndex(root: string, index: string, env: Record<string, string
     fs.copyFileSync(real, index);
     const age = new Date(fs.statSync(real).mtimeMs - INDEX_AGE_MARGIN_MS);
     fs.utimesSync(index, age, age);
-    const flagged = /(?:^|\0)(?:[a-z]|S) /.test(await git(["ls-files", "-v", "-z"], root, env));
+    const flagged = /(?:^|\0)(?:[a-z]|S) /.test(await git(["ls-files", "-v", "-z"], root, env, LISTING_CAP));
     if (!flagged) return true;
   } catch {
     /* no index yet, or none git can read: the fresh path below decides */
@@ -371,9 +382,12 @@ async function seedIndex(root: string, index: string, env: Record<string, string
 }
 
 /**
- * The checkout's fingerprint, or "no-git" outside a git checkout (nothing is then reused).
- * `exclude` (the workflow runs root) is left out, because the run's own journal changes after every
- * call, and so are the run's worktrees and agent logs, which sit under the same `.pi`.
+ * The checkout's fingerprint, or "no-git" outside a git checkout (nothing is then reused). All of
+ * `.pi` is left out, because the journal, the worktrees, the agent logs, the trace and the firewall
+ * audit there change with every call, whether or not the checkout ignores them; so are `exclude`
+ * (the workflow runs root) and the agent logs when they live elsewhere. The comparison trusts no
+ * stat setting of the repository. A nested repository is one gitlink, which hides its uncommitted
+ * edits, and git must not run inside it, so a checkout with one is `unreadable:` and reuses nothing.
  */
 export async function workspaceFingerprint(cwd: string, exclude?: string): Promise<string> {
   let root: string;
@@ -386,19 +400,31 @@ export async function workspaceFingerprint(cwd: string, exclude?: string): Promi
   try {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wf-index-"));
     const index = path.join(tmp, "index");
-    const env = { ...process.env, GIT_INDEX_FILE: index };
+    const objects = path.join(tmp, "objects");
+    fs.mkdirSync(objects);
+    const realObjects = path.resolve(root, await git(["rev-parse", "--git-path", "objects"], root));
+    // Quoted, because this variable is a list split on ":" unless an entry starts with a quote.
+    const env = { ...process.env, GIT_INDEX_FILE: index, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(realObjects) };
     const head = await git(["rev-parse", "--verify", "HEAD^{commit}"], root).catch(() => "no-head");
     if (!(await seedIndex(root, index, env)) && head !== "no-head") await git(["read-tree", "HEAD"], root, env);
     const excludes: string[] = [];
-    for (const dir of exclude === undefined ? [] : [exclude, path.join(root, ".pi", "worktrees"), subagentStateDir(cwd)]) {
-      const skip = path.relative(realOr(root), realOr(dir));
-      if (skip === "" || skip === ".." || skip.startsWith(`..${path.sep}`) || path.isAbsolute(skip)) continue;
+    const inside = (from: string, dir: string): string | undefined => {
+      const skip = path.relative(realOr(from), realOr(dir));
+      return skip === "" || skip === ".." || skip.startsWith(`..${path.sep}`) || path.isAbsolute(skip) ? undefined : skip;
+    };
+    const piDir = path.join(root, ".pi");
+    const elsewhere = [exclude, subagentStateDir(cwd)].filter((dir) => dir !== undefined && inside(piDir, dir) === undefined);
+    for (const dir of [piDir, ...elsewhere]) {
+      if (dir === undefined) continue;
+      const skip = inside(root, dir);
+      if (skip === undefined) continue;
       const rel = skip.split(path.sep).join("/");
       // An ignored directory needs no exclude (git add refuses a pathspec naming an ignored path).
       if (!(await git(["check-ignore", "-q", "--", rel], root).then(() => true, () => false))) excludes.push(`:(exclude,literal)${rel}`);
     }
-    await git(["add", "-A", "--", ".", ...excludes], root, env);
+    await git(["-c", "core.trustctime=true", "-c", "core.checkStat=default", "add", "-A", "--", ".", ...excludes], root, env);
     const tree = await git(["write-tree"], root, env);
+    if (GITLINK_ENTRY.test(await git(["ls-files", "-s", "-z"], root, env, LISTING_CAP))) return "unreadable:a nested repository";
     return crypto.createHash("sha256").update(`${head}\n${tree}`).digest("hex");
   } catch (error) {
     return `unreadable:${error instanceof Error ? error.message.slice(0, 80) : "error"}`;
@@ -418,7 +444,7 @@ function realOr(p: string): string {
 // ---------------------------------------------------------------------------------------------
 // Resume cache: the longest unchanged prefix of agent() calls
 
-export type ReuseRejection = "definition" | "workspace" | "worktree" | "legacy";
+export type ReuseRejection = "definition" | "workspace" | "worktree" | "legacy" | "redacted";
 
 // Fixed text: these lines reach the completion message outside its untrusted fences.
 const REUSE_REJECTED: Readonly<Record<ReuseRejection, string>> = {
@@ -426,46 +452,46 @@ const REUSE_REJECTED: Readonly<Record<ReuseRejection, string>> = {
   workspace: "the checkout is not as the earlier run left it, or cannot be fingerprinted",
   worktree: "a kept worktree is gone or no longer holds what its agent left",
   legacy: "the earlier journal predates these checks, so this resume cost one rerun",
+  redacted: "the journal holds a redacted copy of the result, which cannot stand in for it",
 };
+
+// Running a finished writer again would apply it twice, on its own output.
+const WRITER_NOT_REPLAYED = "the journal holds only a redacted copy of this finished writer's result, and running it again would apply it twice. Check the checkout, then start a fresh run.";
+const STARTED_ROW_LOST = "the journal could not record this writer's start, so a later resume could not tell what it did";
 
 const usable = (fingerprint: string): boolean => fingerprint !== "no-git" && !fingerprint.startsWith("unreadable:");
 
-const readText = (file: string): string => {
-  try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-};
-
-/**
- * Whether a worktree's link still leads through this checkout's git dir. An agent can write the
- * `.git` file in its worktree, and a planted repository's configuration runs in any git command
- * started there, so this reads files only.
- */
-async function linkIntact(worktree: string, cwd: string): Promise<boolean> {
-  const common = realOr(path.resolve(cwd, await git(["rev-parse", "--git-common-dir"], cwd)));
-  const dotGit = path.join(worktree, ".git");
-  const link = /^gitdir:\s*(.+?)\s*$/m.exec(readText(dotGit))?.[1];
-  if (!link) return false;
-  const gitDir = realOr(path.resolve(worktree, link));
-  if (path.dirname(gitDir) !== path.join(common, "worktrees")) return false;
-  const commonDir = readText(path.join(gitDir, "commondir")).trim();
-  const back = readText(path.join(gitDir, "gitdir")).trim();
-  return commonDir !== "" && back !== "" && realOr(path.resolve(gitDir, commonDir)) === common && realOr(path.resolve(gitDir, back)) === realOr(dotGit);
-}
-
 /** A kept worktree's fingerprint, or undefined when its link moved or it cannot be read. */
 async function keptTree(worktree: string, cwd: string): Promise<string | undefined> {
-  if (!(await linkIntact(worktree, cwd).catch(() => false))) return undefined;
+  const common = await git(["rev-parse", "--git-common-dir"], cwd).catch(() => "");
+  if (!common || worktreeGitDir(worktree, realOr(path.resolve(cwd, common))) === null) return undefined;
   const fingerprint = await workspaceFingerprint(worktree);
   return usable(fingerprint) ? fingerprint : undefined;
 }
 
+/** A held-over row whose call was then reused has two rows; the reuse stands for both, so a same-key call later cannot take the spare. */
+function withoutReusedCopies(entries: readonly JournalEntry[]): JournalEntry[] {
+  const reused = new Map<string, number>();
+  for (const e of entries) if (!e.heldOver) reused.set(e.key, (reused.get(e.key) ?? 0) + 1);
+  return entries.filter((e) => {
+    if (!e.heldOver) return true;
+    const left = reused.get(e.key) ?? 0;
+    if (left === 0) return true;
+    reused.set(e.key, left - 1);
+    return false;
+  });
+}
+
 class ResumeCache {
-  private readonly entries: JournalEntry[];
+  /** The earlier run's finished rows, as it wrote them. */
+  readonly entries: readonly JournalEntry[];
   private readonly used: boolean[];
   private broken = false;
+  // Set once a redacted row ended the prefix: the checkout is still as the earlier run left it, so a
+  // finished writer past that point would run on its own output, where an edited script chose to.
+  private replayLost = false;
+  // One call at a time, so that a rejection reaches every later call however long its git checks take.
+  private queue: Promise<unknown> = Promise.resolve();
   private readonly inPlace: boolean;
   private readonly cwd: string;
   /** The checkout the earlier run left: the fingerprint of the last writer it ran, or the one it started on. */
@@ -474,7 +500,7 @@ class ResumeCache {
   readonly unknownEffects: readonly StartedRow[];
 
   constructor(previous: RunJournal, fingerprint: string, cwd: string) {
-    this.entries = previous.entries.filter((e) => e.ok);
+    this.entries = withoutReusedCopies(previous.entries.filter((e) => e.ok));
     this.used = this.entries.map(() => false);
     this.cwd = cwd;
     // A failed writer counts: the state it left is the one a resume continues from. A cached one does
@@ -486,30 +512,49 @@ class ResumeCache {
   }
 
   /** The cached entry for this call, or null; the first miss ends the prefix for every later call. */
-  async take(key: string, definition: string, rejected: (reason: ReuseRejection) => void): Promise<JournalEntry | null> {
-    if (this.broken) return null;
+  take(key: string, definition: string, rejected: (reason: ReuseRejection, entry: JournalEntry) => void): Promise<JournalEntry | null> {
+    const turn = this.queue.then(() => this.takeNext(key, definition, rejected));
+    this.queue = turn.catch(() => undefined);
+    return turn;
+  }
+
+  private async takeNext(key: string, definition: string, rejected: (reason: ReuseRejection, entry: JournalEntry) => void): Promise<JournalEntry | null> {
     const at = this.entries.findIndex((e, i) => !this.used[i] && e.key === key);
     const entry = at >= 0 ? this.entries[at] : undefined;
+    if (this.broken) {
+      if (entry?.writer && (this.replayLost || entry.heldOver)) rejected("redacted", entry);
+      return null;
+    }
     if (!entry) {
       this.broken = true;
       return null;
     }
-    // Claimed before the await so identical concurrent calls each get their own entry.
-    this.used[at] = true;
     const reason = await this.rejection(entry, definition);
     if (reason !== null) {
-      this.used[at] = false;
       this.broken = true;
-      rejected(reason);
+      this.replayLost = reason === "redacted";
+      rejected(reason, entry);
       return null;
     }
+    this.used[at] = true;
     return entry;
+  }
+
+  /**
+   * The finished writers this run must journal as it opens, when the earlier run's results cannot all
+   * be replayed. Whatever ends this run before their calls, a stop, a kill or a failed read, the next
+   * resume still has a record of them and refuses to launch them on their own output.
+   */
+  writersToHold(): readonly JournalEntry[] {
+    if (!this.inPlace || !this.entries.some((e) => e.redacted || e.heldOver)) return [];
+    return this.entries.filter((e) => e.writer);
   }
 
   private async rejection(entry: JournalEntry, definition: string): Promise<ReuseRejection | null> {
     if (entry.v === 1) return "legacy";
     if (!this.inPlace) return "workspace"; // decision 12: one rule, readers and writers alike
     if (entry.definition !== definition) return "definition";
+    if (entry.redacted) return "redacted";
     return (await this.worktreeHolds(entry)) ? null : "worktree";
   }
 
@@ -767,6 +812,8 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   const cache = new ResumeCache(rc.previous, fingerprint, opts.cwd);
   const kept: WorktreeOutcome[] = [];
   let launched = 0;
+  // A worktree that could not be made launches nothing, yet each try costs git processes and a step.
+  let failedWorktrees = 0;
   // Admitted and not yet finished, and the finished agents that spent output: decision 14's budget estimate.
   let liveAgents = 0;
   let finishedAgents = 0;
@@ -793,12 +840,13 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     return step;
   };
 
-  const appendRow = (row: Record<string, unknown>): number => {
+  // A lost row costs a resume that call's result. Only a `required` row can cost more, so only it throws.
+  const appendRow = (row: Record<string, unknown>, required = false): number => {
     const at = ++seq;
     try {
-      appendPrivate(rc.journalPath, `${JSON.stringify({ v: 2, seq: at, ...row })}\n`);
-    } catch {
-      /* a journal write failure only costs resume */
+      appendPrivate(rc.journalPath, `${JSON.stringify({ v: 2, ...row, seq: at })}\n`);
+    } catch (error) {
+      if (required) throw error;
     }
     return at;
   };
@@ -807,10 +855,15 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
   // a clean start and clear the block on the next resume.
   const heldBack = cache.unknownEffects.length > 0;
   const journal = (entry: Omit<JournalEntry, "v" | "seq">): void => {
-    appendRow({ ...entry, ok: entry.ok && !heldBack, label: redact(entry.label), phase: redact(entry.phase), value: redactValue(entry.value), ...(entry.error ? { error: redact(entry.error) } : {}) });
+    const value = redactValue(entry.value);
+    appendRow({ ...entry, ok: entry.ok && !heldBack, label: redact(entry.label), phase: redact(entry.phase), value, ...(canonicalJson(value) !== canonicalJson(entry.value) ? { redacted: true } : {}), ...(entry.error ? { error: redact(entry.error) } : {}) });
   };
-  const journalStart = (row: Omit<StartedRow, "seq" | "event">): number => appendRow({ event: "started", ...row, label: redact(row.label) });
+  const journalStart = (row: Omit<StartedRow, "seq" | "event">, required?: boolean): number => appendRow({ event: "started", ...row, label: redact(row.label) }, required);
   appendRow({ event: "run", fingerprint: heldBack ? cache.base : fingerprint });
+  // `started` names a seq of the earlier journal, where here it could end a row of this one.
+  if (heldBack) for (const entry of cache.entries) appendRow({ ...entry, started: undefined });
+  // `cached` keeps these rows from moving the base: the run row already covers the checkout.
+  for (const row of cache.writersToHold()) appendRow({ ...row, started: undefined, cached: true, heldOver: true });
   for (const { key, label, role, writer } of cache.unknownEffects) journalStart({ key, label, role, writer });
   const reuseRejected = new Set<ReuseRejection>();
   const narrator: string[] = [];
@@ -847,7 +900,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     const end = (): { usage?: SingleResult["usage"]; model?: string | undefined; subagentRunId?: string | undefined } => (result ? { usage: result.usage, model: result.model, subagentRunId: result.runId } : {});
     const stoppedShort = (): Launched => {
       if (handle.skipped()) {
-        settle(step, "skipped", "operator");
+        settle(step, "skipped", handle.skipOrigin() ?? "operator");
         run.agentEnd(id, { ...end(), status: "skipped" });
       } else {
         cancel(step);
@@ -890,7 +943,10 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
         return result;
       };
       if (o.isolation === "worktree") {
-        const tree = await createWorkflowWorktree({ cwd: opts.cwd, runId: rc.runId, index: ++worktreeIndex, signal: cut });
+        const tree = await createWorkflowWorktree({ cwd: opts.cwd, runId: rc.runId, index: ++worktreeIndex, signal: cut }).catch((error: unknown) => {
+          if (!cut.aborted) failedWorktrees++;
+          throw error;
+        });
         try {
           result = await once(tree.path);
         } finally {
@@ -902,7 +958,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
           const r = await once(opts.cwd);
           workspace = await workspaceFingerprint(opts.cwd, rc.runsDir);
           return r;
-        });
+        }, cut);
       } else {
         result = await once(opts.cwd);
         if (writer) workspace = await workspaceFingerprint(opts.cwd, rc.runsDir);
@@ -915,8 +971,13 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     } finally {
       handle.done();
     }
-    if (handle.skipped() || result.stopReason === "aborted" || cut.aborted) return stoppedShort();
+    // A writer whose child ran to its end has changed the checkout, so a cut arriving after that is too
+    // late: only its row stops a resume from running it again on its own output.
+    const finishedWriter = writer && result.stopReason !== "aborted" && result.stopReason !== "denied";
+    if (result.stopReason === "aborted" || ((handle.skipped() || cut.aborted) && !finishedWriter)) return stoppedShort();
     if (result.stopReason === "denied") {
+      // No child ran, and hooks.denied frees only a concurrency denial.
+      admission.free();
       run.agentEnd(id, { ...end(), status: "failed", error: result.errorMessage });
       throw new LaunchRefused(result.deniedCode === "total" ? "agent-limit" : "denied", result.errorMessage ?? "the agent launch was refused");
     }
@@ -962,7 +1023,7 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     for (;;) {
       await control.gate(signal);
       if (signal.aborted) return false;
-      if (launched >= maxAgents) throw refuse(step, "agent-limit", `agent limit reached: this run has started ${String(launched)} agents (limit ${String(maxAgents)})`);
+      if (launched + failedWorktrees >= maxAgents) throw refuse(step, "agent-limit", `agent limit reached: this run has started ${String(launched)} agents${failedWorktrees > 0 ? ` and failed to make ${String(failedWorktrees)} worktrees` : ""} (limit ${String(maxAgents)})`);
       if (total === null) break;
       if (outputTokens >= total) throw refuse(step, "budget", `budget exhausted: ${String(outputTokens)} of ${String(total)} output tokens spent`);
       // What one more agent may cost: the mean of the finished agents that spent output, or, before any has, the
@@ -1014,12 +1075,19 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
     const key = callKey(prompt, rawOpts);
     const writer = isWriter(role);
     const definition = launchDigest(role, launchOverrides(o, model), opts.cwd, opts.parentModel);
-    const hit = await cache.take(key, definition, (reason) => {
+    let replayRefused = false;
+    const hit = await cache.take(key, definition, (reason, entry) => {
+      replayRefused = reason === "redacted" && entry.writer;
       reuseRejected.add(reason);
-      note(frame, `reuse.rejected{${reason}}: ${label} runs live: ${REUSE_REJECTED[reason]}`);
+      note(frame, `reuse.rejected{${reason}}: ${label} ${replayRefused ? "is refused" : "runs live"}: ${REUSE_REJECTED[reason]}`);
     });
+    if (replayRefused) {
+      throw refuse(step, "redacted", WRITER_NOT_REPLAYED);
+    }
     if (hit) {
       cached++;
+      const tree = hit.worktree;
+      if (tree?.status === "kept" && tree.path !== undefined) kept.push({ runId: rc.runId, index: 0, path: tree.path, branch: tree.branch, baseCommit: "", status: "kept", head: tree.head, dirty: true, commits: 0, reason: "kept by the run this one resumed", at: new Date().toISOString() });
       const id = run.agentStart({ label, phase, role: role.name, model, cached: true, ...(frame.nested ? { group: frame.name } : {}) });
       run.agentUpdate(id, { activity: "cached (resumed)" });
       run.agentEnd(id, { status: "passed" });
@@ -1051,7 +1119,14 @@ async function execute(spec: ScriptSpec, args: unknown, opts: EngineOptions, rc:
       if (!(await admit(step, cut, true))) return false;
       reserved = true;
       step.usage.agents = 1;
-      started ??= journalStart({ key, label, role: role.name, writer, ...(o.isolation === "worktree" ? { isolated: true } : {}) });
+      const isolated = o.isolation === "worktree";
+      try {
+        // An unrecorded writer in the checkout is an unknown effect no later resume could see.
+        started ??= journalStart({ key, label, role: role.name, writer, ...(isolated ? { isolated: true } : {}) }, writer && !isolated);
+      } catch {
+        free();
+        throw refuse(step, "journal", STARTED_ROW_LOST);
+      }
       return true;
     };
     try {

@@ -14,9 +14,11 @@
 //   7. the 16-worktree cap is a wait, not a failure; an aborted wait rejects.
 //   8. bad run ids and indexes are refused; the per-checkout writer lock runs writers one at a time.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { loadExtension, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import {
   WORKTREE_CAP, createWorkflowWorktree, finishWorkflowWorktree, worktreeSlots, withCheckoutLock, type WorkflowWorktree,
@@ -36,29 +38,74 @@ fs.mkdirSync(path.join(ws, "home"), { recursive: true });
 fs.writeFileSync(path.join(ws, "gitconfig"), "[user]\n\tname = Smoke\n\temail = smoke@example.invalid\n[init]\n\tdefaultBranch = main\n");
 let checks = 0;
 
-const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const exec = promisify(execFile);
+const git = async (cwd: string, ...args: string[]): Promise<string> => (await exec("git", args, { cwd })).stdout.trim();
 fs.mkdirSync(path.join(ws, "repo"));
 const repo = fs.realpathSync(path.join(ws, "repo"));
-git(repo, "init", "-q");
+await git(repo, "init", "-q");
 fs.writeFileSync(path.join(repo, ".gitignore"), ".pi/\n");
 fs.writeFileSync(path.join(repo, "README.md"), "base\n");
-git(repo, "add", "-A");
-git(repo, "commit", "-q", "-m", "base");
-const mainHead = git(repo, "rev-parse", "HEAD");
+await git(repo, "add", "-A");
+await git(repo, "commit", "-q", "-m", "base");
+const mainHead = await git(repo, "rev-parse", "HEAD");
 const journal = path.join(ws, "run", "worktrees.jsonl");
 
 try {
+  const misses: string[] = [];
+  const finding = async (name: string, check: () => Promise<void>): Promise<void> => {
+    try { await check(); checks++; }
+    catch (error) { misses.push(name); console.log(`  MISS: ${name}: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+  await finding("worktree errors contain fixed host text only", async () => {
+    const tree = await createWorkflowWorktree({ cwd: repo, runId: "errors", index: 0 });
+    const bin = path.join(ws, "bin");
+    fs.mkdirSync(bin);
+    const realGit = (await exec("which", ["git"])).stdout.trim();
+    const marker = "agent-chosen-instructions";
+    const secret = ["AKIA", "A".repeat(16)].join("");
+    fs.writeFileSync(path.join(bin, "git"), `#!/bin/bash\nfor arg in "$@"; do\n if [[ "$arg" == "$WF_FAIL_COMMAND" ]]; then\n  printf '%s' '${marker} ${secret} ${"x".repeat(4096)}' >&2\n  exit 1\n fi\ndone\nexec '${realGit}' "$@"\n`, { mode: 0o700 });
+    const restorePath = setEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+    try {
+      for (const command of ["status", "remove", "branch"]) {
+        const target = command === "status" ? tree : await createWorkflowWorktree({ cwd: repo, runId: "errors", index: command === "remove" ? 1 : 2 });
+        const restoreCommand = setEnv("WF_FAIL_COMMAND", command);
+        try {
+          const outcome = await finishWorkflowWorktree(target, { journalFile: journal });
+          assert.ok((outcome.reason?.length ?? 0) < 256 && !outcome.reason?.includes(marker) && !outcome.reason?.includes(secret), `${command} must not copy git output into its reason`);
+        } finally { restoreCommand(); }
+      }
+    } finally { restorePath(); }
+  });
+  for (const shape of ["fifo", "long"]) await finding(`worktree ${shape} link cannot block finish`, async () => {
+    const tree = await createWorkflowWorktree({ cwd: repo, runId: "links", index: shape === "fifo" ? 0 : 1 });
+    const link = path.join(tree.path, ".git");
+    const original = fs.readFileSync(link, "utf8");
+    fs.rmSync(link);
+    if (shape === "fifo") await exec("mkfifo", [link]);
+    else fs.writeFileSync(link, `gitdir: a${" ".repeat(400_000)}b`);
+    try {
+      const module = pathToFileURL(path.resolve("packages/extensions/third_party/subagent/worktree.ts")).href;
+      const result = await exec(process.execPath, ["--input-type=module", "-e", `import { finishWorkflowWorktree } from ${JSON.stringify(module)}; import fs from "node:fs"; fs.writeSync(1, JSON.stringify(await finishWorkflowWorktree(${JSON.stringify(tree)})));`], { encoding: "utf8", timeout: 1500 });
+      assert.match(result.stdout, /not inspected/);
+    } finally {
+      fs.rmSync(link);
+      fs.writeFileSync(link, original);
+      await finishWorkflowWorktree(tree);
+    }
+  });
+  assert.deepEqual(misses, [], "worktree safety regressions");
+  fs.rmSync(journal, { force: true });
   // 1. unchanged: removed with its branch
   const t0 = await createWorkflowWorktree({ cwd: repo, runId: "r1", index: 0 });
   assert.equal(t0.path, path.join(repo, ".pi", "worktrees", "r1", "0"));
   assert.equal(t0.branch, "luna/wf/r1/0");
   assert.equal(t0.baseCommit, mainHead);
   assert.ok(fs.existsSync(path.join(t0.path, "README.md")), "the worktree is checked out");
-  assert.equal(git(repo, "status", "--porcelain"), "", ".pi/worktrees is ignored by the main checkout");
+  assert.equal(await git(repo, "status", "--porcelain"), "", ".pi/worktrees is ignored by the main checkout");
   const r0 = await finishWorkflowWorktree(t0, { journalFile: journal });
   assert.equal(r0.status, "removed");
   assert.ok(!fs.existsSync(t0.path), "the unchanged worktree is gone");
-  assert.equal(git(repo, "branch", "--list", "luna/wf/r1/0"), "", "its branch is deleted");
+  assert.equal(await git(repo, "branch", "--list", "luna/wf/r1/0"), "", "its branch is deleted");
   assert.ok(!fs.existsSync(journal), "a removed worktree is not journaled");
   checks += 1;
 
@@ -67,7 +114,7 @@ try {
   fs.writeFileSync(path.join(t1.path, "new.txt"), "work\n");
   const t2 = await createWorkflowWorktree({ cwd: repo, runId: "r1", index: 2 });
   fs.writeFileSync(path.join(t2.path, "README.md"), "changed\n");
-  git(t2.path, "commit", "-q", "-am", "agent work");
+  await git(t2.path, "commit", "-q", "-am", "agent work");
   const r1 = await finishWorkflowWorktree(t1, { journalFile: journal });
   const r2 = await finishWorkflowWorktree(t2, { journalFile: journal });
   assert.equal(r1.status, "kept");
@@ -76,8 +123,8 @@ try {
   assert.equal(r2.commits, 1);
   assert.equal(r2.dirty, false);
   assert.ok(fs.existsSync(t1.path) && fs.existsSync(t2.path), "changed worktrees stay on disk");
-  assert.equal(git(repo, "branch", "--list", "luna/wf/r1/2").replace(/^[*+ ]+/, ""), "luna/wf/r1/2");
-  assert.equal(git(repo, "rev-parse", "HEAD"), mainHead, "nothing is merged into the main checkout");
+  assert.equal((await git(repo, "branch", "--list", "luna/wf/r1/2")).replace(/^[*+ ]+/, ""), "luna/wf/r1/2");
+  assert.equal(await git(repo, "rev-parse", "HEAD"), mainHead, "nothing is merged into the main checkout");
   assert.equal(fs.readFileSync(path.join(repo, "README.md"), "utf8"), "base\n");
   const lines = fs.readFileSync(journal, "utf8").trim().split("\n").map((line): [unknown, unknown] => {
     const parsed: unknown = JSON.parse(line);
@@ -160,29 +207,29 @@ try {
   fs.writeFileSync(path.join(t3.path, ".git"), `gitdir: ${evilGitDir}\n`);
   const r3 = await finishWorkflowWorktree(t3, { journalFile: journal });
   assert.equal(r3.status, "kept");
-  assert.match(String(r3.reason), /not inspected: .*\.git no longer names/);
+  assert.match(String(r3.reason), /not inspected: worktree git link changed/);
   const t4 = await createWorkflowWorktree({ cwd: repo, runId: "r2", index: 1 });
   fs.writeFileSync(path.join(t4.gitDir, "commondir"), `${evilCommon}\n`);
   const r4 = await finishWorkflowWorktree(t4, { journalFile: journal });
   assert.equal(r4.status, "kept");
-  assert.match(String(r4.reason), /not inspected: .*commondir no longer names/);
+  assert.match(String(r4.reason), /not inspected: worktree git link changed/);
   const t5 = await createWorkflowWorktree({ cwd: repo, runId: "r2", index: 2 });
-  git(repo, "config", "core.fsmonitor", `touch ${marker}; false`);
+  await git(repo, "config", "core.fsmonitor", `touch ${marker}; false`);
   const r5 = await finishWorkflowWorktree(t5);
-  git(repo, "config", "--unset", "core.fsmonitor");
+  await git(repo, "config", "--unset", "core.fsmonitor");
   assert.equal(r5.status, "removed", "fsmonitor is off for finish's own git commands");
   assert.ok(!fs.existsSync(marker), "no planted fsmonitor command ran in the parent");
   const t7 = await createWorkflowWorktree({ cwd: repo, runId: "r2", index: 4 });
   const sub = path.join(t7.path, "sub");
   fs.mkdirSync(sub);
-  git(sub, "init", "-q");
+  await git(sub, "init", "-q");
   fs.writeFileSync(path.join(sub, "f.txt"), "a\n");
-  git(sub, "add", "f.txt");
-  git(sub, "commit", "-q", "-m", "sub");
+  await git(sub, "add", "f.txt");
+  await git(sub, "commit", "-q", "-m", "sub");
   const filterMarker = path.join(ws, "clean-filter-ran");
-  git(sub, "config", "filter.x.clean", `touch ${filterMarker}; cat`);
+  await git(sub, "config", "filter.x.clean", `touch ${filterMarker}; cat`);
   fs.writeFileSync(path.join(sub, ".git", "info", "attributes"), "* filter=x\n");
-  execFileSync("git", ["add", "sub"], { cwd: t7.path, stdio: "ignore" });
+  await exec("git", ["add", "sub"], { cwd: t7.path });
   fs.writeFileSync(path.join(sub, "f.txt"), "b\n");
   assert.ok(!fs.existsSync(filterMarker));
   const r7 = await finishWorkflowWorktree(t7, { journalFile: journal });
@@ -198,7 +245,7 @@ try {
   assert.equal(r6.status, "removed");
   assert.ok(!fs.existsSync(t6.path), "the worktree itself is gone");
   assert.match(String(r6.reason), /worktree removed, branch luna\/wf\/r2\/3 left/);
-  git(repo, "branch", "-D", "luna/wf/r2/3");
+  await git(repo, "branch", "-D", "luna/wf/r2/3");
   checks += 1;
 
   // 7. the cap is a wait (r1/1 and r1/2 freed their slots when they finished)
@@ -242,6 +289,27 @@ try {
   assert.deepEqual(order, ["a:start", "a:end", "b:start", "b:end"]);
   await assert.rejects(withCheckoutLock(repo, async () => { throw new Error("boom"); }), /boom/);
   assert.equal(await withCheckoutLock(repo, async () => "after"), "after", "a failed writer releases the lock");
+
+  // A stopped writer leaves the queue at once, and the writers behind it still wait for the holder.
+  const leaving: string[] = [];
+  let releaseHolder: () => void = () => {};
+  const holding = new Promise<void>((resolve) => { releaseHolder = resolve; });
+  const holder = withCheckoutLock(repo, async () => { leaving.push("holder:start"); await holding; leaving.push("holder:end"); });
+  const stop = new AbortController();
+  const stopped = withCheckoutLock(repo, async () => { leaving.push("stopped:start"); }, stop.signal);
+  const left = assert.rejects(stopped, /stopped/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  stop.abort();
+  await left;
+  const behind = withCheckoutLock(repo, async () => { leaving.push("behind:start"); });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(leaving, ["holder:start"], "the writer that left let nobody in beside the holder");
+  releaseHolder();
+  await Promise.all([holder, behind]);
+  assert.deepEqual(leaving, ["holder:start", "holder:end", "behind:start"]);
+  await assert.rejects(withCheckoutLock(repo, async () => { leaving.push("never"); }, stop.signal), /stopped/);
+  assert.equal(leaving.includes("never"), false, "a stopped signal never takes the lock");
+  checks += 1;
   checks += 1;
 } finally {
   for (const restore of restores.reverse()) restore();

@@ -469,6 +469,14 @@ SOFTWARE.
     `gate-worker.mjs`, builtin imports only, runs regex gates off the host loop on the last 64 KiB of
     the output. `run-model.ts` hashes run identity with sorted keys (`tests/workflow-plan-smoke.ts`,
     `tests/workflow-builtin-smoke.ts`).
+  - **Engine and worktree review fixes (2026-11-09):** `wf-engine.ts` journals a `redacted` flag and
+    a required `started` row, relaunches a redacted read, refuses a finished writer it cannot replay
+    (code `redacted`) and carries finished writers forward as `heldOver` rows when a run opens on an
+    in-place checkout. `ResumeCache.take` runs one call at a time. Fingerprints leave out all of
+    `.pi`, force `core.trustctime` and use a scratch object directory. `worktree.ts` reads `.git`
+    through one bounded, no-follow reader and returns fixed host text only
+    (`tests/workflow-resume-smoke.ts`, `tests/workflow-worktree-smoke.ts`,
+    `tests/workflow-control-smoke.ts`).
 
 ### `todo`
 

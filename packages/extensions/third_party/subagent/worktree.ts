@@ -173,19 +173,34 @@ function appendJournal(file: string, outcome: WorktreeOutcome): void {
 
 // Git options for every finish-time command: nothing configured to run (fsmonitor, hooks) runs,
 // and no command recurses into a submodule.
-const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false"];
+export const SAFE_GIT = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false"];
 
 function readText(file: string): string {
-  try { return fs.readFileSync(file, "utf8"); } catch { return ""; }
+  let fd: number | undefined;
+  try {
+    // O_NONBLOCK also covers a regular file swapped for a FIFO between checks.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > 16_384) return "";
+    const bytes = Buffer.alloc(16_385);
+    const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    return size > 16_384 ? "" : bytes.toString("utf8", 0, size);
+  } catch { return ""; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-/** Why the worktree's link to its git dir no longer matches creation, or null when it does. */
-function linkChanged(tree: WorkflowWorktree): string | null {
-  const match = /^gitdir:\s*(.+?)\s*$/m.exec(readText(path.join(tree.path, ".git")));
-  if (!match?.[1] || canonical(path.resolve(tree.path, match[1])) !== tree.gitDir) return `${tree.path}/.git no longer names ${tree.gitDir}`;
-  const common = readText(path.join(tree.gitDir, "commondir")).trim();
-  if (!common || canonical(path.resolve(tree.gitDir, common)) !== tree.commonDir) return `${tree.gitDir}/commondir no longer names ${tree.commonDir}`;
-  return null;
+/** Read links only: never start git in an agent-planted repository. Shared by finish and resume. */
+export function worktreeGitDir(worktree: string, commonDir: string, expected?: string): string | null {
+  const dotGit = path.join(worktree, ".git");
+  const text = readText(dotGit).trim();
+  if (!text.startsWith("gitdir:")) return null;
+  const link = text.slice(7).trim();
+  if (!link || link.includes("\n") || link.includes("\r")) return null;
+  const gitDir = canonical(path.resolve(worktree, link));
+  if (path.dirname(gitDir) !== path.join(commonDir, "worktrees") || (expected !== undefined && gitDir !== expected)) return null;
+  const common = readText(path.join(gitDir, "commondir")).trim();
+  const back = readText(path.join(gitDir, "gitdir")).trim();
+  return common && back && canonical(path.resolve(gitDir, common)) === commonDir && canonical(path.resolve(gitDir, back)) === canonical(dotGit) ? gitDir : null;
 }
 
 /**
@@ -200,9 +215,8 @@ export async function finishWorkflowWorktree(tree: WorkflowWorktree, opts: { jou
       await runGit([...SAFE_GIT, "worktree", "prune"], tree.repoRoot).catch(() => "");
       return outcome;
     }
-    const changed = linkChanged(tree);
-    if (changed) {
-      const outcome: WorktreeOutcome = { ...base, status: "kept", head: "", dirty: true, commits: 0, reason: `not inspected: ${changed}`, at: new Date().toISOString() };
+    if (worktreeGitDir(tree.path, tree.commonDir, tree.gitDir) === null) {
+      const outcome: WorktreeOutcome = { ...base, status: "kept", head: "", dirty: true, commits: 0, reason: "not inspected: worktree git link changed", at: new Date().toISOString() };
       if (opts.journalFile) appendJournal(opts.journalFile, outcome);
       return outcome;
     }
@@ -216,27 +230,26 @@ export async function finishWorkflowWorktree(tree: WorkflowWorktree, opts: { jou
       status = await runGit([...inTree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"], tree.path);
       head = await runGit([...inTree, "rev-parse", "HEAD"], tree.path);
       commits = head === tree.baseCommit ? 0 : Number(await runGit([...inTree, "rev-list", "--count", `${tree.baseCommit}..${head}`], tree.path)) || 0;
-    } catch (error) {
+    } catch {
       // A worktree git cannot read may still hold the agent's work, so it is kept, and named.
-      const outcome: WorktreeOutcome = { ...base, status: "kept", head: "", dirty: true, commits: 0, reason: `not inspected: ${error instanceof Error ? error.message : String(error)}`, at: new Date().toISOString() };
+      const outcome: WorktreeOutcome = { ...base, status: "kept", head: "", dirty: true, commits: 0, reason: "not inspected: git could not read the worktree", at: new Date().toISOString() };
       if (opts.journalFile) appendJournal(opts.journalFile, outcome);
       return outcome;
     }
     const dirty = status.length > 0;
     if (!dirty && head === tree.baseCommit) {
-      const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
       try {
         await runGit([...SAFE_GIT, "worktree", "remove", tree.path], tree.repoRoot);
-      } catch (error) {
-        const outcome: WorktreeOutcome = { ...base, status: "kept", head, dirty, commits, reason: `removal failed: ${describe(error)}`, at: new Date().toISOString() };
+      } catch {
+        const outcome: WorktreeOutcome = { ...base, status: "kept", head, dirty, commits, reason: "removal failed: git could not remove the worktree", at: new Date().toISOString() };
         if (opts.journalFile) appendJournal(opts.journalFile, outcome);
         return outcome;
       }
       try { fs.rmdirSync(path.dirname(tree.path)); } catch { /* other agents of the run still have worktrees */ }
       try {
         await runGit([...SAFE_GIT, "branch", "-D", tree.branch], tree.repoRoot);
-      } catch (error) {
-        const outcome: WorktreeOutcome = { ...base, status: "removed", head, dirty, commits, reason: `worktree removed, branch ${tree.branch} left: ${describe(error)}`, at: new Date().toISOString() };
+      } catch {
+        const outcome: WorktreeOutcome = { ...base, status: "removed", head, dirty, commits, reason: `worktree removed, branch ${tree.branch} left: git could not delete it`, at: new Date().toISOString() };
         if (opts.journalFile) appendJournal(opts.journalFile, outcome);
         return outcome;
       }
@@ -258,12 +271,28 @@ const locks = new Map<string, Promise<void>>();
 // order it called even when resolving the root (a git subprocess) finishes sooner for a later caller.
 let arrivals: Promise<unknown> = Promise.resolve();
 
+function untilFree(previous: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(new Error("stopped while waiting for the checkout lock"));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    void previous.then(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
+}
+
 /**
  * Run `fn` holding the writer lock of the checkout containing `cwd`. Writers of the same checkout
  * run one at a time, in arrival order. The lock is in-process: it orders the writers this pi
- * session launches, not other processes.
+ * session launches, not other processes. An abort of `signal` takes a waiting writer out of the
+ * queue with a rejection, and the writers behind it keep their order.
  */
-export async function withCheckoutLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+export async function withCheckoutLock<T>(cwd: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const resolving = arrivals.then(() => checkoutRoot(cwd));
   arrivals = resolving.catch(() => undefined);
   const root = await resolving;
@@ -272,11 +301,12 @@ export async function withCheckoutLock<T>(cwd: string, fn: () => Promise<T>): Pr
   const held = new Promise<void>((resolve) => { release = resolve; });
   const tail = previous.then(() => held);
   locks.set(root, tail);
-  await previous;
+  // Dropped only once the tail settles: a writer that left the queue may be last while one still holds the lock.
+  void tail.then(() => { if (locks.get(root) === tail) locks.delete(root); });
   try {
+    await (signal ? untilFree(previous, signal) : previous);
     return await fn();
   } finally {
     release();
-    if (locks.get(root) === tail) locks.delete(root);
   }
 }

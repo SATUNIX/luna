@@ -31,8 +31,11 @@ import type * as IndexModule from "../packages/extensions/third_party/subagent/i
 import type * as WorkflowToolsModule from "../packages/extensions/third_party/subagent/workflow-tools.ts";
 import type * as ControlModule from "../packages/extensions/third_party/subagent/control.ts";
 import type * as RunModelModule from "../packages/extensions/third_party/subagent/run-model.ts";
+import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
+import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type { ExecuteOptions, RunState, WorkflowDef } from "../packages/extensions/third_party/subagent/workflow.ts";
 import type { WorkflowEvent } from "../packages/extensions/third_party/subagent/run-model.ts";
+import { fakeSpawner as scriptSpawner, type FakeSpawn as ScriptSpawn } from "./workflow-fakes.ts";
 
 const __delegation = await installDelegation();
 process.on("exit", () => __delegation.cleanup());
@@ -582,6 +585,30 @@ steps:
     const rule: unknown = typeof tools === "object" && tools !== null ? Reflect.get(tools, "workflow_control") : undefined;
     assert.deepEqual(rule, { decision: "allow", risk_class: "process_control" });
     ok("both firewall policies allow workflow_control as process_control");
+  }
+
+  // 9. A script run records who skipped a step, as a YAML run does.
+  {
+    type Options = Omit<EngineModule.EngineOptions, "spawnChild"> & { spawnChild: ScriptSpawn };
+    const scripts = await loadModule<{ startScriptRun(spec: EngineModule.ScriptSpec, args: unknown, opts: Options): EngineModule.StartResult }>("vendor/subagent/wf-engine.ts");
+    const sandbox = await loadModule<typeof SandboxModule>("vendor/subagent/wf-sandbox.ts");
+    const support = sandbox.detectSupport();
+    const project = path.join(ws, "script-skip");
+    fs.mkdirSync(project);
+    const skipBy = async (origin: ControlModule.ControlOrigin) => {
+      const fake = scriptSpawner(() => ({ text: "late", delayMs: 5000 }));
+      const controls = new C.ControlRegistry();
+      const source = `export const meta = { name: "skip-origin", description: "test" };\ntry { await agent("must", { required: true, agentType: "planner", label: "must" }) } catch {}\nreturn "went on"`;
+      const started = scripts.startScriptRun({ name: "skip-origin", description: "test", source, phases: [] }, undefined, { cwd: project, agents, sandbox: { mode: support.bwrap ? "full" : "reduced", support }, spawnChild: fake.spawn, controls });
+      assert.ok(started.ok);
+      for (let i = 0; i < 2000 && fake.seen.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(C.controlRun(started.runId, "skip", controls, origin).ok, true);
+      const outcome = await started.done;
+      return outcome.omissions?.map((s) => [s.stepId, s.execution, s.reason?.code]);
+    };
+    assert.deepEqual(await skipBy("agent"), [["must", "skipped", "agent"]]);
+    assert.deepEqual(await skipBy("operator"), [["must", "skipped", "operator"]]);
+    ok("a script run's skipped step records whether the agent or the operator skipped it");
   }
 
   clearInterval(keepalive);

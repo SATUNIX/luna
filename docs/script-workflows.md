@@ -108,7 +108,9 @@ does an unknown name.
   reports `concurrency`, the agent waits for a slot and goes through admission again.
 - **Nested scripts**: as many at once as agents, in slots of their own, so that a fan-out of
   `workflow()` calls cannot start one sandbox each (`tests/workflow-hooks-smoke.ts`, r13).
-- **Agents per run**: 1000 launches. The next `agent()` throws. Cached calls do not count.
+- **Agents per run**: 1000 launches. The next `agent()` throws. Cached calls and launches refused
+  before a child ran do not count; a worktree that could not be made does, as it starts nothing but
+  costs git processes each try (`tests/workflow-resume-smoke.ts`).
 - **Refused calls**: a refusal costs a script one round trip and starts nothing, so only this limit
   meets a loop of them. Past 10,000 refused calls the run fails with kind `limit`
   (`tests/workflow-hooks-smoke.ts`, r21).
@@ -207,14 +209,16 @@ Each run has a directory `<cwd>/.pi/workflows/runs/<runId>/` (mode 0700, files 0
 `script.js` (what ran), `run.json` (status, counts, error, log lines), `journal.jsonl` and, when
 worktrees were used, `worktrees.jsonl`. Values, errors and log lines go through the
 [workflow redaction](workflows.md) rules before they are written; the live value returned to the
-script is not redacted. Script runs do not appear in `workflow_status`, which lists YAML runs.
+script is not redacted, and a result redaction changed is not replayed. Script runs do not appear in `workflow_status`, which lists YAML runs.
 (`tests/workflow-hooks-smoke.ts`, `tests/workflow-resume-smoke.ts`)
 
 ## Resume
 
 The journal opens with a fingerprint of the checkout. Every launched `agent()` call adds a `started`
-row before it launches and an end row with its key, label, phase, role, whether it succeeded, its
-(redacted) value, a digest of what it launched with and, for writers, what it changed. The key is
+row before it launches (a writer in the main checkout is refused with the code `journal` if that row
+cannot be written) and an end row with its key, label, phase, role, whether it succeeded, its
+(redacted) value, whether redaction changed it, a digest of what it launched with and, for writers,
+what it changed. The key is
 the SHA-256 of the canonical JSON of `{prompt, opts}` with `label` left out, so relabelling a call
 does not change it.
 
@@ -230,10 +234,14 @@ call.
   call over the 1 MiB result cap included, and so is a refused model. A call refused for its options
   or role, refused at admission, or cut off before it started has no row. None of these is reused.
 - The fingerprint is `HEAD` plus the tree of the whole working copy, untracked files included,
-  built in a scratch index seeded from the real one. The workflow runs directory
-  (`.pi/workflows/runs`), `.pi/worktrees` and the agent logs (`.pi/subagent`) are left out, so a repo
-  that does not gitignore `.pi/` still reuses results. A writer in the main checkout (a role that is not read-only) records it when
-  it ends, failed or not.
+  built in a scratch index seeded from the real one and a scratch object store, so nothing is written
+  to the repository. All of `.pi` is left out, tracked files included, so a repo that does not
+  gitignore `.pi/` still reuses results, and so are the agent logs wherever they live. A writer in the
+  main checkout (a role that is not read-only) records it when it ends, failed or not. The comparison
+  uses git's default stat checks whatever the repository sets. A nested repository or submodule is one
+  gitlink that would hide its uncommitted edits, and git does not run inside it, so a checkout with one
+  has no usable fingerprint: it reuses nothing, and a killed writer stays blocked.
+  (`tests/workflow-resume-smoke.ts`)
 - Any entry, read or write, is reused only when the fingerprint now equals the one the earlier run's
   last live writer recorded, or the one the run started on if no writer ran live. So an edit or commit after
   the run reuses nothing. Outside a git checkout nothing is reused.
@@ -244,10 +252,16 @@ call.
   contents, uncommitted changes included. Git does not run in a worktree whose link moved.
 - A journal written before these rows existed reuses nothing, once: the resumed run writes the new
   form.
-- Reused values are the journal's redacted copies.
+- A reused value is exactly what the call returned. The journal keeps only the redacted copy, so an
+  entry whose value redaction changed is not reused: a read runs live and ends the prefix, and that
+  writer, or any finished writer after it, is refused with the code `redacted` instead of running
+  again on its own output. A resume that holds such a result copies every finished writer's row
+  into its own journal as it opens, so a later resume is refused or reuses them too, even if this
+  one stops or fails before reaching them (`tests/workflow-resume-smoke.ts`).
+- A reused kept worktree is listed in the completion message and `run.json`, as it was on the first run.
 
-A refused reuse logs `reuse.rejected{definition|workspace|worktree|legacy}` in the run's log, and the
-completion message gives the reason.
+A refused reuse logs `reuse.rejected{definition|workspace|worktree|legacy|redacted}` in the run's log,
+and the completion message gives the reason.
 
 A `started` row with no end row means the run died during that call and nobody knows what it did. A
 read replays, and a worktree writer replays in a new worktree. A writer in the main checkout replays
@@ -315,7 +329,11 @@ is idle, it starts a turn at once. No test here pins pi's ordering.
 `workflow_control {runId, action}` pauses (no new agents start), resumes, stops (the run ends
 `interrupted`) or skips the agents running now (they resolve to `null`, and a `required` one throws
 and fails the run). A skip or stop that reaches an agent waiting for the checkout or a worktree slot
-is that skip or stop, not a failure (r11).
+is that skip or stop, not a failure (r11). A writer whose child had already finished stays finished:
+its result is journaled, so a resume does not run it again. A paused run's writer that has reached
+the checkout lock waits for the resume while holding it, so other writers of that checkout wait too;
+stopping them takes them out of the queue. The omission records who skipped a step, as the code
+`operator` or `agent` (`tests/workflow-control-smoke.ts`, `tests/workflow-resume-smoke.ts`).
 
 A script's calls stop with that script, nested or top-level. One still waiting never starts, and a
 running agent is stopped, so a nested script that throws cannot leave work running beside the retry

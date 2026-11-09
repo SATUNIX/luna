@@ -1066,6 +1066,43 @@ await check('the reference generator documents workflow_run from its source, not
   assert.match(section, /relative to the run directory/, "the description comes from plan.ts");
 });
 
+await check("docs/workflows.md's four plan examples compile and cover the brief's shapes", async () => {
+  const page = fs.readFileSync(path.join(ROOT, "docs", "workflows.md"), "utf8");
+  const heading = "### Plan examples";
+  const at = page.indexOf(heading);
+  assert.ok(at > 0, "the page has a Plan examples section");
+  const after = page.slice(at + heading.length);
+  const next = /^#{2,3} /m.exec(after);
+  const section = next ? after.slice(0, next.index) : after;
+  assert.match(section, /tests\/workflow-plan-smoke\.ts/, "the section names the test that pins it");
+  const blocks = [...section.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1] ?? "");
+  assert.equal(blocks.length, 4, "exactly four plan examples");
+  const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+  const stepsOf = (value: unknown): unknown[] => {
+    assert.ok(isRecord(value), "an example is an object");
+    const steps = value["steps"];
+    assert.ok(Array.isArray(steps), "an example has a steps array");
+    return steps;
+  };
+  const examples: unknown[] = blocks.map((block) => {
+    const parsed: unknown = JSON.parse(block);
+    return parsed;
+  });
+  for (const example of examples) {
+    const compiled = plan.compilePlan(stepsOf(example), roles);
+    assert.ok(compiled.ok, `an example compiles: ${compiled.ok ? "" : JSON.stringify(compiled.errors)}`);
+  }
+  const has = (field: string): boolean => examples.some((example) => stepsOf(example).some((step) => isRecord(step) && field in step));
+  const single = examples.some((example) => {
+    const steps = stepsOf(example);
+    return steps.length === 1 && steps.every((step) => isRecord(step) && !("parallel" in step) && !("gate" in step) && !("when" in step));
+  });
+  assert.ok(single, "one example is a single step with no parallel, gate or when");
+  assert.ok(has("parallel"), "one example fans out in parallel");
+  assert.ok(has("gate"), "one example gates a review");
+  assert.ok(has("when"), "one example recovers under a when");
+});
+
 await check("docs/workflows.md qualifies replanning after a refused expansion with the allowance", () => {
   const page = fs.readFileSync(path.join(ROOT, "docs", "workflows.md"), "utf8");
   assert.doesNotMatch(page, /so the agent can replan\./);

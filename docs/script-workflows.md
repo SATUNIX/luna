@@ -6,6 +6,9 @@ and `workflow()`. The script runs in the [workflow-script sandbox](workflow-sand
 `agent()` call starts a real subagent. The tool returns at once and the run goes on in the
 background. Its result comes back later as a follow-up message.
 
+Most work needs only an [inline plan](workflows.md#inline-plans) through `workflow_run`; this page
+documents the script form for control flow that a plan cannot express.
+
 The engine is `wf-engine.ts` and the tool is `wf-tool.ts`, both in the `subagent` extension. The
 registry and the `meta` format are described under [script workflows](workflows.md#script-workflows)
 in the workflows page.

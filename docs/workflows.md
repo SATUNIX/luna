@@ -37,6 +37,42 @@ same executor as a saved workflow, without a file. A plan cannot set what would 
 refused plan returns the path, the problem and the fix with nothing started.
 (`tests/workflow-plan-smoke.ts`)
 
+### Plan examples
+
+Each shape below is a valid plan. A task with one step, one file and one check is done directly
+rather than planned; plan when there are several steps, a fan-out or a check that can send work
+back.
+
+(a) One step, defaulting to the implementer role:
+
+```json
+{"steps":[{"task":"Fix the typo in README.md."}]}
+```
+
+(b) Parallel investigation, then a synthesis over `{previous}`:
+
+```json
+{"steps":[{"id":"look","parallel":[{"id":"web","agent":"scout","task":"Read the web sources on rate limiting."},{"id":"db","agent":"scout","task":"Read the database code for rate limiting."}]},{"id":"sum","agent":"planner","task":"Combine: {previous}"}]}
+```
+
+(c) Review plus revise: the gate sends work back to `build` until the reviewer passes, at most
+twice:
+
+```json
+{"steps":[{"id":"build","task":"Build the endpoint and run its tests."},{"id":"check","agent":"reviewer","task":"Review: {previous}. Say VERDICT: PASS or VERDICT: FAIL.","gate":{"pass":"VERDICT: PASS","retry":"build","max_loops":2}}]}
+```
+
+(d) Bounded recovery: the first attempt may fail without failing the run, and a `when` step
+names its status before recovering:
+
+```json
+{"steps":[{"id":"try","agent":"scout","task":"Try the first route.","continue_on_error":true},{"id":"recover","agent":"scout","task":"Recover: {{steps.try.status}}","when":{"step":"try","status":"failed"}}]}
+```
+
+`tests/workflow-plan-smoke.ts` pins all four: it parses these blocks, compiles each through
+`compilePlan`, and checks that together they cover the single-step, parallel, gate and `when`
+shapes.
+
 ### Expanding a plan
 
 A step with `expand: true` asks the host for more steps. Its final answer is one JSON object:

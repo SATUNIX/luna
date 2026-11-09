@@ -10,6 +10,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The delegation surfaces teach plans.** E5 now plans substantial work as a small inline
+  `workflow_run` plan by default and keeps the trivial rule for one step, one file and one check; it
+  grants no tool, tier or firewall authority. The workflow card (1,183 characters) teaches when to
+  plan, roles and skills, success and failure, bounded gate loops and `expand`. Standing mode drops
+  its per-call rule. The `workflow-authoring` skill leads with inline plans and moves the full script
+  API to `references/scripts.md`; `agent-orchestration` drops `delegator`, `chain`, `subagent_status`,
+  `subagent_stop` and `/subagents`. `docs/workflows.md` gains four plan examples, each compiled by
+  the smoke (`docs/workflows.md`, `docs/script-workflows.md`, `tests/workflow-strategy-smoke.ts`,
+  `tests/workflow-plan-smoke.ts`).
 - **A smaller delegation surface.** `subagent` keeps single and parallel mode; `chain` mode and the
   ignored `confirmProjectAgents` parameter are removed, since `workflow_run` covers chains. The
   `delegator` kit role is removed, and subagents nest one level by default (`DEFAULT_MAX_DEPTH` is 1;

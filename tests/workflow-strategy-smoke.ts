@@ -501,6 +501,13 @@ async function testRecoveryFollowsThePolicy(): Promise<void> {
 async function testCardText(): Promise<void> {
   const text = repoFile("packages/extensions/src/effort/policy/workflow-card.md");
   assert.ok(text.length < 1200, `the card is under 1,200 chars (got ${String(text.length)})`);
+  assert.match(text, /skills/, "the card names skills");
+  assert.match(text, /fail/, "the card names failure");
+  assert.match(text, /pass|PASS/, "and success");
+  assert.match(text, /gate/, "a gate");
+  assert.match(text, /max_loops/, "with bounded retries");
+  assert.match(text, /expand/, "the card teaches expand");
+  assert.match(text, /one step, one file and one check/, "and the direct rule");
   assert.match(text, /read-only/, "a read-only planner cannot expand into writers");
   assert.match(text, /2 agents/, "an expand step costs 2");
   assert.match(text, /E3/, "so it does not fit E2");
@@ -513,6 +520,34 @@ async function testCardText(): Promise<void> {
   const steps: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "steps") : undefined;
   const compiled = plan.compilePlan(steps, agents.discoverAgents(root, "both").agents);
   assert.ok(compiled.ok, `the card's example compiles: ${compiled.ok ? "" : JSON.stringify(compiled.errors)}`);
+}
+
+/** E5 and standing mode teach plans as resources, and S13 removed the per-call rule. */
+async function testTierTexts(): Promise<void> {
+  const exhaustive = repoFile("packages/extensions/src/effort/policy/exhaustive.md");
+  assert.match(exhaustive, /workflow_run/, "E5 names the plan tool");
+  assert.match(exhaustive, /plan/, "E5 says to plan");
+  assert.match(exhaustive, /one step, one file and one check/, "E5 states the trivial rule");
+  assert.match(exhaustive, /direct/, "and that such a task is done directly");
+  assert.doesNotMatch(repoFile("packages/extensions/src/effort/policy/standing.md"), /per-call rule/, "S13 removed the tool text the per-call rule described");
+}
+
+/** The skill leads with plans, the script API lives in its reference file, and S13's names are gone. */
+async function testTeachingSkills(): Promise<void> {
+  const skill = repoFile("packages/kit/skills/workflow-authoring/SKILL.md");
+  assert.match(skill, /^---\nname: workflow-authoring\n/, "the skill keeps its frontmatter");
+  assert.match(skill, /disable-model-invocation: true/, "and stays hidden unless named");
+  const plan = skill.indexOf("workflow_run");
+  const scripts = skill.indexOf("## Script workflows");
+  assert.ok(plan >= 0, "the skill teaches inline plans");
+  assert.ok(scripts > plan, "plans come before the script section");
+  assert.match(skill, /references\/scripts\.md/, "the script API is in the reference file");
+  const reference = repoFile("packages/kit/skills/workflow-authoring/references/scripts.md");
+  for (const word of ["agent(", "parallel(", "pipeline(", "scriptPath", "resumeFromRunId"]) assert.ok(reference.includes(word), `the reference covers ${word}`);
+  const orchestration = repoFile("packages/kit/skills/agent-orchestration/SKILL.md");
+  assert.doesNotMatch(orchestration, /delegator|subagent_status|subagent_stop|\/subagents/);
+  assert.doesNotMatch(orchestration, /chain:/);
+  assert.match(orchestration, /workflow-authoring/);
 }
 
 // ---- the strategy block in both validators ---------------------------------------------------
@@ -572,6 +607,8 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["tier and tool activity come from effort, never the caller", testRegistryTakesTierFromEffort],
   ["a recovery entry follows the policy: scouts, split with the card, human", testRecoveryFollowsThePolicy],
   ["the card's text and example", testCardText],
+  ["E5 plans by default, the trivial rule is direct, and standing mode has no per-call rule", testTierTexts],
+  ["the skills lead with plans and drop S13's names", testTeachingSkills],
   ["the strategy block in both validators", testBothValidators],
 ];
 

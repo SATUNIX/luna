@@ -11,7 +11,8 @@
  *   node packages/core/gen-shared.ts --check   # exit 1 when a copy is missing or differs
  *
  * `npm run verify` runs the check (section "shared helper copies"), and
- * tests/redaction-corpus-smoke.ts and tests/workspace-symlink-smoke.ts exercise the copies.
+ * tests/redaction-corpus-smoke.ts, tests/workspace-symlink-smoke.ts, tests/workflow-resume-smoke.ts and
+ * tests/verify-failclosed-smoke.ts exercise the copies.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -86,6 +87,10 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   "open-tool-calls.ts": [
     "packages/extensions/src/conductor/shared/open-tool-calls.ts",
     "packages/extensions/third_party/subagent/shared/open-tool-calls.ts",
+  ],
+  "fingerprint.ts": [
+    "packages/extensions/src/verify-gate/shared/fingerprint.ts",
+    "packages/extensions/third_party/subagent/shared/fingerprint.ts",
   ],
   "safe-regex.ts": [
     "packages/extensions/src/skill-router/shared/safe-regex.ts",

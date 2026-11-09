@@ -494,6 +494,11 @@ SOFTWARE.
     `extension.json` (`tests/run-query-smoke.ts`, `tests/workflow-control-smoke.ts`,
     `tests/workflow-panel-smoke.ts`, `tests/subagent-observability-smoke.ts`,
     `tests/workflow-plan-smoke.ts`).
+  - **Shared workspace fingerprint (2026-11-10):** `workspaceFingerprint` moves out of
+    `wf-engine.ts` into `shared/fingerprint.ts` (with `usableFingerprint`), a gen-shared copy of
+    `packages/core/shared/fingerprint.ts` that verify-gate also uses. `wf-engine.ts` keeps its
+    exported wrapper, which still excludes the runs root and the agent log directory, so resume
+    behaviour is unchanged (`tests/workflow-resume-smoke.ts`, `tests/verify-failclosed-smoke.ts`).
 
 ### `todo`
 

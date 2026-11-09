@@ -60,6 +60,7 @@ import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type RefusedCall, ty
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, worktreeGitDir, SAFE_GIT, type WorktreeOutcome } from "./worktree.ts";
 import { delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
+import { workspaceFingerprint as checkoutFingerprint, usableFingerprint } from "./shared/fingerprint.ts";
 import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
 export const MAX_AGENTS_PER_RUN = 1000;
@@ -337,18 +338,9 @@ function newRunId(): string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The checkout fingerprint (T6): HEAD plus the tree of the whole working copy, untracked files
-// included (ignored ones are not), built in a scratch index and a scratch object store, so neither
-// the real index nor the repository's objects are touched. The scratch index starts as a copy of
-// the real one, so git hashes only the files that differ from the real index: every run takes a
-// fingerprint, and a read of the whole tree would cost each of them. Nothing refreshes the real
-// index, so a file an earlier writer left is hashed again by every later fingerprint.
+// The checkout fingerprint (T6) lives in ./shared/fingerprint.ts, shared with verify-gate.
 
-const INDEX_AGE_MARGIN_MS = 2000;
 const OUTPUT_CAP = 16 * 1024 * 1024;
-// One line per tracked file, and running out of room would refuse every reuse in a large checkout.
-const LISTING_CAP = 256 * 1024 * 1024;
-const GITLINK_ENTRY = /(?:^|\0)160000 /;
 
 function git(args: string[], cwd: string, env?: Record<string, string | undefined>, maxBuffer = OUTPUT_CAP): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -360,77 +352,11 @@ function git(args: string[], cwd: string, env?: Record<string, string | undefine
 }
 
 /**
- * Copies the real index to `index`; false when it cannot stand in for a read of the working tree.
- * git trusts an entry's stat data only if the entry is older than the index, so the copy keeps the
- * index's age, set back past its timestamp's rounding: a nearby edit is then hashed, never assumed
- * clean. A file flagged assume-unchanged or skip-worktree would not be read at all, so an index with
- * any of those is not used.
+ * The checkout's fingerprint, or "no-git" outside a git checkout (nothing is then reused). Besides
+ * `.pi`, `exclude` (the workflow runs root) and the agent logs are left out when they live elsewhere.
  */
-async function seedIndex(root: string, index: string, env: Record<string, string | undefined>): Promise<boolean> {
-  try {
-    const real = path.resolve(root, await git(["rev-parse", "--git-path", "index"], root));
-    fs.copyFileSync(real, index);
-    const age = new Date(fs.statSync(real).mtimeMs - INDEX_AGE_MARGIN_MS);
-    fs.utimesSync(index, age, age);
-    const flagged = /(?:^|\0)(?:[a-z]|S) /.test(await git(["ls-files", "-v", "-z"], root, env, LISTING_CAP));
-    if (!flagged) return true;
-  } catch {
-    /* no index yet, or none git can read: the fresh path below decides */
-  }
-  fs.rmSync(index, { force: true });
-  return false;
-}
-
-/**
- * The checkout's fingerprint, or "no-git" outside a git checkout (nothing is then reused). All of
- * `.pi` is left out, because the journal, the worktrees, the agent logs, the trace and the firewall
- * audit there change with every call, whether or not the checkout ignores them; so are `exclude`
- * (the workflow runs root) and the agent logs when they live elsewhere. The comparison trusts no
- * stat setting of the repository. A nested repository is one gitlink, which hides its uncommitted
- * edits, and git must not run inside it, so a checkout with one is `unreadable:` and reuses nothing.
- */
-export async function workspaceFingerprint(cwd: string, exclude?: string): Promise<string> {
-  let root: string;
-  try {
-    root = await checkoutRoot(cwd);
-  } catch {
-    return "no-git";
-  }
-  let tmp: string | undefined;
-  try {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wf-index-"));
-    const index = path.join(tmp, "index");
-    const objects = path.join(tmp, "objects");
-    fs.mkdirSync(objects);
-    const realObjects = path.resolve(root, await git(["rev-parse", "--git-path", "objects"], root));
-    // Quoted, because this variable is a list split on ":" unless an entry starts with a quote.
-    const env = { ...process.env, GIT_INDEX_FILE: index, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(realObjects) };
-    const head = await git(["rev-parse", "--verify", "HEAD^{commit}"], root).catch(() => "no-head");
-    if (!(await seedIndex(root, index, env)) && head !== "no-head") await git(["read-tree", "HEAD"], root, env);
-    const excludes: string[] = [];
-    const inside = (from: string, dir: string): string | undefined => {
-      const skip = path.relative(realOr(from), realOr(dir));
-      return skip === "" || skip === ".." || skip.startsWith(`..${path.sep}`) || path.isAbsolute(skip) ? undefined : skip;
-    };
-    const piDir = path.join(root, ".pi");
-    const elsewhere = [exclude, subagentStateDir(cwd)].filter((dir) => dir !== undefined && inside(piDir, dir) === undefined);
-    for (const dir of [piDir, ...elsewhere]) {
-      if (dir === undefined) continue;
-      const skip = inside(root, dir);
-      if (skip === undefined) continue;
-      const rel = skip.split(path.sep).join("/");
-      // An ignored directory needs no exclude (git add refuses a pathspec naming an ignored path).
-      if (!(await git(["check-ignore", "-q", "--", rel], root).then(() => true, () => false))) excludes.push(`:(exclude,literal)${rel}`);
-    }
-    await git(["-c", "core.trustctime=true", "-c", "core.checkStat=default", "add", "-A", "--", ".", ...excludes], root, env);
-    const tree = await git(["write-tree"], root, env);
-    if (GITLINK_ENTRY.test(await git(["ls-files", "-s", "-z"], root, env, LISTING_CAP))) return "unreadable:a nested repository";
-    return crypto.createHash("sha256").update(`${head}\n${tree}`).digest("hex");
-  } catch (error) {
-    return `unreadable:${error instanceof Error ? error.message.slice(0, 80) : "error"}`;
-  } finally {
-    if (tmp !== undefined) fs.rmSync(tmp, { recursive: true, force: true });
-  }
+export function workspaceFingerprint(cwd: string, exclude?: string): Promise<string> {
+  return checkoutFingerprint(cwd, [exclude, subagentStateDir(cwd)]);
 }
 
 function realOr(p: string): string {
@@ -459,14 +385,12 @@ const REUSE_REJECTED: Readonly<Record<ReuseRejection, string>> = {
 const WRITER_NOT_REPLAYED = "the journal holds only a redacted copy of this finished writer's result, and running it again would apply it twice. Check the checkout, then start a fresh run.";
 const STARTED_ROW_LOST = "the journal could not record this writer's start, so a later resume could not tell what it did";
 
-const usable = (fingerprint: string): boolean => fingerprint !== "no-git" && !fingerprint.startsWith("unreadable:");
-
 /** A kept worktree's fingerprint, or undefined when its link moved or it cannot be read. */
 async function keptTree(worktree: string, cwd: string): Promise<string | undefined> {
   const common = await git(["rev-parse", "--git-common-dir"], cwd).catch(() => "");
   if (!common || worktreeGitDir(worktree, realOr(path.resolve(cwd, common))) === null) return undefined;
   const fingerprint = await workspaceFingerprint(worktree);
-  return usable(fingerprint) ? fingerprint : undefined;
+  return usableFingerprint(fingerprint) ? fingerprint : undefined;
 }
 
 /** A held-over row whose call was then reused has two rows; the reuse stands for both, so a same-key call later cannot take the spare. */
@@ -507,7 +431,7 @@ class ResumeCache {
     // not: its row holds an older run's state, and that run's hit means the run row already covers it.
     const lastWriter = [...previous.entries].reverse().find((e) => e.writer && e.workspace !== undefined && !e.cached);
     this.base = lastWriter?.workspace ?? previous.fingerprint ?? "unreadable:no run row";
-    this.inPlace = usable(fingerprint) && fingerprint === this.base;
+    this.inPlace = usableFingerprint(fingerprint) && fingerprint === this.base;
     this.unknownEffects = this.inPlace ? [] : previous.unknown.filter((s) => s.writer && !s.isolated);
   }
 

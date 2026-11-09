@@ -186,6 +186,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A verify or review PASS is bound to the checkout it checked.** A recorded PASS in a git checkout
+  carries the workspace revision taken after its check ran, and goes stale when the revision changes:
+  after any tool result but `read`, `grep`, `find` and `ls` (a shell `sed -i`, `git checkout`, a
+  formatter or a sub-agent's writes) and at every `turn_end`, so completion stays blocked until it is
+  re-verified. Files the check itself writes no longer stale its own PASS. Outside git the previous
+  behaviour stands. A FAIL at a new revision after an earlier FAIL now steers to `split` at level 3
+  and above, once per request; a stale run is not counted as a FAIL. The workspace fingerprint is
+  shared with the subagent workflow engine (`packages/core/shared/fingerprint.ts`,
+  `tests/verify-failclosed-smoke.ts`).
 - **Protected files cannot be written through a patch.** `git apply`, `git am` and `patch` (and
   `git-apply`, `git-am`, `gpatch`) now count every file their patch names as a write target, in both
   protected-paths and the tool firewall, including rename and copy lines, at every strip level and

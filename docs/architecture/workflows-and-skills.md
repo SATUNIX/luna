@@ -177,7 +177,7 @@ flowchart TD
     REPORT --> RESULT["Pass only if any check passed and the review ran and passed"]
 ```
 
-`PI_KIT_VERIFY_ON_TURN=1` enables a fast turn-end mode. After a turn that made successful `write` or `edit` calls and ended normally, it runs only the check command (when one resolves), records the `verify` verdict and, on a failure, sends one follow-up diagnostic until the next user input. It starts no reviewer. This gate does not intercept shell tools and is unrelated to a workflow step's own `gate`.
+`PI_KIT_VERIFY_ON_TURN=1` enables a fast turn-end mode. After a turn that made successful `write` or `edit` calls and ended normally, it runs only the check command (when one resolves), records the `verify` verdict and, on a failure, sends one follow-up diagnostic until the next user input; when a later failure comes at a different checkout revision and the effort policy answers `split` (level 3 and above), it sends that steer once per request. It starts no reviewer. In a git checkout a recorded PASS is also made stale when the checkout revision changes (see the verify-gate README). This gate does not intercept shell tools and is unrelated to a workflow step's own `gate`.
 
 ```mermaid
 flowchart LR

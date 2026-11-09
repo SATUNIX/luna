@@ -69,6 +69,8 @@ export interface WorkflowRun {
   openedAt: number;
   /** Planned runs only: the tier allowance, which holds the run below `totalPerRun`. */
   cap?: number;
+  /** Planned runs only: the worst case charged to this run so far, which a renewed allowance does not clear. */
+  planned?: number;
 }
 
 /** The workflow limits a workflow ledger is created with. */
@@ -207,14 +209,15 @@ export function withLock<T>(file: string, fn: () => T): T {
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
+      let mtimeMs: number;
       try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          breakStaleLock(lock);
-          continue;
-        }
-      } catch {
-        continue; // the holder released it between our attempt and the stat
+        mtimeMs = fs.statSync(lock).mtimeMs;
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException)?.code === "ENOENT") continue; // the holder released it between our attempt and the stat
+        throw statError;
       }
+      // A break that fails throws, and one that leaves the lock in place still reaches the deadline.
+      if (Date.now() - mtimeMs > LOCK_STALE_MS) breakStaleLock(lock);
       if (Date.now() > deadline) throw new Error(`timed out waiting for the effort ledger lock ${lock}`, { cause: error });
       sleepSync(15);
     }
@@ -238,7 +241,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 function isWorkflowRun(value: unknown): value is WorkflowRun {
-  return isRecord(value) && typeof value.tokenHash === "string" && isCount(value.used) && typeof value.openedAt === "number" && (value.cap === undefined || isCount(value.cap));
+  return isRecord(value) && typeof value.tokenHash === "string" && isCount(value.used) && typeof value.openedAt === "number" && (value.cap === undefined || isCount(value.cap)) && (value.planned === undefined || isCount(value.planned));
 }
 
 function isWorkflowSection(value: unknown): value is WorkflowSection {
@@ -371,7 +374,7 @@ export function openRun(file: string, runId: string, now = Date.now(), newToken:
         data.workflow.plannedUsed = planned + plan.planned;
       }
       const runToken = newToken();
-      data.workflow.runs[runId] = { tokenHash: hashToken(runToken), used: 0, openedAt: now, ...(plan ? { cap: plan.allowance } : {}) };
+      data.workflow.runs[runId] = { tokenHash: hashToken(runToken), used: 0, openedAt: now, ...(plan ? { cap: plan.allowance, planned: plan.planned } : {}) };
       writeLedger(file, data);
       return { ok: true as const, runToken };
     });
@@ -383,7 +386,7 @@ export function openRun(file: string, runId: string, now = Date.now(), newToken:
 /**
  * Charge more to an open planned run: a plan's expansion, which the host only knows once a step has
  * answered. The same allowance and the same run: over the allowance, or past what the run's cap can
- * still start, is refused with nothing charged. Only the holder of the run's token can charge it.
+ * still start once its unstarted planned agents are counted, is refused with nothing charged. Only the holder of the run's token can charge it.
  */
 export function chargeRun(file: string, runId: string, runToken: string, plan: RunPlan): { ok: true } | Denial {
   if (!isCount(plan.planned)) return deny("invalid", "a planned run's worst case must be a non-negative whole number of agents");
@@ -396,18 +399,21 @@ export function chargeRun(file: string, runId: string, runToken: string, plan: R
       if (!wf || run?.cap === undefined || !tokenMatches(run.tokenHash, runToken)) return deny("run-scope", "no open planned workflow run matches this request (unknown run id or wrong run token)");
       const planned = wf.plannedUsed ?? 0;
       const allowance = Math.min(plan.allowance, run.cap);
-      if (planned + plan.planned > allowance || run.used + plan.planned > allowance) {
+      // Retries can take `used` past what was planned; until then the unstarted plan still holds its place.
+      const committed = Math.max(run.used, run.planned ?? 0);
+      if (planned + plan.planned > allowance || committed + plan.planned > allowance) {
         const inRequest = allowance - planned;
-        const inRun = allowance - run.used;
+        const inRun = allowance - committed;
         const why =
           inRequest <= 0
             ? `no workflow of any size fits this request: ${plan.label} allows ${allowance} a request and ${planned} are already planned. The allowance renews on the next user message; raise it with /effort.`
             : inRun <= 0
-              ? `this run has started ${run.used} of its ${allowance} agents, so it cannot expand; a new plan can still start up to ${inRequest}.`
-              : `up to ${Math.min(inRequest, inRun)} more agents would fit: ${plan.label} allows ${allowance} a request (${planned} planned, ${run.used} started here). Plan less, or raise effort with /effort.`;
+              ? `this run has started or planned ${committed} of its ${allowance} agents, so it cannot expand; a new plan can still start up to ${inRequest}.`
+              : `up to ${Math.min(inRequest, inRun)} more agents would fit: ${plan.label} allows ${allowance} a request (${planned} planned, ${committed} started or planned here). Plan less, or raise effort with /effort.`;
         return deny("plan-allowance", why);
       }
       wf.plannedUsed = planned + plan.planned;
+      run.planned = committed + plan.planned;
       writeLedger(file, data);
       return { ok: true as const };
     });

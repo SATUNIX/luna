@@ -147,9 +147,9 @@ run token, and every reservation for the run must carry the run id and that toke
 the token is written to disk. The scope lives in the session's workflow ledger
 (`<agent dir>/pi-kit/effort/ledgers/<session>-workflows.json`), a separate file that the per-turn
 ledger rotation never replaces, so a run that keeps going across your messages keeps its count. A
-run id is opened once; child processes cannot open runs, and a tier with a workflow allowance of 0
-(E1, or any tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflow run` stays
-available there as a user launch (`tests/effort-smoke.ts`). The workflow ledger is created only when
+run id is opened once; child processes cannot open runs, and a tier with no delegation (E1, or any
+tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflow run` stays available there
+as a user launch (`tests/effort-smoke.ts`). The workflow ledger is created only when
 no file exists there. An existing file that cannot be read, or that has no workflow section, is
 never replaced: opening a run and reserving both refuse with code `no-ledger`, so a corrupt or
 edited file cannot reset the session's count. Workflow agents never draw on the tier
@@ -173,6 +173,11 @@ The model starting a YAML workflow is charged before anything launches. Each tie
 |---:|---:|---:|---:|---:|
 | 0 | 1 | 8 | 16 | 64 |
 
+A `maxTotal` you set for a tier lowers its allowance when it is the smaller number, and never raises
+it: a tier whose allowance is 0 refuses a plan with code `plan-allowance`, even if you let it
+delegate. A custom policy that leaves out `workflowAgents` still loads, and plans nothing at that
+tier until you add it (`tests/effort-smoke.ts`).
+
 `openRunScope(runId, {planned})` charges the run's worst case (its steps, plus every gated segment
 at its full `max_loops`) against the allowance. A plan that does not fit is refused with code
 `plan-allowance` and starts nothing, and the reason names `/effort`. The charge is never refunded,
@@ -181,11 +186,14 @@ ledger rotation and a reload: a workflow's completion message starting a turn do
 and only a user message does: yours, or one an extension sends on your behalf, which includes the
 resume after an automatic compaction interrupts a run. The allowance also caps each planned run, so
 the run's limit is the lower of the allowance and `workflowTotalPerRun`. A transient retry is an agent like any other,
-so a run planned at exactly its tier's allowance can use up its cap on its last gate loop.
+so a run planned at exactly its tier's allowance can use up its cap on its last gate loop. Retries
+are checked against that run's cap only, not against the request, so the allowance bounds what is
+planned rather than what starts: at E3, eight one-step plans that each retry once start 16 agents. No test pins that total.
 
 **The cost.** Plans are additive to the discretionary budget: at E3 a request can start the 3
 children of the `subagent` tool and 8 planned workflow agents. Those 8 run at E1, cannot delegate,
-and run at most the tier's `maxConcurrent` at once.
+and run at most the tier's `maxConcurrent` at once. E1 also sets their prompt depth, whatever the
+session's tier, and a role's `effort:` is not applied to them. Their thinking level does not change (`tests/delegation-guard-smoke.ts`).
 
 A script is different: the `workflow` tool stays behind the firewall's ask, so an approved script
 opens its scope with no `planned`, is charged nothing here and keeps `workflowTotalPerRun`.

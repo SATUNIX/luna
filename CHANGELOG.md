@@ -178,6 +178,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- Plan allowances hold under what the review found. A pi that reports no `messageType` renews the
+  allowance on each prompt, where it was one-shot per session; a custom message still renews nothing.
+  An expansion counts the larger of a run's started and planned agents, so a renewed allowance cannot
+  hide unstarted work. An operator's lower `maxTotal` lowers the allowance. A tier with
+  `workflowAgents` 0 refuses plans only, with code `plan-allowance`, and `maxTotal` 0 refuses every
+  scope. A policy older than the field still loads and plans nothing. A stale effort lock that
+  cannot be broken now refuses within the lock wait instead of spinning the event loop
+  (`docs/effort.md`, `tests/effort-smoke.ts`).
 - Plans and expansions run the text they were given. An expansion is parsed from the child's own
   answer, not its redacted copy, and `plan.json` keeps the steps a resume compiles; a plan or
   expansion the secret table matches is refused by field path, never quoting the value, and an

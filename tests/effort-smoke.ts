@@ -8,7 +8,7 @@
  * The concurrency check races real processes on one ledger file.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -223,6 +223,10 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.deepEqual(rtPolicy.tiers.map((t) => t.workflowAgents), expected);
     assert.deepEqual(rtPolicy.tiers.map((t) => policyMod.workflowAllowance(rtPolicy, t.id)), expected);
     assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 0 } }), 0, "a tier the operator set to no delegation plans nothing");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 1 } }), 1, "an operator's lower limit lowers the allowance");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 20 } }), 8, "an operator's higher limit never raises it");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "minimal", { minimal: { maxTotal: 2 } }), 0, "nor does one lift a tier that plans nothing");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { thorough: { maxTotal: 1 } }), 8, "another tier's limit does not apply");
     const dir = policyMod.policyDir();
     const allowanceProblems = (problems: string[]): string[] => problems.filter((p) => p.includes("workflowAgents"));
     const withTier = (index: number, workflowAgents: unknown): unknown => {
@@ -230,10 +234,40 @@ const tests: Record<string, () => void | Promise<void>> = {
       const tiers: unknown[] = policy.tiers.map((t, i) => (i === index ? { ...t, workflowAgents } : t));
       return { ...policy, tiers };
     };
-    for (const policy of [withTier(2, undefined), withTier(2, -1), withTier(2, 1.5), withTier(2, "8"), withTier(2, 0), withTier(4, 15)]) {
+    for (const policy of [withTier(2, -1), withTier(2, 1.5), withTier(2, "8"), withTier(2, 0), withTier(4, 15)]) {
       const core = allowanceProblems(validateEffortPolicy(policy));
       assert.ok(core.length > 0, `core refuses ${JSON.stringify(policy).slice(0, 80)}`);
       assert.deepEqual(allowanceProblems(policyMod.validatePolicy(policy, dir)), core, "runtime agrees");
+    }
+  },
+
+  // A policy directory written before workflowAgents existed still loads. The toolchain stays strict:
+  // it checks the shipped policy, which must carry the field.
+  "a custom policy with no workflowAgents plans nothing at that tier, and still loads": () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-policy-"));
+    try {
+      const src = policyMod.policyDir();
+      fs.cpSync(src, dir, { recursive: true });
+      const doc = structuredClone(corePolicy);
+      const strip = (renamed: string | null, def = doc.default): unknown => ({
+        ...doc,
+        default: def,
+        tiers: doc.tiers.map((t, i) => {
+          const { workflowAgents: _dropped, ...rest } = t;
+          return i === 2 && renamed ? { ...rest, id: renamed } : rest;
+        }),
+      });
+      const load = (value: unknown): EffortPolicy => {
+        fs.writeFileSync(path.join(dir, "effort.json"), JSON.stringify(value));
+        return policyMod.loadPolicy(dir);
+      };
+      assert.deepEqual(load(strip(null)).tiers.map((t) => t.workflowAgents), [0, 0, 0, 0, 0], "a missing allowance is 0, so an older policy widens nothing");
+      assert.deepEqual(load(strip("middling", "middling")).tiers.map((t) => t.workflowAgents), [0, 0, 0, 0, 0], "a renamed tier is no load problem either");
+      const invalid = structuredClone(corePolicy);
+      const bad: unknown = { ...invalid, tiers: invalid.tiers.map((t, i) => (i === 2 ? { ...t, workflowAgents: null } : t)) };
+      assert.throws(() => load(bad), /tiers\[2\]\.workflowAgents must be a non-negative integer/, "a value that is present is still checked");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   },
 
@@ -632,6 +666,39 @@ const tests: Record<string, () => void | Promise<void>> = {
     } finally { w.cleanup(); }
   },
 
+  // Run in a child: on a loop that never yields, this process would hang with it.
+  "a stale lock that cannot be broken refuses within the lock wait, and never spins": () => {
+    const w = world();
+    try {
+      const attempt = (file: string): { status: number | null; out: string } => {
+        const script = `import(${JSON.stringify("file://" + path.join(CACHE, "packages_extensions_src_effort_ledger.mjs"))}).then((l) => { try { l.withLock(process.argv[1], () => {}); console.log("ran"); } catch (e) { console.log("threw: " + e.message); } });`;
+        const r = spawnSync(process.execPath, ["-e", script, file], { encoding: "utf8", timeout: 7_000 });
+        return { status: r.status, out: r.stdout };
+      };
+      const old = (file: string): void => { const t = new Date(Date.now() - 60_000); fs.utimesSync(file, t, t); };
+      // (a) The break lock cannot be cleared (a directory stands in for a dead one on a read-only mount).
+      const stuck = path.join(w.agent, "stuck.json");
+      fs.writeFileSync(`${stuck}.lock`, "999999\n"); old(`${stuck}.lock`);
+      fs.mkdirSync(`${stuck}.lock.break`); old(`${stuck}.lock.break`);
+      const held = attempt(stuck);
+      assert.equal(held.status, 0, "the wait ended by itself");
+      assert.match(held.out, /threw: timed out waiting for the effort ledger lock/);
+      // (b) The directory is read-only, so the break lock cannot be written (root ignores the mode).
+      if (process.getuid?.() !== 0) {
+        const dir = path.join(w.agent, "read-only");
+        fs.mkdirSync(dir);
+        const file = path.join(dir, "ledger.json");
+        fs.writeFileSync(`${file}.lock`, "999999\n"); old(`${file}.lock`);
+        fs.chmodSync(dir, 0o555);
+        try {
+          const denied = attempt(file);
+          assert.equal(denied.status, 0, "the failure ended the wait");
+          assert.match(denied.out, /threw: EACCES/);
+        } finally { fs.chmodSync(dir, 0o755); }
+      }
+    } finally { w.cleanup(); }
+  },
+
   "a stale lock left by a crashed holder is broken safely: racing waiters cannot both win, and a release never removes someone else's lock": async () => {
     const w = world();
     try {
@@ -801,13 +868,58 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(codeOf(ninth), "total", "reserve holds a planned run to min(cap, totalPerRun)");
       assert.match(ninth.ok ? "" : ninth.reason, /limit \(8\)/);
       // A turn that is not the user's keeps the charge, a user turn renews it, and a reload changes nothing.
-      await b.turn();
-      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "a turn with no user message does not refresh the allowance");
+      const customTurn = async (customType: string): Promise<unknown> => b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "custom", message: { customType, content: "done", display: true } }, b.ctx);
+      await customTurn("luna-workflow-result");
+      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "a workflow's completion message does not refresh the allowance");
+      await customTurn("another-extension");
+      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "nor does any other extension's custom message");
       await b.start("reload");
-      await b.turn();
+      await customTurn("luna-workflow-result");
       assert.equal(codeOf(reg.openRunScope("plan-6", { planned: 1 })), "plan-allowance", "nor does a reload");
       await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "go" }, b.ctx);
       assert.ok(reg.openRunScope("plan-7", { planned: 8 }).ok, "a user turn renews it");
+    } finally { w.cleanup(); }
+  },
+
+  // pi before 1.2.0 (the floor and a CI lane) reports no messageType, and starts this event only from a prompt.
+  "a pi that reports no messageType renews the plan allowance on each prompt": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      assert.ok(reg.openRunScope("floor-1", { planned: 8 }).ok, "the first request plans its allowance");
+      assert.equal(codeOf(reg.openRunScope("floor-2", { planned: 1 })), "plan-allowance", "and it is used up");
+      await b.turn();
+      assert.ok(reg.openRunScope("floor-3", { planned: 8 }).ok, "the next prompt renews it");
+    } finally { w.cleanup(); }
+  },
+
+  // An operator can raise a tier's maxTotal above a workflowAgents of 0. That tier delegates and runs an
+  // approved script, which is charged nothing, and it plans nothing; a plan's refusal must say so.
+  "a tier that delegates but plans nothing refuses only plans, and says why; maxTotal 0 refuses every scope": async () => {
+    const w = world();
+    try {
+      fs.mkdirSync(path.join(w.agent, "pi-kit"), { recursive: true });
+      fs.writeFileSync(path.join(w.agent, "pi-kit", "effort.json"), JSON.stringify({ default: "minimal", limits: { minimal: { maxTotal: 2 }, standard: { maxTotal: 0 } } }));
+      const b = boot();
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const plan = reg.openRunScope("zero-plan", { planned: 1 });
+      assert.equal(codeOf(plan), "plan-allowance");
+      assert.doesNotMatch(plan.ok ? "" : plan.reason, /does not delegate/);
+      assert.match(plan.ok ? "" : plan.reason, /E1 Minimal plans no workflow agents.*\/effort/);
+      assert.ok(reg.openRunScope("zero-script").ok, "an approved script is charged nothing");
+      await b.command("standard");
+      await b.turn();
+      for (const options of [{ planned: 1 }, undefined]) {
+        const refused = reg.openRunScope("none", options);
+        assert.equal(codeOf(refused), "tier");
+        assert.match(refused.ok ? "" : refused.reason, /does not delegate/);
+      }
     } finally { w.cleanup(); }
   },
 
@@ -833,8 +945,28 @@ const tests: Record<string, () => void | Promise<void>> = {
       ledgerMod.resetPlanned(run.ledger);
       const full = charge(1);
       assert.equal(codeOf(full), "plan-allowance", "a renewed request does not lift the run's own cap");
-      assert.match(full.ok ? "" : full.reason, /this run has started 8 of its 8 agents, so it cannot expand; a new plan can still start up to 8/);
+      assert.match(full.ok ? "" : full.reason, /this run has started or planned 8 of its 8 agents, so it cannot expand; a new plan can still start up to 8/);
       assert.doesNotMatch(full.ok ? "" : full.reason, /no workflow of any size fits/, "a new workflow would fit, so this must not say none does");
+    } finally { w.cleanup(); }
+  },
+
+  // Rank 57: a second process on the same session renews the allowance while this run is still going.
+  "an expansion counts the run's unstarted planned agents after the allowance renews": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const run = b.registry().openRunScope("renewed", { planned: 6 });
+      assert.ok(run.ok, "a plan within the allowance opens");
+      for (let i = 0; i < 2; i++) assert.equal(ledgerMod.reserve(run.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "renewed", runToken: run.runToken }, Date.now() + i, () => `r${String(i)}`).ok, true);
+      ledgerMod.resetPlanned(run.ledger);
+      const charge = (planned: number) => ledgerMod.chargeRun(run.ledger, "renewed", run.runToken, { planned, allowance: 8, label: "E3 Standard" });
+      const over = charge(6);
+      assert.equal(codeOf(over), "plan-allowance", "2 started, 4 still planned and 6 new is 12 against a cap of 8");
+      assert.match(over.ok ? "" : over.reason, /up to 2 more agents would fit/);
+      assert.ok(charge(2).ok, "the size it named fits");
     } finally { w.cleanup(); }
   },
 

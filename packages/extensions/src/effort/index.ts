@@ -587,10 +587,12 @@ export default function (pi: ExtensionAPI) {
     openRunScope(runId: string, options: { planned?: number } = {}): RunScope {
       if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
       if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so a workflow run cannot be budgeted.` };
-      // A tier with no workflow allowance cannot budget a run, so it refuses before any launch. This
-      // is the boundary on a pi without active-tool control, where the workflow tools stay visible.
+      // A tier with no delegation cannot budget a run, so it refuses before any launch. This is the
+      // boundary on a pi without active-tool control, where the workflow tools stay visible.
+      if (limitsFor(active.tier).maxTotal === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
+      // A tier can delegate and still plan nothing. An approved script opens no plan, so it passes.
       const allowance = workflowAllowance(policy, active.tier, config.limits);
-      if (allowance === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
+      if (options.planned !== undefined && allowance === 0) return { ok: false, code: "plan-allowance", reason: `${label(active.tier)} plans no workflow agents, so this workflow cannot start. Do the work directly, or raise effort with /effort.` };
       if (runFiles.has(runId)) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" already has a scope; a run id is opened once` };
       let file: string;
       try {
@@ -720,8 +722,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!policy) return undefined;
     // A workflow's completion message that starts a turn while idle is a wake; your message ends the chain.
+    // Before pi 1.2.0 the field is absent and this event starts only from a prompt, so that is a user turn.
+    const messageType: unknown = event.messageType;
+    const userTurn = messageType === "user" || messageType === undefined;
     if (event.messageType === "custom" && event.message.customType === WORKFLOW_RESULT_TYPE) wakeChain++;
-    else if (event.messageType === "user") {
+    else if (userTurn) {
       wakeChain = 0;
       // A user message renews the plan allowance, including one an extension sends (trigger-compact's
       // resume, remote-control); a wake rotates the turn's ledger, not this one.
@@ -746,7 +751,7 @@ export default function (pi: ExtensionAPI) {
         process.stderr.write(`[effort] could not read the standing prompt: ${error instanceof Error ? error.message : String(error)}\n`);
       }
     }
-    const planned = event.messageType === "user" ? reportSignal({ trigger: "plan" })?.steer : null;
+    const planned = userTurn ? reportSignal({ trigger: "plan" })?.steer : null;
     if (planned) body = `${body}\n\n${planned}`;
     // One hidden message a turn: the card and the standing reminder share it.
     const card = takeCard();

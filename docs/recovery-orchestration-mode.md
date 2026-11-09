@@ -149,8 +149,8 @@ test pins the lifetime.
 
 ## 8. Shape
 
-`recovery-orchestrator` is an extension: it hooks `session_start`, `input` and `turn_end`,
-keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
+`recovery-orchestrator` is an extension: it hooks `session_start`, `session_shutdown`, `input`
+and `turn_end`, keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
 steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers `/recover`.
 The steer names the `recovery-debugging` skill, which covers recovering from a broken state by
 hand. Open design questions (signature definition, a "worse" metric, scout independence, fork

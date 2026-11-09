@@ -9,7 +9,7 @@
     "maxScouts": 8
   },
   "workflow": {
-    "$comment": "Script workflows (the \"workflow\" launch kind). Each run opens its own pinned scope in a per-session workflow ledger that the per-turn scope rotation never replaces. workflowConcurrent bounds live agents in one run, workflowTotalPerRun the agents one run may ever start, and workflowSessionTotal the agents all runs in a session may start. These launches never draw on the tier budget or on ceilings.maxTotal. A tier's workflowAgents is the allowance for model-started YAML runs: the worst case of every such run started in one user request, charged before the first launch and never refunded; a tier with 0 opens no run scope at all. An approved script is charged nothing and keeps workflowTotalPerRun.",
+    "$comment": "Script workflows (the \"workflow\" launch kind). Each run opens its own pinned scope in a per-session workflow ledger that the per-turn scope rotation never replaces. workflowConcurrent bounds live agents in one run, workflowTotalPerRun the agents one run may ever start, and workflowSessionTotal the agents all runs in a session may start. These launches never draw on the tier budget or on ceilings.maxTotal. A tier's workflowAgents is the allowance for model-started YAML runs: the worst case of every such run started in one user request, charged before the first launch and never refunded; a tier with 0 refuses every plan, and a tier with maxTotal 0 opens no run scope at all. An approved script is charged nothing and keeps workflowTotalPerRun.",
     "workflowConcurrent": 16,
     "workflowTotalPerRun": 1000,
     "workflowSessionTotal": 2000

@@ -186,6 +186,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A model-started workflow step reads at the session's depth, and retries count against the
+  request.** A YAML or plan step keeps the E1 delegation limit, but its prompt now reads at the
+  session's tier, or lower when its role sets `effort:`, through the new `PI_KIT_EFFORT_PROMPT`, with
+  a line saying the step cannot start other agents. Every agent a planned run starts, retries
+  included, now counts against the request's allowance: at E3, eight one-step plans that each retry
+  once start 8 agents, not 16, and the rest are refused with code `plan-allowance`. Scripts are not
+  counted (`docs/effort.md`, `tests/effort-smoke.ts`).
 - **`ask_human` says what happened.** `details.outcome` is exactly one of `answered`, `dismissed`,
   `timeout`, `aborted` or `unavailable`, each with its own text, and `details.answer` is null unless
   answered. A blank typed answer is asked once more with the draft kept, then dismissed. A card that

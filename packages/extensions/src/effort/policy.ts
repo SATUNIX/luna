@@ -337,6 +337,14 @@ export function renderPrompt(policy: EffortPolicy, id: string, dir = policyDir()
   return `${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`;
 }
 
+/**
+ * The prompt of a step of a model-started workflow: the depth it was given, with the tier's child
+ * counts disowned, because the step really runs at the lowest tier and cannot delegate.
+ */
+export function renderStepPrompt(policy: EffortPolicy, id: string, dir = policyDir()): string {
+  return `${renderPrompt(policy, id, dir)}\n\nYou are a step of a workflow. This tier sets how deeply you work and nothing else: you cannot start other agents, whatever it says about children or scouts. Do the work directly.`;
+}
+
 /** The standing-mode file beside the tier prompts (ultracode; docs/effort.md, "Ultracode"). */
 export const STANDING_PROMPT_FILE = "standing.md";
 

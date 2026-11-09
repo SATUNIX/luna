@@ -596,6 +596,112 @@ const tests: Record<string, () => void | Promise<void>> = {
     } finally { w.cleanup(); }
   },
 
+  // Rank 28: a model-started step reads as deep as the session's tier, or lower when its role asks,
+  // while PI_KIT_EFFORT and _CAP stay at the lowest tier, so it gains no delegation.
+  "a model-started workflow step takes the session tier's prompt depth and keeps the E1 delegation limit": async () => {
+    const w = world();
+    const asChild = async (env: Record<string, string>, check: (child: ReturnType<typeof boot>, prompt: string) => void): Promise<void> => {
+      const restore = ["PI_KIT_EFFORT", "PI_KIT_EFFORT_CAP", "PI_KIT_EFFORT_LEDGER", "PI_KIT_EFFORT_PROMPT"].map((k) => setEnv(k, env[k]));
+      try {
+        const child = boot();
+        await child.start();
+        check(child, (await child.turn()).systemPrompt);
+      } finally { restore.reverse().forEach((f) => f()); }
+    };
+    try {
+      const b = boot();
+      saveDefault("exhaustive");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const scope = reg.openRunScope("depth-1", { planned: 3 });
+      assert.ok(scope.ok, "the plan opens");
+      const launch = (requestedTier?: string): Granted => {
+        const r = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-1", runToken: scope.runToken, ...(requestedTier === undefined ? {} : { requestedTier }) });
+        assert.ok(r.ok, "the step is granted a slot");
+        assert.equal(r.childTier, "minimal", "the delegation tier stays the lowest");
+        assert.equal(r.env.PI_KIT_EFFORT, "minimal");
+        assert.equal(r.env.PI_KIT_EFFORT_CAP, "minimal");
+        return r;
+      };
+      await asChild(launch().env, (child, prompt) => {
+        assert.ok(prompt.includes("Tier: E5 Exhaustive."), "a step with no role effort renders the session's tier");
+        assert.ok(!prompt.includes("Tier: E1 Minimal."));
+        assert.match(prompt, /cannot start other agents/, "the tier's child counts are not read as a grant");
+        const snap = child.registry().snapshot();
+        assert.equal(snap.tier, "minimal", "the child's own tier does not move");
+        assert.equal(codeOf(child.registry().reserve({ kind: "discretionary", role: "worker" })), "tier", "the child holds the E1 delegation limit");
+        assert.equal(codeOf(child.registry().openRunScope("nested", { planned: 1 })), "child");
+        // A launch the step does make (a verifier) gets its own depth, not this step's.
+        const verifier = child.registry().reserve({ kind: "mandatory", role: "reviewer" });
+        assert.ok(verifier.ok);
+        assert.equal(verifier.env.PI_KIT_EFFORT_PROMPT, "minimal", "the override stops at this step");
+      });
+      await asChild(launch("focused").env, (_child, prompt) => {
+        assert.ok(prompt.includes("Tier: E2 Focused."), "a role's lower effort: is honoured");
+      });
+      // A script keeps the old rendering: it was approved as a script, and this decision is about plans.
+      const script = reg.openRunScope("depth-script");
+      assert.ok(script.ok);
+      const scripted = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-script", runToken: script.runToken, requestedTier: "exhaustive" });
+      assert.ok(scripted.ok);
+      assert.equal(scripted.env.PI_KIT_EFFORT_PROMPT, undefined);
+      await asChild(scripted.env, (_child, prompt) => { assert.ok(prompt.includes("Tier: E1 Minimal.")); });
+      // The clamp: a role cannot read deeper than the session.
+      await b.command("standard");
+      await b.turn();
+      const lower = reg.openRunScope("depth-2", { planned: 1 });
+      assert.ok(lower.ok);
+      const clamped = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-2", runToken: lower.runToken, requestedTier: "exhaustive" });
+      assert.ok(clamped.ok);
+      await asChild(clamped.env, (_child, prompt) => { assert.ok(prompt.includes("Tier: E3 Standard."), "effort: is clamped to the session tier"); });
+    } finally { w.cleanup(); }
+  },
+
+  // Rank 30: the allowance bounds what starts in a request, retries included, not only what is planned.
+  "at E3 eight one-step plans that each retry once start 8 children, not 16": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const scopes = Array.from({ length: 8 }, (_, i) => {
+        const scope = reg.openRunScope(`retry-${String(i)}`, { planned: 1 });
+        assert.ok(scope.ok, "each one-step plan fits the allowance");
+        return { runId: `retry-${String(i)}`, runToken: scope.runToken };
+      });
+      let started = 0;
+      const refused: Reservation[] = [];
+      for (const scope of scopes) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const r = reg.reserve({ kind: "workflow", role: "worker", ...scope });
+          if (r.ok) { started++; r.settle(attempt === 0 ? "transient" : "ok"); } else refused.push(r);
+        }
+      }
+      assert.equal(started, 8, "the request's allowance bounds every child started");
+      const denial = present(refused[0], "a refusal");
+      assert.equal(codeOf(denial), "plan-allowance");
+      assert.match(denial.ok ? "" : denial.reason, /started 8 of the 8 agents E3 Standard allows a request/);
+      assert.match(denial.ok ? "" : denial.reason, /\/effort/);
+      // Once the request has started its allowance, no new plan opens to be refused step by step.
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "next" }, b.ctx);
+      const next = reg.openRunScope("retry-renewed", { planned: 8 });
+      assert.ok(next.ok, "a user message renews what may start as well as what may be planned");
+      for (let i = 0; i < 8; i++) assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-renewed", runToken: next.runToken }).ok, true);
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "again" }, b.ctx);
+      const one = reg.openRunScope("retry-a", { planned: 1 });
+      assert.ok(one.ok);
+      for (let i = 0; i < 8; i++) assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-a", runToken: one.runToken }).ok, true, "a retry inside its run's cap starts");
+      assert.equal(codeOf(reg.openRunScope("retry-b", { planned: 1 })), "plan-allowance", "the request has started its allowance, so a new plan is refused before any launch");
+      // A script is not planned, so the allowance neither counts nor refuses it.
+      const script = reg.openRunScope("retry-script");
+      assert.ok(script.ok);
+      assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-script", runToken: script.runToken }).ok, true);
+    } finally { w.cleanup(); }
+  },
+
   "resume and compaction keep the budget: a fresh session on the same ledger continues the count": async () => {
     const w = world();
     try {

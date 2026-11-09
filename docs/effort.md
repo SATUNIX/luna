@@ -186,14 +186,21 @@ ledger rotation and a reload: a workflow's completion message starting a turn do
 and only a user message does: yours, or one an extension sends on your behalf, which includes the
 resume after an automatic compaction interrupts a run. The allowance also caps each planned run, so
 the run's limit is the lower of the allowance and `workflowTotalPerRun`. A transient retry is an agent like any other,
-so a run planned at exactly its tier's allowance can use up its cap on its last gate loop. Retries
-are checked against that run's cap only, not against the request, so the allowance bounds what is
-planned rather than what starts: at E3, eight one-step plans that each retry once start 16 agents. No test pins that total.
+so a run planned at exactly its tier's allowance can use up its cap on its last gate loop.
+
+The allowance bounds what starts as well as what is planned. Every agent a planned run starts,
+retries included, counts against it, so at E3 eight one-step plans that each retry once start 8
+agents, not 16. An agent over that is refused with code `plan-allowance`, which names how many have
+started; a plan is refused the same way before it launches anything once the request has started its
+allowance. A user message renews this count with the rest of the allowance, and the session total
+still applies (`tests/effort-smoke.ts`).
 
 **The cost.** Plans are additive to the discretionary budget: at E3 a request can start the 3
 children of the `subagent` tool and 8 planned workflow agents. Those 8 run at E1, cannot delegate,
-and run at most the tier's `maxConcurrent` at once. E1 also sets their prompt depth, whatever the
-session's tier, and a role's `effort:` is not applied to them. Their thinking level does not change (`tests/delegation-guard-smoke.ts`).
+and run at most the tier's `maxConcurrent` at once. E1 sets only what they may start. Their prompt
+reads at the session's tier, or lower when the step's role sets `effort:`, as the same workflow typed
+with `/workflow` would, with a line saying the step cannot start other agents (`tests/effort-smoke.ts`).
+Their thinking level does not change (`tests/delegation-guard-smoke.ts`).
 
 A script is different: the `workflow` tool stays behind the firewall's ask, so an approved script
 opens its scope with no `planned`, is charged nothing here and keeps `workflowTotalPerRun`.

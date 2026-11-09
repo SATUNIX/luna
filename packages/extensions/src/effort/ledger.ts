@@ -29,6 +29,8 @@
  *    scope opens, up to the tier's allowance, which then caps the run as well. The charge lives here,
  *    so neither the per-turn rotation nor a reload refreshes it; only a user message does
  *    (resetPlanned), including one sent by an extension, and a run that spends less gets nothing back. An approved script opens no plan and has no cap.
+ *    Every agent a planned run starts, retries included, also counts in `startedInRequest` against
+ *    that allowance, so a request cannot start more than its tier allows by planning small and retrying.
  *
  * Effort budgets govern cost and behaviour, not security: the ledger is a file the session can
  * write, so a hostile process with shell access in the same account could tamper with it. The
@@ -85,6 +87,8 @@ export interface WorkflowSection extends WorkflowInit {
   used: number;
   /** Agents planned in the current user request; absent until the first plan. */
   plannedUsed?: number;
+  /** Agents planned runs have started since the last user message, retries included. */
+  startedInRequest?: number;
   runs: Record<string, WorkflowRun>;
 }
 
@@ -245,7 +249,7 @@ function isWorkflowRun(value: unknown): value is WorkflowRun {
 }
 
 function isWorkflowSection(value: unknown): value is WorkflowSection {
-  if (!isRecord(value) || !isCount(value.concurrent) || !isCount(value.totalPerRun) || !isCount(value.sessionTotal) || !isCount(value.used) || (value.plannedUsed !== undefined && !isCount(value.plannedUsed))) return false;
+  if (!isRecord(value) || !isCount(value.concurrent) || !isCount(value.totalPerRun) || !isCount(value.sessionTotal) || !isCount(value.used) || (value.plannedUsed !== undefined && !isCount(value.plannedUsed)) || (value.startedInRequest !== undefined && !isCount(value.startedInRequest))) return false;
   const runs = value.runs;
   return isRecord(runs) && !Array.isArray(runs) && Object.values(runs).every(isWorkflowRun);
 }
@@ -363,12 +367,14 @@ export function openRun(file: string, runId: string, now = Date.now(), newToken:
       if (Object.hasOwn(data.workflow.runs, runId)) return deny("run-scope", `workflow run "${runId}" already has a scope; a run id is opened once`);
       if (plan) {
         const planned = data.workflow.plannedUsed ?? 0;
-        if (planned + plan.planned > plan.allowance) {
-          const remaining = plan.allowance - planned;
+        // Retries can take what started past what was planned; a launch would refuse the difference.
+        const spent = Math.max(planned, data.workflow.startedInRequest ?? 0);
+        if (spent + plan.planned > plan.allowance) {
+          const remaining = plan.allowance - spent;
           const why =
             remaining <= 0
-              ? `no workflow of any size fits this request: ${plan.label} allows ${plan.allowance} planned agents a request and ${planned} are already planned. The allowance renews on the next user message; raise it with /effort.`
-              : `this workflow can start up to ${plan.planned} agents, but only up to ${remaining} more would fit this request: ${plan.label} allows ${plan.allowance} planned agents a request (${planned} already planned). Plan fewer agents, or raise effort with /effort.`;
+              ? `no workflow of any size fits this request: ${plan.label} allows ${plan.allowance} planned agents a request and ${spent} are already planned or started. The allowance renews on the next user message; raise it with /effort.`
+              : `this workflow can start up to ${plan.planned} agents, but only up to ${remaining} more would fit this request: ${plan.label} allows ${plan.allowance} planned agents a request (${spent} already planned or started). Plan fewer agents, or raise effort with /effort.`;
           return deny("plan-allowance", why);
         }
         data.workflow.plannedUsed = planned + plan.planned;
@@ -401,15 +407,16 @@ export function chargeRun(file: string, runId: string, runToken: string, plan: R
       const allowance = Math.min(plan.allowance, run.cap);
       // Retries can take `used` past what was planned; until then the unstarted plan still holds its place.
       const committed = Math.max(run.used, run.planned ?? 0);
-      if (planned + plan.planned > allowance || committed + plan.planned > allowance) {
-        const inRequest = allowance - planned;
+      const spent = Math.max(planned, wf.startedInRequest ?? 0);
+      if (spent + plan.planned > allowance || committed + plan.planned > allowance) {
+        const inRequest = allowance - spent;
         const inRun = allowance - committed;
         const why =
           inRequest <= 0
-            ? `no workflow of any size fits this request: ${plan.label} allows ${allowance} a request and ${planned} are already planned. The allowance renews on the next user message; raise it with /effort.`
+            ? `no workflow of any size fits this request: ${plan.label} allows ${allowance} a request and ${spent} are already planned or started. The allowance renews on the next user message; raise it with /effort.`
             : inRun <= 0
               ? `this run has started or planned ${committed} of its ${allowance} agents, so it cannot expand; a new plan can still start up to ${inRequest}.`
-              : `up to ${Math.min(inRequest, inRun)} more agents would fit: ${plan.label} allows ${allowance} a request (${planned} planned, ${committed} started or planned here). Plan less, or raise effort with /effort.`;
+              : `up to ${Math.min(inRequest, inRun)} more agents would fit: ${plan.label} allows ${allowance} a request (${spent} planned or started, ${committed} started or planned here). Plan less, or raise effort with /effort.`;
         return deny("plan-allowance", why);
       }
       wf.plannedUsed = planned + plan.planned;
@@ -427,8 +434,9 @@ export function resetPlanned(file: string): void {
   try {
     withLock(file, () => {
       const data = readLedger(file);
-      if (!data?.workflow?.plannedUsed) return;
+      if (!data?.workflow?.plannedUsed && !data?.workflow?.startedInRequest) return;
       data.workflow.plannedUsed = 0;
+      data.workflow.startedInRequest = 0;
       writeLedger(file, data);
     });
   } catch {
@@ -458,10 +466,14 @@ export function reserve(file: string, request: ReserveRequest, now = Date.now(),
         if (wf.used >= wf.sessionTotal) return deny("session-ceiling", `workflow runs in this session have started ${wf.used} agents, the session limit (${wf.sessionTotal}). Start a new session for more.`);
         const perRun = Math.min(run.cap ?? wf.totalPerRun, wf.totalPerRun);
         if (run.used >= perRun) return deny("total", `workflow run "${runId}" has started ${run.used} agents, the per-run limit (${perRun}); retries and failed agents count.`);
+        // The allowance is per request and final; waiting for a slot could not make this one fit.
+        const started = wf.startedInRequest ?? 0;
+        if (run.cap !== undefined && started >= run.cap) return deny("plan-allowance", `this request has started ${started} of the ${run.cap} agents ${request.requesterLabel} allows a request; retries and failed agents count. The allowance renews on the next user message; raise it with /effort.`);
         const liveRun = data.live.filter((e) => e.kind === "workflow" && e.runId === runId).length;
         if (liveRun >= wf.concurrent) return deny("concurrency", `${liveRun} agents of workflow run "${runId}" are already running (limit ${wf.concurrent}). Wait for one to finish.`);
         run.used++;
         wf.used++;
+        if (run.cap !== undefined) wf.startedInRequest = started + 1;
         entry.runId = runId;
       } else if (request.kind === "user") {
         if (data.userUsed >= data.ceilings.maxTotal) return deny("total", `this request has already run ${data.userUsed} user-directed children, the platform ceiling (${data.ceilings.maxTotal})`);

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
 import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
-import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderCard, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
+import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderCard, renderPrompt, renderStanding, renderStepPrompt, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
 import type { StandingState } from "./standing.ts";
@@ -325,6 +325,12 @@ function say(ctx: ExtensionCommandContext | ExtensionContext, text: string, leve
 }
 
 const isChildProcess = () => Boolean(process.env.PI_KIT_EFFORT_LEDGER?.trim());
+
+/**
+ * How deeply a child's prompt reads, set by its parent. It only picks prompt text: PI_KIT_EFFORT and
+ * _CAP still decide the child's tier, and with it what the child may delegate.
+ */
+const PROMPT_TIER_ENV = "PI_KIT_EFFORT_PROMPT";
 /** Any kit child, budgeted or not: standing mode is refused in all of them. */
 const isKitChild = () => isChildProcess() || process.env.PI_KIT_INTERNAL_CHILD === "1";
 
@@ -353,6 +359,8 @@ export default function (pi: ExtensionAPI) {
   let cardDue = false;
   // Workflow runs opened by this process, each pinned to the workflow ledger it was opened in.
   const runFiles = new Map<string, string>();
+  // Run scopes opened with a plan (model-started YAML and data plans); an approved script opens none.
+  const plannedRuns = new Set<string>();
   // Ultracode standing mode: session-only, recorded with appendEntry so a reload or resume restores it.
   let standing: StandingState = { ...STANDING_OFF };
   let wakeChain = 0;
@@ -491,7 +499,8 @@ export default function (pi: ExtensionAPI) {
 
   function reserveWorkflowSlot(input: ReserveInput): Reservation {
     if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so workflow agents cannot be budgeted.` };
-    const file = input.runId ? runFiles.get(input.runId) : undefined;
+    const runId = input.runId;
+    const file = runId ? runFiles.get(runId) : undefined;
     if (!file) return { ok: false, code: "run-scope", reason: "no workflow run scope is open for this run id in this session" };
     const lowest = policy.tiers[0];
     if (!lowest) return { ok: false, code: "no-policy", reason: "the effort policy has no tiers" };
@@ -499,11 +508,13 @@ export default function (pi: ExtensionAPI) {
     if (!result.ok) return result;
     const id = result.id;
     const childTier = lowest.id;
+    // A planned step reads as the same step typed by the operator would. Its limits stay the lowest tier's.
+    const depth = runId && plannedRuns.has(runId) ? { [PROMPT_TIER_ENV]: clampTier(policy, input.requestedTier ?? active.tier, active.tier) } : {};
     return {
       ok: true,
       id,
       childTier,
-      env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file },
+      env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file, ...depth },
       attach: (pid) => ledger.attach(file, id, pid),
       settle: (outcome) => ledger.settle(file, id, outcome),
     };
@@ -605,6 +616,7 @@ export default function (pi: ExtensionAPI) {
       const opened = ledger.openRun(file, runId, undefined, undefined, plan);
       if (!opened.ok) return opened;
       runFiles.set(runId, file);
+      if (options.planned !== undefined) plannedRuns.add(runId);
       return { ok: true, runId, runToken: opened.runToken, ledger: file, maxConcurrent: limitsFor(active.tier).maxConcurrent };
     },
     chargeRunScope(runId: string, runToken: string, planned: number) {
@@ -666,7 +678,8 @@ export default function (pi: ExtensionAPI) {
         ok: true,
         id,
         childTier,
-        env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file },
+        // Replaces a depth this process was given, which is its own and stops here.
+        env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file, [PROMPT_TIER_ENV]: childTier },
         attach: (pid) => ledger.attach(file, id, pid),
         settle: (outcome) => {
           ledger.settle(file, id, outcome);
@@ -742,7 +755,8 @@ export default function (pi: ExtensionAPI) {
     openScope();
     syncDelegationTools();
     notify();
-    let body = renderPrompt(policy, active.tier);
+    const stepTier = isChildProcess() ? normalizeTier(policy, process.env[PROMPT_TIER_ENV]) : null;
+    let body = stepTier && stepTier !== active.tier ? renderStepPrompt(policy, stepTier) : renderPrompt(policy, active.tier);
     const standingShown = standing.on && workflowToolActive();
     if (standingShown) {
       try {

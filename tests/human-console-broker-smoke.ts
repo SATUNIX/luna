@@ -8,6 +8,7 @@ import { getEventListeners } from "node:events";
 import { type Infer, isRecord, object, optional, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as HumanConsole from "../packages/extensions/src/human-console/index.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 
 type FakePi = ReturnType<typeof fakePi>;
 /** The fields of a broker pending-request file this smoke reads back (a question has no body). */
@@ -15,6 +16,46 @@ const BrokerRequestFile = object({ id: string(), kind: string(), body: optional(
 type BrokerRequestFile = Infer<typeof BrokerRequestFile>;
 
 const wait = (ms = 25): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** `details.outcome` of an ask_human result, or undefined when the result carries none. */
+function outcomeOf(result: unknown): unknown { return isRecord(result) && isRecord(result.details) ? result.details.outcome : undefined; }
+/** `details.answer` of an ask_human result, exactly as the tool returned it. */
+function answerOf(result: unknown): unknown { return isRecord(result) && isRecord(result.details) ? result.details.answer : undefined; }
+/** The dialog factory `ctx.ui.custom` receives, as far as this smoke drives it. */
+type DialogFactory = (tui: unknown, theme: unknown, keybindings: unknown, done: (value: string | undefined) => void) => unknown;
+interface EditorCard { prefill: string; done: (value: string | undefined) => void }
+const TUI_STUB = { requestRender() {}, terminal: { rows: 24, columns: 80 } };
+/** The text in the real editor a card built, read through its private field. */
+function editorText(component: unknown): string {
+  const editor: unknown = typeof component === "object" && component !== null ? Reflect.get(component, "editor") : undefined;
+  const getText: unknown = typeof editor === "object" && editor !== null ? Reflect.get(editor, "getText") : undefined;
+  if (typeof getText !== "function") throw new Error("the card is not the real multiline editor");
+  const text: unknown = Reflect.apply(getText, editor, []);
+  if (typeof text !== "string") throw new Error("the editor's text is not a string");
+  return text;
+}
+/** A UI whose custom dialog is the card; `onCard` plays the operator and may leave it open. `closed` counts cards the extension closed. */
+function tuiEditor(onCard: (card: EditorCard) => void): { custom: (factory: DialogFactory) => Promise<string | undefined>; closed: () => number } {
+  let closed = 0;
+  return {
+    closed: () => closed,
+    custom: (factory) => new Promise((resolve) => {
+      const done = (value: string | undefined) => { closed++; resolve(value); };
+      const component = factory(TUI_STUB, {}, {}, done);
+      onCard({ prefill: editorText(component), done });
+    }),
+  };
+}
+async function waitForPendingFile(ws: string): Promise<string> {
+  const dir = path.join(ws, "console", "pending");
+  for (let i = 0; i < 100; i++) {
+    if (fs.existsSync(dir)) {
+      const name = fs.readdirSync(dir).find((f) => f.endsWith(".json"));
+      if (name) return name;
+    }
+    await wait(10);
+  }
+  throw new Error("no broker request appeared");
+}
 async function resolvePending(ws: string, approved: boolean, answer: string | null = null): Promise<BrokerRequestFile> {
   const pending = path.join(ws, "console", "pending");
   for (let i = 0; i < 80; i++) {
@@ -100,6 +141,129 @@ async function run() {
     const none = await hpi.tools.get("ask_human").execute("3", { question: "Wait", timeoutMs: 1 }, undefined, undefined, { cwd: ws, hasUI: false, ui: {} }); assert.match(textOf(none), /No human answered in time/);
     const abort = new AbortController(); const hung = hpi.tools.get("ask_human").execute("4", { question: "Abort me" }, abort.signal, undefined, { cwd: ws, hasUI: true, ui: { input: () => new Promise(() => {}) } }); abort.abort(); assert.match(textOf(await Promise.race([hung, wait(100).then(() => { throw new Error("aborted prompt hung"); })])), /No human answered in time/);
     const timedOut = hpi.tools.get("ask_human").execute("5", { question: "Time out", timeoutMs: 1 }, undefined, undefined, { cwd: ws, hasUI: true, ui: { input: () => new Promise(() => {}) } }); assert.match(textOf(await Promise.race([timedOut, wait(100).then(() => { throw new Error("timed-out prompt hung"); })])), /No human answered in time/);
+
+    // Regression (S11): every way an ask_human can end has its own `details.outcome` and text. On
+    // the base source a dismissed card and a timed-out card both read "No human answered in time."
+    // and nothing distinguished a blank answer or an unavailable console from an answer. The cases
+    // are collected so one run reports every outcome that is still wrong.
+    {
+      const failures: string[] = [];
+      initTheme(); // the multiline cards build pi's real editor, which draws with the theme
+      const outcomeCase = async (name: string, body: () => Promise<void>): Promise<void> => {
+        try { await body(); } catch (error) { failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`); }
+      };
+      await outcomeCase("dismissed is not an answer", async () => {
+        const dismissed = await hpi.tools.get("ask_human").execute("o1", { question: "Proceed?", options: ["yes"] }, undefined, undefined, { cwd: ws, hasUI: true, ui: { select: async () => undefined } });
+        assert.equal(outcomeOf(dismissed), "dismissed", "Esc/cancel on a card is dismissed");
+        assert.equal(answerOf(dismissed), null, "a dismissed question has no answer");
+        assert.match(textOf(dismissed), /the question was dismissed without an answer/);
+      });
+      await outcomeCase("timeout is distinct from dismissed", async () => {
+        const dismissed = await hpi.tools.get("ask_human").execute("o2a", { question: "Proceed?", options: ["yes"] }, undefined, undefined, { cwd: ws, hasUI: true, ui: { select: async () => undefined } });
+        const expired = await hpi.tools.get("ask_human").execute("o2b", { question: "Proceed?", options: ["yes"], timeoutMs: 1 }, undefined, undefined, { cwd: ws, hasUI: true, ui: { select: () => new Promise(() => {}) } });
+        assert.equal(outcomeOf(expired), "timeout");
+        assert.notEqual(textOf(expired), textOf(dismissed), "a timeout must not read as a dismissal");
+        assert.match(textOf(expired), /the question timed out/);
+      });
+      await outcomeCase("a blank typed answer is re-asked once with its draft", async () => {
+        const calls: Array<string | undefined> = [];
+        const asked = await hpi.tools.get("ask_human").execute("o3", { question: "Explain" }, undefined, undefined, { cwd: ws, hasUI: true, mode: "tui", ui: tuiEditor((card) => { calls.push(card.prefill); card.done(calls.length === 1 ? "   " : "the real answer"); }) });
+        assert.equal(calls.length, 2, "a whitespace-only typed answer is asked exactly once more");
+        assert.equal(calls[1], "   ", "the second card keeps the typed draft");
+        assert.equal(outcomeOf(asked), "answered");
+        assert.equal(answerOf(asked), "the real answer");
+        assert.match(textOf(asked), /Human answer: the real answer/);
+      });
+      await outcomeCase("a question still blank after one re-ask is dismissed", async () => {
+        let cards = 0;
+        const asked = await hpi.tools.get("ask_human").execute("o4", { question: "Explain" }, undefined, undefined, { cwd: ws, hasUI: true, mode: "tui", ui: tuiEditor((card) => { cards++; card.done("  "); }) });
+        assert.equal(cards, 2, "a blank answer never asks a third time");
+        assert.equal(outcomeOf(asked), "dismissed");
+        assert.equal(answerOf(asked), null);
+        assert.match(textOf(asked), /the question was dismissed without an answer/);
+      });
+      await outcomeCase("multi-line free text is an answer", async () => {
+        const asked = await hpi.tools.get("ask_human").execute("o5", { question: "Explain" }, undefined, undefined, { cwd: ws, hasUI: true, mode: "tui", ui: tuiEditor((card) => card.done("line one\nline two")) });
+        assert.equal(outcomeOf(asked), "answered");
+        assert.equal(answerOf(asked), "line one\nline two");
+      });
+      await outcomeCase("a multiline card that times out is closed by the extension", async () => {
+        const ui = tuiEditor(() => {});
+        const asked = await hpi.tools.get("ask_human").execute("o5a", { question: "Explain", timeoutMs: 30 }, undefined, undefined, { cwd: ws, hasUI: true, mode: "tui", ui });
+        assert.equal(outcomeOf(asked), "timeout");
+        assert.equal(ui.closed(), 1, "no dialog is left open past its deadline");
+      });
+      await outcomeCase("a multiline card that is aborted is closed by the extension", async () => {
+        const controller = new AbortController();
+        const ui = tuiEditor(() => { setTimeout(() => controller.abort(), 5); });
+        const asked = await hpi.tools.get("ask_human").execute("o5b", { question: "Explain", timeoutMs: 5000 }, controller.signal, undefined, { cwd: ws, hasUI: true, mode: "tui", ui });
+        assert.equal(outcomeOf(asked), "aborted");
+        assert.equal(ui.closed(), 1, "no dialog is left open after an abort");
+      });
+      await outcomeCase("a multiline card the operator cancels is dismissed", async () => {
+        const asked = await hpi.tools.get("ask_human").execute("o5c", { question: "Explain", timeoutMs: 5000 }, undefined, undefined, { cwd: ws, hasUI: true, mode: "tui", ui: tuiEditor((card) => card.done(undefined)) });
+        assert.equal(outcomeOf(asked), "dismissed");
+      });
+      await outcomeCase("outside the terminal a card has a deadline pi honours", async () => {
+        const seen: Array<{ timeout?: number; signal?: AbortSignal }> = [];
+        const controller = new AbortController();
+        const asked = await hpi.tools.get("ask_human").execute("o5d", { question: "Explain", timeoutMs: 5000 }, controller.signal, undefined, { cwd: ws, hasUI: true, mode: "rpc", ui: {
+          editor: () => { throw new Error("ctx.ui.editor has no deadline"); },
+          input: async (_title: string, _placeholder: string, options: { timeout?: number; signal?: AbortSignal }) => { seen.push(options); return "typed"; },
+        } });
+        assert.equal(outcomeOf(asked), "answered");
+        assert.ok((seen[0]?.timeout ?? 0) > 0, "the card carries what is left of the time");
+        assert.equal(seen[0]?.signal, controller.signal, "the card carries the turn's signal");
+      });
+      await outcomeCase("an abort leaves aborted and no pending file", async () => {
+        const controller = new AbortController();
+        const asked = hpi.tools.get("ask_human").execute("o6", { question: "Abort the brokered question", timeoutMs: 5000 }, controller.signal, undefined, { cwd: ws, hasUI: false, ui: {} });
+        const pending = await waitForPendingFile(ws);
+        controller.abort();
+        const result = await asked;
+        assert.equal(outcomeOf(result), "aborted");
+        assert.equal(answerOf(result), null);
+        assert.match(textOf(result), /the turn was aborted/);
+        assert.ok(!fs.existsSync(path.join(ws, "console", "pending", pending)), "an aborted request leaves no pending file");
+        assert.ok(!fs.existsSync(path.join(ws, "console", "resolved", pending)), "an aborted request leaves no resolved file");
+      });
+      await outcomeCase("no console key is unavailable", async () => {
+        const restoreAgentDir = setEnv("PI_CODING_AGENT_DIR", path.join(ws, "agent-without-a-console-key"));
+        try {
+          const asked = await hpi.tools.get("ask_human").execute("o7", { question: "Anybody?", timeoutMs: 1000 }, undefined, undefined, { cwd: ws, hasUI: false, ui: {} });
+          assert.equal(outcomeOf(asked), "unavailable");
+          assert.match(textOf(asked), /the human console is unavailable/);
+        } finally { restoreAgentDir(); }
+      });
+      await outcomeCase("a refused console write is unavailable, not a crash", async () => {
+        const blocked = path.join(ws, "blocked-console-root");
+        fs.writeFileSync(blocked, "not a directory");
+        const restoreConsoleDir = setEnv("PI_KIT_HUMAN_CONSOLE_DIR", blocked);
+        try {
+          const asked = await hpi.tools.get("ask_human").execute("o8", { question: "Anybody?", timeoutMs: 1000 }, undefined, undefined, { cwd: ws, hasUI: false, ui: {} });
+          assert.equal(outcomeOf(asked), "unavailable");
+          assert.match(textOf(asked), /the human console is unavailable/);
+        } finally { restoreConsoleDir(); fs.rmSync(blocked, { force: true }); }
+      });
+      await outcomeCase("a symlinked workspace console is unavailable and writes nothing", async () => {
+        const linked = path.join(ws, "linked-workspace");
+        const target = path.join(ws, "link-target");
+        fs.mkdirSync(path.join(linked, ".pi"), { recursive: true });
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, path.join(linked, ".pi", "human-console"));
+        const restoreConsoleDir = setEnv("PI_KIT_HUMAN_CONSOLE_DIR", path.join(linked, ".pi", "human-console"));
+        try {
+          const asked = await hpi.tools.get("ask_human").execute("o9", { question: "Anybody?", timeoutMs: 1000 }, undefined, undefined, { cwd: ws, hasUI: false, ui: {} });
+          assert.equal(outcomeOf(asked), "unavailable");
+          assert.deepEqual(fs.readdirSync(target), [], "the broker wrote nothing through the link");
+          const fw = await firewall(ws, true, null);
+          const refused = await callMedium(fw, ws);
+          assert.equal(refused?.block, true, "the firewall refuses an approval it cannot file");
+          assert.deepEqual(fs.readdirSync(target), [], "the firewall wrote nothing through the link");
+        } finally { restoreConsoleDir(); fs.rmSync(linked, { recursive: true, force: true }); fs.rmSync(target, { recursive: true, force: true }); }
+      });
+      assert.deepEqual(failures, [], `ask_human outcomes:\n${failures.join("\n")}`);
+    }
 
     // Regression: the broker's poll sleep must remove its abort listener on the normal timer
     // path. On the pre-fix source every unanswered poll added one listener to the tool signal

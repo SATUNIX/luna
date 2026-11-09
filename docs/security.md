@@ -434,8 +434,10 @@ Not covered:
 - On Windows `O_NOFOLLOW` and the owner check do not exist; the `lstat` checks still run.
 - A path the operator sets (for example `PI_KIT_FIREWALL_AUDIT_LOG` or
   `PI_KIT_BRANCH_LEASES_FILE`) is trusted: only its final name is checked.
-- The human console's request files are still written with plain `fs` calls, and are on the ESLint
-  allowlist as a known gap.
+- The `pentest-governance-domain` extension's human-console approval request is still written
+  with plain `fs` calls, and that file is on the ESLint allowlist as a known gap. Answers are
+  signed, so a planted answer file cannot approve, but a committed link can still redirect where
+  a request is written.
 
 ## The Luna installer and install markers
 

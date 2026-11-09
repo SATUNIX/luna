@@ -580,6 +580,7 @@ absolute or relative to the working directory.
 | `PI_KIT_WEBUI_ROOT` | `remote-control`, `web-console` | — | [remote-control](remote-control.md) |
 | `PI_KIT_WORKFLOWS_DIR` | `subagent` | — | — |
 | `PI_KIT_WORKFLOW_RUN_ID` | `tool-firewall`, `subagent` | — | [script-workflows](script-workflows.md) |
+| `PI_KIT_WORKFLOW_STEP` | `tool-firewall`, `subagent` | — | — |
 | `PI_KIT_WRITE_ALLOWLIST` | `protected-paths` | Semicolon-separated allowlist; blocks writes outside it (dream/print mode) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_LENS_DISABLE_LSP_INSTALL` | `tool-firewall` | — | [supply-chain](supply-chain.md) |
 | `PI_LENS_DISABLE_TOOL_INSTALL` | `tool-firewall` | — | [supply-chain](supply-chain.md) |

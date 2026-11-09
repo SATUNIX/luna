@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendFileSafe, rotateFileSafe, writeFileSafe } from "./shared/safe-fs.ts";
+import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, rotateFileSafe, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 import { cardTimeoutMs, showWhenFree } from "./shared/input-owner.ts";
 import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
@@ -414,10 +414,29 @@ type BrokerResult = { approved: boolean; timedOut: boolean; aborted?: boolean | 
 // A workflow agent (a kit child the subagent runner started for a script-workflow run) carries
 // its run id in PI_KIT_WORKFLOW_RUN_ID. Its requests name the run and the exact action hash (tool,
 // input, cwd and workspace root: runActionHash), so the console's run-scoped broker can group them, keep denials and count distinct approvals per run.
-const WORKFLOW_RUN_ID = /^wf-[a-z0-9-]{1,60}$/;
+// A run id, exactly as its two producers write it: the script engine's `wf-` ids; a YAML run's
+// control/scope id (`<ISO with - for : and .>Z-<workflow name>-<4 hex>`, workflow.ts newRunState)
+// and the digest scope id runScopeId() substitutes for an id too long for the ledger (64 hex, or
+// 59-61 with a resume suffix); each may carry a resume suffix `.r2`, `.r3` ... Arbitrary text stays
+// out. Kept in step with RUN_ID_PATTERN in packages/extensions/src/human-console/run-broker.ts (which
+// also notes why a digest scope id is accepted and cannot pause its run).
+const WORKFLOW_RUN_ID = /^(?:wf-[a-z0-9-]{1,60}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-z][a-z0-9_-]{0,40}-[a-f0-9]{4}|[a-f0-9]{59,64})(?:\.r(?:[2-9]|[1-9][0-9]+))?$/;
+// The step label the runner sets (PI_KIT_WORKFLOW_STEP). Child env text is never interpolated
+// unvalidated into a card, title, audit record or note; the run broker applies the same rule.
+const WORKFLOW_STEP = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$/;
 function workflowRunOf(): string | undefined {
   const runId = process.env.PI_KIT_WORKFLOW_RUN_ID;
   return process.env.PI_KIT_INTERNAL_CHILD === "1" && typeof runId === "string" && WORKFLOW_RUN_ID.test(runId) ? runId : undefined;
+}
+function workflowStepOf(): string | undefined {
+  const step = process.env.PI_KIT_WORKFLOW_STEP;
+  return process.env.PI_KIT_INTERNAL_CHILD === "1" && typeof step === "string" && WORKFLOW_STEP.test(step) ? step : undefined;
+}
+// The console directory is either the operator's (PI_KIT_HUMAN_CONSOLE_DIR) or under the workspace:
+// a request file there is workspace state, so a workspace write is bounded by the workspace root.
+function humanConsoleWriteOptions(file: string): SafeWriteOptions {
+  const configured = process.env.PI_KIT_HUMAN_CONSOLE_DIR?.trim();
+  return configured && piWorkspaceOf(configured) === undefined ? { root: configured } : piWorkspaceOptions(file);
 }
 
 function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: string, body: string, note: string | null, ctx: ExtensionContext, signal?: AbortSignal, choices?: string[], hash?: string): Promise<BrokerResult> {
@@ -430,17 +449,18 @@ function brokerApproval(toolName: string, input: unknown, tier: Tier, reason: st
   const agentName = field(field(ctx, "agent"), "name") || field(ctx, "agentName");
   const titleAgent: unknown = agentName || (process.env.PI_KIT_INTERNAL_CHILD ? "subagent" : "headless session");
   const workflowRun = workflowRunOf();
+  const workflowStep = workflowRun === undefined ? undefined : workflowStepOf();
   // The console and its answers sit where the agent works, so an answer counts only when the console
   // signed it with its key, bound to these exact pending bytes (console-auth.ts). Without a usable key
   // no answer could be accepted: report that at once instead of waiting for a timeout.
   const key = loadConsoleKey({ create: false });
   if (!key.ok) return Promise.resolve({ approved: false, timedOut: false, unavailable: `the human console's answer key cannot be used (${key.why})`, timeoutMs });
-  const pendingText = JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${String(titleAgent)})`, body, choices, autoModeRationale: note, timeoutMs, ...(workflowRun !== undefined && hash !== undefined ? { workflowRun, actionHash: hash } : {}) });
+  const pendingText = JSON.stringify({ id, kind: "approval", createdAt: new Date().toISOString(), requester: { pid: process.pid, sessionId: sessionIdOf(ctx), agent: agentName || "root" }, toolName, input, riskClass: tier, reason, title: `Approve tool call? (${String(titleAgent)})`, body, choices, autoModeRationale: note, timeoutMs, ...(workflowRun !== undefined && hash !== undefined ? { workflowRun, actionHash: hash, ...(workflowStep === undefined ? {} : { workflowStep }) } : {}) });
   const digest = requestDigest(pendingText);
   try {
-    fs.mkdirSync(pending, { recursive: true });
-    fs.mkdirSync(resolved, { recursive: true });
-    fs.writeFileSync(path.join(pending, `${id}.json`), pendingText);
+    ensureDirSafe(pending, humanConsoleWriteOptions(pending));
+    ensureDirSafe(resolved, humanConsoleWriteOptions(resolved));
+    writeFileSafe(path.join(pending, `${id}.json`), pendingText, humanConsoleWriteOptions(pending));
   } catch (error) {
     return Promise.resolve({ approved: false, timedOut: false, unavailable: `could not file the request in the human console at ${root} (${errorText(error)})`, timeoutMs });
   }

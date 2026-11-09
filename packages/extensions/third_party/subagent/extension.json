@@ -41,7 +41,8 @@
     "PI_KIT_WORKFLOWS_DIR",
     "PI_KIT_TRUSTED_WORKFLOWS",
     "PI_KIT_STRUCTURED_OUTPUT_SCHEMA",
-    "PI_KIT_WORKFLOW_RUN_ID"
+    "PI_KIT_WORKFLOW_RUN_ID",
+    "PI_KIT_WORKFLOW_STEP"
   ],
   "provenance": { "origin": "vendored" },
   "homeRepo": "https://github.com/earendil-works/pi",

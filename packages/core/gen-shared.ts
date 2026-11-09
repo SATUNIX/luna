@@ -30,6 +30,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/context-sieve/shared/safe-fs.ts",
     "packages/extensions/src/goal-core/shared/safe-fs.ts",
     "packages/extensions/src/guidelines/shared/safe-fs.ts",
+    "packages/extensions/src/human-console/shared/safe-fs.ts",
     "packages/extensions/src/memory-local/shared/safe-fs.ts",
     "packages/extensions/src/orchestrator/shared/safe-fs.ts",
     "packages/extensions/src/pentest-governance-domain/shared/safe-fs.ts",

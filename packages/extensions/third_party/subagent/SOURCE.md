@@ -241,3 +241,7 @@
     through one bounded, no-follow reader and returns fixed host text only
     (`tests/workflow-resume-smoke.ts`, `tests/workflow-worktree-smoke.ts`,
     `tests/workflow-control-smoke.ts`).
+  - **Workflow step label (2026-11-09):** `runner.ts` sets `PI_KIT_WORKFLOW_STEP` on a workflow
+    child to the step's role name and, where there is one, its numeric step, and `extension.json`
+    declares the name. The tool firewall and the human console validate the label before it reaches
+    a card (`tests/firewall-workflow-approvals-smoke.ts`).

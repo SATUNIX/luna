@@ -178,6 +178,21 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **`ask_human` says what happened.** `details.outcome` is exactly one of `answered`, `dismissed`,
+  `timeout`, `aborted` or `unavailable`, each with its own text, and `details.answer` is null unless
+  answered. A blank typed answer is asked once more with the draft kept, then dismissed. A card that
+  times out or is aborted now closes instead of staying open and focused. Outside the terminal a
+  free-text card uses a single-line input that honours the deadline, and in the terminal Ctrl+G uses
+  `VISUAL` or `EDITOR` rather than pi's `externalEditor` setting
+  (`tests/human-console-broker-smoke.ts`).
+- Human-console requests, answers and the audit log, and the tool firewall's request, are written
+  through the safe-write helper. A console directory under a workspace's `.pi` is bounded by that
+  workspace, so a committed symlink there is refused and the outcome is `unavailable`
+  (`docs/security.md`, `tests/human-console-broker-smoke.ts`).
+- Every YAML and inline-plan workflow run now tags its approvals with its run id, and a resumed
+  `.rN` scope groups with its control id, so the two-prompt cap, sticky denials and pause apply to
+  them; run-scoped cards name the step. A run whose scope id is a digest groups the same way, but
+  its pause reports that it could not be paused (`tests/firewall-workflow-approvals-smoke.ts`).
 - A workflow resume no longer repeats or misreports finished work. A redacted result is never
   replayed as the real one: a read runs again, and a finished writer that cannot be replayed is
   refused with code `redacted` on this and every later resume, even when the live read ends the run

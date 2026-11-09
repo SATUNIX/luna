@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionEditorComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -6,6 +6,7 @@ import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
 import { cardTimeoutMs, inputHeld, showWhenFree } from "./shared/input-owner.ts";
+import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 
 const POLL_MS = 1000;
 const DEFAULT_TIMEOUT_MS = 900000;
@@ -14,14 +15,34 @@ const DEFAULT_TIMEOUT_MS = 900000;
 // directory without bound: keep at most this many, oldest evicted first.
 export const MAX_INVALID_QUARANTINE = 50;
 type Pending = Record<string, unknown>;
-type UiContext = Pick<ExtensionContext, "ui">;
+type UiContext = Pick<ExtensionContext, "ui" | "mode">;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
+// Every way an ask_human can end, each with its own text. The shared prefix is deliberate: three
+// tests outside this extension pin "No human answered in time".
+export type AskOutcome = "answered" | "dismissed" | "timeout" | "aborted" | "unavailable";
+const NO_ANSWER_TEXT: Record<Exclude<AskOutcome, "answered">, string> = {
+  dismissed: "No human answered in time (the question was dismissed without an answer).",
+  timeout: "No human answered in time (the question timed out).",
+  aborted: "No human answered in time (the turn was aborted).",
+  unavailable: "No human answered in time (the human console is unavailable).",
+};
+function askText(outcome: AskOutcome, answer: string | null): string {
+  return outcome === "answered" ? `Human answer: ${answer ?? ""}` : NO_ANSWER_TEXT[outcome];
+}
 
 function root(cwd: string): string { return process.env.PI_KIT_HUMAN_CONSOLE_DIR?.trim() || path.join(cwd, ".pi", "human-console"); }
 function pendingDir(cwd: string): string { return path.join(root(cwd), "pending"); }
 function resolvedDir(cwd: string): string { return path.join(root(cwd), "resolved"); }
 function auditPath(cwd: string): string { return path.join(cwd, ".pi", "human-console-audit.jsonl"); }
-function ensure(cwd: string): void { fs.mkdirSync(pendingDir(cwd), { recursive: true }); fs.mkdirSync(resolvedDir(cwd), { recursive: true }); }
+// The console directory is either the operator's (PI_KIT_HUMAN_CONSOLE_DIR) or under the workspace.
+// A request or answer there is workspace state, so its write is bounded by that root. The runner sets
+// the variable to the workspace's own console for every workflow child, so a directory under a .pi is
+// never trusted as a root: a committed symlink there would be followed.
+function writeOptions(file: string): SafeWriteOptions {
+  const configured = process.env.PI_KIT_HUMAN_CONSOLE_DIR?.trim();
+  return configured && piWorkspaceOf(configured) === undefined ? { root: configured } : piWorkspaceOptions(file);
+}
+function ensure(cwd: string): void { for (const dir of [pendingDir(cwd), resolvedDir(cwd)]) ensureDirSafe(dir, writeOptions(dir)); }
 // Cap the deliberate `.invalid` quarantine by evicting the oldest by mtime. Best-effort:
 // a missing directory is fine and per-file errors (e.g. an ENOENT race) are swallowed.
 function pruneInvalid(dir: string, names: readonly string[]): void {
@@ -29,7 +50,10 @@ function pruneInvalid(dir: string, names: readonly string[]): void {
   const byMtime = names.map((name) => { const file = path.join(dir, name); let mtimeMs = 0; try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* race; treat as oldest */ } return { file, mtimeMs }; }).sort((a, b) => a.mtimeMs - b.mtimeMs);
   for (const { file } of byMtime.slice(0, byMtime.length - MAX_INVALID_QUARANTINE)) { try { fs.unlinkSync(file); } catch { /* already gone */ } }
 }
-function audit(cwd: string, event: Record<string, unknown>): void { const file = auditPath(cwd); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`); }
+function audit(cwd: string, event: Record<string, unknown>): void {
+  // Best-effort: a console whose audit log cannot be written still has to report an outcome.
+  try { appendFileSafe(auditPath(cwd), `${JSON.stringify({ timestamp: new Date().toISOString(), ...event })}\n`, { root: cwd }); } catch { /* the audit log must never break a request */ }
+}
 function sleep(ms: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve) => { const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms); const onAbort = () => { clearTimeout(timer); resolve(); }; signal?.addEventListener("abort", onAbort, { once: true }); }); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 // A field of a value that may not be an object (or may be an array or class instance): undefined when there is none.
@@ -61,8 +85,11 @@ async function waitForUi<T>(prompt: Promise<T> | T, timeoutMs?: number, signal?:
   });
 }
 
-export async function brokerRequest(cwd: string, request: Pending, signal?: AbortSignal): Promise<{ resolved: boolean; approved: boolean; answer: string | null; timedOut: boolean }> {
-  ensure(cwd);
+// `aborted` and `unavailable` are present only when they apply: the deadline result keeps the exact
+// shape existing callers and tests pin (tests/firewall-overlay-queue-smoke.ts).
+export interface BrokerOutcome { resolved: boolean; approved: boolean; answer: string | null; /** True only when the requester's deadline passed. */ timedOut: boolean; aborted?: boolean; unavailable?: boolean }
+
+export async function brokerRequest(cwd: string, request: Pending, signal?: AbortSignal): Promise<BrokerOutcome> {
   const id = isSafeRequestId(request.id) ? request.id : crypto.randomUUID();
   const timeoutMs = Math.max(1, Number(request.timeoutMs) || DEFAULT_TIMEOUT_MS);
   const pending = { ...request, id, createdAt: request.createdAt || new Date().toISOString(), timeoutMs };
@@ -71,12 +98,19 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
   const key = loadConsoleKey({ create: false });
   if (!key.ok) {
     audit(cwd, { event: "human_console_key_unusable", id, why: key.why });
-    return { resolved: false, approved: false, answer: null, timedOut: false };
+    return { resolved: false, approved: false, answer: null, timedOut: false, unavailable: true };
   }
   const pendingFile = path.join(pendingDir(cwd), `${id}.json`);
   const pendingText = JSON.stringify(pending);
   const digest = requestDigest(pendingText);
-  fs.writeFileSync(pendingFile, pendingText);
+  try {
+    ensure(cwd);
+    writeFileSafe(pendingFile, pendingText, writeOptions(pendingFile));
+  } catch (error) {
+    // Fail closed: a request that cannot be filed is not approved, and the host must not crash.
+    audit(cwd, { event: "human_console_unavailable", id, why: error instanceof Error ? error.message : String(error) });
+    return { resolved: false, approved: false, answer: null, timedOut: false, unavailable: true };
+  }
   const deadline = Date.now() + timeoutMs;
   const file = path.join(resolvedDir(cwd), `${id}.json`);
   try {
@@ -92,6 +126,8 @@ export async function brokerRequest(cwd: string, request: Pending, signal?: Abor
       }
       await sleep(Math.min(POLL_MS, Math.max(1, deadline - Date.now())), signal);
     }
+    // An aborted turn is not a deadline: the caller reports the abort distinctly and no card is owed.
+    if (signal?.aborted) return { resolved: false, approved: false, answer: null, timedOut: false, aborted: true };
     return { resolved: false, approved: false, answer: null, timedOut: true };
   } finally {
     // Best-effort: do not leave a pending file behind after this requester gives up,
@@ -112,7 +148,36 @@ function cardBudget(timeoutMs: number, signal?: AbortSignal): () => { timeout: n
   return () => ({ timeout: Math.max(1, deadline - Date.now()), ...(signal ? { signal } : {}) });
 }
 
-async function answerQuestion(ctx: UiContext, request: Pending, signal: AbortSignal | undefined, timeoutMs: number): Promise<{ approved: boolean; answer: string | null }> {
+// The multiline card in the terminal. ctx.ui.editor takes no timeout or signal, so the same editor is
+// opened as a custom dialog that this extension can close itself at the deadline or on an abort.
+async function editorCard(ui: ExtensionContext["ui"], question: string, prefill: string, card: { timeout: number; signal?: AbortSignal }): Promise<{ settled: boolean; value?: string | undefined }> {
+  if (card.signal?.aborted) return { settled: false };
+  let expired = false;
+  try {
+    const value = await ui.custom<string | undefined>((tui, _theme, keybindings, done) => {
+      const close = (result: string | undefined) => {
+        clearTimeout(timer);
+        card.signal?.removeEventListener("abort", expire);
+        done(result);
+      };
+      const expire = () => { expired = true; close(undefined); };
+      const component = new ExtensionEditorComponent(tui, keybindings, question, prefill, close, () => close(undefined));
+      const timer = setTimeout(expire, card.timeout);
+      card.signal?.addEventListener("abort", expire, { once: true });
+      return component;
+    });
+    return expired ? { settled: false } : { settled: true, value };
+  } catch {
+    return { settled: true };
+  }
+}
+
+type Asked = { outcome: AskOutcome; answer: string | null };
+// A card that settles with no value (Esc or cancel) is dismissed at once. A typed blank is not an
+// answer either, but the operator may have meant to write something, so it is asked once more with
+// the draft kept (A2: prefilled in the terminal's editor card, the placeholder of ctx.ui.input
+// elsewhere). A second blank is dismissed.
+async function answerQuestion(ctx: UiContext, request: Pending, signal: AbortSignal | undefined, timeoutMs: number): Promise<Asked> {
   const options: string[] = Array.isArray(request.options) ? request.options.filter(isString) : [];
   const question = text(request.question ?? "");
   const nextCard = cardBudget(timeoutMs, signal);
@@ -120,15 +185,27 @@ async function answerQuestion(ctx: UiContext, request: Pending, signal: AbortSig
     const other = "Other (type an answer)";
     const card = nextCard();
     const selection = await waitForUi(ctx.ui.select(question, [...options, other], card), card.timeout, signal);
-    if (!selection.settled) return { approved: false, answer: null };
+    if (!selection.settled) return { outcome: signal?.aborted ? "aborted" : "timeout", answer: null };
     const selected = selection.value;
-    if (selected && selected !== other) return { approved: true, answer: selected };
+    if (typeof selected === "string" && selected !== other) {
+      return selected.trim() ? { outcome: "answered", answer: selected } : { outcome: "dismissed", answer: null };
+    }
+    if (selected !== other) return { outcome: "dismissed", answer: null };
   }
-  const inputCard = nextCard();
-  const input = ctx.ui?.input ? await waitForUi(ctx.ui.input(question, text(request.context || ""), inputCard), inputCard.timeout, signal) : { settled: true, value: null };
-  if (!input.settled) return { approved: false, answer: null };
-  const answer = input.value;
-  return { approved: Boolean(answer), answer: typeof answer === "string" && answer.trim() ? answer : null };
+  let draft: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const card = nextCard();
+    const typed = ctx.mode === "tui" && typeof ctx.ui?.custom === "function"
+      ? await editorCard(ctx.ui, question, draft ?? "", card)
+      : ctx.ui?.input
+        ? await waitForUi(ctx.ui.input(question, draft ?? text(request.context || ""), card), card.timeout, signal)
+        : { settled: true, value: null };
+    if (!typed.settled) return { outcome: signal?.aborted ? "aborted" : "timeout", answer: null };
+    if (typeof typed.value !== "string") return { outcome: "dismissed", answer: null };
+    if (typed.value.trim()) return { outcome: "answered", answer: typed.value };
+    draft = typed.value;
+  }
+  return { outcome: "dismissed", answer: null };
 }
 
 // An approval with `choices` (tool-firewall: allow once / allow for the session / deny / deny
@@ -206,7 +283,8 @@ function writeAnswer(cwd: string, id: string, file: string, result: Answer, dige
     return;
   }
   const record = signedAnswer(key.key, { id, requestDigest: digest, approved: result.approved, answer: result.answer, note: result.note ?? null }, { decidedAt: new Date().toISOString() });
-  fs.writeFileSync(path.join(resolvedDir(cwd), `${id}.json`), JSON.stringify(record));
+  const resolvedFile = path.join(resolvedDir(cwd), `${id}.json`);
+  writeFileSafe(resolvedFile, JSON.stringify(record), writeOptions(resolvedFile));
   try { fs.unlinkSync(file); } catch { /* already removed by another resolver */ }
 }
 // A pending file as read: its parsed value and the digest of its exact bytes, which the answer is bound to.
@@ -296,7 +374,7 @@ export default function humanConsole(pi: ExtensionAPI) {
     let settled = false;
     const { signal } = cards;
     try {
-      const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}`;
+      const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}${run.step === undefined ? "" : ` · step ${run.step}`}`;
       const result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal);
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
@@ -366,7 +444,10 @@ export default function humanConsole(pi: ExtensionAPI) {
       const { signal } = cards;
       let result: Answer;
       if (request.kind === "approval") result = await answerApproval(ctx, request, cardMs(request, deadline), signal);
-      else result = await answerQuestion(ctx, request, signal, cardMs(request, deadline));
+      else {
+        const asked = await answerQuestion(ctx, request, signal, cardMs(request, deadline));
+        result = { approved: asked.outcome === "answered", answer: asked.answer };
+      }
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
       if (pastDeadline(deadline)) {
@@ -425,6 +506,7 @@ export default function humanConsole(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; cards.abort(); heldNoticed.clear(); runBroker.clear(); });
   pi.registerTool({ name: "ask_human", label: "Ask human", description: "Ask the operator a concise clarifying question.", parameters: Type.Object({ question: Type.String(), options: Type.Optional(Type.Array(Type.String())), context: Type.Optional(Type.String()), timeoutMs: Type.Optional(Type.Number({ minimum: 1 })) }), async execute(_id, params, signal, _onUpdate, ctx) {
+    let outcome: AskOutcome;
     let answer: string | null;
     // Only the declared fields: pi's validator keeps undeclared arguments, and the model must not reach
     // kind, workflowRun, actionHash, createdAt or a card's text through them.
@@ -440,13 +522,24 @@ export default function humanConsole(pi: ExtensionAPI) {
         rawTimeout: true,
         onHeld: (holder) => ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning"),
       });
-      answer = asked.kind === "shown" ? asked.value.answer : null;
+      if (asked.kind === "shown") {
+        outcome = asked.value.outcome;
+        answer = asked.value.answer;
+      } else {
+        outcome = asked.kind;
+        answer = null;
+      }
     } else {
       const id = crypto.randomUUID(); audit(ctx.cwd, { event: "ask_human_pending", id });
-      const outcome = await brokerRequest(ctx.cwd, { ...question, id, kind: "question", requester: requester(ctx) }, signal);
-      answer = outcome.answer;
-      audit(ctx.cwd, { event: outcome.timedOut ? "ask_human_timeout" : "ask_human_resolved", id });
+      const broker = await brokerRequest(ctx.cwd, { ...question, id, kind: "question", requester: requester(ctx) }, signal);
+      if (broker.unavailable) outcome = "unavailable";
+      else if (broker.resolved) outcome = broker.answer?.trim() ? "answered" : "dismissed";
+      else if (broker.aborted) outcome = "aborted";
+      else if (broker.timedOut) outcome = "timeout";
+      else outcome = "dismissed";
+      answer = outcome === "answered" ? broker.answer : null;
+      audit(ctx.cwd, { event: broker.timedOut ? "ask_human_timeout" : "ask_human_resolved", id, outcome });
     }
-    return { content: [{ type: "text" as const, text: answer ? `Human answer: ${answer}` : "No human answered in time." }], details: { answer } };
+    return { content: [{ type: "text" as const, text: askText(outcome, answer) }], details: { answer, outcome } };
   }});
 }

@@ -271,6 +271,9 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
   const maxAttempts = 1 + envInt("PI_KIT_SUBAGENT_RETRIES", DEFAULT_RETRIES, 0, 5);
   const retryBackoffMs = envInt("PI_KIT_SUBAGENT_RETRY_BACKOFF_MS", RETRY_BACKOFF_MS, 0, 60000);
 
+  // The card a workflow agent's approval opens names the run and this step: the role it runs, and
+  // the numeric step when the caller passed one (tool-firewall validates the label before use).
+  const stepLabel = step === undefined ? agentName : `${agentName} ${String(step)}`;
   const runAttempt = async (note = ""): Promise<SingleResult> => {
     const result: SingleResult = {
       agent: agentName,
@@ -432,6 +435,8 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
       // console's run-scoped broker. Any other child never inherits a run id.
       if (workflowLaunch && workflowRun) childEnv.PI_KIT_WORKFLOW_RUN_ID = workflowRun.runId;
       else Reflect.deleteProperty(childEnv, "PI_KIT_WORKFLOW_RUN_ID");
+      if (workflowLaunch && workflowRun) childEnv.PI_KIT_WORKFLOW_STEP = stepLabel;
+      else Reflect.deleteProperty(childEnv, "PI_KIT_WORKFLOW_STEP");
       // An agent in its own worktree would otherwise file approvals under the worktree's .pi/, where
       // the session's console never looks: point it at the console of the session that started it.
       if (workflowLaunch && !childEnv.PI_KIT_HUMAN_CONSOLE_DIR) childEnv.PI_KIT_HUMAN_CONSOLE_DIR = path.resolve(defaultCwd, ".pi", "human-console");

@@ -107,6 +107,88 @@ permissive; `deny` requires an exact entry even for core tools. Explicit externa
 I/O by in-process extension code. Plugins are not isolated; no isolation test exists. See
 `docs/security.md` for that limitation.
 
+## Patch writers and shell writers
+
+`git apply`, `git am` and `patch` (also spelt `git-apply`, `git-am` and `gpatch`) name their targets inside the patch. The classifier and
+`protected-paths` both read the patch headers (`---`, `+++`, `***`, `Index:`, `diff --git`, rename and
+copy lines and git's older `rename old` and `rename new`, git's quoted names) through one shared rule in `shared/inline-guard.ts`, and give the
+decision a direct write would get to every place a target could land: each strip level whatever `-p` says,
+every directory the command may be in (a `cd` that fails or sits in a subshell adds a candidate and replaces
+none, and `git -C` is cumulative), and for git the top of the repository. A patch file is read at every place
+it could be read from. Over-blocking an unusual invocation is accepted. These forms are covered directly and through `bash -c`,
+`sh -c`, `eval`, `cd`, `xargs` and a pipe (`tests/protected-paths-corpus-smoke.ts`).
+
+A patch that cannot be read fails closed, as a write to a safety-control file: standard input with no
+heredoc or `<` file behind it, a missing file, process substitution, a path computed at runtime, a
+binary patch, a patch with no file headers, arguments added by `xargs` or `find -exec`, `env -C` and
+`sudo -D`, standard input with more than one source, a heredoc the shell would expand, a patch file
+the same command rewrites, a transfer-encoded mail for `git am`, more than one `-d` or `--directory`, a
+directory or output named by a variable, a `cd`, `pushd` or `popd` that cannot be read (a variable, `~`, a
+flag, none, or more than six in one command), `CDPATH` set in the command, `--git-dir`, `--work-tree`,
+`GIT_DIR` or `GIT_WORK_TREE` anywhere in the command, a `patch` backup named by `-B`, `-Y`, `-z`, `--prefix`,
+`--basename-prefix`, `--suffix` or `SIMPLE_BACKUP_SUFFIX`, a `git am` series file or a `--patch-format` other
+than `mbox`, `mboxrd`, `stgit` or `hg`, a git subcommand the shell computes, and a shell, `parallel` or
+`script` reading its commands from a pipe on a line that names a patch tool, including a shell inside a
+subshell or compound after the pipe (`| (cd x; sh)`, `| if true; then sh; fi`). That text is matched coarsely, so a heredoc patch whose body contains such a `cd`
+also fails closed. `git apply --check` and `--stat` and `patch --dry-run`
+write nothing and are not read. `git am --continue`, `--skip` and `--abort` are not read because they
+carry no new patch: what they apply was checked when the `git am` that queued it ran. Only those exact spellings count: an
+abbreviated long option is expanded as the tool would expand it and is treated as a write, and a prefix
+that fits two options fails closed.
+
+`git checkout <ref> -- <path>` and `git restore --source <ref> <path>` are checked as writes to each
+path. `sed -i`, `perl -i`, `dd of=`, `install`, `rsync`, `ln -s` and a copy into a directory ending in
+`/` are checked against the same protected list.
+
+This is a guard, not a boundary. It reads command text and cannot see what a command will do when it
+runs. The limits it leaves open:
+
+- **Interpreters.** A script file, or an interpreter whose target is computed at runtime, can write
+  anything: `python3 tool.py` is not inspected (`docs/security.md`).
+- **Inherited shell state.** A `CDPATH` or shell function that was set before the command, and an alias, are
+  not visible in its text. A `cd` is placed as if none applied.
+- **Wrappers and spellings it does not know.** A catch-all runs after the walk: a piece whose words still
+  name `git` then `apply` or `am`, or `patch`, and that gave no readable call fails closed as an unreadable
+  patch, unless the command is a known reader or a known harmless command. Wrappers not on any list are
+  covered this way, and an unusual invocation may be refused when it does nothing wrong. `patch` counts
+  only when the next word is an option, a redirect or a `.patch` or `.diff` file, or when the piece has its
+  input fed in, and `apply` or `am` only straight after `git` and its global options, so a `patch` with plain
+  positional operands behind an unknown wrapper is not caught. The walk reads `$'git'` and `$"git"` as `git`,
+  but a word spelt with ANSI-C escapes (`$'\x67it'`) is not decoded.
+- **Computed commands and editors.** A command word computed at runtime (`X=git; $X apply p.patch`,
+  `$(which git) apply p.patch`), text passed to a shell or `eval` through a command substitution
+  (`bash -c "$(echo git apply p.patch)"`) and an editor's own command option (`vim -c '!git apply p.patch' x`)
+  are not read as patch writers even when the line names a patch tool. They get the firewall's medium rating
+  for dynamic execution.
+- **Inert text.** A quoted-delimiter heredoc body, and quoted text, are not read as commands only when they
+  go to a command that treats its words as data (`cat`, `tee`, `git commit` and the like; never `make`, which
+  reads a heredoc as a makefile). Every other heredoc is read as commands. A heredoc saved to a file and run later is not seen, nor is an option of such a command that runs
+  its value (`git fetch --upload-pack`, `man -P`). An unquoted heredoc body, and quoted text behind a wrapper or
+  an assignment, are still read as commands and may be refused when they do nothing wrong.
+- **Two shell readers.** protected-paths uses its own shell walker rather than the firewall's parser, so a
+  form only one of them can read gets different treatment from each. protected-paths refuses a heredoc patch
+  call fed to `parallel`, `yash`, `busybox ash` or `make -f -`, which the firewall rates medium or low because
+  its parser does not read that heredoc as commands. The remaining gaps between the two walkers are tracked for
+  the post-release follow-up that moves protected-paths onto the firewall's parser.
+- **Patch writers the text does not name.** A shell fed through a pipe is only caught when the line names a
+  patch tool, so a script that is encoded or held in a file is not.
+- **History-carrying git commands.** `git stash pop` and `apply`, `merge`, `rebase`, `cherry-pick`,
+  `revert`, `pull` and `reset --hard` write whatever the named commit or stash holds. The paths are in
+  git objects, so they are rated as ordinary git writes.
+- **Check and use.** A patch file is read when the command is classified. A process that changes it
+  afterwards, outside the same command line, is not seen, and neither is a rewrite in the same line whose
+  destination is a glob or a variable.
+- **Symbolic links.** Candidates are joined as text. A symbolic link in a directory the command moves
+  through, or a repository top found through one, is not followed.
+- **Undiscovered tree redirection.** A git configuration file that moves the work tree (`core.worktree`), or a
+  `.git` file pointing elsewhere, is not read.
+- **Other names.** A copy or link of `patch` or `git` under a name of its own is not read as a patch
+  writer, and neither is a patch applied through an alias or a script.
+- **Parent-directory copies.** A copy into a directory with no trailing `/` is checked against the
+  destination alone by the classifier; `protected-paths` also resolves existing directories.
+- **Replaced parents.** Moving or linking a directory above a protected file is only caught where the
+  parent is itself classified.
+
 ## Audit
 
 Each tool call appends one JSONL record to `PI_KIT_FIREWALL_AUDIT_LOG`, or to

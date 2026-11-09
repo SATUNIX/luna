@@ -186,6 +186,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Protected files cannot be written through a patch.** `git apply`, `git am` and `patch` (and
+  `git-apply`, `git-am`, `gpatch`) now count every file their patch names as a write target, in both
+  protected-paths and the tool firewall, including rename and copy lines, at every strip level and
+  every directory the call could run in. Forms the guard cannot read fail closed: stdin with nothing
+  readable behind it, an unreadable `cd`, backup options, series files, computed git subcommands, and a
+  shell or `parallel` fed the call through a pipe or heredoc. Quoted text, commit messages and
+  data-only heredocs no longer count, and `patch --version`/`--help` write nothing. `sed -i -e`,
+  `perl -pi -e`, `git checkout <ref> -- <path>` and `git restore --source` are rated with their paths.
+  Remaining limits are listed in the tool-firewall README (`tests/protected-paths-corpus-smoke.ts`,
+  `tests/firewall-shell-smoke.ts`).
 - **A model-started workflow step reads at the session's depth, and retries count against the
   request.** A YAML or plan step keeps the E1 delegation limit, but its prompt now reads at the
   session's tier, or lower when its role sets `effort:`, through the new `PI_KIT_EFFORT_PROMPT`, with

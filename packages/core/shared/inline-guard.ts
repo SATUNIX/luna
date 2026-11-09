@@ -19,7 +19,14 @@
  *
  * Canonical source: packages/core/shared/inline-guard.ts. tool-firewall and protected-paths hold
  * generated, byte-checked copies (`npm run gen:shared`; `npm run verify` fails on drift).
+ *
+ * This file also holds the shared reading of patch writers (`git apply`, `git am`, `patch`): the files they
+ * change are named inside the patch, so both hooks read the patch headers and check each target as a direct
+ * write. A patch that cannot be read or parsed is treated as touching a protected path.
  */
+
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Interpreter basenames whose inline code this rule inspects: Python, PyPy, Node and its TypeScript and
@@ -594,4 +601,798 @@ export function inlineAgentConfigWrite(raw: string): string | null {
     return "a command line that names an interpreter, shell or wrapper, mentions agent configuration and has a write- or exec-capable word (fail closed: parse-free backstop)";
   }
   return null;
+}
+
+/** The tools whose write targets are named inside a patch. */
+export type PatchTool = "git-apply" | "git-am" | "patch";
+
+/** One patch invocation, read from its arguments. */
+export interface PatchCall {
+  tool: PatchTool;
+  /** False for a form with no patch of its own to check: `--check`, `--stat`, `--dry-run`, and a `git am` continuation, whose patches were checked when the `git am` that queued them ran. */
+  writes: boolean;
+  /** Patch files named on the command line. */
+  sources: string[];
+  /** True when a patch comes from standard input. */
+  stdin: boolean;
+  /** Why the command line alone cannot place this call's targets, or null. */
+  unresolved: string | null;
+  /** `--directory` for git, `-d` for patch. */
+  directory: string | null;
+  /** Files named on the command line that the tool writes (`patch <file>`, `-o`, `-r`). */
+  namedWrites: string[];
+}
+
+const GIT_PATCH_VALUED_SHORT = "pC";
+const GIT_PATCH_VALUED_LONG = new Set(["--directory", "--exclude", "--include", "--whitespace", "--build-fake-ancestor", "--patch-format", "--resolvemsg"]);
+const GIT_APPLY_READ_ONLY = new Set(["--check", "--stat", "--numstat", "--summary"]);
+const GIT_AM_CONTROL = new Set(["--continue", "-r", "--resolved", "--skip", "--abort", "--quit", "--show-current-patch", "--retry"]);
+const PATCH_VALUED_SHORT = "pidorBDFVYzgx";
+const PATCH_VALUED_LONG = new Set(["--strip", "--input", "--directory", "--output", "--reject-file", "--prefix", "--ifdef", "--fuzz", "--version-control", "--basename-prefix", "--suffix", "--get", "--quoting-style", "--reject-format", "--debug"]);
+const PATCH_BACKUP_NAMING = new Set(["B", "Y", "z", "--prefix", "--basename-prefix", "--suffix"]);
+const GIT_AM_ARCHIVE_FORMATS = new Set(["mbox", "mboxrd", "stgit", "hg"]);
+// Every long option of each tool, because git's parse-options and GNU getopt_long accept any unique prefix.
+const GIT_APPLY_LONG = ["--exclude", "--include", "--no-add", "--stat", "--no-stat", "--numstat", "--no-numstat", "--summary", "--no-summary", "--check", "--no-check", "--index", "--no-index", "--intent-to-add", "--cached", "--no-cached", "--apply", "--no-apply", "--3way", "--no-3way", "--build-fake-ancestor", "--whitespace", "--ignore-space-change", "--ignore-whitespace", "--reverse", "--no-reverse", "--unidiff-zero", "--no-unidiff-zero", "--reject", "--no-reject", "--allow-overlap", "--no-allow-overlap", "--verbose", "--no-verbose", "--quiet", "--no-quiet", "--inaccurate-eof", "--no-inaccurate-eof", "--recount", "--no-recount", "--directory", "--allow-empty", "--no-allow-empty", "--unsafe-paths", "--no-unsafe-paths"];
+const GIT_AM_LONG = ["--interactive", "--binary", "--3way", "--no-3way", "--rerere-autoupdate", "--no-rerere-autoupdate", "--quiet", "--signoff", "--no-signoff", "--utf8", "--no-utf8", "--keep", "--keep-non-patch", "--no-keep", "--message-id", "--no-message-id", "--keep-cr", "--no-keep-cr", "--scissors", "--no-scissors", "--quoted-cr", "--whitespace", "--ignore-space-change", "--ignore-whitespace", "--directory", "--exclude", "--include", "--patch-format", "--reject", "--resolvemsg", "--continue", "--resolved", "--skip", "--abort", "--quit", "--show-current-patch", "--retry", "--allow-empty", "--committer-date-is-author-date", "--ignore-date", "--rebasing", "--gpg-sign", "--no-gpg-sign", "--verify", "--no-verify", "--empty"];
+const PATCH_LONG = ["--strip", "--input", "--directory", "--output", "--reject-file", "--prefix", "--ifdef", "--fuzz", "--version-control", "--basename-prefix", "--suffix", "--get", "--quoting-style", "--reject-format", "--dry-run", "--check", "--backup", "--backup-if-mismatch", "--no-backup-if-mismatch", "--batch", "--binary", "--context", "--ed", "--force", "--forward", "--ignore-whitespace", "--merge", "--normal", "--posix", "--quiet", "--silent", "--read-only", "--remove-empty-files", "--reverse", "--set-time", "--set-utc", "--unified", "--verbose", "--version", "--help", "--follow-symlinks", "--debug"];
+const GIT_APPLY_UNDO_READ_ONLY = new Set(["--apply", "--no-stat", "--no-numstat", "--no-summary", "--no-check"]);
+
+/** A long option's canonical name: unchanged when exact or unknown, null when the prefix fits several options. */
+function canonicalLong(all: readonly string[], name: string): string | null {
+  if (name.length <= 2 || all.includes(name)) return name;
+  const fits = all.filter((option) => option.startsWith(name));
+  if (fits.length > 1) return null;
+  return fits[0] ?? name;
+}
+
+/** Read one patch command's arguments (everything after `git apply`, `git am` or `patch`). */
+export function parsePatchArgs(tool: PatchTool, args: readonly string[]): PatchCall {
+  const call: PatchCall = { tool, writes: true, sources: [], stdin: false, unresolved: null, directory: null, namedWrites: [] };
+  const valuedShort = tool === "patch" ? PATCH_VALUED_SHORT : GIT_PATCH_VALUED_SHORT;
+  const valuedLong = tool === "patch" ? PATCH_VALUED_LONG : GIT_PATCH_VALUED_LONG;
+  const operands: string[] = [];
+  let readOnly = false;
+  let applyAnyway = false;
+  let control = false;
+  let ambiguous = false;
+  let input: string | null = null;
+  const longOptions = tool === "patch" ? PATCH_LONG : tool === "git-am" ? GIT_AM_LONG : GIT_APPLY_LONG;
+  const take = (flag: string, value: string): void => {
+    if (flag === "--directory" || (tool === "patch" && flag === "d")) {
+      if (call.directory !== null) call.unresolved = "the patch names more than one directory";
+      call.directory = value;
+    }
+    else if (tool === "patch" && (flag === "i" || flag === "--input")) input = value;
+    // A backup written under a chosen prefix or suffix can land on a name no header mentions.
+    else if (tool === "patch" && PATCH_BACKUP_NAMING.has(flag)) call.unresolved = "the patch names a backup file pattern";
+    // A format the patch cannot be read as here, such as a series file that lists other patches.
+    else if (tool === "git-am" && flag === "--patch-format" && !GIT_AM_ARCHIVE_FORMATS.has(value)) call.unresolved = "the patch format cannot be read";
+    else if (tool === "patch" && (flag === "o" || flag === "--output" || flag === "r" || flag === "--reject-file")) call.namedWrites.push(value);
+  };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (a === "--") { operands.push(...args.slice(i + 1)); break; }
+    if (a === "-" || !a.startsWith("-")) { operands.push(a); continue; }
+    // Only the exact spelling marks a form read-only: a guess about an abbreviation must lean towards a write.
+    if (tool === "git-am" && GIT_AM_CONTROL.has(a)) { control = true; continue; }
+    if (tool === "git-apply" && GIT_APPLY_READ_ONLY.has(a)) { readOnly = true; continue; }
+    if (tool === "patch" && a === "--dry-run") { readOnly = true; continue; }
+    // Each tool prints and exits during option parsing, without applying anything.
+    if (a === "--help" || a === "-h" || (tool === "patch" && (a === "--version" || a === "-v"))) { call.writes = false; return call; }
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const name = canonicalLong(longOptions, eq > 0 ? a.slice(0, eq) : a);
+      if (name === null) { ambiguous = true; continue; }
+      if (tool === "git-apply" && GIT_APPLY_UNDO_READ_ONLY.has(name)) { applyAnyway = true; continue; }
+      if (eq > 0) { take(name, a.slice(eq + 1)); continue; }
+      if (valuedLong.has(name)) { take(name, args[i + 1] ?? ""); i++; }
+      continue;
+    }
+    // A short-option cluster: `-Np1`, `-ifile`, `-p 2`.
+    for (let k = 1; k < a.length; k++) {
+      const letter = a.charAt(k);
+      // `git am -S[<key>]`: whatever is attached is the key, never more options.
+      if (tool === "git-am" && letter === "S") break;
+      if (!valuedShort.includes(letter)) continue;
+      const attached = a.slice(k + 1);
+      if (attached) take(letter, attached);
+      else { take(letter, args[i + 1] ?? ""); i++; }
+      break;
+    }
+  }
+  // A prefix of several options hides what it set, so nothing read from this command line can be trusted.
+  if (ambiguous) call.stdin = true;
+  else if (control || (readOnly && !applyAnyway)) {
+    // Nothing is written, but the names still say which file this call only reads.
+    call.writes = false;
+    const named: string | null = input;
+    call.sources = [...operands.filter((o) => o !== "-"), ...(named === null ? [] : [named])];
+    return call;
+  }
+  if (tool === "patch") {
+    const [original, patchFile] = operands;
+    if (original !== undefined) call.namedWrites.push(original);
+    const source: string | null | undefined = input ?? patchFile;
+    if (source === undefined || source === null || source === "-") call.stdin = true;
+    else call.sources.push(source);
+    return call;
+  }
+  for (const operand of operands) {
+    if (operand === "-") call.stdin = true;
+    else call.sources.push(operand);
+  }
+  if (!operands.length) call.stdin = true;
+  return call;
+}
+
+/** Undo git's C-style quoting of a path: `"a/\160olicy"`. */
+function unquotePatchPath(name: string): string {
+  if (!/^".*"$/.test(name)) return name;
+  const bytes: number[] = [];
+  const body = name.slice(1, -1);
+  const simple = new Map([["a", 7], ["b", 8], ["t", 9], ["n", 10], ["v", 11], ["f", 12], ["r", 13], ["\"", 34], ["\\", 92]]);
+  for (let i = 0; i < body.length; i++) {
+    const ch = body.charAt(i);
+    if (ch !== "\\") { bytes.push(...Buffer.from(ch, "utf8")); continue; }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1));
+    if (octal) { bytes.push(parseInt(octal[0], 8) & 255); i += octal[0].length; continue; }
+    const escaped = simple.get(body.charAt(i + 1));
+    if (escaped !== undefined) { bytes.push(escaped); i++; }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/**
+ * The file names a patch's headers mention: `---`, `+++`, `***`, `Index:`, `diff --git`, and rename and copy
+ * lines, with GNU patch's tolerance for headers indented by spaces, tabs or `X` and prefixed with `- `. Over-extraction is safe, since each
+ * name is only checked against the protected list. Null when the patch is binary, names nothing, or names a
+ * path that is still to be expanded by the shell.
+ */
+export function patchHeaderPaths(text: string): string[] | null {
+  if (text.includes("\0") || /^[ \t]*(?:GIT binary patch|Binary files )/m.test(text)) return null;
+  const names = new Set<string>();
+  const add = (raw: string): void => {
+    const name = raw.trim();
+    if (!name) return;
+    if (name.startsWith("\"")) { names.add(unquotePatchPath(/^"(?:[^"\\]|\\.)*"/.exec(name)?.[0] ?? name)); return; }
+    // Text after a tab, or after a space in a header with a timestamp, is not part of the name.
+    const toTab = name.split("\t")[0] ?? name;
+    names.add(toTab);
+    names.add(toTab.split(" ")[0] ?? toTab);
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^[ \tX]*(?:- )*/, "");
+    const header = /^(?:---|\+\+\+|\*\*\*)[ \t]+(.+)$/.exec(line) ?? /^Index:[ \t]+(.+)$/.exec(line) ?? /^(?:rename[ \t]+(?:from|to|old|new)|copy[ \t]+(?:from|to))[ \t]+(.+)$/.exec(line);
+    if (header?.[1] !== undefined) {
+      // A context-diff hunk range (`--- 1,5 ----`, `*** 1 ****`) is not a name.
+      if (!/^\d+(?:,\d+)?[ \t]+[-*]+\s*$/.test(header[1])) add(header[1]);
+      continue;
+    }
+    const git = /^diff --git (.{1,4096})$/.exec(line);
+    if (!git?.[1]) continue;
+    if (git[1].includes("\"")) {
+      for (const token of git[1].match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? []) add(token);
+      continue;
+    }
+    // Unquoted names may hold spaces, so every split into two names is a candidate.
+    const words = git[1].split(" ");
+    for (let i = 1; i < words.length; i++) {
+      names.add(words.slice(0, i).join(" "));
+      names.add(words.slice(i).join(" "));
+    }
+  }
+  names.delete("/dev/null");
+  if (!names.size || [...names].some((n) => /[$`]/.test(n))) return null;
+  return [...names];
+}
+
+/**
+ * Where each header name could land relative to the directory the tool works in. Every strip level is a
+ * candidate whatever -p says: the tools disagree on how a leading slash, a rename line or a missing -p counts,
+ * and a wrong extra candidate is only checked against the protected list.
+ */
+export function patchTargets(call: PatchCall, names: readonly string[]): string[] {
+  const out = new Set<string>();
+  const place = (name: string): void => {
+    if (name) out.add(call.directory ? `${call.directory.replace(/\/+$/, "")}/${name}` : name);
+  };
+  for (const name of names) {
+    place(name);
+    const segments = name.split("/").filter(Boolean);
+    for (let k = 0; k < segments.length; k++) place(segments.slice(k).join("/"));
+  }
+  return [...out];
+}
+
+const PATCH_READ_LIMIT = 8 * 1024 * 1024;
+
+/** A regular patch file's text, or null when it is missing, not a file, too large or binary. */
+export function readPatchFile(absolutePath: string): string | null {
+  try {
+    const stat = fs.statSync(absolutePath);
+    if (!stat.isFile() || stat.size > PATCH_READ_LIMIT) return null;
+    return fs.readFileSync(absolutePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// The piece's own command word, behind the shells and plain wrappers that leave the rest of the line as it is.
+const PATCH_READER = /^[\s'"({]*(?:(?:(?:ba|da|z|k)?sh\s+-[a-z]*c|eval|sudo|env|command|builtin|exec|nohup|time|(?:setsid|fakeroot)(?:\s+-\S+)*|flock(?:\s+-[wE]\s+\S+|\s+-\S+)*\s+\S+|(?:taskset|chrt)(?:\s+-\S+)*\s+\S+|script\s+(?:-[a-z]*c|--c[a-z]*))\s+['"]*)*(?:git(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:apply|am|add|commit|status|diff|log|show|rm)|git-apply|git-am|g?patch|cat|less|head|tail|wc|grep|rg|diff|ls|stat|rm)\s/;
+// A `case` arm's pattern before its command: `case x in x) cmd`, or `x) cmd` when the line starts at the arm.
+const CASE_ARM = /^\s*(?:case\b.*?\bin\s+)?[^\s()]+\s*\)\s*/;
+const PATCH_OUTPUT_OPERAND = /(?:>\s*|(?:^|\s)(?:-[A-Za-z]*[or]\s*|--(?:o[a-z]*|reject-fi[a-z]*)(?:=|\s+)))["']?$/;
+
+/** True when the walk reads this piece as a patch call taking the file as its patch. A substitution beside it runs first, so it does not count. */
+function pieceOnlyReadsPatch(piece: string, base: string): boolean {
+  if (/\$\(|`|[<>]\(/.test(piece)) return false;
+  return patchCallsInText(piece).some((c) => c.call.sources.some((s) => s.split("/").filter(Boolean).pop() === base));
+}
+
+/**
+ * True when the command line may replace a patch file before it is applied: the file is read when the command
+ * is checked, so a command that also writes it could apply something else. Any mention of the file's basename
+ * outside a known reader or a patch call reading it counts, so `./x`, `x` and `dir/../x` are one file.
+ */
+export function patchFileMayChange(command: string, file: string): boolean {
+  const base = file.split("/").filter(Boolean).pop();
+  if (!base) return false;
+  for (const raw of command.split(/[;|&\n]/)) {
+    const piece = raw.replace(CASE_ARM, "");
+    if (piece.includes(base) && !PATCH_READER.test(piece) && !pieceOnlyReadsPatch(piece, base)) return true;
+    for (let at = piece.indexOf(base); at >= 0; at = piece.indexOf(base, at + base.length)) {
+      const before = piece.slice(0, at);
+      if ([before, before.replace(/\.\/$/, ""), before.replace(/(?:[\w.~-]*\/)+$/, "")].some((text) => PATCH_OUTPUT_OPERAND.test(text))) return true;
+    }
+  }
+  return false;
+}
+
+const COMPUTED_PATH = /[$`*?[{]/;
+const STGIT_SERIES = /^#[ \t]*This series applies on GIT commit/m;
+const MAIL_ENCODED = /^content-transfer-encoding[ \t]*:[ \t]*(?![ \t]|7bit\b|8bit\b|binary\b)/im;
+
+/** The outcome of reading one call's patches: the targets, or why they cannot be known. */
+export type PatchResolution = { targets: string[]; unreadable: string | null };
+
+/**
+ * Resolve a patch call to the files it writes. `read` returns a source's text, `stdin` the text on standard
+ * input when it is known (a heredoc, a `<` redirect) and null when it is not, and `mayChange` reports a source
+ * the same command rewrites. Any patch that cannot be read fails the whole call closed.
+ */
+export function resolvePatchCall(call: PatchCall, read: (source: string) => string | null, stdin: () => string | null, mayChange: (source: string) => boolean): PatchResolution {
+  // `patch -d` changes directory before it opens anything, so a relative patch file or output is under it.
+  const located = (source: string): string => (call.tool === "patch" && call.directory && !source.startsWith("/") ? `${call.directory.replace(/\/+$/, "")}/${source}` : source);
+  const targets = new Set(call.namedWrites.map(located));
+  const texts: string[] = [];
+  if (call.unresolved !== null) return { targets: [...targets], unreadable: call.unresolved };
+  for (const place of [call.directory ?? "", ...call.namedWrites]) {
+    if (COMPUTED_PATH.test(place)) return { targets: [...targets], unreadable: `the path ${place} is computed at runtime` };
+  }
+  for (const source of call.sources) {
+    if (/[$`*?[{]|<\(|^\/dev\/|^\/proc\//.test(source)) return { targets: [...targets], unreadable: `the patch ${source} is computed at runtime` };
+    if (mayChange(source)) return { targets: [...targets], unreadable: `the patch ${source} is rewritten by the same command` };
+    const text = read(located(source));
+    if (text === null) return { targets: [...targets], unreadable: `the patch ${source} cannot be read` };
+    texts.push(text);
+  }
+  if (call.stdin) {
+    const text = stdin();
+    if (text === null) return { targets: [...targets], unreadable: "the patch arrives on standard input" };
+    texts.push(text);
+  }
+  for (const text of texts) {
+    // git am decodes the mail first, so the raw text would not be the names it applies.
+    // A series file lists other patches, and those are what git am applies.
+    if (call.tool === "git-am" && STGIT_SERIES.test(text)) return { targets: [...targets], unreadable: "the patch is a series file" };
+    if (call.tool === "git-am" && MAIL_ENCODED.test(text)) return { targets: [...targets], unreadable: "the patch is transfer-encoded" };
+    const names = patchHeaderPaths(text);
+    if (names === null) return { targets: [...targets], unreadable: "the patch is binary or has no readable file headers" };
+    for (const target of patchTargets(call, names)) targets.add(target);
+  }
+  return { targets: [...targets], unreadable: null };
+}
+
+/** A patch invocation found in shell text, for a hook with no shell parser of its own. */
+export interface TextPatchCall {
+  call: PatchCall;
+  /** The `git -C` values, in order. */
+  chdirs: string[];
+  /** The text on standard input when a heredoc supplies it. */
+  stdinText: string | null;
+  /** A file redirected to standard input. */
+  stdinFile: string | null;
+  /** True when the arguments are not all visible: xargs and find -exec append their own. */
+  unseen: boolean;
+  /**
+   * True when no call was read and only the walk says a patch writer is here: the catch-all, or a shell reading
+   * its commands from a pipe. The firewall parses the line its own way and fails closed on these too.
+   */
+  guessed?: boolean;
+}
+
+const COMMAND_WRAPPERS = new Set(["sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "stdbuf", "timeout", "eval", "xargs", "parallel", "setsid", "flock", "taskset", "fakeroot", "chrt", "bash", "sh", "zsh", "dash", "ksh", "fish", "ash", "mksh", "pdksh", "yash", "busybox", "coproc", "doas", "unshare", "nsenter", "chroot", "watch", "setpriv", "strace", "su", "runuser", "systemd-run", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
+const WRAPPER_VALUED_SHORT = new Map([["sudo", "ugUhpCDTrtR"], ["env", "uC"], ["nice", "n"], ["ionice", "cnp"], ["stdbuf", "ioe"], ["timeout", "ks"], ["xargs", "IPLnsdEa"], ["parallel", "jIPLnsda"], ["time", "fo"], ["exec", "a"], ["flock", "wE"], ["fakeroot", "lsib"], ["chrt", "TPD"], ["sh", "oO"], ["bash", "oO"], ["dash", "oO"], ["zsh", "oO"], ["ksh", "oO"], ["doas", "uC"], ["unshare", "SGRw"], ["nsenter", "tSG"], ["watch", "n"], ["strace", "abeEIoOpPsSuUX"], ["su", "gGsw"], ["runuser", "ugGslw"], ["systemd-run", "upEMH"]]);
+const WRAPPER_VALUED_LONG = new Set(["--user", "--group", "--host", "--prompt", "--chdir", "--unset", "--signal", "--kill-after", "--adjustment", "--class", "--classdata", "--input", "--output", "--error", "--arg-file", "--delimiter", "--max-args", "--max-chars", "--max-lines", "--max-procs", "--replace", "--format", "--other-user", "--role", "--type", "--command-timeout", "--close-from", "--lib", "--faked", "--conflict-exit-code", "--sched-runtime", "--sched-period", "--sched-deadline", "--rcfile", "--init-file", "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps", "--bounding-set", "--securebits", "--selinux-label", "--apparmor-profile", "--userspec"]);
+// Wrappers whose first operand is not the command: a lock file, a CPU mask.
+const WRAPPER_FIRST_OPERAND = new Set(["flock", "taskset", "chroot"]);
+const PIPE_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "mksh", "pdksh", "yash"]);
+const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/;
+const GIT_GLOBAL_VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--attr-source"]);
+// `script -c <text>`, spelt as a cluster, a long option, or either with the text attached.
+const SCRIPT_COMMAND = /(?:^|\s)(?:-[a-zA-Z]*c|--c[a-z]*)(?:=|\s*)("[^"]*"|'[^']*'|\S+)/;
+const SHELL_DELIMITER = /\|\|?&?|&&|(?<!>)&(?!>)|;|\n|`|\$\(|(?<![<$])\(|\)/g;
+
+// The `$` of `$'git'` or `$"git"`. A segment holding an escape keeps it, so the word is still read as computed.
+const ANSI_QUOTE_DOLLAR = /\$(?='[^'\\]*'|"[^"\\]*")/g;
+
+function shellWords(piece: string): string[] {
+  // Quotes and backslashes inside a word are removed as the shell removes them; a wholly quoted word stays one word.
+  return (piece.match(/[A-Za-z_]\w*=(?:[^\s"']|"(?:[^"\\]|\\.)*"|'[^']*')*|"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) ?? []).map((w) => (/^["']/.test(w) ? w : w.replace(ANSI_QUOTE_DOLLAR, "").replace(/['"\\]/g, "")).replace(/^[\s"'(]+|[\s"')]+$/g, "")).filter(Boolean);
+}
+
+/** True when a wrapper's option takes the next word as its value, so that word is not the command. */
+function wrapperFlagTakesNext(wrapper: string, flag: string): boolean {
+  // One name, two meanings: flock's takes a value, setsid's does not.
+  if (flag === "--wait" || flag === "--timeout") return wrapper === "flock";
+  if (flag.startsWith("--")) return WRAPPER_VALUED_LONG.has(flag);
+  const valued = WRAPPER_VALUED_SHORT.get(wrapper) ?? "";
+  for (let k = 1; k < flag.length; k++) if (valued.includes(flag.charAt(k))) return k === flag.length - 1;
+  return false;
+}
+
+// A wrapper option that moves the command elsewhere or hides its words: `env -C`, `env -S<text>`, `sudo -D`.
+function wrapperFlagHidesCall(wrapper: string, flag: string): boolean {
+  if (wrapper === "env") return /^(?:-[a-zA-Z0]*C|--c|-[a-zA-Z0]*S.|--s[^=]*=)/.test(flag);
+  // These move the root or the working directory the targets would be read against.
+  if (wrapper === "unshare" || wrapper === "nsenter") return /^(?:-[a-zA-Z]*[Rw]|--root|--wd)/.test(flag);
+  return wrapper === "sudo" && /^(?:-[a-zA-Z]*D|--chd)/.test(flag);
+}
+
+/**
+ * What a piece of shell text puts on standard input. Bash uses the last of several sources, and a later file beats
+ * a heredoc, so a piece with more than one is reported as unknown, as is a heredoc whose body the shell expands.
+ */
+function pieceStdin(command: string, text: string, from: number): { stdinText: string | null; stdinFile: string | null } {
+  const unknown = { stdinText: null, stdinFile: null };
+  if (text.includes("<<<")) return unknown;
+  const heredocs = text.match(/(?<!<)<<(?!<)/g)?.length ?? 0;
+  const files = text.match(/(?<!<)<(?!<)/g)?.length ?? 0;
+  if (heredocs + files !== 1) return unknown;
+  if (files === 1) {
+    const m = /(?<!\d)<\s*(?:"([^"]*)"|'([^']*)'|([^\s<>|;&()"'$`\\]+))(?=[\s;|&<>)]|$)/.exec(text);
+    return { stdinText: null, stdinFile: m?.[1] ?? m?.[2] ?? m?.[3] ?? null };
+  }
+  // Bodies follow in the order their operators appear on the line, so another heredoc on it owns the first body.
+  const lineEnd = command.indexOf("\n", from);
+  const line = command.slice(command.lastIndexOf("\n", from) + 1, lineEnd < 0 ? undefined : lineEnd);
+  if ((line.match(/(?<!<)<<(?!<)/g)?.length ?? 0) > 1) return unknown;
+  const m = /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))(?=[\s;|&<>)]|$)/.exec(text);
+  const delim = m?.[2] ?? m?.[3] ?? m?.[4];
+  if (delim === undefined) return unknown;
+  const stripTabs = m?.[1] === "-";
+  const rest = command.slice(from).split("\n").slice(1);
+  const end = rest.findIndex((l) => (stripTabs ? l.replace(/^\t+/, "") : l) === delim);
+  if (end < 0) return unknown;
+  const body = `${rest.slice(0, end).join("\n")}\n`;
+  if (m?.[4] !== undefined && /[$`]|\\\r?\n/.test(body)) return unknown;
+  return { stdinText: body, stdinFile: null };
+}
+
+/** The index of git's subcommand in `words`, past its global options from `start`. */
+function gitSubcommandIndex(words: readonly string[], start: number): number {
+  let k = start;
+  for (; k < words.length && (words[k] ?? "").startsWith("-"); k++) if (GIT_GLOBAL_VALUED.has(words[k] ?? "")) k++;
+  return k;
+}
+
+/** The `git -C` values before the subcommand, in order, for git's cumulative reading of them. */
+export function gitChdirs(words: readonly string[], start: number): string[] {
+  const out: string[] = [];
+  const end = gitSubcommandIndex(words, start);
+  for (let k = start; k < end; k++) {
+    if (words[k] === "-C") out.push(words[k + 1] ?? "");
+    if (GIT_GLOBAL_VALUED.has(words[k] ?? "")) k++;
+  }
+  return out;
+}
+
+const CDPATH_SET = /(?:^|[\s;&|(])(?:export\s+)?CDPATH=/;
+const DIRECTORY_CHANGE = /(?<![\w./-])(cd|pushd|popd)(?![\w./=-])/g;
+const DIRECTORY_OPERAND = /^[ \t]+(?:"([^"]*)"|'([^']*)'|([^\s;&|()<>'"]+))[ \t]*(?=$|[\s;&|)'"])/;
+const MAX_DIRECTORY_CHANGES = 6;
+
+/**
+ * Every directory a command's later words could run in. A `cd` may fail or sit in a subshell, so each one adds
+ * to the set and replaces nothing. Null when a change cannot be read: a variable, `~`, a flag, `popd`, a bare
+ * `cd`, more of them than is worth following, or a `CDPATH` set in the command, which moves where a `cd` lands.
+ */
+function patchShellDirs(command: string, cwd: string): string[] | null {
+  if (CDPATH_SET.test(command)) return null;
+  let dirs = [cwd];
+  const changes = [...command.matchAll(DIRECTORY_CHANGE)];
+  if (changes.length > MAX_DIRECTORY_CHANGES) return null;
+  for (const change of changes) {
+    if (change[1] === "popd") return null;
+    const m = DIRECTORY_OPERAND.exec(command.slice(change.index + change[0].length));
+    const to = m?.[1] ?? m?.[2] ?? m?.[3];
+    if (to === undefined || to.startsWith("-") || to.startsWith("~") || COMPUTED_PATH.test(to)) return null;
+    dirs = [...new Set([...dirs, ...dirs.map((d) => path.resolve(d, to))])];
+  }
+  return dirs;
+}
+
+/** The top of the repository holding `start`, or null outside one. */
+function repositoryTop(start: string): string | null {
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    if (dir === path.dirname(dir)) return null;
+  }
+}
+
+// Each of these points git at a tree other than the one the directory walk finds. Over-matching only fails closed.
+const GIT_TREE_MOVED = /(?:^|[\s'"(;&|])(?:--git-dir\b|--work-tree\b|GIT_DIR=|GIT_WORK_TREE=)/;
+
+const BACKUP_SUFFIX_SET = /(?:^|[\s'"(;&|])SIMPLE_BACKUP_SUFFIX=/;
+
+/** What a shell gives the call on standard input: a heredoc's text or a redirected file. */
+export type PatchStdin = { text: string | null; file: string | null };
+
+/**
+ * The absolute candidates a patch call could write, or why they cannot be known. Both hooks decide through this,
+ * so they cannot disagree: every target is placed at every directory the command may run in (each `cd`
+ * candidate with all `git -C` applied), and for git also at the repository top, which is what `diff --git`
+ * names and all of `git am` are relative to. A patch is read at every place it could be read from.
+ */
+export function patchCallTargets(command: string, cwd: string, call: PatchCall, chdirs: readonly string[], toAbsolute: (dir: string, file: string) => string | null, stdin: PatchStdin): PatchResolution {
+  const fail = (unreadable: string): PatchResolution => ({ targets: [], unreadable });
+  if (call.tool !== "patch" && GIT_TREE_MOVED.test(command)) return fail("the command points git at another tree");
+  if (call.tool === "patch" && BACKUP_SUFFIX_SET.test(command)) return fail("the patch names a backup file pattern");
+  const shellDirs = patchShellDirs(command, cwd);
+  if (shellDirs === null) return fail("the directory it runs in cannot be determined");
+  let workDirs = shellDirs;
+  for (const chdir of chdirs) {
+    if (chdir.startsWith("~") || COMPUTED_PATH.test(chdir)) return fail("the directory it runs in cannot be determined");
+    workDirs = workDirs.map((d) => path.resolve(d, chdir));
+  }
+  const readAcross = (dirs: readonly string[], file: string): string | null => {
+    const texts: string[] = [];
+    for (const absolute of new Set(dirs.map((d) => toAbsolute(d, file)))) {
+      if (absolute === null || !fs.existsSync(absolute)) continue;
+      const text = readPatchFile(absolute);
+      if (text === null) return null;
+      texts.push(text);
+    }
+    return texts.length ? texts.join("\n") : null;
+  };
+  const resolved = resolvePatchCall(call, (source) => readAcross(workDirs, source), () => stdin.text ?? (stdin.file === null ? null : readAcross(shellDirs, stdin.file)), (source) => patchFileMayChange(command, source));
+  const out = new Set<string>();
+  for (const target of resolved.targets) {
+    if (target.startsWith("/") || target.startsWith("~")) { out.add(target); continue; }
+    for (const dir of workDirs) {
+      out.add(path.join(dir, target));
+      const top = call.tool === "patch" ? null : repositoryTop(dir);
+      if (top !== null) out.add(path.join(top, target));
+    }
+  }
+  return { targets: [...out], unreadable: resolved.unreadable };
+}
+
+/** True when the text names a patch writer, for a shell whose commands arrive on a pipe. Deliberately coarse. */
+export function mentionsPatchWriter(text: string): boolean {
+  return /\b(?:git-apply|git-am|g?patch)\b/.test(text) || (/\bgit\b/.test(text) && /\b(?:apply|am)\b/.test(text));
+}
+
+/** A call whose arguments and tool cannot be read from the text, so it fails closed in the hook. */
+function unseenPatchCall(guessed = false): TextPatchCall {
+  return { call: parsePatchArgs("git-apply", []), chdirs: [], stdinText: null, stdinFile: null, unseen: true, guessed };
+}
+
+// Commands whose words are data: a patch tool's name after one of these is an argument, not a program it runs.
+const PATCH_NAME_HARMLESS = new Set(["cat", "head", "tail", "less", "more", "wc", "nl", "tac", "grep", "egrep", "fgrep", "rg", "ag", "ack", "echo", "printf", "ls", "stat", "file", "diff", "cmp", "sort", "uniq", "cut", "tr", "tee", "basename", "dirname", "realpath", "readlink", "which", "type", "man", "true", "false", "test", "[", "cd", "pushd", "mkdir", "rmdir", "touch", "cp", "mv", "rm", "ln", "chmod", "chown", "export", "make", "npm", "pnpm", "yarn", "find", "for", "case", "select", "gh", "glab", "kubectl", "oc", "curl", "wget"]);
+const PACKAGE_RUNNER_EXEC = /^(?:exec|x|dlx)$/;
+// git subcommands that do not run a command or take a patch, so a later `apply` or `am` is one of their arguments.
+const GIT_APPLY_WORD_HARMLESS = new Set(["log", "show", "diff", "status", "grep", "blame", "shortlog", "stash", "add", "commit", "rev-parse", "rev-list", "ls-files", "branch", "tag", "fetch", "push", "checkout", "restore", "switch", "merge", "clone", "worktree", "remote"]);
+
+/** True when the command at this index treats the rest of its words as data. */
+function commandWordsAreData(words: readonly string[], command: number): boolean {
+  const word = words[command] ?? "";
+  const base = word.split("/").pop() ?? word;
+  if (base === "git") {
+    const k = gitSubcommandIndex(words, command + 1);
+    return GIT_APPLY_WORD_HARMLESS.has(words[k] ?? "") && !words.slice(command + 1, k).some((w) => /alias\./i.test(w));
+  }
+  return PATCH_NAME_HARMLESS.has(base) && !words.some((w) => PACKAGE_RUNNER_EXEC.test(w));
+}
+
+/** True when a walked piece that gave no call still names a patch writer somewhere it could execute. */
+function pieceNamesPatchWriter(words: readonly string[], command: number, fed: boolean): boolean {
+  if ((words[command] ?? "").startsWith("#") || commandWordsAreData(words, command)) return false;
+  const tokens = words.flatMap((w) => w.split(/[\s"'`=(){};|&!]+/)).filter(Boolean).map((t) => t.split("/").pop() ?? t);
+  // `patch` only counts with what a patch run takes next, so a bare word such as `cargo release patch` does not.
+  const patchRun = (next: string | undefined): boolean => (next === undefined ? fed : /^[-<]|\.(?:patch|diff)$/.test(next));
+  const applyWord = (t: string | undefined): boolean => t === "apply" || t === "am";
+  return tokens.some((t, n) => t === "git-apply" || t === "git-am" || ((t === "patch" || t === "gpatch") && patchRun(tokens[n + 1])) || (t === "git" && (applyWord(tokens[gitSubcommandIndex(tokens, n + 1)]) || (words.some((w) => /alias\./i.test(w)) && tokens.slice(n + 1).some(applyWord)))));
+}
+
+// The quoted strings of a command that span more than one line, as [opening quote, closing quote].
+function multilineQuotes(command: string): [number, number][] {
+  const out: [number, number][] = [];
+  let open = -1;
+  let mark = "";
+  for (let i = 0; i < command.length; i++) {
+    const ch = command.charAt(i);
+    if (ch === "\\" && mark !== "'") { i++; continue; }
+    if (open < 0) { if (ch === '"' || ch === "'") { open = i; mark = ch; } continue; }
+    if (ch !== mark) continue;
+    if (command.slice(open, i).includes("\n")) out.push([open, i]);
+    open = -1;
+  }
+  return out;
+}
+
+// Where the heredoc bodies of a command lie, since those lines are text and not commands.
+function heredocBodies(command: string): [number, number][] {
+  const out: [number, number][] = [];
+  const lines = command.split("\n");
+  let offset = 0;
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n] ?? "";
+    let at = offset + line.length + 1;
+    let row = n;
+    for (const m of line.matchAll(/(?<!<)<<(-?)\s*["']?([\w.-]+)["']?/g)) {
+      const start = at;
+      for (row++; row < lines.length; row++) {
+        const body = lines[row] ?? "";
+        at += body.length + 1;
+        if ((m[1] === "-" ? body.replace(/^\t+/, "") : body) === m[2]) break;
+      }
+      out.push([start, at]);
+    }
+    n = row;
+    offset = at;
+  }
+  return out;
+}
+
+/** Text the shell does not run, with the position of what opened it and of each substitution around it. */
+interface InertSpan {
+  from: number;
+  to: number;
+  heredoc: boolean;
+  opener: number;
+  within: number[];
+}
+
+// A plain `${name}` form. Anything richer can hold quotes the shell and this reader would pair differently.
+const PLAIN_PARAMETER = /^\$\{[^}"'`$()\s]*\}/;
+const HEREDOC_DELIMITER = /^<<(-?)[ \t]*((?:[^\s;&|()<>"'\\]|\\.|"[^"\n]*"|'[^'\n]*')+)/;
+
+/**
+ * Where a command's literal quoted text and quoted-delimiter heredoc bodies lie, read with nesting: a `$(` or
+ * backtick inside double quotes starts commands again, and a comment hides any quote or `<<` in it. Empty when
+ * the text holds a form this cannot pair as the shell would, so everything is walked as commands.
+ */
+function inertSpans(command: string): InertSpan[] {
+  const spans: InertSpan[] = [];
+  type Frame = { kind: "top" | "paren" | "tick" | "dq"; open: number; depth: number; start: number };
+  const stack: Frame[] = [{ kind: "top", open: -1, depth: 0, start: 0 }];
+  const pending: { delimiter: string; strip: boolean; quoted: boolean; opener: number; within: number[] }[] = [];
+  const within = (): number[] => stack.filter((f) => f.kind === "paren" || f.kind === "tick").map((f) => f.open);
+  for (let i = 0; i < command.length; i++) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined) return [];
+    const ch = command.charAt(i);
+    const next = command.charAt(i + 1);
+    if (ch === "$" && next === "{") {
+      const plain = PLAIN_PARAMETER.exec(command.slice(i, i + 4096));
+      if (plain === null) return [];
+      i += plain[0].length - 1;
+      continue;
+    }
+    if (frame.kind === "dq") {
+      if (ch === "\\") i++;
+      else if (ch === '"') { spans.push({ from: frame.start, to: i, heredoc: false, opener: frame.open, within: within() }); stack.pop(); }
+      else if (ch === "`" || (ch === "$" && next === "(")) {
+        if (next === "(" && command.charAt(i + 2) === "(") return [];
+        spans.push({ from: frame.start, to: i, heredoc: false, opener: frame.open, within: within() });
+        stack.push({ kind: ch === "`" ? "tick" : "paren", open: i, depth: 0, start: 0 });
+        if (ch === "$") i++;
+      }
+      continue;
+    }
+    if (ch === "\\") {
+      if (frame.kind === "tick") return [];
+      i++;
+      continue;
+    }
+    if (ch === "\n" && pending.length > 0) {
+      let at = i + 1;
+      for (const doc of pending.splice(0)) {
+        const start = at;
+        for (;;) {
+          if (at >= command.length) break;
+          const lineEnd = command.indexOf("\n", at);
+          const line = command.slice(at, lineEnd < 0 ? undefined : lineEnd);
+          at = lineEnd < 0 ? command.length : lineEnd + 1;
+          if ((doc.strip ? line.replace(/^\t+/, "") : line) === doc.delimiter) break;
+        }
+        if (doc.quoted) spans.push({ from: start, to: at - 1, heredoc: true, opener: doc.opener, within: doc.within });
+      }
+      i = at - 1;
+      continue;
+    }
+    if (ch === "#" && /^$|[\s;&|()`]/.test(command.charAt(i - 1))) {
+      const end = command.indexOf("\n", i);
+      if (end < 0) break;
+      i = end - 1;
+      continue;
+    }
+    if (ch === "$" && next === "'") return [];
+    if (ch === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close < 0) return [];
+      spans.push({ from: i + 1, to: close, heredoc: false, opener: i, within: within() });
+      i = close;
+      continue;
+    }
+    if (ch === '"') { stack.push({ kind: "dq", open: i, depth: 0, start: i + 1 }); continue; }
+    if (ch === "`") {
+      if (frame.kind === "tick") {
+        stack.pop();
+        const outer = stack[stack.length - 1];
+        if (outer?.kind === "dq") outer.start = i + 1;
+      } else stack.push({ kind: "tick", open: i, depth: 0, start: 0 });
+      continue;
+    }
+    if (ch === "$" && next === "(") {
+      if (command.charAt(i + 2) === "(") return [];
+      stack.push({ kind: "paren", open: i, depth: 0, start: 0 });
+      i++;
+      continue;
+    }
+    if (ch === "(") {
+      if (next === "(") return [];
+      if (frame.kind === "paren") frame.depth++;
+      continue;
+    }
+    if (ch === ")" && frame.kind === "paren") {
+      if (frame.depth > 0) { frame.depth--; continue; }
+      stack.pop();
+      const outer = stack[stack.length - 1];
+      if (outer?.kind === "dq") outer.start = i + 1;
+      continue;
+    }
+    // A `case` pattern's `)` would close the substitution too early.
+    if (frame.kind === "paren" && ch === "c" && /^case\s/.test(command.slice(i, i + 5)) && !/[\w.-]/.test(command.charAt(i - 1))) return [];
+    if (ch === "<" && next === "<" && command.charAt(i + 2) !== "<") {
+      const m = HEREDOC_DELIMITER.exec(command.slice(i, i + 4096));
+      if (m === null) return [];
+      const word = m[2] ?? "";
+      pending.push({ delimiter: word.replace(/\\(.)/g, "$1").replace(/["']/g, ""), strip: m[1] === "-", quoted: /["'\\]/.test(word), opener: i, within: within() });
+      i += m[0].length - 1;
+    }
+  }
+  return stack.length === 1 ? spans : [];
+}
+
+/** Every `git apply`, `git am` and `patch` call in a command line, including those behind wrappers and `-c`. */
+export function patchCallsInText(command: string): TextPatchCall[] {
+  const out: TextPatchCall[] = [];
+  let at = 0;
+  const pieces: { text: string; from: number; piped: boolean; substituted: boolean; rest: string }[] = [];
+  let piped = false;
+  for (const m of command.matchAll(SHELL_DELIMITER)) {
+    pieces.push({ text: command.slice(at, m.index), from: at, piped, substituted: m[0] === "$(" || m[0] === "`", rest: command.slice(m.index + m[0].length) });
+    piped = m[0] === "|" || m[0] === "|&";
+    at = m.index + m[0].length;
+  }
+  pieces.push({ text: command.slice(at), from: at, piped, substituted: false, rest: "" });
+  const bodies = heredocBodies(command);
+  type Piece = (typeof pieces)[number];
+  type Walked = { words: string[]; command: number; fed: boolean };
+  // Reads one piece into `out`. Returns the words and the index of the command word when none was read from them.
+  const walkPiece = (piece: Piece): Walked | null => {
+    // A lookahead, so that a substitution nested in another is matched from its own opener too.
+    for (const m of piece.text.matchAll(/(?<![<\d])<\((?=((?:(?!<\()[^()])*))/g)) out.push(...patchCallsInText(m[1] ?? ""));
+    let text = piece.text.replace(CASE_ARM, "");
+    const hereString = /<<<\s*("[^"]*"|'[^']*'|\S+)/.exec(text)?.[1]?.replace(/^["']|["']$/g, "");
+    const fed = piece.piped || /<(?!\()/.test(text);
+    const { stdinText, stdinFile } = pieceStdin(command, text, piece.from);
+    text = text.replace(/\d*(?:&>|>{1,2})\s*\S+/g, " ").replace(/<<<\s*(?:"[^"]*"|'[^']*'|\S+)/g, " ").replace(/<<-?\s*\S+/g, " ").replace(/(?<![<])<\s*(?!\()\S+/g, " ");
+    const words = shellWords(text);
+    const first = words[0] ?? "";
+    let i = 0;
+    let unseen = false;
+    if (first.split("/").pop() === "find") {
+      const exec = words.findIndex((w) => /^-(?:exec|execdir|ok|okdir)$/.test(w));
+      if (exec < 0) return { words, command: 0, fed };
+      i = exec + 1;
+      unseen = true;
+    }
+    let wrapped = false;
+    let wrapper = "";
+    let skipOperand = false;
+    let shellReadsArgs = false;
+    for (; i < words.length; i++) {
+      const w = words[i] ?? "";
+      const base = w.split("/").pop() ?? w;
+      if (w === "function" && !skipOperand) { i++; continue; } // The keyword and its name, so the body is read as a call.
+      if (COMMAND_WRAPPERS.has(base) && !skipOperand) { wrapped = true; wrapper = base; skipOperand = WRAPPER_FIRST_OPERAND.has(base); if (base === "xargs" || base === "parallel" || base === "systemd-run") unseen = true; continue; }
+      if (/^[A-Za-z_]\w*=/.test(w)) continue;
+      if (wrapped && (w.startsWith("-") || (PIPE_SHELLS.has(wrapper) && w.startsWith("+")))) { if (PIPE_SHELLS.has(wrapper) && /^-[a-zA-Z]*s/.test(w)) shellReadsArgs = true; if (wrapperFlagHidesCall(wrapper, w)) unseen = true; if (wrapperFlagTakesNext(wrapper, w)) i++; continue; }
+      if (skipOperand) { skipOperand = false; if (wrapper === "chroot" && w !== "/") unseen = true; continue; }
+      if (wrapped && /^\d+[smhd]?$/.test(w)) continue;
+      break;
+    }
+    const word = words[i] ?? "";
+    // A shell given no script reads its commands from the pipe, which only the text before it can show.
+    const shellOnPipe = (PIPE_SHELLS.has(wrapper) && (word === "" || word === "-" || shellReadsArgs || STDIN_PATH.test(word))) || (wrapper === "parallel" && word === "") || (word.split("/").pop() === "script" && !SCRIPT_COMMAND.test(text)) || ((word === "source" || word === ".") && STDIN_PATH.test(words[i + 1] ?? ""));
+    // A pipe earlier on the line still feeds a shell inside a subshell or compound: `| (cd .; sh)`, `| if x; then sh; fi`.
+    if ((piece.piped || /\|/.test(command.slice(0, piece.from))) && shellOnPipe && mentionsPatchWriter(command)) { out.push(unseenPatchCall(true)); return null; }
+    // A here-string is the shell's script. Text it would expand cannot be placed, so it fails closed.
+    if (shellOnPipe && hereString !== undefined) {
+      if (/[$`]/.test(hereString) && mentionsPatchWriter(hereString)) out.push(unseenPatchCall());
+      else out.push(...patchCallsInText(hereString).map((c) => ({ ...c, unseen: c.unseen || unseen })));
+      return null;
+    }
+    if (word.split("/").pop() === "script") {
+      const inner = SCRIPT_COMMAND.exec(text)?.[1]?.replace(/^["']|["']$/g, "");
+      if (inner !== undefined) out.push(...patchCallsInText(inner).map((c) => ({ ...c, unseen: c.unseen || unseen })));
+      return null;
+    }
+    if (/\s/.test(word)) { out.push(...patchCallsInText(word).map((c) => ({ ...c, unseen: c.unseen || unseen }))); return null; }
+    const base = word.split("/").pop() ?? word;
+    let tool: PatchTool | null = null;
+    let args: string[] = [];
+    let chdirs: string[] = [];
+    if (base === "patch" || base === "gpatch") { tool = "patch"; args = words.slice(i + 1); }
+    else if (base === "git-apply") { tool = "git-apply"; args = words.slice(i + 1); }
+    else if (base === "git-am") { tool = "git-am"; args = words.slice(i + 1); }
+    else if (base === "git") {
+      const k = gitSubcommandIndex(words, i + 1);
+      chdirs = gitChdirs(words, i + 1);
+      // The subcommand, or a global option's value before it, is computed by the shell: `git $x`, `git $(echo apply)`,
+      // and `git -C $(pwd) apply`, which the substitution cuts off here so only the text after it shows the subcommand.
+      const cutOff = k >= words.length && piece.substituted && (k === words.length ? true : /\b(?:apply|am)\b|[$`]/.test(piece.rest));
+      if (cutOff || /[$`]/.test(words[k] ?? "")) { out.push(unseenPatchCall()); return null; }
+      if (words[k] === "apply") tool = "git-apply";
+      else if (words[k] === "am") tool = "git-am";
+      args = words.slice(k + 1);
+    }
+    if (tool === null) return { words, command: i, fed };
+    out.push({ call: parsePatchArgs(tool, args), chdirs, stdinText: piece.piped ? null : stdinText, stdinFile: piece.piped ? null : stdinFile, unseen });
+    return null;
+  };
+  const quoted = multilineQuotes(command);
+  const seen: { from: number; end: number; walked: Walked | null }[] = [];
+  const spans = inertSpans(command);
+  const walkedAt = (position: number): Walked | null => seen.find((p) => p.from <= position && position <= p.end)?.walked ?? null;
+  const readsAsData = (w: Walked | null): boolean => w !== null && w.command === 0 && commandWordsAreData(w.words, 0);
+  // The command whose inert text this piece is, or null when the piece must be walked. Text in a quoted heredoc or in
+  // quotes is inert only to a command that treats its words as data; make reads a heredoc as a makefile.
+  const inertOpener = (piece: Piece): Walked | null => {
+    const span = spans.find((s) => piece.from >= s.from && piece.from <= s.to);
+    if (span === undefined || (piece.from + piece.text.length > span.to && piece.text.includes("<("))) return null;
+    const opener = walkedAt(span.opener);
+    if (opener === null || !span.within.every((position) => readsAsData(walkedAt(position)))) return null;
+    if (!readsAsData(opener)) return null;
+    const base = opener.words[0]?.split("/").pop() ?? "";
+    return span.heredoc && (base === "make" || base === "gmake") ? null : opener;
+  };
+  for (const piece of pieces) {
+    const inert = inertOpener(piece);
+    if (inert !== null) { seen.push({ from: piece.from, end: piece.from + piece.text.length, walked: inert }); continue; }
+    const before = out.length;
+    const walked = walkPiece(piece);
+    seen.push({ from: piece.from, end: piece.from + piece.text.length, walked });
+    if (walked === null || out.length !== before || bodies.some(([from, to]) => piece.from >= from && piece.from < to)) continue;
+    // A line inside a multi-line quote belongs to the command that opened the quote, as in a long commit message.
+    const quote = quoted.find(([from, to]) => piece.from > from && piece.from < to);
+    const opener = quote === undefined ? undefined : seen.find((p) => p.from <= quote[0] && quote[0] <= p.end)?.walked;
+    const words = opener ? [...opener.words, ...walked.words] : walked.words;
+    // The catch-all: a patch writer the walk could not place, because the wrapper or spelling is not one it knows.
+    if (pieceNamesPatchWriter(words, opener ? opener.command : walked.command, walked.fed)) out.push(unseenPatchCall(true));
+  }
+  return out;
 }

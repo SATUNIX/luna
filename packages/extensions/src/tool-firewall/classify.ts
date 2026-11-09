@@ -4,7 +4,7 @@
 // critical), a reason code and a short human detail. The action's tier is the highest finding.
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
-import { inlineAgentConfigWrite } from "./shared/inline-guard.ts";
+import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchCallTargets, type PatchStdin, type PatchTool } from "./shared/inline-guard.ts";
 import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
@@ -461,6 +461,7 @@ type Ctx = {
   exe: string;
   findings: Finding[];
   a: Assessment;
+  command: string; // the whole command line this segment came from
 };
 
 function prefix(seg: Segment): string {
@@ -730,6 +731,8 @@ function classifySegment(c: Ctx): void {
     return;
   }
   if (seg.evalOf) add(c, "medium", "opaque", "eval_dynamic", "eval of runtime-built text", "eval");
+  // `script` with no -c runs a shell on its standard input; with -c the shell parser has already unwrapped it.
+  if (exe === "script" && seg.pipeIn && mentionsPatchWriter(c.command)) add(c, "high", "security_control", "patch_unreadable", "script reads commands from a pipe and the line names a patch tool, so it may touch a safety-control file", "script patch unreadable");
   // xargs/parallel append the paths that arrive on stdin, which cannot be seen: a writer fed that way can
   // reach any path (rm has its own handling of piped-in paths).
   if (seg.unknownArgs && UNSEEN_TARGET_WRITERS.has(exe)) add(c, "medium", "write_outside", "unresolved_write_args", `${exe} writes to paths supplied on stdin (xargs/parallel), which cannot be checked`, `${exe} stdin-paths`);
@@ -890,8 +893,12 @@ function mergeInner(c: Ctx, inner: Assessment): void {
   c.a.remoteChanges += inner.remoteChanges;
 }
 
+const PIPE_COMMAND_READERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "source", "."]);
+
 function stdinExec(c: Ctx): void {
   const { seg, exe } = c;
+  // The commands come from the pipe, so a patch writer named anywhere in the line cannot be placed or read.
+  if (PIPE_COMMAND_READERS.has(exe) && mentionsPatchWriter(c.command)) add(c, "high", "security_control", "patch_unreadable", `${exe} reads commands from a pipe and the line names a patch tool, so it may touch a safety-control file`, `${exe} patch unreadable`);
   // Walk back through the pipeline for the producer.
   let p = seg.prev;
   let producer = "";
@@ -1232,6 +1239,19 @@ function psRemove(c: Ctx): void {
   for (const t of targets) deletePath(c, t, recursive);
 }
 
+// `cp x/default-policy.json packages/.../tool-firewall/` lands on a protected file with a destination that is
+// only its directory. A destination is a directory when it ends in a slash; only protected outcomes are added.
+function intoDirectory(c: Ctx, dest: string, sources: string[], how: string): void {
+  if (!dest.endsWith("/")) return;
+  for (const s of sources) {
+    const name = s.replace(/\/+$/, "").split("/").pop() ?? "";
+    if (!name) continue;
+    const target = `${dest}${name}`;
+    const r = pathOf(c, target);
+    if (r.cls === "security_control" || r.cls === "credential_control") writePath(c, target, how);
+  }
+}
+
 function mvCp(move: boolean): Handler {
   return (c) => {
     const argv = c.seg.argv;
@@ -1259,6 +1279,7 @@ function mvCp(move: boolean): Handler {
       }
     }
     if (dest) writePath(c, dest, move ? "moves files into" : "copies into");
+    if (dest) intoDirectory(c, dest, sources, move ? "moves files into" : "copies into");
     if (!c.findings.length) add(c, "low", "workspace_write", move ? "move" : "copy", `${c.exe} ${paths.join(" ")}`);
   };
 }
@@ -1326,8 +1347,11 @@ function truncate(c: Ctx): void {
 function sed(c: Ctx): void {
   const argv = c.seg.argv;
   const inPlace = argv.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith("--in-place"));
-  const script = argv.find((a, i) => i > 0 && !a.startsWith("-") && !(argv[i - 1] === "-e" || argv[i - 1] === "-f"));
-  const files = argPaths(argv).filter((a) => a !== script);
+  // With -e, -f or --expression the program is in the option, and every operand is a file.
+  const programInOption = argv.some((a, i) => i > 0 && (/^-[A-Za-z]*[ef]$/.test(a) || /^--(?:expression|file)(?:=|$)/.test(a)));
+  const script = programInOption ? undefined : argv.find((a, i) => i > 0 && !a.startsWith("-"));
+  const optionValues = new Set(argv.filter((_, i) => i > 0 && /^-[A-Za-z]*[ef]$|^--(?:expression|file)$/.test(argv[i - 1] ?? "")));
+  const files = argPaths(argv).filter((a) => a !== script && !optionValues.has(a));
   const scripts = argv.filter((a, i) => i > 0 && (argv[i - 1] === "-e" || argv[i - 1] === "--expression" || a === script)).join("\n").split(/[;\n]/);
   // GNU sed's `e` command, or the `e` flag on s///.
   if (scripts.some((l) => /^\s*(?:\d+|\$)?(?:,\s*(?:\d+|\$))?\s*e(?:\s|$)/.test(l) || /^\s*s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gipmMI0-9]*e[gipmMIw0-9]*\s*$/.test(l))) add(c, "medium", "code_exec", "sed_exec", "sed script executes commands", "sed e");
@@ -1391,6 +1415,8 @@ function git(c: Ctx): void {
     const r = dir === undefined ? null : pathOf(c, dir);
     if (r && (r.cls === "security_control" || r.cls === "credential_control")) add(c, "high", "security_control", "control_repo_update", `git ${sub} rewrites files in ${r.shown}, which pi loads into the next session`, `git ${sub} ${r.key}`);
   }
+  // A subcommand the shell computes could be apply or am, and its patch cannot be placed.
+  if (sub !== undefined && /[$`]/.test(sub) && !c.seg.remote) add(c, "high", "security_control", "patch_unreadable", `git ${sub}: the subcommand is computed at runtime, so it may apply a patch to a safety-control file`, "git subcommand unreadable");
   const rest = argv.slice(i + 1);
   const has = (re: RegExp) => rest.some((a) => re.test(a));
   const k = (s: string) => `git ${s}`;
@@ -1418,6 +1444,7 @@ function git(c: Ctx): void {
       }
       add(c, "low", "workspace_write", "git_pull", k(sub)); return;
     case "add": case "commit": case "mv": case "init": case "apply": case "am": case "cherry-pick": case "revert": case "merge": case "switch": case "notes": case "bisect": case "format-patch": case "mergetool": case "sparse-checkout": case "maintenance": case "rerere": case "citool": case "gui": case "tag":
+      if (sub === "apply" || sub === "am") patchWrites(c, sub === "apply" ? "git-apply" : "git-am", rest, gitChdirs(argv, 1));
       if (sub === "tag" && has(/^-d$|^--delete$/)) { add(c, "medium", "history_rewrite", "git_tag_delete", "deletes a tag", k("tag -d")); return; }
       if (sub === "commit" && has(/^--amend$/)) { add(c, "low", "history_rewrite", "git_amend", "amends the last commit"); return; }
       add(c, "low", "workspace_write", "git_write", k(sub)); return;
@@ -1433,7 +1460,12 @@ function git(c: Ctx): void {
       add(c, "low", "workspace_write", "git_stash", k("stash")); return;
     case "checkout": case "restore": {
       const dashdash = rest.indexOf("--");
-      const paths = dashdash >= 0 ? rest.slice(dashdash + 1) : sub === "restore" ? rest.filter((a) => !a.startsWith("-")) : [];
+      const valued = /^(?:-s|--source|-U|--unified|--inter-hunk-context|--pathspec-from-file|-b|-B|--orphan|-t|--track|--conflict)$/;
+      const operands = rest.filter((a, n) => !a.startsWith("-") && !valued.test(rest[n - 1] ?? ""));
+      // `git checkout <ref> <path>` names its paths with no `--`; the first operand may be the ref.
+      const paths = dashdash >= 0 ? rest.slice(dashdash + 1) : sub === "restore" ? operands : operands.slice(1);
+      // Restoring a path rewrites it from another ref: the same write as a direct one.
+      for (const p of paths) { const before = c.findings.length; writePath(c, gitDest(c, argv, p), `git ${sub} rewrites`); if (c.findings.slice(before).every((f) => f.tier === "low")) c.findings.splice(before); }
       if (paths.some((p) => p === "." || p === ":/" || p === "*")) { add(c, "high", "history_rewrite", "git_discard_all", `discards all uncommitted changes (git ${sub} ${paths.join(" ")})`, k(`${sub} .`)); return; }
       if (paths.length || has(/^-f$|^--force$/)) { add(c, "medium", "history_rewrite", "git_discard", `discards uncommitted changes to ${paths.join(" ") || "files"}`, k(`${sub} -- file`)); return; }
       add(c, "low", "workspace_write", "git_checkout", k(sub)); return;
@@ -1509,10 +1541,10 @@ function gitOperands(args: string[], withArg: Set<string>): string[] {
 
 // A path git resolves against `git -C <dir>` when that is given.
 function gitDest(c: Ctx, argv: string[], p: string): string {
-  const ci = argv.indexOf("-C");
-  const dir = ci > 0 ? argv[ci + 1] : undefined;
-  if (!dir || /^[~/$]/.test(p)) return p;
-  return `${dir.replace(/\/+$/, "")}/${p}`;
+  if (/^[~/$]/.test(p)) return p;
+  let dir = "";
+  for (const step of gitChdirs(argv, 1)) dir = step.startsWith("/") || !dir ? step : `${dir.replace(/\/+$/, "")}/${step}`;
+  return dir ? `${dir.replace(/\/+$/, "")}/${p}` : p;
 }
 
 function curlLike(c: Ctx): void {
@@ -1685,6 +1717,7 @@ function scpRsync(c: Ctx): void {
     else if (!c.seg.remote && r.abs !== null && holdsProjectControl(r.abs, c.env)) add(c, "high", "security_control", "security_control_move", `removes the source files of a directory that holds the project's .pi control directory: ${r.shown}`, `${c.exe} move ${r.key}`);
   }
   writePath(c, dest, `${c.exe} copies into`);
+  intoDirectory(c, dest, sources, `${c.exe} copies into`);
   if (deleting) deletePath(c, dest, true);
 }
 
@@ -2292,10 +2325,46 @@ function installCmd(c: Ctx): void {
   mvCp(false)(c);
 }
 
+// The files a patch writer changes are named inside the patch: each is checked as a direct write, and a patch
+// that cannot be read fails closed as a write to a safety-control file. A remote patch is covered by the
+// remote-exec rule, as a remote write is. Low findings are dropped; the caller's own finding records them.
+function patchWrites(c: Ctx, tool: PatchTool, args: string[], chdirs: readonly string[]): void {
+  const call = parsePatchArgs(tool, args);
+  if (!call.writes || c.seg.remote) return;
+  const before = c.findings.length;
+  const label = tool === "patch" ? "patch" : tool === "git-am" ? "git am" : "git apply";
+  const stdin = (): PatchStdin => {
+    const unknown = { text: null, file: null };
+    if (c.seg.unknownArgs || c.seg.pipeIn) return unknown;
+    // Bash uses the last of several sources and a later file beats a heredoc, so only a single source is known.
+    const inputs = c.seg.redirects.filter((r) => r.op.includes("<"));
+    const from = inputs[0];
+    if (!from || inputs.length > 1 || (from.fd !== "" && from.fd !== "0")) return unknown;
+    // The shell expands an unquoted heredoc and deletes a backslash-newline in it, so the text here may not be git's.
+    if (from.op === "<<" || from.op === "<<-") return { text: (from.bodyExpands ?? true) && /[$`]|\\\r?\n/.test(from.body ?? "") ? null : (from.body ?? null), file: null };
+    return from.op === "<" && !from.dynamic ? { text: null, file: from.target } : unknown;
+  };
+  const toAbsolute = (dir: string, file: string): string | null => resolvePath(file, dir, c.env, c.seg.remote, c.seg.vars);
+  const resolved = c.seg.unknownArgs
+    ? { targets: [], unreadable: "the patch arrives through arguments that cannot be seen" }
+    : patchCallTargets(c.command, c.env.cwd, call, chdirs, toAbsolute, stdin());
+  for (const target of resolved.targets) writePath(c, target, `${label} writes`);
+  if (resolved.unreadable !== null) add(c, "high", "security_control", "patch_unreadable", `${label}: ${resolved.unreadable}, so it may touch a safety-control file`, `${label} unreadable`);
+  const fresh = c.findings.slice(before);
+  if (fresh.length && fresh.every((f) => f.tier === "low")) c.findings.splice(before);
+}
+
 function patchCmd(c: Ctx): void {
-  const oi = c.seg.argv.findIndex((a) => a === "-o" || a === "--output");
-  if (oi > 0) writePath(c, c.seg.argv[oi + 1] ?? "", "patch writes");
+  patchWrites(c, "patch", c.seg.argv.slice(1), []);
   add(c, "low", "workspace_write", "patch", "patch");
+}
+
+// git's own programs for `git apply` and `git am`, reached by path or through git-core on PATH.
+function gitPatchProgram(tool: PatchTool): Handler {
+  return (c) => {
+    patchWrites(c, tool, c.seg.argv.slice(1), []);
+    add(c, "low", "workspace_write", "git_write", c.exe);
+  };
 }
 
 function editorLike(c: Ctx): void {
@@ -2392,7 +2461,7 @@ const HANDLERS: Record<string, Handler> = {
   chattr: chattr, setfacl: chattr, setcap: chattr,
   "sudo-shell": sudoShellMarker, "sudo-query": interactiveSudo,
   test: testCmd, "[": testCmd,
-  patch: patchCmd,
+  patch: patchCmd, gpatch: patchCmd, "git-apply": gitPatchProgram("git-apply"), "git-am": gitPatchProgram("git-am"),
   vim: editorLike, nvim: editorLike, vi: editorLike, nano: editorLike, emacs: editorLike, code: editorLike, micro: editorLike, hx: editorLike,
   "xdg-open": xdgOpen, open: xdgOpen,
   // `enable -f lib.so name` loads a builtin from a shared library into the shell.
@@ -2472,7 +2541,7 @@ export function classifyShellText(command: string, env: ClassifyEnv, cwd: string
   for (const o of parsed.opaque) a.findings.push({ tier: "medium", effect: "opaque", code: "unparsed", detail: `could not fully parse the command (${o})`, key: "unparsed" });
   for (const seg of parsed.segments) {
     const exe = basenameOf(seg.argv[0] ?? "");
-    const c: Ctx = { env, seg, exe, findings: [], a };
+    const c: Ctx = { env, seg, exe, findings: [], a, command };
     if (seg.remote && !env.knownHosts.has(seg.remote) && !seg.ssh) {
       // Unknown hosts get no auto-mode trust; the connection finding already says so.
     }
@@ -2513,6 +2582,8 @@ export function classifyCommand(command: string, env: ClassifyEnv, tool = "bash"
   // configuration and has a write- or exec-capable call is at least high, whatever target it builds.
   const inline = inlineAgentConfigWrite(command);
   if (inline) a.findings.push({ tier: "high", effect: "security_control", code: "inline_agent_config", detail: inline, key: "inline agent-config write" });
+  // The same catch-all protected-paths applies: a patch writer the shell walk could not place.
+  if (patchCallsInText(command).some((found) => found.guessed)) a.findings.push({ tier: "high", effect: "security_control", code: "patch_unreadable", detail: "the command names a patch tool in a form that cannot be read, so it may touch a safety-control file", key: "patch writer unreadable" });
   a.tool = tool;
   a.command = command;
   a.segments = segments;
@@ -2653,12 +2724,12 @@ export function classifyToolCall(tool: string, input: unknown, env: ClassifyEnv,
     // A policy entry's path inputs are checked on top of its shell analysis, so a `command` field
     // cannot hide a write destination such as lsp_navigation's `newFilePath`.
     if ((rule?.decision === "allow" || rule?.decision === "ask") && !["bash", "powershell"].includes(lname)) {
-      policyPaths({ env, seg: toolSegment(tool, env.cwd), exe: tool, findings: a.findings, a }, fields, rule);
+      policyPaths({ env, seg: toolSegment(tool, env.cwd), exe: tool, findings: a.findings, a, command: "" }, fields, rule);
     }
   } else {
     a = emptyAssessment(tool);
     const seg = toolSegment(tool, env.cwd);
-    const c: Ctx = { env, seg, exe: tool, findings: a.findings, a };
+    const c: Ctx = { env, seg, exe: tool, findings: a.findings, a, command: "" };
     const p = typeof fields.path === "string" ? fields.path : typeof fields.file_path === "string" ? fields.file_path : typeof fields.filePath === "string" ? fields.filePath : null;
     if (lname === "write" || lname === "edit" || lname === "multiedit" || lname === "notebookedit" || lname === "apply_patch" || lname === "str_replace_editor" || lname === "create_file") {
       if (p) writePath(c, p, lname === "write" || lname === "create_file" ? "writes" : "edits");

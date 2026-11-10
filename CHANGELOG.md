@@ -8,6 +8,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.3.0-beta.1]
+
 ### Changed
 
 - **The improver plans its items.** The autonomy cycle prompt sends each item through an inline

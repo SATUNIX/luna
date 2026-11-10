@@ -11,6 +11,7 @@
 //      rewritten one is trust-gated No-first, an edited one passed inline resumes); name; models.
 //   5. The tool is not registered in a child session.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, textOf, tmpWorkspace, type FakePiApi } from "../packages/core/eval/harness.ts";
@@ -88,6 +89,7 @@ try {
   // 3-4. The tool.
   const project = path.join(ws, "project");
   fs.mkdirSync(project, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: project }); // outside git nothing is reused
   const fake = fakeSpawner((s) => ({ text: `did ${s.task}`, delayMs: 150 }));
   const support = sandboxMod.detectSupport();
   const sandbox = new sandboxMod.SandboxSession({ detect: () => support });

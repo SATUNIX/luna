@@ -8,7 +8,7 @@
  * The concurrency check races real processes on one ledger file.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -216,6 +216,61 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   // M4: every tier carries a Memento allowance (E1-E3 none, E4 2, E5 4), and both validators refuse the same bad values.
+  // The tier's plan allowance: validated and monotonic the same way in both validators.
+  "the runtime and toolchain implementations agree on workflowAgents (0/1/8/16/64) and refuse the same bad values": () => {
+    const expected = [0, 1, 8, 16, 64];
+    assert.deepEqual(corePolicy.tiers.map((t) => t.workflowAgents), expected);
+    assert.deepEqual(rtPolicy.tiers.map((t) => t.workflowAgents), expected);
+    assert.deepEqual(rtPolicy.tiers.map((t) => policyMod.workflowAllowance(rtPolicy, t.id)), expected);
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 0 } }), 0, "a tier the operator set to no delegation plans nothing");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 1 } }), 1, "an operator's lower limit lowers the allowance");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { standard: { maxTotal: 20 } }), 8, "an operator's higher limit never raises it");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "minimal", { minimal: { maxTotal: 2 } }), 0, "nor does one lift a tier that plans nothing");
+    assert.equal(policyMod.workflowAllowance(rtPolicy, "standard", { thorough: { maxTotal: 1 } }), 8, "another tier's limit does not apply");
+    const dir = policyMod.policyDir();
+    const allowanceProblems = (problems: string[]): string[] => problems.filter((p) => p.includes("workflowAgents"));
+    const withTier = (index: number, workflowAgents: unknown): unknown => {
+      const policy = structuredClone(corePolicy);
+      const tiers: unknown[] = policy.tiers.map((t, i) => (i === index ? { ...t, workflowAgents } : t));
+      return { ...policy, tiers };
+    };
+    for (const policy of [withTier(2, -1), withTier(2, 1.5), withTier(2, "8"), withTier(2, 0), withTier(4, 15)]) {
+      const core = allowanceProblems(validateEffortPolicy(policy));
+      assert.ok(core.length > 0, `core refuses ${JSON.stringify(policy).slice(0, 80)}`);
+      assert.deepEqual(allowanceProblems(policyMod.validatePolicy(policy, dir)), core, "runtime agrees");
+    }
+  },
+
+  // A policy directory written before workflowAgents existed still loads. The toolchain stays strict:
+  // it checks the shipped policy, which must carry the field.
+  "a custom policy with no workflowAgents plans nothing at that tier, and still loads": () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-policy-"));
+    try {
+      const src = policyMod.policyDir();
+      fs.cpSync(src, dir, { recursive: true });
+      const doc = structuredClone(corePolicy);
+      const strip = (renamed: string | null, def = doc.default): unknown => ({
+        ...doc,
+        default: def,
+        tiers: doc.tiers.map((t, i) => {
+          const { workflowAgents: _dropped, ...rest } = t;
+          return i === 2 && renamed ? { ...rest, id: renamed } : rest;
+        }),
+      });
+      const load = (value: unknown): EffortPolicy => {
+        fs.writeFileSync(path.join(dir, "effort.json"), JSON.stringify(value));
+        return policyMod.loadPolicy(dir);
+      };
+      assert.deepEqual(load(strip(null)).tiers.map((t) => t.workflowAgents), [0, 0, 0, 0, 0], "a missing allowance is 0, so an older policy widens nothing");
+      assert.deepEqual(load(strip("middling", "middling")).tiers.map((t) => t.workflowAgents), [0, 0, 0, 0, 0], "a renamed tier is no load problem either");
+      const invalid = structuredClone(corePolicy);
+      const bad: unknown = { ...invalid, tiers: invalid.tiers.map((t, i) => (i === 2 ? { ...t, workflowAgents: null } : t)) };
+      assert.throws(() => load(bad), /tiers\[2\]\.workflowAgents must be a non-negative integer/, "a value that is present is still checked");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  },
+
   "the runtime and toolchain implementations agree on memento.maxGenerations (0/0/0/2/4) and refuse the same bad values": () => {
     const expected = [0, 0, 0, 2, 4];
     assert.deepEqual(corePolicy.tiers.map((t) => mementoGenerations(t.id, corePolicy)), expected);
@@ -541,6 +596,112 @@ const tests: Record<string, () => void | Promise<void>> = {
     } finally { w.cleanup(); }
   },
 
+  // Rank 28: a model-started step reads as deep as the session's tier, or lower when its role asks,
+  // while PI_KIT_EFFORT and _CAP stay at the lowest tier, so it gains no delegation.
+  "a model-started workflow step takes the session tier's prompt depth and keeps the E1 delegation limit": async () => {
+    const w = world();
+    const asChild = async (env: Record<string, string>, check: (child: ReturnType<typeof boot>, prompt: string) => void): Promise<void> => {
+      const restore = ["PI_KIT_EFFORT", "PI_KIT_EFFORT_CAP", "PI_KIT_EFFORT_LEDGER", "PI_KIT_EFFORT_PROMPT"].map((k) => setEnv(k, env[k]));
+      try {
+        const child = boot();
+        await child.start();
+        check(child, (await child.turn()).systemPrompt);
+      } finally { restore.reverse().forEach((f) => f()); }
+    };
+    try {
+      const b = boot();
+      saveDefault("exhaustive");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const scope = reg.openRunScope("depth-1", { planned: 3 });
+      assert.ok(scope.ok, "the plan opens");
+      const launch = (requestedTier?: string): Granted => {
+        const r = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-1", runToken: scope.runToken, ...(requestedTier === undefined ? {} : { requestedTier }) });
+        assert.ok(r.ok, "the step is granted a slot");
+        assert.equal(r.childTier, "minimal", "the delegation tier stays the lowest");
+        assert.equal(r.env.PI_KIT_EFFORT, "minimal");
+        assert.equal(r.env.PI_KIT_EFFORT_CAP, "minimal");
+        return r;
+      };
+      await asChild(launch().env, (child, prompt) => {
+        assert.ok(prompt.includes("Tier: E5 Exhaustive."), "a step with no role effort renders the session's tier");
+        assert.ok(!prompt.includes("Tier: E1 Minimal."));
+        assert.match(prompt, /cannot start other agents/, "the tier's child counts are not read as a grant");
+        const snap = child.registry().snapshot();
+        assert.equal(snap.tier, "minimal", "the child's own tier does not move");
+        assert.equal(codeOf(child.registry().reserve({ kind: "discretionary", role: "worker" })), "tier", "the child holds the E1 delegation limit");
+        assert.equal(codeOf(child.registry().openRunScope("nested", { planned: 1 })), "child");
+        // A launch the step does make (a verifier) gets its own depth, not this step's.
+        const verifier = child.registry().reserve({ kind: "mandatory", role: "reviewer" });
+        assert.ok(verifier.ok);
+        assert.equal(verifier.env.PI_KIT_EFFORT_PROMPT, "minimal", "the override stops at this step");
+      });
+      await asChild(launch("focused").env, (_child, prompt) => {
+        assert.ok(prompt.includes("Tier: E2 Focused."), "a role's lower effort: is honoured");
+      });
+      // A script keeps the old rendering: it was approved as a script, and this decision is about plans.
+      const script = reg.openRunScope("depth-script");
+      assert.ok(script.ok);
+      const scripted = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-script", runToken: script.runToken, requestedTier: "exhaustive" });
+      assert.ok(scripted.ok);
+      assert.equal(scripted.env.PI_KIT_EFFORT_PROMPT, undefined);
+      await asChild(scripted.env, (_child, prompt) => { assert.ok(prompt.includes("Tier: E1 Minimal.")); });
+      // The clamp: a role cannot read deeper than the session.
+      await b.command("standard");
+      await b.turn();
+      const lower = reg.openRunScope("depth-2", { planned: 1 });
+      assert.ok(lower.ok);
+      const clamped = reg.reserve({ kind: "workflow", role: "worker", runId: "depth-2", runToken: lower.runToken, requestedTier: "exhaustive" });
+      assert.ok(clamped.ok);
+      await asChild(clamped.env, (_child, prompt) => { assert.ok(prompt.includes("Tier: E3 Standard."), "effort: is clamped to the session tier"); });
+    } finally { w.cleanup(); }
+  },
+
+  // Rank 30: the allowance bounds what starts in a request, retries included, not only what is planned.
+  "at E3 eight one-step plans that each retry once start 8 children, not 16": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const scopes = Array.from({ length: 8 }, (_, i) => {
+        const scope = reg.openRunScope(`retry-${String(i)}`, { planned: 1 });
+        assert.ok(scope.ok, "each one-step plan fits the allowance");
+        return { runId: `retry-${String(i)}`, runToken: scope.runToken };
+      });
+      let started = 0;
+      const refused: Reservation[] = [];
+      for (const scope of scopes) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const r = reg.reserve({ kind: "workflow", role: "worker", ...scope });
+          if (r.ok) { started++; r.settle(attempt === 0 ? "transient" : "ok"); } else refused.push(r);
+        }
+      }
+      assert.equal(started, 8, "the request's allowance bounds every child started");
+      const denial = present(refused[0], "a refusal");
+      assert.equal(codeOf(denial), "plan-allowance");
+      assert.match(denial.ok ? "" : denial.reason, /started 8 of the 8 agents E3 Standard allows a request/);
+      assert.match(denial.ok ? "" : denial.reason, /\/effort/);
+      // Once the request has started its allowance, no new plan opens to be refused step by step.
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "next" }, b.ctx);
+      const next = reg.openRunScope("retry-renewed", { planned: 8 });
+      assert.ok(next.ok, "a user message renews what may start as well as what may be planned");
+      for (let i = 0; i < 8; i++) assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-renewed", runToken: next.runToken }).ok, true);
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "again" }, b.ctx);
+      const one = reg.openRunScope("retry-a", { planned: 1 });
+      assert.ok(one.ok);
+      for (let i = 0; i < 8; i++) assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-a", runToken: one.runToken }).ok, true, "a retry inside its run's cap starts");
+      assert.equal(codeOf(reg.openRunScope("retry-b", { planned: 1 })), "plan-allowance", "the request has started its allowance, so a new plan is refused before any launch");
+      // A script is not planned, so the allowance neither counts nor refuses it.
+      const script = reg.openRunScope("retry-script");
+      assert.ok(script.ok);
+      assert.equal(reg.reserve({ kind: "workflow", role: "worker", runId: "retry-script", runToken: script.runToken }).ok, true);
+    } finally { w.cleanup(); }
+  },
+
   "resume and compaction keep the budget: a fresh session on the same ledger continues the count": async () => {
     const w = world();
     try {
@@ -611,6 +772,39 @@ const tests: Record<string, () => void | Promise<void>> = {
     } finally { w.cleanup(); }
   },
 
+  // Run in a child: on a loop that never yields, this process would hang with it.
+  "a stale lock that cannot be broken refuses within the lock wait, and never spins": () => {
+    const w = world();
+    try {
+      const attempt = (file: string): { status: number | null; out: string } => {
+        const script = `import(${JSON.stringify("file://" + path.join(CACHE, "packages_extensions_src_effort_ledger.mjs"))}).then((l) => { try { l.withLock(process.argv[1], () => {}); console.log("ran"); } catch (e) { console.log("threw: " + e.message); } });`;
+        const r = spawnSync(process.execPath, ["-e", script, file], { encoding: "utf8", timeout: 7_000 });
+        return { status: r.status, out: r.stdout };
+      };
+      const old = (file: string): void => { const t = new Date(Date.now() - 60_000); fs.utimesSync(file, t, t); };
+      // (a) The break lock cannot be cleared (a directory stands in for a dead one on a read-only mount).
+      const stuck = path.join(w.agent, "stuck.json");
+      fs.writeFileSync(`${stuck}.lock`, "999999\n"); old(`${stuck}.lock`);
+      fs.mkdirSync(`${stuck}.lock.break`); old(`${stuck}.lock.break`);
+      const held = attempt(stuck);
+      assert.equal(held.status, 0, "the wait ended by itself");
+      assert.match(held.out, /threw: timed out waiting for the effort ledger lock/);
+      // (b) The directory is read-only, so the break lock cannot be written (root ignores the mode).
+      if (process.getuid?.() !== 0) {
+        const dir = path.join(w.agent, "read-only");
+        fs.mkdirSync(dir);
+        const file = path.join(dir, "ledger.json");
+        fs.writeFileSync(`${file}.lock`, "999999\n"); old(`${file}.lock`);
+        fs.chmodSync(dir, 0o555);
+        try {
+          const denied = attempt(file);
+          assert.equal(denied.status, 0, "the failure ended the wait");
+          assert.match(denied.out, /threw: EACCES/);
+        } finally { fs.chmodSync(dir, 0o755); }
+      }
+    } finally { w.cleanup(); }
+  },
+
   "a stale lock left by a crashed holder is broken safely: racing waiters cannot both win, and a release never removes someone else's lock": async () => {
     const w = world();
     try {
@@ -667,7 +861,7 @@ const tests: Record<string, () => void | Promise<void>> = {
     const w = world();
     try {
       const b = boot();
-      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "subagent_status", "subagent_stop"];
+      const active = ["read", "bash", "edit", "write", "subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist", "workflow_status", "workflow_control"];
       const calls: string[][] = [];
       let current = [...active];
       const api: ToolControlApi = b.pi.api;
@@ -676,8 +870,10 @@ const tests: Record<string, () => void | Promise<void>> = {
       saveDefault("minimal");
       await b.start();
       await b.turn();
-      assert.ok(!current.includes("subagent") && !current.includes("workflow_run"), "delegation tools are hidden at E1");
-      assert.ok(current.includes("subagent_status") && current.includes("subagent_stop"), "the read/stop tools stay so running children can still be inspected and stopped");
+      assert.ok(!current.includes("subagent") && !current.includes("workflow_run") && !current.includes("workflow"), "delegation tools are hidden at E1");
+      // Both can only be refused at E1, and a refused dispatch_specialist still spends an engagement slot.
+      assert.ok(!current.includes("dual_review") && !current.includes("dispatch_specialist"), "dual_review and dispatch_specialist are hidden at E1");
+      assert.ok(current.includes("workflow_status") && current.includes("workflow_control"), "the one read/stop pair stays so running children and runs can still be inspected and stopped");
       assert.equal(calls.length, 1);
       await b.turn(); // no change, no churn
       assert.equal(calls.length, 1, "setActiveTools is not called again when nothing changed");
@@ -685,23 +881,212 @@ const tests: Record<string, () => void | Promise<void>> = {
       current = current.filter((t) => t !== "edit");
       await b.command("standard");
       await b.turn();
-      assert.ok(current.includes("subagent") && current.includes("workflow_run"), "raising effort restores them at the next turn");
+      assert.ok(current.includes("subagent") && current.includes("workflow_run") && current.includes("workflow") && current.includes("dual_review") && current.includes("dispatch_specialist"), "raising effort restores them at the next turn");
       assert.ok(!current.includes("edit"), "tools this extension did not remove stay removed");
-      // recovery opens the delegation tools even at E1 (read-only scouts), then closes again
+      // recovery opens the delegation tools even at E1 (read-only scouts), then closes again. The
+      // workflow tools stay hidden: at E1 openRunScope always refuses them, so showing them would only
+      // ask the operator for approvals that end in that refusal.
       await b.command("minimal");
       await b.turn();
-      assert.ok(!current.includes("subagent"));
+      assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       b.registry().setRecoveryActive(true);
-      assert.ok(current.includes("subagent"), "recovery makes the tool available");
+      assert.ok(current.includes("subagent"), "recovery makes the delegation tools available");
+      assert.ok(!current.includes("workflow") && !current.includes("workflow_run"), "recovery does not bring back a tool the run scope always refuses at E1");
       b.registry().setRecoveryActive(false);
       await b.turn();
-      assert.ok(!current.includes("subagent"));
+      assert.ok(!current.includes("subagent") && !current.includes("workflow"));
       // a pi without active-tool control is fine
       const bare = boot();
       const bareApi: ToolControlApi = bare.pi.api;
       delete bareApi.getActiveTools;
       await bare.start();
       await bare.turn();
+    } finally { w.cleanup(); }
+  },
+
+  // S2: a script-workflow run scope is refused at E1, so E1 launches nothing even on a pi without
+  // active-tool control. Recovery opens neither the tool nor the scope, and a user-typed
+  // /workflow run is a "user" launch, which the tier does not bound.
+  "E1 refuses a workflow run scope, and a user-directed workflow launch still works": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("minimal");
+      await b.start();
+      await b.turn();
+      // The registry is per extension instance: keep this one, because booting another replaces the global.
+      const reg = b.registry();
+      const scope = reg.openRunScope("e1-run");
+      assert.equal(scope.ok, false);
+      assert.equal(scope.code, "tier");
+      assert.match(scope.reason, /E1 Minimal does not delegate/);
+      assert.match(scope.reason, /\/effort/);
+      // A pi without active-tool control cannot hide the tool, so the scope refusal is the boundary.
+      const bare = boot();
+      const bareApi: ToolControlApi = bare.pi.api;
+      delete bareApi.getActiveTools;
+      delete bareApi.setActiveTools;
+      saveDefault("minimal");
+      await bare.start();
+      await bare.turn();
+      assert.equal(bare.registry().openRunScope("e1-bare").ok, false, "no active-tool control: the scope still refuses");
+      // Recovery does not open a run scope at E1 either.
+      reg.setRecoveryActive(true);
+      assert.equal(reg.openRunScope("e1-recovery").ok, false, "recovery does not open a run scope at E1");
+      reg.setRecoveryActive(false);
+      // /workflow run is a user launch: it is not the agent's own initiative, so E1 allows it.
+      const user = reg.reserve({ kind: "user", role: "worker" });
+      assert.equal(user.ok, true, "a user-directed workflow launch is not blocked by the tier");
+      // Raising effort opens a script-workflow run scope.
+      await b.command("standard");
+      await b.turn();
+      assert.equal(reg.openRunScope("e3-run").ok, true);
+    } finally { w.cleanup(); }
+  },
+
+  // N1, P3: a planned scope charges its worst case per user request, and the tier allowance caps the
+  // run. A scope without `planned` (an approved script) is charged nothing and keeps totalPerRun.
+  "a planned run scope charges the request and caps the run; a plain scope does neither": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const first = reg.openRunScope("plan-1", { planned: 5 });
+      assert.ok(first.ok, "a plan within the allowance opens");
+      assert.equal(first.maxConcurrent, 2, "the scope carries the tier's parallel limit");
+      const over = reg.openRunScope("plan-2", { planned: 4 });
+      assert.equal(codeOf(over), "plan-allowance", "5 + 4 is past E3's 8");
+      assert.match(over.ok ? "" : over.reason, /\/effort/);
+      assert.ok(reg.openRunScope("plan-2", { planned: 3 }).ok, "a refused plan charged nothing, and did not spend its run id");
+      assert.equal(codeOf(reg.openRunScope("plan-3", { planned: 1 })), "plan-allowance", "the allowance is used up");
+      assert.equal(codeOf(reg.openRunScope("plan-4", { planned: -1 })), "invalid", "a negative plan cannot refund the request");
+      const script = reg.openRunScope("script-1");
+      assert.ok(script.ok, "a scope with no plan is not charged, so the used-up allowance does not refuse it");
+      const saved = present(ledgerMod.readLedger(first.ledger)?.workflow, "the workflow section");
+      assert.equal(saved.runs["plan-1"]?.cap, 8);
+      assert.equal(saved.runs["script-1"]?.cap, undefined, "cap applies only to planned scopes");
+      assert.equal(saved.plannedUsed, 8);
+      for (let i = 0; i < 8; i++) assert.equal(ledgerMod.reserve(first.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "plan-1", runToken: first.runToken }, Date.now() + i, () => `a${String(i)}`).ok, true);
+      const ninth = ledgerMod.reserve(first.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "plan-1", runToken: first.runToken });
+      assert.equal(codeOf(ninth), "total", "reserve holds a planned run to min(cap, totalPerRun)");
+      assert.match(ninth.ok ? "" : ninth.reason, /limit \(8\)/);
+      // A turn that is not the user's keeps the charge, a user turn renews it, and a reload changes nothing.
+      const customTurn = async (customType: string): Promise<unknown> => b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "custom", message: { customType, content: "done", display: true } }, b.ctx);
+      await customTurn("luna-workflow-result");
+      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "a workflow's completion message does not refresh the allowance");
+      await customTurn("another-extension");
+      assert.equal(codeOf(reg.openRunScope("plan-5", { planned: 1 })), "plan-allowance", "nor does any other extension's custom message");
+      await b.start("reload");
+      await customTurn("luna-workflow-result");
+      assert.equal(codeOf(reg.openRunScope("plan-6", { planned: 1 })), "plan-allowance", "nor does a reload");
+      await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "go" }, b.ctx);
+      assert.ok(reg.openRunScope("plan-7", { planned: 8 }).ok, "a user turn renews it");
+    } finally { w.cleanup(); }
+  },
+
+  // pi before 1.2.0 (the floor and a CI lane) reports no messageType, and starts this event only from a prompt.
+  "a pi that reports no messageType renews the plan allowance on each prompt": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      assert.ok(reg.openRunScope("floor-1", { planned: 8 }).ok, "the first request plans its allowance");
+      assert.equal(codeOf(reg.openRunScope("floor-2", { planned: 1 })), "plan-allowance", "and it is used up");
+      await b.turn();
+      assert.ok(reg.openRunScope("floor-3", { planned: 8 }).ok, "the next prompt renews it");
+    } finally { w.cleanup(); }
+  },
+
+  // An operator can raise a tier's maxTotal above a workflowAgents of 0. That tier delegates and runs an
+  // approved script, which is charged nothing, and it plans nothing; a plan's refusal must say so.
+  "a tier that delegates but plans nothing refuses only plans, and says why; maxTotal 0 refuses every scope": async () => {
+    const w = world();
+    try {
+      fs.mkdirSync(path.join(w.agent, "pi-kit"), { recursive: true });
+      fs.writeFileSync(path.join(w.agent, "pi-kit", "effort.json"), JSON.stringify({ default: "minimal", limits: { minimal: { maxTotal: 2 }, standard: { maxTotal: 0 } } }));
+      const b = boot();
+      await b.start();
+      await b.turn();
+      const reg = b.registry();
+      const plan = reg.openRunScope("zero-plan", { planned: 1 });
+      assert.equal(codeOf(plan), "plan-allowance");
+      assert.doesNotMatch(plan.ok ? "" : plan.reason, /does not delegate/);
+      assert.match(plan.ok ? "" : plan.reason, /E1 Minimal plans no workflow agents.*\/effort/);
+      assert.ok(reg.openRunScope("zero-script").ok, "an approved script is charged nothing");
+      await b.command("standard");
+      await b.turn();
+      for (const options of [{ planned: 1 }, undefined]) {
+        const refused = reg.openRunScope("none", options);
+        assert.equal(codeOf(refused), "tier");
+        assert.match(refused.ok ? "" : refused.reason, /does not delegate/);
+      }
+    } finally { w.cleanup(); }
+  },
+
+  "an expansion's refusal says what would fit: some room, none in the request, or none left in this run": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const run = b.registry().openRunScope("grow", { planned: 5 });
+      assert.ok(run.ok, "a plan within the allowance opens");
+      const charge = (planned: number) => ledgerMod.chargeRun(run.ledger, "grow", run.runToken, { planned, allowance: 8, label: "E3 Standard" });
+      const room = charge(4);
+      assert.equal(codeOf(room), "plan-allowance");
+      assert.match(room.ok ? "" : room.reason, /up to 3 more agents would fit/);
+      assert.ok(charge(3).ok, "a refused charge spent nothing, so the size it named fits");
+      const spent = charge(1);
+      assert.equal(codeOf(spent), "plan-allowance");
+      assert.match(spent.ok ? "" : spent.reason, /no workflow of any size fits this request/);
+      assert.match(spent.ok ? "" : spent.reason, /renews on the next user message/);
+      for (let i = 0; i < 8; i++) assert.equal(ledgerMod.reserve(run.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "grow", runToken: run.runToken }, Date.now() + i, () => `g${String(i)}`).ok, true);
+      ledgerMod.resetPlanned(run.ledger);
+      const full = charge(1);
+      assert.equal(codeOf(full), "plan-allowance", "a renewed request does not lift the run's own cap");
+      assert.match(full.ok ? "" : full.reason, /this run has started or planned 8 of its 8 agents, so it cannot expand; a new plan can still start up to 8/);
+      assert.doesNotMatch(full.ok ? "" : full.reason, /no workflow of any size fits/, "a new workflow would fit, so this must not say none does");
+    } finally { w.cleanup(); }
+  },
+
+  // Rank 57: a second process on the same session renews the allowance while this run is still going.
+  "an expansion counts the run's unstarted planned agents after the allowance renews": async () => {
+    const w = world();
+    try {
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      await b.turn();
+      const run = b.registry().openRunScope("renewed", { planned: 6 });
+      assert.ok(run.ok, "a plan within the allowance opens");
+      for (let i = 0; i < 2; i++) assert.equal(ledgerMod.reserve(run.ledger, { kind: "workflow", role: "worker", requesterTier: "standard", requesterLimits: { maxConcurrent: 2, maxTotal: 3, maxScouts: 1 }, requesterLabel: "E3", runId: "renewed", runToken: run.runToken }, Date.now() + i, () => `r${String(i)}`).ok, true);
+      ledgerMod.resetPlanned(run.ledger);
+      const charge = (planned: number) => ledgerMod.chargeRun(run.ledger, "renewed", run.runToken, { planned, allowance: 8, label: "E3 Standard" });
+      const over = charge(6);
+      assert.equal(codeOf(over), "plan-allowance", "2 started, 4 still planned and 6 new is 12 against a cap of 8");
+      assert.match(over.ok ? "" : over.reason, /up to 2 more agents would fit/);
+      assert.ok(charge(2).ok, "the size it named fits");
+    } finally { w.cleanup(); }
+  },
+
+  // E1 stays closed through the allowance key, and a tier the operator set to no delegation stays closed too.
+  "an operator's maxTotal 0 refuses a run scope at any tier": async () => {
+    const w = world();
+    try {
+      fs.mkdirSync(path.dirname(mod.configPath()), { recursive: true });
+      fs.writeFileSync(mod.configPath(), JSON.stringify({ schemaVersion: 1, limits: { standard: { maxTotal: 0 } } }));
+      const b = boot();
+      await b.start();
+      await b.turn();
+      assert.equal(codeOf(b.registry().openRunScope("none")), "tier");
+      assert.equal(codeOf(b.registry().openRunScope("none-plan", { planned: 1 })), "tier");
     } finally { w.cleanup(); }
   },
 

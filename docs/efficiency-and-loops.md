@@ -38,7 +38,7 @@ Loaded on demand (the orchestrator points the model at them):
 Detects three cheap "stuck" signals — the same action **repeating**, an A→B→A
 **oscillation** (alternating between two actions with no edit between), or many **reads
 since the last edit** — and helps break out:
-- **`suggest`** mode (default): notifies a suggestion; you run `/reflect` or delegate.
+- **`suggest`** mode (default): notifies a suggestion; you delegate or keep working.
 - **`auto`** mode: injects a guidance nudge (never a system prompt) that tells the model to
   reflect and, if looping, delegate the stuck step to a fresh sub-agent that returns only the
   answer. The nudge reaches the model inside the run that is looping, as a hidden message pi
@@ -69,7 +69,7 @@ enters the deep
 scaffold and steers the multi-agent root-cause pass (fresh scouts + a forked top-10 of
 causes + a primary/backup plan + a delegated fix). Non-destructive; bounded to
 `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default 2) per signature before escalating to the operator.
-Manual trigger: `/recover`. Ships in `long-horizon`/`autonomous`/`self-improving`.
+On demand, a bare `/boost` enters the same flow. Ships in `long-horizon`/`autonomous`/`self-improving`.
 
 ## Threshold calibration
 
@@ -141,8 +141,8 @@ been measured.
 | Want | Use |
 |---|---|
 | See if you're repeating reads/commands | `/trace` |
-| Force a self-reflection now | `/reflect` |
+| Reassess now | `/boost` |
 | Auto-nudge on loops this session | `/boost on` |
-| Enter deep recovery now | `/recover` |
+| Enter deep recovery now | `/boost` |
 | Tune sensitivity | `PI_KIT_GUARD_REPEAT`, `PI_KIT_GUARD_STALL`, `PI_KIT_GUARD_OSC` |
 | Auto-boost on autonomous runs | arm `/loop <goal>` (automatic) or `PI_KIT_GUARD_MODE=auto` |

@@ -59,7 +59,7 @@ tag; if none exists yet, use `--channel next`.
 
 ## Subagent roles and workflows
 
-The built-in roles (`delegator`, `planner`, `implementer`, `reviewer`, `scout`) come from
+The built-in roles (`implementer`, `planner`, `reviewer`, `scout`) come from
 `packages/kit/agents/`. Customise one by copying it to `~/.pi/agent/agents/`; project `.pi/agents/`
 files apply only with `agentScope: "project"` or `"both"`. Saved multi-step flows live in
 `packages/kit/workflows/`. Every child runs under the same governance as its parent; see

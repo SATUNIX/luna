@@ -38,7 +38,7 @@ function fakeChild(): FakeChild {
   const d = specialistBounds({});
   assert.equal(d.streamCapBytes, 256 * 1024 * 1024, "default stream cap");
   assert.equal(d.idleTimeoutMs, 15 * 60 * 1000, "default idle timeout");
-  assert.equal(d.maxRuntimeMs, 0, "wall-clock disabled by default");
+  assert.equal(d.maxRuntimeMs, 30 * 60 * 1000, "default wall clock, as a subagent's");
 
   const o = specialistBounds({
     PI_KIT_SPECIALIST_STREAM_CAP_BYTES: "65536",
@@ -82,6 +82,44 @@ function fakeChild(): FakeChild {
     const r = await streamSpecialistChild(child, bounds, undefined);
     assert.equal(r.killed, "wall-clock");
   } finally { clearInterval(drip); }
+}
+
+// 4b. A specialist's idle watchdog is held while a tool call is open, as a subagent child's is
+// (tests/subagent-progress-smoke.ts): a long silent build is work, not a stall. Silence after the
+// last end is a stall again, and the wall clock still ends a tool call that never finishes.
+{
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const event = (type: string, toolCallId?: string): string => `${JSON.stringify({ type, ...(toolCallId === undefined ? {} : { toolCallId }) })}\n`;
+  const bounds = { streamCapBytes: 1024 * 1024, idleTimeoutMs: 80, maxRuntimeMs: 0 };
+  const child = fakeChild();
+  const run = streamSpecialistChild(child, bounds, undefined);
+  child.stdout.write(event("tool_execution_start", "t1") + event("tool_execution_start", "") + event("tool_execution_start"));
+  await sleep(250);
+  assert.equal(child.killed, false, "an open tool call holds the specialist's idle watchdog");
+  child.stdout.write(event("tool_execution_end", "t1") + event("tool_execution_end", ""));
+  await sleep(250);
+  assert.equal(child.killed, false, "the second call without an id still holds it");
+  child.stdout.write(event("tool_execution_end"));
+  assert.equal((await run).killed, "idle-timeout", "silence after the last end is a stall");
+
+  const walled = fakeChild();
+  const walledRun = streamSpecialistChild(walled, { ...bounds, maxRuntimeMs: 120 }, undefined);
+  walled.stdout.write(event("tool_execution_start", "t1"));
+  assert.equal((await walledRun).killed, "wall-clock", "the wall clock still ends a tool call that never finishes");
+
+  // With the hold in place the wall clock is the only limit on a hung tool, so the default must set
+  // one: invariant 6, nothing waits forever unattended. Only an explicit 0 turns it off.
+  assert.ok(specialistBounds({}).maxRuntimeMs > 0, "an open tool call under the default bounds has a wall clock");
+  assert.equal(specialistBounds({ PI_KIT_SPECIALIST_MAX_RUNTIME_MS: "0" }).maxRuntimeMs, 0, "an explicit 0 leaves it off");
+  assert.equal(specialistBounds({ PI_KIT_SPECIALIST_MAX_RUNTIME_MS: "-1" }).maxRuntimeMs, 30 * 60 * 1000, "an unusable value keeps the default");
+
+  // A limit above 2^31-1 ms must not overflow setTimeout, which would fire at once.
+  const huge = fakeChild();
+  const hugeRun = streamSpecialistChild(huge, { ...bounds, idleTimeoutMs: 3_000_000_000, maxRuntimeMs: 3_000_000_000 }, undefined);
+  await sleep(100);
+  assert.equal(huge.killed, false, "a limit above the timer range must not fire at once");
+  huge.emit("close", 0);
+  await hugeRun;
 }
 
 // 5. A clean child resolves code 0 and its message_end is captured.

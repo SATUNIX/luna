@@ -390,4 +390,98 @@ assert.ok(
   "skills catalogue must not use the ambiguous 'lite profile shows' wording",
 );
 
-console.log(`[docs-smoke] OK: ${checked} documented commands validated, ${linksChecked} relative links resolved; balanced profile resolved; ${skipped.length} external lines skipped; skills catalogue visible ${skillsVisible}/${skillsTotal}.`);
+// S17: no shipped page may name a delegation surface this release removed. The names are derived
+// from the extension source where they can be: a tool or command still registered there is not
+// removed, and the kit agent files are the role list. The parameters and the removed role are
+// hard-coded because their removal is pinned by `tests/subagent-roles-isolation-smoke.ts` (neither
+// key is in the `subagent` schema, and the kit has four roles).
+const subagentSource = (() => {
+  const parts: string[] = [];
+  const dir = path.join(ROOT, "packages", "extensions", "third_party", "subagent");
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() && entry.name.endsWith(".ts")) parts.push(fs.readFileSync(path.join(dir, entry.name), "utf8"));
+  }
+  return parts.join("\n");
+})();
+const registeredTools = new Set([...subagentSource.matchAll(/registerTool\(\{[\s\S]{0,200}?name:\s*"([^"]+)"/g)].map((m) => m[1] ?? ""));
+const registeredCommands = new Set([...(allExtensionSource + "\n" + subagentSource).matchAll(/registerCommand\(\s*"([^"]+)"/g)].map((m) => m[1] ?? ""));
+const kitRoles = fs.readdirSync(path.join(ROOT, "packages", "kit", "agents")).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3));
+const subagentToolsSource = readRel("packages/extensions/third_party/subagent/tools.ts");
+
+interface RemovedName {
+  kind: "tool" | "command" | "parameter" | "role";
+  name: string;
+  replacement: string;
+  pattern: RegExp;
+  removed: boolean;
+}
+const removedNames: RemovedName[] = [
+  { kind: "tool", name: "subagent_status", replacement: "`workflow_status`", pattern: /\bsubagent_status\b/, removed: !registeredTools.has("subagent_status") },
+  { kind: "tool", name: "subagent_stop", replacement: "`workflow_control` with `action: \"stop\"`", pattern: /\bsubagent_stop\b/, removed: !registeredTools.has("subagent_stop") },
+  { kind: "command", name: "/subagents", replacement: "`/workflows`", pattern: /\/subagents(?=$|[\s"'`)\].,;:])/, removed: !registeredCommands.has("subagents") },
+  { kind: "command", name: "/subagent-stop", replacement: "`workflow_control` with `action: \"stop\"`", pattern: /\/subagent-stop(?=$|[\s"'`)\].,;:])/, removed: !registeredCommands.has("subagent-stop") },
+  { kind: "command", name: "/reflect", replacement: "a bare `/boost`", pattern: /\/reflect(?=$|[\s"'`)\].,;:])/, removed: !registeredCommands.has("reflect") },
+  { kind: "command", name: "/recover", replacement: "a bare `/boost`", pattern: /\/recover(?=$|[\s"'`)\].,;:])/, removed: !registeredCommands.has("recover") },
+  { kind: "parameter", name: "chain", replacement: "`workflow_run {steps}`", pattern: /`chain`|(^|[^"\w])chain\s*:|chain mode|\bchain parameter\b/, removed: !/\bchain\s*:/.test(subagentToolsSource) },
+  { kind: "parameter", name: "confirmProjectAgents", replacement: "`agentScope` with the project trust prompt", pattern: /\bconfirmProjectAgents\b/, removed: !subagentToolsSource.includes("confirmProjectAgents") },
+  { kind: "role", name: "delegator", replacement: "`implementer`, or `workflow_run {steps}` for a chain", pattern: /\bdelegator\b/, removed: !kitRoles.includes("delegator") },
+];
+for (const item of removedNames) {
+  assert.ok(item.removed, `tests/docs-smoke.ts: ${item.name} is registered again; update this guard and the migration notes (${item.replacement} is the replacement)`);
+}
+assert.ok(registeredTools.has("workflow_status") && registeredTools.has("workflow_control"), "the subagent extension registers workflow_status and workflow_control, the replacements this guard names");
+assert.ok(registeredCommands.has("workflow") && registeredCommands.has("workflows"), "the subagent extension registers /workflows and its /workflow alias");
+
+const shippedPages: string[] = [];
+const addPage = (rel: string): void => {
+  if (!shippedPages.includes(rel)) shippedPages.push(rel);
+};
+const walkPages = (rel: string): void => {
+  for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+    const child = `${rel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (child !== "docs/proposals") walkPages(child);
+    } else if (entry.name.endsWith(".md")) addPage(child);
+  }
+};
+addPage("README.md");
+addPage("AGENTS.md");
+walkPages("docs");
+for (const pkg of fs.readdirSync(path.join(ROOT, "packages"), { withFileTypes: true })) {
+  if (!pkg.isDirectory()) continue;
+  const rel = `packages/${pkg.name}/README.md`;
+  if (fs.existsSync(path.join(ROOT, rel))) addPage(rel);
+}
+for (const group of ["src", "third_party"]) {
+  const dir = path.join(ROOT, "packages", "extensions", group);
+  if (!fs.existsSync(dir)) continue;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const rel = `packages/extensions/${group}/${entry.name}/README.md`;
+    if (fs.existsSync(path.join(ROOT, rel))) addPage(rel);
+  }
+}
+for (const rel of shippedPages) {
+  const lines = readRel(rel).split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    for (const item of removedNames) {
+      if (!item.pattern.test(line)) continue;
+      assert.fail(`${rel}:${index + 1}: names removed ${item.kind} ${item.name}; use ${item.replacement} instead (S17 surface trim; the migration notes are in CHANGELOG.md)`);
+    }
+  }
+}
+
+// S10 changed this claim: a repeat verification FAIL at a new revision returns the policy's `split`
+// move from the verify-fail signal (a steer plus the workflow card). It is text, not a recovery
+// activation, so recovery itself still starts only on a progress-guard escalation or a bare
+// `/boost`. A first FAIL returns no move and a check that regresses sends nothing.
+assert.ok(
+  !/A verification that\s+still fails after an edit, or a check that regresses,\s+does not start recovery\./.test(readRel("docs/future-work.md")),
+  "docs/future-work.md still says a repeat verification FAIL starts nothing; it returns the `split` steer at E3 and above (tests/verify-failclosed-smoke.ts, tests/workflow-strategy-smoke.ts)",
+);
+assert.ok(
+  !/A verification that\s+still fails after an edit, or a check that regresses,\s+is not detected as a trigger/.test(readRel("docs/recovery-orchestration-mode.md")),
+  "docs/recovery-orchestration-mode.md still says a repeat verification FAIL is not detected; the verify-fail signal returns `split` (tests/verify-failclosed-smoke.ts, tests/workflow-strategy-smoke.ts)",
+);
+
+console.log(`[docs-smoke] OK: ${checked} documented commands validated, ${linksChecked} relative links resolved; balanced profile resolved; ${skipped.length} external lines skipped; skills catalogue visible ${skillsVisible}/${skillsTotal}; ${shippedPages.length} shipped pages name no removed delegation surface.`);

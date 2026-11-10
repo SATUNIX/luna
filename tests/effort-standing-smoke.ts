@@ -24,7 +24,7 @@ import type * as PolicyModule from "../packages/extensions/src/effort/policy.ts"
 import type * as WfTool from "../packages/extensions/third_party/subagent/wf-tool.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
-type EffortView = Omit<typeof EffortModule, "default"> & { default: (api: FakePi["api"] & { appendEntry: (t: string, d?: unknown) => void }) => void };
+type EffortView = Omit<typeof EffortModule, "default"> & { default: (api: FakePi["api"] & { appendEntry: (t: string, d?: unknown) => void; setActiveTools: (names: string[]) => void }) => void };
 
 interface FirewallDecision { block?: boolean; reason?: string }
 type FwHandler = (event: object, ctx: object) => Promise<FirewallDecision | undefined>;
@@ -50,6 +50,7 @@ const standingMod: typeof StandingModule = await loadModule("extensions/effort/s
 const policyMod: typeof PolicyModule = await loadModule("extensions/effort/policy.ts");
 const wfTool: typeof WfTool = await loadModule("vendor/subagent/wf-tool.ts");
 const firewall = await loadExtension<(api: object) => void>("extensions/tool-firewall/index.ts");
+const owner = await import("../packages/core/shared/input-owner.ts");
 
 interface Note { m: string; l: string | undefined }
 interface Entry { type: "custom"; customType: string; data: unknown }
@@ -58,7 +59,8 @@ interface Entry { type: "custom"; customType: string; data: unknown }
 async function boot({ hasUI = true, answer = (o: string[]): string | undefined => o[0], tools = ["read", "bash", "subagent", "workflow"], entries = [] as Entry[], reason = "startup" } = {}) {
   const pi = fakePi();
   const appended: Entry[] = [...entries];
-  mod.default({ ...pi.api, getActiveTools: () => tools, appendEntry: (customType: string, data?: unknown) => { appended.push({ type: "custom", customType, data }); } });
+  let activeTools = [...tools];
+  mod.default({ ...pi.api, getActiveTools: () => [...activeTools], setActiveTools: (names: string[]) => { activeTools = [...names]; }, appendEntry: (customType: string, data?: unknown) => { appended.push({ type: "custom", customType, data }); } });
   const notes: Note[] = [];
   const selects: Array<{ title: string; options: string[] }> = [];
   let aborts = 0;
@@ -82,7 +84,7 @@ async function boot({ hasUI = true, answer = (o: string[]): string | undefined =
   const command = (args: string): Promise<unknown> => pi.commands.get("effort").handler(args, ctx);
   const turn = async (event: Record<string, unknown> = { messageType: "user", prompt: "go" }) => pi.handlers.get("before_agent_start")({ systemPrompt: "BASE", ...event }, ctx);
   const wake = () => turn({ messageType: "custom", message: { customType: "luna-workflow-result", content: "done", display: true } });
-  return { notes, selects, command, turn, wake, registry, appended, aborts: () => aborts, last: () => notes.at(-1)?.m ?? "" };
+  return { notes, selects, command, turn, wake, registry, appended, activeTools: () => [...activeTools], aborts: () => aborts, last: () => notes.at(-1)?.m ?? "" };
 }
 
 const yes = (options: string[]): string | undefined => options.find((o) => o.startsWith("Yes"));
@@ -206,6 +208,22 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(messageOf(r), null);
   },
 
+  "ultracode from E1 counts the workflow tool effort hid itself, and the next turn restores it": async () => {
+    fresh();
+    const s = await boot({ answer: yes });
+    await s.command("minimal");
+    await s.turn();
+    assert.equal(s.activeTools().includes("workflow"), false, "E1 hid the tool");
+    await s.command("ultracode");
+    assert.equal(s.registry().standing().on, true);
+    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the switch-on notice");
+    await s.command("ultracode status");
+    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the status line");
+    const prompt = promptOf(await s.turn());
+    assert.ok(s.activeTools().includes("workflow"), "the next turn restored the tool");
+    assert.match(prompt, /standing mode/);
+  },
+
   "off returns to opt-in and revokes the pre-authorisation; a lower tier turns it off too": async () => {
     fresh();
     const s = await boot({ answer: yes });
@@ -259,6 +277,44 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(s.aborts(), 2);
     await s.turn();
     assert.equal(s.registry().standing().wakeChain, 0, "your message ends the chain");
+  },
+
+  // The wake-chain question is a keyboard card raised by a turn, not by the operator: Enter typed into an
+  // open workflow panel would stop the agent, and Down then Enter would lift the cap.
+  "the wake-chain question waits for an open overlay, and a hold that outlasts its time stops the turn": async () => {
+    fresh();
+    let reply: string | undefined = "Yes, let the agent continue (asks again after 5 more)";
+    const s = await boot({ answer: (o) => (o[0]?.startsWith("No, keep") ? yes(o) : reply) });
+    await s.command("ultracode");
+    await s.turn();
+    for (let i = 0; i < 5; i++) await s.wake();
+    const asked = s.selects.length;
+    const restoreLong = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "60000");
+    const release = owner.holdInput("the workflow panel");
+    let settled = false;
+    const sixth = s.wake().finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    try {
+      assert.equal(s.selects.length, asked, "the question must not open while an overlay holds input");
+      assert.equal(settled, false, "the turn waits for the overlay");
+    } finally {
+      release();
+      restoreLong();
+    }
+    assert.notEqual(await sixth, undefined, "after the hold the operator's answer decides");
+    assert.equal(s.selects.length, asked + 1, "the question is shown once, after the hold");
+    reply = "ignored";
+    for (let i = 0; i < 4; i++) await s.wake();
+    const before = s.selects.length;
+    const restore = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "40");
+    const held = owner.holdInput("the workflow panel");
+    try {
+      assert.equal(await s.wake(), undefined, "a hold that outlasts the question stops the turn, the same as No");
+      assert.equal(s.selects.length, before, "and it never shows the card");
+    } finally {
+      held();
+      restore();
+    }
   },
 
   "the workflow tool's run budget comes from standing mode": async () => {

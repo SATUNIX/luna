@@ -54,9 +54,9 @@ export const DEFAULT_HEARTBEAT_MS = 5000;
 export const DEFAULT_CHILD_APPROVAL_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Nesting: how many subagent levels may be spawned below the root session. 0 disables
-// delegation entirely; 1 allows only root -> child; 2 (default) lets a child delegate once
-// more. Guards against runaway recursive fan-out while enabling delegate-able roles.
-export const DEFAULT_MAX_DEPTH = 2;
+// delegation entirely; 1 (default) allows only root -> child. A custom role that delegates
+// needs PI_KIT_SUBAGENT_MAX_DEPTH=2. Guards against runaway recursive fan-out.
+export const DEFAULT_MAX_DEPTH = 1;
 export const MAX_DEPTH_CEILING = 32;
 
 // Automatic retries for *transient* failures only (spawn failure, or a non-zero exit with

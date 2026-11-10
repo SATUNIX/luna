@@ -11,6 +11,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_STRATEGY } from "./strategy.ts";
+import type { StrategyConfig } from "./strategy.ts";
 
 export interface TierLimits {
   maxConcurrent: number;
@@ -40,6 +42,8 @@ export interface Tier {
   label: string;
   aliases: string[];
   promptFile: string;
+  /** The agents model-started YAML runs may plan in one user request (0: no run scope opens). */
+  workflowAgents: number;
   limits: TierLimits;
   memento: MementoAllowance;
 }
@@ -50,6 +54,8 @@ export interface EffortPolicy {
   sharedPromptFile: string;
   ceilings: TierLimits;
   workflow: WorkflowLimits;
+  /** The decision policy's numbers, and how far work may be reshaped while it runs. */
+  strategy: StrategyConfig;
   recovery: { maxInvocations: number; maxConcurrent: number; roles: string[] };
   /** No tier's memento.maxGenerations may exceed this. */
   memento: { maxGenerationsCeiling: number };
@@ -99,6 +105,38 @@ function workflowProblems(value: unknown): string[] {
   return problems;
 }
 
+const STRATEGY_TIER_KEYS = ["planMinTier", "splitMinTier"] as const;
+const STRATEGY_COUNT_KEYS = ["delegateScore", "reviewLines", "stallAfter", "quietTurns", "maxAttempts", "expandDepth"] as const;
+
+/**
+ * The strategy block's problems (empty when valid; it may be left out, and then every number is its
+ * default). Mirrors packages/core/lib/effort.ts strategyProblems (tests/workflow-strategy-smoke.ts compares them).
+ */
+function strategyProblems(value: unknown): string[] {
+  if (value === undefined) return [];
+  const problems: string[] = [];
+  const at = (key: string): unknown => (isRecord(value) ? value[key] : undefined);
+  for (const key of STRATEGY_TIER_KEYS) {
+    const level = at(key);
+    if (!isCount(level) || level < 1 || level > 5) problems.push(`strategy.${key} must be a tier level from 1 to 5`);
+  }
+  for (const key of STRATEGY_COUNT_KEYS) {
+    const n = at(key);
+    if (!isCount(n) || n < 1) problems.push(`strategy.${key} must be a positive integer`);
+  }
+  return problems;
+}
+
+/** The strategy numbers when the block is valid; the defaults when it is left out. */
+function strategyOf(value: unknown): StrategyConfig | null {
+  if (value === undefined) return { ...DEFAULT_STRATEGY };
+  if (!isRecord(value) || strategyProblems(value).length) return null;
+  const { planMinTier, splitMinTier, delegateScore, reviewLines, stallAfter, quietTurns, maxAttempts, expandDepth } = value;
+  return isCount(planMinTier) && isCount(splitMinTier) && isCount(delegateScore) && isCount(reviewLines) && isCount(stallAfter) && isCount(quietTurns) && isCount(maxAttempts) && isCount(expandDepth)
+    ? { planMinTier, splitMinTier, delegateScore, reviewLines, stallAfter, quietTurns, maxAttempts, expandDepth }
+    : null;
+}
+
 /** The workflow limits when they are valid; null otherwise. */
 function workflowOf(value: unknown): WorkflowLimits | null {
   if (!isRecord(value) || workflowProblems(value).length) return null;
@@ -127,6 +165,25 @@ function mementoProblems(block: unknown, tiers: unknown[]): string[] {
   return problems;
 }
 
+/**
+ * The workflowAgents problems (empty when valid): every value given a count that never falls below
+ * the one before it. A tier may leave it out, for a policy directory older than the field, and then
+ * plans nothing (checkPolicy). Otherwise mirrors packages/core/lib/effort.ts workflowAgentsProblems, which
+ * checks the shipped policy and requires it (tests/effort-smoke.ts compares them).
+ */
+function workflowAgentsProblems(tiers: unknown[]): string[] {
+  const problems: string[] = [];
+  let previous: number | null = null;
+  tiers.forEach((tier, index) => {
+    const n = isRecord(tier) ? tier.workflowAgents : undefined;
+    if (n === undefined && isRecord(tier)) return;
+    if (!isCount(n)) return void problems.push(`tiers[${index}].workflowAgents must be a non-negative integer`);
+    if (previous !== null && n < previous) problems.push(`tiers[${index}].workflowAgents must not fall below the previous tier's`);
+    previous = n;
+  });
+  return problems;
+}
+
 /** A tier's Memento allowance when it is a count; null otherwise. */
 function mementoOf(value: unknown): MementoAllowance | null {
   const n = isRecord(value) ? value.maxGenerations : undefined;
@@ -148,6 +205,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   rawTiers.forEach((tier, index) => {
     if (!isRecord(tier)) return void problems.push(`tiers[${index}] is not an object`);
     const { id, level, code, label, aliases, promptFile } = tier;
+    const workflowAgents = tier.workflowAgents === undefined ? 0 : tier.workflowAgents;
     if (typeof id !== "string" || !/^[a-z]+$/.test(id)) problems.push(`tiers[${index}].id must be lower-case letters`);
     if (ids.has(id)) problems.push(`tiers[${index}].id "${String(id)}" is duplicated`);
     ids.add(id);
@@ -158,8 +216,8 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
     if (typeof promptFile !== "string" || !fs.existsSync(path.join(dir, promptFile))) problems.push(`tiers[${index}].promptFile is missing`);
     const limits = limitsOf(tier.limits);
     const memento = mementoOf(tier.memento);
-    if (typeof id === "string" && typeof level === "number" && typeof code === "string" && typeof label === "string" && typeof promptFile === "string" && limits && memento) {
-      tiers.push({ id, level, code, label, aliases: isStringArray(aliases) ? aliases : [], promptFile, limits, memento });
+    if (typeof id === "string" && typeof level === "number" && typeof code === "string" && typeof label === "string" && typeof promptFile === "string" && isCount(workflowAgents) && limits && memento) {
+      tiers.push({ id, level, code, label, aliases: isStringArray(aliases) ? aliases : [], promptFile, workflowAgents, limits, memento });
     }
   });
   const { default: def, sharedPromptFile, recovery } = policy;
@@ -172,18 +230,21 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   const ceilings = limitsOf(policy.ceilings);
   problems.push(...workflowProblems(policy.workflow));
   const workflow = workflowOf(policy.workflow);
+  problems.push(...strategyProblems(policy.strategy));
+  problems.push(...workflowAgentsProblems(rawTiers));
   problems.push(...mementoProblems(policy.memento, rawTiers));
+  const strategy = strategyOf(policy.strategy);
   const mementoCeiling = isRecord(policy.memento) ? policy.memento.maxGenerationsCeiling : undefined;
   const r = isRecord(recovery) ? recovery : null;
   const roles = r?.roles;
   if (!r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) problems.push("recovery needs maxInvocations, maxConcurrent and roles");
   if (problems.length) return { problems, policy: null };
-  if (typeof def !== "string" || typeof sharedPromptFile !== "string" || !ceilings || !workflow || !isCount(mementoCeiling) || !r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) {
+  if (typeof def !== "string" || typeof sharedPromptFile !== "string" || !ceilings || !workflow || !strategy || !isCount(mementoCeiling) || !r || !isCount(r.maxInvocations) || !isCount(r.maxConcurrent) || !isStringArray(roles)) {
     return { problems: ["effort policy is malformed"], policy: null };
   }
   return {
     problems,
-    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
+    policy: { schemaVersion: 1, default: def, sharedPromptFile, ceilings, workflow, strategy, recovery: { maxInvocations: r.maxInvocations, maxConcurrent: r.maxConcurrent, roles }, memento: { maxGenerationsCeiling: mementoCeiling }, tiers },
   };
 }
 
@@ -246,6 +307,18 @@ export function workflowLimits(policy: EffortPolicy): WorkflowLimits {
   return { ...policy.workflow };
 }
 
+/**
+ * The agents model-started YAML runs may plan in one request at tier `id` (the policy default for an
+ * unknown id). A tier with no delegation plans nothing, and an operator's own maxTotal can lower the
+ * allowance but never raise it. A tier's default maxTotal does not apply: the two budgets are separate.
+ */
+export function workflowAllowance(policy: EffortPolicy, id: string, overrides: LimitOverrides = {}): number {
+  const tier = tierOf(policy, id) ?? defaultTier(policy);
+  const { maxTotal } = tierLimits(policy, tier.id, overrides);
+  if (maxTotal === 0) return 0;
+  return isCount(overrides[tier.id]?.maxTotal) ? Math.min(tier.workflowAgents, maxTotal) : tier.workflowAgents;
+}
+
 /** The most Memento generations a task at tier `id` may use (the policy default for an unknown id). */
 export function mementoGenerations(policy: EffortPolicy, id: string): number {
   const tier = tierOf(policy, id) ?? defaultTier(policy);
@@ -264,6 +337,14 @@ export function renderPrompt(policy: EffortPolicy, id: string, dir = policyDir()
   return `${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`;
 }
 
+/**
+ * The prompt of a step of a model-started workflow: the depth it was given, with the tier's child
+ * counts disowned, because the step really runs at the lowest tier and cannot delegate.
+ */
+export function renderStepPrompt(policy: EffortPolicy, id: string, dir = policyDir()): string {
+  return `${renderPrompt(policy, id, dir)}\n\nYou are a step of a workflow. This tier sets how deeply you work and nothing else: you cannot start other agents, whatever it says about children or scouts. Do the work directly.`;
+}
+
 /** The standing-mode file beside the tier prompts (ultracode; docs/effort.md, "Ultracode"). */
 export const STANDING_PROMPT_FILE = "standing.md";
 
@@ -275,6 +356,13 @@ export function renderStanding(size: number, budget: number | null, dir = policy
   const text = fs.readFileSync(path.join(dir, STANDING_PROMPT_FILE), "utf8").trim();
   const budgetText = budget === null ? "none set (`budget.total` is null)" : `${String(budget)} output tokens (\`budget.total\`); \`agent()\` throws once it is spent`;
   return text.replaceAll("{{size}}", String(size)).replaceAll("{{budget}}", budgetText);
+}
+
+/** The workflow card beside the tier prompts, shown once an epoch (docs/effort.md, "Decision policy"). */
+export const WORKFLOW_CARD_FILE = "workflow-card.md";
+
+export function renderCard(dir = policyDir()): string {
+  return fs.readFileSync(path.join(dir, WORKFLOW_CARD_FILE), "utf8").trim();
 }
 
 export const PROMPT_START = "<!-- pi-kit:effort -->";

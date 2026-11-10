@@ -23,6 +23,12 @@ type Row = [command: string, manual: Classify.Tier, auto?: Classify.Tier];
 
 const rows: Row[] = [
   // Routine development: low.
+  // A patch whose file does not exist here cannot be read, so it fails closed (corpus: protected-paths-corpus-smoke).
+  ["git apply /work/repo/no-such.patch", "high"],
+  ["cat x.patch | patch -p1", "high"],
+  ["git apply --check /work/repo/no-such.patch", "low"],
+  ["sed -i -e 's/a/b/' packages/core/policies/default.json", "high"],
+  ["git restore --source=HEAD~1 packages/core/policies/default.json", "high"],
   ["ls -la && git status && git diff --stat", "low"],
   ["npm test 2>&1 | tail -20", "low"],
   ["npm ci && npm run build", "low"],

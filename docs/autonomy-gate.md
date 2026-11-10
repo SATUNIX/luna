@@ -155,7 +155,11 @@ timeout and abort signal and again by the firewall, with `PI_KIT_FIREWALL_PROMPT
 (15 minutes by default). The judge waits at most `PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS` (15 seconds
 by default) and stops at once when the turn is aborted. A console that cannot even be written to
 is UNCERTAIN, not "the operator declined". An interactive `ask_human` question gives up at the
-console timeout too.
+console timeout too. While the hub or the workflow panel is open, a firewall card and an `ask_human`
+question first wait for it to close or for the turn to abort, and the wait and the card share one
+timeout: an overlay left open, or opened from a linked phone, ends the call as UNCERTAIN, as an
+unanswered card does (`tests/firewall-overlay-queue-smoke.ts`); see invariant 6 in
+[security](security.md).
 
 ## Action families
 

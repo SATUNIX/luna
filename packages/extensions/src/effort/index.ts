@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
 import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
-import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderPrompt, renderStanding, tierLabel, tierLimits, tierOf, withEffortBlock, workflowLimits } from "./policy.ts";
+import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderCard, renderPrompt, renderStanding, renderStepPrompt, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
 import type { StandingState } from "./standing.ts";
+import { decide, DEFAULT_STRATEGY, NO_MOVE, PLAN_TOOL, strategyConfig } from "./strategy.ts";
+import type { Decision, Signal, StrategyConfig } from "./strategy.ts";
+import { showWhenFree } from "./shared/input-owner.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer, plus this extension's own
 // files. No sibling-extension imports. See CONTRIBUTING.md.
@@ -19,7 +22,8 @@ import type { StandingState } from "./standing.ts";
 //   - one prompt contribution per turn, replaced (never appended twice) at the user-turn boundary,
 //   - the shared delegation ledger every launch point reserves against, at any depth,
 //   - a small registry (globalThis[Symbol.for("pi-kit.effort")]) other extensions read: the footer
-//     for the tier chip, delegation launch points for reservations.
+//     for the tier chip, delegation launch points for reservations, and every caller of the one
+//     decision policy (strategy.ts), which supplies the signal and delivers the text it gets back.
 
 export const REGISTRY_KEY = Symbol.for("pi-kit.effort");
 const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
@@ -69,7 +73,7 @@ export interface ReserveInput {
 }
 
 /** A workflow run's pinned scope: every agent of the run reserves with this id and token. */
-export type RunScope = { ok: true; runId: string; runToken: string; ledger: string } | { ok: false; code: string; reason: string };
+export type RunScope = { ok: true; runId: string; runToken: string; ledger: string; maxConcurrent: number } | { ok: false; code: string; reason: string };
 
 /** Thrown by reserveWorkflow for every denial except "concurrency" (which it waits out). */
 export class WorkflowLedgerError extends Error {
@@ -118,9 +122,27 @@ export interface EffortRegistry {
   /**
    * Open a script-workflow run's scope in this session's workflow ledger. The scope is pinned: it
    * outlives the per-turn ledger rotation, so a background run keeps its count across user turns.
-   * Refused in child processes and when the policy is unavailable.
+   * Refused in child processes, when the policy is unavailable, and at a tier with no workflow allowance (code "tier").
+   * `planned` (a model-started YAML run's worst case) is charged to this user request, past the
+   * allowance refused with code "plan-allowance", and the run is capped at the allowance. An
+   * approved script passes none: it is charged nothing and keeps the per-run limit.
    */
-  openRunScope(runId: string): RunScope;
+  openRunScope(runId: string, options?: { planned?: number }): RunScope;
+  /**
+   * Charge a plan's expansion to the run scope it belongs to, against the same allowance. The ledger
+   * checks the run token; past the allowance is refused with code "plan-allowance".
+   */
+  chargeRunScope(runId: string, runToken: string, planned: number): { ok: true } | { ok: false; code: string; reason: string };
+  /** How many generations a plan may expand (strategy.expandDepth); null without a policy. */
+  expandDepth(): number | null;
+  /**
+   * The one decision policy. `report` decides a caller's signal with the tier and the tools in force
+   * here, never the caller's, and queues the card when the move asks for it and this epoch has not
+   * seen it. Null without a policy. A child always gets no move. `card` is true only for the report
+   * that queued it: effort delivers it, at the next prompt. No move changes a tool set, a firewall
+   * decision or a tier, and nothing here touches recovery.
+   */
+  strategy: { report(signal: Signal): Decision | null; config(): StrategyConfig };
   /**
    * Reserve a slot for one agent of a workflow run. A "concurrency" denial is waited out (polling
    * until a slot frees or `signal` aborts); every other denial throws a WorkflowLedgerError.
@@ -136,7 +158,12 @@ function unbudgeted(childTier: string): Reservation {
 }
 
 /** Tools through which the model starts children of its own accord. Hidden while the tier allows none. */
-export const DELEGATION_TOOLS = ["subagent", "workflow_run"];
+export const DELEGATION_TOOLS = ["subagent", "workflow_run", "workflow", "dual_review", "dispatch_specialist"];
+/** Hidden at such a tier even in recovery: openRunScope refuses them there whatever recovery does. */
+const NO_RUN_SCOPE_TOOLS = ["workflow", "workflow_run"];
+
+/** The hidden message that carries the workflow card on a turn without a standing reminder. */
+const WORKFLOW_CARD_TYPE = "luna-effort-workflow-card";
 
 const USAGE_REFRESH_MS = 2000;
 const LEDGER_KEEP_MS = 24 * 60 * 60 * 1000;
@@ -298,6 +325,12 @@ function say(ctx: ExtensionCommandContext | ExtensionContext, text: string, leve
 }
 
 const isChildProcess = () => Boolean(process.env.PI_KIT_EFFORT_LEDGER?.trim());
+
+/**
+ * How deeply a child's prompt reads, set by its parent. It only picks prompt text: PI_KIT_EFFORT and
+ * _CAP still decide the child's tier, and with it what the child may delegate.
+ */
+const PROMPT_TIER_ENV = "PI_KIT_EFFORT_PROMPT";
 /** Any kit child, budgeted or not: standing mode is refused in all of them. */
 const isKitChild = () => isChildProcess() || process.env.PI_KIT_INTERNAL_CHILD === "1";
 
@@ -321,8 +354,13 @@ export default function (pi: ExtensionAPI) {
   let usageAt = 0;
   let warnedLoad = false;
   let recoveryOn = false;
+  // The card's epoch: one showing per session and per compaction, and a showing that waits for the prompt.
+  let cardSeen = false;
+  let cardDue = false;
   // Workflow runs opened by this process, each pinned to the workflow ledger it was opened in.
   const runFiles = new Map<string, string>();
+  // Run scopes opened with a plan (model-started YAML and data plans); an approved script opens none.
+  const plannedRuns = new Set<string>();
   // Ultracode standing mode: session-only, recorded with appendEntry so a reload or resume restores it.
   let standing: StandingState = { ...STANDING_OFF };
   let wakeChain = 0;
@@ -397,28 +435,25 @@ export default function (pi: ExtensionAPI) {
 
   /**
    * Keep the model-launchable delegation tools out of the prompt while the tier allows no
-   * delegation (E1): their descriptions cost about 850 tokens a turn and could only ever be
+   * delegation (E1): their descriptions cost about 1,200 tokens a turn and could only ever be
    * refused. They come back at the next user turn after a higher tier is chosen, and while the
-   * trusted recovery extension has recovery active (recovery may start read-only scouts). Only
-   * tools this extension removed are ever restored; a tool the profile or operator removed stays
-   * removed. Skipped quietly on a pi without active-tool control.
+   * trusted recovery extension has recovery active (recovery may start read-only scouts), except
+   * the workflow tools, which only ever reach the scope refusal at that tier, the `workflow` tool
+   * after asking the operator for approvals. Only tools this extension removed are ever restored; a tool the profile
+   * or operator removed stays removed. Skipped quietly on a pi without active-tool control.
    */
   function syncDelegationTools(): void {
     try {
       if (!active || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
-      const noDelegation = limitsFor(active.tier).maxTotal === 0 && !recoveryOn;
+      const noDelegation = limitsFor(active.tier).maxTotal === 0;
+      const hide = noDelegation ? (recoveryOn ? NO_RUN_SCOPE_TOOLS : DELEGATION_TOOLS) : [];
       const current = pi.getActiveTools();
-      let next = current;
-      if (noDelegation) {
-        const remove = DELEGATION_TOOLS.filter((t) => current.includes(t));
-        remove.forEach((t) => hidden.add(t));
-        if (remove.length) next = current.filter((t) => !remove.includes(t));
-      } else if (hidden.size) {
-        const restore = [...hidden].filter((t) => !current.includes(t));
-        next = [...current, ...restore];
-        hidden.clear();
-      }
-      if (next !== current) pi.setActiveTools(next);
+      const remove = hide.filter((t) => current.includes(t));
+      remove.forEach((t) => hidden.add(t));
+      const released = [...hidden].filter((t) => !hide.includes(t));
+      released.forEach((t) => hidden.delete(t));
+      const restore = released.filter((t) => !current.includes(t));
+      if (remove.length || restore.length) pi.setActiveTools([...current.filter((t) => !remove.includes(t)), ...restore]);
     } catch {
       /* tool activation is an optimisation, never a reason to fail a turn */
     }
@@ -436,10 +471,12 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const workflowLedgerFile = (): string => path.join(ledgerDir(), `${sessionKey}-workflows.json`);
+
   /** This session's workflow ledger, created on first use (only when no file exists) and reused (also across a reload). */
   function workflowLedger(): string {
     if (!policy || !active) throw new Error("the effort policy is unavailable");
-    const file = path.join(ledgerDir(), `${sessionKey}-workflows.json`);
+    const file = workflowLedgerFile();
     const wf = workflowLimits(policy);
     const lowest = policy.tiers[0];
     if (!lowest) throw new Error("effort policy has no tiers");
@@ -462,7 +499,8 @@ export default function (pi: ExtensionAPI) {
 
   function reserveWorkflowSlot(input: ReserveInput): Reservation {
     if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so workflow agents cannot be budgeted.` };
-    const file = input.runId ? runFiles.get(input.runId) : undefined;
+    const runId = input.runId;
+    const file = runId ? runFiles.get(runId) : undefined;
     if (!file) return { ok: false, code: "run-scope", reason: "no workflow run scope is open for this run id in this session" };
     const lowest = policy.tiers[0];
     if (!lowest) return { ok: false, code: "no-policy", reason: "the effort policy has no tiers" };
@@ -470,11 +508,13 @@ export default function (pi: ExtensionAPI) {
     if (!result.ok) return result;
     const id = result.id;
     const childTier = lowest.id;
+    // A planned step reads as the same step typed by the operator would. Its limits stay the lowest tier's.
+    const depth = runId && plannedRuns.has(runId) ? { [PROMPT_TIER_ENV]: clampTier(policy, input.requestedTier ?? active.tier, active.tier) } : {};
     return {
       ok: true,
       id,
       childTier,
-      env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file },
+      env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file, ...depth },
       attach: (pid) => ledger.attach(file, id, pid),
       settle: (outcome) => ledger.settle(file, id, outcome),
     };
@@ -482,12 +522,49 @@ export default function (pi: ExtensionAPI) {
 
   const topTier = (): string | null => policy?.tiers[policy.tiers.length - 1]?.id ?? null;
 
-  /** Whether the workflow tool is in the active tool set (the standing block is shown only then). */
+  /**
+   * Whether the workflow tool is in the active tool set (the standing block is shown only then), or
+   * is out of it only because this extension hid it at E1 and will restore it next turn.
+   */
   function workflowToolActive(): boolean {
     try {
-      return pi.getActiveTools().includes(WORKFLOW_TOOL);
+      return pi.getActiveTools().includes(WORKFLOW_TOOL) || hidden.has(WORKFLOW_TOOL);
     } catch {
       return false;
+    }
+  }
+
+  function planToolActive(): boolean {
+    try {
+      return pi.getActiveTools().includes(PLAN_TOOL);
+    } catch {
+      return false;
+    }
+  }
+
+  function reportSignal(signal: Signal): Decision | null {
+    if (!policy) return null;
+    if (isKitChild()) return NO_MOVE;
+    const tier = tierOf(policy, (active ?? recompute())?.tier);
+    if (!tier) return null;
+    const env = { level: tier.level, standing: standing.on, planTool: planToolActive(), allowance: workflowAllowance(policy, tier.id, config.limits) };
+    const decision = decide(signal, env, strategyConfig(policy.strategy, process.env));
+    if (!decision.card) return decision;
+    if (cardSeen) return { ...decision, card: false };
+    cardSeen = true;
+    cardDue = true;
+    return decision;
+  }
+
+  /** The card when one is waiting; a card that cannot be read is not worth a turn. */
+  function takeCard(): string | null {
+    if (!cardDue) return null;
+    cardDue = false;
+    try {
+      return renderCard();
+    } catch (error) {
+      process.stderr.write(`[effort] could not read the workflow card: ${error instanceof Error ? error.message : String(error)}\n`);
+      return null;
     }
   }
 
@@ -518,9 +595,15 @@ export default function (pi: ExtensionAPI) {
     recoveryEligible(role: string, readOnly?: boolean): boolean {
       return Boolean(policy && recoveryOn && readOnly !== false && policy.recovery.roles.includes(role));
     },
-    openRunScope(runId: string): RunScope {
+    openRunScope(runId: string, options: { planned?: number } = {}): RunScope {
       if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
       if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so a workflow run cannot be budgeted.` };
+      // A tier with no delegation cannot budget a run, so it refuses before any launch. This is the
+      // boundary on a pi without active-tool control, where the workflow tools stay visible.
+      if (limitsFor(active.tier).maxTotal === 0) return { ok: false, code: "tier", reason: `${label(active.tier)} does not delegate (no child invocations are allowed), so a workflow run cannot be budgeted. Do the work directly, or ask the user to raise effort with /effort.` };
+      // A tier can delegate and still plan nothing. An approved script opens no plan, so it passes.
+      const allowance = workflowAllowance(policy, active.tier, config.limits);
+      if (options.planned !== undefined && allowance === 0) return { ok: false, code: "plan-allowance", reason: `${label(active.tier)} plans no workflow agents, so this workflow cannot start. Do the work directly, or raise effort with /effort.` };
       if (runFiles.has(runId)) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" already has a scope; a run id is opened once` };
       let file: string;
       try {
@@ -529,10 +612,26 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         return { ok: false, code: "no-ledger", reason: `the workflow ledger could not be created or read (${error instanceof Error ? error.message : String(error)})` };
       }
-      const opened = ledger.openRun(file, runId);
+      const plan = options.planned === undefined ? undefined : { planned: options.planned, allowance, label: label(active.tier) };
+      const opened = ledger.openRun(file, runId, undefined, undefined, plan);
       if (!opened.ok) return opened;
       runFiles.set(runId, file);
-      return { ok: true, runId, runToken: opened.runToken, ledger: file };
+      if (options.planned !== undefined) plannedRuns.add(runId);
+      return { ok: true, runId, runToken: opened.runToken, ledger: file, maxConcurrent: limitsFor(active.tier).maxConcurrent };
+    },
+    chargeRunScope(runId: string, runToken: string, planned: number) {
+      if (isChildProcess()) return { ok: false, code: "child", reason: "workflow runs start only in the root session, not in a child" };
+      if (!policy || !active) return { ok: false, code: "no-policy", reason: `the effort policy could not be loaded (${loadError ?? "unknown"}), so the expansion cannot be budgeted.` };
+      const file = runFiles.get(runId);
+      if (!file) return { ok: false, code: "run-scope", reason: `workflow run "${runId}" has no scope in this session` };
+      return ledger.chargeRun(file, runId, runToken, { planned, allowance: workflowAllowance(policy, active.tier, config.limits), label: label(active.tier) });
+    },
+    expandDepth(): number | null {
+      return policy?.strategy.expandDepth ?? null;
+    },
+    strategy: {
+      report: reportSignal,
+      config: () => strategyConfig(policy?.strategy ?? DEFAULT_STRATEGY, process.env),
     },
     async reserveWorkflow(input, options = {}) {
       const pollMs = Math.max(10, options.pollMs ?? 250);
@@ -579,7 +678,8 @@ export default function (pi: ExtensionAPI) {
         ok: true,
         id,
         childTier,
-        env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file },
+        // Replaces a depth this process was given, which is its own and stops here.
+        env: { PI_KIT_EFFORT: childTier, PI_KIT_EFFORT_CAP: childTier, PI_KIT_EFFORT_LEDGER: file, [PROMPT_TIER_ENV]: childTier },
         attach: (pid) => ledger.attach(file, id, pid),
         settle: (outcome) => {
           ledger.settle(file, id, outcome);
@@ -611,11 +711,17 @@ export default function (pi: ExtensionAPI) {
     }
     if (!isChildProcess()) pruneLedgers();
     openScope();
+    cardSeen = cardDue = false;
     const reason = event?.reason;
     restoreStanding(ctx, reason);
     const warnings = [...config.warnings, ...(active?.warnings ?? [])];
     if (warnings.length && reason !== "reload") say(ctx, warnings.join("\n"), "warning");
     notify();
+  });
+
+  // A compaction may drop the card from the conversation, so the next epoch shows it again.
+  pi.on("session_compact", async () => {
+    cardSeen = false;
   });
 
   pi.on("session_shutdown", async () => {
@@ -629,8 +735,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!policy) return undefined;
     // A workflow's completion message that starts a turn while idle is a wake; your message ends the chain.
+    // Before pi 1.2.0 the field is absent and this event starts only from a prompt, so that is a user turn.
+    const messageType: unknown = event.messageType;
+    const userTurn = messageType === "user" || messageType === undefined;
     if (event.messageType === "custom" && event.message.customType === WORKFLOW_RESULT_TYPE) wakeChain++;
-    else if (event.messageType === "user") wakeChain = 0;
+    else if (userTurn) {
+      wakeChain = 0;
+      // A user message renews the plan allowance, including one an extension sends (trigger-compact's
+      // resume, remote-control); a wake rotates the turn's ledger, not this one.
+      if (!isChildProcess()) ledger.resetPlanned(workflowLedgerFile());
+    }
     if (standing.on && wakeChain > WAKE_CHAIN_CAP && !(await continueWakeChain(ctx))) return undefined;
     if (pending && (pending.tier !== active?.tier || pending.source !== active.source)) {
       active = pending;
@@ -641,7 +755,8 @@ export default function (pi: ExtensionAPI) {
     openScope();
     syncDelegationTools();
     notify();
-    let body = renderPrompt(policy, active.tier);
+    const stepTier = isChildProcess() ? normalizeTier(policy, process.env[PROMPT_TIER_ENV]) : null;
+    let body = stepTier && stepTier !== active.tier ? renderStepPrompt(policy, stepTier) : renderPrompt(policy, active.tier);
     const standingShown = standing.on && workflowToolActive();
     if (standingShown) {
       try {
@@ -650,9 +765,14 @@ export default function (pi: ExtensionAPI) {
         process.stderr.write(`[effort] could not read the standing prompt: ${error instanceof Error ? error.message : String(error)}\n`);
       }
     }
-    if (!standingShown) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
-    const reminder = `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.`;
-    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: STANDING_REMINDER_TYPE, content: reminder, display: false } };
+    const planned = userTurn ? reportSignal({ trigger: "plan" })?.steer : null;
+    if (planned) body = `${body}\n\n${planned}`;
+    // One hidden message a turn: the card and the standing reminder share it.
+    const card = takeCard();
+    const reminder = standingShown ? `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.` : null;
+    const hidden = [reminder, card].filter((text) => text !== null).join("\n\n");
+    if (!hidden) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
+    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: reminder ? STANDING_REMINDER_TYPE : WORKFLOW_CARD_TYPE, content: hidden, display: false } };
   });
 
   /**
@@ -666,7 +786,13 @@ export default function (pi: ExtensionAPI) {
     let choice: string | undefined;
     if (ctx.hasUI) {
       try {
-        choice = await ctx.ui.select(`A workflow result has started ${String(wakeChain)} turns in a row without a message from you. Let the agent continue?`, [no, yes]);
+        // A turn raises this card, not the operator: keys meant for an open overlay must not answer it,
+        // and a hold that outlasts it stops the turn, as No does.
+        const asked = await showWhenFree((card) => ctx.ui.select(`A workflow result has started ${String(wakeChain)} turns in a row without a message from you. Let the agent continue?`, [no, yes], card), {
+          signal: ctx.signal,
+          onHeld: (holder) => say(ctx, `effort: a workflow result is waiting for your answer; close ${holder} to see it.`, "warning"),
+        });
+        choice = asked.kind === "shown" ? asked.value : undefined;
       } catch {
         choice = undefined;
       }

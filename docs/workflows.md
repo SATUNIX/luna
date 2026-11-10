@@ -7,7 +7,7 @@ An interrupted run can be resumed.
 
 Use a workflow when the same multi-step delegation keeps coming up: plan → implement →
 review, reproduce → fix → verify, or fan out → synthesise. For a one-off delegation, the
-`subagent` tool (single, parallel or chain) is enough.
+`subagent` tool (single or parallel) is enough.
 
 ## Running
 
@@ -16,17 +16,110 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow list` | Available workflows and their inputs (`*` = required) |
 | `/workflow run feature goal="add rate limiting to /api/orders"` | Start a run in the background. The footer shows progress, and the summary is posted into the session when it finishes. `/workflow run` with no name opens a picker. |
 | `/workflow status [run-id]` | Recent runs, or one run's steps |
-| `/workflows [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
+| `/workflows` | Every run of this workspace, of every format, live or finished |
+| `/workflows panel [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
 | `/workflow pause <run-id>` | Pause a live run: it starts no new agents (see [Pausing, stopping and skipping](#pausing-stopping-and-skipping)) |
-| `/workflow skip <run-id>` | Stop the agents running now, record their steps as `skipped`, and go on |
+| `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
 | `/workflow resume <run-id>` | Unpause a live paused run; otherwise continue an interrupted or failed run from its current step |
-| `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, or `{resume: "<run-id>"}` |
+| `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, `{resume: "<run-id>"}`, or an [inline plan](#inline-plans) as `{steps: [...]}` |
 | `workflow_status` tool | The agent inspects runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
 Esc cancels a `workflow_run` started by the agent. The current step's subagent is stopped,
 the run is marked `interrupted`, and it can be resumed.
+
+The table's commands and tools are checked by `tests/workflow-panel-smoke.ts` (registration),
+`tests/workflow-control-smoke.ts` (pause, skip, stop and resume) and `tests/workflow-smoke.ts`
+(an interrupted run resumes); Esc cancellation is the tool call's signal, checked by
+`tests/workflow-plan-smoke.ts`.
+
+## Inline plans
+
+`workflow_run {steps: [...]}` takes the [step fields](#step-fields) as JSON and runs them in the
+same executor as a saved workflow, without a file. A plan cannot set what would widen a step
+(`model`, `thinking`, `extensions`, `max_runtime`, `skill`), `tools` only narrow the role, and a
+refused plan returns the path, the problem and the fix with nothing started.
+(`tests/workflow-plan-smoke.ts`)
+
+### Plan examples
+
+Each shape below is a valid plan. A task with one step, one file and one check is done directly
+rather than planned; plan when there are several steps, a fan-out or a check that can send work
+back.
+
+(a) One step, defaulting to the implementer role:
+
+```json
+{"steps":[{"task":"Fix the typo in README.md."}]}
+```
+
+(b) Parallel investigation, then a synthesis over `{previous}`:
+
+```json
+{"steps":[{"id":"look","parallel":[{"id":"web","agent":"scout","task":"Read the web sources on rate limiting."},{"id":"db","agent":"scout","task":"Read the database code for rate limiting."}]},{"id":"sum","agent":"planner","task":"Combine: {previous}"}]}
+```
+
+(c) Review plus revise: the gate sends work back to `build` until the reviewer passes, at most
+twice:
+
+```json
+{"steps":[{"id":"build","task":"Build the endpoint and run its tests."},{"id":"check","agent":"reviewer","task":"Review: {previous}. Say VERDICT: PASS or VERDICT: FAIL.","gate":{"pass":"VERDICT: PASS","retry":"build","max_loops":2}}]}
+```
+
+(d) Bounded recovery: the first attempt may fail without failing the run, and a `when` step
+names its status before recovering:
+
+```json
+{"steps":[{"id":"try","agent":"scout","task":"Try the first route.","continue_on_error":true},{"id":"recover","agent":"scout","task":"Recover: {{steps.try.status}}","when":{"step":"try","status":"failed"}}]}
+```
+
+`tests/workflow-plan-smoke.ts` pins all four: it parses these blocks, compiles each through
+`compilePlan`, and checks that together they cover the single-step, parallel, gate and `when`
+shapes.
+
+### Expanding a plan
+
+A step with `expand: true` asks the host for more steps. Its final answer is one JSON object:
+`{"steps": [...]}`, a plan the host runs next, or `{"done": "the result"}`, which adds nothing and
+becomes the step's output. The child never gains a way to start agents: process depth stays 1, and
+the steps run as ordinary steps of the same run, so stop, failure, gates, status and the summary
+treat them like any other.
+
+- **Ids.** The steps run right after the expanding step, each id prefixed with the parent's:
+  `a` under `split` is `split.a`, and its answer is `steps/split.a.md`. References inside the
+  expansion follow the prefix. A step outside it cannot name an expanded step, and sees a spliced
+  plan as the expanding step's output, so a later step reads expanded results from the run directory.
+- **Inherited restrictions.** The steps compile under every plan rule, and no step may have a tool
+  the expanding step lacks, whether through `tools` or through its role, and like any plan step it
+  cannot be a role that starts agents unless `tools` narrows that away. A `planner` cannot ask for
+  an `implementer` unless the step narrows it to the planner's tools, so a step that should expand
+  into writers has to be able to write. A role's model, thinking, extensions, run time limit and
+  effort must also match the parent role's, so an expansion cannot reach a dearer model by naming
+  a role that sets one, or the session's model by naming one that does not.
+- **Budget.** An `expand` step counts as 2 agents, for its one resample. The host charges each
+  expansion's worst case to the same run scope and [allowance](effort.md#plan-allowance) before
+  anything in it launches, and never past 60 step executions in the run.
+- **Refused and invalid.** An answer that is not valid JSON, or a plan that does not compile, is
+  asked for once more with `{path, problem, fix}` added to the task; a second miss fails the step,
+  and so does a miss when the run has no execution left for the second ask.
+  An expansion past the depth limit, the allowance or the execution limit launches nothing, is
+  recorded as an omission, and the run goes on to end `partial`, so the agent can replan within
+  what is left of the allowance, or once it renews on the next user message. The step stays
+  `passed`, but `when` and `{{steps.<id>.status}}` read it as `skipped`, and its output is the
+  reason, so a later step does not act on work that never happened. A typed
+  `/workflow resume` has no run scope to charge, so it refuses a new expansion the same way; it
+  still replays one the run already charged.
+- **Depth.** `strategy.expandDepth` in the effort policy (3 by default) limits the generations one
+  plan may reach.
+- **Resume.** Each expansion is saved in `plan.json` before it runs, so a resume replays it and
+  does not ask the step again. A `plan.json` this process did not write is gated like a
+  [project workflow](#trusting-a-project-workflow).
+
+`expand` goes on a top-level step only. It is refused on a parallel member, with a `gate` on the
+same step, inside a segment a gate can go back over (the step would run twice), and in a saved
+workflow file, where it fails to parse: expansion is for inline plans only.
+(`tests/workflow-plan-smoke.ts`)
 
 ## Pausing, stopping and skipping
 
@@ -40,10 +133,9 @@ refused with the list of live ones.
 | `pause` | The executor waits at its scheduler gate before it launches any agent, so a paused run starts no new agents. Agents already running keep running and finish. `state.json` gets `"paused": true` while it lasts, and the run model shows `paused`. |
 | `resume` | Opens the gate; the next step launches. For a run that is not live, use `workflow_run {resume}` or `/workflow resume` instead. |
 | `stop` | Aborts the run's AbortController, which stops its running agents. The run ends `interrupted` and can be resumed. A step that was waiting at a paused gate never launches and keeps its old status. |
-| `skip` | Stops only the agents running now (each agent has its own AbortController under the run's). Their steps are recorded as `skipped` with the error "skipped by operator", and the run goes on: a later `when` sees `skipped`, and a parallel group whose members were skipped passes. A skipped step's `outputs:` check does not run. Skip never passes a review gate: a skipped gate step, or a skipped member of a group that has a `gate`, fails that gate, so the run loops back to `retry` (while `max_loops` lasts) or ends `failed`, and the step after the gate does not run. With nothing running, `skip` is refused. |
+| `skip` | Stops only the agents running now (each agent has its own AbortController under the run's). Their steps are recorded as `skipped` with the error "skipped by operator" (or "skipped by the agent" through the `workflow_control` tool), and the run goes on: a later `when` sees `skipped`, and a parallel group whose members were skipped passes. A skipped step's `outputs:` check does not run. Skip never passes a review gate: a skipped gate step, or a skipped member of a group that has a `gate`, fails that gate, so the run loops back to `retry` (while `max_loops` lasts) or ends `failed`, and the step after the gate does not run. The governed agent's skip of a required step is an omission, so the run reads `partial`; an operator's is not (`tests/workflow-hooks-smoke.ts`, r01). With nothing running, `skip` is refused. |
 
-`workflow_control` is allowed by the shipped firewall policy as `process_control`, like
-`subagent_stop`.
+`workflow_control` is allowed by the shipped firewall policy as `process_control`.
 
 ### Resuming an interrupted writer step
 
@@ -79,6 +171,10 @@ checks that both firewall policy copies hold the same `workflow_control` rule.
 [script workflows](#script-workflows). Both kinds share one set of names, and a later location
 overrides an earlier one with the same `name`, whatever its kind. Luna reads only these
 directories; Claude Code's `.claude/workflows/` is not read.
+
+The locations, the shared namespace and the override rule are checked in
+`tests/workflow-registry-smoke.ts`; the trust prompt and the headless refusal in
+`tests/workflow-smoke.ts`.
 
 ### Trusting a project workflow
 
@@ -156,7 +252,7 @@ inputs:
 vault: false                        # true: copy the finished run into the memory vault
 steps:
   - id: scout                       # unique across the workflow
-    agent: scout                    # a role: scout, planner, implementer, reviewer, delegator, or yours
+    agent: scout                    # a role: scout, planner, implementer, reviewer, or yours
     task: |
       Map the code relevant to: {{inputs.goal}} (look in {{inputs.area}})
   - id: plan
@@ -194,10 +290,14 @@ steps:
 | `model`, `thinking` | Per-step model (`provider/id`) and thinking level. The default is the role's `model:`, else the session model. |
 | `max_runtime` | Wall-clock limit for this step: `90s`, `20m`, `2h`. |
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
-| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. |
-| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, default 2). When the loops run out, the run fails. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. |
-| `continue_on_error` | A failure of this step doesn't fail the run. |
-| `parallel` | A list of steps run concurrently (up to 4 at once) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
+| `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member (`tests/workflow-hooks-smoke.ts`). |
+| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. A `/regex/` is tested on the last 64 KiB of the output (a substring on all of it), off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
+| `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
+| `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
+
+The format and its step fields are parsed and checked in `tests/workflow-smoke.ts` for a saved
+workflow and in `tests/workflow-plan-smoke.ts` for an inline plan, which refuses the fields that
+would widen a step.
 
 ### Templates
 
@@ -206,12 +306,15 @@ steps:
 | `{{inputs.<name>}}` | A run input (after defaults) |
 | `{{steps.<id>.output}}` | That step's final answer (for a parallel group: every member's answer under `## <id>`) |
 | `{{steps.<id>.status}}` | `passed`, `failed`, `skipped`, … |
-| `{{file:<path>}}` | A file in the run directory (up to 64 KiB). Paths can't leave the run directory. |
+| `{{file:<path>}}` | A file in the run directory (up to 64 KiB). Paths can't leave the run directory, and anything but a regular file with one link, such as a symbolic link or a FIFO, fails the step, even with `?`. |
 | `{{run.dir}}`, `{{run.id}}`, `{{loop}}` | Run directory, run id, current gate loop |
 
 Add `?` to make a missing value empty instead of an error, for example
 `{{steps.review.output?}}` on the first pass through a gate loop. Values are inserted
 verbatim; nothing inside them is re-expanded.
+
+Templates, `?` and the `{{file:}}` limits are checked by `tests/workflow-smoke.ts` and
+`tests/workflow-plan-smoke.ts`.
 
 ## The blackboard (run directory)
 
@@ -226,13 +329,13 @@ steps/<id>.md       every step's final answer (what {{steps.<id>.output}} reads)
 Every step's subagent is told the run directory and the files already in it, so tasks can
 say "write your findings to `findings.md`" and later steps can use `{{file:findings.md}}`.
 Read-only roles (scout, planner) can't write files. Use their `{{steps.<id>.output}}`
-instead. With `vault: true`, a passed run is copied to
+instead. With `vault: true`, a run that reaches its last step, `passed` or `partial`, is copied to
 `~/.pi/vault/Projects/<project>/Workflows/<run-id>/`, so it can be picked up from another
-session or opened in Obsidian.
+session or opened in Obsidian. (`tests/workflow-hooks-smoke.ts`)
 
 ### Redaction and file modes
 
-The executor redacts secrets before it writes `state.json` or `steps/<id>.md`: the run's
+The executor redacts secrets before it writes `state.json` or `steps/<id>.md` (an `expand` answer waiting to be acted on is the one exception, below): the run's
 `inputs`, each step's answer and the step and run errors. Known secret shapes become
 `[REDACTED]`. These are the rules the trace ledger applies to its targets (authorization headers,
 `password`/`secret`/`token`/`api_key` assignments, `user:password@` in URLs, `sk-` and `gh*_`
@@ -247,6 +350,14 @@ answer. A step's own prompt is built from the in-memory inputs, so it still gets
 values. A resumed run reads its inputs back from `state.json`, though, so it gets the redacted
 ones.
 
+A plan is the definition a resume runs, so `plan.json` is never redacted. A plan or expansion with
+text the kit's secret table matches is refused instead, by field name and never quoting it, and an expansion is resampled once, asked to
+name the credential instead. The table is not the wider redaction above, so a task may say "token"
+or "password" (`tests/workflow-plan-smoke.ts`). An `expand` step's answer is read as the child gave
+it, not from the redacted `steps/<id>.md`. Until the host acts on it, `state.json` holds that answer
+unredacted, if the table leaves it unchanged and it fits in 64 KiB. Otherwise a kill in that window
+loses the answer and a resume asks about the step like an interrupted writer.
+
 The executor creates the run directory and `steps/` with mode 0700 and writes `state.json` and
 `steps/<id>.md` with mode 0600, and it sets those modes again on each write. The redaction
 rules are copies, because extensions are self-contained. `npm run verify` and
@@ -255,7 +366,8 @@ rules are copies, because extensions are self-contained. `npm run verify` and
 input, and that a run's files are redacted and have the right modes.
 
 Each step is an ordinary subagent run, so it also has a log under `.pi/subagent/`
-(`/subagents`, `subagent_status id=<run>`). The step's run ids are recorded in
+(`/workflows`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
+its id still shows its log and `workflow_control` can stop it. The step's run ids are recorded in
 `state.json`. A corrupt or wrong-shape `state.json` is ignored and not listed by
 `/workflow status`, rather than crashing the status listing. The persisted state must
 also carry a non-negative integer `cursor` and a finite `executions` count, or it is
@@ -266,9 +378,13 @@ whole state is treated as corrupt.
 
 ## Execution rules
 
-- Steps run top to bottom. A failing step fails the run, unless it has `continue_on_error`.
+- Steps run top to bottom. A failing step fails the run, unless it has `continue_on_error`; such
+  a run reports `partial`, and the rule is in [Run status](script-workflows.md#run-status).
+  A gate that misses and then passes stays `passed`. (`tests/workflow-hooks-smoke.ts`)
 - Gates loop back to `retry`, and every step from there to the gate runs again.
-- A run is capped at 60 step executions, counting loops.
+- A run is capped at 60 step executions, counting loops. Each member of a parallel group is an
+  execution, and a group that would pass the cap fails the run before any member starts
+  (`tests/workflow-hooks-smoke.ts`, r06).
 - Resuming re-runs the interrupted step (in a parallel group, only the members that hadn't
   passed) and continues from there. `inputs` and finished outputs are kept.
 - Subagents in a workflow get the same governed launch as any subagent: `--no-extensions` plus
@@ -276,10 +392,21 @@ whole state is treated as corrupt.
   protection check (see [Agent orchestration](agent-orchestration.md#child-governance)). A subagent
   can't start another workflow.
 - **Effort budgets apply.** `/workflow run` and `/workflow resume` are user-directed launches, limited
-  only by the platform ceilings. The `workflow_run` tool, which the model calls, spends the
-  discretionary [effort](effort.md) budget like any delegation and is hidden at E1. The `research`
-  workflow starts three scouts at once, so as a model-started workflow it needs an effort tier that
-  allows three scouts (E5); use `/workflow run research` at lower tiers.
+  only by the platform ceilings. The `workflow_run` tool, which the model calls, runs in its own
+  [run scope](effort.md#plan-allowance) and is hidden at E1. The run's worst case (each step, plus
+  every gated segment at its full `max_loops`) is charged to the tier's plan allowance before the
+  first launch, so a run that does not fit is refused with nothing started, and the reason names
+  `/effort`. The kit's
+  `bugfix` and `feature` cost 8 and `research` costs 5, so each fits at E3 and above, one to a
+  request at E3. A model-started resume opens a new scope and is charged only what has not passed.
+  A parallel group runs at most the tier's `maxConcurrent` at once, and at 0 it starts nothing and
+  fails the run. In a plan, a group with a member that can edit files runs its members one at a
+  time, because nobody reviewed it; a saved workflow's author decides.
+  (`tests/workflow-builtin-smoke.ts`, `tests/workflow-plan-smoke.ts`)
+- **Steps do not delegate.** An agent of a model-started run has E1 as its tier and cap, and gets
+  neither the `subagent` tool nor its extension, whatever its role or step asks for
+  (`tests/workflow-builtin-smoke.ts`). A plan also refuses a role that loads an extension which
+  starts agents (`tests/workflow-plan-smoke.ts`).
 
 ## Live telemetry
 
@@ -299,8 +426,8 @@ While a workflow runs, the subagent extension keeps an in-process record of it, 
   template fails is a `failed` agent that never launched. In a script run an agent can also be
   marked `cached` (answered from a resumed run's journal) and carry the `group` (the nested
   `workflow()` it ran in), and a phase can name its `parent` group phase.
-- **Runs.** A run records its kind (`yaml` or `script`), name, the workflow's description, definition file and source (kit, user or project), status (`running`, `passed`, `failed`,
-  `interrupted`), whether it is paused, elapsed time, the usage summed over its agents and a
+- **Runs.** A run records its kind (`yaml` or `script`), name, the workflow's description, definition file and source (kit, user or project), status (`running`, `passed`, `partial`,
+  `failed`, `interrupted`), whether it is paused, elapsed time, the usage summed over its agents and a
   count of approvals (`noteApproval`). A script run also records its sandbox mode, `budget.total`
   and the sha256 of the script it executed. A resumed run keeps its id,
   and its record starts again with this execution's agents. When a run ends, any agent still
@@ -317,9 +444,11 @@ Checked by `tests/workflow-telemetry-smoke.ts` (`npm run smoke:workflow-telemetr
 
 ## The /workflows panel
 
-`/workflows` shows the workflow runs of this pi session, read from the run model above
-(`wf-panel.ts`). Runs started in another pi process are not shown; use `/workflow status` for
-those. The panel is modelled on Claude Code's workflow panel and shows YAML runs and
+Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`).
+`/workflows panel [run-id]` opens the panel, which shows the workflow runs of this pi session, read from the
+run model above (`wf-panel.ts`). Runs started in another pi process are not shown there; use
+`/workflows` or `workflow_status` for those, and `workflow_status {id}` and `workflow_control` for
+a step's log and to stop it. The panel is modelled on Claude Code's workflow panel and shows YAML runs and
 [script workflow](script-workflows.md) runs (started by the `workflow` tool) alike; both can be
 saved with `s`.
 
@@ -327,9 +456,9 @@ In the TUI it opens as an overlay on pi 1.3.0 or newer (on older pi, as a plain 
 the control-center hub's rule; `tests/workflow-panel-smoke.ts` checks the rule and the options
 passed on the installed pi). It has two views:
 
-- **Run list** (`/workflows`): one row per run, newest first, with a status dot, name, status,
+- **Run list** (`/workflows panel`): one row per run, newest first, with a status dot, name, status,
   done/total agents, elapsed time and run id. ↑↓ select, Enter opens a run, Esc closes the panel.
-- **Run view** (Enter on a run, or `/workflows <run-id>`):
+- **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds
     the badges that apply: `sandbox: reduced` when the script ran in the reduced sandbox,
@@ -359,12 +488,12 @@ passed on the installed pi). It has two views:
 | Key | Effect |
 | --- | --- |
 | `x` | Stop the run. Asks first, inside the panel, with "No, keep it running" highlighted; Enter on it or Esc keeps the run, and only "Stop the run" stops it, through the same `controlRun` as `workflow_control`. A run that is not live has nothing to stop. |
-| `k` | Skip the selected agent when it is running: it is cut off, recorded as `skipped` (its `agent()` call returns `null` in a script run) and the run goes on; other running agents are not touched. A finished agent, or a run that is not live, has nothing to skip. |
+| `k` | Skip the selected agent when it is running: it is cut off and recorded as `skipped` (its `agent()` call returns `null` in a script run, and a required one fails that run); other running agents are not touched. A finished agent, or a run that is not live, has nothing to skip. |
 | `p` | Pause a live run, or resume it when it is paused (`controlRun`). The footer shows `p resume` while paused, for YAML and script runs. |
 | `s` | Save the run's workflow into the project's `.pi/workflows/`. Asks first with "No, don't save" highlighted; when the file already exists the second choice is "Overwrite …", so an overwrite is No-first too. A YAML run's definition is copied under the same file name; the copy is a project workflow, so it overrides the Luna or user workflow of the same name in this project and goes through the [trust prompt](#trusting-a-project-workflow) when it runs. A script run's script is saved as `.pi/workflows/<name>.js` only while the file still hashes to the sha256 of the script the run executed (checked when `s` is pressed and again at the write), and that digest is then trusted ("Trust this digest", in every project); for a script run the question names the sha256 and the second choice is "Save and trust …" or "Overwrite … and trust it", so the saved script runs without the trust prompt until the file changes. A run of a project workflow has nothing to save. The save is refused when `.pi`, `.pi/workflows` or the target file is a symlink (or not a directory / regular file), so a planted link cannot redirect the write outside the project. |
 | `Esc` | Back from a run to the list, then close the panel. In a stop or save choice, Esc means No. |
 
-Outside the TUI (RPC, `pi -p`, JSON mode) `/workflows [run-id]` prints the same content as text
+Outside the TUI (RPC, `pi -p`, JSON mode) `/workflows panel [run-id]` prints the same content as text
 (as a notification when the mode has a UI, otherwise on stderr): the list followed by every run,
 or the one run asked for. The text lists each failed agent's error under it. A subagent child
 does not register `/workflows`.
@@ -391,6 +520,10 @@ agents.
   reproduction itself.
 - **research**: three parallel scouts (code, tests, history) → synthesis → durable facts
   saved to memory; the run is copied to the vault.
+
+`tests/workflow-smoke.ts` checks that all three parse, their names and both gates;
+`tests/workflow-builtin-smoke.ts` runs each with fake children and pins their worst-case agent
+counts (8, 8 and 5).
 
 ## Writing your own: checklist
 

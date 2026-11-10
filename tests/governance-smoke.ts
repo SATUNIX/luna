@@ -236,6 +236,129 @@ async function testBrokerResolvesWhenAuditFails() {
   }
 }
 
+// 7b. V-02: an open overlay owns the keyboard. The pentest card starts on Yes, so a key typed into the
+// overlay must not reach it: the card waits for the hold to end, and an abort during the hold blocks.
+async function testApprovalWaitsForHeldInput() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-held-input-"));
+  writeCompleteEngagement(workspace);
+  const restoreDataRoot = setEnv("PENTEST_DATA_ROOT", path.join(workspace, "pentest-data"));
+  const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+  try {
+    await withCwd(workspace, async () => {
+      const pi = await loadGovernance(workspace);
+      let confirms = 0;
+      const options: unknown[] = [];
+      const ctx = { hasUI: true, ui: { confirm: async (_title: string, _body: string, opts?: unknown) => { confirms++; options.push(opts); return true; } } };
+      const input = { tool: "remote_request", url: "https://example.test/" };
+
+      const release = holdInput("the test box");
+      let settled = false;
+      const call = (pi.handlers.get("tool_call")({ toolName: "mcp", input }, ctx) as Promise<Decision | undefined>).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(confirms, 0, "the card must not appear while an overlay holds input");
+      assert.equal(settled, false, "the tool call must stay unresolved while input is held");
+      release();
+      assert.equal((await call)?.block, undefined, "after the hold the operator's answer decides");
+      assert.equal(confirms, 1, "the card is shown once, after the hold");
+
+      const held = holdInput("the test box");
+      const abort = new AbortController();
+      // pi's tool_call event carries no signal: the turn's signal is on the context.
+      const aborted = pi.handlers.get("tool_call")({ toolName: "mcp", input }, { ...ctx, signal: abort.signal }) as Promise<Decision | undefined>;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      abort.abort();
+      const result = await aborted;
+      held();
+      assert.equal(result?.block, true, "aborting while input is held must block");
+      assert.equal(confirms, 1, "an aborted request never shows the card");
+      const audited = fs.readFileSync(path.join(workspace, "pentest-data", "audit", "audit.jsonl"), "utf8");
+      assert.match(audited, /aborted_while_input_held/, "the abort is audited");
+      const shown = options[0];
+      assert.ok(typeof shown === "object" && shown !== null && Number(Reflect.get(shown, "timeout")) > 0, "the card is bounded so pi dismisses it");
+
+      // The hold and the card share one deadline: an overlay left open cannot park the action.
+      const restoreTimeout = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "50");
+      const parked = holdInput("the test box");
+      try {
+        const outcome = await Promise.race([
+          pi.handlers.get("tool_call")({ toolName: "mcp", input }, ctx) as Promise<Decision | undefined>,
+          new Promise<"parked">((resolve) => setTimeout(() => resolve("parked"), 500)),
+        ]);
+        assert.notEqual(outcome, "parked", "a hold must not park the action past its deadline");
+        assert.equal(typeof outcome === "object" && outcome.block, true, "a hold past the deadline fails closed");
+        assert.equal(confirms, 1, "and it never shows the card");
+      } finally {
+        parked();
+        restoreTimeout();
+      }
+    });
+  } finally {
+    restoreDataRoot();
+  }
+}
+
+// 7c. The scope and RoE answer can change during the wait. It is asked again after the hold and after
+// the Yes, so an action whose window closed or whose target left scope does not run on an old answer.
+async function testScopeIsRecheckedAroundTheCard() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-recheck-"));
+  const restoreDataRoot = setEnv("PENTEST_DATA_ROOT", path.join(workspace, "pentest-data"));
+  const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+  const scope = path.join(workspace, "engagement", "scope.yaml");
+  const narrow = (): void => {
+    fs.writeFileSync(scope, fs.readFileSync(scope, "utf8").replaceAll("example.test", "other.test"));
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(scope, later, later);
+  };
+  try {
+    await withCwd(workspace, async () => {
+      const input = { tool: "remote_request", url: "https://example.test/" };
+      const auditText = (): string => fs.readFileSync(path.join(workspace, "pentest-data", "audit", "audit.jsonl"), "utf8");
+
+      writeCompleteEngagement(workspace);
+      const pi = await loadGovernance(workspace);
+      const release = holdInput("the test box");
+      let confirms = 0;
+      const heldCtx = { hasUI: true, ui: { confirm: async () => { confirms++; return true; } } };
+      const held = pi.handlers.get("tool_call")({ toolName: "mcp", input }, heldCtx) as Promise<Decision | undefined>;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      narrow();
+      release();
+      assert.equal((await held)?.block, true, "a target that left scope during the hold is blocked");
+      assert.equal(confirms, 0, "and the card is not shown for it");
+      assert.match(auditText(), /scope_roe_changed/, "the changed answer is audited");
+
+      writeCompleteEngagement(workspace);
+      const later = new Date(Date.now() + 120_000);
+      fs.utimesSync(scope, later, later);
+      const again = await loadGovernance(workspace);
+      const yesCtx = { hasUI: true, ui: { confirm: async () => { narrow(); fs.utimesSync(scope, new Date(Date.now() + 180_000), new Date(Date.now() + 180_000)); return true; } } };
+      const decided = (await again.handlers.get("tool_call")({ toolName: "mcp", input }, yesCtx)) as Decision | undefined;
+      assert.equal(decided?.block, true, "a Yes given to an answer that has changed does not run the action");
+    });
+  } finally {
+    restoreDataRoot();
+  }
+}
+
+// 7d. MCP-only mode exempts the kit's own tools. The workflow read tool and the workflow control's
+// pause and stop are among them, so running work can be seen and stopped; resume and skip let a run
+// go on, so they stay blocked with the launching tools outside the list.
+async function testWorkflowControlToolsPassMcpOnly() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-wf-control-"));
+  writeCompleteEngagement(workspace);
+  await withCwd(workspace, async () => {
+    const pi = await loadGovernance(workspace);
+    assert.equal(await callTool(pi, "workflow_status"), undefined, "workflow_status passes an engagement");
+    assert.equal(await callTool(pi, "workflow_control", { action: "stop" }), undefined, "workflow_control stop passes an engagement");
+    assert.equal(await callTool(pi, "workflow_control", { action: "pause" }), undefined, "workflow_control pause passes an engagement");
+    assert.equal((await callTool(pi, "workflow_control", { action: "resume" }))?.block, true, "workflow_control resume stays blocked");
+    assert.equal((await callTool(pi, "workflow_control", { action: "skip" }))?.block, true, "workflow_control skip stays blocked");
+    assert.equal((await callTool(pi, "workflow_control", {}))?.block, true, "workflow_control with no action stays blocked");
+    assert.equal((await callTool(pi, "workflow_run", { name: "x" }))?.block, true, "workflow_run stays blocked");
+    assert.equal((await callTool(pi, "dispatch_specialist", { agent: "a", task: "t" }))?.block, true, "dispatch_specialist stays blocked");
+  });
+}
+
 // 8. F3 regression: `tool-policy.json` containing the JSON literal `null` is not a
 // valid policy object. Pre-fix loadPolicy returned it verbatim, so metadataFor did
 // `policy.tools` on null and the tool_call handler threw a TypeError. It must instead
@@ -288,6 +411,9 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["env templates are not protected paths", testEnvTemplatesAreNotProtectedPaths],
   ["broker settles, and blocks the action, when the audit chain is corrupt", testBrokerResolvesWhenAuditFails],
   ["an unauditable allow fails closed; read-only tools stay available", testUnauditableAllowFailsClosed],
+  ["a held overlay defers the pentest approval and an abort blocks it", testApprovalWaitsForHeldInput],
+  ["the scope and RoE answer is asked again after the hold and after the Yes", testScopeIsRecheckedAroundTheCard],
+  ["workflow_status and workflow_control pass MCP-only mode; launching tools do not", testWorkflowControlToolsPassMcpOnly],
   ["null tool-policy.json falls back to the default empty policy", testNullPolicyFallsBackToEmptyPolicy],
 ];
 

@@ -291,7 +291,7 @@ steps:
     assert.ok(good.calls.includes("read REPORT-BODY"), "a later step reads an artefact from the blackboard");
     const bad = await run(def, {}, () => "ok");
     assert.equal(bad.final.status, "failed");
-    assert.match(bad.final.error ?? "", /declared output\(s\) not written: report\.md/);
+    assert.match(bad.final.error ?? "", /declared output\(s\) not written in .*: report\.md/);
     ok("declared outputs are enforced; artefacts flow through {{file:}}; when skips");
   }
 

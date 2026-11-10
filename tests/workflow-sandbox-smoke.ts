@@ -109,11 +109,12 @@ try {
     assert.deepEqual(phases, ["Scan"]);
     assert.deepEqual(seen.slice(0, 2), [{ label: "x" }, null]);
     ok(`${mode}: agent/parallel/pipeline/log/phase/args/budget behave as documented; 4096-item cap; hook errors reject`);
-    const exhausted = await run(mode, `try { await agent("x"); return "ran" } catch (e) { return e.message }`, { budget: { total: 5, spent: () => 5 } });
-    assert.ok(exhausted.ok && typeof exhausted.value === "string" && /^budget exhausted/.test(exhausted.value), JSON.stringify(exhausted));
+    // The refusal itself is the host's (wf-engine.ts), so that it reaches the run's record; the call still gets there.
+    const exhausted = await run(mode, `return [await agent("x"), budget.spent(), budget.remaining()]`, { hooks: echo, budget: { total: 5, spent: () => 5 } });
+    assert.deepEqual(exhausted, { ok: true, value: [{ text: "did: x" }, 5, 0] }, JSON.stringify(exhausted));
     const noArgs = await run(mode, `return typeof args`);
     assert.deepEqual(noArgs, { ok: true, value: "undefined" });
-    ok(`${mode}: agent() throws once the budget is spent; args is undefined when none are passed`);
+    ok(`${mode}: a spent budget reads 0 remaining and agent() still reaches the host; args is undefined when none are passed`);
     const lines: string[] = [];
     const logged = await run(mode, `log("x".repeat(5000)); for (let i = 0; i < 10005; i++) log("n" + i); return 1`, { hooks: { ...echo, log: (text) => lines.push(text) } });
     assert.deepEqual(logged, { ok: true, value: 1 });
@@ -146,8 +147,14 @@ try {
 
     // 5. 1 MiB caps.
     expectError(await run(mode, `return "x".repeat(1100000)`), "limit", /exceeds 1 MiB/, "result cap");
-    const bigCall = await run(mode, `try { await agent("y".repeat(1100000)) } catch (e) { return e.message }`);
+    // agent() sends the host the refusal, not the call, so the host can record the step.
+    const refusals: Array<[string, boolean]> = [];
+    const refusing = { agent: () => Promise.reject(new Error("no call reaches this hook")), refused: ({ reason, required }: { reason: string; required: boolean }) => { refusals.push([reason, required]); } };
+    const bigCall = await run(mode, `try { await agent("y".repeat(1100000), { required: true }) } catch (e) { return e.message }`, { hooks: refusing });
     assert.deepEqual(bigCall, { ok: true, value: "the call's arguments exceed 1 MiB" });
+    assert.deepEqual(refusals, [["the call's arguments exceed 1 MiB", true]]);
+    const bigWorkflow = await run(mode, `try { await workflow("w", "y".repeat(1100000)) } catch (e) { return e.message }`);
+    assert.deepEqual(bigWorkflow, { ok: true, value: "the call's arguments exceed 1 MiB" });
     const bigReply = await run(mode, `try { await agent("x") } catch (e) { return e.message }`, { hooks: { agent: () => Promise.resolve("r".repeat(1100000)) } });
     assert.deepEqual(bigReply, { ok: true, value: "the hook's result exceeds 1 MiB" });
     ok(`${mode}: results, call arguments and hook results over 1 MiB are refused`);
@@ -162,9 +169,9 @@ try {
     const odd = await run(mode, `try { await agent("x"); return "resolved" } catch (e) { return e.message }`, { hooks: { agent: () => Promise.reject(badRejection) }, limits: { idleMs: 3000 } });
     assert.deepEqual(odd, { ok: true, value: "the hook failed with a value that cannot be shown" });
     ok(`${mode}: a hook result JSON cannot encode (BigInt, function, cycle) or a rejection whose message getter throws rejects agent() instead of hanging the run`);
-    expectError(await run(mode, `await agent("x", { toJSON() { return undefined } }); return 1`), "protocol", /malformed agent\(\) call/, "opts dropped by toJSON");
-    expectError(await run(mode, `await workflow("child", { toJSON() { return undefined } }); return 1`, { hooks: { ...echo, workflow: () => Promise.resolve(1) } }), "protocol", /malformed workflow\(\) call/, "workflow args dropped by toJSON");
-    ok(`${mode}: an agent() or workflow() payload that a toJSON() reshapes past the prelude's checks ends the run with kind protocol`);
+    expectError(await run(mode, `await agent("x", { toJSON() { return undefined } }); return 1`), "script", /opts must be an object/, "opts dropped by toJSON");
+    expectError(await run(mode, `await workflow("child", { toJSON() { return undefined } }); return 1`, { hooks: { ...echo, workflow: () => Promise.resolve(1) } }), "script", /args must be JSON-serialisable/, "workflow args dropped by toJSON");
+    ok(`${mode}: an agent() or workflow() payload that a toJSON() reshapes is refused into the script, so it cannot end the run`);
 
     // Host-to-runner lines carrying U+2028/U+2029 (readline splits on both).
     const sep = "a\u2028b\u2029c";

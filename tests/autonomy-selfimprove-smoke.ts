@@ -20,6 +20,8 @@ import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
+import { compilePlan } from "../packages/extensions/third_party/subagent/plan.ts";
+import { discoverAgents } from "../packages/extensions/third_party/subagent/agents.ts";
 
 const { check, done } = makeChecker("autonomy-selfimprove-smoke");
 /** One host-side model call the scripted manager saw. */
@@ -749,6 +751,40 @@ await check("a conflict resolution that keeps the integration side of an upstrea
   const entry = state.selfImprove?.history[1];
   assert.equal(entry?.merged, false);
   assert.match(entry?.mergeReason ?? "", /drops upstream changes .*README\.md/);
+});
+
+await check("the cycle prompt sends items through workflow_run {steps}, its example compiles at worst case 4, and it names the subagent fallback", async () => {
+  let message = "";
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => { message = t.message; t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("prompt seen"); },
+  });
+  await runOnce(h);
+  assert.match(message, /`workflow_run \{steps\}`/, "the prompt directs items through an inline plan");
+  assert.match(message, /"parallel"/, "phase 1 may send scouts as a parallel plan");
+  assert.match(message, /"max_loops":1/, "the item plan sets max_loops 1");
+  assert.match(message, /worst case of 4/);
+  assert.match(message, /`standard`.*8 agents/s, "the prompt states the request allowance");
+  assert.match(message, /two items, or one scouts plan and one item/);
+  assert.match(message, /fall back to the `subagent` tool/, "a refusal names the fallback");
+  assert.match(message, /`Workflow: refused <reason>`/, "and the report line it adds");
+  assert.match(message, /`subagent` for one-off tasks/, "the subagent rule stays for one-off tasks");
+  assert.doesNotMatch(message, /\{\{[A-Z_]+\}\}/, "every placeholder is filled");
+  // The item plan the prompt shows compiles through the same compiler workflow_run uses, against the kit's roles.
+  const example = /^\s*\{"steps".*"max_loops".*$/m.exec(message)?.[0];
+  assert.ok(example, "the prompt shows the item plan on one line");
+  const parsed: unknown = JSON.parse(example);
+  const steps: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "steps") : undefined;
+  const compiled = compilePlan(steps, discoverAgents(scratch(), "project").agents);
+  assert.ok(compiled.ok, `the example compiles: ${compiled.ok ? "" : JSON.stringify(compiled.errors)}`);
+  assert.equal(compiled.worstCaseAgents, 4, "an item costs 4 of the 8 a standard request gets");
+  const scouts = /^\s*\{"steps":\[\{"parallel".*$/m.exec(message)?.[0];
+  assert.ok(scouts, "the prompt shows the scouts plan on one line");
+  const scoutsParsed: unknown = JSON.parse(scouts);
+  const scoutSteps: unknown = typeof scoutsParsed === "object" && scoutsParsed !== null ? Reflect.get(scoutsParsed, "steps") : undefined;
+  const scoutPlan = compilePlan(scoutSteps, discoverAgents(scratch(), "project").agents);
+  assert.ok(scoutPlan.ok, `the scouts example compiles: ${scoutPlan.ok ? "" : JSON.stringify(scoutPlan.errors)}`);
+  assert.ok(scoutPlan.worstCaseAgents + compiled.worstCaseAgents <= 8, "scouts plus one item fit the standard allowance");
 });
 
 await check("an upstream fetch failure is logged and the cycle still runs and merges", async () => {

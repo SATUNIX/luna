@@ -62,6 +62,8 @@ const writeMarker = (over) => write(markerPath, JSON.stringify(Object.assign({ k
 const writeFirewall = (over) => {
   write(firewallPath, JSON.stringify(Object.assign({ mode: (def.firewall && def.firewall.mode) || "manual", policy: (def.firewall && def.firewall.policy) || "coding", source: "profile" }, over || {}), null, 2));
   write(path.join(agent, "pi-kit", "security.json"), JSON.stringify({ schemaVersion: 1, level: def.securityLevel || (profile === "pentest" ? "guarded" : "balanced"), source: "profile", revision: 1, changedAt: new Date().toISOString() }));
+  // As install step 4c does: the ownership record of the pi settings this profile now owns.
+  write(path.join(agent, "pi-kit", "profile-settings.json"), JSON.stringify({ schemaVersion: 2, previous: { "compaction.reserveTokens": { present: false, wrote: profile.length * 1000 } } }));
 };
 if (mode !== "silent-kill") console.log("[install] pi-system");
 switch (mode) {
@@ -235,6 +237,9 @@ async function installBalanced(world: World, scope = "global"): Promise<void> {
   fs.mkdirSync(path.join(world.agent, "pi-kit"), { recursive: true });
   fs.writeFileSync(path.join(world.agent, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { add: [], remove: [] } }, null, 2));
   fs.writeFileSync(path.join(world.agent, "pi-kit", "firewall.json"), JSON.stringify({ mode: "auto", policy: "coding", source: "user", judgeModel: "x/y" }, null, 2));
+  // An earlier profile's ownership record of pi settings: a rolled-back switch must put it back with
+  // settings.json, or the next switch releases keys that are the operator's again.
+  fs.writeFileSync(path.join(world.agent, "pi-kit", "profile-settings.json"), JSON.stringify({ schemaVersion: 2, previous: { "compaction.enabled": { present: true, value: false, wrote: true } } }, null, 2));
 }
 
 function hashAll(world: Pick<World, "project">): Record<string, string | null> {
@@ -365,8 +370,12 @@ tests["rollback: a failing reload restores the files and reloads the old configu
     const { handler } = loadCommand(w);
     let calls = 0;
     const ctx = makeCtx(w, { reload: async () => { calls++; if (calls === 1) throw new Error("extension failed to load"); } });
+    const record = path.join(w.agent, "pi-kit", "profile-settings.json");
+    const recordBefore = fs.readFileSync(record, "utf8");
+    assert.ok(helpers.switchFiles(w.project).includes(record), "the pi-settings ownership record is snapshotted with settings.json");
     await withMode("ok", () => handler("long", ctx));
     assert.equal(calls, 2, "reload the new config (fails), then the restored one");
+    assert.equal(fs.readFileSync(record, "utf8"), recordBefore, "the ownership record is restored byte for byte with settings.json");
     assert.match(last(ctx).message, /FAILED at reload: pi could not reload the new configuration: extension failed to load/);
     assert.deepEqual(hashAll(w), before);
   } finally { w.done(); }

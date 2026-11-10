@@ -81,8 +81,10 @@ complete). Set `PI_ALLOW_DIRECT_TOOLS=1` to force-allow direct tools mid-engagem
 override, still audited), or `=0` to force MCP-only lockdown without a configured engagement.
 
 Luna's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
-`record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools) are exempt
-from MCP-only mode: they do not touch a pentest target and are already gated by `tool-firewall`.
+`record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools, plus
+`workflow_status` and the `pause` and `stop` actions of `workflow_control`) are exempt from MCP-only
+mode: they do not touch a pentest target and are already gated by `tool-firewall`. The `resume` and
+`skip` actions let a run go on, so they stay blocked.
 
 ### Pentest commands
 
@@ -135,9 +137,28 @@ are pinned by `tests/governance-smoke.ts`.
    say-so.** A high action runs without the operator only as an exact repeat of an approval you
    gave. A judge block whose confidence is not high goes to the operator rather than being final,
    and an unsure judge never becomes an allow.
-6. **Nothing waits forever.** An approval card, the human console and the judge all have
-   timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
-   `UNCERTAIN` and nothing runs. Aborting ends every wait.
+6. **Nothing waits forever unattended.** An approval card, the human console and the judge all
+   have timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
+   `UNCERTAIN` and nothing runs. While an overlay you opened (the hub or the workflow panel) is
+   open, every prompt an agent can raise on its own waits for you to close it, with one notice: a
+   firewall approval, session or brokered; a pentest action approval; an `ask_human` question; the
+   trust prompts for project-local agents, specialists and project workflows; the resume prompt for
+   interrupted writer steps; the reduced-sandbox prompt; the wake-chain question; and the question
+   that resumes a paused workflow run. The wait and the card share one timeout, so an overlay left
+   open ends the request as an unanswered card would, and a card shown after a wait gets only the
+   time left, which pi uses to dismiss it. A brokered child request is deferred and keeps its console
+   timeout, so it can expire behind the overlay and fail closed. Aborting a turn ends that turn's wait,
+   and a pentest action asks scope and RoE again after the wait and after your Yes. A reload or the
+   end of a session drops the hold, because pi removes an overlay without settling it
+   (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,
+   `tests/governance-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`,
+   `tests/workflow-control-smoke.ts`). Four kinds of prompt are not held, and no test pins that: the
+   prompts of a command you typed, which you start from the editor rather than an overlay (`/update`,
+   `/profile`, `/effort` and the like); the
+   checks pi runs on your own `/new`, `/resume` and `/fork` (uncommitted files, restoring a
+   checkpoint); `/remote pair`, whose card follows the waiting dialog you opened and whose approval
+   needs four typed characters; and the "tell the agent why" note, which follows a card you
+   have just answered and approves nothing.
 7. **Every child agent is at least as protected as its parent.** `delegation-guard` starts a child
    only with the protections the parent registered; inside the child it checks that they loaded
    and otherwise blocks every tool and exits with code 78. This applies to grandchildren and to
@@ -388,7 +409,7 @@ differs). For a write under the workspace it:
   renamed over it, keeping the old file's mode, and creates new files with mode 0600.
 
 The writers that use it include the trace ledger, the firewall audit log, `/auto`, goal-core,
-task-graph, verifier-board and verify-gate, `/recover`, self-improvement's `AGENTS.md` edits,
+task-graph, verifier-board and verify-gate, recovery-orchestrator, self-improvement's `AGENTS.md` edits,
 `/save`, todo, the conductor, context-sieve, the workflow run files and the caveman and plan-mode
 contributions. `tests/workspace-symlink-smoke.ts` plants a link at each state file, and `.pi` as a
 link to a directory, drives those writers through their real entry points, and checks that nothing
@@ -413,8 +434,10 @@ Not covered:
 - On Windows `O_NOFOLLOW` and the owner check do not exist; the `lstat` checks still run.
 - A path the operator sets (for example `PI_KIT_FIREWALL_AUDIT_LOG` or
   `PI_KIT_BRANCH_LEASES_FILE`) is trusted: only its final name is checked.
-- The human console's request files are still written with plain `fs` calls, and are on the ESLint
-  allowlist as a known gap.
+- The `pentest-governance-domain` extension's human-console approval request is still written
+  with plain `fs` calls, and that file is on the ESLint allowlist as a known gap. Answers are
+  signed, so a planted answer file cannot approve, but a committed link can still redirect where
+  a request is written.
 
 ## The Luna installer and install markers
 

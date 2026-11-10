@@ -8,10 +8,10 @@ ledger and hands back the child's environment. Every child loads the mandatory p
 parent has (`tool-firewall`, `secret-guard`, `protected-paths`) and every governance extension the
 parent runs, that is, each one whose manifest declares `childGovernance: true`. Its effort tier is
 never above its parent's. A launch that cannot meet the contract is refused, and a child that starts
-without a protection its parent has blocks every tool call and exits with code 78. Roles run in
-single, parallel or chain mode, and chain threads each step's output into the next step through a
-`{previous}` placeholder. Background and detached runs report back through follow-up messages, while
-Esc, `session_shutdown` and `subagent_stop` provide cancel and kill paths. On top of this, the
+without a protection its parent has blocks every tool call and exits with code 78. The `subagent`
+tool runs one role in single or parallel mode; `workflow_run` threads steps through the host's plan
+engine. Background and detached runs report back through follow-up messages, while
+Esc, `session_shutdown` and `workflow_control` provide cancel and kill paths. On top of this, the
 `orchestrator` extension is a context and steering layer, and the `task-graph`, `verifier-board` and
 `human-console` extensions share file contracts under `.pi/` to plan work, record independent
 verdicts and broker approvals.
@@ -82,7 +82,7 @@ The file contracts, and who touches them:
 
 | File | Written by | Read by |
 |---|---|---|
-| `.pi/subagent/<run id>.log`, `.pi/subagent/runs.jsonl` | `subagent` runner | `subagent_status`, `/subagents`, `subagent_stop` |
+| `.pi/subagent/<run id>.log`, `.pi/subagent/runs.jsonl` | `subagent` runner | `workflow_status`, `/workflows`, `workflow_control` |
 | `<agent dir>/pi-kit/effort/ledgers/<scope>.json` | `effort` (root opens it, every descendant reserves in it) | `effort`, `/effort status` |
 | `.pi/task-graph.json` | `task-graph` tools | `task-graph` tools, `verify-gate` (definition of done) |
 | `.pi/verdicts.json` | `verifier-board`, `verify-gate`, `conductor` validator | `orchestrator`, `verifier-board` |
@@ -94,7 +94,8 @@ The file contracts, and who touches them:
 ## Role resolution and trust gate
 
 The nesting limit is checked first: a child that already sits at `PI_KIT_SUBAGENT_MAX_DEPTH` (default
-2) cannot delegate further. Agent roles are then loaded from up to three directories and merged into
+1) cannot delegate further; a custom role that delegates needs that variable set to 2. Agent roles
+are then loaded from up to three directories and merged into
 a map keyed by name, with later sources overriding earlier ones: kit, then user, then the nearest
 project `.pi/agents`. The default `agentScope` is `user`, which means kit plus user roles. Project
 roles need `agentScope: "project"` or `"both"`, and they must clear a trust gate, either an
@@ -103,7 +104,7 @@ role's name, system prompt, tools and model. A headless session cannot confirm, 
 
 ```mermaid
 flowchart TD
-    start["subagent tool call"] --> depth{"PI_KIT_SUBAGENT_DEPTH below PI_KIT_SUBAGENT_MAX_DEPTH, default 2?"}
+    start["subagent tool call"] --> depth{"PI_KIT_SUBAGENT_DEPTH below PI_KIT_SUBAGENT_MAX_DEPTH, default 1?"}
     depth -->|no| refuse["Refused: nesting limit reached"]
     depth -->|yes| scope["agentScope: user, project or both"]
     scope --> kit["Kit roles: packages/kit/agents, always"]
@@ -113,7 +114,7 @@ flowchart TD
     user --> merge
     project --> merge
     merge --> shadow["Shadowed names recorded in the discovery result"]
-    merge --> mode{"Exactly one mode, and background not with chain?"}
+    merge --> mode{"Exactly one mode?"}
     mode -->|no| badmode["Refused: provide exactly one mode"]
     mode -->|yes| trust{"A requested project role whose digest is not in PI_KIT_TRUSTED_PROJECT_ROLES?"}
     trust -->|no| role
@@ -146,9 +147,10 @@ flowchart TD
   (`tests/conductor-validator-smoke.ts`, `tests/conductor-recursion-smoke.ts`). `dual-review` sends
   its reviewer prompt and diff the same way (`tests/dual-review-smoke.ts`).
 - **Other delegation tools.** While `.pi/engagement/engagement.json` holds an engagement record whose
-  phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run` and
-  `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
-  child. Advancing the engagement to `close-out` with `/engagement phase close-out` lifts the block. In
+  phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run`, `workflow`
+  and `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
+  child, and only where the tool policy allows it: pentest MCP-only mode does not exempt it
+  (`tests/governance-smoke.ts`). Advancing the engagement to `close-out` with `/engagement phase close-out` lifts the block. In
   a headless session the only delegation path while the block holds is a specialist whose digest is in
   `PI_KIT_TRUSTED_PROJECT_ROLES` (`tests/conductor-recursion-smoke.ts`).
 
@@ -191,7 +193,8 @@ What the child loads:
 - **Optional additions only add.** The companions `finish-reason-retry` and `todo` load when the
   operator has them enabled, `PI_KIT_SUBAGENT_EXTENSIONS=a,b` replaces the companion list (never the
   governance set), and a role's or workflow step's `extensions:` adds more. A role whose tools include
-  `subagent` also gets the `subagent` extension, which is how a `delegator` child can delegate again.
+  `subagent` also gets the `subagent` extension when the launch grants it, which is how a custom
+  child role can delegate again.
   An unknown optional extension is skipped, because it is not a protection.
 - **Isolation.** By default a child is isolated: `--no-extensions` plus exactly that set.
   `conductor` specialists and validators use `isolation: "ambient"` because their children need the
@@ -235,8 +238,9 @@ readable ledger, it runs unbudgeted rather than not at all. It never skips the p
 
 | Launcher | Launch kind | Isolation | Notes |
 |---|---|---|---|
-| `subagent` tool (single, parallel, chain) | `discretionary` | isolated | Each task or chain step reserves its own slot. The `effort` argument can ask for a lower tier. |
-| `workflow_run` tool | `discretionary` | isolated | Hidden together with `subagent` at E1. |
+| `subagent` tool (single or parallel) | `discretionary` | isolated | Each task reserves its own slot. The `effort` argument can ask for a lower tier. |
+| `workflow_run` tool | `workflow` | isolated | Hidden at E1, in recovery too; charged to the plan allowance. |
+| `workflow` tool | `workflow` | isolated | Hidden at E1, in recovery too; `openRunScope` refuses a run at a tier with no workflow allowance (code `tier`), so E1 launches nothing even without active-tool control (`tests/effort-smoke.ts`). |
 | `/workflow run` and `/workflow resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
 | Completion reviewer (`/verify`, `verify_completion`) | `mandatory` | isolated | Role `reviewer`, read-only, tools `read,grep,find,ls`. |
 | `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tool list is non-empty and names only `read`, `grep`, `find` and `ls`, the same rule as `subagent` (`tests/conductor-specialist-bounds-smoke.ts`). |
@@ -276,9 +280,9 @@ flowchart TD
 ```
 
 If the policy or the ledger cannot be read, discretionary, recovery and user launches are refused.
-At E1 the `subagent` and `workflow_run` tools are taken out of the prompt for the turn, because they
-could only be refused, and they return while the recovery budget is open or once a higher tier is
-chosen.
+At E1 the `subagent`, `workflow_run`, `workflow`, `dual_review` and `dispatch_specialist` tools are taken
+out of the prompt for the turn, because they could only be refused. They return once a higher tier is
+chosen, and all but `workflow` and `workflow_run` return while the recovery budget is open (`tests/effort-smoke.ts`).
 
 ## Single delegation end to end
 
@@ -332,37 +336,28 @@ a temporary file holding the role's prompt and any preloaded skills. The runner 
 `PI_KIT_SUBAGENT_DEPTH` (parent depth plus one), `PI_KIT_SUBAGENT_STATE_DIR` and, unless already set,
 a shorter `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` (`PI_KIT_SUBAGENT_APPROVAL_TIMEOUT_MS`, default 2 minutes)
 so an approval nobody answers fails closed quickly. The task travels over stdin, which print mode
-merges into the prompt, so a large chained task cannot hit the 128 KiB argument limit. The run log
+merges into the prompt, so a large task cannot hit the 128 KiB argument limit. The run log
 records the extensions loaded, the child's tier and its slot id, or the reason a launch was refused.
 
-## Modes and previous threading
+## Modes
 
 The tool requires exactly one mode. Single runs one agent and task. Parallel runs up to eight tasks
-under a concurrency limit, and single and parallel can be detached with `background: true`. Chain
-runs steps sequentially and substitutes each step's prior output into the next step's task, so it
-cannot be backgrounded. A failed step stops the chain. A detached step ends the call early: that
-child keeps running in the background and the later steps are not started. Every task or step is its
-own launch and reserves its own slot, so a refused launch fails just that parallel task, or stops the
-chain at that step.
+under a concurrency limit, and both modes can be detached with `background: true`. Every task is its
+own launch and reserves its own slot, so a refused launch fails just that parallel task. Sequential
+work with threading between steps is a [workflow](workflows-and-skills.md), run through
+`workflow_run` or the `workflow` tool, not a `subagent` mode.
 
 ```mermaid
 flowchart TD
     req["subagent call"] --> mode{"Exactly one mode required"}
     mode --> single["single: agent plus task"]
     mode --> parallel["parallel: tasks array"]
-    mode --> chain["chain: sequential steps"]
     parallel --> conc["At most 8 tasks, concurrency PI_KIT_SUBAGENT_CONCURRENCY, default 4"]
     conc --> claim["mapWithConcurrencyLimit"]
     single --> bg
     parallel --> bg["background true: every child launches at once and the call returns immediately"]
     bg --> settled["onSettled notifies the operator and the agent later"]
-    chain --> sub["substitutePrevious replaces the previous placeholder"]
-    sub --> prev["previous is the prior step's finalOutput"]
-    prev --> stepfail["Failed step stops the chain"]
-    prev --> detach["Detached step returns early"]
-    prev --> last["Last step's output is returned"]
     claim --> slot["Each child reserves its own slot: a refused launch fails only that task"]
-    sub --> slot
 ```
 
 ## Lifecycle, cancel and kill switch
@@ -370,7 +365,7 @@ flowchart TD
 A spawned child is cancel-by-default: the parent's abort signal is passed to the child, so Esc kills
 it as an `aborted` run. `background: true` and `PI_KIT_SUBAGENT_DETACH_SIGNAL=1` restore detach. Idle,
 stream-cap and wall-clock budgets each end the run with a distinct `KillReason`, the operator can stop
-runs with `subagent_stop` or `/subagent-stop`, and `session_shutdown` stops all live children. Every
+runs with `workflow_control` or `/workflows stop`, and `session_shutdown` stops all live children. Every
 kill sends SIGTERM and escalates to SIGKILL after five seconds.
 
 Only a transient failure is retried: a spawn failure, or a non-zero exit with no usable output, up
@@ -411,7 +406,7 @@ stateDiagram-v2
     Running --> Idle
     Running --> Cap
     Running --> Wall
-    Running --> Stopped: subagent_stop, /subagent-stop or session_shutdown
+    Running --> Stopped: workflow_control, /workflows stop or session_shutdown
     Aborted --> Kill
     Idle --> Kill
     Cap --> Kill
@@ -476,9 +471,9 @@ goal or repository revision.
 - `packages/extensions/third_party/subagent/launch.ts`: the launcher side of the contract, `prepareChildLaunch`, read-only and scout role checks.
 - `packages/extensions/third_party/subagent/runner.ts`: `runAgent`: argv, model selection, per-attempt reservation and settling, env vars, budgets, cancel and retry.
 - `packages/extensions/third_party/subagent/child-process.ts`: spawn, stdin delivery, JSONL streaming, kill escalation, byte caps.
-- `packages/extensions/third_party/subagent/tools.ts`: the `subagent` tool, mode validation, trust gate, nesting check, `subagent_stop` and `settledNotifier`.
+- `packages/extensions/third_party/subagent/tools.ts`: the `subagent` tool, mode validation, trust gate, nesting check and `settledNotifier`.
 - `packages/extensions/third_party/subagent/agents.ts`: `discoverAgents`, kit, user and project directories, name precedence and shadowed names.
-- `packages/extensions/third_party/subagent/result.ts`: `substitutePrevious` and `classifyFailure` (a denied or exit 78 launch is fatal).
+- `packages/extensions/third_party/subagent/result.ts`: `classifyFailure` (a denied or exit 78 launch is fatal) and result formatting.
 - `packages/extensions/third_party/subagent/logging.ts`: run ids, `.pi/subagent/<runId>.log` and `.pi/subagent/runs.jsonl`.
 - `packages/extensions/third_party/subagent/live.ts`: in-process live-run registry and orphan PID guards.
 - `packages/extensions/third_party/subagent/status.ts`: run table and the `orphaned` state.
@@ -491,4 +486,4 @@ goal or repository revision.
 - `packages/extensions/src/verifier-board/index.ts`: `record_verdict`, `verdict_status` and `.pi/verdicts.json`.
 - `packages/extensions/src/human-console/index.ts`: pending and resolved polling and the `.pi/human-console` file contract.
 - `packages/extensions/src/tool-firewall/index.ts`: `brokerApproval` for headless children.
-- `packages/kit/agents/scout.md`, `planner.md`, `implementer.md`, `reviewer.md`, `delegator.md`: role frontmatter and system prompts.
+- `packages/kit/agents/scout.md`, `planner.md`, `implementer.md`, `reviewer.md`: role frontmatter and system prompts.

@@ -93,6 +93,6 @@ phase('Synthesize')
 const others = order.slice(1).map((r) => `Runner-up draft ${r.draft} (${r.angle}, score ${r.score ?? 'n/a'}):\n${fence(`design-draft-${r.draft}`, drafts[r.draft].text)}`).join('\n\n')
 const design = await agent(
   `Write the final design for the problem below. Start from the winning draft and graft in the best ideas of the runners-up where they fix its weaknesses; say what you took from where.\n\nProblem:\n${problem}${constraints}\n\nWinning draft ${winner.draft} (${winner.angle}, score ${winner.score ?? 'n/a'}):\n${fence(`design-draft-${winner.draft}`, drafts[winner.draft].text)}\n\nJudges' notes on it:\n${fence('design-notes', winner.notes)}\n\n${others}`,
-  { label: 'synthesize', agentType: 'planner' },
+  { label: 'synthesize', agentType: 'planner', required: true },
 )
 return { problem, ranking: order.map(({ notes, ...r }) => r), winner: winner.angle, design }

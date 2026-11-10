@@ -7,7 +7,8 @@
  *   - a scheduler gate (`gate()`): the executor awaits it before it launches any agent, so a
  *     paused run launches no new agents. Agents already running keep running;
  *   - one child AbortController per running agent (`agent()`), linked to the run's signal; `skip`
- *     aborts those, and the executor records the skipped steps as `skipped` and goes on.
+ *     aborts those, and the executor records the skipped steps as `skipped`. What a skip of a
+ *     required step does to the run depends on the run's format (docs/script-workflows.md).
  *
  * Who asks matters for one case: a pause the human console's safety stop sets (`origin: "safety"`,
  * after more than 10 distinct approvals in the run) is held for the operator. Only an operator
@@ -28,6 +29,8 @@ export interface AgentHandle {
   signal: AbortSignal;
   /** True once `skip` cut this agent off (and the run itself was not stopped). */
   skipped(): boolean;
+  /** Who skipped it: a YAML run reads a skip of a required step by who asked. */
+  skipOrigin(): ControlOrigin | undefined;
   /** Unregister the agent; call when it has finished. */
   done(): void;
 }
@@ -42,13 +45,15 @@ export interface ControlResult {
 
 type ControlListener = (paused: boolean) => void;
 
+const SKIP_NOTE = "recorded as skipped. The run continues unless the step was required: a skipped required step can fail the run or leave it partial.";
+
 export class RunControl {
   readonly runId: string;
   private readonly controller = new AbortController();
   private pausedFlag = false;
   private heldFlag = false;
   private waiters: Array<() => void> = [];
-  private readonly agents = new Map<string, { controller: AbortController; skipped: boolean; label: string; agentId?: string | undefined }>();
+  private readonly agents = new Map<string, { controller: AbortController; skippedBy?: ControlOrigin | undefined; label: string; agentId?: string | undefined }>();
   private readonly listeners = new Set<ControlListener>();
   private agentSeq = 0;
 
@@ -79,10 +84,17 @@ export class RunControl {
     return [...this.agents.values()].map((a) => a.label);
   }
 
-  /** Resolves at once unless the run is paused; then when it is resumed or stopped. */
-  gate(): Promise<void> {
-    if (!this.pausedFlag || this.stopped) return Promise.resolve();
-    return new Promise((resolve) => this.waiters.push(resolve));
+  /** Resolves at once unless the run is paused; then when it is resumed or stopped, or `signal` aborts. */
+  gate(signal?: AbortSignal): Promise<void> {
+    if (!this.pausedFlag || this.stopped || signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const open = (): void => {
+        signal?.removeEventListener("abort", open);
+        resolve();
+      };
+      this.waiters.push(open);
+      signal?.addEventListener("abort", open, { once: true });
+    });
   }
 
   /**
@@ -92,14 +104,15 @@ export class RunControl {
   agent(label: string, agentId?: string): AgentHandle {
     const key = `${label}#${++this.agentSeq}`;
     const controller = new AbortController();
-    const entry = { controller, skipped: false, label, agentId };
+    const entry: { controller: AbortController; skippedBy?: ControlOrigin | undefined; label: string; agentId?: string | undefined } = { controller, label, agentId };
     const onRunAbort = () => controller.abort();
     if (this.stopped) controller.abort();
     else this.controller.signal.addEventListener("abort", onRunAbort, { once: true });
     this.agents.set(key, entry);
     return {
       signal: controller.signal,
-      skipped: () => entry.skipped && !this.stopped,
+      skipped: () => entry.skippedBy !== undefined && !this.stopped,
+      skipOrigin: () => (this.stopped ? undefined : entry.skippedBy),
       done: () => {
         this.agents.delete(key);
         this.controller.signal.removeEventListener("abort", onRunAbort);
@@ -140,12 +153,12 @@ export class RunControl {
       case "skip": {
         const cut: string[] = [];
         for (const entry of this.agents.values()) {
-          if (entry.skipped) continue;
-          entry.skipped = true;
+          if (entry.skippedBy) continue;
+          entry.skippedBy = origin;
           entry.controller.abort();
           cut.push(entry.label);
         }
-        return cut.length ? { ok: true, message: `Skipping ${cut.join(", ")} in ${id}: recorded as skipped; the run goes on.` } : { ok: false, message: `Run ${id} has no running agent to skip.` };
+        return cut.length ? { ok: true, message: `Skipping ${cut.join(", ")} in ${id}: ${SKIP_NOTE}` } : { ok: false, message: `Run ${id} has no running agent to skip.` };
       }
     }
   }
@@ -155,10 +168,10 @@ export class RunControl {
     const id = this.runId;
     if (this.stopped) return { ok: false, message: `Run ${id} is already stopping.` };
     for (const entry of this.agents.values()) {
-      if (entry.agentId !== agentId || entry.skipped) continue;
-      entry.skipped = true;
+      if (entry.agentId !== agentId || entry.skippedBy) continue;
+      entry.skippedBy = "operator";
       entry.controller.abort();
-      return { ok: true, message: `Skipping ${agentId} in ${id}: recorded as skipped; the run goes on.` };
+      return { ok: true, message: `Skipping ${agentId} in ${id}: ${SKIP_NOTE}` };
     }
     return { ok: false, message: `${agentId} is not running in ${id}; there is nothing to skip.` };
   }

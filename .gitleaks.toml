@@ -65,3 +65,10 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^tests/secret-guard-smoke\.(?:mjs|ts)$''']
 regexes = ['''BEGIN OPENSSH PRIVATE KEY-----\\nabc\\n-----END''']
+
+[[allowlists]]
+description = "workflow-plan smoke: a made-up key the task-text redaction must mask"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/workflow-plan-smoke\.(?:mjs|ts)$''']
+regexes = ['''const secret = "use api_key=abcdef123456 here";''']

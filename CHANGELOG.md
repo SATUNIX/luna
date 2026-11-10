@@ -247,7 +247,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   data-only heredocs no longer count, and `patch --version`/`--help` write nothing. `sed -i -e`,
   `perl -pi -e`, `git checkout <ref> -- <path>` and `git restore --source` are rated with their paths.
   Remaining limits are listed in the tool-firewall README (`tests/protected-paths-corpus-smoke.ts`,
-  `tests/firewall-shell-smoke.ts`).
+  `tests/firewall-shell-smoke.ts`). The patch file is checked and read through one
+  file descriptor, and the wrapper pattern in front of a patch reader runs in linear time on any line.
 - **A model-started workflow step reads at the session's depth, and retries count against the
   request.** A YAML or plan step keeps the E1 delegation limit, but its prompt now reads at the
   session's tier, or lower when its role sets `effort:`, through the new `PI_KIT_EFFORT_PROMPT`, with

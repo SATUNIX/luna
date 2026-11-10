@@ -810,17 +810,23 @@ const PATCH_READ_LIMIT = 8 * 1024 * 1024;
 
 /** A regular patch file's text, or null when it is missing, not a file, too large or binary. */
 export function readPatchFile(absolutePath: string): string | null {
+  // Check and read through one descriptor, so the file checked is the file read.
+  let fd: number | undefined;
   try {
-    const stat = fs.statSync(absolutePath);
+    fd = fs.openSync(absolutePath, "r");
+    const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.size > PATCH_READ_LIMIT) return null;
-    return fs.readFileSync(absolutePath, "utf8");
+    return fs.readFileSync(fd, "utf8");
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
 // The piece's own command word, behind the shells and plain wrappers that leave the rest of the line as it is.
-const PATCH_READER = /^[\s'"({]*(?:(?:(?:ba|da|z|k)?sh\s+-[a-z]*c|eval|sudo|env|command|builtin|exec|nohup|time|(?:setsid|fakeroot)(?:\s+-\S+)*|flock(?:\s+-[wE]\s+\S+|\s+-\S+)*\s+\S+|(?:taskset|chrt)(?:\s+-\S+)*\s+\S+|script\s+(?:-[a-z]*c|--c[a-z]*))\s+['"]*)*(?:git(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:apply|am|add|commit|status|diff|log|show|rm)|git-apply|git-am|g?patch|cat|less|head|tail|wc|grep|rg|diff|ls|stat|rm)\s/;
+// A wrapper's own argument never starts with `-`, so each token has one reading and the match stays linear.
+const PATCH_READER = /^[\s'"({]*(?:(?:(?:ba|da|z|k)?sh\s+-[a-z]*c|eval|sudo|env|command|builtin|exec|nohup|time|(?:setsid|fakeroot)(?:\s+-\S+)*|flock(?:\s+-[wE]\s+\S+|\s+-(?![wE]\s)\S+)*\s+(?!-)\S+|(?:taskset|chrt)(?:\s+-\S+)*\s+(?!-)\S+|script\s+(?:-[a-z]*c|--c[a-z]*))\s+['"]*)*(?:git(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:apply|am|add|commit|status|diff|log|show|rm)|git-apply|git-am|g?patch|cat|less|head|tail|wc|grep|rg|diff|ls|stat|rm)\s/;
 // A `case` arm's pattern before its command: `case x in x) cmd`, or `x) cmd` when the line starts at the arm.
 const CASE_ARM = /^\s*(?:case\b.*?\bin\s+)?[^\s()]+\s*\)\s*/;
 const PATCH_OUTPUT_OPERAND = /(?:>\s*|(?:^|\s)(?:-[A-Za-z]*[or]\s*|--(?:o[a-z]*|reject-fi[a-z]*)(?:=|\s+)))["']?$/;

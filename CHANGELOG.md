@@ -227,6 +227,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **The website names a release tag that exists.** The install command on the website came from
+  `package.json`, which a release branch bumps before its tag can be pushed, so the site named
+  `v0.2.4-beta.11`, a tag that was never pushed. `build-site.ts` now names the newest pushed `v*`
+  tag merged into main at or below `package.json`, the pages build warns `Release tag missing`
+  while one is pending and fails without any tag, and `docs/releasing.md` lists the steps after a
+  release pull request merges: tag, push, redeploy the site, run the release workflow
+  (`tests/site-smoke.ts`).
+- **Docs corrections.** Getting started names the one runtime dependency (`quickjs-wasi`); the
+  security model lists patch writes among the protected-paths writes; Effort states the default
+  subagent depth of 1; Concepts points at the capability matrix for tiers; the website links the
+  Workflows guide.
 - **The docs no longer say a repeat verification FAIL starts nothing.** A repeat FAIL at a new
   revision returns the `split` steer at E3 and above; `docs/future-work.md` and
   `docs/recovery-orchestration-mode.md` now say so (`tests/docs-smoke.ts`,

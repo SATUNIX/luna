@@ -58,7 +58,8 @@ lower ones are solid.
 | **T3** | Long-horizon agent | Hold a goal and plan, persist state across context resets, isolate risky work, recover by evidence. | goal-core, task-graph, branch-lab, autonomous-loop |
 | **T4** | Self-improving specialist | Record and score runs, mine failures, curate skills, route hard jobs to a stronger reviewer. | trace-ledger, skill-forge, self-improvement |
 
-Each extension manifest declares a `tier`; `docs/EXTENSIONS.md` lists them.
+Each extension manifest declares a `tier`; the [capability matrix](capability-matrix.md) shows the
+tiers each profile reaches.
 
 ## Layers
 

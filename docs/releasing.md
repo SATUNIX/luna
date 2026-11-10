@@ -60,6 +60,29 @@ so it only gates and tags. The first release, the version already in `package.js
 tag exists, works the same way. `tests/release-plan-smoke.ts` covers each of these cases, and
 `tests/docs-smoke.ts` fails when a pin or the badge disagrees with `package.json`.
 
+### After the release pull request merges
+
+Tag the release in the same sitting as the merge. The tag is the release, and until it exists the
+version on `main` points at nothing: the install pins in the README and the docs name a tag that
+cannot be installed, and the website keeps naming the previous tag. Two releases (`0.2.4-beta.10`
+and `0.2.4-beta.11`) were merged this way and never tagged.
+
+```sh
+V=0.3.0-beta.1                               # the version that just merged
+git fetch --tags origin && git switch main && git pull --ff-only
+npm run release -- "$V"                      # gates, then tags the merged commit (local only)
+git push origin "v$V"                        # the release
+gh workflow run pages.yml --ref main         # redeploy the website so it names the new tag
+gh workflow run release.yml --ref "v$V"      # dry run; then again with -f dry-run=false
+```
+
+Then check that it landed:
+
+- `git ls-remote --tags origin "v$V"` prints the tag;
+- the website's install command names it (the pages build warns `Release tag missing` while it
+  does not);
+- the GitHub Release exists once the non-dry run finishes.
+
 Users on `latest` see a new release the next time `/update` checks (at most a day later, or
 straight away with `/update`). A tag is the release even if a later workflow fails: `/update`
 reads tags. If a release turns out wrong, fix it forward: release a new version with the fix,

@@ -1,6 +1,6 @@
 # Beta status
 
-Luna is in public beta (the `0.2.4-beta` releases). It is complete enough to install and use every
+Luna is in public beta (the `0.3.0-beta` releases). It is complete enough to install and use every
 day, and tested enough that we can say what has and has not been shown to work. It is not a stable
 release: interfaces such as the run contract and the approvals file are versioned but may still
 change in a later beta, and there are gaps in what has been verified. This page lists them

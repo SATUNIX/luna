@@ -12,17 +12,23 @@ illustrations and this documentation under `/docs/`. GitHub Pages serves it at
 | `/assets/luna-*.svg` | `docs/assets/luna-*.svg` | `packages/core/build-site.ts` (copied) |
 | `/docs/` | `docs/` and `mkdocs.yml` | `python -m mkdocs build --strict --site-dir _site/docs` |
 
-`build-site.ts` fills the page's `{{TAG}}` and `{{VERSION}}` placeholders from `package.json`, so
-the install command on the page names the current release and moves with it; an unknown or
-unfilled placeholder fails the build. It writes only into an empty output directory.
+`build-site.ts` fills the page's `{{TAG}}` and `{{VERSION}}` placeholders with the newest pushed
+`v*` tag that is merged into the built commit and not above the `package.json` version, so the
+install command on the page always names a tag that exists. A release branch bumps `package.json`
+before its tag can be pushed, so between that merge and the tag push the page keeps the previous
+release and the pages build prints a `Release tag missing` warning. Pushing the tag does not
+redeploy the site on its own; the release steps re-run the pages workflow
+([Releasing](releasing.md#after-the-release-pull-request-merges)). A checkout with no usable tag,
+or an unknown or unfilled placeholder, fails the build. It writes only into an empty output
+directory.
 
 The page runs no script. Its content security policy allows images and styles from the site itself,
 and the two typefaces (Archivo and Martian Mono) from Google Fonts; nothing else loads from another
 origin. The documentation uses the same tokens (`docs/assets/proof-docs.css`) and the same fonts,
 and loads no syntax highlighter.
 
-`tests/site-smoke.ts` pins this: it builds the site in memory, checks that every placeholder is
-filled with the `package.json` release, that the page has no script and every local link and image
+`tests/site-smoke.ts` pins this: it builds the site in memory, checks which tag the page names
+(the newest pushed one, with the pending release reported), that every placeholder is filled, that the page has no script and every local link and image
 resolves, and that the illustrations are current, script-free and within their size budget.
 
 ## Illustrations

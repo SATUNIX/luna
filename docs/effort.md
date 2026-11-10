@@ -74,7 +74,8 @@ recovery) asks the same **shared ledger** for a slot before it launches anything
 small file under `<agent dir>/pi-kit/effort/ledgers/`, updated under a lock, so:
 
 - the limits are **atomic**: two children asking at once cannot both take the last slot;
-- they hold **at every depth**: a child's own children, and theirs, draw from the same request
+- they hold **at every depth**: subagents nest one level by default (`PI_KIT_SUBAGENT_MAX_DEPTH`
+  is 1), and when that is raised a child's own children, and theirs, draw from the same request
   budget as the parent's, so delegation cannot multiply by nesting;
 - a **failed or retried child still counts**: nothing is refunded, so a retry loop cannot spend
   unbounded children;
@@ -94,7 +95,7 @@ sequenceDiagram
     Root->>Child: start, at this tier or lower
     Child->>Ledger: reserve a slot from the same request budget
     Ledger-->>Child: granted, or refused
-    Child->>Grand: start
+    Child->>Grand: start (only when PI_KIT_SUBAGENT_MAX_DEPTH allows it)
     Grand-->>Ledger: settle (no refund)
     Child-->>Ledger: settle (no refund)
 ```

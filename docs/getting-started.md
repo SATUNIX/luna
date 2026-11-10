@@ -22,7 +22,7 @@ Luna supports pi **0.85.1 and newer**; the version it is tested against is pinne
 ## 2. Install Luna
 
 ```sh
-pi install git:github.com/SATUNIX/luna@v0.3.0-beta.1
+pi install git:github.com/SATUNIX/luna@v0.3.0-beta.2
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna` and runs

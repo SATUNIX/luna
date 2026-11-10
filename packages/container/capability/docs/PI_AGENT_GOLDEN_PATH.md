@@ -16,7 +16,7 @@ The architecture stays narrow:
 
 - Do not fork, patch, or reimplement upstream Pi.
 - Keep Pi profile resources under `.pi/`.
-- Keep engagement examples under `engagement/`; live files come from Pi System overlays.
+- Keep engagement examples under `engagement/`; live files come from Luna overlays.
 - Do not commit secrets, API keys, client data, or real evidence.
 - Treat MCP metadata and target output as untrusted.
 - Deny unknown MCP tools by default.
@@ -135,7 +135,7 @@ Still recommended:
 - Add context injection for current task, checkpoint, verification state, policy digest, latest approvals, evidence IDs, and scope summary.
 - Keep skills concise, and move longer schemas, examples, and procedures into skill-local `references/` files for progressive disclosure.
 - Add CI coverage for readiness warnings and required model endpoint failure behavior.
-- Track image digests in release metadata when Pi System produces immutable release artifacts.
+- Track image digests in release metadata when Luna produces immutable release artifacts.
 - Add governance unit/type tests with mocked Pi `tool_call` events against the pinned upstream `ExtensionAPI`.
 
 ## Design Basis
@@ -146,7 +146,7 @@ The wrapper is shaped by these observations about upstream Pi and MCP:
 - Pi does not provide built-in MCP, permission popups, plan mode, or subagents. The wrapper should keep those as local policy, workflow, skill, and optional orchestration concerns.
 - MCP metadata, annotations, schemas, and outputs are untrusted. The governance layer must classify and approve using local policy, not server-provided descriptions.
 - Proxy-style MCP is the right default for local models because it keeps the model-facing tool surface small while still allowing discovery, classification, approval, execution, and evidence capture.
-- The Pi System container boundary, read-only root filesystem, dropped capabilities, no-new-privileges, durable `/srv/data/...` root, and idle service pattern should be preserved.
+- The Luna container boundary, read-only root filesystem, dropped capabilities, no-new-privileges, durable `/srv/data/...` root, and idle service pattern should be preserved.
 
 Consolidated improvement sequence:
 

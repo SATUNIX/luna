@@ -54,7 +54,7 @@ export interface SingleResult {
   errorMessage?: string | undefined;
   step?: number | undefined;
   logPath?: string | undefined;
-  // The run id (the log filename stem). Surfaced so the TUI, subagent_status, and the
+  // The run id (the log filename stem). Surfaced so the TUI, workflow_status and the
   // operator can reference a live run without re-deriving it from the log path.
   runId?: string | undefined;
   // True when the parent stopped waiting on a detached run; the child keeps working and
@@ -62,8 +62,8 @@ export interface SingleResult {
   detached?: boolean | undefined;
   // How many attempts were made (1 unless a transient failure was retried).
   attempts?: number | undefined;
-  // The child's final assistant text, kept unbounded so chain mode and success output get
-  // the full deliverable even though the stored message list is bounded for memory.
+  // The child's final assistant text, kept unbounded so a workflow step and the success output
+  // get the full deliverable even though the stored message list is bounded for memory.
   finalOutput?: string | undefined;
   // Only for a run started with a result schema: the StructuredOutput value the host validated
   // itself, or null when no attempt produced a valid one (structuredErrors says why).
@@ -110,8 +110,8 @@ export interface ToolContext {
   cwd?: string;
   hasUI?: boolean;
   ui?: {
-    confirm?(title: string, message: string): Promise<boolean>;
-    select?(title: string, options: string[]): Promise<string | undefined>;
+    confirm?(title: string, message: string, opts?: { timeout?: number; signal?: AbortSignal }): Promise<boolean>;
+    select?(title: string, options: string[], opts?: { timeout?: number; signal?: AbortSignal }): Promise<string | undefined>;
     notify?(message: string, level?: string): void;
     // Footer/status-bar text. The subagent tool uses this to show a live run summary
     // (agent, elapsed, last action, run id) for human oversight and debugging.

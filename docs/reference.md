@@ -4,7 +4,7 @@
 > `registerCommand` / `registerTool` calls in the extension sources. Do not hand-edit; run
 > `npm run catalog`. `npm run verify` fails when this page is stale.
 
-The kit's external interface: what an operator types, what the model can call, the environment
+Luna's external interface: what an operator types, what the model can call, the environment
 it reads and the files it is configured by. Which extensions a profile loads is in the
 [capability matrix](capability-matrix.md); each extension's purpose is in the
 [extension catalogue](EXTENSIONS.md). A command or tool exists only while its extension is loaded.
@@ -21,7 +21,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/auto` | `tool-firewall` | Auto mode: /auto [status\|on\|off\|explain [n]\|learned\|forget <sig>\|learn on\|off\|stats\|profile [rebuild\|reset]\|check <command>] | [autonomy-gate](autonomy-gate.md) |
 | `/auto-mode` | `tool-firewall` | Alias of /auto | [autonomy-gate](autonomy-gate.md) |
 | `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|boundary\|reconfigure. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
-| `/boost` | `progress-guard` | Auto-boost control: /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
+| `/boost` | `progress-guard` | Auto-boost control: /boost reassesses now; /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |
 | `/caveman` | `caveman` | Toggle/set output compression: /caveman [on\|off\|lite\|full\|ultra\|micro\|status] | [control-center](control-center.md) |
 | `/clear` | `session-helpers` | How to reset context (pi has no native /clear). Non-destructive: prints guidance only. | [control-center](control-center.md) |
@@ -49,27 +49,23 @@ describes. Commands are for the operator: the model cannot call them.
 | `/pentest:reload-policy` | `pentest-governance-domain` | Reload pentest policy metadata and scope/ROE files from disk immediately | [security](security.md) |
 | `/pentest:status` | `pentest-governance-domain` | Show pentest data-root and governance status | [security](security.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
-| `/profile` | `session-helpers` | Switch the pi-kit profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
-| `/recover` | `recovery-orchestrator` | Manually trigger recovery-orchestration for the current stuck state (/recover [signature]). | [recovery-orchestration-mode](recovery-orchestration-mode.md) |
-| `/reflect` | `progress-guard` | Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?). | [efficiency-and-loops](efficiency-and-loops.md) |
+| `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
 | `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [control-center](control-center.md) |
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
 | `/security` | `tool-firewall` | /security [off\|relaxed\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
 | `/skills` | `skill-router` | List installed skills: which are listed in the prompt, which are on-demand (skill_search / hints), and their triggers. | [control-center](control-center.md) |
-| `/subagent-stop` | `subagent` | Stop running subagents (safety). /subagent-stop [<id>\|all]; no args lists running runs. | [agent-orchestration](agent-orchestration.md) |
-| `/subagents` | `subagent` | Check in on subagents: running and recent runs with log paths. /subagents [limit] | [agent-orchestration](agent-orchestration.md) |
 | `/tips` | `custom-footer` | Show or hide usage tips while the agent works: /tips on\|off | [control-center](control-center.md) |
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
-| `/update` | `kit-update` | Check for and apply updates to pi, the pi-system kit (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
-| `/workflow` | `subagent` | Workflows: /workflow list \| run <name> key=value… \| status [id] \| resume <id> \| pause <id> \| skip <id> \| stop <id> | [workflows](workflows.md) |
-| `/workflows` | `subagent` | Workflow runs panel: /workflows [run-id] (header, phases, agents, narrator; k skip · x stop · p pause · s save) | [workflows](workflows.md) |
+| `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
+| `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
 ## Tools
 
@@ -270,7 +266,7 @@ Extension `skill-forge`. Archive a superseded skill proposal or skill into .pi/s
 
 ### `skill_score`
 
-Extension `skill-forge`. Score the kit against its own eval harness (real, eval-tied number) as the skill's regression baseline.
+Extension `skill-forge`. Score Luna against its own eval harness (real, eval-tied number) as the skill's regression baseline.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -297,25 +293,13 @@ Extension `skill-forge`. Mine the trace-ledger and synthesise a candidate SKILL.
 
 ### `StructuredOutput`
 
-Extension `subagent`. No description.
+Extension `subagent`. Return your final result. Call this exactly once, when the work is done, with {"…": <result>} where <result> matches the schema of the "…" parameter. A rejected call lists what to fix.
 
 Parameters: built from a shared schema; see the extension source.
 
 ### `subagent`
 
-Extension `subagent`. Delegate tasks to specialized subagents with isolated context. Modes: single (agent+task), parallel (tasks array), chain (sequential with {previous} placeholder). Built-in roles: scout, planner, implementer, reviewer, delegator (plus ~/.pi/agent/agents). A subagent cannot see this conversation: make each task self-contained. Esc cancels running subagents; background: true detaches long work. Only a delegator role may delegate further (depth limit PI_KIT_SUBAGENT_MAX_DEPTH, default 2).
-
-Parameters: built from a shared schema; see the extension source.
-
-### `subagent_status`
-
-Extension `subagent`. List recent subagent runs (status, agent, duration, log path) from .pi/subagent/runs.jsonl, or tail one run's log. Use this to see live progress (`tail -f` the log path) and to recover results after a child was killed or a parent abort.
-
-Parameters: built from a shared schema; see the extension source.
-
-### `subagent_stop`
-
-Extension `subagent`. Safety kill switch for subagents. With no id and all unset, lists running runs; with id, stops that run; with all=true, stops every running run. Stops in-process children and orphaned children recorded in the run registry.
+Extension `subagent`. Delegate to subagents with isolated context: one agent+task, or parallel tasks. Roles: scout, planner, implementer, reviewer, plus ~/.pi/agent/agents. A subagent cannot see this conversation: make each task self-contained; background detaches long work.
 
 Parameters: built from a shared schema; see the extension source.
 
@@ -394,42 +378,46 @@ Extension `verify-gate`. Run an independent check that the task is done. It runs
 
 ### `workflow`
 
-Extension `subagent`. Run a JavaScript workflow script in the background: deterministic multi-agent orchestration with agent(), parallel(), pipeline(), phase(), log(), args, budget and workflow(). Pass exactly one of script (inline source starting with `export const meta = {name, description, phases}`), scriptPath (a script saved by an earlier run, or in a workflow directory) or name (a registered script workflow). Returns runId, scriptPath and transcriptDir at once; the result arrives later as a follow-up message. Resume an interrupted run with {scriptPath, resumeFromRunId}; to change the script, pass the edited source as script with resumeFromRunId (a rewritten run script needs the operator's approval). Only use it when the user asked for a workflow or multi-agent orchestration.
+Extension `subagent`. Run a JavaScript workflow script in the background (deterministic orchestration: agent(), parallel(), pipeline(), phase(), log(), args, budget, workflow()). Pass exactly one of script (inline, starting `export const meta = {name, description, phases}`), scriptPath or name (registered). Returns runId and scriptPath at once; the result follows as a message. Resume with {scriptPath or edited script, resumeFromRunId}; an edited script needs operator approval.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `script?` | string | Inline workflow script (plain JavaScript, starting with export const meta = {...}) |
-| `scriptPath?` | string | Path of a workflow script: one an earlier run saved, or one in a workflow directory |
-| `name?` | string | Name of a registered script workflow |
-| `args?` | unknown | Value passed to the script as `args` (a JSON value, not a JSON-encoded string) |
-| `resumeFromRunId?` | string | Run id whose journal's unchanged prefix of agent() calls is reused |
+| `script?` | string | Inline script (plain JavaScript) |
+| `scriptPath?` | string | A saved run script or workflow-directory script |
+| `name?` | string | Registered script workflow |
+| `args?` | unknown | The script's `args`: a JSON value, not a string |
+| `resumeFromRunId?` | string | Run whose unchanged agent() prefix is reused |
 
 ### `workflow_control`
 
-Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (stop its agents; the run ends interrupted and can be resumed with workflow_run {resume}), or skip (stop the agents running now, record their steps as skipped, and go on).
+Extension `subagent`. Control a live workflow run in this session: pause (start no new agents; running ones finish), resume (unpause; a pause the console's safety stop set yields only to the operator), stop (a live run's agents stop and it ends interrupted, resumable with workflow_run {resume}; a background subagent run id stops that child; all stops every live run and every background subagent, orphans included), or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).
 
 | Parameter | Type | Description |
 |---|---|---|
-| `runId` | string | The live run's id (workflow_status lists active runs) |
+| `runId?` | string | The live run's id, or a background subagent run id (workflow_status lists both) |
 | `action` | union | — |
+| `all?` | boolean | With action "stop": stop every live workflow run and every background subagent, orphans included |
 
 ### `workflow_run`
 
-Extension `subagent`. Run a saved workflow: a deterministic chain of subagent/skill steps with a shared run directory, review gates and resume. Use name "list" to see available workflows and their inputs. Prefer a matching workflow over hand-building subagent chains.
+Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `name` | string | Workflow name, or "list" |
-| `inputs?` | record | Workflow inputs, e.g. {goal: "..."} |
-| `resume?` | string | Run id to resume instead of starting a new run |
+| `name?` | string | Saved workflow name, or "list" |
+| `steps?` | unknown[] | The plan's steps |
+| `inputs?` | record | Inputs, e.g. {goal: "..."} |
+| `resume?` | string | Run id to resume |
 
 ### `workflow_status`
 
-Extension `subagent`. Show recent workflow runs, or one run's step-by-step state (with id).
+Extension `subagent`. List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `id?` | string | — |
+| `id?` | string | One run's id; without it, the newest runs of every format |
+| `limit?` | number | How many runs to list (default 20, max 100) |
+| `tail?` | number | Lines of a background subagent's log to show with id (default 40) |
 
 ## Environment variables
 
@@ -485,6 +473,7 @@ absolute or relative to the working directory.
 | `PI_KIT_EFFORT_CONFIG` | `effort` | Saved effort default and limit overrides ([Effort](effort.md)) (default `<agent dir>/pi-kit/effort.json`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_EFFORT_LEDGER` | `effort` | — | — |
 | `PI_KIT_EFFORT_POLICY_DIR` | `effort` | — | — |
+| `PI_KIT_EFFORT_PROMPT` | `effort` | — | — |
 | `PI_KIT_EMBED_MODEL` | `memory-local` | — | — |
 | `PI_KIT_EXTENSIONS_ROOT` | `delegation-guard` | — | — |
 | `PI_KIT_FIREWALL_APPROVALS` | `secret-guard`, `tool-firewall`, `protected-paths` | Where remembered approvals are stored ([Security](security.md)) (default `<agent dir>/pi-kit/firewall-approvals.json`) | [INSTALL](INSTALL.md#environment-variables) |
@@ -553,7 +542,7 @@ absolute or relative to the working directory.
 | `PI_KIT_SUBAGENT_HEARTBEAT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_INHERIT_MODEL` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_SUBAGENT_MAX_DEPTH` | `subagent` | — | [script-workflows](script-workflows.md) |
+| `PI_KIT_SUBAGENT_MAX_DEPTH` | `subagent` | — | [effort](effort.md) |
 | `PI_KIT_SUBAGENT_MAX_RUNTIME_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_RETRIES` | `subagent` | — | — |
 | `PI_KIT_SUBAGENT_RETRY_BACKOFF_MS` | `subagent` | — | — |
@@ -579,6 +568,7 @@ absolute or relative to the working directory.
 | `PI_KIT_WEBUI_ROOT` | `remote-control`, `web-console` | — | [remote-control](remote-control.md) |
 | `PI_KIT_WORKFLOWS_DIR` | `subagent` | — | — |
 | `PI_KIT_WORKFLOW_RUN_ID` | `tool-firewall`, `subagent` | — | [script-workflows](script-workflows.md) |
+| `PI_KIT_WORKFLOW_STEP` | `tool-firewall`, `subagent` | — | — |
 | `PI_KIT_WRITE_ALLOWLIST` | `protected-paths` | Semicolon-separated allowlist; blocks writes outside it (dream/print mode) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_LENS_DISABLE_LSP_INSTALL` | `tool-firewall` | — | [supply-chain](supply-chain.md) |
 | `PI_LENS_DISABLE_TOOL_INSTALL` | `tool-firewall` | — | [supply-chain](supply-chain.md) |
@@ -598,7 +588,7 @@ absolute or relative to the working directory.
 |---|---|---|
 | `packages/kit/profiles/<name>.json` | A profile: which extensions, skills and prompts load, and the firewall mode | [profiles](profiles.md) |
 | `packages/extensions/src/tool-firewall/default-policy.json` | The shipped firewall policy (a custom one is named by `PI_KIT_FIREWALL_POLICY`) | [security](security.md) |
-| `packages/core/.env.example` | Every environment variable the kit reads, with defaults | [INSTALL](INSTALL.md#environment-variables) |
+| `packages/core/.env.example` | Every environment variable Luna reads, with defaults | [INSTALL](INSTALL.md#environment-variables) |
 
 ### JSON schemas
 

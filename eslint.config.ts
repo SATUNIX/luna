@@ -142,12 +142,11 @@ const RAW_WRITE_ALLOWED: Readonly<Record<string, string>> = {
   "packages/extensions/src/human-console/console-auth.ts": "the console answer key in the agent directory: created exclusive (wx, 0600) in a 0700 directory and linked into place; a linked, foreign or open key path is refused when loaded",
   "packages/extensions/src/pentest-governance-domain/console-auth.ts": "byte-identical copy of the console answer-key module (see human-console/console-auth.ts)",
   "packages/extensions/src/tool-firewall/console-auth.ts": "byte-identical copy of the console answer-key module (see human-console/console-auth.ts)",
-  // Known gap: the human-console request directory defaults to <workspace>/.pi/human-console and is
-  // still written with raw APIs; it is still to move to the safe-write helper. Answers are signed
-  // (console-auth.ts), so a planted answer file cannot approve, but a committed link can still
-  // redirect where a request is written (docs/security.md, "Workspace file writes", Not covered).
-  "packages/extensions/src/human-console/index.ts": "KNOWN GAP: human-console request, resolution and audit files (see the note above)",
-  "packages/extensions/src/tool-firewall/index.ts": "KNOWN GAP: the human-console approval request it files (see the note above); the audit log and /auto state use the helper",
+  // Known gap: packages/extensions/src/pentest-governance-domain/index.ts still files its
+  // human-console approval request with raw APIs; it is still to move to the safe-write helper.
+  // Answers are signed (console-auth.ts), so a planted answer file cannot approve, but a committed
+  // link can still redirect where a request is written (docs/security.md, "Workspace file writes",
+  // Not covered).
   "packages/extensions/src/pentest-governance-domain/index.ts": "KNOWN GAP: the human-console approval request it files (see the note above); the evidence ledger uses the helper",
 };
 

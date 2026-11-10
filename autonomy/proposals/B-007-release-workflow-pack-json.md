@@ -1,7 +1,11 @@
 # Proposal B-007 — fix the release workflow's `npm pack --json` parsing for npm 12
 
-Status: proposal. Needs an operator decision; an autonomous improvement cycle may not edit a
-release or publish pipeline (`autonomy/CHARTER.md`, "Out of bounds").
+Status: closed in the backlog (B-007, `dropped`) and handed to the operator. The release workflow is
+operator-owned: the charter puts release pipelines out of bounds for an agent cycle, and the path is
+protected for agents in this sandbox. The proposal keeps the finding, evidence and patch; no in-repo
+check executes that parser (`grep -rn "pack.json" tests packages/core` returns nothing), so an
+agent cannot verify a change. This status records neither a fix nor a confirmation that the workflow
+is still broken.
 
 ## Finding
 

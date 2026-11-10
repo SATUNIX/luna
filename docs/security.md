@@ -1,12 +1,12 @@
 # Security model
 
-This page states what the pi-system safety boundary **guarantees** and, just as important, what it
+This page states what Luna's safety boundary **guarantees** and, just as important, what it
 **does not**. It is a default-deny **guard rail**, not a sandbox. The reporting process is in
 `SECURITY.md` at the repository root.
 
 What the boundary protects, from whom, is in the [Threat model](threat-model.md); every control,
 with its code, test and CI job, is in [Security controls](security-controls.md); the rules a
-change to the kit follows are in the [Secure development standard](security-standard.md). What to
+change to Luna follows are in the [Secure development standard](security-standard.md). What to
 do when something goes wrong is in [Incident response](incident-response.md).
 
 The [Security level](security-level.md) control adjusts implemented firewall approval mechanisms,
@@ -80,9 +80,11 @@ engagement is configured (both `engagement/scope.yaml` and `engagement/roe.yaml`
 complete). Set `PI_ALLOW_DIRECT_TOOLS=1` to force-allow direct tools mid-engagement (operator
 override, still audited), or `=0` to force MCP-only lockdown without a configured engagement.
 
-The kit's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
-`record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools) are exempt
-from MCP-only mode: they do not touch a pentest target and are already gated by `tool-firewall`.
+Luna's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
+`record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools, plus
+`workflow_status` and the `pause` and `stop` actions of `workflow_control`) are exempt from MCP-only
+mode: they do not touch a pentest target and are already gated by `tool-firewall`. The `resume` and
+`skip` actions let a run go on, so they stay blocked.
 
 ### Pentest commands
 
@@ -135,9 +137,28 @@ are pinned by `tests/governance-smoke.ts`.
    say-so.** A high action runs without the operator only as an exact repeat of an approval you
    gave. A judge block whose confidence is not high goes to the operator rather than being final,
    and an unsure judge never becomes an allow.
-6. **Nothing waits forever.** An approval card, the human console and the judge all have
-   timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
-   `UNCERTAIN` and nothing runs. Aborting ends every wait.
+6. **Nothing waits forever unattended.** An approval card, the human console and the judge all
+   have timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
+   `UNCERTAIN` and nothing runs. While an overlay you opened (the hub or the workflow panel) is
+   open, every prompt an agent can raise on its own waits for you to close it, with one notice: a
+   firewall approval, session or brokered; a pentest action approval; an `ask_human` question; the
+   trust prompts for project-local agents, specialists and project workflows; the resume prompt for
+   interrupted writer steps; the reduced-sandbox prompt; the wake-chain question; and the question
+   that resumes a paused workflow run. The wait and the card share one timeout, so an overlay left
+   open ends the request as an unanswered card would, and a card shown after a wait gets only the
+   time left, which pi uses to dismiss it. A brokered child request is deferred and keeps its console
+   timeout, so it can expire behind the overlay and fail closed. Aborting a turn ends that turn's wait,
+   and a pentest action asks scope and RoE again after the wait and after your Yes. A reload or the
+   end of a session drops the hold, because pi removes an overlay without settling it
+   (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,
+   `tests/governance-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`,
+   `tests/workflow-control-smoke.ts`). Four kinds of prompt are not held, and no test pins that: the
+   prompts of a command you typed, which you start from the editor rather than an overlay (`/update`,
+   `/profile`, `/effort` and the like); the
+   checks pi runs on your own `/new`, `/resume` and `/fork` (uncommitted files, restoring a
+   checkpoint); `/remote pair`, whose card follows the waiting dialog you opened and whose approval
+   needs four typed characters; and the "tell the agent why" note, which follows a card you
+   have just answered and approves nothing.
 7. **Every child agent is at least as protected as its parent.** `delegation-guard` starts a child
    only with the protections the parent registered; inside the child it checks that they loaded
    and otherwise blocks every tool and exits with code 78. This applies to grandchildren and to
@@ -225,7 +246,9 @@ are pinned by `tests/governance-smoke.ts`.
     `$PI_CODING_AGENT_DIR`, a relative target after `cd`, clone, pull and checkout targets, `tar -C`,
     `unzip -d` and `rsync` destinations, links, plain shell commands that create, empty, delete or
     re-permission a protected file (`touch`, `truncate`, `rm`, `unlink`, `chmod`, `chown`, `chgrp`)
-    as well as redirection, `tee` and `cp`/`mv` destinations, and the literal and listed inline
+    as well as redirection, `tee` and `cp`/`mv` destinations, every file a patch applied with
+    `git apply`, `git am` or `patch` names (rename and copy lines included, at any strip level; a
+    patch it cannot read is refused), and the literal and listed inline
     spellings above; `tests/protected-paths-corpus-smoke.ts` runs one corpus against both.
     On top of those spellings, both layers apply one coarse, fail-closed rule, kept as generated,
     byte-checked copies of `packages/core/shared/inline-guard.ts`. It applies when a command runs an
@@ -336,14 +359,14 @@ are pinned by `tests/governance-smoke.ts`.
   the pentest governance layer's job (scope and rules of engagement), and in unattended runs the
   container's network is the stop, because package-manager and opaque-tool traffic cannot be
   attributed to a host.
-- **The kit's own sources are ordinary files in a kit checkout.** When the workspace is a source
-  checkout of this kit (for example the one a live install was made from), an agent edit to
+- **Luna's own sources are ordinary files in a kit checkout.** When the workspace is a source
+  checkout of Luna (for example the one a live install was made from), an agent edit to
   `packages/extensions/src/tool-firewall/`, `packages/extensions/third_party/protected-paths/` or
   `packages/extensions/src/secret-guard/` is classed like any other source edit (low); only
   `tool-firewall/default-policy.json` is a safety control among them
   (`tests/firewall-shell-smoke.ts`). If pi loads the extensions from that checkout, review such
   diffs before the next session.
-- **Companion tools outside the kit's classification.** A pi package that registers its own shell
+- **Companion tools outside Luna's classification.** A pi package that registers its own shell
   or edit tools (for example the optional `pi-lean-ctx`) needs an exact policy entry or operator
   approval. Shell-looking fields are also analysed, but cannot authorise an unknown tool's
   other effects. `secret-guard` matches the built-in tool names. An explicitly allowed external
@@ -373,9 +396,9 @@ are pinned by `tests/governance-smoke.ts`.
 
 ## Workspace file writes
 
-A cloned repository is untrusted content, and git stores symbolic links, so any path the kit
+A cloned repository is untrusted content, and git stores symbolic links, so any path Luna
 writes under a workspace (`<workspace>/.pi/...`, `AGENTS.md`, `TODO.md`) may be a committed link to
-a file elsewhere. The kit's own state writes go through one helper, `packages/core/shared/safe-fs.ts`,
+a file elsewhere. Luna's own state writes go through one helper, `packages/core/shared/safe-fs.ts`,
 copied into each extension that writes (`npm run gen:shared`; `npm run verify` fails when a copy
 differs). For a write under the workspace it:
 
@@ -388,7 +411,7 @@ differs). For a write under the workspace it:
   renamed over it, keeping the old file's mode, and creates new files with mode 0600.
 
 The writers that use it include the trace ledger, the firewall audit log, `/auto`, goal-core,
-task-graph, verifier-board and verify-gate, `/recover`, self-improvement's `AGENTS.md` edits,
+task-graph, verifier-board and verify-gate, recovery-orchestrator, self-improvement's `AGENTS.md` edits,
 `/save`, todo, the conductor, context-sieve, the workflow run files and the caveman and plan-mode
 contributions. `tests/workspace-symlink-smoke.ts` plants a link at each state file, and `.pi` as a
 link to a directory, drives those writers through their real entry points, and checks that nothing
@@ -413,12 +436,14 @@ Not covered:
 - On Windows `O_NOFOLLOW` and the owner check do not exist; the `lstat` checks still run.
 - A path the operator sets (for example `PI_KIT_FIREWALL_AUDIT_LOG` or
   `PI_KIT_BRANCH_LEASES_FILE`) is trusted: only its final name is checked.
-- The human console's request files are still written with plain `fs` calls, and are on the ESLint
-  allowlist as a known gap.
+- The `pentest-governance-domain` extension's human-console approval request is still written
+  with plain `fs` calls, and that file is on the ESLint allowlist as a known gap. Answers are
+  signed, so a planted answer file cannot approve, but a committed link can still redirect where
+  a request is written.
 
-## The kit installer and install markers
+## The Luna installer and install markers
 
-`/profile` and the first-run auto-profile run the kit's installer
+`/profile` and the first-run auto-profile run Luna's installer
 (`node <kit root>/packages/core/install.ts`). A project install keeps its marker in
 `.pi/.pi-kit.json`, which a cloned repository can commit, so the marker never chooses where that
 installer comes from. The kit root is `PI_KIT_ROOT` when set, otherwise the marker's `kitSource`
@@ -446,7 +471,7 @@ operator's own marker names is trusted.
 
 ## Redaction
 
-Text the kit stores or sends to a memory service passes through one secret-redaction table,
+Text Luna stores or sends to a memory service passes through one secret-redaction table,
 `packages/core/shared/redact.ts`, copied byte for byte into each consumer: the memory vault,
 `/save` snapshots, the firewall's feedback records, autonomy notebooks, workflow run files (on top
 of their own rules), role-runner telemetry and memories sent to mem0. It replaces private keys,
@@ -477,7 +502,7 @@ skill triggers.
 
 ## Decisions and their compensating controls
 
-Some behaviour is an operator decision rather than a default the kit would otherwise choose. Each
+Some behaviour is an operator decision rather than a default Luna would otherwise choose. Each
 is recorded with its risk and the controls that compensate for it.
 
 | Decision | Risk | Compensating controls | Record |

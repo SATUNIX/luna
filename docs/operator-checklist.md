@@ -36,6 +36,9 @@ round.
 - [ ] **The `npm` environment**, before any npm publication: a required reviewer and a deployment
   policy for `v*` tags (`environments.npm`). Bind the npm trusted publisher to it
   ([Releasing](releasing.md#npm-publication-optional)).
+- [ ] **GitHub Pages**, for the website: Settings → Pages → Source: GitHub Actions. This creates the
+  `github-pages` environment; keep its deployment branch rule to `main` only
+  (`environments.github-pages`, [Website](website.md#deployment)).
 - [ ] **Bot and App identities**: each has only the permissions its job needs, is not a bypass
   actor, and cannot approve pull requests. Agents push as such an identity, never as the owner.
 - [ ] **Stray branches**: review and delete branches nobody owns.

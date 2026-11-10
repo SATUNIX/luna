@@ -74,7 +74,8 @@ recovery) asks the same **shared ledger** for a slot before it launches anything
 small file under `<agent dir>/pi-kit/effort/ledgers/`, updated under a lock, so:
 
 - the limits are **atomic**: two children asking at once cannot both take the last slot;
-- they hold **at every depth**: a child's own children, and theirs, draw from the same request
+- they hold **at every depth**: subagents nest one level by default (`PI_KIT_SUBAGENT_MAX_DEPTH`
+  is 1), and when that is raised a child's own children, and theirs, draw from the same request
   budget as the parent's, so delegation cannot multiply by nesting;
 - a **failed or retried child still counts**: nothing is refunded, so a retry loop cannot spend
   unbounded children;
@@ -94,14 +95,16 @@ sequenceDiagram
     Root->>Child: start, at this tier or lower
     Child->>Ledger: reserve a slot from the same request budget
     Ledger-->>Child: granted, or refused
-    Child->>Grand: start
+    Child->>Grand: start (only when PI_KIT_SUBAGENT_MAX_DEPTH allows it)
     Grand-->>Ledger: settle (no refund)
     Child-->>Ledger: settle (no refund)
 ```
 
-At **E1** the model-launchable delegation tools are not even offered (their descriptions cost
-around 850 tokens a turn and could only be refused); they return at the next message after a
-higher tier is chosen.
+At **E1** the model-launchable delegation tools (`subagent`, `workflow_run`, `workflow`,
+`dual_review` and `dispatch_specialist`) are not even offered: their descriptions cost around 1,200
+tokens a turn and they could only be refused. They return at the next message after a higher tier is
+chosen. Recovery brings them back at E1 too, except `workflow` and `workflow_run`, which a run scope
+always refuses there (`tests/effort-smoke.ts`).
 
 Three kinds of launch are accounted separately from the discretionary budget above:
 
@@ -130,9 +133,9 @@ specialists (`tests/conductor-specialist-bounds-smoke.ts`).
 ## Script workflows
 
 The ledger also has a **workflow** launch kind for the agents of a
-[script-workflow](script-workflows.md) run: every agent the `workflow` tool starts is charged here,
-through delegation-guard with the run id and token. Its limits live in the
-`workflow` block of `effort.json`:
+[script-workflow](script-workflows.md) run and of a YAML workflow the model starts with `workflow_run`:
+every such agent is charged here, through delegation-guard with the run id and token. Its limits live
+in the `workflow` block of `effort.json`:
 
 | Limit | Default | Bounds |
 |---|---:|---|
@@ -145,7 +148,9 @@ run token, and every reservation for the run must carry the run id and that toke
 the token is written to disk. The scope lives in the session's workflow ledger
 (`<agent dir>/pi-kit/effort/ledgers/<session>-workflows.json`), a separate file that the per-turn
 ledger rotation never replaces, so a run that keeps going across your messages keeps its count. A
-run id is opened once; child processes cannot open runs. The workflow ledger is created only when
+run id is opened once; child processes cannot open runs, and a tier with no delegation (E1, or any
+tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflow run` stays available there
+as a user launch (`tests/effort-smoke.ts`). The workflow ledger is created only when
 no file exists there. An existing file that cannot be read, or that has no workflow section, is
 never replaced: opening a run and reserving both refuse with code `no-ledger`, so a corrupt or
 edited file cannot reset the session's count. Workflow agents never draw on the tier
@@ -159,6 +164,48 @@ or wrong token, a used-up run, a used-up session, an unreadable ledger) throws a
 (`packages/extensions/src/effort/policy.ts` and `packages/core/lib/effort.ts`) read and validate
 the block the same way. Tests: `tests/workflow-ledger-smoke.ts` (`npm run smoke:workflow-ledger`)
 and `tests/effort-smoke.ts` (`npm run smoke:effort`, the parity check).
+
+### Plan allowance
+
+The model starting a YAML workflow is charged before anything launches. Each tier has a
+`workflowAgents` allowance, the agents such runs may plan in one user request:
+
+| E1 | E2 | E3 | E4 | E5 |
+|---:|---:|---:|---:|---:|
+| 0 | 1 | 8 | 16 | 64 |
+
+A `maxTotal` you set for a tier lowers its allowance when it is the smaller number, and never raises
+it: a tier whose allowance is 0 refuses a plan with code `plan-allowance`, even if you let it
+delegate. A custom policy that leaves out `workflowAgents` still loads, and plans nothing at that
+tier until you add it (`tests/effort-smoke.ts`).
+
+`openRunScope(runId, {planned})` charges the run's worst case (its steps, plus every gated segment
+at its full `max_loops`) against the allowance. A plan that does not fit is refused with code
+`plan-allowance` and starts nothing, and the reason names `/effort`. The charge is never refunded,
+so a run that passes its gate first time still spends its worst case. It survives the per-turn
+ledger rotation and a reload: a workflow's completion message starting a turn does not refresh it,
+and only a user message does: yours, or one an extension sends on your behalf, which includes the
+resume after an automatic compaction interrupts a run. The allowance also caps each planned run, so
+the run's limit is the lower of the allowance and `workflowTotalPerRun`. A transient retry is an agent like any other,
+so a run planned at exactly its tier's allowance can use up its cap on its last gate loop.
+
+The allowance bounds what starts as well as what is planned. Every agent a planned run starts,
+retries included, counts against it, so at E3 eight one-step plans that each retry once start 8
+agents, not 16. An agent over that is refused with code `plan-allowance`, which names how many have
+started; a plan is refused the same way before it launches anything once the request has started its
+allowance. A user message renews this count with the rest of the allowance, and the session total
+still applies (`tests/effort-smoke.ts`).
+
+**The cost.** Plans are additive to the discretionary budget: at E3 a request can start the 3
+children of the `subagent` tool and 8 planned workflow agents. Those 8 run at E1, cannot delegate,
+and run at most the tier's `maxConcurrent` at once. E1 sets only what they may start. Their prompt
+reads at the session's tier, or lower when the step's role sets `effort:`, as the same workflow typed
+with `/workflow` would, with a line saying the step cannot start other agents (`tests/effort-smoke.ts`).
+Their thinking level does not change (`tests/delegation-guard-smoke.ts`).
+
+A script is different: the `workflow` tool stays behind the firewall's ask, so an approved script
+opens its scope with no `planned`, is charged nothing here and keeps `workflowTotalPerRun`.
+Tests: `tests/effort-smoke.ts`, `tests/workflow-builtin-smoke.ts`.
 
 ## Memento mode
 
@@ -253,9 +300,10 @@ each `workflow` call is asked until you answer Yes to `/effort ultracode` again.
 
 - **Prompt.** While the `workflow` tool is in the active tool set, `policy/standing.md`, with the
   size guideline and the budget filled in, is added inside the one effort block, and each turn
-  carries a one-line hidden reminder message. The effort extension injects these itself, as it
-  does its tier text: this is the one exception to context-sieve being the only injector of
-  turn guidance.
+  carries a hidden reminder message, which may also carry the workflow card (see
+  [Decision policy](#decision-policy)). The effort extension injects these itself, as it does its
+  tier text: the standing text, the plan sentence and the card are effort's one exception to
+  context-sieve being the only injector of turn guidance.
 - **Size** is a soft guideline in the prompt; nothing enforces it. The engine's own limits (1000
   agents a run, the [workflow ledger](#script-workflows)) still apply.
 - **Budget** becomes `budget.total` of every run the `workflow` tool starts while standing mode is
@@ -277,6 +325,35 @@ Tests: `tests/effort-standing-smoke.ts` (`npm run smoke:effort-standing`).
 
 Not covered: the hidden reminder is one more message in the session for every turn while standing
 mode is on, and the wake-chain cap applies only while standing mode is on.
+
+## Decision policy
+
+One pure function, `decide` in `src/effort/strategy.ts`, chooses what a stall, a large task or a
+large diff turns into. A move only chooses words: it never changes a tool set, a firewall decision
+or a tier. Effort supplies the tier and the tool activity, never the caller, and a child always
+gets no move.
+
+The numbers are the `strategy` block of `policy/effort.json`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `planMinTier` | 5 | Level from which each user message is told to plan. |
+| `splitMinTier` | 3 | Level from which a task is shaped as a plan: a directive names `workflow_run`, a repeated stall or FAIL becomes a split, and a large diff suggests `review-changes`. |
+| `delegateScore` | 3 | Complexity score that earns a directive. `PI_KIT_ORCH_THRESHOLD` overrides it. |
+| `reviewLines` | 400 | Changed lines of a large diff. |
+| `stallAfter` | 2 | Detections of one signal before recovery is called. `PI_KIT_GUARD_ESCALATE` overrides it. |
+| `quietTurns` | 20 | Turns without a signature after which its attempts clear. |
+| `maxAttempts` | 2 | Recovery attempts before the operator is called. `PI_KIT_RECOVERY_MAX_ATTEMPTS` overrides it. |
+| `expandDepth` | 3 | Generations of expansion one inline plan may reach. |
+
+- **Plan sentence.** At level 5, or in standing mode, with `workflow_run` active, each user message
+  adds one sentence to the effort block telling the agent to run substantial work as a plan.
+- **Workflow card.** A short guide to `workflow_run`, sent with the first move that asks for it (a
+  plan or a split). It is shown once per epoch: `session_start` and `session_compact` each start a
+  new one. It is never shown in a child. It goes out as one hidden message, joined to the standing
+  reminder when there is one.
+
+Tests: `tests/workflow-strategy-smoke.ts` (`npm run smoke:workflow-strategy`).
 
 ## Autonomous runs
 

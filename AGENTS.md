@@ -1,7 +1,7 @@
-# pi-system: instructions for the agent
+# Luna: instructions for the agent
 
 This file is loaded by pi as project context whenever pi runs in this repository, or in a project
-that copies it. It tells the agent how to install and use the kit. The full guide for developing
+that copies it. It tells the agent how to install and use Luna. The full guide for developing
 this repository is `CLAUDE.md`, but pi loads only the first context file it finds in a directory
 (`AGENTS.override.md`, `AGENTS.md`, then `CLAUDE.md`; pi's resource loader, which no test here
 pins), so it never loads `CLAUDE.md` here. The
@@ -18,7 +18,7 @@ vendored `third_party/`), `packages/kit/` (skills, prompts, profiles, themes, ag
 Users install a release from the public repository (see `docs/INSTALL.md`):
 
 ```sh
-pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.3.0-beta.2
 ```
 
 The first interactive start applies the `balanced` profile and asks for `/reload`. To choose a
@@ -59,7 +59,7 @@ tag; if none exists yet, use `--channel next`.
 
 ## Subagent roles and workflows
 
-The built-in roles (`delegator`, `planner`, `implementer`, `reviewer`, `scout`) come from
+The built-in roles (`implementer`, `planner`, `reviewer`, `scout`) come from
 `packages/kit/agents/`. Customise one by copying it to `~/.pi/agent/agents/`; project `.pi/agents/`
 files apply only with `agentScope: "project"` or `"both"`. Saved multi-step flows live in
 `packages/kit/workflows/`. Every child runs under the same governance as its parent; see

@@ -408,7 +408,8 @@ try {
     const spy = { cwd: ws, hasUI: true, sessionManager: { getSessionId: () => "O3" }, signal: new AbortController().signal, ui: { notify() {}, select: async (_t: string, _o: string[], o: DialogOptions) => ((opts = o), "Deny") } };
     await bash(pi, MEDIUM, spy);
     if (!opts) throw new Error("ui.select was never called");
-    assert.equal(opts.timeout, 150);
+    // What remains of the 150 ms deadline when the card opens, so a loaded machine sees a little less.
+    assert.ok(opts.timeout !== undefined && opts.timeout > 0 && opts.timeout <= 150, `dialog timeout ${String(opts.timeout)}`);
     assert.equal(opts.signal, spy.signal);
     // A UI that throws: UNCERTAIN, not a crash.
     const boom = { cwd: ws, hasUI: true, sessionManager: { getSessionId: () => "O3" }, ui: { notify() {}, select: async () => { throw new Error("terminal closed"); } } };

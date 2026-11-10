@@ -11,7 +11,8 @@
  *   node packages/core/gen-shared.ts --check   # exit 1 when a copy is missing or differs
  *
  * `npm run verify` runs the check (section "shared helper copies"), and
- * tests/redaction-corpus-smoke.ts and tests/workspace-symlink-smoke.ts exercise the copies.
+ * tests/redaction-corpus-smoke.ts, tests/workspace-symlink-smoke.ts, tests/workflow-resume-smoke.ts and
+ * tests/verify-failclosed-smoke.ts exercise the copies.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -30,6 +31,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/context-sieve/shared/safe-fs.ts",
     "packages/extensions/src/goal-core/shared/safe-fs.ts",
     "packages/extensions/src/guidelines/shared/safe-fs.ts",
+    "packages/extensions/src/human-console/shared/safe-fs.ts",
     "packages/extensions/src/memory-local/shared/safe-fs.ts",
     "packages/extensions/src/orchestrator/shared/safe-fs.ts",
     "packages/extensions/src/pentest-governance-domain/shared/safe-fs.ts",
@@ -72,6 +74,23 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   "inline-guard.ts": [
     "packages/extensions/src/tool-firewall/shared/inline-guard.ts",
     "packages/extensions/third_party/protected-paths/shared/inline-guard.ts",
+  ],
+  "input-owner.ts": [
+    "packages/extensions/src/conductor/shared/input-owner.ts",
+    "packages/extensions/src/control-center/shared/input-owner.ts",
+    "packages/extensions/src/effort/shared/input-owner.ts",
+    "packages/extensions/src/human-console/shared/input-owner.ts",
+    "packages/extensions/src/pentest-governance-domain/shared/input-owner.ts",
+    "packages/extensions/src/tool-firewall/shared/input-owner.ts",
+    "packages/extensions/third_party/subagent/shared/input-owner.ts",
+  ],
+  "open-tool-calls.ts": [
+    "packages/extensions/src/conductor/shared/open-tool-calls.ts",
+    "packages/extensions/third_party/subagent/shared/open-tool-calls.ts",
+  ],
+  "fingerprint.ts": [
+    "packages/extensions/src/verify-gate/shared/fingerprint.ts",
+    "packages/extensions/third_party/subagent/shared/fingerprint.ts",
   ],
   "safe-regex.ts": [
     "packages/extensions/src/skill-router/shared/safe-regex.ts",

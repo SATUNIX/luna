@@ -18,12 +18,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./agents.ts";
 import { isSecretReadPath, untrusted } from "./fence.ts";
 import { redact } from "./redact.ts";
+import { duplicateRefusal, liveRuns, runIdentity } from "./run-model.ts";
+import { producedResult, resumable, type StepResult } from "./run-contract.ts";
 import type { ToolContext } from "./types.ts";
-import { startScriptRun, scriptRunsRoot, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
+import { OMISSIONS_NAMED, startScriptRun, type EngineOptions, type RunOutcome, type ScriptSpec } from "./wf-engine.ts";
 import { parseScriptMeta } from "./wf-meta.ts";
-import { SandboxSession } from "./wf-sandbox.ts";
-import { MAX_SCRIPT_BYTES, discoverWorkflows, workflowDirs } from "./workflow.ts";
-import { openScriptWorkflow, trustError } from "./workflow-tools.ts";
+import { SandboxSession, type ModeUi } from "./wf-sandbox.ts";
+import { MAX_SCRIPT_BYTES, discoverWorkflows, runsRoot, workflowDirs } from "./workflow.ts";
+import { askFree, openScriptWorkflow, trustError } from "./workflow-tools.ts";
 
 export const RESULT_MESSAGE_TYPE = "luna-workflow-result";
 /** Longest result text inside the completion message's fence. */
@@ -71,7 +73,7 @@ export async function resolveScriptPath(ctx: ToolContext, given: string, session
   const real = canonical(abs);
   if (!real) return { error: `scriptPath ${given} does not exist.` };
   if (isSecretReadPath(real)) return { error: `Refused: ${given} resolves to a path secret-guard treats as secret.` };
-  const runs = canonical(scriptRunsRoot(cwd));
+  const runs = canonical(runsRoot(cwd));
   if (runs && inside(real, runs)) {
     const runId = path.relative(runs, real).split(path.sep)[0] ?? "";
     let bytes: Buffer;
@@ -98,7 +100,7 @@ export async function resolveScriptPath(ctx: ToolContext, given: string, session
     if (opened.error !== undefined) return { error: opened.error };
     return { spec: { name: opened.def.name, description: opened.def.description, phases: opened.def.phases, source: opened.source, file: opened.def.file } };
   }
-  return { error: `Refused: scriptPath must be a script in a workflow run directory (${scriptRunsRoot(cwd)}/<runId>/) or in a workflow directory.` };
+  return { error: `Refused: scriptPath must be a script in a workflow run directory (${runsRoot(cwd)}/<runId>/) or in a workflow directory.` };
 }
 
 /** The models the session can use, read from the tool context's model registry. */
@@ -144,7 +146,10 @@ export function standingBudget(): number | null {
   }
 }
 
-/** The completion message: status, counts, kept worktrees, paths, and the error and value inside the fence. */
+// Each part alone: over the whole line, redaction reads the word after a label like secret-scan as its value.
+const omissionLine = (o: StepResult): string => `${redact(o.stepId)} ${o.execution}${o.required ? " (required)" : ""}${o.reason ? `: ${redact(o.reason.text)}` : ""}`;
+
+/** The completion message: status, counts, kept worktrees, paths, and the error, omissions and value inside the fence. */
 export function formatCompletion(o: RunOutcome): string {
   let valueText: string;
   try {
@@ -155,15 +160,38 @@ export function formatCompletion(o: RunOutcome): string {
   const lines = [
     `Workflow ${o.name} (run ${o.runId}) ${o.status}${o.error ? ` (${o.errorKind ?? "error"}); the error text is below.` : "."}`,
     `Agents: ${String(o.launched)} launched, ${String(o.cached)} reused from the journal; ${String(o.outputTokens)} output tokens.`,
+    ...(o.reuseRejected ?? []).map((line) => `Not reused: ${line}.`),
     ...o.keptWorktrees.map((w) => `Kept worktree ${w.path} on branch ${w.branch} (${w.reason ?? "changed"}); it is not merged: review it yourself.`),
     `Journal: ${o.journalPath}`,
     `Script: ${o.scriptPath}`,
-    ...(o.status === "passed" ? [] : [`Resume with workflow {scriptPath: "${o.scriptPath}", resumeFromRunId: "${o.runId}"}.`]),
+    ...(resumable(o) ? [`Resume with workflow {scriptPath: "${o.scriptPath}", resumeFromRunId: "${o.runId}"}.`] : []),
   ];
-  // The error can carry script or agent text, so it is fenced like the value.
+  // The error and the omissions can carry script or agent text, so they are fenced like the value.
   if (o.error) lines.push("", untrusted("workflow-error", redact(o.error), ERROR_TEXT_CAP));
-  if (o.status === "passed") lines.push("", untrusted("workflow-result", redact(valueText), RESULT_TEXT_CAP));
+  if (o.omissions?.length) {
+    const named = o.omissions.slice(0, OMISSIONS_NAMED);
+    const count = o.omissionCount ?? o.omissions.length;
+    const head = count > named.length ? [`${String(count)} steps did not complete; the first ${String(named.length)}:`] : [];
+    lines.push("", untrusted("workflow-omissions", [...head, ...named.map(omissionLine)].join("\n"), ERROR_TEXT_CAP));
+  }
+  if (producedResult(o.status)) lines.push("", untrusted("workflow-result", redact(valueText), RESULT_TEXT_CAP));
   return lines.join("\n");
+}
+
+/**
+ * The reduced-sandbox question as a tool raises it: under an open overlay it waits, and an abort or a
+ * hold past its time answers nothing, which declines for the session as Escape does.
+ */
+export function sandboxUi(ctx: ToolContext): ModeUi {
+  const select = ctx.ui?.select?.bind(ctx.ui);
+  if (!select) return { hasUI: ctx.hasUI === true };
+  return {
+    hasUI: ctx.hasUI === true,
+    select: async (title, options) => {
+      const asked = await askFree(ctx, { what: "workflow: the sandbox question is waiting", show: (card) => select(title, options, card) });
+      return asked.kind === "shown" ? asked.value : undefined;
+    },
+  };
 }
 
 export interface ScriptToolDeps {
@@ -183,17 +211,16 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
     name: "workflow",
     label: "Workflow script",
     description:
-      "Run a JavaScript workflow script in the background: deterministic multi-agent orchestration with agent(), parallel(), pipeline(), phase(), log(), args, budget and workflow(). " +
-      "Pass exactly one of script (inline source starting with `export const meta = {name, description, phases}`), scriptPath (a script saved by an earlier run, or in a workflow directory) or name (a registered script workflow). " +
-      "Returns runId, scriptPath and transcriptDir at once; the result arrives later as a follow-up message. Resume an interrupted run with {scriptPath, resumeFromRunId}; to change the script, pass the edited source as script with resumeFromRunId (a rewritten run script needs the operator's approval). " +
-      "Only use it when the user asked for a workflow or multi-agent orchestration.",
-    promptSnippet: "Run a JavaScript multi-agent workflow script in the background",
+      "Run a JavaScript workflow script in the background (deterministic orchestration: agent(), parallel(), pipeline(), phase(), log(), args, budget, workflow()). " +
+      "Pass exactly one of script (inline, starting `export const meta = {name, description, phases}`), scriptPath or name (registered). " +
+      "Returns runId and scriptPath at once; the result follows as a message. Resume with {scriptPath or edited script, resumeFromRunId}; an edited script needs operator approval.",
+    promptSnippet: "Run a multi-agent workflow script",
     parameters: Type.Object({
-      script: Type.Optional(Type.String({ description: "Inline workflow script (plain JavaScript, starting with export const meta = {...})" })),
-      scriptPath: Type.Optional(Type.String({ description: "Path of a workflow script: one an earlier run saved, or one in a workflow directory" })),
-      name: Type.Optional(Type.String({ description: "Name of a registered script workflow" })),
-      args: Type.Optional(Type.Unknown({ description: "Value passed to the script as `args` (a JSON value, not a JSON-encoded string)" })),
-      resumeFromRunId: Type.Optional(Type.String({ description: "Run id whose journal's unchanged prefix of agent() calls is reused" })),
+      script: Type.Optional(Type.String({ description: "Inline script (plain JavaScript)" })),
+      scriptPath: Type.Optional(Type.String({ description: "A saved run script or workflow-directory script" })),
+      name: Type.Optional(Type.String({ description: "Registered script workflow" })),
+      args: Type.Optional(Type.Unknown({ description: "The script's `args`: a JSON value, not a string" })),
+      resumeFromRunId: Type.Optional(Type.String({ description: "Run whose unchanged agent() prefix is reused" })),
     }),
     async execute(_id, params, _signal, _onUpdate, rawCtx) {
       const ctx: ToolContext = rawCtx;
@@ -214,9 +241,14 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
         if (opened.error !== undefined) return textResult(opened.error, true);
         spec = { name: opened.def.name, description: opened.def.description, phases: opened.def.phases, source: opened.source, file: opened.def.file };
       }
-      const mode = await sandbox.prepare({ hasUI: ctx.hasUI === true, ...(ctx.ui?.select ? { select: ctx.ui.select.bind(ctx.ui) } : {}) });
+      const mode = await sandbox.prepare(sandboxUi(ctx));
       if (!mode.ok) return textResult(mode.error, true);
       const budget = standingBudget();
+      const digest = crypto.createHash("sha256").update(spec.source, "utf8").digest("hex");
+      // Nothing awaits from this check to the hold below, so two calls cannot both pass it.
+      const identity = runIdentity("script", digest, params.args);
+      const live = liveRuns.find(identity);
+      if (live) return textResult(duplicateRefusal(live), true);
       const started = startScriptRun(spec, params.args, {
         cwd,
         ...(budget !== null ? { budgetTotal: budget } : {}),
@@ -239,8 +271,10 @@ export function registerScriptWorkflowTool(pi: ExtensionAPI, deps: ScriptToolDep
       });
       if (!started.ok) return textResult(started.error, true);
       // startScriptRun saved spec.source (UTF-8) as the run's script.js.
-      sessionRuns.set(started.runId, crypto.createHash("sha256").update(spec.source, "utf8").digest("hex"));
+      sessionRuns.set(started.runId, digest);
+      const release = liveRuns.hold(identity, { runId: started.runId, name: spec.name });
       void started.done.then((outcome) => {
+        release();
         const content = formatCompletion(outcome);
         try {
           pi.sendMessage(

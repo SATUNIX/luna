@@ -18,16 +18,17 @@ your own context lean.
 - **implementer**: executes one scoped unit. Run several in parallel (`tasks`) only when
   their files don't overlap.
 - **reviewer**: validates the result. It's the final gate (Verdict PASS/FAIL).
-- **delegator**: fans a broad task out to other roles (may nest once).
 
 ## Standard flow
 1. (optional) scout → 2. planner → 3. implementer(s) → 4. reviewer. On FAIL, loop back to an
    implementer with the must-fix list. **Don't report done until the reviewer passes.**
-2. Linear shortcut: `subagent({ chain: [{agent:"planner",task:"…"}, {agent:"implementer",task:"{previous}"}, {agent:"reviewer",task:"{previous}"}] })`.
-3. For a repeatable multi-step flow, prefer a **workflow** (`workflow_run`, `/workflow list`).
-   Workflows run steps deterministically, hand files between steps, loop on review gates and
-   can resume after an interruption.
-4. When the control flow itself matters (fan-out over a discovered list, adversarial verify,
+2. For one task or a parallel set, use `subagent` (`tasks` for the parallel set).
+3. For multi-step work, use `workflow_run` with a saved workflow (`{name, inputs}`) or an inline
+   plan (`{steps: [...]}`). A plan runs its steps deterministically, passes work between them
+   with `{previous}`, loops on review gates and can resume after an interruption.
+4. A step with `expand: true` may answer with more steps when the work is only clear once
+   running; the host runs them in the same bounded run.
+5. When the control flow itself matters (fan-out over a discovered list, adversarial verify,
    loops until nothing new turns up), use a **script workflow** through the `workflow` tool,
    or a kit built-in (`understand`, `review-changes`, `design-panel`, `research-sweep`,
    `migrate`). Load the `workflow-authoring` skill before writing a script.
@@ -45,9 +46,11 @@ Ask for a **distilled result** back (the answer, file:line, decision, verdict), 
 output.
 
 ## Control
-- Esc cancels running subagents. `background: true` detaches long single/parallel work;
+- Esc cancels running subagents. `background: true` detaches long single or parallel work;
   you're notified when it finishes.
-- `/subagents` shows runs; `subagent_status id=<run>` tails a log; `/subagent-stop` stops.
+- `/workflows` shows every run in the workspace, live or finished; `workflow_status` lists a
+  run's steps or shows a step's log; `workflow_control` pauses, resumes, stops or skips a live
+  run, and stops a background subagent by id.
 
 ## When NOT to delegate
 Trivial, single-file or read-only questions: answer directly. Delegation has overhead. Use it

@@ -7,29 +7,31 @@
 //   2. Role frontmatter: model/thinking/skills/extensions/max_runtime are parsed; a role model is
 //      honoured unless inheritance is forced; skills are preloaded into the system prompt.
 //   3. Run ids are unique even when created in the same millisecond (parallel same-role runs).
-//   4. Chain {previous} threading preserves `$&`-style sequences verbatim.
-//   5. A >200 KiB task reaches the child intact over stdin (argv would hit MAX_ARG_STRLEN).
-//   6. A multi-byte UTF-8 character split across two stdout chunks decodes correctly.
-//   7. Child isolation: --no-extensions plus only the safety extensions the operator enabled.
-//   8. A registry row whose process died is reported "orphaned", not "running" forever, and
+//   4. A >200 KiB task reaches the child intact over stdin (argv would hit MAX_ARG_STRLEN).
+//   5. A multi-byte UTF-8 character split across two stdout chunks decodes correctly.
+//   6. Child isolation: --no-extensions plus only the safety extensions the operator enabled.
+//   7. A registry row whose process died is reported "orphaned", not "running" forever, and
 //      runs.jsonl is compacted to a bounded number of runs.
+//   8. Surface trim: four kit roles, depth 1 by default and still overridable, and no chain mode,
+//      confirmProjectAgents or removed commands.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { loadModule, tmpWorkspace, rmWorkspace, setEnv } from "../packages/core/eval/harness.ts";
+import { fakePi, loadExtension, loadModule, tmpWorkspace, rmWorkspace, setEnv } from "../packages/core/eval/harness.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
 import type * as DelegationGuard from "../packages/extensions/src/delegation-guard/index.ts";
 import type * as Subagent from "../packages/extensions/third_party/subagent/index.ts";
 import type * as SubagentAgents from "../packages/extensions/third_party/subagent/agents.ts";
-import type * as SubagentResult from "../packages/extensions/third_party/subagent/result.ts";
 import type * as SubagentLogging from "../packages/extensions/third_party/subagent/logging.ts";
 import type * as SubagentStatus from "../packages/extensions/third_party/subagent/status.ts";
+import type * as SubagentConfig from "../packages/extensions/third_party/subagent/config.ts";
+import type * as SubagentTools from "../packages/extensions/third_party/subagent/tools.ts";
 import type { AgentConfig } from "../packages/extensions/third_party/subagent/agents.ts";
 import type { RunAgentOptions } from "../packages/extensions/third_party/subagent/runner.ts";
 import type { SingleResult } from "../packages/extensions/third_party/subagent/types.ts";
-import { object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import { object, parseJsonAs, string, unknownValue } from "../packages/core/lib/guard.ts";
 
 /** The subset of a discovered/parsed role this test reads. */
 interface AgentRole {
@@ -59,8 +61,9 @@ function fakeChild() {
 }
 
 // The subagent entry module as this test drives it: runAgent given a spawn double that returns fakeChild().
-type SubagentIndex = Omit<typeof Subagent, "runAgent"> & {
-  runAgent: (options: Omit<RunAgentOptions, "spawnChild"> & { spawnChild: (cmd: string, args: string[]) => ReturnType<typeof fakeChild> }) => Promise<SingleResult>;
+type SubagentIndex = Omit<typeof Subagent, "default" | "runAgent"> & {
+  default: (api: ReturnType<typeof fakePi>["api"]) => void;
+  runAgent: (options: Omit<RunAgentOptions, "spawnChild"> & { spawnChild: (cmd: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => ReturnType<typeof fakeChild> }) => Promise<SingleResult>;
 };
 
 // Launches go through delegation-guard (mandatory protections + effort budget); fake children still need it in place.
@@ -74,7 +77,6 @@ const ok = (label: string) => { checks++; console.log(`  OK: ${label}`); };
 try {
   const index = await loadModule<SubagentIndex>("vendor/subagent/index.ts");
   const agentsMod = await loadModule<typeof SubagentAgents>("vendor/subagent/agents.ts");
-  const resultMod = await loadModule<typeof SubagentResult>("vendor/subagent/result.ts");
   const logging = await loadModule<typeof SubagentLogging>("vendor/subagent/logging.ts");
   const status = await loadModule<typeof SubagentStatus>("vendor/subagent/status.ts");
 
@@ -82,7 +84,7 @@ try {
   {
     const { agents, shadowed } = agentsMod.discoverAgents(ws, "user");
     const names = agents.map((a: AgentRole) => a.name).sort();
-    for (const role of ["delegator", "implementer", "planner", "reviewer", "scout"]) assert.ok(names.includes(role), `kit role ${role} resolves`);
+    assert.deepEqual(names, ["implementer", "planner", "reviewer", "scout"], "the kit roles are exactly the four shipped roles");
     assert.ok(agents.every((a: AgentRole) => a.source === "kit"));
     assert.deepEqual(shadowed, []);
     fs.mkdirSync(path.join(ws, ".pi", "agents"), { recursive: true });
@@ -167,14 +169,7 @@ try {
     ok("run ids are unique within one millisecond");
   }
 
-  // 4. {previous} substitution is literal.
-  {
-    const previous = "cost $& and $' and $1 and $$";
-    assert.equal(resultMod.substitutePrevious("before {previous} after {previous}", previous), `before ${previous} after ${previous}`);
-    ok("chain {previous} preserves $-sequences verbatim");
-  }
-
-  // 5 + 6. Large task over stdin; split UTF-8 decoding.
+  // 4 + 5. Large task over stdin; split UTF-8 decoding.
   {
     const roles: AgentConfig[] = [{ name: "scout", description: "d", tools: ["read"], systemPrompt: "", source: "user", filePath: "f" }];
     const big = "x".repeat(210 * 1024);
@@ -219,10 +214,10 @@ try {
     assert.equal(plan.args[0], "--no-extensions");
     plan.slot.settle("test");
     assert.deepEqual([...plan.loaded].sort(), ["delegation-guard", "effort", "protected-paths", "secret-guard", "todo", "tool-firewall"], "protections the parent runs, effort and enabled companions load; memory/orchestrator never do");
-    const delegator = guard.prepareChild({ cwd: ws, kind: "discretionary", role: "delegator", needsSubagent: true });
-    assert.ok(delegator.ok, "a delegator child is prepared");
-    assert.ok(delegator.loaded.includes("subagent"), "a delegator child gets the subagent tool");
-    delegator.slot.settle("test");
+    const delegating = guard.prepareChild({ cwd: ws, kind: "discretionary", role: "implementer", needsSubagent: true });
+    assert.ok(delegating.ok, "a child granted delegation is prepared");
+    assert.ok(delegating.loaded.includes("subagent"), "a child granted delegation gets the subagent tool");
+    delegating.slot.settle("test");
     const restore = setEnv("PI_KIT_SUBAGENT_ISOLATE", "0");
     try {
       const forced = guard.prepareChild({ cwd: ws, kind: "discretionary", role: "scout" });
@@ -234,7 +229,7 @@ try {
     ok("children load --no-extensions plus enabled safety extensions only");
   }
 
-  // 8. Orphans + registry compaction.
+  // 7. Orphans + registry compaction.
   {
     const dir = path.join(ws, "reg");
     fs.mkdirSync(dir, { recursive: true });
@@ -257,6 +252,75 @@ try {
     assert.equal(new Set(kept).size, 10);
     assert.ok(kept.includes("r29") && !kept.includes("r0"), "the newest runs are kept");
     ok("dead runs report orphaned; registry compacts to the newest runs");
+  }
+
+  // 8. Surface trim: default depth 1 (still overridable), four kit roles, no removed params or commands.
+  {
+    const config = await loadModule<typeof SubagentConfig>("vendor/subagent/config.ts");
+    const toolsMod = await loadModule<typeof SubagentTools>("vendor/subagent/tools.ts");
+    assert.equal(config.DEFAULT_MAX_DEPTH, 1, "the default depth is root -> child only");
+
+    // A custom role that delegates still runs at depth 2 when the operator raises the limit: 1 is a
+    // default, not a hard cap. The caller is a depth-1 child, so nestingError (the gate the subagent
+    // tool runs first) is checked before the launch. The child is a fake, so no pi process starts.
+    const agentDir = path.join(ws, "agent", "agents");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "depth-two-role.md"), "---\nname: depth-two-role\ndescription: custom role\ntools: read, subagent\n---\nbody\n");
+    const custom = agentsMod.discoverAgents(ws, "user").agents.find((a: AgentRole) => a.name === "depth-two-role");
+    assert.ok(custom, "the custom role resolves");
+    const restoreDepth = setEnv("PI_KIT_SUBAGENT_DEPTH", "1");
+    const restoreMax = setEnv("PI_KIT_SUBAGENT_MAX_DEPTH", undefined);
+    let defaultRefusal = "";
+    try {
+      defaultRefusal = toolsMod.nestingError() ?? "";
+    } finally {
+      restoreMax();
+    }
+    assert.match(defaultRefusal, /depth 1\/1/, "at the default a child cannot delegate further");
+    const restoreMax2 = setEnv("PI_KIT_SUBAGENT_MAX_DEPTH", "2");
+    try {
+      assert.equal(toolsMod.nestingError(), null, "PI_KIT_SUBAGENT_MAX_DEPTH=2 lets a child delegate");
+      let childDepth: string | undefined;
+      const spawn = (_cmd: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        childDepth = options.env?.PI_KIT_SUBAGENT_DEPTH;
+        const child = fakeChild();
+        queueMicrotask(() => {
+          child.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "end" } }) + "\n");
+          child.emit("close", 0);
+        });
+        return child;
+      };
+      const launched = await index.runAgent({ defaultCwd: ws, agents: [custom], agentName: "depth-two-role", task: "t", spawnChild: spawn });
+      assert.equal(launched.exitCode, 0, launched.errorMessage ?? "depth-two-role runs");
+      assert.equal(childDepth, "2", "depth-two-role is launched at depth 2");
+    } finally {
+      restoreMax2();
+      restoreDepth();
+    }
+
+    const pi = fakePi();
+    index.default(pi.api);
+    (await loadExtension("extensions/progress-guard/index.ts"))(pi.api);
+    (await loadExtension("extensions/recovery-orchestrator/index.ts"))(pi.api);
+    const tool = pi.tools.find("subagent");
+    assert.ok(tool, "the subagent tool is registered");
+    const schema = parseJsonAs(object({ properties: unknownValue() }), JSON.stringify(tool.parameters), "subagent parameters");
+    const props = schema.properties;
+    assert.ok(typeof props === "object" && props !== null, "the subagent parameters list their properties");
+    assert.equal(Object.hasOwn(props, "chain"), false, "chain is not in the subagent schema");
+    assert.equal(Object.hasOwn(props, "confirmProjectAgents"), false, "confirmProjectAgents is not in the subagent schema");
+    for (const removed of ["subagents", "subagent-stop", "reflect", "recover"]) assert.equal(pi.commands.find(removed), undefined, `/${removed} is not registered`);
+    assert.ok(pi.commands.find("workflows"), "/workflows survives the trim");
+    assert.ok(pi.commands.find("boost"), "/boost survives the trim");
+    // The delegation tool text, measured as DESIGN measures it, stays inside its budget.
+    let toolText = 0;
+    for (const name of ["subagent", "workflow_run", "workflow_status", "workflow_control", "workflow"]) {
+      const t = pi.tools.find(name);
+      assert.ok(t, `${name} is registered`);
+      toolText += t.description.length + (t.promptSnippet ?? "").length + JSON.stringify(t.parameters).length;
+    }
+    assert.ok(toolText <= 4900, `the delegation tool text is ${String(toolText)} chars, over the 4,900 budget`);
+    ok("default depth 1 is overridable, the kit has four roles, the removed params and commands are gone, and the tool text fits 4,900");
   }
 
   console.log(`[subagent-roles-isolation-smoke] all ${checks} checks passed`);

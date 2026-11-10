@@ -241,7 +241,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "skill_score",
     label: "Skill Forge: score",
-    description: "Score the kit against its own eval harness (real, eval-tied number) as the skill's regression baseline.",
+    description: "Score Luna against its own eval harness (real, eval-tied number) as the skill's regression baseline.",
     parameters: Type.Object({
       skill_name: Type.String({ description: "Skill name being evaluated (recorded in the score record)" }),
     }),

@@ -1,10 +1,10 @@
 # Control centre
 
-The kit registers many commands, and their settings live in subcommands that are easy to forget.
+Luna registers many commands, and their settings live in subcommands that are easy to forget.
 The control centre is one hub — `/kit` — that shows every level and page, with each row's current
 value and the typed command that still does the same work. Nothing is renamed or unregistered:
 every command keeps working, and the hub is an additional way in. In the TUI the `/` menu hides the
-kit commands that moved into the hub, while typing them still runs them (see The curated `/` menu
+Luna commands that moved into the hub, while typing them still runs them (see The curated `/` menu
 below).
 
 ## Open it
@@ -34,7 +34,7 @@ at any time.
 | --- | --- | --- |
 | Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect and System | `/profile`, `/effort`, `/thinking`, `/security` |
 | Autonomy | Approvals, remembered approvals, loop, auto-boost, container runs | `/auto`, `/firewall`, `/loop`, `/boost`, `/autonomy` |
-| Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/subagents`, `/workflow`, `/reflect`, `/recover`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
+| Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
 | Session | Save, handoff, compact, compress, auto-compaction, new/fork/clone/tree/resume/name, clear | `/save`, `/handoff`, `/compact`, `/compress`, `/compaction`, `/clear` |
 | Connect | Remote control, web console | `/remote`, `/console` |
 | System | Display, updates and health, diagnostics, companions, all commands, help | `/footer`, `/tips`, `/caveman`, `/update`, `/trace`, `/capture`, `/skills`, `/firewall reload` |
@@ -91,7 +91,7 @@ the same row with every value read again. Back returns the cursor to the row tha
 ## The curated `/` menu
 
 In the TUI, typing `/` offers only the pinned commands plus pi's own built-ins, the prompt templates
-and the skill commands. Every other kit extension command, and every companion-package command, is
+and the skill commands. Every other Luna extension command, and every companion-package command, is
 hidden from the list. Nothing is unregistered: a hidden command runs exactly as before when it is
 typed in full, and it appears again once at least four characters of its name have been typed, so
 muscle memory still completes (`tests/command-menu-smoke.ts`).
@@ -161,8 +161,8 @@ weakening set match `packages/kit/profiles/*.json` (`firewall.mode` is `auto`).
 Doctor is a read-only page under System ▸ Updates & health. Each line names the command that gives
 more detail:
 
-- the kit version, profile and scope, from the install marker (`/update status`);
-- the running pi version against the kit's tested pin and peer floor (`/update status`);
+- the Luna version, profile and scope, from the install marker (`/update status`);
+- the running pi version against Luna's tested pin and peer floor (`/update status`);
 - the companions the marker records against the packages registered in the `settings.json` of the
   marker's scope (the project `.pi/settings.json` beside a project marker, else
   `<agent dir>/settings.json`), which catches a marker that lists a package settings no longer

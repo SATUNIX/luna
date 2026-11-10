@@ -3,20 +3,28 @@
  * events that feed it.
  *
  * A run has ordered phases and the agents launched in them. Each agent records its label, phase,
- * model, token usage, elapsed time and status. The YAML executor (workflow.ts) feeds it today:
- * every top-level step is a phase and every step execution (a parallel member, a gate loop's
- * re-run) is one agent. The API is engine-neutral (`kind`, phases created on demand by id), so
- * a script engine can feed the same model later.
+ * model, token usage, elapsed time and status. Both engines feed it. In the YAML executor
+ * (workflow.ts) every top-level step is a phase and every step execution (a parallel member, a gate
+ * loop's re-run) is one agent; in the script engine (wf-engine.ts) phases come from the script and
+ * every launched or reused agent() call is one agent. A run's status is derived by run-contract.ts.
  *
  * Nothing here is written to disk: records hold no prompts or outputs, only labels, ids, model
  * names, counters and error text. Listeners (a panel, a status line) subscribe; a throwing
  * listener is ignored so telemetry can never break a run.
  */
+import crypto from "node:crypto";
+import type { RunStatus } from "./run-contract.ts";
 import type { UsageStats } from "./types.ts";
 
+export type { RunStatus };
 export type RunKind = "yaml" | "script";
-export type RunStatus = "running" | "passed" | "failed" | "interrupted";
 export type PhaseStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "aborted";
+
+const TERMINAL_PHASE_STATUS: Readonly<Record<Exclude<RunStatus, "running">, PhaseStatus>> = { passed: "passed", partial: "passed", failed: "aborted", interrupted: "aborted" };
+
+/** What a phase still running when the run ended reads as. */
+export const terminalPhaseStatus = (status: Exclude<RunStatus, "running">): PhaseStatus => TERMINAL_PHASE_STATUS[status];
+
 export type AgentStatus = "running" | "passed" | "failed" | "skipped" | "aborted";
 
 export interface AgentRecord {
@@ -30,7 +38,7 @@ export interface AgentRecord {
   startedAt: number;
   endedAt?: number | undefined;
   elapsedMs: number; // live for a running agent, frozen once it ends
-  subagentRunId?: string | undefined; // the subagent log id, for subagent_status / stop
+  subagentRunId?: string | undefined; // the subagent log id, for workflow_status / workflow_control
   activity?: string | undefined; // the last progress line
   error?: string | undefined;
   cached?: true | undefined; // answered from a resumed run's journal; nothing was launched
@@ -150,12 +158,20 @@ export class RunModel {
     this.startedAt = now();
   }
 
-  /** Create (or retitle) a phase. Phases keep their first-seen order; `parent` names a group phase. */
-  phase(id: string, title = id, status?: PhaseStatus, parent?: string): PhaseRecord {
+  /**
+   * Create (or retitle) a phase. Phases keep their first-seen order, or come right after the phase
+   * `after` names, as a spliced expansion does; `parent` names a group phase.
+   */
+  phase(id: string, title = id, status?: PhaseStatus, parent?: string, after?: string): PhaseRecord {
     let p = this.phases.get(id);
     if (!p) {
       p = { id, title, status: status ?? "pending", agentIds: [], ...(parent !== undefined ? { parent } : {}) };
-      this.phases.set(id, p);
+      if (after !== undefined && this.phases.has(after)) {
+        const entries = [...this.phases.entries()];
+        entries.splice(entries.findIndex(([key]) => key === after) + 1, 0, [id, p]);
+        this.phases.clear();
+        for (const [key, value] of entries) this.phases.set(key, value);
+      } else this.phases.set(id, p);
     } else {
       p.title = title;
       if (status) p.status = status;
@@ -171,6 +187,11 @@ export class RunModel {
 
   hasPhase(id: string): boolean {
     return this.phases.has(id);
+  }
+
+  /** The ids of the phases still running, in phase order. */
+  runningPhases(): string[] {
+    return [...this.phases.values()].filter((p) => p.status === "running").map((p) => p.id);
   }
 
   /** Record an agent launch; returns its id within the run. Unknown phases are created. */
@@ -333,3 +354,47 @@ export class RunRegistry {
 
 /** The process-wide registry the executors feed. */
 export const runRegistry = new RunRegistry();
+
+/** A live run as a refusal names it. */
+export interface LiveRun {
+  runId: string;
+  name: string;
+}
+
+/** A value with its object keys sorted at every level, so equal arguments give equal text. */
+function sortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const list: unknown[] = value;
+    return list.map(sortedKeys);
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedKeys(Reflect.get(value, key))]));
+}
+
+/** What makes two runs the same work: what kind they are, the definition's digest or text, and their arguments. */
+export function runIdentity(kind: RunKind | "plan", definition: string, args: unknown): string {
+  return crypto.createHash("sha256").update(JSON.stringify([kind, definition, sortedKeys(args ?? null)])).digest("hex");
+}
+
+/** The runs of this process that hold an identity. A refused run never starts, so `start` replacing a run id is not this check. */
+class LiveRuns {
+  private readonly held = new Map<string, LiveRun>();
+
+  find(identity: string): LiveRun | undefined {
+    return this.held.get(identity);
+  }
+
+  /** Hold an identity while a run is live; the returned function releases it. */
+  hold(identity: string, run: LiveRun): () => void {
+    this.held.set(identity, run);
+    return () => {
+      if (this.held.get(identity) === run) this.held.delete(identity);
+    };
+  }
+}
+
+/** The process-wide live identities both engines' tools check before a start. */
+export const liveRuns = new LiveRuns();
+
+export const duplicateRefusal = (live: LiveRun): string =>
+  `Refused: run ${live.runId} (${live.name}) is already doing this work. Wait for it, or stop it with workflow_control {runId: "${live.runId}", action: "stop"} and start again.`;

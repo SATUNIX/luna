@@ -18,7 +18,8 @@
 //   7. resuming a run whose writer step was interrupted asks a No-first select (never confirm);
 //      headless is refused; "No" and Esc cancel; "Skip" marks it skipped and goes on; "Re-run"
 //      keeps it; read-only steps and steps that never launched ask nothing.
-//   8. both firewall policy copies allow workflow_control as process_control and stay identical.
+//   8. both firewall policy copies allow workflow_status as read_only and workflow_control as
+//      process_control, stay identical, and no longer name the removed subagent tools.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,8 +32,11 @@ import type * as IndexModule from "../packages/extensions/third_party/subagent/i
 import type * as WorkflowToolsModule from "../packages/extensions/third_party/subagent/workflow-tools.ts";
 import type * as ControlModule from "../packages/extensions/third_party/subagent/control.ts";
 import type * as RunModelModule from "../packages/extensions/third_party/subagent/run-model.ts";
+import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
+import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type { ExecuteOptions, RunState, WorkflowDef } from "../packages/extensions/third_party/subagent/workflow.ts";
 import type { WorkflowEvent } from "../packages/extensions/third_party/subagent/run-model.ts";
+import { fakeSpawner as scriptSpawner, type FakeSpawn as ScriptSpawn } from "./workflow-fakes.ts";
 
 const __delegation = await installDelegation();
 process.on("exit", () => __delegation.cleanup());
@@ -382,6 +386,20 @@ steps:
     gs.status = "interrupted";
     gs.steps.review = { status: "aborted", attempts: 1, runIds: [], cost: 0 };
     const selectSkip = { cwd: ws, hasUI: true, ui: { select: () => Promise.resolve("Skip the interrupted step(s)"), setStatus: () => {} } };
+    // The gate is a keyboard card: under an open overlay it waits, and an abort during the wait refuses.
+    {
+      const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+      let shown = 0;
+      const counting = { ...selectSkip, ui: { ...selectSkip.ui, select: () => { shown++; return Promise.resolve("Skip the interrupted step(s)"); } } };
+      const abort = new AbortController();
+      const hold = holdInput("the test box");
+      const aborted = T.resumeWriterGate(gd, gs, agents, { ...counting, signal: abort.signal });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      abort.abort();
+      assert.match((await aborted) ?? "", /Blocked/, "aborting while input is held refuses the resume");
+      assert.equal(shown, 0, "the gate's card must not open while an overlay holds input");
+      hold();
+    }
     assert.equal(await T.resumeWriterGate(gd, gs, agents, selectSkip), null);
     assert.equal(gs.cursor, 0, "a skipped gate step is not stepped past");
     gs.status = "running";
@@ -497,7 +515,7 @@ steps:
     };
     const run = pi.tools.get("workflow_run");
     const s1 = writeInterrupted();
-    const headless = await run.execute("r1", { name: "writer", resume: s1.id }, undefined, undefined, { cwd: ws, hasUI: false });
+    const headless = await run.execute("r1", { resume: s1.id }, undefined, undefined, { cwd: ws, hasUI: false });
     assert.equal(headless.isError, true);
     assert.match(textOf(headless), /Blocked: .*writer step\(s\) edit/, "a headless resume of an interrupted writer is refused");
     const prompts: string[][] = [];
@@ -514,13 +532,13 @@ steps:
       },
     });
     for (const answer of ["No, leave the run interrupted", undefined]) {
-      const r = await run.execute("r2", { name: "writer", resume: s1.id }, undefined, undefined, ui(answer));
+      const r = await run.execute("r2", { resume: s1.id }, undefined, undefined, ui(answer));
       assert.equal(r.isError, true);
       assert.match(textOf(r), /Cancelled: run .* stays interrupted/, `answer ${String(answer)} cancels`);
     }
     assert.deepEqual(prompts[0], ["No, leave the run interrupted", "Re-run the interrupted step(s)", "Skip the interrupted step(s)"], "No is the first (default) option");
     assert.deepEqual([...T.RESUME_WRITER_CHOICES], prompts[0]);
-    const skipped = await run.execute("r3", { name: "writer", resume: s1.id }, undefined, undefined, ui("Skip the interrupted step(s)"));
+    const skipped = await run.execute("r3", { resume: s1.id }, undefined, undefined, ui("Skip the interrupted step(s)"));
     assert.match(textOf(skipped), /passed/, "Skip marks the step skipped and the run goes on (here: to the end, nothing launched)");
     const after = I.loadState(ws, s1.id);
     assert.equal(after?.steps.edit?.status, "skipped");
@@ -565,9 +583,36 @@ steps:
     assert.equal(a, b, "the two policy copies are byte-identical");
     const policy: unknown = JSON.parse(a);
     const tools: unknown = typeof policy === "object" && policy !== null ? Reflect.get(policy, "tools") : undefined;
-    const rule: unknown = typeof tools === "object" && tools !== null ? Reflect.get(tools, "workflow_control") : undefined;
-    assert.deepEqual(rule, { decision: "allow", risk_class: "process_control" });
-    ok("both firewall policies allow workflow_control as process_control");
+    const rule = (name: string): unknown => (typeof tools === "object" && tools !== null ? Reflect.get(tools, name) : undefined);
+    assert.deepEqual(rule("workflow_status"), { decision: "allow", risk_class: "read_only" });
+    assert.deepEqual(rule("workflow_control"), { decision: "allow", risk_class: "process_control" });
+    assert.equal(rule("subagent_status"), undefined, "subagent_status left both policies");
+    assert.equal(rule("subagent_stop"), undefined, "subagent_stop left both policies");
+    ok("both firewall policies allow workflow_status read_only and workflow_control process_control, and drop the removed tools");
+  }
+
+  // 9. A script run records who skipped a step, as a YAML run does.
+  {
+    type Options = Omit<EngineModule.EngineOptions, "spawnChild"> & { spawnChild: ScriptSpawn };
+    const scripts = await loadModule<{ startScriptRun(spec: EngineModule.ScriptSpec, args: unknown, opts: Options): EngineModule.StartResult }>("vendor/subagent/wf-engine.ts");
+    const sandbox = await loadModule<typeof SandboxModule>("vendor/subagent/wf-sandbox.ts");
+    const support = sandbox.detectSupport();
+    const project = path.join(ws, "script-skip");
+    fs.mkdirSync(project);
+    const skipBy = async (origin: ControlModule.ControlOrigin) => {
+      const fake = scriptSpawner(() => ({ text: "late", delayMs: 5000 }));
+      const controls = new C.ControlRegistry();
+      const source = `export const meta = { name: "skip-origin", description: "test" };\ntry { await agent("must", { required: true, agentType: "planner", label: "must" }) } catch {}\nreturn "went on"`;
+      const started = scripts.startScriptRun({ name: "skip-origin", description: "test", source, phases: [] }, undefined, { cwd: project, agents, sandbox: { mode: support.bwrap ? "full" : "reduced", support }, spawnChild: fake.spawn, controls });
+      assert.ok(started.ok);
+      for (let i = 0; i < 2000 && fake.seen.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(C.controlRun(started.runId, "skip", controls, origin).ok, true);
+      const outcome = await started.done;
+      return outcome.omissions?.map((s) => [s.stepId, s.execution, s.reason?.code]);
+    };
+    assert.deepEqual(await skipBy("agent"), [["must", "skipped", "agent"]]);
+    assert.deepEqual(await skipBy("operator"), [["must", "skipped", "operator"]]);
+    ok("a script run's skipped step records whether the agent or the operator skipped it");
   }
 
   clearInterval(keepalive);

@@ -24,6 +24,7 @@ import {
 import { Container, SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
+import { withInputHold } from "./shared/input-owner.ts";
 import type { HubValues } from "./values.ts";
 
 /** A command as `pi.getCommands()` reports it, plus the built-ins the hub adds itself. */
@@ -363,40 +364,46 @@ export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> 
   const renderer = deps.ctx.mode === "tui" ? tuiRenderer(deps) : selectRenderer(deps);
   let page = startPage;
   let focus: string | undefined;
-  for (;;) {
-    const rows = rowsForPage(page, deps);
-    const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: parentPage(deps.model, page), focus });
-    focus = undefined;
-    if (result === undefined) return;
-    if (result === "back") {
-      const parent = parentPage(deps.model, page);
-      if (!parent) return;
-      // Back on the parent, the cursor returns to the row that opened this page.
-      focus = deps.model.rows.find((r) => r.page === parent && r.targetPage === page)?.id;
-      page = parent;
-      continue;
+  const loop = async (): Promise<void> => {
+    for (;;) {
+      const rows = rowsForPage(page, deps);
+      const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: parentPage(deps.model, page), focus });
+      focus = undefined;
+      if (result === undefined) return;
+      if (result === "back") {
+        const parent = parentPage(deps.model, page);
+        if (!parent) return;
+        // Back on the parent, the cursor returns to the row that opened this page.
+        focus = deps.model.rows.find((r) => r.page === parent && r.targetPage === page)?.id;
+        page = parent;
+        continue;
+      }
+      const row = findRow(deps.model, result.id) ?? rows.find((r) => r.id === result.id);
+      if (!row) continue;
+      if (row.kind === "page" && row.targetPage) {
+        page = row.targetPage;
+        continue;
+      }
+      const dispatched = await dispatchRow(row, deps, result.value);
+      focus = row.id;
+      if (!dispatched.ok) {
+        deps.notify(dispatched.note ?? "nothing changed", "warning");
+        continue;
+      }
+      if (dispatched.handedOff || dispatched.changesSession) return;
+      // An in-place change (the thinking level) or an informational row: reopen on the same row,
+      // with the values read again so the change shows.
+      const next = deps.refresh?.();
+      if (next) {
+        deps.model = next.model;
+        deps.values = next.values;
+      }
     }
-    const row = findRow(deps.model, result.id) ?? rows.find((r) => r.id === result.id);
-    if (!row) continue;
-    if (row.kind === "page" && row.targetPage) {
-      page = row.targetPage;
-      continue;
-    }
-    const dispatched = await dispatchRow(row, deps, result.value);
-    focus = row.id;
-    if (!dispatched.ok) {
-      deps.notify(dispatched.note ?? "nothing changed", "warning");
-      continue;
-    }
-    if (dispatched.handedOff || dispatched.changesSession) return;
-    // An in-place change (the thinking level) or an informational row: reopen on the same row,
-    // with the values read again so the change shows.
-    const next = deps.refresh?.();
-    if (next) {
-      deps.model = next.model;
-      deps.values = next.values;
-    }
-  }
+  };
+  // The TUI hub owns the keyboard for the whole session, not one page: a per-page hold would be
+  // released between pages, and an approval could take focus (and keys) from the next page. Released
+  // on every exit (return, Esc, throw), and on a reload, which never settles the overlay.
+  await (deps.ctx.mode === "tui" ? withInputHold("the kit hub", loop) : loop());
 }
 
 /** Re-export for callers that build deps from disk. */

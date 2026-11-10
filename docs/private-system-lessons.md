@@ -1,6 +1,6 @@
 # Lessons from the private system
 
-Pi System began as a private system: a private GitLab project, a homelab deployment and a set of
+Luna began as a private system: a private GitLab project, a homelab deployment and a set of
 internal design and review documents. The public beta keeps what generalises and leaves the
 rest behind. This page records each decision so it is not re-litigated, and so an operator who
 knew the private system can see where each piece went. The complete history is in git; nothing
@@ -11,9 +11,9 @@ out, with the reason), **removed** (deleted from the tracked tree).
 
 | Component or lesson | Disposition | Where it is now | Why |
 |---|---|---|---|
-| A private GitLab source with a private CA, SSH-only instructions and a private release pipeline | **Adapted** | The kit installs from `github.com/SATUNIX/luna`; installs from the retired sources migrate ([Migration](migration.md)); releases are operator-run ([Releasing](releasing.md)) | A public beta cannot depend on a host nobody outside can reach. Migration never reconnects to the old remote and never overwrites customisations. |
+| A private GitLab source with a private CA, SSH-only instructions and a private release pipeline | **Adapted** | Luna installs from `github.com/SATUNIX/luna`; installs from the retired sources migrate ([Migration](migration.md)); releases are operator-run ([Releasing](releasing.md)) | A public beta cannot depend on a host nobody outside can reach. Migration never reconnects to the old remote and never overwrites customisations. |
 | GitLab CI (`.gitlab-ci.yml`) and the GitLab Release script | **Removed** | GitHub Actions: `ci.yml`, `security.yml`, and a manual dry-run-first `release.yml` ([CI security](ci-security.md)) | GitHub ignores the GitLab pipeline, and the release script called an API this repository no longer uses. |
-| The `roles/` operate-mode contracts and the `packages/role-runner` runner | **Not adopted** (removed) | Nowhere | They encode one homelab platform (its secrets broker, model gateway, service accounts and cluster roles). Only the untrusted-data marking idea in the runner is generic, and the kit's own context handling already covers it; porting it would be new work with its own review. |
+| The `roles/` operate-mode contracts and the `packages/role-runner` runner | **Not adopted** (removed) | Nowhere | They encode one homelab platform (its secrets broker, model gateway, service accounts and cluster roles). Only the untrusted-data marking idea in the runner is generic, and Luna's own context handling already covers it; porting it would be new work with its own review. |
 | Two rounds of independent adversarial review of the predecessor | **Adopted** (the outcome) and **removed** (the records) | The bypasses they found are fixed and pinned by regression tests ([Security model](security.md)) | The records contain machine paths and refer to commits that are not in the public history. |
 | The agent-improvement loop (`/pi-improve` cycles, a Codex submission workflow through a private git host) | **Adapted** | The generic autonomous run engine, with a self-improvement template ([Autonomous runs](autonomy.md)) | The private workflow depended on a specific host and account setup. What generalises is unattended runs inside a hard boundary with scoped authorisation, budgets and bounded recovery. |
 | Fleet documents for the container package (security baseline, contributor identities, changelog, session handoffs) | **Removed** | `packages/container/README.md` and `AGENTS.md`; the root `SECURITY.md` is the policy | They named private accounts, hosts and runners. |

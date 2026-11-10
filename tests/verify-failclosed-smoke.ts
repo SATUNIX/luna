@@ -20,7 +20,8 @@ import { boolean, isRecord, number, object, parseJson, parseJsonAs, record, stri
 import type * as Orchestrator from "../packages/extensions/src/orchestrator/index.ts";
 import type * as VerifyGate from "../packages/extensions/src/verify-gate/index.ts";
 import type * as Conductor from "../packages/extensions/src/conductor/index.ts";
-import { spawn } from "node:child_process";
+import type * as Strategy from "../packages/extensions/src/effort/strategy.ts";
+import { execFileSync, spawn } from "node:child_process";
 
 // The extension is called with the harness's fake pi API, not pi's ExtensionAPI, so its default export is the harness's factory type.
 type VerifyGateModule = Omit<typeof VerifyGate, "default"> & { default: ExtensionFactory };
@@ -647,34 +648,368 @@ async function testEditDuringVerificationIsStale(): Promise<void> {
 	}
 }
 
-// Known limitation (REL-6): only `write` and `edit` tool results count as edits. A `bash`
-// tool result (sed -i, git checkout, a formatter) leaves a recorded PASS as it was.
-async function testBashResultIsNotTreatedAsAnEdit(): Promise<void> {
+// A git checkout with one committed file, for the revision checks.
+function gitWorkspace(prefix: string): string {
+	const ws = tmpWorkspace(prefix);
+	const git = (...args: string[]): void => {
+		execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: ws, stdio: "ignore" });
+	};
+	git("init", "-q");
+	fs.writeFileSync(path.join(ws, "app.txt"), "one\n");
+	git("add", "app.txt");
+	git("commit", "-q", "-m", "init");
+	return ws;
+}
+
+const PASS_REVIEW = "## Criteria\n- PASS | the work is done | checked\n\n## Verdict\nPASS\n";
+
+/** Records a verify and a review PASS the way /verify does, so both carry the run's revision. */
+async function recordPassingRun(vg: VerifyGateModule, ws: string): Promise<void> {
+	const restoreCmd = setEnv("PI_KIT_VERIFY_CMD", 'node -e "process.exit(0)"');
+	try {
+		const report = await vg.runVerification(ws, {
+			focus: "finish the work",
+			runner: async () => ({ ok: true, output: PASS_REVIEW }),
+		});
+		assert.equal(report.pass, true, "precondition: the run passes");
+	} finally {
+		restoreCmd();
+	}
+}
+
+// G1: a PASS describes one revision of the checkout. A shell edit (sed -i, a formatter, git
+// checkout) after it must not leave it reading passing, even when the shell command failed.
+async function testShellEditAfterPassIsStale(): Promise<void> {
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const orch = await loadModule<typeof Orchestrator>("extensions/orchestrator/index.ts");
+	const ws = gitWorkspace("pi-kit-eval-shell-after-pass-");
+	try {
+		await recordPassingRun(vg, ws);
+		const board = parseJson(fs.readFileSync(path.join(ws, ".pi", "verdicts.json"), "utf8"));
+		const verify = isRecord(board) && isRecord(board.verdicts) ? board.verdicts.verify : undefined;
+		const pi = fakePi();
+		vg.default(pi.api);
+		const ui = { setStatus() {}, notify() {} };
+		await pi.handlers.get("session_start")({}, { cwd: ws });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "a shell command that changed nothing leaves the PASS standing");
+		fs.writeFileSync(path.join(ws, ".pi", "scratch.txt"), "kit state");
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "a change under .pi is not a change to the work");
+		fs.writeFileSync(path.join(ws, "app.txt"), "two\n");
+		await pi.handlers.get("tool_result")({ isError: true, toolName: "bash" }, { cwd: ws, ui });
+		const result = orch.missionCompleteBlocked(ws);
+		assert.equal(result.blocked, true, "a shell edit after the PASS must block completion");
+		assert.deepEqual(result.failing.sort(), ["review", "verify"], "both verdicts are stale");
+		assert.match(verdictOf(readBoard(path.join(ws, ".pi", "verdicts.json")), "verify").summary, /^stale:/);
+		assert.ok(isRecord(verify) && typeof verify.revision === "string" && /^[0-9a-f]{64}$/.test(verify.revision), "the PASS carried the revision it was recorded at");
+	} finally {
+		rmWorkspace(ws);
+	}
+}
+
+// G1: an edit no tool result reports (another process, an editor) is seen at turn_end.
+async function testTurnEndSeesAnUnreportedEdit(): Promise<void> {
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const orch = await loadModule<typeof Orchestrator>("extensions/orchestrator/index.ts");
+	const ws = gitWorkspace("pi-kit-eval-turnend-revision-");
+	try {
+		await recordPassingRun(vg, ws);
+		const pi = fakePi();
+		vg.default(pi.api);
+		const ui = { setStatus() {}, notify() {} };
+		await pi.handlers.get("session_start")({}, { cwd: ws });
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse" } }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "an unchanged checkout keeps the PASS at turn_end");
+		fs.writeFileSync(path.join(ws, "new-file.txt"), "untracked work\n");
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse" } }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, true, "an untracked file after the PASS blocks completion at turn_end");
+	} finally {
+		rmWorkspace(ws);
+	}
+}
+
+// G1: a verdict is bound to the checkout the check leaves behind. A check command that writes
+// files that are not ignored (coverage output, a formatter, a snapshot update) must not turn its
+// own PASS stale at the next tool result or turn_end, or completion could never unblock.
+async function testCheckOutputDoesNotStaleItsOwnPass(): Promise<void> {
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const orch = await loadModule<typeof Orchestrator>("extensions/orchestrator/index.ts");
+	const writesOutput = `node -e "require('fs').writeFileSync('check-out-' + process.hrtime.bigint() + '.txt', 'x')"`;
+	const ui = { setStatus() {}, notify() {} };
+	const ws = gitWorkspace("pi-kit-eval-check-writes-");
+	const restoreCmd = setEnv("PI_KIT_VERIFY_CMD", writesOutput);
+	try {
+		const report = await vg.runVerification(ws, {
+			focus: "finish the work",
+			runner: async () => ({ ok: true, output: PASS_REVIEW }),
+		});
+		assert.equal(report.pass, true, "precondition: the run passes");
+		const pi = fakePi();
+		vg.default(pi.api);
+		await pi.handlers.get("session_start")({}, { cwd: ws });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "the check's own output does not stale its PASS at tool_result");
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse" } }, { cwd: ws, ui });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "the check's own output does not stale its PASS at turn_end");
+	} finally {
+		restoreCmd();
+		rmWorkspace(ws);
+	}
+
+	// The automatic turn_end check binds its verdict the same way.
+	const ws2 = gitWorkspace("pi-kit-eval-check-writes-auto-");
+	const restoreOnTurn = setEnv("PI_KIT_VERIFY_ON_TURN", "1");
+	const restoreAuto = setEnv("PI_KIT_VERIFY_CMD", writesOutput);
+	try {
+		const pi = fakePi();
+		vg.default(pi.api);
+		await pi.handlers.get("session_start")({}, { cwd: ws2 });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "write" }, { cwd: ws2, ui });
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, { cwd: ws2, ui });
+		const board = path.join(ws2, ".pi", "verdicts.json");
+		assert.equal(verdictOf(readBoard(board), "verify").pass, true, "precondition: the automatic check passes");
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws2, ui });
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "toolUse" } }, { cwd: ws2, ui });
+		assert.equal(verdictOf(readBoard(board), "verify").pass, true, "the automatic check's own output does not stale its PASS");
+	} finally {
+		restoreAuto();
+		restoreOnTurn();
+		rmWorkspace(ws2);
+	}
+}
+
+// G1: the checkout is fingerprinted only while a PASS stands; a turn with nothing to protect runs no git.
+async function testNoFingerprintWithoutAPass(): Promise<void> {
+	if (process.platform === "win32") return;
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const ws = gitWorkspace("pi-kit-eval-no-fingerprint-");
+	const bin = tmpWorkspace("pi-kit-eval-git-shim-");
+	const log = path.join(bin, "calls.log");
+	const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+	fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\necho call >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+	const restorePath = setEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+	const calls = (): number => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0);
+	try {
+		const pi = fakePi();
+		vg.default(pi.api);
+		const ui = { setStatus() {}, notify() {} };
+		await pi.handlers.get("session_start")({}, { cwd: ws });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, { cwd: ws, ui });
+		assert.equal(calls(), 0, "no board: no fingerprint");
+		vg.recordVerifyVerdict(ws, "verify", false, "checks failed");
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		await pi.handlers.get("turn_end")({ message: { role: "assistant", stopReason: "stop" } }, { cwd: ws, ui });
+		assert.equal(calls(), 0, "a standing FAIL: no fingerprint");
+		await recordPassingRun(vg, ws);
+		fs.rmSync(log, { force: true });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui });
+		assert.ok(calls() > 0, "a standing PASS is checked (the shim sees git)");
+		fs.rmSync(log, { force: true });
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "read" }, { cwd: ws, ui });
+		assert.equal(calls(), 0, "a read-only tool result is not checked");
+	} finally {
+		restorePath();
+		rmWorkspace(bin);
+		rmWorkspace(ws);
+	}
+}
+
+// Known limitation: outside a git checkout there is no revision, so only `write` and `edit` tool
+// results count as edits; a `bash` tool result leaves a recorded PASS as it was.
+async function testOutsideGitBashIsNotAnEdit(): Promise<void> {
 	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
 	const orch = await loadModule<typeof Orchestrator>("extensions/orchestrator/index.ts");
 	const ws = tmpWorkspace("pi-kit-eval-bash-not-edit-");
 	try {
-		fs.mkdirSync(path.join(ws, ".pi"), { recursive: true });
-		vg.recordVerifyVerdict(ws, "verify", true, "checks passed");
-		vg.recordVerifyVerdict(ws, "review", true, "review passed");
+		fs.writeFileSync(path.join(ws, "app.txt"), "one\n");
+		await recordPassingRun(vg, ws);
+		const board = parseJson(fs.readFileSync(path.join(ws, ".pi", "verdicts.json"), "utf8"));
+		const verify = isRecord(board) && isRecord(board.verdicts) ? board.verdicts.verify : undefined;
+		assert.ok(isRecord(verify) && verify.revision === undefined, "outside git a PASS carries no revision");
 		const pi = fakePi();
 		vg.default(pi.api);
 		await pi.handlers.get("session_start")({}, { cwd: ws });
-		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws });
-		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "a bash result does not mark the verdicts stale (known limitation)");
+		fs.writeFileSync(path.join(ws, "app.txt"), "two\n");
+		await pi.handlers.get("tool_result")({ isError: false, toolName: "bash" }, { cwd: ws, ui: { setStatus() {}, notify() {} } });
+		assert.equal(orch.missionCompleteBlocked(ws).blocked, false, "outside git a bash result does not mark the verdicts stale (known limitation)");
 	} finally {
+		rmWorkspace(ws);
+	}
+}
+
+/** Signals verify-gate reported to a stand-in effort registry that answers with the real policy. */
+async function withEffortPolicy<T>(level: number, run: (signals: unknown[]) => Promise<T>): Promise<T> {
+	const strategy = await loadModule<typeof Strategy>("extensions/effort/strategy.ts");
+	const signals: unknown[] = [];
+	const key = Symbol.for("pi-kit.effort");
+	const registry: Record<symbol, unknown> = globalThis;
+	const previous = registry[key];
+	registry[key] = {
+		strategy: {
+			report: (signal: Strategy.Signal) => {
+				signals.push(signal);
+				return strategy.decide(signal, { level, standing: false, planTool: true, allowance: 8 }, strategy.DEFAULT_STRATEGY);
+			},
+			config: () => strategy.DEFAULT_STRATEGY,
+		},
+	};
+	try {
+		return await run(signals);
+	} finally {
+		if (previous === undefined) Reflect.deleteProperty(registry, key);
+		else registry[key] = previous;
+	}
+}
+
+// verify-fail: a first FAIL leaves the existing correction alone; a second FAIL after the work
+// changed (a new revision) moves to `split` at level 3 and above. A repeat at the same revision does not.
+async function testRepeatFailAtNewRevisionSplits(): Promise<void> {
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const ws = gitWorkspace("pi-kit-eval-verify-fail-");
+	const restoreCmd = setEnv("PI_KIT_VERIFY_CMD", 'node -e "process.exit(1)"');
+	const restoreReview = setEnv("PI_KIT_VERIFY_REVIEW", "0");
+	const split = /split it: start `workflow_run \{steps\}`/;
+	try {
+		const textOf = (result: unknown): string => {
+			const content = isRecord(result) && Array.isArray(result.content) ? result.content : [];
+			return content.map((c: unknown) => (isRecord(c) && typeof c.text === "string" ? c.text : "")).join("\n");
+		};
+		await withEffortPolicy(3, async (signals) => {
+			const pi = fakePi();
+			vg.default(pi.api);
+			await pi.handlers.get("session_start")({}, { cwd: ws });
+			const tool = pi.tools.get("verify_completion");
+			const verify = async (): Promise<string> => textOf(await tool.execute("id", {}, undefined, undefined, { cwd: ws }));
+			const first = await verify();
+			assert.match(first, /Result: \*\*FAIL\*\*/);
+			assert.doesNotMatch(first, split, "a first FAIL adds nothing");
+			assert.doesNotMatch(await verify(), split, "a repeat FAIL at the same revision adds nothing");
+			fs.writeFileSync(path.join(ws, "app.txt"), "attempt two\n");
+			assert.match(await verify(), split, "a repeat FAIL at a new revision steers to split");
+			assert.deepEqual(signals.map((s) => (isRecord(s) ? s.repeatFail : undefined)), [false, false, true]);
+			assert.ok(signals.every((s) => isRecord(s) && s.trigger === "verify-fail"));
+		});
+		await withEffortPolicy(2, async () => {
+			const pi = fakePi();
+			vg.default(pi.api);
+			await pi.handlers.get("session_start")({}, { cwd: ws });
+			const tool = pi.tools.get("verify_completion");
+			await tool.execute("id", {}, undefined, undefined, { cwd: ws });
+			fs.writeFileSync(path.join(ws, "app.txt"), "attempt three\n");
+			assert.doesNotMatch(textOf(await tool.execute("id", {}, undefined, undefined, { cwd: ws })), split, "below level 3 a repeat FAIL does not split");
+		});
+	} finally {
+		restoreReview();
+		restoreCmd();
+		rmWorkspace(ws);
+	}
+
+	// The automatic turn_end check: the second FAIL after an edit delivers the split steer once.
+	const ws2 = gitWorkspace("pi-kit-eval-verify-fail-auto-");
+	const restoreOnTurn = setEnv("PI_KIT_VERIFY_ON_TURN", "1");
+	const restoreFail = setEnv("PI_KIT_VERIFY_CMD", 'node -e "process.exit(1)"');
+	try {
+		await withEffortPolicy(3, async () => {
+			const pi = fakePi();
+			vg.default(pi.api);
+			const ui = { setStatus() {}, notify() {} };
+			const end = { message: { role: "assistant", stopReason: "stop" } };
+			await pi.handlers.get("session_start")({}, { cwd: ws2 });
+			fs.writeFileSync(path.join(ws2, "app.txt"), "first try\n");
+			await pi.handlers.get("tool_result")({ isError: false, toolName: "write" }, { cwd: ws2, ui });
+			await pi.handlers.get("turn_end")(end, { cwd: ws2, ui });
+			const texts = (): string[] => pi.steers.map((s) => (isRecord(s.message) && typeof s.message.content === "string" ? s.message.content : ""));
+			assert.equal(texts().filter((t) => split.test(t)).length, 0, "the first automatic FAIL sends only the correction");
+			fs.writeFileSync(path.join(ws2, "app.txt"), "second try\n");
+			await pi.handlers.get("tool_result")({ isError: false, toolName: "write" }, { cwd: ws2, ui });
+			await pi.handlers.get("turn_end")(end, { cwd: ws2, ui });
+			assert.equal(texts().filter((t) => split.test(t)).length, 1, "the second FAIL at a new revision sends the split steer");
+		});
+	} finally {
+		restoreFail();
+		restoreOnTurn();
+		rmWorkspace(ws2);
+	}
+}
+
+// A run that went stale (its checks passed but an edit landed during it) is not a FAIL, so it must
+// not read as a repeat of an earlier FAIL and steer to split.
+async function testStaleRunIsNotARepeatFail(): Promise<void> {
+	const vg = await loadModule<VerifyGateModule>("extensions/verify-gate/index.ts");
+	const ws = gitWorkspace("pi-kit-eval-verify-stale-not-fail-");
+	const restoreReview = setEnv("PI_KIT_VERIFY_REVIEW", "0");
+	const split = /split it: start `workflow_run \{steps\}`/;
+	try {
+		const textOf = (result: unknown): string => {
+			const content = isRecord(result) && Array.isArray(result.content) ? result.content : [];
+			return content.map((c: unknown) => (isRecord(c) && typeof c.text === "string" ? c.text : "")).join("\n");
+		};
+		await withEffortPolicy(3, async (signals) => {
+			const pi = fakePi();
+			vg.default(pi.api);
+			const ui = { setStatus() {}, notify() {} };
+			await pi.handlers.get("session_start")({}, { cwd: ws });
+			const tool = pi.tools.get("verify_completion");
+			const restoreFail = setEnv("PI_KIT_VERIFY_CMD", 'node -e "process.exit(1)"');
+			try {
+				assert.doesNotMatch(textOf(await tool.execute("id", {}, undefined, undefined, { cwd: ws })), split);
+			} finally {
+				restoreFail();
+			}
+			fs.writeFileSync(path.join(ws, "app.txt"), "attempt two\n");
+			const restoreSlow = setEnv("PI_KIT_VERIFY_CMD", 'node -e "setTimeout(() => process.exit(0), 400)"');
+			try {
+				const run = tool.execute("id", {}, undefined, undefined, { cwd: ws });
+				await new Promise((r) => setTimeout(r, 100));
+				await pi.handlers.get("tool_result")({ isError: false, toolName: "write" }, { cwd: ws, ui });
+				const text = textOf(await run);
+				assert.match(text, /## Stale/, "the run went stale");
+				assert.doesNotMatch(text, split, "a stale run is not a repeat FAIL");
+			} finally {
+				restoreSlow();
+			}
+			assert.equal(signals.length, 1, "only the real FAIL reports a verify-fail signal");
+		});
+	} finally {
+		restoreReview();
 		rmWorkspace(ws);
 	}
 }
 
 const tests: Array<[name: string, fn: () => Promise<void>]> = [
 	[
+		"a stale run is not a repeat FAIL and does not steer to split",
+		testStaleRunIsNotARepeatFail,
+	],
+	[
 		"an edit made while verification runs leaves a stale FAIL",
 		testEditDuringVerificationIsStale,
 	],
 	[
-		"a bash tool result is not treated as an edit (known limitation)",
-		testBashResultIsNotTreatedAsAnEdit,
+		"a shell edit after a verify/review PASS blocks completion (revision)",
+		testShellEditAfterPassIsStale,
+	],
+	[
+		"turn_end sees an edit no tool result reported",
+		testTurnEndSeesAnUnreportedEdit,
+	],
+	[
+		"a check that writes files does not stale its own PASS",
+		testCheckOutputDoesNotStaleItsOwnPass,
+	],
+	[
+		"no fingerprint runs while no PASS stands",
+		testNoFingerprintWithoutAPass,
+	],
+	[
+		"outside git a bash tool result is not treated as an edit (known limitation)",
+		testOutsideGitBashIsNotAnEdit,
+	],
+	[
+		"a repeat FAIL at a new revision steers to split at level 3",
+		testRepeatFailAtNewRevisionSplits,
 	],
 	[
 		"an edit after a verify/review PASS blocks completion until re-verified",

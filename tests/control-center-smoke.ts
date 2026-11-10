@@ -324,6 +324,8 @@ tests.push([
     const builtins = new Set<string>(CORE_BUILTINS);
     const dispatched = modelMod.ROWS.filter((row) => row.legacy !== undefined && builtins.has(modelMod.legacyCommandName(row.legacy)));
     assert.deepEqual(dispatched.map((row) => row.id), [], "rows whose typed command is a pi built-in");
+    // Bare /boost spends a recovery attempt and at the cap stops the loop: a hub row only looks.
+    assert.equal(modelMod.ROWS.find((row) => row.id === "boost")?.legacy, "/boost status", "the Auto-boost row spends no recovery attempt");
     const compact = modelMod.ROWS.find((row) => row.id === "compact");
     assert.equal(compact?.prefill, "/compact ");
     const model = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });

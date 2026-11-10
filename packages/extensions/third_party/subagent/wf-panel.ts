@@ -1,7 +1,8 @@
 /**
  * The /workflows panel (E5 slice G5): live workflow runs of this session, modelled on Claude Code's
- * workflow panel. It reads the run registry (run-model.ts) and acts through control.ts, so it does
- * exactly what workflow_control and /workflow do.
+ * workflow panel. It reads the run registry (run-model.ts) and acts through control.ts, so it shows
+ * and controls this session's live runs only; `/workflows` (run-query.ts) is the surface that also
+ * lists past runs of every format.
  *
  * Views:
  *   - run list: one row per run (status dot, name, status, done/total agents, elapsed, id);
@@ -19,7 +20,8 @@
  * active runs.
  *
  * In the TUI it opens as an overlay (`ctx.ui.custom`, overlay on pi 1.3.0 or newer, the
- * control-center hub pattern). Outside the TUI, `/workflows [run-id]` prints the same content as text.
+ * control-center hub pattern) through `/workflows panel [run-id]`. Outside the TUI, that command
+ * prints the same content as text.
  *
  * `s` copies a YAML run's definition file into the project's `.pi/workflows/`, so the workflow can be
  * kept and changed with the project. A copy is a project workflow: running it goes through the
@@ -41,7 +43,8 @@ import { controlRun, runControls, skipRunAgent, type ControlResult } from "./con
 import { runRegistry, type AgentRecord, type AgentStatus, type PhaseRecord, type PhaseStatus, type RunRegistry, type RunSnapshot, type RunStatus, type WorkflowEvent } from "./run-model.ts";
 import type { ToolContext } from "./types.ts";
 import { META_NAME } from "./wf-meta.ts";
-import { rememberDigest } from "./workflow-tools.ts";
+import { bindWorkflowPanelOpener, rememberDigest } from "./workflow-tools.ts";
+import { withInputHold } from "./shared/input-owner.ts";
 
 // --- formatting -------------------------------------------------------------------------------
 
@@ -86,6 +89,7 @@ export function tone(status: AgentStatus | PhaseStatus | RunStatus): Tone {
       return "bad";
     case "aborted":
     case "interrupted":
+    case "partial":
       return "warn";
     case "skipped":
     case "pending":
@@ -356,7 +360,7 @@ export function renderListLines(runs: RunSnapshot[], paint: Paint, selected?: nu
   return out;
 }
 
-/** The text fallback: `/workflows` (every run) or `/workflows <run-id>` outside the TUI. */
+/** The panel's text fallback outside the TUI: `/workflows panel` (every live run) or `/workflows panel <run-id>`. */
 export function renderText(registry: RunRegistry, narration: Narrator, runId?: string): string {
   if (runId) {
     const run = registry.get(runId);
@@ -720,44 +724,49 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
     }
     return;
   }
-  await ctx.ui.custom<undefined>(
-    (tui, theme, keybindings, done) => {
-      let closed = false;
-      const offRegistry = registry.subscribe(() => tui.requestRender());
-      // Elapsed times tick while the panel is open.
-      const timer = setInterval(() => tui.requestRender(), 1000);
-      timer.unref?.();
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        clearInterval(timer);
-        offRegistry();
-      };
-      const panel = new WorkflowPanel(
-        {
-          registry,
-          narrator: narration,
-          cwd,
-          paint: themePaint(theme),
-          requestRender: () => tui.requestRender(),
-          close: () => {
-            cleanup();
-            done(undefined);
+  // While the panel is open it owns the keyboard: an approval prompt would take focus from it and
+  // keys typed here could answer the card. The hold is released on every exit (done, Esc, throw), and
+  // on a reload, which never settles the overlay.
+  await withInputHold("the workflow panel", () =>
+    ctx.ui.custom<undefined>(
+      (tui, theme, keybindings, done) => {
+        let closed = false;
+        const offRegistry = registry.subscribe(() => tui.requestRender());
+        // Elapsed times tick while the panel is open.
+        const timer = setInterval(() => tui.requestRender(), 1000);
+        timer.unref?.();
+        const cleanup = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(timer);
+          offRegistry();
+        };
+        const panel = new WorkflowPanel(
+          {
+            registry,
+            narrator: narration,
+            cwd,
+            paint: themePaint(theme),
+            requestRender: () => tui.requestRender(),
+            close: () => {
+              cleanup();
+              done(undefined);
+            },
           },
-        },
-        runId,
-      );
-      return {
-        render: (width: number) => panel.render(width),
-        invalidate: () => {},
-        handleInput: (data: string) => {
-          const key = keyOf(data, keybindings);
-          if (key) panel.press(key);
-        },
-        dispose: cleanup,
-      };
-    },
-    supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
+          runId,
+        );
+        return {
+          render: (width: number) => panel.render(width),
+          invalidate: () => {},
+          handleInput: (data: string) => {
+            const key = keyOf(data, keybindings);
+            if (key) panel.press(key);
+          },
+          dispose: cleanup,
+        };
+      },
+      supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
+    ),
   );
 }
 
@@ -849,8 +858,11 @@ export function bindWorkflowStatus(ctx: ToolContext): void {
 
 let attached = false;
 
-/** Register `/workflows` and start narrating the session's runs. */
-export function registerWorkflowPanel(pi: ExtensionAPI): void {
+/**
+ * Start narrating the session's runs, and bind the panel to `/workflows panel [run-id]` (the
+ * command itself is registered in workflow-tools.ts, so `/workflow` is its alias).
+ */
+export function registerWorkflowPanel(_pi: ExtensionAPI): void {
   // Workflows run in the operator's session; a subagent child has no panel.
   if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
   if (!attached) {
@@ -858,17 +870,5 @@ export function registerWorkflowPanel(pi: ExtensionAPI): void {
     workflowStatus.attach();
     attached = true;
   }
-  pi.registerCommand("workflows", {
-    description: "Workflow runs panel: /workflows [run-id] (header, phases, agents, narrator; k skip · x stop · p pause · s save)",
-    getArgumentCompletions: (prefix: string) => {
-      const p = prefix.trim();
-      return runRegistry
-        .list()
-        .filter((r) => r.id.startsWith(p))
-        .map((r) => ({ value: r.id, label: r.id, description: `${r.name}: ${r.status}` }));
-    },
-    handler: async (args, ctx) => {
-      await openWorkflowPanel(ctx, args.trim() || undefined);
-    },
-  });
+  bindWorkflowPanelOpener((ctx, runId) => openWorkflowPanel(ctx, runId));
 }

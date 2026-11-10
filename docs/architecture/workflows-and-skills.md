@@ -2,7 +2,7 @@
 
 Workflows are declarative chains of subagent and skill steps: a Markdown file with YAML frontmatter that a deterministic executor, not a model, turns into an ordered run. Every run gets a blackboard directory under `.pi/workflows/runs/<id>` where `state.json` records progress and `steps/<id>.md` holds each step's final answer, so an interrupted run can resume from where it stopped. Workflow files are discovered from three locations in order (the shipped kit, the user's agent directory and the project), with a later location overriding an earlier one of the same name and project files requiring approval.
 
-Each step is a subagent launch like any other, so it goes through the delegation launch contract: `delegation-guard` decides which extensions the step's child loads and reserves a slot in the shared effort ledger. A `/workflow` command is launch kind `user`, because you typed it, and is bounded only by the platform ceilings. The `workflow_run` tool is `discretionary`, so it draws on the effort tier's budget like the `subagent` tool and is hidden at E1. That matters for workflows that fan out: `research` starts three scouts at once, and when the agent starts it with `workflow_run` the scout limit allows all three only at E5, whereas `/workflow run research` is not tier-limited. See [Subagents, orchestration and the task graph](subagents-and-orchestration.md) for the contract and [Effort](../effort.md) for the limits.
+Each step is a subagent launch like any other, so it goes through the delegation launch contract: `delegation-guard` decides which extensions the step's child loads and reserves a slot in the shared effort ledger. A `/workflow` command is launch kind `user`, because you typed it, and is bounded only by the platform ceilings. The `workflow_run` tool is launch kind `workflow`: it opens a run scope, is charged its worst case against the tier's plan allowance before anything starts, and is hidden at E1. `/workflow run` is not tier-limited. See [Subagents, orchestration and the task graph](subagents-and-orchestration.md) for the contract and [Effort](../effort.md) for the limits.
 
 Skills feed the same system from two directions. A workflow step (or a role) can preload named `SKILL.md` bodies into its child's system prompt, while the skill-router extension keeps most skills out of the system prompt and surfaces them progressively through BM25 search, automatic trigger hints and direct slash invocation. This page diagrams both mechanisms, and the separate completion gate in `verify-gate`, and shows where their state lives.
 
@@ -50,7 +50,7 @@ flowchart TD
     EXECQ -->|"yes"| FAIL["status failed"]
     EXECQ -->|"no"| RENDER["when check, then renderTemplate: inputs, steps, file, run, loop"]
     RENDER --> AGENT["runAgent: child launched through delegation-guard, with role, skills and tools"]
-    RENDER -.->|"parallel group"| PAR["Members run concurrently, up to 4"]
+    RENDER -.->|"parallel group"| PAR["Members run concurrently: up to 4, or the tier's maxConcurrent when the model started the run"]
     AGENT --> SAVEOUT["Write steps/STEP.md in full, truncate the copy in state.json"]
     PAR --> SAVEOUT
     SAVEOUT --> STEPST{"Step result"}
@@ -73,7 +73,7 @@ Steps render their task with `{{inputs.x}}`, `{{steps.<id>.output}}`, `{{steps.<
 
 ## A workflow run end to end
 
-The shipped `feature` workflow has four steps (`scout`, `plan`, `implement`, `review`) with the gate on `review`: the last non-blank line of its reply must be `VERDICT: PASS` (case is ignored), or the cursor goes back to `implement` with the review as feedback, at most twice. Invoked as a slash command, `/workflow` runs in the background as launch kind `user` and posts its summary into the session with `sendMessage` using `deliverAs: "followUp"`, while the `workflow_run` tool is launch kind `discretionary` and returns the summary plus the run directory. Aborting (Esc) cancels the active child and leaves the run `interrupted`, which can be resumed with `workflow_run {resume: id}` or `/workflow resume <id>`.
+The shipped `feature` workflow has four steps (`scout`, `plan`, `implement`, `review`) with the gate on `review`: the last non-blank line of its reply must be `VERDICT: PASS` (case is ignored), or the cursor goes back to `implement` with the review as feedback, at most twice. Invoked as a slash command, `/workflow` runs in the background as launch kind `user` and posts its summary into the session with `sendMessage` using `deliverAs: "followUp"`, while the `workflow_run` tool is launch kind `workflow`, charged its worst case against the tier's plan allowance before the first launch, and returns the summary plus the run directory. Aborting (Esc) cancels the active child and leaves the run `interrupted`, which can be resumed with `workflow_run {resume: id}` or `/workflow resume <id>`.
 
 ```mermaid
 sequenceDiagram
@@ -87,7 +87,7 @@ sequenceDiagram
     alt the agent starts it
         U->>A: run the feature workflow with a goal
         A->>T: workflow_run name feature, inputs goal
-        Note over T,E: launch kind discretionary, bounded by the effort tier
+        Note over T,E: launch kind workflow, worst case charged to the plan allowance
     else the user types the command
         U->>T: /workflow run feature goal=...
         Note over T,E: launch kind user, runs in the background
@@ -177,7 +177,7 @@ flowchart TD
     REPORT --> RESULT["Pass only if any check passed and the review ran and passed"]
 ```
 
-`PI_KIT_VERIFY_ON_TURN=1` enables a fast turn-end mode. After a turn that made successful `write` or `edit` calls and ended normally, it runs only the check command (when one resolves), records the `verify` verdict and, on a failure, sends one follow-up diagnostic until the next user input. It starts no reviewer. This gate does not intercept shell tools and is unrelated to a workflow step's own `gate`.
+`PI_KIT_VERIFY_ON_TURN=1` enables a fast turn-end mode. After a turn that made successful `write` or `edit` calls and ended normally, it runs only the check command (when one resolves), records the `verify` verdict and, on a failure, sends one follow-up diagnostic until the next user input; when a later failure comes at a different checkout revision and the effort policy answers `split` (level 3 and above), it sends that steer once per request. It starts no reviewer. In a git checkout a recorded PASS is also made stale when the checkout revision changes (see the verify-gate README). This gate does not intercept shell tools and is unrelated to a workflow step's own `gate`.
 
 ```mermaid
 flowchart LR

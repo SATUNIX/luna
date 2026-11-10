@@ -39,7 +39,7 @@ export interface FakeReply {
   write?: { file: string; text: string };
 }
 
-export type FakeSpawn = (command: string, args: string[], options: { env?: Record<string, string | undefined>; cwd?: string | URL }) => FakeChild;
+export type FakeSpawn = (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv | undefined; cwd?: string | URL | undefined }) => FakeChild;
 
 export function fakeSpawner(reply: (s: Spawned) => FakeReply): { spawn: FakeSpawn; seen: Spawned[]; maxLive: () => number } {
   const seen: Spawned[] = [];
@@ -64,7 +64,7 @@ export function fakeSpawner(reply: (s: Spawned) => FakeReply): { spawn: FakeSpaw
     };
     child.stdin.on("data", (chunk: Buffer) => { input += chunk.toString("utf8"); });
     child.stdin.on("end", () => {
-      const s: Spawned = { args, env: options.env ?? {}, cwd, task: input.replace(/^Task: /, ""), system };
+      const s: Spawned = { args: [...args], env: options.env ?? {}, cwd, task: input.replace(/^Task: /, ""), system };
       seen.push(s);
       const r = reply(s);
       const send = (event: Record<string, unknown>): void => { child.stdout.write(`${JSON.stringify(event)}\n`); };

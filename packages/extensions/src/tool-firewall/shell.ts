@@ -39,7 +39,7 @@ export type Word = {
   procSub: boolean;
 };
 
-export type Redirect = { op: string; fd: string; target: string; dynamic: boolean; body?: string };
+export type Redirect = { op: string; fd: string; target: string; dynamic: boolean; body?: string; bodyExpands?: boolean };
 
 export type Segment = {
   argv: string[];
@@ -656,7 +656,7 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
       if (target) t++;
       const redir: Redirect = { op: tok.op, fd: tok.fd, target: target?.text ?? "", dynamic: target?.dynamic ?? false };
       const body = tok.body;
-      if (body !== undefined) { redir.body = body; raw.stdinBody = body; redir.target = ""; }
+      if (body !== undefined) { redir.body = body; redir.bodyExpands = !(target?.quoted ?? false); raw.stdinBody = body; redir.target = ""; }
       if (tok.op === "<<<") raw.stdinBody = target?.text ?? "";
       if (target?.subs.length) for (const s of target.subs) parseInto(s, { ...env, cwd, via: [...(env.via ?? []), "$()"], depth: depth + 1 }, out, opaque);
       raw.redirects.push(redir);
@@ -958,7 +958,9 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
         while (i < seg.argv.length) {
           const a = seg.argv[i];
           if (a === undefined) break;
-          if (a === "-u" || a === "--unset" || a === "-C" || a === "--chdir" || a === "-S" || a === "--split-string") {
+          // `env -C` moves the command but not the shell's redirects, so what it reads is no longer known here.
+          if (/^(?:-[a-zA-Z0]*C|--c)/.test(a)) seg.unknownArgs = true;
+          if (/^-[a-zA-Z0]*[uC]$/.test(a) || a === "--unset" || a === "--chdir" || a === "-S" || a === "--split-string") {
             if ((a === "-S" || a === "--split-string") && seg.argv[i + 1]) {
               parseInto(seg.argv.slice(i + 1).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "env -S"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
               return null;

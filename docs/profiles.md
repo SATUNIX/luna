@@ -1,6 +1,6 @@
 # Profiles
 
-pi-system ships as one package. A **profile** chooses which of its
+Luna ships as one package. A **profile** chooses which of its
 extensions pi loads and which of its skills and prompt templates are listed. Switching profile
 changes pi's settings, not what is installed, so it takes effect immediately and is reversible.
 
@@ -39,7 +39,7 @@ Inside pi:
 From a shell:
 
 ```sh
-# A release install: run the installer of pi's own copy of the kit
+# A release install: run the installer of pi's own copy of Luna
 node ~/.pi/agent/git/github.com/SATUNIX/luna/packages/core/install.mjs --profile lite --yes --settings-only
 # A checkout registered in place
 node packages/core/install.ts --profile lite --yes
@@ -84,9 +84,9 @@ calls the `pi_system_governance` MCP tools only when that server is available
 
 ## Companion packages
 
-Some profiles use npm packages that are not part of the kit (`pi-lens`, `pi-readseek`). The
-installer registers them as their own pi packages, at the exact version the kit has reviewed
-(`packages/core/sources.json`). `/update` moves them when a kit release changes a pin.
+Some profiles use npm packages that are not part of Luna (`pi-lens`, `pi-readseek`). The
+installer registers them as their own pi packages, at the exact version Luna has reviewed
+(`packages/core/sources.json`). `/update` moves them when a Luna release changes a pin.
 `pi-lean-ctx` is in no profile: it is opt-in, registered by `install.ts --all` only when its
 `lean-ctx` binary is on `PATH`, and its extra shell and edit tools sit outside the firewall's shell
 and secret classification (see [Supply chain](supply-chain.md)).

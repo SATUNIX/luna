@@ -9,10 +9,21 @@
     "maxScouts": 8
   },
   "workflow": {
-    "$comment": "Script workflows (the \"workflow\" launch kind). Each run opens its own pinned scope in a per-session workflow ledger that the per-turn scope rotation never replaces. workflowConcurrent bounds live agents in one run, workflowTotalPerRun the agents one run may ever start, and workflowSessionTotal the agents all runs in a session may start. These launches never draw on the tier budget or on ceilings.maxTotal.",
+    "$comment": "Script workflows (the \"workflow\" launch kind). Each run opens its own pinned scope in a per-session workflow ledger that the per-turn scope rotation never replaces. workflowConcurrent bounds live agents in one run, workflowTotalPerRun the agents one run may ever start, and workflowSessionTotal the agents all runs in a session may start. These launches never draw on the tier budget or on ceilings.maxTotal. A tier's workflowAgents is the allowance for model-started YAML runs: the worst case of every such run started in one user request, charged before the first launch and never refunded; a tier with 0 refuses every plan, and a tier with maxTotal 0 opens no run scope at all. An approved script is charged nothing and keeps workflowTotalPerRun.",
     "workflowConcurrent": 16,
     "workflowTotalPerRun": 1000,
     "workflowSessionTotal": 2000
+  },
+  "strategy": {
+    "$comment": "The one decision policy (strategy.ts): what a stall, a large task or a large diff turns into. A move only chooses words: it never changes a tool set, a firewall decision or a tier. planMinTier is the level from which each user message is told to plan (standing mode too); splitMinTier the level from which a task is shaped as a plan, so a directive names workflow_run, a repeated stall or FAIL becomes a split, and a large diff suggests review-changes; delegateScore the complexity score that earns a directive; reviewLines the changed lines of a large diff. stallAfter is the detections of one signal before recovery is called (PI_KIT_GUARD_ESCALATE overrides it), maxAttempts the recovery attempts before the operator is (PI_KIT_RECOVERY_MAX_ATTEMPTS overrides it), and quietTurns the turns without a signature after which its attempts clear. expandDepth is how many generations of expansion one inline plan may reach: a step with expand answers with more steps, which may themselves expand. Each generation is ordinary steps in the same run, charged to the same allowance, and process depth stays 1.",
+    "planMinTier": 5,
+    "splitMinTier": 3,
+    "delegateScore": 3,
+    "reviewLines": 400,
+    "stallAfter": 2,
+    "quietTurns": 20,
+    "maxAttempts": 2,
+    "expandDepth": 3
   },
   "recovery": {
     "$comment": "A separate, small budget so a minimal-effort session can still recover from being stuck. It is only spendable while the trusted recovery extension has recovery active (the model cannot switch it on), only for read-only roles, and it never adds to the discretionary budget.",
@@ -38,6 +49,7 @@
         "1"
       ],
       "promptFile": "minimal.md",
+      "workflowAgents": 0,
       "limits": {
         "maxConcurrent": 0,
         "maxTotal": 0,
@@ -57,6 +69,7 @@
         "2"
       ],
       "promptFile": "focused.md",
+      "workflowAgents": 1,
       "limits": {
         "maxConcurrent": 1,
         "maxTotal": 1,
@@ -78,6 +91,7 @@
         "3"
       ],
       "promptFile": "standard.md",
+      "workflowAgents": 8,
       "limits": {
         "maxConcurrent": 2,
         "maxTotal": 3,
@@ -97,6 +111,7 @@
         "4"
       ],
       "promptFile": "thorough.md",
+      "workflowAgents": 16,
       "limits": {
         "maxConcurrent": 4,
         "maxTotal": 8,
@@ -117,6 +132,7 @@
         "5"
       ],
       "promptFile": "exhaustive.md",
+      "workflowAgents": 64,
       "limits": {
         "maxConcurrent": 6,
         "maxTotal": 16,

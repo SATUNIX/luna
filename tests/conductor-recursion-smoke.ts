@@ -104,7 +104,7 @@ async function testGenericSubagentIsBlockedAndLedgerIsProtected(): Promise<void>
   try {
     const { pi } = await setup(ws);
     const blocked = await pi.handlers.get("tool_call")({ toolName: "subagent", input: {} }, { cwd: ws, hasUI: false, ui: {} });
-    assert.deepEqual(blocked, { block: true, reason: "conductor: an engagement is active, so subagent is blocked; use dispatch_specialist for bounded delegation" });
+    assert.deepEqual(blocked, { block: true, reason: "conductor: an engagement is active, so subagent is blocked; dispatch_specialist is the bounded route, where the active tool policy allows it" });
     const module = await import(pathToFileURL(path.join(ROOT, "packages", "extensions", "src", "conductor", "index.ts")).href + `?protected=${Date.now()}`) as ConductorModule;
     fs.writeFileSync(path.join(ws, ".pi", "agents", "shell-role.md"), "---\nname: shell-role\ntools: read, bash\n---\nunsafe\n");
     const shellRole = await module.dispatchSpecialist(ws, "shell-role", "attempt shell escape", async () => ({ ok: true, output: "must not run" }));
@@ -178,6 +178,29 @@ async function testProjectSpecialistNeedsTrust(): Promise<void> {
     assert.deepEqual(asked[0], [module.ROLE_KEEP, module.ROLE_RUN], "the approval question starts on No");
     assert.equal(calls, 0, "no specialist starts without trust");
     assert.equal(engagement(ws).recursion.dispatchesUsed, 0, "a trust refusal costs no dispatch budget");
+    // An open overlay owns the keyboard: the card waits for it, and an abort during the wait refuses.
+    const { holdInput } = await import("../packages/core/shared/input-owner.ts");
+    const heldAsked: string[][] = [];
+    const release = holdInput("the test box");
+    let settled = false;
+    const heldRun = module.dispatchSpecialist(ws, "scout", "inspect", runner, undefined, undefined, selectContext(ws, () => module.ROLE_RUN, heldAsked)).finally(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    try {
+      assert.equal(heldAsked.length, 0, "the trust card must not open while an overlay holds input");
+      assert.equal(settled, false, "the dispatch waits for the overlay");
+    } finally { release(); }
+    assert.equal((await heldRun).ok, true, "after the hold the operator's answer decides");
+    assert.equal(calls, 1); calls = 0;
+    const abort = new AbortController();
+    const abortHold = holdInput("the test box");
+    const abortedRun = module.dispatchSpecialist(ws, "scout", "inspect", runner, undefined, undefined, { ...selectContext(ws, () => module.ROLE_RUN, heldAsked), signal: abort.signal });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    abort.abort();
+    const aborted = await abortedRun;
+    abortHold();
+    assert.equal(aborted.ok, false, "aborting while input is held refuses");
+    assert.equal(heldAsked.length, 1, "an aborted dispatch never shows the card");
+    assert.equal(calls, 0, "an aborted dispatch starts nothing");
     const approved = await module.dispatchSpecialist(ws, "scout", "inspect", runner, undefined, undefined, selectContext(ws, () => module.ROLE_RUN, asked));
     assert.equal(approved.ok, true, "an approved project role runs"); assert.equal(calls, 1);
     process.env.PI_KIT_TRUSTED_PROJECT_ROLES = `other;${module.specialistRoleDigest(ws, "scout") ?? ""}`;
@@ -205,10 +228,10 @@ async function testSiblingDelegationToolsAreBlocked(): Promise<void> {
   try {
     const { pi } = await setup(ws);
     const module = await loadModule<ConductorModule>("extensions/conductor/index.ts");
-    assert.deepEqual([...module.ENGAGEMENT_BLOCKED_TOOLS], ["subagent", "workflow_run", "dual_review"]);
-    for (const toolName of ["workflow_run", "dual_review"]) {
+    assert.deepEqual([...module.ENGAGEMENT_BLOCKED_TOOLS], ["subagent", "workflow_run", "workflow", "dual_review"]);
+    for (const toolName of ["workflow_run", "workflow", "dual_review"]) {
       const decision = await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} });
-      assert.deepEqual(decision, { block: true, reason: `conductor: an engagement is active, so ${toolName} is blocked; use dispatch_specialist for bounded delegation` });
+      assert.deepEqual(decision, { block: true, reason: `conductor: an engagement is active, so ${toolName} is blocked; dispatch_specialist is the bounded route, where the active tool policy allows it` });
     }
     assert.equal(await pi.handlers.get("tool_call")({ toolName: "workflow_status", input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, "tools that start no child stay available");
     // The block ends when the engagement closes, through the supported command, not by deleting the record.
@@ -220,7 +243,7 @@ async function testSiblingDelegationToolsAreBlocked(): Promise<void> {
     assert.equal(engagement(ws).phase, "close-out", notes.map((note) => note.message).join("; "));
     for (const toolName of module.ENGAGEMENT_BLOCKED_TOOLS) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is allowed again once the engagement is closed`);
     fs.rmSync(path.join(ws, ".pi", "engagement", "engagement.json"));
-    for (const toolName of ["workflow_run", "dual_review"]) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is only constrained during an engagement`);
+    for (const toolName of ["workflow_run", "workflow", "dual_review"]) assert.equal(await pi.handlers.get("tool_call")({ toolName, input: {} }, { cwd: ws, hasUI: false, ui: {} }), undefined, `${toolName} is only constrained during an engagement`);
   } finally { rmWorkspace(ws); }
 }
 

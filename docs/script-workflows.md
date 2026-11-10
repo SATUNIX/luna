@@ -6,6 +6,9 @@ and `workflow()`. The script runs in the [workflow-script sandbox](workflow-sand
 `agent()` call starts a real subagent. The tool returns at once and the run goes on in the
 background. Its result comes back later as a follow-up message.
 
+Most work needs only an [inline plan](workflows.md#inline-plans) through `workflow_run`; this page
+documents the script form for control flow that a plan cannot express.
+
 The engine is `wf-engine.ts` and the tool is `wf-tool.ts`, both in the `subagent` extension. The
 registry and the `meta` format are described under [script workflows](workflows.md#script-workflows)
 in the workflows page.
@@ -65,7 +68,8 @@ asking, on a screen in the root session only (`tests/effort-standing-smoke.ts`).
 
 `agent(prompt, opts?)` starts one subagent and resolves to its final text, or, with `schema`, to
 the validated object. It resolves to `null` when the agent fails (after the runner's own retries),
-is skipped through `workflow_control`, or the run is stopped. Options:
+is skipped through `workflow_control`, or the run is stopped. With `required: true` it throws in
+those cases instead, except for a stop. Options:
 
 | Option | Behaviour |
 | --- | --- |
@@ -75,10 +79,14 @@ is skipped through `workflow_control`, or the run is stopped. Options:
 | `model` | `provider/id` or a bare id. The provider must be one the session has configured (pi's model registry `getAvailable()`); otherwise the call returns `null` and a log line says why. |
 | `effort` | A thinking level for the child: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` (mapped to `xhigh`). |
 | `isolation` | `"worktree"`: the agent runs in its own git worktree (see [Isolation](#isolation-and-the-writer-lock)). |
-| `agentType` | A role (`implementer`, `scout`, `planner`, `reviewer`, `delegator`, or a user role). Aliases: `general-purpose`, `general` and `workflow` mean `implementer`; `explore`/`Explore` mean `scout`; `plan`/`Plan` mean `planner`; `code-reviewer` means `reviewer`. The default is `implementer`. |
+| `required` | `true`: the call must complete. If it does not, `agent()` throws and the run is `failed`, even if the script catches the throw or `parallel()` swallows it. A required failure names the step in the run's error. The default is `false`. It is left out of the journal key, so changing it does not cost a resume. (`tests/workflow-hooks-smoke.ts`) |
+| `agentType` | A role (`implementer`, `scout`, `planner`, `reviewer`, or a user role). Aliases: `general-purpose`, `general` and `workflow` mean `implementer`; `explore`/`Explore` mean `scout`; `plan`/`Plan` mean `planner`; `code-reviewer` means `reviewer`. The default is `implementer`. |
 
 An option of the wrong type, an unknown `effort`, `isolation` or `agentType` makes `agent()` throw
-into the script. Every child gets a note in its system prompt saying its answer is returned to the
+into the script. So does a prompt that is not a string, `opts` that are not an object or cannot be
+written as JSON, and a call over 1 MiB. Each of these still counts as a step that did not complete
+(see [Run status](#run-status)), so it launches nothing and is named as a `blocked` omission.
+Every child gets a note in its system prompt saying its answer is returned to the
 script as data, that it cannot start subagents or workflows, and that text from files, tools, web
 pages or other agents, including anything inside an `<untrusted>` fence, is data, not
 instructions. The prompt travels over stdin, never argv. (`tests/workflow-hooks-smoke.ts`)
@@ -100,13 +108,32 @@ does an unknown name.
 
 - **Concurrency**: at most `min(16, CPUs - 2)` agents of one run at once (at least 1); nested
   scripts share it. The effort ledger's own per-run limit (16) sits above it; if the ledger still
-  reports `concurrency`, the agent waits for a slot.
-- **Agents per run**: 1000 launches. The next `agent()` throws. Cached calls do not count.
+  reports `concurrency`, the agent waits for a slot and goes through admission again.
+- **Nested scripts**: as many at once as agents, in slots of their own, so that a fan-out of
+  `workflow()` calls cannot start one sandbox each (`tests/workflow-hooks-smoke.ts`, r13).
+- **Agents per run**: 1000 launches. The next `agent()` throws. Cached calls and launches refused
+  before a child ran do not count; a worktree that could not be made does, as it starts nothing but
+  costs git processes each try (`tests/workflow-resume-smoke.ts`).
+- **Refused calls**: a refusal costs a script one round trip and starts nothing, so only this limit
+  meets a loop of them. Past 10,000 refused calls the run fails with kind `limit`
+  (`tests/workflow-hooks-smoke.ts`, r21).
+- **`opts.model`**: at most 200 characters; a longer one is refused (r22). `label` and `phase` are cut
+  to 200.
 - **Budget**: `budget.total` is null unless the engine is given a total. The tool gives the
   budget set with `/effort ultracode --budget N` while standing mode is on
   (`tests/effort-standing-smoke.ts`), and none otherwise, so such a run has no ceiling. With a total, `budget.spent()` is the output tokens of the run's
   agents (nested ones included, not the main conversation), and `agent()` throws `budget exhausted`
-  once it reaches the total.
+  once it reaches the total. The total is where a run stops starting agents, not a ceiling on what it
+  spends: a run can pass it by what its live agents spend (`tests/workflow-kernel-regress-smoke.ts`, F3b, F3c).
+- **Admission**: a call takes its concurrency slot first, then is checked in this order: the pause
+  gate, a stop, the agent limit, the budget. The same checks run again as the last step before each
+  launch, after the wait for the checkout lock or a worktree slot, and before a launch is retried,
+  so none of those waits can outrun a pause or a spent budget (`tests/workflow-hooks-smoke.ts`,
+  r02, r02b, r16). A budgeted call waits, holding its slot, while `spent + live agents × estimate`
+  would reach the total. The estimate is the mean output of the finished agents that reported any,
+  and before one has it is the whole remainder, so a budgeted run starts its first agents one at a
+  time. Children that report no output never set an estimate, so they hold a budgeted run to one
+  agent at a time for its whole length; a run with no total is not affected (r24).
 - Each agent is a `workflow` launch in the [effort ledger](effort.md#script-workflows): it runs at
   E1, it counts toward the run's 1000 and the session's 2000 workflow agents, and any denial other
   than `concurrency` throws into the script.
@@ -185,58 +212,145 @@ Each run has a directory `<cwd>/.pi/workflows/runs/<runId>/` (mode 0700, files 0
 `script.js` (what ran), `run.json` (status, counts, error, log lines), `journal.jsonl` and, when
 worktrees were used, `worktrees.jsonl`. Values, errors and log lines go through the
 [workflow redaction](workflows.md) rules before they are written; the live value returned to the
-script is not redacted. Script runs do not appear in `workflow_status`, which lists YAML runs.
+script is not redacted, and a result redaction changed is not replayed. Script runs appear in
+`workflow_status` and `/workflows`, labelled `script`.
 (`tests/workflow-hooks-smoke.ts`, `tests/workflow-resume-smoke.ts`)
 
 ## Resume
 
-Every `agent()` call is journaled when it ends, with its key, label, phase, role, whether it
-succeeded, its (redacted) value and, for writers, what it changed. The key is the SHA-256 of the
-canonical JSON of `{prompt, opts}` with `label` left out, so relabelling a call does not change it.
+The journal opens with a fingerprint of the checkout. Every launched `agent()` call adds a `started`
+row before it launches (a writer in the main checkout is refused with the code `journal` if that row
+cannot be written) and an end row with its key, label, phase, role, whether it succeeded, its
+(redacted) value, whether redaction changed it, a digest of what it launched with and, for writers,
+what it changed. The key is
+the SHA-256 of the canonical JSON of `{prompt, opts}` with `label` left out, so relabelling a call
+does not change it.
 
 Resuming (`resumeFromRunId`) starts a new run with a new id and reuses the longest unchanged prefix
 of the earlier run's calls. A call is answered from the journal when no call before it has missed
 and an unused earlier entry has the same key; matching ignores the order calls finished in, so a
 pipeline resumes fully. An entry is claimed by one call only, so identical concurrent calls (a
 best-of-N fan-out) each get their own. The first call with no match runs live, and so does every
-call after it. The same script with the same args reuses every call.
+call after it. The same script with the same args, on an unchanged checkout and roles, reuses every
+call.
 
-- A failed, skipped or refused call is journaled with `ok: false` and never reused.
-- A writer in the main checkout (a role that is not read-only) records a fingerprint of the
-  checkout when it ends: `HEAD` plus the tree of the whole working copy, untracked files included,
-  built in a scratch index. The workflow runs directory (`.pi/workflows/runs`) is left out, so a
-  repo that does not gitignore `.pi/` still reuses writers. It is reused only when the checkout's fingerprint now equals the one
-  the earlier run's last such writer recorded. Outside a git checkout, writers are never reused.
+- A launched call that failed, was skipped or was denied at launch is journaled with `ok: false`, a
+  call over the 1 MiB result cap included, and so is a refused model. A call refused for its options
+  or role, refused at admission, or cut off before it started has no row. None of these is reused.
+- The fingerprint is `HEAD` plus the tree of the whole working copy, untracked files included,
+  built in a scratch index seeded from the real one and a scratch object store, so nothing is written
+  to the repository. All of `.pi` is left out, tracked files included, so a repo that does not
+  gitignore `.pi/` still reuses results, and so are the agent logs wherever they live. A writer in the
+  main checkout (a role that is not read-only) records it when it ends, failed or not. The comparison
+  uses git's default stat checks whatever the repository sets. A nested repository or submodule is one
+  gitlink that would hide its uncommitted edits, and git does not run inside it, so a checkout with one
+  has no usable fingerprint: it reuses nothing, and a killed writer stays blocked.
+  (`tests/workflow-resume-smoke.ts`)
+- Any entry, read or write, is reused only when the fingerprint now equals the one the earlier run's
+  last live writer recorded, or the one the run started on if no writer ran live. So an edit or commit after
+  the run reuses nothing. Outside a git checkout nothing is reused.
+- An entry is reused only when the call would launch the same thing: its resolved tools, model,
+  thinking, skills and their text, extensions, effort, runtime and system prompt.
 - A worktree agent is reused when its worktree was removed (it changed nothing), or when its kept
-  branch still points at the head it ended at.
-- Reused values are the journal's redacted copies.
+  worktree still exists with its git link intact, its branch at the head it ended at, and the same
+  contents, uncommitted changes included. Git does not run in a worktree whose link moved.
+- A journal written before these rows existed reuses nothing, once: the resumed run writes the new
+  form.
+- A reused value is exactly what the call returned. The journal keeps only the redacted copy, so an
+  entry whose value redaction changed is not reused: a read runs live and ends the prefix, and that
+  writer, or any finished writer after it, is refused with the code `redacted` instead of running
+  again on its own output. A resume that holds such a result copies every finished writer's row
+  into its own journal as it opens, so a later resume is refused or reuses them too, even if this
+  one stops or fails before reaching them (`tests/workflow-resume-smoke.ts`).
+- A reused kept worktree is listed in the completion message and `run.json`, as it was on the first run.
+
+A refused reuse logs `reuse.rejected{definition|workspace|worktree|legacy|redacted}` in the run's log,
+and the completion message gives the reason.
+
+A `started` row with no end row means the run died during that call and nobody knows what it did. A
+read replays, and a worktree writer replays in a new worktree. A writer in the main checkout replays
+only if the checkout is as the run left it. Otherwise every call that would write to the main
+checkout is refused as `blocked` with reason `unknown-effect`, reads and worktree writers still run,
+and later resumes stay refused until the checkout is back as the run left it. Calls that run while
+held back are journaled with `ok: false` and never reused, even once the checkout is back. A resume
+cannot settle it: check the checkout and start a fresh run. YAML workflows have their own record of this
+(`interruptedWriterSteps`).
 
 An unknown run id is refused. (`tests/workflow-resume-smoke.ts`)
+
+## Run status
+
+The host derives a run's status from what each step did, in
+`packages/extensions/third_party/subagent/run-contract.ts`, so a caught throw cannot change it, and
+the script's return value only decides between `partial` and `failed`. The first row that matches
+wins:
+
+| Condition | Status |
+| --- | --- |
+| The run was stopped | `interrupted` |
+| The script threw, or a `required` step did not complete | `failed` |
+| A step did not complete, and the value is `null` or `undefined` | `failed` |
+| A step did not complete | `partial`: the value is kept and the steps are named |
+| Otherwise | `passed` |
+
+Every `agent()` and `workflow()` call is a step, launched or refused: a bad reference, arguments
+over 1 MiB or that JSON cannot hold, a name that does not resolve and a second nesting level are all
+`blocked` steps, under the call's `label` or name when it has one. A malformed `required` (such as the
+string `"true"`) counts as required, so it fails the run. An agent whose result exceeds 1 MiB is a
+`failed` step: a best-effort call returns `null`, a required one throws, and a resume runs it again.
+Each `agent()` call is a step of its own, so a later success does not close an omission, and a
+script's retry loop cannot turn a failure into `passed`. A best-effort agent skipped through
+`workflow_control` is not an omission, because the skip is a decision to go on; a required one is,
+and fails the run. An agent still running when its script ends reads `cancelled`. `run.json` keeps
+the first 200 omissions and `omissionCount` holds the total.
+
+YAML workflows use [the same rule](workflows.md#execution-rules), with two differences. A step that
+a gate runs again reports its latest attempt, so a gate loop can close a failure of a best-effort
+step. An operator's skip of a YAML step is not an omission; the governed agent's skip of a required
+one, through the `workflow_control` tool, is, and the run reads `partial`
+(`tests/workflow-control-smoke.ts`, `tests/workflow-hooks-smoke.ts`, r01).
+(`tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`)
 
 ## Completion
 
 When the run ends, the tool posts a `luna-workflow-result` message with `deliverAs: "followUp"` and
 `triggerTurn: true`. It names the status, the counts of launched and reused agents, output tokens,
-kept worktrees, the journal and script paths, and, for a run that did not pass, how to resume it.
-A passed run's value (JSON, or the string as is) is redacted and placed inside an
-`<untrusted source="workflow-result">` fence, cut to 20,000 characters, with any ` ``` ` inside
-turned into `'''` so it cannot close the fence. A run that did not pass names only its status and
-error kind outside the fence; the error text, which can carry script or agent output, is redacted
-and placed inside an `<untrusted source="workflow-error">` fence, cut to 4,000 characters.
-(`tests/workflow-notify-smoke.ts`)
+kept worktrees, the journal and script paths. A run that did not pass says how to resume it only
+when a resume can help: an interrupted run or a crash always does, while a script that does not
+compile, a required step refused, or omissions that are all refusals the next run would meet again,
+such as bad options or an unknown role, need an edit instead (`tests/workflow-hooks-smoke.ts`, r04). The value of a `passed` or `partial` run (JSON, or the string as is) is redacted and placed
+inside an `<untrusted source="workflow-result">` fence, cut to 20,000 characters, with any ` ``` `
+inside turned into `'''` so it cannot close the fence. A run with omissions names them in an `<untrusted source="workflow-omissions">` fence. Outside the fences a run that
+did not pass names only its status and error kind; the error text, which can carry script or agent
+output, is redacted and placed inside an `<untrusted source="workflow-error">` fence. Both of
+those are cut to 4,000 characters. (`tests/workflow-notify-smoke.ts`,
+`tests/workflow-hooks-smoke.ts`)
 
 In pi 1.4.0 such a message, sent while the agent is streaming, joins the same follow-up queue as a
 follow-up the user types, so the two are delivered in the order they arrived; sent while the agent
 is idle, it starts a turn at once. No test here pins pi's ordering.
 
 `workflow_control {runId, action}` pauses (no new agents start), resumes, stops (the run ends
-`interrupted`) or skips the agents running now (they resolve to `null`)
-(`tests/workflow-hooks-smoke.ts`). If a script returns while agents it did not await are still
-running, they are stopped; no test pins that.
+`interrupted`) or skips the agents running now (they resolve to `null`, and a `required` one throws
+and fails the run). A skip or stop that reaches an agent waiting for the checkout or a worktree slot
+is that skip or stop, not a failure (r11). A writer whose child had already finished stays finished:
+its result is journaled, so a resume does not run it again. A paused run's writer that has reached
+the checkout lock waits for the resume while holding it, so other writers of that checkout wait too;
+stopping them takes them out of the queue. The omission records who skipped a step, as the code
+`operator` or `agent` (`tests/workflow-control-smoke.ts`, `tests/workflow-resume-smoke.ts`).
+
+A script's calls stop with that script, nested or top-level. One still waiting never starts, and a
+running agent is stopped, so a nested script that throws cannot leave work running beside the retry
+that caught it (r03, r03b; r23 for calls sent just before the return). A call the host read before
+the script ended may already have started; it is stopped and costs what it spent. The end of a run
+waits up to 10 seconds for what it stopped, so that their tokens and kept worktrees reach `run.json`,
+the outcome and the completion message; a child that ignores its kill is left out, and its step
+reads `cancelled` (r14, r15, with the fake child reporting usage and then taking the kill).
+(`tests/workflow-hooks-smoke.ts`)
 
 ## Built-in script workflows
 
-The kit ships five script workflows in `packages/kit/workflows/`. Each is a worked example of a
+Luna ships five script workflows in `packages/kit/workflows/`. Each is a worked example of a
 pattern from the `workflow-authoring` skill (`packages/kit/skills/workflow-authoring/SKILL.md`),
 the Luna port of the workflow authoring reference. Run one with `workflow({name, args})`. Every
 one of them that has a required argument fails before launching any agent when it is missing.
@@ -265,12 +379,12 @@ that the skill covers the built-ins and the Luna notes.
   call cannot pass one.
 - The built-ins' prompts and result shapes are checked with fake agents only; no test runs them
   against a model.
-- A run's result reaches the conversation only as the follow-up message. `/workflows` shows the
+- A run's result reaches the conversation only as the follow-up message. `/workflows panel` shows the
   live run (phases, agents, `▸` groups for nested workflows, `◆` for journal answers) in the
   session that started it; see [The /workflows panel](workflows.md#the-workflows-panel).
 - Completion turns chained one after another are capped (5, then a question) only while ultracode
   standing mode is on ([Ultracode](effort.md#ultracode)).
-- `workflow_status` and `/workflow` do not list or start script runs.
+- `workflow_status` and `/workflows` list script runs; `/workflow run` does not start them.
 - The checkout fingerprint is taken after each writer; changes made meanwhile by agents that do not
   take the writer lock (a `bash`-capable role) are attributed to whichever writer finished last.
 - The run-scoped approval rules apply only to requests that reach the console. A medium action the

@@ -75,21 +75,87 @@ function sourcesOf(dir: string): string[] {
   return out;
 }
 
-/** `const name = <initializer>` in the file being scanned, so a description held in a constant is still read. */
-let constants = new Map<string, TypeScript.Expression>();
+/** Named imports of a file's sibling modules, by the name they are bound to here. */
+interface Imported {
+  file: string;
+  name: string;
+}
+
+/** Where a description's constant may be found: this file's own `const`s and the modules it imports. */
+interface ConstScope {
+  constants: ReadonlyMap<string, TypeScript.Expression>;
+  imports: ReadonlyMap<string, Imported>;
+}
+
+const scopes = new Map<string, ConstScope>();
+const EMPTY_SCOPE: ConstScope = { constants: new Map(), imports: new Map() };
+
+/** `const name = <initializer>` in a parsed file, so a description held in a constant is still read. */
+function constantsIn(source: TypeScript.SourceFile): Map<string, TypeScript.Expression> {
+  const out = new Map<string, TypeScript.Expression>();
+  const collect = (node: TypeScript.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && !out.has(node.name.text)) out.set(node.name.text, node.initializer);
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  return out;
+}
+
+/** The named imports of sibling `.ts` modules, so a description held in one is read where it is written. */
+function importsIn(source: TypeScript.SourceFile, file: string): Map<string, Imported> {
+  const out = new Map<string, Imported>();
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !statement.importClause || statement.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
+    const specifier = statement.moduleSpecifier;
+    if (!ts.isStringLiteral(specifier) || !specifier.text.startsWith(".")) continue;
+    const bindings = statement.importClause.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      if (element.isTypeOnly) continue;
+      const name = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
+      out.set(element.name.text, { file: path.resolve(path.dirname(file), specifier.text), name });
+    }
+  }
+  return out;
+}
+
+/** A file's constants and imports, read once; an unreadable import resolves to nothing. */
+function scopeOf(file: string, source?: TypeScript.SourceFile): ConstScope {
+  const cached = scopes.get(file);
+  if (cached) return cached;
+  let parsed = source;
+  if (!parsed) {
+    try {
+      parsed = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    } catch {
+      scopes.set(file, EMPTY_SCOPE);
+      return EMPTY_SCOPE;
+    }
+  }
+  const scope: ConstScope = { constants: constantsIn(parsed), imports: importsIn(parsed, file) };
+  scopes.set(file, scope);
+  return scope;
+}
 
 /** The text of a string-like expression; a template's substitutions read as "…". */
-function textOf(node: TypeScript.Expression | undefined, depth = 0): string | undefined {
+function textOf(node: TypeScript.Expression | undefined, scope: ConstScope, depth = 0): string | undefined {
   if (!node || depth > 3) return undefined;
-  if (ts.isIdentifier(node)) return textOf(constants.get(node.text), depth + 1);
+  if (ts.isIdentifier(node)) {
+    const local = scope.constants.get(node.text);
+    if (local) return textOf(local, scope, depth + 1);
+    const imported = scope.imports.get(node.text);
+    if (!imported) return undefined;
+    const from = scopeOf(imported.file);
+    return textOf(from.constants.get(imported.name), from, depth + 1);
+  }
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
   if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((s) => `…${s.literal.text}`).join("");
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = textOf(node.left, depth);
-    const right = textOf(node.right, depth);
+    const left = textOf(node.left, scope, depth);
+    const right = textOf(node.right, scope, depth);
     return left !== undefined && right !== undefined ? left + right : undefined;
   }
-  if (ts.isParenthesizedExpression(node)) return textOf(node.expression, depth);
+  if (ts.isParenthesizedExpression(node)) return textOf(node.expression, scope, depth);
   return undefined;
 }
 
@@ -101,32 +167,32 @@ function property(obj: TypeScript.ObjectLiteralExpression, key: string): TypeScr
 }
 
 /** `Type.X(...)` -> a short type name and the options' description, unwrapping Optional. */
-function describeSchema(node: TypeScript.Expression): { type: string; optional: boolean; description: string } {
+function describeSchema(node: TypeScript.Expression, scope: ConstScope): { type: string; optional: boolean; description: string } {
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
     const kind = node.expression.name.text;
     const args = node.arguments;
-    if (kind === "Optional" && args[0]) return { ...describeSchema(args[0]), optional: true };
+    if (kind === "Optional" && args[0]) return { ...describeSchema(args[0], scope), optional: true };
     const options = [...args].reverse().find((a): a is TypeScript.ObjectLiteralExpression => ts.isObjectLiteralExpression(a));
-    const description = (options && textOf(property(options, "description"))) ?? "";
+    const description = (options && textOf(property(options, "description"), scope)) ?? "";
     let type = kind.toLowerCase();
-    if (kind === "Array" && args[0]) type = `${describeSchema(args[0]).type}[]`;
-    else if (kind === "Literal" && args[0]) type = JSON.stringify(textOf(args[0]) ?? args[0].getText());
+    if (kind === "Array" && args[0]) type = `${describeSchema(args[0], scope).type}[]`;
+    else if (kind === "Literal" && args[0]) type = JSON.stringify(textOf(args[0], scope) ?? args[0].getText());
     else if ((kind === "Union" || kind === "StringEnum") && args[0] && ts.isArrayLiteralExpression(args[0])) {
-      type = args[0].elements.map((e) => (ts.isStringLiteral(e) ? JSON.stringify(e.text) : describeSchema(e).type)).join(" | ");
+      type = args[0].elements.map((e) => (ts.isStringLiteral(e) ? JSON.stringify(e.text) : describeSchema(e, scope).type)).join(" | ");
     }
     return { type, optional: false, description };
   }
   return { type: "see source", optional: false, description: "" };
 }
 
-function paramsOf(node: TypeScript.Expression | undefined): Param[] | null {
+function paramsOf(node: TypeScript.Expression | undefined, scope: ConstScope): Param[] | null {
   if (!node || !ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== "Object") return null;
   const shape = node.arguments[0];
   if (!shape || !ts.isObjectLiteralExpression(shape)) return null;
   const out: Param[] = [];
   for (const p of shape.properties) {
     if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) return null;
-    const d = describeSchema(p.initializer);
+    const d = describeSchema(p.initializer, scope);
     out.push({ name: p.name.text, ...d });
   }
   return out;
@@ -138,23 +204,18 @@ function scan(ext: Extension): { commands: Map<string, string>; tools: Map<strin
   const tools = new Map<string, { description: string; params: Param[] | null }>();
   for (const file of sourcesOf(ext.dir)) {
     const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    constants = new Map();
-    const collect = (node: TypeScript.Node): void => {
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && !constants.has(node.name.text)) constants.set(node.name.text, node.initializer);
-      ts.forEachChild(node, collect);
-    };
-    collect(source);
+    const scope = scopeOf(file, source);
     const visit = (node: TypeScript.Node): void => {
       if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
         const method = node.expression.name.text;
         const [first, second] = node.arguments;
         if (method === "registerCommand" && first) {
-          const name = textOf(first);
-          const description = second && ts.isObjectLiteralExpression(second) ? textOf(property(second, "description")) : undefined;
+          const name = textOf(first, scope);
+          const description = second && ts.isObjectLiteralExpression(second) ? textOf(property(second, "description"), scope) : undefined;
           if (name !== undefined && !commands.has(name)) commands.set(name, description ?? "");
         } else if (method === "registerTool" && first && ts.isObjectLiteralExpression(first)) {
-          const name = textOf(property(first, "name"));
-          if (name !== undefined && !tools.has(name)) tools.set(name, { description: textOf(property(first, "description")) ?? "", params: paramsOf(property(first, "parameters")) });
+          const name = textOf(property(first, "name"), scope);
+          if (name !== undefined && !tools.has(name)) tools.set(name, { description: textOf(property(first, "description"), scope) ?? "", params: paramsOf(property(first, "parameters"), scope) });
         }
       }
       ts.forEachChild(node, visit);
@@ -227,7 +288,7 @@ function whereEnv(name: string, pages: ReadonlyArray<{ file: string; text: strin
 const CONFIG_FILES: ReadonlyArray<{ file: string; what: string; defined: string }> = [
   { file: "packages/kit/profiles/<name>.json", what: "A profile: which extensions, skills and prompts load, and the firewall mode", defined: "[profiles](profiles.md)" },
   { file: "packages/extensions/src/tool-firewall/default-policy.json", what: "The shipped firewall policy (a custom one is named by `PI_KIT_FIREWALL_POLICY`)", defined: "[security](security.md)" },
-  { file: "packages/core/.env.example", what: "Every environment variable the kit reads, with defaults", defined: "[INSTALL](INSTALL.md#environment-variables)" },
+  { file: "packages/core/.env.example", what: "Every environment variable Luna reads, with defaults", defined: "[INSTALL](INSTALL.md#environment-variables)" },
 ];
 
 function schemaRows(): string[] {
@@ -273,7 +334,7 @@ function render(): string {
     "> `registerCommand` / `registerTool` calls in the extension sources. Do not hand-edit; run",
     "> `npm run catalog`. `npm run verify` fails when this page is stale.",
     "",
-    "The kit's external interface: what an operator types, what the model can call, the environment",
+    "Luna's external interface: what an operator types, what the model can call, the environment",
     "it reads and the files it is configured by. Which extensions a profile loads is in the",
     "[capability matrix](capability-matrix.md); each extension's purpose is in the",
     "[extension catalogue](EXTENSIONS.md). A command or tool exists only while its extension is loaded.",

@@ -297,14 +297,17 @@ async function testAutonomousLoopProducer() {
   }
 }
 
-// 7. Session-scoped producer coverage: recovery-orchestrator's /recover command writes its
-// contribution under sessions/<id>/ (not flat), and scaffolds the recovery report.
+// 7. Session-scoped producer coverage: recovery-orchestrator's automatic escalation path writes
+// its contribution under sessions/<id>/ (not flat), and scaffolds the recovery report.
 async function testRecoveryOrchestratorProducer() {
   const ws = tmpWorkspace("pi-kit-ctxcontrib-recovery-");
   try {
     const pi = await loadProducer("extensions/recovery-orchestrator/index.ts", ws, "rec-1");
     const ctx = { cwd: ws, sessionManager: { getSessionId: () => "rec-1" }, ui: { notify() {}, setStatus() {} } };
-    await pi.commands.get("recover").handler("same-task", ctx);
+    const escalationDir = path.join(ws, ".pi", "recovery", "sessions", "rec-1");
+    fs.mkdirSync(escalationDir, { recursive: true });
+    fs.writeFileSync(path.join(escalationDir, "escalation.json"), JSON.stringify({ signature: "same-task", reason: "fixture", count: 1, at: new Date().toISOString(), sessionId: "rec-1" }));
+    await pi.handlers.get("turn_end")({}, ctx);
 
     const scoped = path.join(contribDir(ws), "sessions", "rec-1", "recovery-orchestrator.json");
     const flat = path.join(contribDir(ws), "recovery-orchestrator.json");

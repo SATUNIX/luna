@@ -1,9 +1,9 @@
 # Capability Research & Integration Workflow
 
 This page describes how an agent (or a human) should research, plan, and integrate new
-capabilities — extensions, skills, prompts — into this kit. It is **documentation only**: there is
+capabilities — extensions, skills, prompts — into Luna. It is **documentation only**: there is
 no runtime skill for it yet. Follow it whenever the ask is "find good pi packages / extensions and
-wire the best ones in," or "improve the kit's coding capability, efficiency, or usability."
+wire the best ones in," or "improve Luna's coding capability, efficiency, or usability."
 
 The goal is high-ROI additions that **run in the background** (auto-triggered, minimal visible tool
 surface) rather than tools the operator must remember to invoke.
@@ -32,7 +32,7 @@ surface) rather than tools the operator must remember to invoke.
   value is a package that improves coding quality or cuts context/token cost *without* adding a
   tool the model has to call.
 
-## 3. Respect the kit's architecture (hard constraints)
+## 3. Respect Luna's architecture (hard constraints)
 
 - **Injection monopoly.** Only `packages/extensions/src/context-sieve` may return `{ systemPrompt }` from
   `before_agent_start`; any local extension that wants to add to the system prompt must instead write
@@ -56,7 +56,7 @@ surface) rather than tools the operator must remember to invoke.
 
 | Mode | When | How |
 |---|---|---|
-| **Vendor** (`packages/extensions/third_party/<name>/`) | Small, low/zero-dep, needs local modification, or must ship inside the kit package | Copy/reimplement source, add `SOURCE.md` + `extension.json`, keep self-contained |
+| **Vendor** (`packages/extensions/third_party/<name>/`) | Small, low/zero-dep, needs local modification, or must ship inside the Luna package | Copy/reimplement source, add `SOURCE.md` + `extension.json`, keep self-contained |
 | **External reference** (`packages/core/sources.json`, `mode:"reference"`) | Heavier native/WASM deps, or a maintained npm pi package | Add entry with `source`, `entry`, `provides`, `profiles`; `packages/core/install.ts` installs it as an independent pi package when a selected profile includes its name |
 
 ## 5. Wire it in

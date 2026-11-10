@@ -7,6 +7,10 @@ import { execFileSync } from "node:child_process";
 import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, assert, ROOT, isolateKitEnv } from "./harness.ts";
 import { call, callMethod, dig, firstText, prop } from "./dynamic.ts";
 import { parseJson } from "../lib/guard.ts";
+import { writeSettingsAtomic } from "../lib/settings.ts";
+import { planValidRate } from "./footprint.ts";
+import type * as AgentsModule from "../../extensions/third_party/subagent/agents.ts";
+import type * as PlanModule from "../../extensions/third_party/subagent/plan.ts";
 
 export type FixtureCategory = "security" | "verification" | "orchestration" | "recovery" | "memory";
 
@@ -464,6 +468,36 @@ export const fixtures: readonly Fixture[] = [
         restoreIsolation();
         rmWorkspace(ws);
       }
+    },
+  },
+  // ---- Orchestration (live-only, operator-run): plan-valid rate per model ----
+  // A live run records what each model answered; this fixture only scores that file, so no model
+  // runs here and CI never reaches one. The operator writes a JSONL file with one
+  // `{"model":"<id>","steps":[...]}` record per plan the model returned (`steps` is the plan
+  // itself, the same list `workflow_run` takes), then:
+  //   PI_KIT_PLAN_RATE_FILE=/path/plans.jsonl npm run eval -- --category orchestration
+  // and reads the per-model counts from PI_KIT_PLAN_RATE_OUT (default: plan-rate.json beside the
+  // input). With the gate unset this returns at once: the offline CI path.
+  {
+    name: "small-model/plan-valid-rate",
+    category: "orchestration",
+    async run(): Promise<void> {
+      const input = process.env.PI_KIT_PLAN_RATE_FILE;
+      if (!input) return;
+      const plan: typeof PlanModule = await loadModule("vendor/subagent/plan.ts");
+      const agents: typeof AgentsModule = await loadModule("vendor/subagent/agents.ts");
+      const records = fs
+        .readFileSync(input, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => line.trim() !== "")
+        .map((line) => parseJson(line));
+      // The roles a real `workflow_run` resolves against. An empty list cannot be used: compilePlan
+      // refuses every step with "\"implementer\" is not a role", so every plan would score invalid
+      // and the rate would say nothing about the model.
+      const roles = agents.discoverAgents(ROOT, "both").agents;
+      const rate = planValidRate(records, (steps) => plan.compilePlan(steps, roles).ok);
+      const out = process.env.PI_KIT_PLAN_RATE_OUT ?? path.join(path.dirname(input), "plan-rate.json");
+      writeSettingsAtomic(out, { schemaVersion: 1, at: new Date().toISOString(), ...rate });
     },
   },
 ];

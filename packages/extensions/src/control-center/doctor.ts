@@ -148,7 +148,7 @@ export function doctorLines(input: DoctorInput): DoctorLine[] {
   if (r.delegation) lines.push({ label: "Delegation", value: r.delegation, command: "/orchestrate status", ok: true });
   if (r.compaction) lines.push({ label: "Compaction", value: r.compaction, command: "/compaction status", ok: true });
   if (r.unattended) lines.push({ label: "Unattended", value: r.unattended, command: "/auto explain", ok: true });
-  if (r.subagents) lines.push({ label: "Subagents", value: r.subagents, command: "/subagents", ok: true });
+  if (r.subagents) lines.push({ label: "Subagents", value: r.subagents, command: "/workflows", ok: true });
   if (r.security) lines.push({ label: "Security", value: r.security, command: "/security status", ok: true });
 
   return lines;

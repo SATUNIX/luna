@@ -195,4 +195,5 @@ console.log("[release] NOT pushed. main is protected, so the release lands throu
 if (bump) console.log("[release]   1. push this branch and merge it into main through a reviewed merge request;");
 console.log(`[release]   ${bump ? "2" : "1"}. once the release commit is on main, push the tag: git push origin v${version}`);
 console.log(`[release] Pushing the v${version} tag makes it the \`latest\` release for git installs; the GitHub release workflow (manual) re-runs the gate before any npm publish.`);
+console.log(`[release] Then redeploy the website so it names the tag: gh workflow run pages.yml --ref main (docs/releasing.md).`);
 if (dryRun) console.log("[release] (dry-run: validation gates ran for real; no files changed, no commit/tag created)");

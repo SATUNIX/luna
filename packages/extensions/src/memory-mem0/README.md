@@ -32,7 +32,7 @@ server; no Docker/Qdrant).
 
 ## What is sent
 
-`mem0_add` passes the memory text through the kit's secret-redaction table (`shared/redact.ts`,
+`mem0_add` passes the memory text through Luna's secret-redaction table (`shared/redact.ts`,
 see the "Redaction" section of `docs/security.md`) before either transport stores it, so a
 secret-shaped value is stored as `[REDACTED]`. On the REST path `MEM0_API_KEY` is sent only over
 `https://` or to a loopback host (`localhost`, `127.x.x.x`, `[::1]`); plain `http://` to any other

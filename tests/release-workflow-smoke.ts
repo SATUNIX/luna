@@ -131,12 +131,37 @@ const tests: Record<string, () => void> = {
   "no job releases or publishes through a third-party action (the side-effect scan reads commands, not actions)": () => {
     // SIDE_EFFECTS matches command lines. A `uses:` of a release, publish or deploy action would slip past it, so none is
     // allowed anywhere: the release is made with `gh release create` and `npm publish` in the two guarded jobs.
+    // The one reviewed exception: the website's upload and deploy, whose confinement the
+    // "the website deploy is confined" test below checks.
+    const PAGES_ACTION = /^\s*(?:-\s*)?uses:\s*actions\/(?:upload-pages-artifact|deploy-pages)@[0-9a-f]{40}\b/;
     const RELEASING_ACTION = /^\s*(?:-\s*)?uses:\s*\S*(?:release|publish|deploy|upload-release|create-pull-request|build-push|pages)\S*/i;
     for (const file of fs.readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml"))) {
       for (const line of read(file).split(/\r?\n/)) {
-        if (isCode(line) && RELEASING_ACTION.test(line)) assert.fail(`${file}: \`${line.trim()}\` is a releasing or publishing action, which the guarded jobs' structure test cannot see`);
+        if (isCode(line) && RELEASING_ACTION.test(line) && !(file === "pages.yml" && PAGES_ACTION.test(line))) assert.fail(`${file}: \`${line.trim()}\` is a releasing or publishing action, which the guarded jobs' structure test cannot see`);
       }
     }
+  },
+
+  "the website deploy is confined: main only, no pull requests, no checkout, its environment": () => {
+    const text = read("pages.yml");
+    assert.deepEqual(triggers(text), ["push", "workflow_dispatch"], "pages.yml runs on a push and by hand, never on a pull request");
+    assert.match(text, /^ {2}push:\s*\n {4}branches: \[main\]\s*$/m, "pages.yml deploys from pushes to main only");
+    assert.match(text, /^permissions:\s*\n {2}contents: read\s*$/m, "the workflow-level token is read-only");
+    const jobs = parseJobs(text);
+    assert.deepEqual([...jobs.keys()].sort(), ["build", "deploy"], "pages.yml has a build job and a deploy job");
+    const build = jobs.get("build") ?? "";
+    const deploy = jobs.get("deploy") ?? "";
+    assert.deepEqual(sideEffectsOf(build), [], "the build job has no write rights and publishes nothing");
+    assert.ok(!/^ {4}permissions:/m.test(build), "the build job keeps the read-only workflow token");
+    assert.match(build, /if: github\.ref == 'refs\/heads\/main'\s*\n\s+uses: actions\/upload-pages-artifact@/, "the site is uploaded only on main");
+    assert.match(deploy, /^ {4}if: github\.ref == 'refs\/heads\/main'\s*$/m, "the deploy job runs only on main");
+    assert.match(deploy, /^ {4}needs: build\s*$/m, "the deploy job deploys what the build job built");
+    assert.match(deploy, /^ {4}environment:\s*\n {6}name: github-pages\s*$/m, "the deploy job runs in the github-pages environment");
+    const perms = /^ {4}permissions:\s*\n((?: {6}.*\n)+)/m.exec(deploy)?.[1] ?? "";
+    assert.deepEqual(perms.split("\n").filter(Boolean).map((l) => l.trim().replace(/\s*#.*$/, "")).sort(), ["id-token: write", "pages: write"], "the deploy job has exactly pages: write and id-token: write");
+    const uses = [...deploy.matchAll(/uses:\s*(\S+)/g)].map((m) => (m[1] ?? "").replace(/@.*/, ""));
+    assert.deepEqual(uses, ["actions/deploy-pages"], "the deploy job runs only actions/deploy-pages: no checkout, no repository code");
+    assert.ok(!/^\s+(?:-\s+)?run:/m.test(deploy), "the deploy job runs no commands");
   },
 
   "the dry-run job only ever runs npm publish with --dry-run": () => {

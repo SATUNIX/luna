@@ -1,6 +1,6 @@
 # Releasing
 
-pi-system is delivered from its public git repository, `github.com/SATUNIX/luna`. pi
+Luna is delivered from its public git repository, `github.com/SATUNIX/luna`. pi
 installs it straight from there, so **a pushed `vX.Y.Z` tag is the release**: there is no package
 registry in between.
 
@@ -59,6 +59,29 @@ merges, `npm run release -- <version>` on main finds every version field already
 so it only gates and tags. The first release, the version already in `package.json` before any
 tag exists, works the same way. `tests/release-plan-smoke.ts` covers each of these cases, and
 `tests/docs-smoke.ts` fails when a pin or the badge disagrees with `package.json`.
+
+### After the release pull request merges
+
+Tag the release in the same sitting as the merge. The tag is the release, and until it exists the
+version on `main` points at nothing: the install pins in the README and the docs name a tag that
+cannot be installed, and the website keeps naming the previous tag. Two releases (`0.2.4-beta.10`
+and `0.2.4-beta.11`) were merged this way and never tagged.
+
+```sh
+V=0.3.0-beta.1                               # the version that just merged
+git fetch --tags origin && git switch main && git pull --ff-only
+npm run release -- "$V"                      # gates, then tags the merged commit (local only)
+git push origin "v$V"                        # the release
+gh workflow run pages.yml --ref main         # redeploy the website so it names the new tag
+gh workflow run release.yml --ref "v$V"      # dry run; then again with -f dry-run=false
+```
+
+Then check that it landed:
+
+- `git ls-remote --tags origin "v$V"` prints the tag;
+- the website's install command names it (the pages build warns `Release tag missing` while it
+  does not);
+- the GitHub Release exists once the non-dry run finishes.
 
 Users on `latest` see a new release the next time `/update` checks (at most a day later, or
 straight away with `/update`). A tag is the release even if a later workflow fails: `/update`
@@ -147,9 +170,9 @@ them with every other operator-only step. In short:
 ## What a release contains
 
 The whole repository at the tag. pi runs `npm install --omit=dev --legacy-peer-deps` in its copy,
-which fetches the kit's one runtime dependency from the npm registry ([Supply chain](supply-chain.md), "What
-installing the kit pulls in"). Companion packages (`pi-lens`,
-`pi-readseek`) are separate pi packages from npm, registered by the installer at the kit's
+which fetches Luna's one runtime dependency from the npm registry ([Supply chain](supply-chain.md), "What
+installing Luna pulls in"). Companion packages (`pi-lens`,
+`pi-readseek`) are separate pi packages from npm, registered by the installer at Luna's
 reviewed pins in `packages/core/sources.json`.
 
 `npm run smoke:package` (part of `check:all`) packs the repository exactly as `npm publish`

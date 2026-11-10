@@ -1,6 +1,6 @@
 # Security policy
 
-`pi-system` puts a **default-deny guard rail** between the model and your machine. It is a guard
+Luna puts a **default-deny guard rail** between the model and your machine. It is a guard
 rail, not a sandbox. The full model, including the specific things it does not guarantee, is in
 [`docs/security.md`](docs/security.md), and what it protects from whom is in
 [`docs/threat-model.md`](docs/threat-model.md); read them before relying on the boundary.
@@ -13,7 +13,7 @@ rail, not a sandbox. The full model, including the specific things it does not g
 | `main` (the `next` channel) | Yes: fixes land here first |
 | Any older tag | No: update to the newest release (`/update`) |
 
-The kit is in beta ([`docs/beta.md`](docs/beta.md)). Releases move forward: a fix is a new
+Luna is in beta ([`docs/beta.md`](docs/beta.md)). Releases move forward: a fix is a new
 release, never a moved tag.
 
 ## Reporting a vulnerability
@@ -81,7 +81,7 @@ In scope:
 
 Out of scope (documented limits, not vulnerabilities, unless the documentation says otherwise):
 
-- what an **allowed** tool call does: the kit is not a sandbox;
+- what an **allowed** tool call does: Luna is not a sandbox;
 - actions by a process of your own account that does not go through a tool call, by root, or by
   code running inside the pi process;
 - a secret in a shape `secret-guard` or the redaction table does not know: detection is
@@ -91,8 +91,8 @@ Out of scope (documented limits, not vulnerabilities, unless the documentation s
 - an action you approved, and approval prompts that list *Approve* first (an operator decision,
   recorded in [`docs/remote-control.md`](docs/remote-control.md#the-yes-first-decision-sec-5));
 - vulnerabilities in pi itself, in companion packages or in other upstream code, which belong to
-  their maintainers (tell us too if the kit's use of them makes it worse);
-- findings that need a modified kit, policy or profile that widens the boundary on purpose.
+  their maintainers (tell us too if Luna's use of them makes it worse);
+- findings that need a modified Luna, policy or profile that widens the boundary on purpose.
 
 ## Safe harbour
 

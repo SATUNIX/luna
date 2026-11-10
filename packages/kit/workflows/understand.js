@@ -89,6 +89,6 @@ reads.push(...more)
 phase('Synthesize')
 const map = await agent(
   `Write a map that answers the question below from these subsystem reads: how the parts fit together, the flow through them with path:line evidence, and the open questions. Say where reads disagree.${dropped.length ? ` These areas were named but not read: ${dropped.join(', ')}.` : ''}\n\nQuestion:\n${question}\n\n${fence('understand-reads', reads)}`,
-  { label: 'synthesize', agentType: 'planner' },
+  { label: 'synthesize', agentType: 'planner', required: true },
 )
 return { question, areas: reads, map, notRead: dropped }

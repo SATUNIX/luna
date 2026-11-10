@@ -3,7 +3,7 @@
 > Already installed and looking to update instead? See [Updates](updates.md). A first install is
 > covered in [Getting started](getting-started.md); this page is the reference.
 
-pi-system is one pi package. A **profile** chooses which of its extensions, skills and prompts
+Luna is one pi package. A **profile** chooses which of its extensions, skills and prompts
 load; there are no separate packages per profile. It is delivered from its public git repository,
 `github.com/SATUNIX/luna` (set in `packages/core/distribution.json`). This is a beta; see
 [Beta status](beta.md).
@@ -18,16 +18,16 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.3.0-beta.2
 pi
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna`. On the first
-interactive start the kit applies the `balanced` profile and asks for a `/reload`. Set
+interactive start Luna applies the `balanced` profile and asks for a `/reload`. Set
 `PI_KIT_AUTO_PROFILE=<name>` to pick another profile, or `0` to leave the package unfiltered.
 
 The repository is public, so no credentials are involved. pi runs `npm install --omit=dev` in
-its copy of the kit, as it does for every git package; that step fetches the kit's one runtime
+its copy of Luna, as it does for every git package; that step fetches Luna's one runtime
 dependency from the npm registry ([Supply chain](supply-chain.md)).
 
 ## The scripted installer
@@ -54,12 +54,12 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--yes` | Accepted for scripts; the installer never prompts. |
 | `--dry-run` | Print what would change; change nothing. |
 | `--no-externals` | Skip companion packages such as `pi-lens`. |
-| `--uninstall` | Remove the kit and the companions this installer registered. A companion you had already registered at the kit's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
+| `--uninstall` | Remove Luna and the companions this installer registered. A companion you had already registered at Luna's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
 
 An unknown flag, or a value flag such as `--profile` with no value, stops the installer with exit
 code 1 and a usage line before anything changes (`tests/install-marker-smoke.ts`).
 
-The installer keeps **exactly one** registered copy of the kit: registering a checkout replaces
+The installer keeps **exactly one** registered copy of Luna: registering a checkout replaces
 a release install and the other way round, because two copies would load every extension twice.
 
 `--scope project` writes only the project's `.pi/settings.json` and `.pi/.pi-kit.json`. The firewall
@@ -107,7 +107,7 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 | --- | --- | --- |
 | Release from pi | `pi install git:github.com/SATUNIX/luna@vX.Y.Z` | Normal use; the profile is applied on first start |
 | Release from the installer | `node packages/core/install.ts --channel <latest\|next\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
-| Local checkout (editable) | `node packages/core/install.ts --profile <name> --yes` | Developing the kit: pi loads the checkout in place, edit and `/reload` |
+| Local checkout (editable) | `node packages/core/install.ts --profile <name> --yes` | Developing Luna: pi loads the checkout in place, edit and `/reload` |
 | Project auto-install | Ship `.pi/settings.json` in a repository | pi auto-installs on first trusted start |
 | npm (not published yet) | `npx @satunix/pi-system --profile <name>` | Only once npm delivery is switched on ([Releasing](releasing.md#npm-publication-optional)) |
 
@@ -124,7 +124,7 @@ node packages/core/install.ts --only memory-local,verify-gate --yes
 
 ## Coming from the private GitLab source
 
-Installs made from the earlier private GitLab source move by installing the public kit and running
+Installs made from the earlier private GitLab source move by installing the public Luna package and running
 its installer, which keeps your profile and hand edits and never contacts the old host; see
 [Migration](migration.md).
 
@@ -142,7 +142,7 @@ and bound to loopback by default.
 ## Uninstall
 
 ```sh
-# Removes the kit and the companions the installer registered (from the clone root):
+# Removes Luna and the companions the installer registered (from the clone root):
 node packages/core/install.ts --uninstall
 ```
 
@@ -197,7 +197,7 @@ patch of each minor release, starting each one on the volume until it reports re
 it (v1.13.6, v1.14.1, v1.15.5, v1.16.3, v1.17.1, v1.18.3, v1.19.2, then v1.20.0; from v1.16.1 the
 start also moves RocksDB storage to Gridstore, which v1.18 and later require), or remove the volume
 (`docker compose ... down -v`), which discards whatever a mem0 server stored in it. Back the volume
-up before stepping. Nothing in the kit's tests runs Qdrant.
+up before stepping. Nothing in Luna's tests runs Qdrant.
 
 `memory-mem0` (an **experimental** extension in the `self-improving` profile) additionally
 needs an external mem0 REST server, which this repo does not ship. Point it at your own mem0

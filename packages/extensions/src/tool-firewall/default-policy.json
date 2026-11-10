@@ -49,14 +49,6 @@
       "decision": "allow",
       "risk_class": "delegation"
     },
-    "subagent_status": {
-      "decision": "allow",
-      "risk_class": "read_only"
-    },
-    "subagent_stop": {
-      "decision": "allow",
-      "risk_class": "process_control"
-    },
     "dual_review": {
       "decision": "allow",
       "risk_class": "delegation"

@@ -254,6 +254,9 @@
     },
     {
       "description": "secret-guard smoke: a stub key body the secret guard must block"
+    },
+    {
+      "description": "workflow-plan smoke: a made-up key the task-text redaction must mask"
     }
   ],
   "zizmor": [

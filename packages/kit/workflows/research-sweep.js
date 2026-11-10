@@ -90,6 +90,6 @@ reads.push(...(await pipeline(fresh.slice(0, room), readSource)).filter(Boolean)
 phase('Synthesize')
 const answer = await agent(
   `Answer the question below from these facts. Cite the evidence for every claim, say where sources disagree, and list what stays open.${dropped.length ? ` These sources were found but not read: ${dropped.join(', ')}.` : ''}\n\nQuestion:\n${question}\n\n${fence('research-facts', reads)}`,
-  { label: 'synthesize', agentType: 'planner' },
+  { label: 'synthesize', agentType: 'planner', required: true },
 )
 return { question, reads, notRead: dropped, answer }

@@ -13,6 +13,7 @@ import path from "node:path";
 import { globalAgentDir, findPackageEntry, KitMarkerSchema, SettingsSchema, type KitMarker } from "./lib/settings.ts";
 import { isRecord, parseJson, safeParse } from "./lib/guard.ts";
 import { displayCommand, runPi } from "./lib/pi-cli.ts";
+import { ownedSettingKeys, profileSettingsPath, readProfileSettingsRecord, removeProfileSettings } from "./lib/profiles.ts";
 
 const args = process.argv.slice(2);
 const has = (flag: string): boolean => args.includes(flag);
@@ -141,7 +142,31 @@ if (failures) {
   process.exit(1);
 }
 
-// 3. Remove state marker after every managed removal succeeds.
+// 3. Hand back the pi settings a profile set (lite's compaction keys) before the marker goes: they
+// change pi itself, not only the kit, so plain pi must not keep a small-window profile's numbers.
+// Only a global install writes them (settings.json there is machine-global). A failure keeps the
+// marker and the record, so the same command can be retried.
+if (effectiveScope === "global") {
+  const settingsFile = path.join(globalAgentDir(), "settings.json");
+  try {
+    const owned = readProfileSettingsRecord();
+    const keys = ownedSettingKeys(owned);
+    if (keys.length > 0) {
+      if (dryRun) {
+        console.log(`[uninstall] Dry run: would restore or remove ${keys.join(", ")} in ${settingsFile}`);
+      } else {
+        for (const warning of removeProfileSettings(settingsFile, owned)) console.warn(`[uninstall] WARN: ${warning}`);
+        fs.rmSync(profileSettingsPath(), { force: true });
+        console.log(`[uninstall] Restored the operator's own ${keys.join(", ")} in ${settingsFile} (the profile's values removed)`);
+      }
+    }
+  } catch (e) {
+    console.error(`[uninstall] Incomplete: could not restore the profile's settings in ${settingsFile}: ${errorMessage(e)}. State marker retained at ${markerPath}. Resolve the error and retry the same uninstall command.`);
+    process.exit(1);
+  }
+}
+
+// 4. Remove state marker after every managed removal succeeds.
 if (!dryRun && fs.existsSync(markerPath)) {
   fs.unlinkSync(markerPath);
   console.log(`[uninstall] Removed state marker: ${markerPath}`);

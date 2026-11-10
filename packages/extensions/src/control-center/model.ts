@@ -142,7 +142,7 @@ export const ROWS: RowDef[] = [
   { id: "approvals.auto", label: "Approvals → auto", page: "autonomy", kind: "action", legacy: "/auto on", risk: "weakening", asksItself: true, description: "Switches approvals to automatic (a model judge decides)" },
   { id: "firewall", label: "Remembered approvals", page: "autonomy", kind: "action", legacy: "/firewall" },
   { id: "loop", label: "Loop", page: "autonomy", kind: "action", legacy: "/loop", unavailableReason: "loaded only in the long-horizon and autonomous profiles" },
-  { id: "boost", label: "Auto-boost", page: "autonomy", kind: "action", legacy: "/boost" },
+  { id: "boost", label: "Auto-boost", page: "autonomy", kind: "action", legacy: "/boost status" },
   { id: "autonomy", label: "Container runs", page: "autonomy", kind: "action", legacy: "/autonomy", unavailableReason: "loaded only in the autonomous profile" },
 
   // --- work ---
@@ -159,13 +159,12 @@ export const ROWS: RowDef[] = [
   { id: "orchestrate", label: "Orchestration", page: "delegation", kind: "action", legacy: "/orchestrate" },
   { id: "orchestrate.plan", label: "Plan only", page: "delegation", kind: "action", legacy: "/orchestrate-plan" },
   { id: "orchestrate.implement-review", label: "Plan → implement → review", page: "delegation", kind: "action", legacy: "/orchestrate-implement-review" },
-  { id: "subagents", label: "Subagents", page: "delegation", kind: "action", valueKey: "subagents", legacy: "/subagents" },
+  { id: "subagents", label: "Subagents", page: "delegation", kind: "action", valueKey: "subagents", legacy: "/workflows" },
   { id: "workflow", label: "Workflows", page: "delegation", kind: "action", legacy: "/workflow" },
   { id: "plan", label: "Plan mode", page: "delegation", kind: "action", legacy: "/plan", unavailableReason: "loaded only in the self-improving profile" },
 
   // --- recovery ---
-  { id: "reflect", label: "Reflect now", page: "recovery", kind: "action", legacy: "/reflect" },
-  { id: "recover", label: "Recover now", page: "recovery", kind: "action", legacy: "/recover", unavailableReason: "loaded only in the long-horizon and autonomous profiles" },
+  { id: "reflect", label: "Reassess now", page: "recovery", kind: "action", legacy: "/boost" },
 
   // --- memory ---
   { id: "remember", label: "Remember", page: "memory", kind: "action", legacy: "/remember" },

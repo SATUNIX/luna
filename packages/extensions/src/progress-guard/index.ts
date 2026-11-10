@@ -13,6 +13,10 @@ import { writeFileSafe } from "./shared/safe-fs.ts";
 //   - "suggest" : notify a suggestion only, never inject (default).
 // The autonomous profile should set PI_KIT_GUARD_MODE=auto; other profiles stay "suggest".
 //
+// What a signal turns into, and its words, is the effort extension's one decision policy (its
+// strategy.ts); this file detects, counts and delivers. Without effort it delivers one fixed line,
+// and the counters and the recovery marker work as before.
+//
 // It never blocks a tool and never emits a system prompt — guidance goes into the running loop
 // as a hidden custom message (returned from turn_end on pi >=0.87.0, steered on older pi), and
 // into later prompts through a context-sieve ctx-contribution. When it cannot detect enough, it
@@ -141,6 +145,27 @@ function short(t: string): string {
   return t.length > 56 ? "…" + t.slice(-53) : t;
 }
 
+interface GuardDecision {
+  move: string;
+  steer: string | null;
+}
+
+/** What this extension asks of the effort registry. */
+interface StrategyView {
+  report(signal: { trigger: "stall" | "boost"; signature?: string; detections?: number }): GuardDecision | null;
+}
+
+/** The policy's decision, or null without one (effort absent, or its policy unreadable). Never throws. */
+function reportToPolicy(signal: Parameters<StrategyView["report"]>[0]): GuardDecision | null {
+  try {
+    return ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { strategy?: StrategyView } | undefined)?.strategy?.report(signal) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const NO_POLICY_LINE = "The effort policy is not loaded, so no move was chosen: take a different next action or report the blocker.";
+
 // B-005: contribution files are scoped per session so concurrent sessions sharing a cwd
 // (child agents do) cannot overwrite each other. The resolver is duplicated in each producer
 // (not imported) because every extension must stay independently extractable
@@ -240,42 +265,22 @@ export default function (pi: ExtensionAPI) {
     return null;
   }
 
-  function nudgeContent(reason: string): string {
-    return [
-      `## progress-guard: possible loop`,
-      "",
-      `Signal: ${reason}.`,
-      "Stop and self-reflect against your goal: is this advancing it, or repeating? Then do ONE of:",
-      "- take the smallest **different** next action, or",
-      "- **delegate** the stuck investigation to a fresh sub-agent (`agent-orchestration`) that works",
-      "  in its own context and returns only the answer you need — not raw output, or",
-      "- report the completed findings or the concrete blocker when further authorized work is not useful.",
-      "Read-only research can make progress without writes. Do not edit files merely to reset this detector.",
-      "",
-      `Recent actions: ${digest()}`,
-      "Skill: `self-reflection-and-recovery`. If assistance is not enough, see",
-      "docs/recovery-orchestration-mode.md.",
-    ].join("\n");
+  /** The stall's move: the policy's, or without one the same thresholds and a fixed line. */
+  function stallDecision(signature: string, detections: number): GuardDecision {
+    return reportToPolicy({ trigger: "stall", signature, detections }) ?? { move: detections >= ESCALATE_AFTER ? "angle" : "reorient", steer: NO_POLICY_LINE };
   }
 
-  // The stronger, autonomous checkpoint injected once a loop signature keeps recurring. It is
-  // written unconditionally (not only in "auto" mode): the operator should not have to run
-  // /reflect or arm anything for a repeated loop to get a review/delegate nudge.
-  function reviewDelegateContent(signature: string, reason: string, count: number): string {
-    return [
-      "## progress-guard: review / delegate checkpoint (automatic)",
-      "",
-      `The signal \`${signature}\` has now fired ${count} times: ${reason}.`,
-      "This is the point to stop and review rather than continue the current streak:",
-      "1. Re-read your goal and confirm the last N actions serve it. If not, say so and change approach.",
-      "2. Prefer delegating the stuck step to a fresh sub-agent (`agent-orchestration`) so it gets an",
-      "   unpolluted context and returns only the answer.",
-      "3. If the loop is a repeated failure, capture the concrete blocker (what you tried, what failed,",
-      "   what is needed) instead of retrying it a fourth time.",
-      "",
-      `Recent actions: ${digest()}`,
-      "Skill: `self-reflection-and-recovery`.",
-    ].join("\n");
+  function guidance(reason: string, steer: string | null): string {
+    return `progress-guard: ${reason}. ${steer ?? NO_POLICY_LINE} Recent actions: ${digest()}`;
+  }
+
+  // Bare /boost: this moment, not the next detection. It goes in through the same marker the
+  // automatic escalation uses; recovery-orchestrator acts on the event, or on the marker at its
+  // next turn_end.
+  function reassess(dir: string, signature: string): void {
+    writeContribution(dir, guidance("reassessment asked for", reportToPolicy({ trigger: "boost" })?.steer ?? null));
+    writeEscalation(dir, signature, "operator invoked /boost", 1);
+    pi.events?.emit("pi-kit:recovery-reassess", { cwd: dir, signature });
   }
 
   pi.on("session_start", async (_event, ctx) => {
@@ -353,6 +358,12 @@ export default function (pi: ExtensionAPI) {
     // still avoiding a notification on every single turn.
     const detections = (actCounts.get(signature) ?? 0) + 1;
     actCounts.set(signature, detections);
+    // Recovery's quiet stretch runs from the last detection, not the last entry: a stall that keeps
+    // firing is not quiet. An event, because extensions stay self-contained.
+    pi.events?.emit("pi-kit:stall-seen", { signature });
+
+    const decision = stallDecision(signature, detections);
+    if (decision.move !== "reorient" && decision.move !== "angle") return undefined;
 
     const inCooldown = signature === lastActedSignature && turn - lastActedTurn < COOLDOWN_TURNS;
     // The guidance also goes into this run (EFF-5): the contribution file is read by
@@ -365,7 +376,7 @@ export default function (pi: ExtensionAPI) {
       lastActedTurn = turn;
       const msg = `progress-guard: ${reason}. Auto review/delegate checkpoint incoming. (/boost status)`;
       if (mode() === "auto") {
-        inRun = nudgeContent(reason);
+        inRun = guidance(reason, decision.steer);
         writeContribution(cwd, inRun);
         if (c.hasUI) c.ui.notify(`${msg} [auto-nudged]`, "warning");
       } else if (c.hasUI) {
@@ -373,12 +384,11 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Autonomous review/delegate injection (no /reflect, no mode switch): once the same
-    // signature keeps recurring, inject the stronger checkpoint via context-sieve AND write
-    // the recovery marker so recovery-orchestrator can act on it. This is the automatic
-    // replacement for the manual /reflect step.
-    if (detections >= ESCALATE_AFTER) {
-      const checkpoint = reviewDelegateContent(signature, reason, detections);
+    // Autonomous review/delegate injection (no reminder command, no mode switch): once the
+    // same signature keeps recurring, inject the stronger checkpoint via context-sieve AND write
+    // the recovery marker so recovery-orchestrator can act on it.
+    if (decision.move === "angle") {
+      const checkpoint = guidance(reason, decision.steer);
       writeContribution(cwd, checkpoint);
       // Delivered in the run on the episode's first escalation and then at most once per cooldown.
       if (!inCooldown || !escalated.has(signature)) inRun = checkpoint;
@@ -409,28 +419,8 @@ export default function (pi: ExtensionAPI) {
     return { entries: [...event.entries, { type: "custom_message", customType: CONTRIB_ID, content: inRun, display: false }] };
   });
 
-  pi.registerCommand("reflect", {
-    description: "Inject a self-reflection checkpoint (goal vs recent actions: progressing or looping?).",
-    handler: async (_args, ctx) => {
-      const c = ctx;
-      const content = [
-        "## Self-reflection checkpoint",
-        "",
-        "Answer briefly against your current goal, then act on the answer:",
-        "1. Are my recent actions advancing the goal, or repeating?",
-        "2. If looping: what is the single smallest **different** next action?",
-        "3. Should the stuck step be delegated to a fresh sub-agent that returns only the answer?",
-        "",
-        `Recent actions: ${digest()}`,
-        "Skill: `self-reflection-and-recovery`.",
-      ].join("\n");
-      writeContribution(c.cwd ?? cwd, content);
-      if (c.hasUI) c.ui.notify("progress-guard: reflection checkpoint queued for the next turn.", "info");
-    },
-  });
-
   pi.registerCommand("boost", {
-    description: "Auto-boost control: /boost [on|off|status]. 'on' auto-nudges on detected loops this session.",
+    description: "Auto-boost control: /boost reassesses now; /boost [on|off|status]. 'on' auto-nudges on detected loops this session.",
     handler: async (args, ctx) => {
       const c = ctx;
       const arg = (args ?? "").trim().toLowerCase();
@@ -441,13 +431,18 @@ export default function (pi: ExtensionAPI) {
         runtimeMode = "suggest";
         clearContribution(c.cwd ?? cwd);
         if (c.hasUI) c.ui.notify("progress-guard: auto-boost OFF (suggest-only).", "info");
-      } else {
+      } else if (arg === "status") {
         if (c.hasUI) {
           c.ui.notify(
             `progress-guard: mode=${mode()} | reads-since-edit=${readsSinceWrite} | window=${recent.length} | write-capable=${writeCapable} | thresholds repeat≥${REPEAT_LIMIT}, stall≥${READ_STALL}`,
             "info",
           );
         }
+      } else if (arg === "") {
+        reassess(c.cwd ?? cwd, detect()?.[0] ?? "manual");
+        if (c.hasUI) c.ui.notify("progress-guard: reassessing now. /boost status shows the counters.", "info");
+      } else if (c.hasUI) {
+        c.ui.notify(`progress-guard: unknown option "${arg}". Use /boost, or /boost on, off or status.`, "warning");
       }
     },
   });

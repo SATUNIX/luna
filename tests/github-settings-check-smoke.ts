@@ -32,7 +32,7 @@ function fixture(want: Expected): Map<string, Response> {
   r(`${repo}/vulnerability-alerts`, null, want.vulnerability_alerts ? 204 : 404);
   for (const [name, env] of Object.entries(want.environments)) {
     r(`${repo}/environments/${name}`, { protection_rules: [{ type: "required_reviewers", reviewers: env.required_reviewers.map((login) => ({ type: "User", reviewer: { login } })) }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } });
-    r(`${repo}/environments/${name}/deployment-branch-policies`, { branch_policies: env.tag_policies.map((name) => ({ name, type: "tag" })) });
+    r(`${repo}/environments/${name}/deployment-branch-policies`, { branch_policies: [...env.tag_policies.map((name) => ({ name, type: "tag" })), ...(env.branch_policies ?? []).map((name) => ({ name, type: "branch" }))] });
   }
   return routes;
 }
@@ -58,6 +58,7 @@ const cases: Array<[string, (live: Expected) => void, RegExp]> = [
   ["Dependabot alerts off", (s) => { s.vulnerability_alerts = false; }, /vulnerability_alerts: expected true, live false/],
   ["security updates off", (s) => { s.security_and_analysis.dependabot_security_updates = "disabled"; }, /dependabot_security_updates/],
   ["the npm environment missing", (s) => { s.environments = {}; }, /environment npm: missing/],
+  ["Pages deployable from any branch", (s) => { const pages = s.environments["github-pages"]; if (pages) pages.branch_policies = ["*"]; }, /environment github-pages: branch_policies/],
   ["first-time-only fork approval", (s) => { s.fork_pr_approval_policy = "first_time_contributors"; }, /fork_pr_approval_policy/],
   ["a bypass actor added", (s) => { s.rulesets[0]?.bypass_actors.push({ actor_type: "Integration", actor_id: 1, bypass_mode: "always" }); }, /ruleset main: bypass_actors/],
 ];

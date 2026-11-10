@@ -31,8 +31,29 @@ export const RUN_CHOICE_ALLOW_RUN = "Allow this exact action for the rest of thi
 export const PAUSE_CHOICE_NO = "No, keep the run paused";
 export const PAUSE_CHOICE_YES = "Yes, resume the run";
 
-export const RUN_ID_PATTERN = /^wf-[a-z0-9-]{1,60}$/;
+// A run id, exactly as its two producers write it: the script engine's `wf-` ids; a YAML run's
+// control/scope id (`<ISO with - for : and .>Z-<workflow name>-<4 hex>`, workflow.ts newRunState)
+// and the digest scope id runScopeId() substitutes for an id too long for the ledger (64 hex, or
+// 59-61 with a resume suffix); each may carry a resume suffix `.r2`, `.r3` ... Arbitrary text stays
+// out. Kept in step with WORKFLOW_RUN_ID in packages/extensions/src/tool-firewall/index.ts.
+//
+// The digest scope id has no path back to the run's control id (that map lives in workflow-tools.ts):
+// accepting it still groups, caps and denies stickily for that scope, but its safety-pause attempt
+// names an id the workflow control registry does not hold, so the console's existing "could not be
+// paused" warning reports it. Its group state also restarts at the first resume, because the suffix
+// shortens the digest and the resumed scope is a different id. That is no worse than the base, where
+// such a run was tagged not at all; a run id short enough to stay a plain control id keeps its group
+// across resumes.
+export const RUN_ID_PATTERN = /^(?:wf-[a-z0-9-]{1,60}|\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-z][a-z0-9_-]{0,40}-[a-f0-9]{4}|[a-f0-9]{59,64})(?:\.r(?:[2-9]|[1-9][0-9]+))?$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+// The step label a workflow child's runner sets (PI_KIT_WORKFLOW_STEP): a role name and an optional
+// number. Validated before it can reach a card; the tool-firewall checks the env with the same rule.
+const STEP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$/;
+
+/** The run a scope id belongs to: a resumed scope (`.r2`, `.r3` ...) groups with its control id. */
+export function runGroupId(runId: string): string {
+  return runId.replace(/\.r(?:[2-9]|[1-9][0-9]+)$/, "");
+}
 
 /** The menu for a run request, No first. High-risk actions get no run grant. */
 export function runChoices(high: boolean): string[] {
@@ -41,18 +62,22 @@ export function runChoices(high: boolean): string[] {
 
 export interface RunRequest {
   id: string;
+  /** The run's control id: a resumed scope's `.r<n>` suffix is stripped (runGroupId). */
   runId: string;
   hash: string;
   /** True unless the request says it is medium: an unknown tier is treated as high. */
   high: boolean;
+  /** The workflow step's validated label (PI_KIT_WORKFLOW_STEP), when the child set one. */
+  step?: string;
 }
 
 /** The run fields of a pending approval, or null when it is not a well-formed workflow-run request. */
 export function runRequestOf(request: Record<string, unknown>): RunRequest | null {
-  const { id, workflowRun, actionHash, riskClass } = request;
+  const { id, workflowRun, actionHash, riskClass, workflowStep } = request;
   if (typeof id !== "string" || typeof workflowRun !== "string" || typeof actionHash !== "string") return null;
   if (!RUN_ID_PATTERN.test(workflowRun) || !HASH_PATTERN.test(actionHash)) return null;
-  return { id, runId: workflowRun, hash: actionHash, high: riskClass !== "medium" };
+  const step = typeof workflowStep === "string" && STEP_PATTERN.test(workflowStep) ? workflowStep : undefined;
+  return { id, runId: runGroupId(workflowRun), hash: actionHash, high: riskClass !== "medium", ...(step === undefined ? {} : { step }) };
 }
 
 export type Offer =

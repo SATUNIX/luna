@@ -173,6 +173,25 @@ try {
     expectError(await run(mode, `await workflow("child", { toJSON() { return undefined } }); return 1`, { hooks: { ...echo, workflow: () => Promise.resolve(1) } }), "script", /args must be JSON-serialisable/, "workflow args dropped by toJSON");
     ok(`${mode}: an agent() or workflow() payload that a toJSON() reshapes is refused into the script, so it cannot end the run`);
 
+    // Calls made in the slice that returns reach the host with the run already ended, so none starts,
+    // even when their lines are large enough that the pipe splits them across many reads. A call the
+    // script waits on starts as before.
+    const sameSlice = async (source: string): Promise<{ r: SandboxResult; seen: Array<[number, boolean]> }> => {
+      const seen: Array<[number, boolean]> = [];
+      const r = await run(mode, source, { hooks: { agent: (prompt, _opts, signal) => { seen.push([prompt.length, signal.aborted]); return Promise.resolve("ok"); } } });
+      return { r, seen };
+    };
+    const small = await sameSlice(`agent("a"); agent("b"); agent("c"); return 1`);
+    assert.deepEqual(small.r, { ok: true, value: 1 });
+    assert.deepEqual(small.seen, [[1, true], [1, true], [1, true]], "calls sent with the return start with the run ended");
+    const large = await sameSlice(`const big = "x".repeat(900000); agent(big); agent(big); agent(big); return 1`);
+    assert.deepEqual(large.r, { ok: true, value: 1 });
+    assert.deepEqual(large.seen, [[900000, true], [900000, true], [900000, true]], "the same holds when the lines span many pipe reads");
+    const awaited = await sameSlice(`const v = await agent("a"); agent("bb"); return v`);
+    assert.deepEqual(awaited.r, { ok: true, value: "ok" });
+    assert.deepEqual(awaited.seen, [[1, false], [2, true]], "an awaited call starts; the one sent with the return does not");
+    ok(`${mode}: calls sent in the slice that returns are cancelled with the run, never started, however the pipe splits them`);
+
     // Host-to-runner lines carrying U+2028/U+2029 (readline splits on both).
     const sep = "a\u2028b\u2029c";
     const sepReply = await run(mode, `return await agent("x")`, { hooks: { agent: () => Promise.resolve(sep) }, limits: { idleMs: 3000 } });

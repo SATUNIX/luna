@@ -264,3 +264,8 @@
     `DEFAULT_MAX_DEPTH` to 1; `PI_KIT_SUBAGENT_MAX_DEPTH` still raises it. The `subagent` and
     `workflow` tool text is shorter (`tests/subagent-roles-isolation-smoke.ts`,
     `tests/subagent-observability-smoke.ts`, `tests/delegation-guard-smoke.ts`).
+  - **Slice boundary in the sandbox protocol (2026-11-10):** `wf-runner.mjs` ends a slice that made
+    calls with a `turn` line, and `wf-sandbox.ts` holds a slice's calls until it reads one. A slice
+    that returns sends `done` instead, so its calls are cancelled with the script and never start,
+    however the pipe splits the runner's lines (`tests/workflow-sandbox-smoke.ts`,
+    `tests/workflow-hooks-smoke.ts` r23).

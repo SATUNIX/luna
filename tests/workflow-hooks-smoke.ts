@@ -217,8 +217,8 @@ try {
     await finding("r23 calls sent just before the return are stopped, not started, charged and killed", async () => {
       const r = await run(`agent("a", { ${planner} }); agent("b", { ${planner} }); agent("c", { ${planner} }); return 1`, () => ({ text: "ok", delayMs: 500 }), { concurrency: 4 });
       assert.equal(value(r.outcome, "partial"), 1);
-      // A call the host reads before the script's end may start; it is stopped with the script, and the rest never start.
-      assert.ok(r.outcome.launched < 3, `launched ${String(r.outcome.launched)}`);
+      // The calls share the script's last slice, so the host reads its end before starting any of them.
+      assert.equal(r.outcome.launched, 0, `launched ${String(r.outcome.launched)}`);
       assert.equal(r.outcome.outputTokens, 0);
       assert.deepEqual(codes(r.outcome), [["cancelled", "run-ended"], ["cancelled", "run-ended"], ["cancelled", "run-ended"]]);
     });

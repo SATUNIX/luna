@@ -8,6 +8,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Calls a workflow script sends as it returns never start.** `agent("a"); agent("b"); return 1`
+  sends the calls and the return in one slice of the script. The runner wrote each line as it was
+  made, so whether the host started the calls before it read the return depended on how the pipe
+  split the writes: on the CI runners all three started (and were killed), failing
+  `smoke:workflow-hooks` on `main` and in the v0.3.0-beta.1 release gate. The runner now ends a
+  slice that made calls with a `turn` line, and the host starts a slice's calls only when it reads
+  one; a slice that returns sends `done` instead, so its calls are cancelled with the script and
+  are not started, charged or counted (`tests/workflow-sandbox-smoke.ts`,
+  `tests/workflow-hooks-smoke.ts`).
+
 ## [0.3.0-beta.1]
 
 ### Changed

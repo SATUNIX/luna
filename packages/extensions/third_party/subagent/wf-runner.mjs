@@ -198,6 +198,7 @@ async function run() {
   let seq = 0;
   let logs = 0;
   let result = null;
+  let called = false;
   const pending = new Map();
 
   const host = vm.newObject();
@@ -213,6 +214,7 @@ async function run() {
     }
     const id = ++seq;
     pending.set(id, d);
+    called = true;
     send({ t: "call", id, op: op.toString(), payload: text });
     return d.handle;
   });
@@ -230,6 +232,7 @@ async function run() {
   // Runs the VM's queued jobs as one slice under the slice deadline, then decides whether the run is over.
   const slice = (work) => {
     deadline = Date.now() + start.sliceMs;
+    called = false;
     try {
       work();
       vm.executePendingJobs();
@@ -242,6 +245,9 @@ async function run() {
     if (interrupted) finish(timeout());
     else if (result) finish(result.ok || result.kind !== "script" ? result : { ...result, kind: kindOf(result.error) });
     else if (pending.size === 0) finish({ t: "done", ok: false, kind: "stalled", error: "the script is waiting on a promise that nothing will settle" });
+    // The slice is over and the run goes on: the host starts this slice's calls now. A slice that ended
+    // the run sent `done` instead, so the host cancels its calls rather than starting them.
+    else if (called) send({ t: "turn" });
   };
 
   onLine = (line) => {

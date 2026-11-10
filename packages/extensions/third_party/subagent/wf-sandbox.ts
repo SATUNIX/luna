@@ -263,6 +263,7 @@ export function jailCommand(spec: JailSpec): { command: string; args: string[] }
 const RunnerMessage = Type.Union([
   Type.Object({ t: Type.Literal("call"), id: Type.Integer({ minimum: 1 }), op: Type.Union([Type.Literal("agent"), Type.Literal("refused"), Type.Literal("workflow")]), payload: Type.String() }, { additionalProperties: false }),
   Type.Object({ t: Type.Union([Type.Literal("log"), Type.Literal("phase")]), text: Type.String() }, { additionalProperties: false }),
+  Type.Object({ t: Type.Literal("turn") }, { additionalProperties: false }),
   Type.Object({ t: Type.Literal("done"), ok: Type.Literal(true), value: Type.String() }, { additionalProperties: false }),
   Type.Object({ t: Type.Literal("done"), ok: Type.Literal(false), kind: Type.String(), error: Type.String() }, { additionalProperties: false }),
 ]);
@@ -444,8 +445,18 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
         arm();
       }).catch((e: unknown) => { end(fail("protocol", `the host could not deliver a hook result: ${message(e)}`)); });
     };
+    // The calls of the slice the runner is in, started when it reports the slice's end with `turn`. A
+    // `done` in the same slice ends the run first, so those calls are cancelled with the script and
+    // never start, however the pipe split the runner's lines (tests/workflow-sandbox-smoke.ts).
+    const held: Array<() => void> = [];
+    const release = (): void => {
+      for (const start of held.splice(0)) start();
+    };
     const handle = (msg: RunnerMessage): void => {
       switch (msg.t) {
+        case "turn":
+          release();
+          return;
         case "log":
           opts.hooks.log?.(msg.text);
           return;
@@ -454,6 +465,7 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
           return;
         case "done":
           end(msg.ok ? parseValue(msg.value) : fail(runnerKind(msg.kind), msg.error));
+          release();
           return;
         case "call": {
           let payload: unknown;
@@ -468,25 +480,29 @@ export async function runWorkflowScript(opts: RunOptions): Promise<SandboxResult
               end(fail("protocol", "the runner sent a malformed agent() call"));
               return;
             }
-            reply(msg.id, Promise.resolve().then(() => opts.hooks.agent(payload.prompt, payload.opts, controller.signal)));
+            held.push(() => { reply(msg.id, Promise.resolve().then(() => opts.hooks.agent(payload.prompt, payload.opts, controller.signal))); });
           } else if (msg.op === "refused") {
             if (!Check(RefusedPayload, payload)) {
               end(fail("protocol", "the runner sent a malformed agent() refusal"));
               return;
             }
-            reply(msg.id, Promise.resolve().then(() => {
-              opts.hooks.refused?.(payload);
-              throw new Error(payload.reason);
-            }));
+            held.push(() => {
+              reply(msg.id, Promise.resolve().then(() => {
+                opts.hooks.refused?.(payload);
+                throw new Error(payload.reason);
+              }));
+            });
           } else {
             if (!Check(WorkflowPayload, payload)) {
               end(fail("protocol", "the runner sent a malformed workflow() call"));
               return;
             }
             const { hooks } = opts;
-            reply(msg.id, hooks.workflow
-              ? Promise.resolve().then(() => hooks.workflow?.(payload.ref, payload.args, controller.signal))
-              : Promise.reject(new Error("workflow() is not available here")));
+            held.push(() => {
+              reply(msg.id, hooks.workflow
+                ? Promise.resolve().then(() => hooks.workflow?.(payload.ref, payload.args, controller.signal))
+                : Promise.reject(new Error("workflow() is not available here")));
+            });
           }
         }
       }

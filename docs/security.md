@@ -246,7 +246,9 @@ are pinned by `tests/governance-smoke.ts`.
     `$PI_CODING_AGENT_DIR`, a relative target after `cd`, clone, pull and checkout targets, `tar -C`,
     `unzip -d` and `rsync` destinations, links, plain shell commands that create, empty, delete or
     re-permission a protected file (`touch`, `truncate`, `rm`, `unlink`, `chmod`, `chown`, `chgrp`)
-    as well as redirection, `tee` and `cp`/`mv` destinations, and the literal and listed inline
+    as well as redirection, `tee` and `cp`/`mv` destinations, every file a patch applied with
+    `git apply`, `git am` or `patch` names (rename and copy lines included, at any strip level; a
+    patch it cannot read is refused), and the literal and listed inline
     spellings above; `tests/protected-paths-corpus-smoke.ts` runs one corpus against both.
     On top of those spellings, both layers apply one coarse, fail-closed rule, kept as generated,
     byte-checked copies of `packages/core/shared/inline-guard.ts`. It applies when a command runs an

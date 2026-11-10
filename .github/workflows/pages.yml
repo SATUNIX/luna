@@ -2,7 +2,9 @@ name: pages
 
 # The project website (docs/website.md): website/ assembled by packages/core/build-site.ts, the
 # documentation built by mkdocs into /docs/. A push to main (or a manual run on main) builds it and
-# deploys it to GitHub Pages. It never runs on a pull request: ci.yml checks the same build there
+# deploys it to GitHub Pages. Pushing a release tag does not run it (the github-pages environment
+# deploys from main only), so the release steps re-run it by hand on main once the tag is pushed
+# (docs/releasing.md); until then the page keeps the previous tag and the build prints a warning. It never runs on a pull request: ci.yml checks the same build there
 # (smoke:site builds the page and checks the illustrations; docs-build runs mkdocs --strict), so no
 # pull request can reach the deploy job's rights (tests/release-workflow-smoke.ts).
 #
@@ -29,8 +31,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The full history and its tags: the page names the newest pushed v* tag merged into main,
+      # never a package.json version whose tag is not pushed yet (packages/core/build-site.ts).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

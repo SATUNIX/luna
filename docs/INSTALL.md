@@ -18,7 +18,7 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.3.0-beta.1
 pi
 ```
 

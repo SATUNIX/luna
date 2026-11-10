@@ -1,6 +1,6 @@
 # Beta status
 
-Luna is in public beta (the `0.2.4-beta` releases). It is complete enough to install and use every
+Luna is in public beta (the `0.3.0-beta` releases). It is complete enough to install and use every
 day, and tested enough that we can say what has and has not been shown to work. It is not a stable
 release: interfaces such as the run contract and the approvals file are versioned but may still
 change in a later beta, and there are gaps in what has been verified. This page lists them
@@ -22,7 +22,7 @@ plainly.
 | Node.js | 22.19 or newer | pi's own minimum; CI runs the suite on Node 26 and the pi-compat lanes on Node 22 |
 | pi | 0.85.1 to 1.4.0 | The suite is pinned to 1.4.0; 0.85.1 (the floor) and 0.99.2 (the last 0.x release) run the whole suite in CI |
 | Operating system | Linux | Every profile is also install-checked on Windows in CI; the full suite and interactive use are not. macOS has not been tested |
-| Delivery | `git` | `pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11`. The npm package is not published |
+| Delivery | `git` | `pi install git:github.com/SATUNIX/luna@v0.3.0-beta.1`. The npm package is not published |
 
 ## What has been verified, and how
 

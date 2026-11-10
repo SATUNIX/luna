@@ -20,7 +20,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fill, release, siteFiles } from "../packages/core/build-site.ts";
+import { fill, pickRelease, release, siteFiles } from "../packages/core/build-site.ts";
 import { artFiles } from "../packages/core/readme-art.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,12 +98,22 @@ for (const [pattern, what, sample] of BANNED) assert.ok(pattern.test(sample), `t
 ok("every illustration is well-formed, script-free, loads nothing and is within budget");
 
 // 3. The page.
-const { version, tag } = release(ROOT);
-const files = siteFiles(ROOT);
+// The page names the newest pushed tag at or below package.json, never a version whose tag is not
+// pushed yet. Synthetic tag lists, so a shallow checkout without tags tests the same thing.
+const pkgVersion = (JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")) as { version: string }).version;
+assert.deepEqual(pickRelease("0.3.0-beta.1", ["v0.2.4-beta.1", "v0.2.4-beta.9", "v0.2.4-beta.10"]), { version: "0.2.4-beta.10", tag: "v0.2.4-beta.10", pending: "0.3.0-beta.1" }, "a release whose tag is not pushed keeps the previous tag and reports it as pending");
+assert.deepEqual(pickRelease("0.3.0-beta.1", ["v0.2.4-beta.9", "v0.3.0-beta.1"]), { version: "0.3.0-beta.1", tag: "v0.3.0-beta.1", pending: null }, "once the tag is pushed the page names it");
+assert.equal(pickRelease("0.3.0-beta.1", ["v0.3.0-beta.1", "v0.3.0", "v1.0.0", "v-next", "cycle-01", "0.2.0"]).tag, "v0.3.0-beta.1", "tags above package.json and non-release tags are never named");
+assert.equal(pickRelease("0.3.0", ["v0.3.0-beta.2", "v0.3.0-beta.10"]).tag, "v0.3.0-beta.10", "prereleases compare numerically");
+assert.throws(() => pickRelease("0.3.0", []), /no v\* release tag/, "a checkout without tags fails the build instead of naming an untagged version");
+assert.throws(() => pickRelease("0.3.0", ["v0.4.0"]), /no v\* release tag/, "only tags above package.json also fail");
+assert.deepEqual(release(ROOT, [`v${pkgVersion}`]), { version: pkgVersion, tag: `v${pkgVersion}`, pending: null }, "release() reads package.json");
+const tag = "v9.8.7-beta.6";
+const files = siteFiles(ROOT, { version: "9.8.7-beta.6", tag, pending: null });
 const html = files.get("index.html");
 assert.ok(html !== undefined, "the site has an index.html");
 assert.ok(!html.includes("{{"), "every placeholder is filled");
-assert.ok(html.includes(`pi install git:github.com/SATUNIX/luna@${tag}`), `the page installs ${tag}, the package.json release`);
+assert.ok(html.includes(`pi install git:github.com/SATUNIX/luna@${tag}`), `the page installs the release it is given (${tag})`);
 assert.ok(!/<script\b/i.test(html) && !/\son[a-z]+\s*=/i.test(html) && !/javascript:/i.test(html), "the page runs no script");
 const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(html)?.[1] ?? "";
 for (const directive of ["default-src 'none'", "img-src 'self'", "base-uri 'none'", "form-action 'none'"]) assert.ok(csp.includes(directive), `the CSP has ${directive}`);
@@ -129,7 +139,7 @@ for (const ref of refs) {
 }
 assert.ok(checked > 20, `the page's local references are checked (${checked})`);
 assert.ok(files.has(".nojekyll"), "the site is served as it is (.nojekyll)");
-assert.ok(html.includes(`Luna ${tag}`) && version.length > 0, "the footer names the release");
+assert.ok(html.includes(`Luna ${tag}`), "the footer names the release");
 ok(`the page names ${tag}, runs no script and its ${checked} local references resolve`);
 
 // 4. Every <picture> pairs a light image with its -dark variant.
@@ -148,11 +158,20 @@ ok("every <picture> pairs a light image with its dark variant");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "luna-site-"));
 try {
   const out = path.join(temp, "_site");
-  const first = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", out], { encoding: "utf8" });
+  const current = `v${pkgVersion}`;
+  const first = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", out, "--tags", `v0.0.1,${current}`], { encoding: "utf8" });
   assert.equal(first.status, 0, `build-site succeeds: ${first.stderr}`);
+  assert.doesNotMatch(first.stdout, /not pushed/, "no warning once the package.json release is tagged");
   for (const name of files.keys()) assert.ok(fs.existsSync(path.join(out, name)), `build-site wrote ${name}`);
-  assert.equal(fs.readFileSync(path.join(out, "index.html"), "utf8"), html, "the written page is the checked one");
-  const second = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", out], { encoding: "utf8" });
+  assert.equal(fs.readFileSync(path.join(out, "index.html"), "utf8"), siteFiles(ROOT, release(ROOT, [current])).get("index.html"), "the written page is the checked one");
+  const pendingOut = path.join(temp, "_pending");
+  const pending = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", pendingOut, "--tags", "v0.0.1"], { encoding: "utf8", env: { ...process.env, GITHUB_ACTIONS: "true" } });
+  assert.equal(pending.status, 0, `build-site builds with an older tag: ${pending.stderr}`);
+  assert.match(pending.stdout, new RegExp(`^::warning title=Release tag missing::package\\.json is at ${pkgVersion.replace(/\./g, "\\.")} but tag ${current.replace(/\./g, "\\.")} is not pushed: the site names v0\\.0\\.1\\.`, "m"), "an untagged package.json release is a workflow warning");
+  assert.ok(fs.readFileSync(path.join(pendingOut, "index.html"), "utf8").includes("luna@v0.0.1"), "and the page keeps naming the pushed tag");
+  const none = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", path.join(temp, "_none"), "--tags", "v99.0.0"], { encoding: "utf8" });
+  assert.notEqual(none.status, 0, "no usable tag fails the build");
+  const second = spawnSync(process.execPath, [path.join(ROOT, "packages/core/build-site.ts"), "--out", out, "--tags", current], { encoding: "utf8" });
   assert.equal(second.status, 1, "build-site refuses a non-empty directory");
   assert.match(second.stderr, /is not empty/);
 } finally {

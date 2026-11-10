@@ -22,12 +22,12 @@ Luna supports pi **0.85.1 and newer**; the version it is tested against is pinne
 ## 2. Install Luna
 
 ```sh
-pi install git:github.com/SATUNIX/luna@v0.2.4-beta.11
+pi install git:github.com/SATUNIX/luna@v0.3.0-beta.1
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna` and runs
-`npm install --omit=dev` there, as it does for every git package. Luna has no runtime npm
-dependencies of its own, so this reads nothing beyond git.
+`npm install --omit=dev` there, as it does for every git package. Luna has one runtime
+dependency, `quickjs-wasi` (pinned), so this step fetches it from the npm registry.
 
 To follow `main` instead of a release, leave the tag off:
 `pi install git:github.com/SATUNIX/luna`. Switching channels later is

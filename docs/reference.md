@@ -542,7 +542,7 @@ absolute or relative to the working directory.
 | `PI_KIT_SUBAGENT_HEARTBEAT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_INHERIT_MODEL` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_SUBAGENT_MAX_DEPTH` | `subagent` | — | [script-workflows](script-workflows.md) |
+| `PI_KIT_SUBAGENT_MAX_DEPTH` | `subagent` | — | [effort](effort.md) |
 | `PI_KIT_SUBAGENT_MAX_RUNTIME_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_RETRIES` | `subagent` | — | — |
 | `PI_KIT_SUBAGENT_RETRY_BACKOFF_MS` | `subagent` | — | — |

@@ -10,6 +10,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The improver plans its items.** The autonomy cycle prompt sends each item through an inline
+  `workflow_run {steps}` plan, an implementer then a reviewer gated with `max_loops` 1 (worst case 4),
+  and lets review send scouts as one parallel plan; at the default contract effort one request's plans
+  may launch 8 agents, and the rest or any refused plan fall back to `subagent`, with a
+  `Workflow: refused <reason>` report line. Host gate, review and containment are unchanged
+  (`docs/autonomy.md`, `tests/autonomy-selfimprove-smoke.ts`, `tests/firewall-unattended-smoke.ts`).
 - **The delegation surfaces teach plans.** E5 now plans substantial work as a small inline
   `workflow_run` plan by default and keeps the trivial rule for one step, one file and one check; it
   grants no tool, tier or firewall authority. The workflow card (1,183 characters) teaches when to

@@ -276,6 +276,16 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   `report.md` and `verify.md` under 5,000 characters each, because the review keeps only the
   first and last 3,000. Assigned board items come right after the budget, and the precedence is
   stated once (`tests/autonomy-selfimprove-smoke.ts`).
+- **The worker delegates through plans.** The cycle prompt sends each item through an inline
+  `workflow_run {steps}` plan: an `implementer`, then a `reviewer` gated with `max_loops: 1`, a
+  worst case of 4 agents. Review may send scouts as one parallel plan. At the default contract
+  effort, `standard`, one request's plans may launch 8 agents, so two items, or a scouts plan and
+  one item; the rest, and any plan the tool refuses, go through the `subagent` tool, and a refusal
+  adds a `Workflow: refused <reason>` line to the report. The prompt's item plan compiles through
+  the same compiler `workflow_run` uses (`tests/autonomy-selfimprove-smoke.ts`). Unattended, an
+  inline plan and `subagent` run without a prompt while `workflow` scripts stay denied, because
+  the policy asks a person for them (`tests/firewall-unattended-smoke.ts`). Whether the model
+  follows the prompt is not tested.
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
   Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with

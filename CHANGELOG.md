@@ -30,8 +30,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `delegator` kit role is removed, and subagents nest one level by default (`DEFAULT_MAX_DEPTH` is 1;
   `PI_KIT_SUBAGENT_MAX_DEPTH=2` restores a second level). `/subagents`, `/subagent-stop`, `/reflect`
   and `/recover` are removed: use `workflow_status`, `workflow_control`, `/workflows` and a bare
-  `/boost`. The delegation tool text drops from 6,882 to 4,880 characters
-  (`docs/agent-orchestration.md`, `tests/subagent-roles-isolation-smoke.ts`,
+  `/boost`. The delegation tool text drops from 6,266 to 4,730 characters, measured by the
+  `smoke:eval-footprint` meter on the merge base and here (`docs/agent-orchestration.md`, `tests/subagent-roles-isolation-smoke.ts`,
   `tests/run-query-smoke.ts`).
 - **One query and one control surface for every run.** `workflow_status` lists and shows script,
   YAML and background subagent runs, finished ones too, and a step's id still shows its log.
@@ -313,9 +313,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 - A failed workflow can no longer read `passed`. An oversized result is refused before it is journaled, so
   resume does not reuse it, and a model's skip of a required YAML step reads `partial`. An operator's skip keeps
   its meaning. Shipped kit scripts mark their final deliverable `required` (`tests/workflow-hooks-smoke.ts`).
-- **Migration:** a `gate` on a parallel member and a `when` on a parallel group were ignored, so a rejecting
-  review could read `passed`. They are now refused at parse time; move the check onto a step after the group.
-  Group members count against the run's execution ceiling (`tests/workflow-hooks-smoke.ts`).
+- A `gate` on a parallel member and a `when` on a parallel group were ignored, so a rejecting review could
+  read `passed`; see Migration. Group members count against the run's execution ceiling
+  (`tests/workflow-hooks-smoke.ts`).
 - A resumed workflow no longer replays results that stopped being true. A journaled call is reused only
   when the checkout still matches what the earlier run left, reads included, and when the call would
   launch the same thing: tools, model, thinking, skills and their text, extensions, effort, runtime and
@@ -388,6 +388,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Migration
 
+- **Saved YAML that relied on an ignored `gate` or `when` is refused.** A `gate` on a parallel
+  member or a `when` on a parallel group is refused at parse time; move the check onto a step after
+  the group (`tests/workflow-hooks-smoke.ts`).
 - **A model-started YAML run is charged to a tier allowance.** A run whose worst case exceeds the
   tier's `workflowAgents` allowance is refused before launch with code `plan-allowance`, and no run
   directory is created. E3 now affords 8 agents per request for plans instead of 3, additive to the

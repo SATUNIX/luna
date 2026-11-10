@@ -473,6 +473,7 @@ absolute or relative to the working directory.
 | `PI_KIT_EFFORT_CONFIG` | `effort` | Saved effort default and limit overrides ([Effort](effort.md)) (default `<agent dir>/pi-kit/effort.json`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_EFFORT_LEDGER` | `effort` | — | — |
 | `PI_KIT_EFFORT_POLICY_DIR` | `effort` | — | — |
+| `PI_KIT_EFFORT_PROMPT` | `effort` | — | — |
 | `PI_KIT_EMBED_MODEL` | `memory-local` | — | — |
 | `PI_KIT_EXTENSIONS_ROOT` | `delegation-guard` | — | — |
 | `PI_KIT_FIREWALL_APPROVALS` | `secret-guard`, `tool-firewall`, `protected-paths` | Where remembered approvals are stored ([Security](security.md)) (default `<agent dir>/pi-kit/firewall-approvals.json`) | [INSTALL](INSTALL.md#environment-variables) |

@@ -31,16 +31,85 @@ it.
   kit-authored hint.
 - **`trigger-compact`'s mid-run resume** sends a visible user message and has been tested only
   with fakes. It never runs inside child sessions.
-- **Recovery triggers only on a progress-guard escalation or a bare `/boost`.** A verification that
-  still fails after an edit, or a check that regresses, does not start recovery. Closing this needs
-  a single "worse" signal (a test count, a checkpoint diff or a `verifier-board` verdict flip) and
-  a settled definition of "the same problem" for the signature. Whether scouts should run on a
-  second provider for independence, whether an extension can drive `/fork` itself, and a token
-  ceiling before recovery gives up are also open
-  ([Recovery orchestration mode](recovery-orchestration-mode.md)).
+- **Recovery itself starts only on a progress-guard escalation or a bare `/boost`.** A repeat
+  verification FAIL does not enter recovery, but the verify-fail signal returns the policy's
+  `split` move at E3 and above: a steer plus the workflow card, from `decide()` in
+  `packages/extensions/src/effort/strategy.ts`. A first FAIL returns no move, and a check that
+  regresses sends nothing (`tests/verify-failclosed-smoke.ts`, `tests/workflow-strategy-smoke.ts`).
+  The wider gap remains: no single "worse" signal (a test count, a checkpoint diff or a
+  `verifier-board` verdict flip) tells recovery that an attempt made things worse, and "the same
+  problem" has no settled definition for the signature. Whether scouts should run on a second
+  provider for independence, whether an extension can drive `/fork` itself, and a token ceiling
+  before recovery gives up are also open ([Recovery orchestration mode](recovery-orchestration-mode.md)).
 - **Effort budgets are accounting, not enforcement.** A hostile process owned by the same user can
   edit the ledger. Enforcing tiers at the operating-system level would need a supervisor outside
   the session.
+
+### Limits of the delegation kernel
+
+Each is a limit of the delivered kernel, not a bug in a test.
+
+- **"No model too small" is a hypothesis.** The kit footprint meter shows the `balanced` kit tool
+  text at 8,919 characters over 13 tools and the delegation tools at 4,730, under their ceilings; the kit
+  floor stays near 9,500 and `pi-lens` and pi core are unmeasured. Nothing shows that data plans
+  raise completion on a small model, and a syntactically valid plan can still be a bad one
+  (`tests/eval-footprint-smoke.ts` pins the meter). The live `small-model/plan-valid-rate` fixture
+  records a rate per model and never reaches a model in CI; running it, plus an outcome eval per
+  model, would close the question.
+- **"No task too large" is unproven.** Size is handled by replanning across turns inside the tier
+  allowances, and no test runs a large task. Delivered recursion is one nested `workflow()` level
+  plus `expand` within one run; process depth stays 1, a deliberate retreat until grandchild
+  cancellation is proven (`tests/workflow-plan-smoke.ts` pins the expansion bounds, nothing pins a
+  large task). A large-task eval and a cancellation test below the direct child would close it.
+- **E5 "by default" is an instruction, not enforcement.** Tests pin the text that tells the agent to
+  plan substantial work; only a live run can show a model following it (`tests/workflow-strategy-smoke.ts`).
+  A recorded live run at E5 on a substantial task would close it.
+- **At default effort an autonomous request affords two gated items, or scouts plus one.** Each
+  item's plan costs 4 and the engine request affords 8, so later items fall back to `subagent`
+  (`tests/autonomy-selfimprove-smoke.ts`). A larger engine allowance, or smaller plans that fit,
+  would close it.
+- **The ladder order and its thresholds are judgement.** `planMinTier` 5, `splitMinTier` 3,
+  `delegateScore` 3, `reviewLines` 400 and `stallAfter` 2 are unmeasured defaults in the `strategy`
+  block of `effort.json`, and no evidence shows that workflows, the ladder or the card improve
+  outcomes (`tests/workflow-strategy-smoke.ts` pins the defaults and the moves). Comparing outcomes
+  with the policy on and off, and measuring each threshold, would close it.
+- **A budget can still be overshot.** A live agent can pass a budget after its slot was granted,
+  input tokens are not counted, and retries count on the ledger but not in the run's `launched`
+  total (`tests/workflow-ledger-smoke.ts`, `tests/effort-smoke.ts`). Whole-request accounting that
+  includes input tokens, reconciled after each child ends, would close it.
+- **A script's return value is not checked.** A script cannot make a failed step read as `passed`,
+  but it can return a misleading value that the host has no way to judge
+  (`tests/workflow-hooks-smoke.ts`). An acceptance check on the value, such as a structured output
+  or a verifier verdict, would close it.
+- **A revision check runs at events.** A PASS or fingerprint is re-read after a tool result and at
+  `turn_end`, so an edit by another process is seen at the next event, not before the next action
+  (`tests/verify-failclosed-smoke.ts`). A filesystem watch, or a check before every action, would
+  close it.
+- **Cancellation is proven to one level.** A run's AbortController reaches its direct child; below
+  that, `proc.kill` does not. With process depth 1 that is the whole delivered chain, but a child
+  given a second nesting level is not covered (`tests/workflow-control-smoke.ts`). Process
+  groups, or a cancellation test through a grandchild, would close it.
+- **Direct `subagent` is not a run.** It keeps its run log (`.pi/subagent/<id>.log`,
+  `runs.jsonl`) and has no run directory or `unknown` state; "a one-step run" holds in result shape
+  only (`tests/run-query-smoke.ts`). A run record and journal for direct delegation would close it.
+- **A bash-capable child can still run `pi`.** Named-tool tests claim named tools only: a role with
+  `bash` can start another agent process outside the ledger (`tests/delegation-guard-smoke.ts`).
+  An operating-system boundary, not a tool list, would close it.
+- **Scripts in the autonomous container are not delivered.** The container runs no sandboxed script
+  workflow, because `bwrap` is absent and an unattended `policy_ask` is denied (see
+  [Autonomous runs](autonomy.md); no test covers it because it is not delivered). A sandbox proven
+  inside the container and an unattended approval path for it would close it.
+
+### Known issues
+
+- **`protected-paths` has its own shell walker.** The tool firewall's `shell.ts` and
+  `protected-paths`' `directWriteTargets` are two regular-expression sets, so a shell shape fixed
+  in one must be fixed in the other (follow-up A-90 on the operator's board, outside this
+  repository). `tests/protected-paths-corpus-smoke.ts` covers the shapes both understand today; a
+  shared shell-walker module, which the extension contract today forbids, would close it.
+- **`smoke:workflow-resume` flaked once in a sandbox.** It failed once and passed on rerun; the
+  cause was not established and no reproduction is recorded. Re-run it after a failure, and treat
+  a repeat as a defect.
 
 ## Approvals and the firewall
 

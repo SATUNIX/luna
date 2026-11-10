@@ -216,10 +216,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `small-model/plan-valid-rate` fixture scores recorded plans per model and never reaches a model in
   CI (`packages/core/eval/footprint.ts`, `tests/eval-footprint-smoke.ts`,
   `tests/profile-transaction-smoke.ts`, `docs/architecture/profiles-and-install.md`).
+- **Shipped pages cannot name a removed delegation surface.** `smoke:docs` checks 96 shipped pages
+  for the removed tools, commands, parameter and role, deriving removed-ness from the extension
+  source and the kit agent list, and pins the corrected verify-fail sentences. `docs/future-work.md`
+  gains the delegation kernel's limits and known issues, and `docs/workflows.md` names the test for
+  each claim (`tests/docs-smoke.ts`, `docs/future-work.md`).
 - **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
 ### Fixed
 
+- **The docs no longer say a repeat verification FAIL starts nothing.** A repeat FAIL at a new
+  revision returns the `split` steer at E3 and above; `docs/future-work.md` and
+  `docs/recovery-orchestration-mode.md` now say so (`tests/docs-smoke.ts`,
+  `tests/verify-failclosed-smoke.ts`, `tests/workflow-strategy-smoke.ts`).
 - **A verify or review PASS is bound to the checkout it checked.** A recorded PASS in a git checkout
   carries the workspace revision taken after its check ran, and goes stale when the revision changes:
   after any tool result but `read`, `grep`, `find` and `ls` (a shell `sed -i`, `git checkout`, a
@@ -376,6 +385,31 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (`tests/auto-mode-smoke.ts`, `npm run test:lint`).
 - **Unattended self-improve cycles recover dead workers without manager calls.** Three automatic restarts by default, persisted across resumes; next-tick exit detection, green-gate host report salvage with independent merge review, STOP parking, and an engine heartbeat for external stewards (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **Host publication and promotion scan every outgoing commit before pushing**, including unmerged attempt tags, using the repository pre-push leak scanner; findings or scan failures record a publication blocker and keep work local (`tests/autonomy-selfimprove-smoke.ts`, `tests/prepush-scan-smoke.ts`).
+
+### Migration
+
+- **A model-started YAML run is charged to a tier allowance.** A run whose worst case exceeds the
+  tier's `workflowAgents` allowance is refused before launch with code `plan-allowance`, and no run
+  directory is created. E3 now affords 8 agents per request for plans instead of 3, additive to the
+  `subagent` limit. This reverses the previous policy, which counted workflow agents against the
+  `subagent` allowance. `/workflow run` and approved scripts are unchanged.
+- **A YAML step can no longer use `subagent`.** Kit workflows do not; a user step that relied on it
+  needs a script workflow (`workflow`) or the central agent.
+- **A run with omissions reports `partial`.** This includes a refused launch a script catches: the
+  value is kept and the omissions are named.
+- **Resume reuses nothing outside git, or after any workspace edit.** A v1 journal reuses nothing
+  once.
+- **`chain` becomes `workflow_run {steps}`.** `subagent` keeps single and parallel mode; the
+  `delegator` role is gone.
+- **A custom role that delegates needs `PI_KIT_SUBAGENT_MAX_DEPTH=2`.** Depth 1 is the default, so
+  a direct child cannot start another agent.
+- **A bare `/boost` reassesses and spends an attempt; `/boost status` reports it.**
+- **Removed names and their replacements.** `/reflect` and `/recover` map to a bare `/boost`;
+  `subagent_status` to `workflow_status`; `subagent_stop` and `/subagent-stop` to
+  `workflow_control` with `action: "stop"`; `/subagents` to `/workflows`; and
+  `confirmProjectAgents` to `agentScope` with the project trust prompt. No aliases are registered,
+  because aliases would cost prompt text, so a custom skill that names a removed tool gets an
+  unknown-tool error.
 
 ## [0.2.4-beta.11]
 

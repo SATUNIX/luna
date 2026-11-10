@@ -29,6 +29,11 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 Esc cancels a `workflow_run` started by the agent. The current step's subagent is stopped,
 the run is marked `interrupted`, and it can be resumed.
 
+The table's commands and tools are checked by `tests/workflow-panel-smoke.ts` (registration),
+`tests/workflow-control-smoke.ts` (pause, skip, stop and resume) and `tests/workflow-smoke.ts`
+(an interrupted run resumes); Esc cancellation is the tool call's signal, checked by
+`tests/workflow-plan-smoke.ts`.
+
 ## Inline plans
 
 `workflow_run {steps: [...]}` takes the [step fields](#step-fields) as JSON and runs them in the
@@ -167,6 +172,10 @@ checks that both firewall policy copies hold the same `workflow_control` rule.
 overrides an earlier one with the same `name`, whatever its kind. Luna reads only these
 directories; Claude Code's `.claude/workflows/` is not read.
 
+The locations, the shared namespace and the override rule are checked in
+`tests/workflow-registry-smoke.ts`; the trust prompt and the headless refusal in
+`tests/workflow-smoke.ts`.
+
 ### Trusting a project workflow
 
 A project workflow can start any delegated work, so before it runs (a new run or a resume,
@@ -286,6 +295,10 @@ steps:
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
+The format and its step fields are parsed and checked in `tests/workflow-smoke.ts` for a saved
+workflow and in `tests/workflow-plan-smoke.ts` for an inline plan, which refuses the fields that
+would widen a step.
+
 ### Templates
 
 | Expression | Value |
@@ -299,6 +312,9 @@ steps:
 Add `?` to make a missing value empty instead of an error, for example
 `{{steps.review.output?}}` on the first pass through a gate loop. Values are inserted
 verbatim; nothing inside them is re-expanded.
+
+Templates, `?` and the `{{file:}}` limits are checked by `tests/workflow-smoke.ts` and
+`tests/workflow-plan-smoke.ts`.
 
 ## The blackboard (run directory)
 
@@ -504,6 +520,10 @@ agents.
   reproduction itself.
 - **research**: three parallel scouts (code, tests, history) → synthesis → durable facts
   saved to memory; the run is copied to the vault.
+
+`tests/workflow-smoke.ts` checks that all three parse, their names and both gates;
+`tests/workflow-builtin-smoke.ts` runs each with fake children and pins their worst-case agent
+counts (8, 8 and 5).
 
 ## Writing your own: checklist
 

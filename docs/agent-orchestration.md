@@ -78,13 +78,15 @@ flowchart TD
 - **Fatal, not retried.** A denied or misconfigured launch is not treated as a transient failure.
 - **Budgeted.** Every launch reserves a slot in the [effort ledger](effort.md#how-delegation-is-budgeted);
   a child's tier is its parent's or lower.
-- **Roles that need more.** A role whose tools include `subagent` also gets `subagent`, and a
-  role or step can add `extensions:`, by **name**: a kit extension's registry name, never a path,
-  so a role, workflow or settings file cannot load arbitrary code into a governed child (a name
-  that is not one is skipped). Ambient launchers (a pentest specialist that needs the operator's
-  MCP servers) keep the operator's extensions but are always given `delegation-guard` explicitly
-  and the guard's environment, so the child-side check runs even if the child's settings would not
-  have loaded it.
+- **Roles that need more.** A role whose tools include `subagent` also gets the `subagent`
+  extension, when the launch grants it and the nesting limit allows another level: depth 1 is the
+  default, so a direct child that should delegate needs the maximum depth raised to 2
+  (`tests/subagent-roles-isolation-smoke.ts`). A role or step can add `extensions:`, by **name**: a
+  kit extension's registry name, never a path, so a role, workflow or settings file cannot load
+  arbitrary code into a governed child (a name that is not one is skipped). Ambient launchers (a
+  pentest specialist that needs the operator's MCP servers) keep the operator's extensions but are
+  always given `delegation-guard` explicitly and the guard's environment, so the child-side check
+  runs even if the child's settings would not have loaded it.
 
 `PI_KIT_SUBAGENT_EXTENSIONS=a,b` replaces the **companion** list (governance cannot be removed).
 `PI_KIT_SUBAGENT_ISOLATE=0` no longer disables isolation. The task reaches the child over stdin

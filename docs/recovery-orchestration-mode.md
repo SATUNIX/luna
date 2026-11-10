@@ -60,8 +60,12 @@ hand.
   `recovery-orchestrator` enters recovery for that signature (`tests/progress-guard-agsix-smoke.ts`,
   `tests/recovery-grounding-smoke.ts`).
 
-Nothing else triggers it. A verification that still fails after an edit, or a check that
-regresses, is not detected as a trigger; see [Future work](future-work.md#delegation-and-recovery).
+Nothing else enters recovery. A repeat verification FAIL at a new revision is detected by the
+`verify-fail` signal and, at E3 or above with `workflow_run` active, returns the policy's `split`
+move: a steer plus the workflow card, which is text and not a recovery activation. A first FAIL
+returns no move, and a check that regresses sends nothing
+(`tests/verify-failclosed-smoke.ts`, `tests/workflow-strategy-smoke.ts`). The wider evidence gap is
+in [Future work](future-work.md#delegation-and-recovery).
 
 ### On demand
 - A bare `/boost` in `progress-guard` writes the marker and enters the same flow on demand

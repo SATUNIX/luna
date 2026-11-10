@@ -102,3 +102,10 @@ registered. `/update status` shows the source and channel Luna follows.
   fails before anything is written instead of being silently replaced.
 
 See `CHANGELOG.md` in the repository root for the complete list.
+
+## Delegation surface changes
+
+The delegation surface changed: tools, commands, a parameter and a role were removed, model-started
+YAML runs are charged to a tier allowance, and a run gained a `partial` outcome. The migration notes,
+including every removed name, are in `### Migration` in the repository root's `CHANGELOG.md`; this
+page does not repeat them.

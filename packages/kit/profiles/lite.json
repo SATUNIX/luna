@@ -1,8 +1,9 @@
 {
   "name": "lite",
-  "description": "Low-context set for small local models: default-deny firewall, checkpoints, todo, verification, context sieve, cheap readseek navigation, and a trimmed skill/prompt list.",
+  "description": "Low-context set for small local models: default-deny firewall, checkpoints, todo, verification, context sieve, cheap readseek navigation, a trimmed skill/prompt list, and its own compaction settings sized for a small window.",
   "securityLevel": "relaxed",
   "firewall": { "mode": "manual", "policy": "coding" },
+  "settings": { "compaction": { "enabled": true, "reserveTokens": 4096, "keepRecentTokens": 6000 } },
   "skills": {
     "only": [
       "coding-agent-workflow", "codebase-navigation", "task-decomposition", "patch-hygiene",

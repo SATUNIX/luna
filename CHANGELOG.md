@@ -205,6 +205,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `npm run settings:check` (`packages/core/github-settings-check.ts`, GET requests only, needs an
   administrator's `gh` login), and the README shows the OpenSSF Best Practices badge
   (`tests/github-settings-check-smoke.ts`).
+- **A metered small-model floor, and compaction for `lite`.** `smoke:eval-footprint` now measures
+  each profile's kit tool text against a reviewed baseline (`packages/core/eval/footprint-baseline.json`:
+  `balanced` 8,919 characters over 13 tools under a 9,500 ceiling, its delegation tools 4,730 under
+  4,900; `lite` 7,614) and checks that the system prompt prefix stays stable up to the effort block
+  through the profile's whole `before_agent_start` chain. A profile may carry a `settings.compaction`
+  block; `lite` sets `reserveTokens` 4096 and `keepRecentTokens` 6000 for a 32k window. Install
+  records the operator's previous compaction values and hands them back on a profile switch and on a
+  global uninstall; a rolled-back `/profile` switch restores the record too. A live-only
+  `small-model/plan-valid-rate` fixture scores recorded plans per model and never reaches a model in
+  CI (`packages/core/eval/footprint.ts`, `tests/eval-footprint-smoke.ts`,
+  `tests/profile-transaction-smoke.ts`, `docs/architecture/profiles-and-install.md`).
 - **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
 ### Fixed

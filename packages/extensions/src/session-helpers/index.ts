@@ -635,6 +635,7 @@ export function switchFiles(projectCwd: string): string[] {
     firewallConfigFile(),
     process.env.PI_KIT_SECURITY_CONFIG?.trim() || path.join(agentDir(), "pi-kit", "security.json"),
     path.join(agentDir(), "pi-kit", "overrides.json"),
+    path.join(agentDir(), "pi-kit", "profile-settings.json"),
     path.join(agentDir(), ".env"),
   ];
 }

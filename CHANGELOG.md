@@ -8,6 +8,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.3.0-beta.2]
+
 ### Fixed
 
 - **Calls a workflow script sends as it returns never start.** `agent("a"); agent("b"); return 1`

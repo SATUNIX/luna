@@ -120,8 +120,10 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
   pi.on("before_agent_start", async (event) => {
     if (isChild()) return undefined;
     const blocks: string[] = [];
+    // A run started by an extension's custom message (pi 1.2+) has no prompt to recall against.
+    const isUserPrompt = "prompt" in event;
     try {
-      if (firstPrompt) {
+      if (firstPrompt && isUserPrompt) {
         const recaps = recentRecaps(cfg.root, project, 3);
         const pinned = [...loadIndex(cfg.root).entries()].filter(([rel, e]) => e.meta.pinned && (e.meta.scope === "global" || rel.startsWith(path.join("Projects", project) + path.sep)));
         if (recaps.length) blocks.push(`### Earlier sessions (${project}) - history only\n\n${recaps.map((r) => `${r.date} ${r.text.replace(/^## /, "").replace(/\*\*Next:\*\*/g, "**Was open then:**")}`).join("\n\n")}`);
@@ -130,9 +132,8 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
           for (const [rel] of pinned) injected.add(rel);
         }
       }
-      firstPrompt = false;
-      // A run started by an extension's custom message (pi 1.2+) has no prompt to recall against.
-      const hits = searchMemories(cfg.root, "prompt" in event ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size, minScore: cfg.minScore, gate: true })
+      if (isUserPrompt) firstPrompt = false;
+      const hits = searchMemories(cfg.root, isUserPrompt ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size, minScore: cfg.minScore, gate: true })
         .filter((h) => !injected.has(h.rel))
         .slice(0, cfg.recallLimit);
       if (hits.length) {

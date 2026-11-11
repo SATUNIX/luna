@@ -128,6 +128,9 @@ try {
     const pi2 = fakePi();
     ext.createMemoryVault(pi2.api, { complete: async () => reply });
     await pi2.handlers.get("session_start")({}, ctx);
+    // A run started by an extension custom message must not consume the first-user-prompt recall.
+    const custom = await pi2.handlers.get("before_agent_start")({ messageType: "custom", message: { customType: "x", content: "hi" }, systemPrompt: "SYS" }, ctx);
+    assert.equal(custom, undefined, "a custom-message run recalls nothing and keeps the first-user-prompt flag");
     const first = (await pi2.handlers.get("before_agent_start")({ prompt: "continue with the auth redirects work", systemPrompt: "SYS" }, ctx)) as Recall;
     assert.equal(first.systemPrompt, undefined, "memory never rewrites the system prompt");
     assert.equal(first.message.display, false);

@@ -540,15 +540,21 @@ worker-influenced sections, plus the current report clipped to 6,000 characters 
 drives control-path checks. Real code over budget and unreadable diffs still refuse merge,
 including with review disabled (`tests/autonomy-review-inputs-smoke.ts`).
 
-The repository's `.gitattributes` uses `CHANGELOG.md merge=union`, retaining both sides of
-overlapping changelog additions. Host upstream and base merges use
+The repository's `.gitattributes` uses `merge=union` for `CHANGELOG.md` and `autonomy/JOURNAL.md`,
+retaining both sides of overlapping additions. Host upstream and base merges use
 `git -c attr.tree=<integration-head> merge-tree --write-tree`, so a bare mirror reads committed
 attributes without a worktree or index. The attributes must already be committed on the
 integration side, and host Git must support `attr.tree`; older Git can still report a conflict.
 Cycle integration itself is a fast-forward and performs no content merge. The two host content
 merge paths and the fast-forward are covered by `tests/autonomy-smoke.ts`. Union merging does
-not validate changelog wording, ordering or duplicates; review the resulting text. There is no
-additional shared journal: cycle reports and individual proposals already have separate paths.
+not validate changelog wording, ordering or duplicates; review the resulting text.
+
+`autonomy/JOURNAL.md` is the one shared journal: a line per cycle report, which the cycle prompt's
+Record step asks each cycle to add for its own report. `npm run smoke:docs` runs `checkJournal`
+(`packages/core/lib/journal.ts`) and fails a report with no line, a line with no report and a
+line whose board IDs differ from the report's, and so reddens the acceptance gate
+(`tests/docs-smoke.ts`; the cycle prompt wording is pinned by `tests/autonomy-selfimprove-smoke.ts`).
+Cycle reports and individual proposals keep their own separate paths.
 
 ```mermaid
 flowchart LR

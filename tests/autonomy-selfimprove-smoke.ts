@@ -274,6 +274,9 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
   assert.match(nth(prompts, 0), /You are working on the repository in \/work, on branch `pi\/improve-test-1`/);
   assert.doesNotMatch(nth(prompts, 0), /pi-system repository/);
   assert.match(nth(prompts, 0), /cycle 1 of 8/);
+  // Every report needs a journal line (checkJournal, run by the docs smoke in the gate); the Record step
+  // names the line, with this run and cycle filled in, so a stream does not learn it by going red.
+  assert.match(nth(prompts, 0), /If the repository has `autonomy\/JOURNAL\.md`, add one line for this cycle to it[^`]*`- improve-test-1\/01 \| Board: <the IDs the report names, or none> \| <the Outcome, as written in the report> \| <one-line summary>`/);
   assert.match(nth(prompts, 1), /Cycle 01 ended completed \(report recorded\); acceptance green; merged into pi-autonomy\/integration/);
   assert.match(nth(prompts, 2), /found nothing to do/);
   // Promotion: a LOCAL branch in the source repository, and nothing else. No tags, no working branch, main untouched.

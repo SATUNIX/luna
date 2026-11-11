@@ -861,32 +861,40 @@ try {
         }
       });
 
-      // 24d. A workflow run's approval holds input too: two run requests in one scan open one card,
-      //      and the second is asked only after the first is answered.
-      await attempt("two run approvals in one scan open one card at a time", async () => {
+      // 24d. A workflow run's approval card takes a run-card hold: the broker's two-outstanding
+      //      contract still holds (two run cards open together), while a non-run child request waits
+      //      behind them instead of opening a third focus-stealing card.
+      await attempt("a run approval's hold admits the broker's two cards and defers other requests", async () => {
         selects.length = 0;
         manual = true;
         manualCards.length = 0;
         pick = "Allow once";
-        const first = brokerRequest(ws, runRequest("run-serial-first", "f", 30000));
-        const second = brokerRequest(ws, runRequest("run-serial-second", "0", 30000));
+        const first = brokerRequest(ws, runRequest("run-pair-first", "f", 30000));
+        const second = brokerRequest(ws, runRequest("run-pair-second", "0", 30000));
+        let child: ReturnType<typeof brokerRequest> | undefined;
         try {
-          await until(() => selects.length === 1, 2500);
-          await sleep(1500);
-          assert.equal(selects.length, 1, "a second run approval waits while the first card is open");
-          assert.equal(owner.inputHeld(), "the open console card", "a run approval holds input while its card is open");
-          manualCards.shift()?.();
           await until(() => selects.length === 2, 2500);
-          assert.equal(selects.length, 2, "the second run approval opens after the first closes");
+          await sleep(1500);
+          assert.equal(selects.length, 2, "the broker's two run approvals open together");
+          assert.equal(owner.inputHeld(), undefined, "run cards use the broker's slots, not the global input hold");
+          child = brokerRequest(ws, { id: "run-pair-child", kind: "approval", title: "Approve tool call?", body: "plain child", choices: ["Allow once", "Deny"], timeoutMs: 30000 });
+          await sleep(1500);
+          assert.equal(selects.length, 2, "a non-run child request does not open over the run cards");
+          assert.ok(fs.existsSync(pendingFile("run-pair-child")), "a non-run child request waits behind the run cards");
           manualCards.shift()?.();
-          const [a, b] = await Promise.all([first, second]);
+          manualCards.shift()?.();
+          await until(() => selects.length === 3, 2500);
+          assert.equal(selects.length, 3, "the waiting child card opens only after the run cards close");
+          manualCards.shift()?.();
+          const [a, b, c] = await Promise.all([first, second, child]);
           assert.equal(a.approved, true, "the first run request resolves approved");
           assert.equal(b.approved, true, "the second run request resolves approved");
+          assert.equal(c.approved, true, "the deferred child request resolves approved");
         } finally {
           manual = false;
           while (manualCards.length) manualCards.shift()?.();
-          for (const id of ["run-serial-first", "run-serial-second"]) fs.rmSync(pendingFile(id), { force: true });
-          await Promise.race([Promise.all([first, second]), sleep(1500)]);
+          for (const id of ["run-pair-first", "run-pair-second", "run-pair-child"]) fs.rmSync(pendingFile(id), { force: true });
+          await Promise.race([Promise.all([first, second, ...(child ? [child] : [])]), sleep(1500)]);
         }
       });
     } finally {

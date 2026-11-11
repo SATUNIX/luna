@@ -148,9 +148,11 @@ are pinned by `tests/governance-smoke.ts`.
    open ends the request as an unanswered card would, and a card shown after a wait gets only the
    time left, which pi uses to dismiss it. A brokered child request is deferred and keeps its console
    timeout, so it can expire behind the overlay and fail closed. The console itself holds input while
-   its own card is open, so two child requests that arrive in one poll are shown one at a time: the
-   sibling waits for the next poll. An `ask_human` question holds input the same way while its card
-   is open. Aborting a turn ends that turn's wait, and a pentest action asks
+   a non-run card is open, so two child requests that arrive in one poll are shown one at a time: the
+   sibling waits for the next poll. A workflow-run approval card does not take that hold, because the
+   run broker deliberately allows two outstanding prompts per run; non-run cards and child requests
+   still wait behind those open run cards. An `ask_human` question holds input the same way while its
+   card is open. Aborting a turn ends that turn's wait, and a pentest action asks
    scope and RoE again after the wait and after your Yes. A reload or the
    end of a session drops the hold, because pi removes an overlay without settling it
    (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,

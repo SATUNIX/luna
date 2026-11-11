@@ -300,6 +300,13 @@ export default function humanConsole(pi: ExtensionAPI) {
   const runBroker = new RunApprovalBroker();
   // Requests the operator has been told are waiting behind an overlay: one notice each, not one a poll.
   const heldNoticed = new Set<string>();
+  // Workflow-run approval cards. The run broker deliberately allows two outstanding prompts for one
+  // run (RUN_OUTSTANDING_MAX), so these cards do not take the input-owner hold: that would make the
+  // broker's second slot unreachable and leave a parallel run's pause question waiting on them. A
+  // counter lets non-run cards and child requests wait behind the open run cards instead.
+  const RUN_CARD_HOLD = "the open workflow card";
+  let openRunCards = 0;
+  const runCardHolder = (): string | undefined => (openRunCards > 0 ? RUN_CARD_HOLD : undefined);
   // Dismisses open deferred cards when the session ends.
   let cards = new AbortController();
   const noteHeld = (ctx: ExtensionContext, id: string, request: Pending, holder: string) => {
@@ -371,7 +378,8 @@ export default function humanConsole(pi: ExtensionAPI) {
       audit(ctx.cwd, { event: offer.reason === "sticky_deny" ? "workflow_approval_sticky_deny" : "workflow_approval_run_grant", runId: run.runId, id: run.id, actionHash: run.hash });
       return;
     }
-    // No card while an overlay owns the keyboard (see processOne); give the slot back and retry.
+    // No card while another kind of overlay owns the keyboard (see processOne); give the slot back
+    // and retry. A sibling run card may join: the broker caps outstanding prompts per run.
     const holder = inputHeld();
     if (holder) {
       noteHeld(ctx, run.id, request, holder);
@@ -382,9 +390,17 @@ export default function humanConsole(pi: ExtensionAPI) {
     const { signal } = cards;
     try {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}${run.step === undefined ? "" : ` · step ${run.step}`}`;
-      // Hold input for the card and release it before settling and asking to resume: askToResume's
-      // showWhenFree must not wait on our own hold.
-      const result = await withInputHold("the open console card", () => answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal));
+      // The card does not take the input-owner hold: the broker allows two per run, and a hold
+      // would make its second slot unreachable. openRunCards makes non-run cards and child requests
+      // wait behind it instead. The counter is dropped before askToResume so its showWhenFree is
+      // not waiting on this card.
+      let result: Answer;
+      openRunCards += 1;
+      try {
+        result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal);
+      } finally {
+        openRunCards -= 1;
+      }
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
       // No answer before the requester's deadline: it has already failed closed; decide nothing.
@@ -444,7 +460,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       // into it could answer a child's card. Leave the pending file for a later poll; the requester's
       // own deadline still fails closed. The check is per request, not per scan, so that a run grant
       // or a sticky deny, which needs no card, is not stalled behind the workflow panel.
-      const holder = inputHeld();
+      const holder = inputHeld() ?? runCardHolder();
       if (holder) {
         noteHeld(ctx, id, request, holder);
         return;

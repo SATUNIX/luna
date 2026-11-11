@@ -25,12 +25,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
-- **A human-console card holds input while it is open (V-02).** The console checked the shared
-  input-owner registry but never registered a hold, so two child requests written in one poll
-  opened two cards and the second took focus from the first. The console's card now holds input
-  and a sibling waits for the next poll; an interactive `ask_human` card holds input the same
-  way, so a console card cannot open over it. The notices name the open card rather than a
-  process. Pinned by `tests/firewall-overlay-queue-smoke.ts` (`npm run smoke:firewall-overlay-queue`).
+- **A non-run human-console card holds input while it is open (V-02).** The console checked the
+  shared input-owner registry but never registered a hold, so two child requests written in one poll
+  opened two cards and the second took focus from the first. A non-run card now holds input and a
+  sibling waits for the next poll; an interactive `ask_human` card holds input the same way, so a
+  console card cannot open over it. A workflow run's approval card is the exception: the run broker
+  allows two outstanding prompts per run, so those cards keep their two slots and a non-run request
+  waits behind them. The notices name the open card rather than a process. Pinned by
+  `tests/firewall-overlay-queue-smoke.ts` and `tests/firewall-workflow-approvals-smoke.ts`.
 - **Framed overlays size their inner content and forward the mouse.** The hub's frame laid its
   child out four cells wider than the drawn area and dropped pointer events, so content wrapped
   or clipped and the list could not be clicked; a hidden command shorter than four characters

@@ -29,8 +29,9 @@ item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
   against `secret`, `secrets`, `credentials` and `.ssh`. Quoted text is expanded as well, because
   `sh -c 'cat .en[v]'` hands it to a second shell. A quote inside a word is removed the way the
   shell removes it before the scan (`.e'n'v`, `".e"nv`, `cred"entials"/db.txt`); a word quoted as a
-  whole keeps its quotes, because the quoting is what marks a search pattern as text. Not covered:
-  a backslash-escaped bracket (`[v\]]`), `$'...'` quoting, and a name reached only through `?`,
+  whole keeps its quotes, because the quoting is what marks a search pattern as text. A `$'...'`
+  string is decoded first (`\x2e`, octal, `\u002e`, `\n`). Not covered:
+  a backslash-escaped bracket (`[v\]]`), and a name reached only through `?`,
   `*`, a negated class or a class of more than 32 characters when it is not canonical (`foo.p?m`,
   `foo.p[!x]m`). The `.env.example` and `.env.sample` exemption applies after expansion. All of
   this is pinned by `tests/secret-guard-smoke.ts`.

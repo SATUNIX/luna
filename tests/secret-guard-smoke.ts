@@ -351,6 +351,35 @@ async function run() {
       'cat "src/"index.ts | head',
     ]) await allows("bash", { command }, `quoted words that name nothing secret: ${command}`);
 
+    // ANSI-C quoting: bash decodes `$'...'` (`\x2e`, octal, `\u002e`) before the command runs.
+    for (const command of [
+      "cat .e$'n'v",
+      String.raw`cat $'\x2eenv'`,
+      String.raw`cat $'\056env'`,
+      String.raw`cat $'.e\156v'`,
+      String.raw`cat $'\x2e\x65nv' | head`,
+      String.raw`cat $'\u002eenv'`,
+      "cat config/sec$'ret's/x",
+      'cat .e$"n"v',
+    ]) await blocks("bash", { command }, `ANSI-C quoted secret name stays blocked: ${command}`);
+    for (const command of [
+      String.raw`echo $'a\tb' | head`,
+      String.raw`cat $'hello\nworld.txt' | head`,
+      String.raw`echo $'it\'s' | head`,
+      "cat $'src/index.ts' | head",
+      "cat $'unterminated | head",
+      String.raw`printf '%s\n' x | head`,
+    ]) await allows("bash", { command }, `ANSI-C string that names nothing secret: ${command}`);
+    for (const [name, command] of [
+      ["30,000 ANSI-C openers", `cat ${"$'".repeat(30000)} | head`],
+      ["20,000 hex escapes", `cat $'${String.raw`\x2e`.repeat(20000)}' | head`],
+      ["20,000 ANSI-C strings", `cat ${"$'a'".repeat(20000)} | head`],
+    ] as const) {
+      const started = Date.now();
+      await allows("bash", { command }, `${name} is bounded`);
+      assert.ok(Date.now() - started < 1500, `${name} must stay cheap`);
+    }
+
     // 5. Benign operations still pass.
     await allows("write", { path: "src/index.ts", content: "export const x = 1;" }, "normal source write");
     await allows("edit", { path: "README.md", new_string: "# Title" }, "normal edit");

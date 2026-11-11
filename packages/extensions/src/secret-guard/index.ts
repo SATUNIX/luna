@@ -392,11 +392,56 @@ function closingQuote(command: string, open: number): number {
   return -1;
 }
 
+const ANSI_C_SIMPLE_ESCAPES = new Map<string, string>([
+  ["a", "\x07"], ["b", "\b"], ["e", "\x1b"], ["E", "\x1b"], ["f", "\f"], ["n", "\n"], ["r", "\r"], ["t", "\t"],
+  ["v", "\v"], ["\\", "\\"], ["'", "'"], ['"', '"'], ["?", "?"],
+]);
+
+// Index of the quote that closes the `$'` string opened at `open` (a backslash makes the next
+// character part of the string), or -1.
+function closingAnsiCQuote(command: string, open: number): number {
+  for (let i = open + 2; i < command.length; i++) {
+    const ch = command.charAt(i);
+    if (ch === "\\") i++;
+    else if (ch === "'") return i;
+  }
+  return -1;
+}
+
+// The text of a `$'...'` string after bash's escapes: `\n`, `\xHH`, `\NNN` (octal), `\uHHHH`,
+// `\UHHHHHHHH`, `\cX`. An escape it does not know stays as written.
+function decodeAnsiC(body: string): string {
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body.charAt(i);
+    if (ch !== "\\" || i + 1 >= body.length) {
+      out += ch;
+      continue;
+    }
+    const next = body.charAt(++i);
+    const simple = ANSI_C_SIMPLE_ESCAPES.get(next);
+    const hex = next === "x" ? /^[0-9a-fA-F]{1,2}/.exec(body.slice(i + 1, i + 3)) : next === "u" ? /^[0-9a-fA-F]{1,4}/.exec(body.slice(i + 1, i + 5)) : next === "U" ? /^[0-9a-fA-F]{1,8}/.exec(body.slice(i + 1, i + 9)) : null;
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i, i + 3));
+    if (simple !== undefined) out += simple;
+    else if (hex) {
+      const code = Number.parseInt(hex[0], 16);
+      out += code <= 0x10ffff ? String.fromCodePoint(code) : "";
+      i += hex[0].length;
+    } else if (octal) {
+      out += String.fromCharCode(Number.parseInt(octal[0], 8) & 0xff);
+      i += octal[0].length - 1;
+    } else if (next === "c" && i + 1 < body.length) {
+      out += String.fromCharCode(body.charCodeAt(++i) & 0x1f);
+    } else out += `\\${next}`;
+  }
+  return out;
+}
+
 // Quote removal as the shell does it for a quote that sits inside a word: `.e'n'v`, `".e"nv` and
 // `cred"entials"/db.txt` become `.env` and `credentials/db.txt`, which no scan of the quoted text
 // could see. A word quoted as a whole (`"secret*"`, `".env"`) keeps its quotes, because the other
 // scans read the quoting (a quoted search pattern is text). Separators inside a removed quote are
-// swapped for a placeholder so a quoted phrase stays one word.
+// swapped for a placeholder so a quoted phrase stays one word. A `$'...'` string is decoded.
 function joinQuoteFragments(command: string): string {
   const boundary = (ch: string): boolean => ch === "" || QUOTED_SEPARATORS.test(ch);
   let out = "";
@@ -406,6 +451,17 @@ function joinQuoteFragments(command: string): string {
     if (ch === "\\" && i + 1 < command.length) {
       out += ch + command.charAt(i + 1);
       i += 2;
+    } else if (ch === "$" && command.charAt(i + 1) === "'") {
+      // ANSI-C quoting: `.e$'n'v` and `$'\x2eenv'` name `.env`; the `$` goes with the quote.
+      const close = closingAnsiCQuote(command, i);
+      if (close < 0) {
+        out += command.slice(i);
+        break;
+      }
+      for (const inner of decodeAnsiC(command.slice(i + 2, close))) out += QUOTED_SEPARATORS.test(inner) ? QUOTED_SEPARATOR_PLACEHOLDER : inner;
+      i = close + 1;
+    } else if (ch === "$" && command.charAt(i + 1) === '"') {
+      i++;
     } else if (ch !== "'" && ch !== '"') {
       out += ch;
       i++;
@@ -794,9 +850,13 @@ export default function (pi: ExtensionAPI) {
     if (toolName === "bash") {
       const command = commandField?.ok ? commandField.value : undefined;
       if (command) {
-        const deobfuscated = deobfuscateShellText(command);
-        const candidates = new Set([command, deobfuscated]);
-        if (/['"]/.test(deobfuscated)) candidates.add(joinQuoteFragments(deobfuscated));
+        const candidates = new Set([command, deobfuscateShellText(command)]);
+        if (/['"]/.test(command)) {
+          // From the original text: deobfuscateShellText drops the backslash of `\x2e` and `\n`.
+          const joined = joinQuoteFragments(command);
+          candidates.add(joined);
+          candidates.add(deobfuscateShellText(joined));
+        }
         for (const candidate of candidates) {
           for (const pattern of SECRET_BASH_LEAK_PATTERNS) {
             if (pattern.test(candidate)) {

@@ -48,11 +48,25 @@ existing rpc.ts comment is updated to state the fail-closed rule; no other doc c
 **Out of scope.** No command is added to the kit. `autonomy/CHARTER.md`, `package.json` `scripts`,
 control paths and release files are untouched.
 
-## Item 2 — A-01 [P1] Team journal (only if budget and time remain)
+## Item 2 — A-01 [P1] Team journal (A-91 committed first)
 
 As specified by the board item: `packages/core/lib/journal.ts` (`parseJournal`, `cycleReports`,
 `checkJournal`), `autonomy/JOURNAL.md`, `autonomy/decisions/`, one `.gitattributes` line, wired
-into `tests/docs-smoke.ts`. Deferred until A-91 is committed and verified.
+into `tests/docs-smoke.ts`. Two clarifications for the implementer:
+
+- Entries are required for every `autonomy/cycles/**/report.md` on the branch, which today is
+  `luna-improve-01` 04–09 plus this cycle (`luna-ops-01/02`). The `luna-improve-01` reports carry
+  no `Board:` lines, so their entries are `Board: none`. This cycle worked A-91 and A-01, so its
+  entry is `Board: A-91, A-01` (the report will carry a `Board:` line for each), and the decision
+  file is `Board: A-01` per the board item.
+- `checkJournal(root): string[]` returns failures only: a host close-out report (its text contains
+  `Host close-out: the worker exited before recording report.md`) never produces one. The warning
+  is observable through a sibling export (e.g. `journalWarnings(root)`), and a fixture pins that
+  the close-out tree has no failure but does have the warning. The real tree asserts
+  `checkJournal(ROOT)` deep-equals `[]`.
+
+Checks: `npm run smoke:docs`, `npm run test:typecheck`, `npm run test:lint`, and
+`node packages/core/check-all.ts --check-wiring` (never the full `npm run check:all`).
 
 ## Set goal / task graph
 

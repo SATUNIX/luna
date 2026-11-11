@@ -54,3 +54,44 @@ a regression test that fails at the base, and keep the docs that describe them a
 
 - Idle-blink dead code (`cat.ts:36` vs `index.ts:387-391`): ambiguous intent, deferred.
 - human-console `inputHeld()` TOCTOU: proposal for the owner.
+
+---
+
+# Plan — second session, cycle base `afecc1bbb33d`
+
+- Mode: **fix**. Prior batch is merged into the base; this session takes the C-1 defect from the
+  continuation review. Budget ~$5, ~3 h; one small item in one file plus its test.
+
+## Goal
+
+Keep the curated `/` menu active for the whole session, including after `/new`, `/resume` and
+`/fork`, with a regression test that fails at the base.
+
+## Item C-1 — curated `/` menu lost on session replacement
+
+- Justification (charter 1, 3, 4): a reproduced TUI/`/`-menu defect. The hidden-command filter is
+  documented (`docs/control-center.md:88-124`) as always active in the TUI; after the first session
+  replacement it silently stops until `/reload`, so every kit command reappears in the `/` menu.
+  The wrapper is dropped by pi (`interactive-mode.js:1913`) but the extension is not re-imported.
+- Change: in `registerCommandMenu` (`packages/extensions/src/control-center/index.ts`), register a
+  `session_shutdown` handler that sets `curated = false`, so the next TUI `session_start`
+  re-registers the provider. No other behaviour changes; the in-session duplicate guard is kept.
+- Proof: add a case to `tests/command-menu-smoke.ts` that loads control-center once, fires
+  `session_start` (TUI), asserts one provider, emulates pi's replacement (fire `session_shutdown`,
+  clear `providers`, fire `session_start` again) and asserts one provider again; also assert two
+  `session_start`s without a shutdown still yield one provider. Must fail at the base (second
+  registration yields zero providers).
+- Checks: `npm run smoke:command-menu`; `npm run test:typecheck`; `npm run test:lint`.
+- Docs: none change — `docs/control-center.md` already says the filter is TUI-only and always on.
+
+## Checks that prove the session
+
+- `npm run smoke:command-menu` (the changed file's smoke), `npm run test:typecheck`,
+  `npm run test:lint`.
+- Independent `reviewer` subagent on `git diff afecc1bbb33d..HEAD` against `autonomy/CHARTER.md`.
+- Never `npm test` or `npm run check:all` (host gate runs the full suite).
+
+## Out of scope (recorded)
+
+- human-console proposal refuted; new `processPending` multi-card focus-theft proposal to be filed.
+- idle-cat blink still needs an intent decision (proposal kept open).

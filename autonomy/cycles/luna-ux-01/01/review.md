@@ -68,3 +68,68 @@ setting on the widget.
 
 1. F-1: fix the double merge in `fitLine`; add a test that counts the summary occurrences.
 2. F-2: thread the ASCII setting into `renderTodoWidget`; update the doc that already claims it.
+
+---
+
+# Continuation — second session, cycle base `afecc1bbb33d`
+
+- The prior batch above (`6accaa653a47..b33ed76`) is already merged into the new cycle base
+  `afecc1bbb33d` (head of `stream/ux`). This session ran a fresh reconnaissance against the new
+  base: one parallel `scout` plan of three agents (workflow run
+  `2026-11-11T04-55-50-111Z-plan-c530`) covering the `/` command menu, the open human-console
+  proposal, and the idle-cat blink proposal. Docs were treated as hypotheses; every candidate
+  needed a reproduction.
+- Mode: **fix** (a real `/` menu defect plus proposal triage). Assigned board: still none.
+- `npm run smoke:command-menu` passes all 11 checks at the base, so the defect below is by
+  construction not pinned.
+
+## Confirmed finding
+
+### C-1 (fix) — the curated `/` menu switches off after `/new`, `/resume` or `/fork` until `/reload`
+
+`packages/extensions/src/control-center/index.ts:43-46`. `registerCommandMenu` guards its
+`session_start` handler with a module-closure `curated` flag that is never reset:
+
+```ts
+let curated = false;
+pi.on("session_start", (_event, ctx) => {
+  if (curated) return;
+```
+
+On a session replacement pi emits `session_shutdown`, clears `autocompleteProviderWrappers` (so
+the registered provider is dropped) and then emits a new `session_start` — but the extension module
+is not re-imported, so `curated` is still `true` and the provider is never re-added. Verified in the
+installed host: `agent-session-runtime.js:105-114` (`teardownCurrent`: `emitSessionShutdownEvent`
+then `beforeSessionInvalidate`), `interactive-mode.js:358-369` + `:1898-1913`
+(`resetExtensionUI` sets `autocompleteProviderWrappers = []`), and `agent-session-runtime.js:141`,
+`:165`, `:211` (`sessionStartEvent` reason `resume` / `new` / `fork`). Repro (headless, load
+control-center once): first `session_start` gives `providers: 1`; after `session_shutdown` +
+wrapper reset + second `session_start`, `providers: 0`. Not pinned: `tests/command-menu-smoke.ts`
+cache-busts and reloads the module per case, so it never exercises the closure across a replacement.
+
+## Proposals triaged
+
+- **human-console `inputHeld()` TOCTOU** (`autonomy/proposals/luna-ux-01-01-human-console-input-hold-race.md`)
+  — **REFUTED.** The cited lines are off by one and the gap contains **no `await`**: `inputHeld()`
+  (`human-console/index.ts:368`, `:438`) and the `ctx.ui.select`/`ctx.ui.confirm` inside
+  `answerApproval`/`answerQuestion` run in one synchronous turn (`index.ts:223`, `:236`, `:187`),
+  so no other holder can acquire input there. `showWhenFree` re-checks only because it actually
+  waits (`core/shared/input-owner.ts:156-164,193-211`); these paths do not. No fix; mark the
+  proposal closed. The scout found a different, real focus-theft weakness: `processPending`
+  (`index.ts:487-501`) fires `void processOne(...)` for every pending file synchronously, so a
+  second card opens over the first. That is a new, separate proposal, not this one.
+- **idle-cat blink** (`autonomy/proposals/luna-ux-01-01-idle-cat-blink.md`) — **CONFIRMED dead at
+  runtime.** `catView` (`custom-footer/index.ts:387-391`) passes `now - now` for any non-TRANSIENT
+  state, so `renderCat("idle", 0)` is the only idle call ever made; the `=^-.-^=` blink in
+  `cat.ts:36` is unreachable while `tests/cat-status-smoke.ts:95` asserts the table blinks and
+  `docs/status-bar-and-costs.md:108-110` says it does not. Intent is split (commit `3a245e6` added
+  the frame deliberately; the renderer and docs never followed). Deferred again: option (a) drive a
+  timer contradicts the documented "nothing ticks while idle" and needs a new idle-clock and timer
+  lifecycle; option (b) delete the frame removes a face the operator added. Neither is clearly the
+  intended one, and this cycle's chosen fix is higher-value. Kept as a proposal needing an intent
+  decision.
+
+## Chosen for this session
+
+1. C-1: reset `curated` on `session_shutdown` so the curated `/` menu survives a session
+   replacement; add a smoke case that emulates pi's wrapper reset across two `session_start`s.

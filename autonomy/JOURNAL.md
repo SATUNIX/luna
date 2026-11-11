@@ -15,3 +15,5 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-ops-01/03 | Board: A-01, A-91 | successful | Added the missing luna-core-01/01 entry that reddened smoke:docs and made the journal check flag an entry with no report | decisions: autonomy/decisions/luna-ops-01-03-team-journal.md
 - luna-ux-01/01 | Board: none | successful | Fixed the duplicated narrow status-bar critical-warning merge and made /footer ascii on reach the todo widget
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
+- luna-ux-01/03 | Board: V-01, V-03 | partial | Re-landed the reviewed overlay frame and transcript dim improvements and carried the /settings-into-/menu V-03 work to cycle 04
+- luna-ux-01/06 | Board: V-03 | successful | Folded /settings into /menu as the primary command with kit/helpers aliases and a Settings page, and repaired the smoke:docs journal gate for luna-ux-01/03

@@ -494,7 +494,7 @@ absolute or relative to the working directory.
 | `PI_KIT_GUARD_OSC` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_REPEAT` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_STALL` | `progress-guard` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_GUIDELINES_PATH` | `guidelines` | — | — |
+| `PI_KIT_GUIDELINES_PATH` | `guidelines` | Path to guidelines file (default `GUIDELINES.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_HANDOFF_AUTO` | `handoff` | — | — |
 | `PI_KIT_HANDOFF_FILE` | `handoff` | — | — |
 | `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [script-workflows](script-workflows.md) |

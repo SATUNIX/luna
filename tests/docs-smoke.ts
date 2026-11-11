@@ -21,6 +21,7 @@ interface PackageJson {
 
 interface ExtensionManifest {
   name?: string;
+  env?: string[];
 }
 
 interface ProfileJson {
@@ -274,6 +275,32 @@ for (const name of new Set(recoveryMd.match(/PI_KIT_[A-Z0-9_]+/g) ?? [])) {
     `docs/recovery-orchestration-mode.md names ${name}, which no extension reads`);
 }
 assert.ok(!/\/unstuck\b/.test(recoveryMd), "docs/recovery-orchestration-mode.md offers /unstuck, which no extension registers");
+
+// INSTALL.md's environment table must name a real extension and a variable that extension's
+// manifest declares. It once listed PI_KIT_GUIDELINES_FILE for `guidelines`, while the manifest,
+// the code and the extension README all use PI_KIT_GUIDELINES_PATH, so anyone following the docs
+// set a no-op variable.
+const manifestsByName = new Map<string, ExtensionManifest>();
+for (const rootRel of ["packages/extensions/src", "packages/extensions/third_party"]) {
+  const rootAbs = path.join(ROOT, rootRel);
+  if (!fs.existsSync(rootAbs)) continue;
+  for (const entry of fs.readdirSync(rootAbs, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+    const manifestPath = path.join(rootAbs, entry.name, "extension.json");
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as ExtensionManifest;
+    if (manifest.name) manifestsByName.set(manifest.name, manifest);
+  }
+}
+for (const line of readRel("docs/INSTALL.md").split(/\r?\n/)) {
+  const m = /^\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*([a-z0-9-]+)\s*\|/.exec(line);
+  if (!m) continue;
+  const [, variable, extension] = m;
+  assert.ok(variable !== undefined && extension !== undefined, "INSTALL.md env-table regex lost a capture group");
+  const manifest = manifestsByName.get(extension);
+  assert.ok(manifest, `docs/INSTALL.md lists ${variable} for extension "${extension}", which has no extension.json`);
+  assert.ok(manifest.env?.includes(variable), `docs/INSTALL.md lists ${variable} for "${extension}", but its manifest env[] does not declare it`);
+}
 
 // SEC-8: secret-guard ships in balanced and autonomous only, and blocks reads of credential files.
 const secretGuardSrc = readRel("packages/extensions/src/secret-guard/index.ts");

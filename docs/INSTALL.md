@@ -212,7 +212,7 @@ MEM0_API_URL=http://localhost:8000
 
 | Var | Extension | Default | Purpose |
 | --- | --- | --- | --- |
-| `PI_KIT_GUIDELINES_FILE` | guidelines | `GUIDELINES.md` | Path to guidelines file |
+| `PI_KIT_GUIDELINES_PATH` | guidelines | `GUIDELINES.md` | Path to guidelines file |
 | `PI_KIT_TODO_FILE` | todo | `TODO.md` | Path to todo file |
 | `PI_KIT_PROTECTED_PATHS` | protected-paths | — | Semicolon-separated protected paths (denylist) |
 | `PI_KIT_WRITE_ALLOWLIST` | protected-paths | — | Semicolon-separated allowlist; blocks writes outside it (dream/print mode) |

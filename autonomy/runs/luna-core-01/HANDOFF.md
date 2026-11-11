@@ -2,12 +2,16 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `363dba0b9a25` (head of `stream/core`, holds cycles 01–11).
-  Cycle 12 commits, all pushed: `b8602c5`, `c6bc2ee` (PG-55), `d647f95` (PG-19), `34ee17a`
-  (V-81), `be8f294` (review fixes), `8a0fbe9` (second review fixes), plus the records under `autonomy/cycles/luna-core-01/12/`
-  and the `luna-core-01/12` line in `autonomy/JOURNAL.md`.
-- Cycle 12 outcome: **successful** (fix + improve).
-- Reviewable diff 50,945 chars — under the 60,000 review read budget.
+- Branch `pi/luna-core-01`, base `fc13571d21c7` (head of `stream/core`, holds cycles 01–12).
+  Cycle 13 commits, both pushed: `c088feb` (review + plan), `47f48d0` (the fix), plus the records
+  under `autonomy/cycles/luna-core-01/13/` and the `luna-core-01/13` line in `autonomy/JOURNAL.md`.
+- Cycle 13 outcome: **successful** (fix / consolidate). The board re-listed PG-19 and V-81, both
+  merged in cycle 12; they were re-verified green and left untouched. The one change fixes a real
+  docs-drift defect: `docs/capability-research-workflow.md` and the caveman comment claimed
+  context-sieve wipes contributions on `session_start`, while the code never deletes and skips
+  files older than `SESSION_EPOCH_NS`; two `tests/docs-smoke.ts` guards now pin the corrected text.
+- Reviewable diff is tiny (48 insertions / 5 deletions across 5 files) — well under the 60,000
+  review read budget.
 
 ## What cycle 12 did
 

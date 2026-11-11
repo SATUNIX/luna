@@ -18,6 +18,7 @@
 //      recap body is truncated with the header and footer kept; oversized recaps leave room
 //      for pinned/relevant memories, and with none present the recap is still truncated.
 //  14. oversized recaps with no pinned or matching memory are truncated, not dropped.
+//  15. pinned memories that outrank a relevant one do not crowd it out of the first-prompt recall.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -410,6 +411,39 @@ try {
     } finally {
       restoreSolo();
     }
+  }
+
+  // 15. Pinned memories ranking above a relevant one must not crowd it out of the first-prompt
+  //     recall: the search over-fetches by the pinned count, so filtering the pins (which are
+  //     shown in their own block) still leaves a slot for the relevant hit behind them.
+  {
+    const pinRoot = path.join(ws, "vault-pinned-recall");
+    const repo = path.join(ws, "pinned-recall");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restorePin = setEnv("PI_KIT_VAULT", pinRoot);
+    // Keep the relevance floor out of this check: the defect is the over-fetch limit, not the
+    // gate, and a lower floor makes every candidate eligible so only the limit decides.
+    const restoreFloor = setEnv("PI_KIT_MEMORY_MIN_SCORE", "0.1");
+    try {
+      // Distinct bodies (a shared body would be deduplicated into one note) that all outrank the
+      // non-pinned memory for the query. Three pins fill `recallLimit` on the first turn.
+      const markers = ["amber", "birch", "cobalt"];
+      for (const marker of markers) vault.saveMemory(pinRoot, { title: `Kestrel migration rollout ${marker}`, body: `Kestrel migration rollout ${marker}.`, pinned: true, project: "pinned-recall" });
+      const relevant = vault.saveMemory(pinRoot, { title: "Kestrel migration rollback", body: "A kestrel migration rollout can be rolled back safely.", project: "pinned-recall" });
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-pinned-recall" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "kestrel migration rollout", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.match(result.message.content, /### Pinned memories/, "the pinned block is shown");
+      assert.match(result.message.content, /### Relevant memories/, "a relevant memory still appears when pinned memories rank above it");
+      assert.match(result.message.content, /Kestrel migration rollback/, "the non-pinned relevant memory survives the pinned block");
+      assert.ok(result.message.content.includes(`[${relevant.rel}]`), "the relevant memory is named by its rel");
+    } finally {
+      restoreFloor();
+      restorePin();
+    }
+    ok("pinned memories ranking above a relevant one do not crowd it out of the first-prompt recall");
   }
 
   console.log(`[memory-vault-smoke] all ${checks} checks passed`);

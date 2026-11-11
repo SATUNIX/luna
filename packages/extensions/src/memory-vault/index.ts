@@ -138,32 +138,51 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
         for (const [rel, e] of pinned) pinnedLines.push({ rel, line: `- **${e.meta.title}** [${rel}]` });
       }
       if (isUserPrompt) firstPrompt = false;
-      // A pinned rel is already claimed this turn even before it is (maybe) injected, so the
-      // relevance search does not resurface it as a duplicate hit.
-      const chosen = new Set([...injected, ...pinnedLines.map((p) => p.rel)]);
-      const hits = searchMemories(cfg.root, isUserPrompt ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size, minScore: cfg.minScore, gate: true })
-        .filter((h) => !chosen.has(h.rel))
-        .slice(0, cfg.recallLimit);
+      // Only already-injected memories are claimed up front. The over-fetch also adds the pinned
+      // count: every pinned line below is offered to the search and filtered out, so without it an
+      // all-pinned top-`recallLimit` leaves the turn with no relevant memory even when one ranks
+      // just below the pins on the first turn (when `injected` is empty).
+      const chosen = new Set(injected);
+      const candidates = searchMemories(cfg.root, isUserPrompt ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size + pinnedLines.length, minScore: cfg.minScore, gate: true })
+        .filter((h) => !chosen.has(h.rel));
       const pinnedBlock = pinnedLines.length ? `### Pinned memories\n\n${pinnedLines.map((p) => p.line).join("\n")}` : "";
-      const hitsBlock = hits.length ? `### Relevant memories\n\n${formatHits(hits)}` : "";
-      // Pinned and relevant blocks get their room first; the recap only keeps what is left. A
-      // recap too big for that is dropped whole rather than truncated into the blocks after it,
-      // which used to hide pinned and relevant memories while still counting them as injected.
-      const preferred = [pinnedBlock, hitsBlock].filter(Boolean);
-      const preferredRoom = preferred.reduce((n, b) => n + b.length + 2, 0);
-      // Only drop the recap when a preferred block actually needs the room; with no pinned or
-      // relevant block an oversized recap is still truncated (header/footer/marker kept).
-      if (preferred.length > 0 && recapBlock && recapBlock.length > room - preferredRoom) recapBlock = "";
-      const blocks = [recapBlock, ...preferred].filter(Boolean);
-      if (blocks.length === 0) return undefined;
-      const body = blocks.join("\n\n");
-      let content = `${header}\n\n${body}${trail}`;
-      if (body.length > room) content = `${header}\n\n${body.slice(0, Math.max(0, room - marker.length))}${marker}${trail}`;
+      // Assemble the message for a set of relevant hits. Pinned and relevant blocks get their room
+      // first; the recap only keeps what is left, and is dropped whole rather than truncated into
+      // the blocks after it, which used to hide pinned and relevant memories while still counting
+      // them as injected. A lone oversized recap is still truncated (header/footer/marker kept).
+      const assemble = (hits: typeof candidates): { content: string; pinnedShown: Set<string> } | undefined => {
+        const hitsBlock = hits.length ? `### Relevant memories\n\n${formatHits(hits)}` : "";
+        const preferred = [pinnedBlock, hitsBlock].filter(Boolean);
+        const preferredRoom = preferred.reduce((n, b) => n + b.length + 2, 0);
+        const recap = preferred.length > 0 && recapBlock && recapBlock.length > room - preferredRoom ? "" : recapBlock;
+        const blocks = [recap, ...preferred].filter(Boolean);
+        if (blocks.length === 0) return undefined;
+        const body = blocks.join("\n\n");
+        const content = body.length > room ? `${header}\n\n${body.slice(0, Math.max(0, room - marker.length))}${marker}${trail}` : `${header}\n\n${body}${trail}`;
+        const pinnedShown = new Set(pinnedLines.filter((p) => content.includes(p.line)).map((p) => p.rel));
+        return { content, pinnedShown };
+      };
+      // A pinned line cut by the cap is not shown, so it must stay eligible for the relevance
+      // search (this turn and later) instead of being filtered out forever. Render the candidates,
+      // learn which pinned lines survive, drop those pins from the hits so they are not shown
+      // twice, and repeat until the hit set is stable: removing a hit only frees room, so a pin
+      // that survives stays excluded. Anything still cut is left un-injected and so is recalled
+      // again on a later turn.
+      let hits = candidates.slice(0, cfg.recallLimit);
+      let final = assemble(hits);
+      for (let pass = 0; final && pass < pinnedLines.length; pass++) {
+        const current = final;
+        const next = candidates.filter((h) => !current.pinnedShown.has(h.rel)).slice(0, cfg.recallLimit);
+        if (next.length === hits.length && next.every((h, i) => h.rel === hits[i]?.rel)) break;
+        hits = next;
+        final = assemble(hits) ?? current;
+      }
+      if (!final) return undefined;
       // A memory counts as injected only when its own rendered line survived into the final
       // content; anything cut by the cap is recalled again on a later turn.
-      for (const { rel, line } of pinnedLines) if (content.includes(line)) injected.add(rel);
-      for (const h of hits) if (content.includes(formatHits([h]))) injected.add(h.rel);
-      return { message: { customType: "memory-recall", content, display: false } };
+      for (const { rel } of pinnedLines) if (final.pinnedShown.has(rel)) injected.add(rel);
+      for (const h of hits) if (final.content.includes(formatHits([h]))) injected.add(h.rel);
+      return { message: { customType: "memory-recall", content: final.content, display: false } };
     } catch (error) {
       logError(cfg.root, `recall failed: ${String(error)}`);
       return undefined;

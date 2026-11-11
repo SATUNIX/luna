@@ -38,13 +38,13 @@ Green: `smoke:firewall-overlay-queue` 35/35, `smoke:control-center` 34/34,
 `smoke:command-menu` 12/12, `smoke:workflow-panel` 14/14, `smoke:human-console-broker` OK,
 `smoke:human-console-auth` 8/8, `smoke:update-notice` 8/8, `smoke:launch-screen` 11/11,
 `smoke:docs` OK, `test:typecheck` exit 0, `test:lint` exit 0. The three new console cases fail
-when the source is reverted to `205590d`. Whole-diff reviewer: PASS. Diff 40296 characters: over
+when the source is reverted to `205590d`. Whole-diff reviewer: PASS. Diff 40573 characters: over
 the 30000 stop line, under the 60000 review budget. No scripts, charter, control-path, credential
 or release change. Details in `verify.md`.
 
 ## Leftovers
 
-- The diff is 40296 characters, over the 30000 stop-new-items line but under the 60000 merge
+- The diff is 40573 characters, over the 30000 stop-new-items line but under the 60000 merge
   budget; no new item was started after it crossed.
 - Open proposals not taken: `luna-ux-01-10-hub-overlay-mouse-and-width.md` (short-terminal
   clipping), the hub `ctx.mode` fallback, undocumented hub rows, `idle-cat-blink`, and

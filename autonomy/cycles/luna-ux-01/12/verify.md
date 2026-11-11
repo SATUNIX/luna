@@ -74,6 +74,6 @@ request keeps its pending file while the question card is open, then is asked af
 
 `git diff --no-renames 7647d1b2f347..HEAD -- . ":(exclude)package-lock.json"
 ":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c` →
-**40296** characters including this cycle's records, over the 30000 stop line but under the
+**40573** characters including this cycle's records, over the 30000 stop line but under the
 60000 review budget. No `package.json` `scripts`, `autonomy/CHARTER.md`, control path, credential
 or release change.

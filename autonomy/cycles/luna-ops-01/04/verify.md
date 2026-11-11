@@ -31,6 +31,11 @@ has all four required sections, the caller counts sum to the grep counts, and it
 `3c4c571`'s optimistic `/workflows <run-id>` claim), each fixed in the editorial-fix commit
 without changing factual content, and re-verified (`smoke:docs`, `docs:check` both exit 0).
 
+A second focused `subagent` reviewer re-checked `e112c29` (the editorial fix) and the new
+`luna-ops-01/04` journal line against its report: verdict **PASS**, no warnings — `e112c29` changes
+only the proposal and fixes exactly the three warnings, and the journal line matches the report's
+`Outcome: successful` / `Board: V-41 done`.
+
 ## (c) Failures fixed or reverted
 
 The only failure was the priority-0 red gate (`smoke:docs`). It was fixed by adding the missing

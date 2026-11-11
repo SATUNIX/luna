@@ -6,5 +6,5 @@
 `npx eslint --max-warnings 0` on the changed TS files — PASS.
 `npm run smoke:docs` — PASS (14 commands, 62 links; 12/12 journal/report lines valid).
 `node packages/core/paperwork-budget.ts autonomy/cycles/luna-core-01/12 --journal=autonomy/JOURNAL.md --run=luna-core-01 --cycle=12` — PASS.
-Independent reviewer on `363dba0b9a25..be8f294`: VERDICT PASS after `be8f294` fixed the tagged-commit, history and atomic-write findings.
-Never ran `npm test` or `npm run check:all`. Diff 44,268 chars, under the 60,000 read budget.
+Reviewer on `363dba0b9a25..be8f294` found one false docs claim and four edge cases; `8a0fbe9` fixed all five and every check above was re-run green.
+Never ran `npm test` or `npm run check:all`. Diff 50,945 chars, under the 60,000 read budget.

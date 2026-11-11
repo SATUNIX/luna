@@ -423,6 +423,46 @@ function testEvalCategoryGate(): void {
   }
 }
 
+/** The CLI V-81 documents: measure a profile, print JSON, and record a baseline byte-identically. */
+function testFootprintCli(): void {
+  const ws = tmpWorkspace("pi-footprint-cli-");
+  try {
+    const baselineFile = path.join(ws, "baseline.json");
+    const reviewed = path.join(ROOT, "packages", "core", "eval", "footprint-baseline.json");
+    fs.copyFileSync(reviewed, baselineFile);
+    const before = fs.readFileSync(baselineFile, "utf8");
+    const run = (args: string[]) =>
+      spawnSync(process.execPath, ["packages/core/eval/footprint.ts", ...args], { cwd: ROOT, encoding: "utf8", timeout: 120_000 });
+
+    const lite = run(["--profile", "lite", "--json", `--baseline=${baselineFile}`]);
+    assert.equal(lite.status, 0, lite.stderr);
+    const parsed: unknown = JSON.parse(lite.stdout);
+    assert.ok(isRecord(parsed), "--json prints one object");
+    assert.equal(parsed.profile, "lite");
+    assert.equal(typeof parsed.chars, "number");
+    assert.equal(parsed.tokens, Math.ceil(Number(parsed.chars) / 4), "tokens are ceil(chars/4)");
+    assert.ok(Array.isArray(parsed.tools), "tools are listed");
+    assert.deepEqual(parsed.problems, [], "lite matches the reviewed baseline");
+    const again = run(["--profile", "lite", "--json", `--baseline=${baselineFile}`]);
+    assert.equal(again.stdout, lite.stdout, "two runs of the same profile print identical JSON");
+
+    const unknown = run(["--profile", "__no_such_profile__"]);
+    assert.equal(unknown.status, 2, "an unknown profile is a usage error, not a silent pass");
+    assert.match(unknown.stderr, /cannot measure profile/, "the unknown profile is named on stderr");
+    const missing = run(["--profile"]);
+    assert.equal(missing.status, 2, "a --profile with no value is a usage error");
+    const stray = run(["--nonsense"]);
+    assert.equal(stray.status, 2, "an unknown argument is a usage error");
+
+    const written = run(["--profile", "balanced", "--write-baseline", `--baseline=${baselineFile}`]);
+    assert.equal(written.status, 0, written.stderr);
+    assert.match(written.stdout, /baseline unchanged/, "an unchanged record is reported as unchanged");
+    assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "an unchanged baseline is not reformatted");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
 // ---- runner ---------------------------------------------------------------------------------
 
 const tests: Array<[string, () => void | Promise<void>]> = [
@@ -437,7 +477,8 @@ const tests: Array<[string, () => void | Promise<void>]> = [
   ["plan-valid rate per model, malformed records ignored", testPlanValidRate],
   ["the live-only plan-valid fixture is registered and skipped offline", testLiveOnlyFixtureIsSkippedOffline],
   ["the eval --category gate refuses an unknown or missing value", testEvalCategoryGate],
-];
+  ["the footprint CLI measures, prints deterministic JSON, rejects bad arguments, and preserves an unchanged baseline", testFootprintCli],
+  ];
 
 const restoreEnv = isolateKitEnv();
 let failed = 0;

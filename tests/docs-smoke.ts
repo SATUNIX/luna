@@ -599,4 +599,20 @@ function removeJournalFixture(fixture: JournalFixture): void {
   }
 }
 
+// An entry whose cycle directory exists but has no report.md fails, naming the key.
+{
+  const fixture = journalFixture();
+  try {
+    fs.mkdirSync(path.join(fixture.root, "autonomy/cycles/run-01/01"), { recursive: true });
+    fixture.journal(["- run-01/01 | Board: none | successful | did a thing"]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("journal entry has no report: run-01/01")),
+      `journal checker missed an entry with no report: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
 console.log(`[docs-smoke] OK: ${checked} documented commands validated, ${linksChecked} relative links resolved; balanced profile resolved; ${skipped.length} external lines skipped; skills catalogue visible ${skillsVisible}/${skillsTotal}; ${shippedPages.length} shipped pages name no removed delegation surface.`);

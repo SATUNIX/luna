@@ -105,6 +105,7 @@ export function checkJournal(root: string): string[] {
   for (const entry of entries) {
     const dir = path.join(cycles, ...entry.key.split("/"));
     if (!fs.existsSync(dir)) problems.push(`journal entry has no cycle directory: ${entry.key}`);
+    else if (!fs.existsSync(path.join(dir, "report.md"))) problems.push(`journal entry has no report: ${entry.key}`);
     for (const file of entry.decisions) {
       if (!fs.existsSync(path.join(root, file))) {
         problems.push(`journal entry ${entry.key} links a missing decisions file: ${file}`);

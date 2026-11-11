@@ -53,7 +53,8 @@ symlink were removed afterwards; `/work` was not modified.
 
 `git diff --no-renames aad264ed68f1..HEAD -- . ":(exclude)package-lock.json"
 ":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c` →
-**12854** characters, under the 30000 stop line and the 60000 review budget. No `package.json`
+**17695** characters including this cycle's proposal, journal line and records (12854 at code head
+`9e4e345` before them), under the 30000 stop line and the 60000 review budget. No `package.json`
 `scripts`, `autonomy/CHARTER.md`, control path, credential or release change.
 
 ## Notes

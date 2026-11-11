@@ -37,7 +37,8 @@ reverted to the base: all three fail there and pass at HEAD (see `verify.md`).
 
 `smoke:control-center` 34/34, `smoke:command-menu` 11/11, `smoke:update-notice` 8/8,
 `smoke:launch-screen` 11/11, `smoke:docs` OK, `test:typecheck` and `test:lint` exit 0. Cycle diff
-excluding lockfile and autonomy records is 12854 characters, under the 30000 stop line.
+excluding lockfile and the cycle record directories is 17695 characters including the proposal
+and journal line (12854 at code head `9e4e345`), under the 30000 stop line.
 
 An independent whole-diff reviewer was started twice and both runs were cut off by context
 compaction before returning a verdict; the per-item gated reviewers passed and the negative run

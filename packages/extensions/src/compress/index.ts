@@ -97,6 +97,12 @@ function clip(text: string, limit: number): string {
   return `${text.slice(0, head)} […${text.length - head - tail} chars…] ${text.slice(text.length - tail)}`;
 }
 
+// The one-line marker that stands in for omitted middle turns. Used both to build the summary
+// and to reserve its cost before the older-turns loop, so the final join cannot exceed the budget.
+function omissionMarker(omittedTurns: number): string {
+  return `[… ${omittedTurns} older turns omitted to fit the budget …]`;
+}
+
 function stripCode(text: string): string {
   return text.replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_m, lang: string, body: string) => {
     const lines = body.split("\n").filter((l) => l.trim()).length;
@@ -277,7 +283,9 @@ export function buildCompressedSummary(event: SessionBeforeCompactEvent, note = 
     fileSection("read-files", readFiles, Math.floor(lim.files * 0.5)),
   ].filter(Boolean).join("\n\n");
 
-  const fixed = [header, objectiveSection, noteSection, files, "## Conversation"].filter(Boolean).join("\n\n").length;
+  // Count "## Conversation" with its trailing newline: the final summary joins that prefix with the
+  // turn body, but `fixed` joins the bare heading, so the newline was otherwise never charged.
+  const fixed = [header, objectiveSection, noteSection, files, "## Conversation\n"].filter(Boolean).join("\n\n").length;
   let remaining = lim.budget - fixed;
 
   // Priority: first turn (the original ask), newest turn, earlier summary
@@ -304,6 +312,11 @@ export function buildCompressedSummary(event: SessionBeforeCompactEvent, note = 
     remaining -= previous.length + 2;
   }
 
+  // Charge the omission marker (and the separator the final join adds before it) before keeping
+  // older turns. Reserving the widest form (turns.length) is an upper bound, so any shorter marker
+  // leaves slack rather than overrunning the budget.
+  if (turns.length) remaining -= omissionMarker(turns.length).length + 2;
+
   for (let i = turns.length - 2; i > 0 && remaining > 0; i--) {
     if (cost(i) > remaining) break;
     kept.add(i);
@@ -316,7 +329,7 @@ export function buildCompressedSummary(event: SessionBeforeCompactEvent, note = 
   for (let i = 0; i < turns.length; i++) {
     if (kept.has(i)) body.push(turnAt(i));
     else if (!markerPlaced) {
-      body.push(`[… ${omittedTurns} older turns omitted to fit the budget …]`);
+      body.push(omissionMarker(omittedTurns));
       markerPlaced = true;
     }
   }

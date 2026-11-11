@@ -575,8 +575,17 @@ commits the destination does not already hold, including all tags about to be pu
 fresh destination refs, excludes known published main/master history, and reads exceptions from the
 supervisor-held source base, never worker changes. Findings (locations only), mixed exception/content
 changes, or scan errors refuse the push; automatic cycles continue locally with
-`state.selfImprove.publishBlocker`/`publishError`, and explicit promotion records `promotion.error`.
-The worker has no push credentials and never performs host promotion; host pushes stay fast-forward
+`state.selfImprove.publishBlocker`/`publishError` and `state.selfImprove.publishBlockedCycles`, and
+explicit promotion records `promotion.error`. The refusal is now surfaced instead of only logged:
+`pi-autonomy status` reports `selfImprove.publishBlocker` and `selfImprove.unpublished` (a
+`publication BLOCKED` line in the text view), the next cycle's prompt names the refused commit and
+location and makes removing the identifier its first job, and after **two** consecutive merged
+cycles stay unpublished, the host stops the run in `blocked` with an operator question (remove the
+identifier and resume, or stop the run). Answering that question lets exactly one cycle run — the
+answer is consumed as that one resume permission — and the run parks again if that cycle's
+publication is still refused. A successful publish clears the blocker and the count
+(`tests/autonomy-selfimprove-smoke.ts`). The worker has no push credentials and never performs host
+promotion; host pushes stay fast-forward
 only (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-smoke.ts`; scanner rules:
 `tests/prepush-scan-smoke.ts`). Approval-gated publication remains held for `promote`. Disabling tag
 publication avoids publishing rejected attempts, but the integration branch is still public as soon

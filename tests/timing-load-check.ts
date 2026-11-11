@@ -10,6 +10,15 @@
  * "busy host" that used to turn correct code red under wall-clock bounds; with the CPU-time
  * guards in `tests/timing.ts` every run must still pass.
  *
+ * A smoke is listed here only when every timing assertion it runs is CPU-bound (or already
+ * load-tolerant). `tests/workflow-sandbox-smoke.ts` is deliberately NOT listed: besides its
+ * converted `scriptBody` CPU guard it asserts on the sandbox's own wall-clock watchdogs — a
+ * `sliceMs` deadline racing a 10 s `idleMs` host watchdog, and `Date.now() - t < 10_000` for the
+ * busy loops. On a saturated host the jailed runner is starved, the idle watchdog wins and the
+ * slice deadline is misreported as `idle`; no CPU-time conversion can express (or should weaken)
+ * that hang guard, so it stays out of this load run. The converted guard still runs in the normal
+ * smoke. See autonomy/proposals/ for the wall-clock watchdog finding.
+ *
  * This is CPU-heavy by design and is deliberately NOT part of `check:all` / the CI gate — it
  * would slow every run down to prove something the guards prove on their own. Run it directly
  * (or from the cycle's acceptance evidence) when the guards change.
@@ -30,6 +39,9 @@ const SMOKES = [
   "tests/workflow-plan-smoke.ts",
   "tests/skill-routing-smoke.ts",
   "tests/compress-smoke.ts",
+  "tests/workflow-structured-smoke.ts",
+  "tests/tool-capture-smoke.ts",
+  "tests/trace-ledger-bound-smoke.ts",
 ] as const;
 
 const RUNS = 5;

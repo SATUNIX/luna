@@ -14,7 +14,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { assert, makeChecker, testEffort, type RawContract } from "./autonomy-helpers.ts";
-import { cleanup, fakeAlive, harness, runOnce, scratch, NODE_EXIT, type Harness, type HarnessRuntime, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
+import { cleanup, fakeAlive, harness, runOnce, scratch, NODE_EXIT, type Harness, type HarnessRuntime, type MadeEngine, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
+import { main } from "../packages/autonomy/cli.ts";
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
@@ -50,6 +51,18 @@ const mirrorGit = (rt: HarnessRuntime): NonNullable<HarnessRuntime["repo"]["g"]>
   const g = rt.repo.g;
   assert.ok(g, "the host mirror is open");
   return g;
+};
+
+/** Run `pi-autonomy <argv>` in-process against a harness home and return its code and captured output. */
+const cliRun = async (h: Harness, argv: readonly string[]): Promise<{ code: number; out: string; err: string }> => {
+  const out: string[] = []; const err: string[] = [];
+  const code = await main(argv, {
+    home: h.home,
+    now: () => new Date(h.clock.now),
+    stdout: { write: (s: string): number => out.push(s) },
+    stderr: { write: (s: string): number => err.push(s) },
+  });
+  return { code, out: out.join(""), err: err.join("") };
 };
 
 const gitIn = (cwd: string, args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
@@ -587,6 +600,167 @@ await check("publish range scanning catches a private path removed before the fi
   assert.equal(rt.repo.fileAt(state.selfImprove?.history[0]?.head ?? "", "internal/private-note.txt"), null);
   assert.match(state.selfImprove?.publishBlocker ?? "", /private path/);
   assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), state.selfImprove?.seedSha, "no newly exposing commit was pushed");
+});
+
+await check("PG-55: a leak-scan-refused merge is counted, surfaced by status, and names the location in the next cycle prompt", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  const { state } = await runOnce(h);
+  assert.equal(state.status, "succeeded", JSON.stringify(state.outcome));
+  assert.match(state.selfImprove?.publishBlocker ?? "", /pre-push leak scan/);
+  assert.ok((state.selfImprove?.publishBlockedCycles ?? 0) >= 1, "the merged-but-unpublished cycle is counted");
+  // (c) the NEXT cycle's prompt carries the blocker, locations only, and the fix instruction.
+  assert.match(nth(prompts, 1), /## Publication blocked \(pre-push leak scan\)/);
+  assert.ok(nth(prompts, 1).includes(state.selfImprove?.publishBlocker ?? "\u0000"), "the next cycle prompt quotes the blocker verbatim");
+  assert.match(nth(prompts, 1), /Your first job this cycle is to stop adding that identifier: remove it, or if it is legitimate propose an exception; the run cannot publish until it is gone\./);
+  // (b) status carries the blocker and the unpublished count, in JSON and in text.
+  const status = await cliRun(h, ["status", "--run", "improve-test-1", "--json"]);
+  assert.equal(status.code, 0, status.err);
+  const json = JSON.parse(status.out) as { selfImprove?: { publishBlocker?: string | null; unpublished?: number } };
+  assert.match(json.selfImprove?.publishBlocker ?? "", /pre-push leak scan/);
+  assert.ok((json.selfImprove?.unpublished ?? 0) >= 1);
+  const text = await cliRun(h, ["status", "--run", "improve-test-1"]);
+  assert.equal(text.code, 0, text.err);
+  assert.match(text.out, /publication BLOCKED: publication blocked by pre-push leak scan: .*merged cycle\(s\) not published; the leak scan refuses the commit above/);
+});
+
+await check("PG-55: two consecutive leak-scan-refused merges stop the run with an operator question", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let stopped = false;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => { if (slot.engine && !stopped && h.state().status === "blocked") { stopped = true; slot.engine.engine.signalled = true; } } },
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "publish-blocked");
+  assert.equal(state.blocker?.kind, "external");
+  assert.equal(state.selfImprove?.publishBlockedCycles, 2, "two merged cycles are stacked unpublished");
+  assert.equal(state.pendingQuestions.filter((q) => q.id === "publish-blocked").length, 1);
+  assert.match(state.blocker?.question ?? "", /Publication of 2 merged cycle\(s\) is blocked by the pre-push leak scan/);
+  assert.match(state.blocker?.question ?? "", /remove the identifier or stop the run/);
+  assert.deepEqual(state.blocker?.options, ["Remove the identifier and resume", "Stop the run"]);
+  assert.equal(prompts.length, 2, "the run waits for the operator instead of starting a third cycle");
+});
+
+await check("PG-55: answering the publish-blocked question runs exactly one cycle, then parks again", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let answered = 0;
+  let stopped = false;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      if (!slot.engine) return;
+      const s = h.state();
+      if (s.status !== "blocked" || s.blocker?.id !== "publish-blocked") return;
+      if (answered === 0) { answered += 1; h.store.enqueue("answer", { text: "Remove the identifier and resume" }); return; }
+      if (!stopped) { stopped = true; slot.engine.engine.signalled = true; }
+    } },
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(answered, 1, "the operator answered the publish-blocked question once");
+  assert.equal(prompts.length, 3, "exactly one cycle ran after the answer, not zero and not more");
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "publish-blocked", "the still-refused publication parks the run again");
+  assert.equal(state.pendingAnswer ?? null, null, "the answer was consumed");
+});
+
+await check("PG-55: a non-merged cycle between refused merges does not reset the blocked-cycle count", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let stopped = false;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => { if (slot.engine && !stopped && h.state().status === "blocked") { stopped = true; slot.engine.engine.signalled = true; } } },
+    script: async (t) => {
+      prompts.push(t.message);
+      if (t.step === 2) { t.remove("AUDIT_OK"); report(t, "successful"); t.commit("red gate cycle"); return; }
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "publish-blocked");
+  assert.equal(state.selfImprove?.publishBlockedCycles, 2, "the intervening non-merged cycle did not clear the count");
+  assert.equal(state.selfImprove?.history.filter((c) => c.merged).length, 2, "only the two leak-bearing cycles merged");
+  assert.equal(prompts.length, 3, "the run stops before a fourth cycle");
+});
+
+await check("PG-55: a clean publish clears the blocker, the unpublished count and the status line", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const slot: { engine?: MadeEngine } = {};
+  let injected = false;
+  let blockedText = "";
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: async () => {
+      const si = slot.engine?.engine.state.selfImprove;
+      if (si && !injected) {
+        injected = true;
+        si.publishBlocker = "publication blocked by pre-push leak scan: 012345678901 internal/private-note.txt: a private path";
+        si.publishBlockedCycles = 1;
+        slot.engine?.engine.save();
+        blockedText = (await cliRun(h, ["status", "--run", "improve-test-1"])).out;
+      }
+    } },
+    script: async (t) => { t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit(`cycle ${t.step}`); },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  assert.match(blockedText, /publication BLOCKED: publication blocked by pre-push leak scan/, "the status line is visible while the block stands");
+  const state = h.state();
+  assert.equal(state.selfImprove?.publishBlocker ?? null, null, "a clean publish clears the blocker");
+  assert.equal(state.selfImprove?.publishBlockedCycles ?? 0, 0, "and the unpublished count");
+  assert.equal(state.selfImprove?.merged, 1);
+  const text = await cliRun(h, ["status", "--run", "improve-test-1"]);
+  assert.doesNotMatch(text.out, /publication BLOCKED/);
 });
 
 await check("the deprecated v0 shape maps onto this template: same limits and budgets, no default remote, an explicit destination", () => {

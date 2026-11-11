@@ -569,7 +569,7 @@ export class Engine {
     const r = resumeAction(this.state, { answer: text, approve, deny });
     if (!r.ok) { this.log(`answer refused: ${r.message}`); return; }
     const q = this.state.blocker;
-    const pending: PendingAnswer = { text: (text ?? "").slice(0, 2000), ...(q ? { question: q.question, kind: q.kind } : {}), ...(approve ? { approved: true } : deny ? { approved: false } : {}), at: new Date(this.rt.now()).toISOString() };
+    const pending: PendingAnswer = { text: (text ?? "").slice(0, 2000), ...(q ? { id: q.id, question: q.question, kind: q.kind } : {}), ...(approve ? { approved: true } : deny ? { approved: false } : {}), at: new Date(this.rt.now()).toISOString() };
     this.state.pendingAnswer = pending;
     this.startReason = "answer";
     this.go("running", { reason: "answered", by: "operator" });

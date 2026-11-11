@@ -19,3 +19,6 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-ux-01/01 | Board: none | successful | Fixed the duplicated narrow status-bar critical-warning merge and made /footer ascii on reach the todo widget
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
 - luna-core-01/07 | Board: PG-27, PG-51 | successful | Converted the CPU-bound smoke timing guards to CPU time (all budgets kept), fixed the skill-router re: trigger guard and a workflow-plan timer race the load-check exposed
+- luna-core-01/09 | Board: PG-55, PG-57 | successful | Carried over the blocked-publication stop and made a declared-output step name the absolute output path in its task and its failure
+- luna-core-01/10 | Board: PG-55, PG-57 | successful | Made the publish-blocked operator answer resume exactly one cycle, fixing the no-op exit path in the cycle-09 stop
+- luna-core-01/11 | Board: none | successful | Carried the PG-51 thread-scoped CPU timing guards and fixed the /compress budget overrun by charging the omission marker and conversation newline to it

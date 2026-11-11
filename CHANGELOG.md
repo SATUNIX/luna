@@ -18,6 +18,27 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
+  `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,
+  so a step declaring `outputs: [report.md]` never learned the path it had to write. The subagent
+  finished, the executor found the file absent, and the step failed after its tokens were already
+  spent (`step <id> failed: declared output(s) not written in <runDir>: report.md`); a gated review
+  step then never ran and the parent redid the review by hand. The task now ends with a
+  `## Required output` block naming each declared file by its absolute path and stating the step
+  fails if that exact file is absent, and the failure message names the absolute paths too. Pinned
+  by `tests/workflow-smoke.ts` and `tests/workflow-plan-smoke.ts`.
+
+- **A publication the pre-push leak scan refuses no longer lets the run cycle on.** `publishNow` in
+  the self-improve template caught every error, stored `selfImprove.publishBlocker` and returned;
+  nothing read it, so a leak-scan refusal was logged once and the supervisor kept merging and
+  leaving cycles unpublished, with the run status showing no blocker. The blocker is now counted
+  (`selfImprove.publishBlockedCycles`, reset by a successful publish), shown by `pi-autonomy status`
+  (`selfImprove.publishBlocker`/`selfImprove.unpublished` in `--json`, a `publication BLOCKED` line
+  in the text), carried into the next cycle's prompt (the refused commit and location, locations
+  only, and the instruction to remove the identifier first), and after two consecutive merged cycles
+  stay unpublished, the host stops the run in `blocked` with an operator question. Pinned by
+  `tests/autonomy-selfimprove-smoke.ts`; the leak scan and its patterns are unchanged.
+
 - **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
   wall-clock time (`performance.now` / `Date.now`), which includes time the process spent
   descheduled; under load wall time inflated ~4–9x and correct code failed its own linear-time
@@ -34,6 +55,30 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `packages/extensions/src/skill-router/match.ts` now decides on the same 50 ms CPU-time budget
   (with a wall-clock cap only to interrupt a runaway match, and one retry for a descheduled fast
   regex), so host load is ignored while catastrophic backtracking is still stopped.
+
+- **Residual smoke timing guards still measured wall-clock time, or were too noisy under load.**
+  Two findings from the PG-51 load check. (1) Three more CPU-bound guards cycle 07 did not cover
+  measured wall-clock time: the V8 regex-compile cap and the over-long-value early refusal in
+  `tests/workflow-structured-smoke.ts`, `scanSecrets` on 200 KB in `tests/tool-capture-smoke.ts`,
+  and `targetOf` plus the in-process `tool_call`/`tool_result` hooks on 200 KB in
+  `tests/trace-ledger-bound-smoke.ts`. They now use `assertCpuWithin` / `cpuMs` from
+  `tests/timing.ts` with every budget unchanged (500, 50, 200, 200, 400 ms), and all three are
+  added to `tests/timing-load-check.ts` (11 smokes x 5 = 55 runs). The `scriptBody` guard in
+  `tests/workflow-sandbox-smoke.ts` is also converted (budget 1000 ms) but that smoke is left out
+  of the load run: it asserts on the sandbox's own wall-clock watchdogs (a `sliceMs` deadline
+  racing a 10 s `idleMs` host watchdog and a `Date.now() - t < 10_000` busy-loop hang guard), which
+  a saturated host genuinely cannot satisfy, and no CPU-time conversion can express a hang guard.
+  The two `validateSchema` cut-off bounds in `workflow-structured-smoke.ts` likewise stay wall
+  clock because they measure a `node:vm` timeout and a `Date.now()` deadline. (2)
+  `tests/workflow-redaction-smoke.ts` already measured CPU time, but its 4x-scaling ratio guard
+  still read as quadratic (~11x to ~20x) about one run in five under load. `process.cpuUsage()`
+  is process-wide, so it charged the V8 concurrent-marking/compilation helper threads — which a
+  saturated host keeps busy — to every measurement window. `cpuMs()` now uses
+  `process.threadCpuUsage()`, the calling thread only (available since Node 22.13, engines is
+  >=22.19); the guarded work runs on the main thread, so this is the honest measure. A residual
+  main-thread GC spike can still touch several samples in a row, so the helper takes best of nine
+  and warms both input sizes; the 10x bound is unchanged. The rule is stated in the `tests/timing.ts`
+  header.
 
 ## [0.3.0-beta.2]
 

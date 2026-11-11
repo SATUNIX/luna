@@ -228,12 +228,16 @@ function publishNow(ctx: StepContext): void {
   try {
     const r = gm.publish(repo.git(), siConfig(ctx.cfg), si.lastPushed);
     si.lastPushed = r.state;
-    if (si.publishError) { log("publish recovered"); si.publishError = null; si.publishBlocker = null; }
+    if (si.publishError) log("publish recovered");
+    si.publishError = null;
+    si.publishBlocker = null;
+    si.publishBlockedCycles = 0;
   } catch (e) {
     const message = errorMessage(e);
     if (message !== si.publishError) log(`publish failed (will retry): ${message}`);
     si.publishError = message;
-    si.publishBlocker = e instanceof gm.PublishBlocked ? message : null;
+    // A generic failure must not erase a real leak-scan blocker; only a PublishBlocked sets it (a successful publish clears it above).
+    if (e instanceof gm.PublishBlocked) si.publishBlocker = message;
   }
 }
 
@@ -295,7 +299,13 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     ? `Sent during cycle ${pad(f.step)}, which has ended; apply only if it is still relevant: ${f.text.replace(/^Operator steering \(authoritative\): /, "Operator steering: ")}`
     : f.text));
   const full = `${text}${backlog}`;
-  return feedback.length ? `${full}\n\nNotes from the operator:\n${feedback.map((f) => `- ${f}`).join("\n")}` : full;
+  // A publication the leak scan refused is passed to the NEXT cycle's worker: the run keeps cycling
+  // until it is gone, so the cycle must know it is the reason. The blocker holds locations only.
+  const blocked = si.publishBlocker
+    ? `## Publication blocked (pre-push leak scan)\nThe pre-push leak scan refuses to publish this run's commits, so this cycle cannot be published. The blocker (locations only):\n${si.publishBlocker}\nYour first job this cycle is to stop adding that identifier: remove it, or if it is legitimate propose an exception; the run cannot publish until it is gone.\n\n`
+    : "";
+  const withNotes = feedback.length ? `${full}\n\nNotes from the operator:\n${feedback.map((f) => `- ${f}`).join("\n")}` : full;
+  return `${blocked}${withNotes}`;
 }
 
 /** Adapt the engine's runtime to what lib/cycle.ts expects. */
@@ -388,6 +398,19 @@ async function runStep(ctx: StepContext): Promise<void> {
   const cfg = siConfig(ctx.cfg);
   const si = siState(state);
   const g = repo.git();
+  // Two merged cycles the leak scan has refused: stop adding unpublished merges and wait for a person.
+  if (!si.current && (si.publishBlockedCycles ?? 0) >= 2) {
+    // One cycle per operator answer: consume the answer to the publish-blocked question and run a
+    // single cycle. If the leak scan still refuses that cycle's publication, publishBlocker and
+    // publishBlockedCycles stay set, so the next runStep parks here again with a fresh question.
+    if (state.pendingAnswer?.id === "publish-blocked") {
+      ctx.save((s) => { s.pendingAnswer = null; });
+    } else {
+      const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";
+      await engine.enterBlocked({ kind: "external", id: "publish-blocked", method: "publish", question: `Publication of ${si.publishBlockedCycles} merged cycle(s) is blocked by the pre-push leak scan at ${detail}; remove the identifier or stop the run.`, options: ["Remove the identifier and resume", "Stop the run"] });
+      return;
+    }
+  }
   if (!si.current && nothingFoundInARow(si.history) >= cfg.limits.nothingFoundToStop) { await finalize(ctx, "backlog_exhausted"); return; }
   const resume = Boolean(si.current);
   const n = si.current?.n ?? si.history.length + 1;
@@ -488,6 +511,9 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   }
   if (merge.merged) { si.lastGoodSha = sha; si.merged = (si.merged ?? 0) + 1; }
   publishNow(ctx);
+  // A merged cycle the leak scan refused is one more unpublished cycle stacked; a non-merged cycle
+  // leaves the count unchanged. Only a successful publish (in publishNow) clears it.
+  if (merge.merged && si.publishBlocker) si.publishBlockedCycles = (si.publishBlockedCycles ?? 0) + 1;
   const entry: CycleEntry = { n, outcome: result.outcome, reason: result.reason, attempts: result.attempts, start, head: sha, gate: gate.skipped ? "skipped" : gate.green ? "green" : "red", gateFailing: failing,
     reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, costUsd: +result.costUsd.toFixed(4),
     decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}) };

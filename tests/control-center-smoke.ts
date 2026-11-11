@@ -3,7 +3,7 @@
  * The control centre (docs/control-center.md).
  *
  * Layers, all hermetic (temporary HOME/agent dir, no live pi):
- *   - registration: /kit and /helpers once, by control-center; session-helpers no longer owns /kit;
+ *   - registration: /menu, /kit and /helpers once, by control-center; session-helpers no longer owns /kit;
  *     alt+m (or the configured hubKey); nothing in an internal child session;
  *   - the controls registry: register/list/snapshot/unregister;
  *   - the view model: rows, pages, values, search, unavailability;
@@ -329,12 +329,12 @@ tests.push([
     const settings = modelMod.pageRows(model, "settings");
     assert.deepEqual(
       settings.map((row) => row.id),
-      ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "page.display"],
+      ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "settings.display"],
       "the Settings page rows",
     );
-    assert.equal(settings.filter((row) => row.id.startsWith("settings.")).length, 5, "the five settings rows");
+    assert.equal(settings.filter((row) => row.kind !== "page").length, 5, "the five settings rows");
     assert.equal(modelMod.findRow(model, "settings.pi")?.prefill, "/settings ");
-    assert.equal(settings.find((row) => row.id === "page.display")?.targetPage, "display");
+    assert.equal(settings.find((row) => row.id === "settings.display")?.targetPage, "display");
   },
 ]);
 
@@ -801,7 +801,7 @@ tests.push([
   },
 ]);
 
-/** Run the registered `/kit <page>` over RPC and return the first dialog's options (one per row). */
+/** Run the registered `/menu <page>` (or its /kit alias) over RPC and return the first dialog's options (one per row). */
 async function rpcPageOptions(page: string, cwd: string): Promise<string[]> {
   const { api, registered } = makeApi();
   await registerControl(api);

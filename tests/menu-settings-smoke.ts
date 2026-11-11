@@ -131,7 +131,7 @@ tests.push([
     assert.ok(pi, "the pi-settings row exists");
     assert.equal(pi.prefill, "/settings ");
     assert.equal(modelMod.parentPage(model, "settings"), "main");
-    const settings = modelMod.pageRows(model, "settings").filter((row) => row.id.startsWith("settings."));
+    const settings = modelMod.pageRows(model, "settings").filter((row) => row.kind !== "page");
     assert.equal(settings.length, 5, "five settings rows on the page");
   },
 ]);

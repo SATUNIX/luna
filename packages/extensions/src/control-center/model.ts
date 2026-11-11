@@ -211,7 +211,7 @@ export const ROWS: RowDef[] = [
   { id: "settings.hubKey", label: "Hub key", page: "settings", kind: "value", valueKey: "hubKey" },
   { id: "settings.pinned", label: "Pinned commands", page: "settings", kind: "value", valueKey: "pinnedCommands" },
   { id: "settings.hidden", label: "Hidden commands", page: "settings", kind: "value", valueKey: "hiddenCommands" },
-  { id: "page.display", label: "Display", page: "settings", kind: "page", targetPage: "display" },
+  { id: "settings.display", label: "Display", page: "settings", kind: "page", targetPage: "display" },
 
   // --- display ---
   { id: "footer", label: "Status bar", page: "display", kind: "action", legacy: "/footer" },

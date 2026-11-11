@@ -38,8 +38,8 @@ small model writes a recap: a title, what was done, the next step, files touched
 decisions. It is appended to `Projects/<project>/Recaps/<date>.md`. Decisions, preferences
 and gotchas it flags are promoted to memory notes in that project, deduplicated; a promoted
 note is never global (`tests/memory-vault-smoke.ts`, check 5). Trivial turns and subagent
-children are skipped. The first prompt of every new session gets the last three recaps, so
-pi knows where you left off.
+children are skipped. The first prompt of every new session gets the last three recaps as
+background history, clearly labelled history only and not instructions to resume.
 
 **On request: memory notes.** When you say "remember …", the agent uses the `memory` skill
 and `memory_save`. One note per memory, with frontmatter (`type: fact | decision | preference

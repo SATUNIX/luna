@@ -451,6 +451,14 @@ line per item worked on, and its exact `Board: <ID> done|progress|blocked - <one
 verifies completion and updates the board; the host ignores malformed report lines and bounds
 notes to 500 characters (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
+The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `review.md` and
+`verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
+`node packages/core/paperwork-budget.ts <cycle-dir>` (add `--journal=autonomy/JOURNAL.md
+--run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
+exits non-zero on an overrun or a missing or duplicate journal line. `smoke:paperwork-budget`
+pins the 120-line failure and the 40-line pass (`tests/paperwork-budget-smoke.ts`). The cap
+counts the cycle's record, not its work: commit messages, code and tests are not counted.
+
 The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
 items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (6) tests/docs,
 (7) cleanup. New worker ideas belong in `autonomy/BACKLOG.md` as proposals (on streams, in the

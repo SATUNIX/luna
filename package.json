@@ -156,6 +156,7 @@
     "smoke:autonomy-gate-overlay": "node tests/autonomy-gate-overlay-smoke.ts",
     "smoke:autonomy-generations": "node tests/autonomy-generations-smoke.ts",
     "smoke:autonomy-image-scripts": "node tests/autonomy-image-scripts-smoke.ts",
+    "smoke:paperwork-budget": "node tests/paperwork-budget-smoke.ts",
     "smoke:compaction-continuity": "node tests/compaction-continuity-smoke.ts",
     "smoke:compaction-state": "node tests/compaction-state-smoke.ts",
     "smoke:completion-review": "node tests/completion-review-smoke.ts",

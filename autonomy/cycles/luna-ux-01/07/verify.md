@@ -62,9 +62,10 @@ Two independent reviewers (neither wrote the change) ran on earlier heads and bo
    throttled start-up wording, the proposal nuance and the non-finite guard were also fixed.
 
 After those fixes the diff was re-checked with the host's independent `verify_completion` verifier
-(the E3 child budget of three was already spent on the implementer and the two reviewers); its
-verdict is recorded on the verifier board. `git status` is clean on every commit and each commit
-was pushed (`git ls-remote origin refs/heads/pi/luna-ux-01` is at the cycle head).
+(the E3 child budget of three was already spent on the implementer and the two reviewers):
+**PASS**, `npm run verify` passed and the reviewer returned PASS. `git status` is clean on every
+commit and each commit was pushed (`git ls-remote origin refs/heads/pi/luna-ux-01` is at the cycle
+head `f912f6f`).
 
 ## Gate / budget
 

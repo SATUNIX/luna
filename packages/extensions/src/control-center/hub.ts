@@ -181,7 +181,7 @@ function securityRows(deps: HubDeps, page: string): HubRow[] {
 
 function helpRows(page: string, hubKey = "alt+m"): HubRow[] {
   return informationalPage(page, "Help & keys", [
-    { label: "Open", value: `/kit, /helpers, or the ${hubKey} key` },
+    { label: "Open", value: `/menu, /kit, /helpers, or the ${hubKey} key` },
     { label: "Navigate", value: "Enter opens or cycles, Esc goes back, type to search" },
     { label: "Typed", value: "every row shows its typed command; every old command still works" },
     { label: "Weakening", value: "a change that lowers oversight needs a confirmation the terminal alone can answer" },

@@ -132,7 +132,7 @@ its installer, which keeps your profile and hand edits and never contacts the ol
 
 1. Run `pi`.
 2. `/reload` applies extension changes without restarting.
-3. `pi list` shows the registered packages; `/kit` and `/footer status` show what is active.
+3. `pi list` shows the registered packages; `/menu` and `/footer status` show what is active.
 
 ## Web console
 

@@ -1,7 +1,7 @@
 /**
  * The control centre: one navigable hub for the kit's settings and actions.
  *
- * `/kit` (and its `/helpers` alias, and the `alt+m` shortcut) opens a searchable tree. Every row
+ * `/menu` (and its `/kit` and `/helpers` aliases, and the `alt+m` shortcut) opens a searchable tree. Every row
  * carries its typed command; the hub never renames anything, and the TUI's `/` menu only filters
  * autocomplete suggestions (see `command-menu.ts`) while every command keeps running when typed.
  *
@@ -123,7 +123,7 @@ export default function controlCenter(pi: ExtensionAPI): void {
     const cwd = ctx.cwd || process.cwd();
     const commands = pi.getCommands().map((command) => command.name);
     const build = () => {
-      const values = readValues({ cwd, thinkingLevel: thinkingLevelOf(pi) });
+      const values = readValues({ cwd, thinkingLevel: thinkingLevelOf(pi), commandMenu: readCommandMenuSettings(), hubKey });
       return { values, model: buildModel({ values, commands, controls: getOrCreateControls().list() }) };
     };
     const { values, model } = build();
@@ -168,22 +168,27 @@ export default function controlCenter(pi: ExtensionAPI): void {
     await openHub(deps, startPage);
   };
 
-  pi.registerCommand("kit", {
+  pi.registerCommand("menu", {
     description: `Open the control centre: profile, effort, thinking, security and every page (also ${hubKey})`,
     getArgumentCompletions: (prefix: string) =>
       PAGES.filter((page) => page.id.startsWith(prefix.trim())).map((page) => ({ value: page.id, label: page.id, description: page.title })),
     handler: open,
   });
 
+  pi.registerCommand("kit", {
+    description: "Alias of /menu",
+    handler: open,
+  });
+
   pi.registerCommand("helpers", {
-    description: "Alias of /kit - open the control centre",
+    description: "Alias of /menu",
     handler: open,
   });
 
   pi.registerShortcut(hubKey as Parameters<ExtensionAPI["registerShortcut"]>[0], {
     description: "Open the control centre",
     handler: () => {
-      pi.sendUserMessage("/kit", { expandPromptTemplates: true });
+      pi.sendUserMessage("/menu", { expandPromptTemplates: true });
     },
   });
 

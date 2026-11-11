@@ -64,6 +64,7 @@ const values = (suggestions: AutocompleteSuggestions | null): string[] => (sugge
 // --- fixtures ----------------------------------------------------------------------------------
 
 const COMMANDS: CommandMenuModule.CommandMenuCommand[] = [
+  { name: "menu", source: "extension" },
   { name: "auto", source: "extension" },
   { name: "effort", source: "extension" },
   { name: "todos", source: "extension" },
@@ -167,6 +168,7 @@ tests.push([
     assert.ok(hidden.has("todos"), "another non-pinned kit command is hidden");
     assert.ok(hidden.has("totally-companion"), "a companion-package command is hidden");
     assert.ok(!hidden.has("effort"), "a pinned kit command stays");
+    assert.ok(!hidden.has("menu"), "the renamed menu command stays pinned");
 
     const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
     const result = await suggest(provider, ["/"], 1);
@@ -283,20 +285,20 @@ tests.push([
   async () => {
     const menu = await loadMenu();
     const model = await modelFor(["auto", "todos", "orchestrate", "lens-health"]);
-    assert.equal(menu.hubLocationFor("auto", model), "moved → /kit ▸ Autonomy ▸ Approvals");
-    assert.equal(menu.hubLocationFor("todos", model), "moved → /kit ▸ Work ▸ Todos");
-    assert.equal(menu.hubLocationFor("orchestrate", model), "moved → /kit ▸ Work ▸ Delegation ▸ Orchestration");
-    assert.equal(menu.hubLocationFor("lens-health", model), "moved → /kit ▸ System ▸ Companions ▸ pi-lens health");
+    assert.equal(menu.hubLocationFor("auto", model), "moved → /menu ▸ Autonomy ▸ Approvals");
+    assert.equal(menu.hubLocationFor("todos", model), "moved → /menu ▸ Work ▸ Todos");
+    assert.equal(menu.hubLocationFor("orchestrate", model), "moved → /menu ▸ Work ▸ Delegation ▸ Orchestration");
+    assert.equal(menu.hubLocationFor("lens-health", model), "moved → /menu ▸ System ▸ Companions ▸ pi-lens health");
     assert.equal(menu.hubLocationFor("not-in-the-hub", model), menu.ALL_COMMANDS_LOCATION, "a command with no row points at All commands");
 
     const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden: new Set(["auto", "todos"]), locationOf: menu.locationFor(model) });
     const result = await suggest(provider, ["/auto"], 5);
     const auto = result?.items.find((item) => item.value === "auto");
-    assert.equal(auto?.description, "moved → /kit ▸ Autonomy ▸ Approvals — Autonomy / approvals", "the location prefixes the old description");
+    assert.equal(auto?.description, "moved → /menu ▸ Autonomy ▸ Approvals — Autonomy / approvals", "the location prefixes the old description");
 
     const all = await suggest(provider, ["/todo"], 5);
     const todos = all?.items.find((item) => item.value === "todos");
-    assert.equal(todos?.description, "moved → /kit ▸ Work ▸ Todos", "a row without a description shows only the location");
+    assert.equal(todos?.description, "moved → /menu ▸ Work ▸ Todos", "a row without a description shows only the location");
   },
 ]);
 

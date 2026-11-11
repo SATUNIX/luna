@@ -60,7 +60,7 @@ the project's `.pi/` settings and extensions load). If pi warns `No models avail
 
 Then:
 
-- `/kit` prints the command cheatsheet.
+- `/menu` prints the command cheatsheet.
 - `/footer status` confirms the status bar is active and shows every detail it drops when narrow.
 - `/effort` shows how hard the agent is set to work ([Effort](effort.md)). The default is
   E3 Standard.

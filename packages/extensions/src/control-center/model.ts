@@ -85,6 +85,7 @@ export const PAGES: HubPage[] = [
   { id: "session", title: "Session", parent: "main" },
   { id: "connect", title: "Connect", parent: "main" },
   { id: "system", title: "System", parent: "main" },
+  { id: "settings", title: "Settings", parent: "main" },
   { id: "delegation", title: "Delegation", parent: "work" },
   { id: "recovery", title: "Recovery", parent: "work" },
   { id: "memory", title: "Memory", parent: "work" },
@@ -127,6 +128,7 @@ export const ROWS: RowDef[] = [
   { id: "page.session", label: "Session", page: "main", kind: "page", targetPage: "session" },
   { id: "page.connect", label: "Connect", page: "main", kind: "page", targetPage: "connect" },
   { id: "page.system", label: "System", page: "main", kind: "page", targetPage: "system" },
+  { id: "page.settings", label: "Settings", page: "main", kind: "page", targetPage: "settings" },
 
   // --- profiles ---
   profileRow("quick", "quick"),
@@ -202,6 +204,14 @@ export const ROWS: RowDef[] = [
   { id: "page.companions", label: "Companions", page: "system", kind: "page", targetPage: "companions" },
   { id: "all-commands", label: "All commands", page: "system", kind: "page", targetPage: "all-commands" },
   { id: "help", label: "Help & keys", page: "system", kind: "page", targetPage: "help" },
+
+  // --- settings ---
+  { id: "settings.pi", label: "pi settings", page: "settings", kind: "action", prefill: "/settings " },
+  { id: "settings.commandMenu", label: "Command menu", page: "settings", kind: "value", valueKey: "commandMenu" },
+  { id: "settings.hubKey", label: "Hub key", page: "settings", kind: "value", valueKey: "hubKey" },
+  { id: "settings.pinned", label: "Pinned commands", page: "settings", kind: "value", valueKey: "pinnedCommands" },
+  { id: "settings.hidden", label: "Hidden commands", page: "settings", kind: "value", valueKey: "hiddenCommands" },
+  { id: "page.display", label: "Display", page: "settings", kind: "page", targetPage: "display" },
 
   // --- display ---
   { id: "footer", label: "Status bar", page: "display", kind: "action", legacy: "/footer" },

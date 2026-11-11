@@ -211,14 +211,19 @@ const tests: Array<[name: string, fn: () => Promise<void>]> = [];
 // --- registration ------------------------------------------------------------------------------
 
 tests.push([
-  "/kit and /helpers are registered once, by control-center, with alt+m",
+  "/menu, /kit and /helpers are registered once, by control-center, with alt+m sending /menu",
   async () => {
-    const { api, registered, shortcuts } = makeApi();
+    const { api, registered, shortcuts, sent } = makeApi();
     await registerControl(api);
-    assert.ok(registered.has("kit"), "/kit must be registered");
-    assert.ok(registered.has("helpers"), "/helpers must be registered");
+    assert.ok(registered.has("menu"), "/menu must be registered as the primary command");
+    assert.ok(registered.has("kit"), "/kit must be registered as an alias");
+    assert.ok(registered.has("helpers"), "/helpers must be registered as an alias");
+    assert.equal(registered.get("kit")?.description, "Alias of /menu");
+    assert.equal(registered.get("helpers")?.description, "Alias of /menu");
     assert.ok(shortcuts.has("alt+m"), "alt+m must be registered by default");
-    assert.equal(registered.size, 2, "control-center registers exactly /kit and /helpers");
+    assert.equal(registered.size, 3, "control-center registers exactly /menu, /kit and /helpers");
+    shortcuts.get("alt+m")?.handler(undefined);
+    assert.deepEqual(sent, ["/menu"], "the alt+m shortcut sends /menu");
   },
 ]);
 
@@ -301,7 +306,7 @@ tests.push([
       controls: [],
     });
     const main = modelMod.pageRows(model, "main");
-    assert.equal(main.length, 10, "the main page has the levels, the Security level fallback and four page rows");
+    assert.equal(main.length, 11, "the main page has the levels, the Security level fallback and five page rows");
     assert.equal(modelMod.parentPage(model, "delegation"), "work");
     const approvals = modelMod.findRow(model, "approvals");
     assert.equal(approvals?.value, "auto/coding");
@@ -312,6 +317,50 @@ tests.push([
     assert.equal(modelMod.legacyCommandName("/auto on"), "auto");
     assert.equal(modelMod.searchRows(model, "auto").length > 0, true);
     assert.match(headerLine({ profile: "balanced", effort: "E3", securityMissing: true }), /profile balanced/);
+  },
+]);
+
+tests.push([
+  "the Settings page holds the five settings rows and opens the Display page",
+  async () => {
+    const modelMod = await loadModelModule();
+    const model = await modelFor([]);
+    assert.ok(modelMod.PAGES.some((page) => page.id === "settings" && page.parent === "main"), "a Settings page under main");
+    const settings = modelMod.pageRows(model, "settings");
+    assert.deepEqual(
+      settings.map((row) => row.id),
+      ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "page.display"],
+      "the Settings page rows",
+    );
+    assert.equal(settings.filter((row) => row.id.startsWith("settings.")).length, 5, "the five settings rows");
+    assert.equal(modelMod.findRow(model, "settings.pi")?.prefill, "/settings ");
+    assert.equal(settings.find((row) => row.id === "page.display")?.targetPage, "display");
+  },
+]);
+
+tests.push([
+  "readValues exposes the command-menu settings, the hub key and the joined command lists",
+  async () => {
+    const valuesMod = await loadValuesModule();
+    const ws = tmpWorkspace("pi-kit-settings-values-");
+    try {
+      const values = valuesMod.readValues({
+        cwd: ws,
+        hubKey: "alt+k",
+        commandMenu: { commandMenu: "curated", pinnedCommands: ["goal", "verify"], hiddenCommands: ["foo"] },
+      });
+      assert.equal(values.commandMenu, "curated");
+      assert.equal(values.hubKey, "alt+k");
+      assert.equal(values.pinnedCommands, "goal, verify");
+      assert.equal(values.hiddenCommands, "foo");
+      const empty = valuesMod.readValues({ cwd: ws, commandMenu: { commandMenu: "all", pinnedCommands: [], hiddenCommands: [] } });
+      assert.equal(empty.commandMenu, "all");
+      assert.equal(empty.pinnedCommands, undefined, "an empty pin list reads as undefined");
+      assert.equal(empty.hiddenCommands, undefined, "an empty hide list reads as undefined");
+      assert.equal(empty.hubKey, undefined);
+    } finally {
+      rmWorkspace(ws);
+    }
   },
 ]);
 
@@ -813,20 +862,20 @@ tests.push([
 ]);
 
 tests.push([
-  "the Help page and the /kit description name the configured hubKey",
+  "the Help page and the /menu description name the configured hubKey",
   async () => {
     const ws = tmpWorkspace("pi-kit-hubkey-help-");
     const restore = setEnv("PI_CODING_AGENT_DIR", ws);
     try {
       const defaults = await rpcPageOptions("help", ws);
-      assert.ok(defaults.includes("Open: /kit, /helpers, or the alt+m key"), defaults.join(" | "));
+      assert.ok(defaults.includes("Open: /menu, /kit, /helpers, or the alt+m key"), defaults.join(" | "));
       fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true });
       fs.writeFileSync(path.join(ws, "pi-kit", "ui.json"), JSON.stringify({ hubKey: "alt+k" }));
       const options = await rpcPageOptions("help", ws);
-      assert.ok(options.includes("Open: /kit, /helpers, or the alt+k key"), options.join(" | "));
+      assert.ok(options.includes("Open: /menu, /kit, /helpers, or the alt+k key"), options.join(" | "));
       const { api, registered } = makeApi();
       await registerControl(api);
-      assert.match(registered.get("kit")?.description ?? "", /\(also alt\+k\)$/);
+      assert.match(registered.get("menu")?.description ?? "", /\(also alt\+k\)$/);
     } finally {
       restore();
       rmWorkspace(ws);

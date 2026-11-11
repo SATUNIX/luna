@@ -98,7 +98,7 @@ pass (`verify-gate`, in every profile but `quick`; [Concepts](docs/concepts.md))
 
 | Want to | Do |
 |---|---|
-| Open the control centre | `/kit`, `/helpers` or `alt+m` ([Control centre](docs/control-center.md)) |
+| Open the control centre | `/menu`, `/kit`, `/helpers` or `alt+m` ([Control centre](docs/control-center.md)) |
 | Switch profile | `/profile` (picker) or `/profile lite` |
 | Choose how hard the agent works and how much it delegates | `/effort` or `/effort thorough` ([Effort](docs/effort.md)) |
 | See what pi, Luna and packages can update to | `/update` ([Updates](docs/updates.md)) |

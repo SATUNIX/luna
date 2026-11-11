@@ -71,7 +71,7 @@ export const TIPS: Tip[] = [
   { text: "/verify runs an independent reviewer against the goal and todo list.", requires: "verify" },
   { text: "/verdicts shows what done means and what still blocks completion.", requires: "verdicts" },
   { text: "/goal <text> sets the mission goal that the verifier checks.", requires: "goal" },
-  { text: "/kit lists every kit command.", requires: "kit" },
+  { text: "/menu lists every command.", requires: "menu" },
   { text: "/handoff writes a resume note for the next session.", requires: "handoff" },
   { text: "/footer status shows every detail the bar drops when it is narrow. /footer light|default|heavy picks the density." },
   { text: "/effort picks how deep and broad the agent works and how much it delegates (E1 to E5)." },

@@ -23,11 +23,11 @@ import { agentDir } from "./values.ts";
 export const HIDDEN_VISIBLE_PREFIX_LENGTH = 4;
 
 /** The location shown when no hub row runs the command. */
-export const ALL_COMMANDS_LOCATION = "moved → /kit ▸ All commands";
+export const ALL_COMMANDS_LOCATION = "moved → /menu ▸ All commands";
 
 /** The kit commands that stay in the `/` menu in every profile. */
 export const PINNED_KIT_COMMANDS: readonly string[] = [
-  "kit",
+  "menu",
   "goal",
   "verify",
   "save",
@@ -190,7 +190,7 @@ export function pageTrail(model: HubModel, page: string): string[] {
 }
 
 function locationOfRow(model: HubModel, page: string, label: string): string {
-  return `moved → ${["/kit", ...pageTrail(model, page), label].join(" ▸ ")}`;
+  return `moved → ${["/menu", ...pageTrail(model, page), label].join(" ▸ ")}`;
 }
 
 /** Where a command lives in the hub, for a hidden suggestion's description. */

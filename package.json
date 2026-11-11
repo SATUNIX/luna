@@ -137,6 +137,7 @@
     "smoke:fuzz-workspace-paths": "node tests/fuzz-workspace-paths-smoke.ts",
     "smoke:command-contract": "node tests/command-contract-smoke.ts",
     "smoke:command-menu": "node tests/command-menu-smoke.ts",
+    "smoke:menu-settings": "node tests/menu-settings-smoke.ts",
     "smoke:extract-extension": "node tests/extract-extension-smoke.ts",
     "smoke:cat-status": "node tests/cat-status-smoke.ts",
     "smoke:caveman": "node tests/caveman-smoke.ts",

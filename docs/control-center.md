@@ -1,7 +1,7 @@
 # Control centre
 
 Luna registers many commands, and their settings live in subcommands that are easy to forget.
-The control centre is one hub — `/kit` — that shows every level and page, with each row's current
+The control centre is one hub — `/menu` — that shows every level and page, with each row's current
 value and the typed command that still does the same work. Nothing is renamed or unregistered:
 every command keeps working, and the hub is an additional way in. In the TUI the `/` menu hides the
 Luna commands that moved into the hub, while typing them still runs them (see The curated `/` menu
@@ -11,13 +11,14 @@ below).
 
 | How | What happens |
 | --- | --- |
-| `/kit` | Opens the hub on the main page. |
-| `/helpers` | Alias of `/kit`. |
+| `/menu` | Opens the hub on the main page. |
+| `/kit` | Alias of `/menu`. |
+| `/helpers` | Alias of `/menu`. |
 | `alt+m` | Opens the hub from anywhere. |
-| `/kit <page>` | Opens a named page directly (argument completion lists the page ids). |
+| `/menu <page>` | Opens a named page directly (argument completion lists the page ids). |
 
 `alt+m` is the default key. Put `"hubKey": "alt+k"` (or another free key) in
-`<agent dir>/pi-kit/ui.json` to change it. The Help page and the `/kit` description name the
+`<agent dir>/pi-kit/ui.json` to change it. The Help page and the `/menu` description name the
 configured key. The hub reads only that key and never rewrites the
 other settings in the file, so the status bar's own settings there are untouched.
 
@@ -26,29 +27,31 @@ The hub is not registered in an internal child session (`PI_KIT_INTERNAL_CHILD=1
 
 ## Pages
 
-The main page is the levels strip plus five pages (`tests/docs-smoke.ts` checks the count against
+The main page is the levels strip plus six pages (`tests/docs-smoke.ts` checks the count against
 `control-center/model.ts`). Every row shows its typed equivalent, and the old command can be typed
 at any time.
 
 | Page | Holds | Typed equivalents |
 | --- | --- | --- |
-| Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect and System | `/profile`, `/effort`, `/thinking`, `/security` |
+| Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect, System and Settings | `/profile`, `/effort`, `/thinking`, `/security` |
 | Autonomy | Approvals, remembered approvals, loop, auto-boost, container runs | `/auto`, `/firewall`, `/loop`, `/boost`, `/autonomy` |
 | Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
 | Session | Save, handoff, compact, compress, auto-compaction, new/fork/clone/tree/resume/name, clear | `/save`, `/handoff`, `/compact`, `/compress`, `/compaction`, `/clear` |
 | Connect | Remote control, web console | `/remote`, `/console` |
 | System | Display, updates and health, diagnostics, companions, all commands, help | `/footer`, `/tips`, `/caveman`, `/update`, `/trace`, `/capture`, `/skills`, `/firewall reload` |
+| Settings | pi settings, command menu, hub key, pinned commands, hidden commands, display | `/settings` |
 | All commands | Every command from `pi.getCommands()` plus pi's built-ins, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
 | Doctor | Read-only health checks (see below) | the command on each line |
 
 ```mermaid
 flowchart TD
-  K["/kit or alt+m"] --> M["Main: profile, effort, thinking, security"]
+  K["/menu or alt+m"] --> M["Main: profile, effort, thinking, security"]
   M --> A[Autonomy]
   M --> W[Work]
   M --> S[Session]
   M --> C[Connect]
   M --> Y[System]
+  M --> G[Settings]
   Y --> D[Doctor]
   Y --> L[All commands]
 ```
@@ -86,7 +89,7 @@ The header strip combines the profile, effort, thinking level, security level an
   to stderr.
 
 A row that runs a typed command, or pre-fills the editor, closes the hub, so the command's own
-dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/kit`. Changing the
+dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/menu`. Changing the
 thinking level, or choosing a row that only shows information, keeps the hub open: it reopens on
 the same row with every value read again. Back returns the cursor to the row that opened the page.
 
@@ -99,10 +102,10 @@ typed in full, and it appears again once at least four characters of its name ha
 muscle memory still completes (`tests/command-menu-smoke.ts`).
 
 Hidden suggestions say where the command lives, for example
-`moved → /kit ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
-no row points at `moved → /kit ▸ All commands` (`tests/command-menu-smoke.ts`).
+`moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
+no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`).
 
-The pinned commands are `/kit`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
+The pinned commands are `/menu`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
 `/update` and `/security`. A profile adds the commands that define it: `/autonomy` in autonomous,
 `/engagement` in pentest and self-improving, and `/improve` and `/review` in self-improving
 (`tests/command-menu-smoke.ts`).
@@ -183,8 +186,9 @@ A line that reports drift starts with `! ` (for example `! Protections: 0 record
 
 ## What is not covered
 
-- No command is renamed, removed or unregistered. The curated `/` menu only removes autocomplete
-  suggestions; every name still runs, and no alias is pruned yet (pruning is a later phase).
+- No command is removed or unregistered. `/kit` and `/helpers` forward to `/menu`, and the curated
+  `/` menu only removes autocomplete suggestions; every name still runs, and no alias is pruned yet
+  (pruning is a later phase).
 - The Security level row runs the typed `/security` picker. The level is not yet a registered
   control that the hub can cycle in place.
 - In a terminal session the hub is drawn with `ctx.ui.custom()`. Remote control mirrors only

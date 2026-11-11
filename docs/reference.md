@@ -37,11 +37,12 @@ describes. Commands are for the operator: the model cannot call them.
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
-| `/helpers` | `control-center` | Alias of /kit - open the control centre | [control-center](control-center.md) |
+| `/helpers` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/improve` | `self-improvement` | Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md. | [control-center](control-center.md) |
-| `/kit` | `control-center` | Open the control centre: profile, effort, thinking, security and every page (also …) | [control-center](control-center.md) |
+| `/kit` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/loop` | `autonomous-loop` | Enable autonomous loop: /loop <goal> starts the loop; /loop stop ends it. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/memory` | `memory-vault` | Memory vault: /memory [status\|recent\|search <q>\|forget <id>\|migrate] | [memory](memory.md) |
+| `/menu` | `control-center` | Open the control centre: profile, effort, thinking, security and every page (also …) | [control-center](control-center.md) |
 | `/orchestrate` | `orchestrator` | Control autonomous delegation: /orchestrate [on\|off\|auto\|status] | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-implement-review` | `orchestrator` | Delegate the full plan → implement → review loop: /orchestrate-implement-review <task> | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-plan` | `orchestrator` | Delegate planning only, no changes: /orchestrate-plan <task> | [agent-orchestration](agent-orchestration.md) |

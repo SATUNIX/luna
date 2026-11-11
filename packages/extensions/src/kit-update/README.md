@@ -51,7 +51,9 @@ is ahead of your checked-out commit. If it has moved ahead, the line `trunk is N
 under `/update status`. It names `next`, the channel that follows `main`, so the suggested command
 really applies the newer commits; the installed release channel would not. The notice is silent
 when your copy is in sync or already ahead, and when git could not be reached (offline, or no
-credentials): a failed count is never reported as a gap.
+credentials): a failed count is never reported as a gap. When the gap exists, the trunk line is
+the whole start-up kit notice: the generic `Updates available: ...` summary is not stacked on it
+(pi's own built-in update notice is separate and may still appear).
 
 ## Background check
 

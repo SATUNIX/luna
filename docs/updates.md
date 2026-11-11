@@ -27,7 +27,9 @@ start-up (subject to the once-a-day background throttle), on `/update`, and unde
 the newer commits; naming the installed release channel (`latest`, or an exact version) would not.
 The line shows even when the release channel you follow is otherwise current, and it is silent
 when your copy is in sync or ahead and when the remote could not be reached (offline, or no git
-credentials).
+credentials). When the trunk gap exists, this trunk line is the whole start-up kit notice: the
+generic `Updates available: ...` summary is not stacked on it. pi's own built-in update notice is
+separate and may still appear.
 
 | Command | What it does |
 |---|---|

@@ -746,6 +746,24 @@ export function hasUpdates(report: UpdateReport): boolean {
   return report.pi.available || report.kit.available || report.packages.some((p) => p.action === "reconcile" || p.action === "update");
 }
 
+/** What a session-start check should show: the notices to send, and whether the status bar points at /update. */
+export interface SessionStartNotice {
+  notices: string[];
+  setStatus: boolean;
+}
+
+/**
+ * The session-start decision. A trunk gap owns the kit notice: showing the generic summary next
+ * to it would say the same thing twice, and the trunk line names the command that actually
+ * moves the copy forward. pi's own built-in update notice is separate and is not part of this.
+ */
+export function sessionStartNotice(report: UpdateReport): SessionStartNotice {
+  const trunk = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
+  if (trunk) return { notices: [trunk], setStatus: hasUpdates(report) };
+  if (!hasUpdates(report)) return { notices: [], setStatus: false };
+  return { notices: [summaryLine(report)], setStatus: true };
+}
+
 export function summaryLine(report: UpdateReport): string {
   const parts: string[] = [];
   if (report.kit.legacy) parts.push("pi-system is on a retired private source and moves to the public one");
@@ -1247,11 +1265,9 @@ export default function (pi: ExtensionAPI) {
     void check(cwd)
       .then((report) => {
         if (report.staleRoles?.length) ctx.ui.notify(`pi-system: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
-        const notice = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
-        if (notice) ctx.ui.notify(notice, "info");
-        if (!hasUpdates(report)) return;
-        ctx.ui.setStatus("kit-update", "updates: /update");
-        ctx.ui.notify(summaryLine(report), "info");
+        const { notices, setStatus } = sessionStartNotice(report);
+        for (const notice of notices) ctx.ui.notify(notice, "info");
+        if (setStatus) ctx.ui.setStatus("kit-update", "updates: /update");
       })
       .catch(() => {});
   });

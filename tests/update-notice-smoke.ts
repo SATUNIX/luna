@@ -56,7 +56,10 @@ type KitUpdateModule = Omit<typeof KitUpdate, "default"> & {
 
 const restoreKitEnv = isolateKitEnv();
 const mod: KitUpdateModule = await loadModule("extensions/kit-update/index.ts");
-const { default: kitUpdate, trunkNotice, checkForUpdates, formatReport, TRUNK_CHANNEL } = mod;
+const { default: kitUpdate, trunkNotice, checkForUpdates, formatReport, sessionStartNotice, TRUNK_CHANNEL } = mod;
+
+// pi's own updater writes this notice; it is not a kit notice and must not be counted as one.
+const PI_BUILTIN_UPDATE_NOTICE = /^Updates available: pi .+ (?:→|->) .+\. Run \/update\.$/;
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -253,11 +256,20 @@ const tests: Record<string, () => void | Promise<void>> = {
     try {
       const pi = fakePi();
       kitUpdate(pi.api);
-      const notes: Note[] = [];
+      // A built-in pi notice may already be in the capture; the filter below must ignore it.
+      const builtIn = { m: "Updates available: pi 1.3.0 → 1.4.0. Run /update.", l: "info" };
+      const notes: Note[] = [builtIn];
       const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {} } };
       await pi.handlers.get("session_start")({}, ctx);
-      await waitFor(() => notes.length > 0);
-      assert.deepEqual(notes, [{ m: "trunk is 3 commits ahead — /update channel next", l: "info" }]);
+      await waitFor(() => notes.some((n) => n.m.startsWith("trunk is")));
+      const kitNotes = notes.filter((n) => !PI_BUILTIN_UPDATE_NOTICE.test(n.m));
+      assert.deepEqual(kitNotes, [{ m: "trunk is 3 commits ahead — /update channel next", l: "info" }]);
+      assert.ok(notes.includes(builtIn), "the built-in pi notice is left alone, not removed by the filter");
+      assert.equal(
+        notes.filter((n) => n.m === "trunk is 3 commits ahead — /update channel next").length,
+        1,
+        "a gap report yields the trunk line exactly once",
+      );
     } finally {
       globalThis.fetch = realFetch;
       restoreOffline();
@@ -265,6 +277,20 @@ const tests: Record<string, () => void | Promise<void>> = {
       restoreMode();
       restorePath();
       shim.cleanup();
+      w.cleanup();
+    }
+  },
+
+  "an update-available pi still yields only the trunk notice at session start": async () => {
+    const w = makeGitWorld();
+    try {
+      const report = await checkForUpdates(w.cwd, fakeRegistry(PI_TAGS), "0.99.2", fakeGit({ tags: ["0.2.1-beta.0"], count: 3 }).git);
+      assert.equal(report.pi.available, true, "the fixture pins an installed pi older than the registry's latest");
+      const decision = sessionStartNotice(report);
+      assert.deepEqual(decision.notices, ["trunk is 3 commits ahead — /update channel next"]);
+      assert.equal(decision.setStatus, true, "the status bar still points at /update");
+      assert.doesNotMatch(decision.notices.join("\n"), /^Updates available:/m, "the generic summary is not stacked on the trunk line");
+    } finally {
       w.cleanup();
     }
   },

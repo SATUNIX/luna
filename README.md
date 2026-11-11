@@ -106,6 +106,11 @@ pass (`verify-gate`, in every profile but `quick`; [Concepts](docs/concepts.md))
 | Change the status bar | `/footer light`, `/footer default`, `/footer heavy` ([Status bar](docs/status-bar-and-costs.md)) |
 | Open the local web console | `/console` ([Web console](docs/web-console.md)) |
 
+## Architecture
+
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/satunix/luna?utm_source=readme&utm_medium=badge)
+
+
 ## Profiles
 
 A profile chooses which extensions, skills and prompts load, and the firewall mode. Switching is

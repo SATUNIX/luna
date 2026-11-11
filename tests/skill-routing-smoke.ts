@@ -11,7 +11,7 @@ import { ROOT, loadModule } from "../packages/core/eval/harness.ts";
 import { excludedSkills, normalizeOverrides, loadProfileDef } from "../packages/core/lib/profiles.ts";
 import { array, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as Match from "../packages/extensions/src/skill-router/match.ts";
-import { assertCpuWithin } from "./timing.ts";
+import { cpuMs } from "./timing.ts";
 
 // One line of tests/skill-routing-fixtures.jsonl.
 const Fixture = object({ profile: string(), prompt: string(), expect: array(string()) });
@@ -82,9 +82,13 @@ assert.ok(chars / 4 < 700, `listed skills cost ~${Math.round(chars / 4)} tokens;
   assert.ok(first, "the catalogue has a skill to copy");
   const skill: Match.SkillEntry = { ...first, name: "slow-trigger-probe", triggers: [slow] };
   const prompt = "a".repeat(4000);
-  assertCpuWithin("the timed test stops a slow trigger", 2000, () => {
-    assert.deepEqual(match.matchTriggers(prompt, [skill]), [], "a slow trigger does not match");
-  });
+  // One real run: matchTriggers caches the switch-off on the trigger string, so a best-of-three
+  // repeat would measure two cached no-ops and make the 2000 ms bound vacuous. A single run is
+  // what the old wall-clock assertion measured, so the same work is bounded.
+  const before = cpuMs();
+  assert.deepEqual(match.matchTriggers(prompt, [skill]), [], "a slow trigger does not match");
+  const spent = cpuMs() - before;
+  assert.ok(spent < 2000, `the timed test stops a slow trigger in ${Math.round(spent)} ms of CPU (budget 2000 ms)`);
   assert.match(match.refusedTriggers.get(slow) ?? "", /switched off/);
   assert.equal(match.triggerRegex(slow), null, "the switched-off trigger stays off");
   const plain = "re:" + "\\bdeploy\\b";

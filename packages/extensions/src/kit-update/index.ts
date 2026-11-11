@@ -19,9 +19,10 @@ import { nodeRuntime } from "./shared/node-runtime.ts";
 // The kit is delivered from git (release tags `vX.Y.Z` and the main branch of its repository)
 // or from npm (dist-tags of @satunix/pi-system); packages/core/distribution.json in the kit
 // says which. Both have the same channels: `latest` (the newest release), `next` (every
-// commit on main) and an exact version, which is a pin and is never moved except by an
-// explicit `/update channel`. If a kit release changes the delivery, `/update kit` moves the
-// install over, keeping its channel and profile.
+// commit on main), `trunk` (the head of the integration branch, canary/opt-in) and an exact
+// version, which is a pin and is never moved except by an explicit `/update channel`. If a
+// kit release changes the delivery, `/update kit` moves the install over, keeping its channel
+// and profile.
 //
 // pi itself moves only within the versions the installed kit release is tested with: the kit's
 // package.json pins that pi version as a devDependency. A newer pi is reported, not offered.
@@ -135,6 +136,8 @@ export interface Distribution {
   delivery: "git" | "npm" | null;
   gitSource: string | null;
   branch: string;
+  /** The canary branch `trunk` follows; a ref equal to it is the trunk channel. */
+  trunkBranch: string;
   tagPrefix: string;
   /** Retired private sources (host/path keys, lower case): installs registered from one are migrated. */
   legacySources: string[];
@@ -165,6 +168,7 @@ export function readDistribution(root: string | null): Distribution {
     delivery: raw === "git" || raw === "npm" ? raw : null,
     gitSource: (envIsLegacy ? "" : envSource) || configured || null,
     branch: str(field(git, "branch")) || "main",
+    trunkBranch: str(field(git, "trunkBranch")) || "integration/luna",
     tagPrefix: str(field(git, "tagPrefix")) ?? "v",
     legacySources,
     previousSources: list(previousSources).filter((source): source is string => typeof source === "string"),
@@ -466,12 +470,12 @@ export function detectKitInstall(cwd: string): KitInstall {
     if (git) {
       const dir = gitInstallDir(git, entry.scope, cwd);
       const root = isKitRoot(dir) ? dir : own;
-      if (!isKitGitSource(entry.source, readDistribution(root).previousSources)) continue;
-      const prefix = readDistribution(root).tagPrefix;
-      const inferred = !git.ref ? "next" : git.ref.startsWith(prefix) && isExactVersion(git.ref.slice(prefix.length)) ? "latest" : git.ref;
+      const dist = readDistribution(root);
+      if (!isKitGitSource(entry.source, dist.previousSources)) continue;
+      const inferred = !git.ref ? "next" : git.ref === dist.trunkBranch ? "trunk" : git.ref.startsWith(dist.tagPrefix) && isExactVersion(git.ref.slice(dist.tagPrefix.length)) ? "latest" : git.ref;
       const channel = recordedChannel(entry.source, cwd) ?? inferred;
-      const legacy = isLegacyGitSource(entry.source, readDistribution(root).legacySources);
-      return { kind: "git", scope: entry.scope, source: entry.source, channel, pinned: channel !== "latest" && channel !== "next", root, version: root ? installedVersionAt(root) : null, legacy };
+      const legacy = isLegacyGitSource(entry.source, dist.legacySources);
+      return { kind: "git", scope: entry.scope, source: entry.source, channel, pinned: channel !== "latest" && channel !== "next" && channel !== "trunk", root, version: root ? installedVersionAt(root) : null, legacy };
     }
     const dir = path.resolve(path.dirname(entry.settingsFile), entry.source);
     if (isKitRoot(dir) || (own && sameDir(dir, own))) {
@@ -617,7 +621,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     note = `pi-system is now delivered from ${migrateTo}: /update kit moves this install (channel ${kit.channel ?? "latest"}, same profile)`;
   } else if (kit.kind === "npm") {
     if (kit.pinned) {
-      note = `pinned to ${kit.channel}; /update channel latest|next to follow a channel`;
+      note = `pinned to ${kit.channel}; /update channel latest|next|trunk to follow a channel`;
       target = kitTags?.latest ?? null;
     } else {
       target = kitTags?.[kit.channel ?? "latest"] ?? null;
@@ -645,7 +649,8 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     } else {
       const latest = latestRelease(releaseTags(remote, dist.tagPrefix));
       const main = branchHead(remote, dist.branch);
-      tags = { latest: latest ?? "-", next: main ? `${dist.branch}@${main.slice(0, 7)}` : "-" };
+      const trunk = branchHead(remote, dist.trunkBranch);
+      tags = { latest: latest ?? "-", next: main ? `${dist.branch}@${main.slice(0, 7)}` : "-", trunk: trunk ? `${dist.trunkBranch}@${trunk.slice(0, 7)}` : "-" };
       if (kit.channel === "next") {
         target = main ? `${dist.branch}@${main.slice(0, 7)}` : null;
         available = Boolean(main && commit && main !== commit);
@@ -653,9 +658,13 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
         target = latest;
         available = Boolean(latest && kit.version && compareVersions(latest, kit.version) > 0);
         if (!latest) note = `no release tags (${dist.tagPrefix}X.Y.Z) in ${source.repo} yet`;
+      } else if (kit.channel === "trunk") {
+        target = trunk ? `${dist.trunkBranch}@${trunk.slice(0, 7)}` : null;
+        available = Boolean(trunk && commit && trunk !== commit);
+        if (!trunk) note = `no ${dist.trunkBranch} branch in ${source.repo} yet`;
       } else {
         target = latest;
-        note = `pinned to ${kit.channel}; /update channel latest|next to follow a channel`;
+        note = `pinned to ${kit.channel}; /update channel latest|next|trunk to follow a channel`;
       }
     }
   } else if (kit.kind === "local") {
@@ -730,7 +739,7 @@ export function formatReport(report: UpdateReport): string {
       : k.kind;
   const at = k.commit ? ` @${k.commit.slice(0, 7)}` : "";
   lines.push(`  pi-system  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
-  if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}`);
+  if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}${k.tags.trunk !== undefined ? `, trunk ${k.tags.trunk}` : ""}`);
   if (k.note) lines.push(`             ${k.note}`);
   const piInfo = report.pi;
   const piState = piInfo.available
@@ -762,7 +771,7 @@ export function formatReport(report: UpdateReport): string {
     lines.push("", `  Stale role copies in ${agentDir()}/agents (shadow the shipped kit roles; delete or update them):`);
     for (const role of staleRoles) lines.push(`    ${role.name}  ${role.path}`);
   }
-  lines.push("", "  /update            pick what to update", "  /update all        update everything, re-apply the profile, reload", "  /update channel <latest|next|X.Y.Z>   switch the kit's release channel");
+  lines.push("", "  /update            pick what to update", "  /update all        update everything, re-apply the profile, reload", "  /update channel <latest|next|trunk|X.Y.Z>   switch the kit's release channel");
   return lines.join("\n");
 }
 
@@ -996,6 +1005,10 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
     } else if (kit.kind === "git" && kit.available && kit.source) {
       if (kit.channel === "next") {
         steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["update", kit.source], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
+      } else if (kit.channel === "trunk") {
+        // The trunk branch is a moving ref (like next), so the command names the branch rather than a tag.
+        const trunkBranch = readDistribution(kit.root).trunkBranch;
+        steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, trunkBranch), ...scopeFlag], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
       } else {
         const prefix = readDistribution(kit.root).tagPrefix;
         steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, `${prefix}${kit.target}`), ...scopeFlag], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
@@ -1033,7 +1046,7 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
 }
 
 function isChannelName(channel: string): boolean {
-  return /^(latest|next|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(channel);
+  return /^(latest|next|trunk|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/.test(channel);
 }
 
 export function planChannelSwitch(report: UpdateReport, channel: string): { steps: Step[]; notes: string[] } {
@@ -1051,7 +1064,7 @@ export function planChannelSwitch(report: UpdateReport, channel: string): { step
 
 function planChannelSwitchSteps(report: UpdateReport, channel: string): { steps: Step[]; notes: string[] } {
   if (!isChannelName(channel)) {
-    return { steps: [], notes: [`Unknown channel "${channel}". Use latest, next, or an exact version.`] };
+    return { steps: [], notes: [`Unknown channel "${channel}". Use latest, next, trunk, or an exact version.`] };
   }
   const kit = report.kit;
   const steps: Step[] = [];
@@ -1208,9 +1221,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("update", {
     description:
-      "Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|X.Y.Z>`.",
+      "Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|trunk|X.Y.Z>`.",
     getArgumentCompletions: (prefix: string) =>
-      ["status", "all", "kit", "pi", "packages", "channel latest", "channel next"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
+      ["status", "all", "kit", "pi", "packages", "channel latest", "channel next", "channel trunk"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, c) => {
       const cwd = c.cwd ?? process.cwd();
       let arg = args.trim().toLowerCase();
@@ -1254,7 +1267,7 @@ export default function (pi: ExtensionAPI) {
       if (arg.startsWith("channel")) {
         const channel = arg.slice("channel".length).trim();
         if (!channel) {
-          say(c, "update: usage: /update channel <latest|next|X.Y.Z>", "error");
+          say(c, "update: usage: /update channel <latest|next|trunk|X.Y.Z>", "error");
           return;
         }
         plan = planChannelSwitch(report, channel);

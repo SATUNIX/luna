@@ -60,7 +60,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
-| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |

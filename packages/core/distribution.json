@@ -6,6 +6,7 @@
     "source": "git:github.com/SATUNIX/luna",
     "previousSources": ["git:github.com/SATUNIX/pi-system"],
     "branch": "main",
+    "trunkBranch": "integration/luna",
     "tagPrefix": "v",
     "legacySources": [
       "sha256:1bbc2f0c5eb44c5382561c9a9d60d688210cd833bb6f3e996010062adb26661e",

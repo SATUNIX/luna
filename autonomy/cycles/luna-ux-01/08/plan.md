@@ -34,7 +34,20 @@ characters (measured `git diff --no-renames 384dcf4^..00ff7c8 -- . ":(exclude)pa
 remains possible; it will only be taken if V-73 is complete, verified and pushed and budget
 remains.
 
+### 2. `withOverlayFrame` dim leak (HANDOFF carry-over, defect)
+
+Why: `overlay-frame.ts:124` called `const inner = build(finish)` unguarded; a throwing `build`
+left the transcript dim patch installed with no overlay open. A real, evidenced defensive bug in
+the stream's overlay area. Taken after V-73 was complete, verified and pushed, since it fits the
+remaining diff budget.
+
+Change: wrap `build(finish)` in try/catch in both byte-identical copies; restore once and rethrow.
+Add control-center-smoke case (f).
+
+Proof: `npm run smoke:control-center`, `smoke:workflow-panel`, `test:typecheck`, `test:lint`,
+`npm run verify`; the new case fails without the try/catch (the patch stays installed).
+
 ## Not taken
 
-Back navigation, overlay mouse forwarding, idle-cat blink, `smoke:web-console` runtime and the
-`withOverlayFrame` dim leak — see `review.md` "Carried over".
+Back navigation, overlay mouse forwarding, idle-cat blink and the `smoke:web-console` runtime —
+see `review.md` "Carried over".

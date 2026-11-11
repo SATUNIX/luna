@@ -50,8 +50,8 @@ cleanly with no conflict.
 - Idle-cat blink intent (`luna-ux-01-01-idle-cat-blink.md`) — needs an operator intent decision
   before either driving or deleting the frame.
 - `smoke:web-console` shared runtime (`luna-ux-01-03-web-console-smoke-shared-runtime.md`).
-- `withOverlayFrame` dim leak (`overlay-frame.ts:124`, `const inner = build(finish)` throws →
-  patch stays installed). No proposal yet; left for a later cycle with budget.
+- `withOverlayFrame` dim leak (`overlay-frame.ts:124`) — **taken this cycle** as the second item
+  after V-73; it was small, evidenced and in scope, so it was fixed rather than carried.
 
 ## New problems found
 

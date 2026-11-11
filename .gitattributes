@@ -28,3 +28,4 @@ CHANGELOG.md merge=union
 *.pdf    binary
 *.gz     binary
 *.zip    binary
+autonomy/JOURNAL.md merge=union

@@ -32,8 +32,8 @@ describes. Commands are for the operator: the model cannot call them.
 | `/effort` | `effort` | Choose how deep and broad the agent works and how much it delegates: `/effort` (picker), `/effort <minimal\|focused\|standard\|thorough\|exhaustive \| E1..E5>`, `/effort status`, `/effort reset`, `/effort memento [status\|on\|off] [provider/model]` (per-model Memento opt-in, off by default), `/effort ultracode [--size N] [--budget N\|none] \| off` (alias uc, or e5 --standing: E5 plus standing workflow mode). Independent of thinking level, profile and permissions. | [effort](effort.md) |
 | `/engagement` | `conductor` | Manage engagement lifecycle: /engagement start \| status \| phase <name> | [control-center](control-center.md) |
 | `/firewall` | `tool-firewall` | Tool firewall: /firewall [status \| list \| revoke <id>\|session\|workspace\|all\|host:<name> \| reload]. Lists remembered approvals with their scope and revokes them. | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:reload` | `tool-firewall` | Reload the tool-firewall policy from disk (alias of /firewall reload) | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:status` | `tool-firewall` | Show tool-firewall status: policy, mode, judge, learning, approvals (alias of /firewall status) | [autonomy-gate](autonomy-gate.md) |
+| `/firewall:reload` | `tool-firewall` | Alias of /firewall reload - reload the tool-firewall policy from disk | [autonomy-gate](autonomy-gate.md) |
+| `/firewall:status` | `tool-firewall` | Alias of /firewall status - show policy, mode, judge, learning and remembered approvals | [autonomy-gate](autonomy-gate.md) |
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
@@ -64,7 +64,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
-| `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
+| `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
 | `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
 | `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 

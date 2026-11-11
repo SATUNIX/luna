@@ -58,7 +58,7 @@ Semantics from the handler (`:727-835`):
 
 The alias is the same handler: `/workflow` accepts exactly the same subcommands and arguments as
 `/workflows`. The smoke test pins the shared registration and the main behaviours:
-`tests/run-query-smoke.ts:268-291` (quoted in the evidence above) asserts that `/workflows` is
+`tests/run-query-smoke.ts:268-291` asserts that `/workflows` is
 registered, that a bare `/workflows` lists finished script, YAML and background-subagent runs and
 does not list a run's children, that `/workflow` is still registered and lists the same runs,
 that `/workflow status <id>` shows a past run (`Format: script`), and that `panel` reaches the live
@@ -159,6 +159,10 @@ change that unified the surfaces. Its commit message states the compatibility ex
 > `/workflows panel [id]`, and `/workflows <run-id>` is now `status <id>`. `/workflow` keeps working
 > as the alias of both.
 
+That message is optimistic about `/workflows <run-id>`: the shipped handler has no such branch
+(a bare run id falls through to `Unknown subcommand`, section 1), so the code, not the message, is
+what section 2 and the follow-up sweep treat as the contract.
+
 The original pre-2026-11-11 design in this item — a bare `/workflows` or a run id opening the panel,
 and an exported `runWorkflowCommand` — was superseded by `3c4c571`. It **MUST NOT** be re-proposed or
 re-implemented. The shipped contract is the one in section 1: one handler, two command names,
@@ -178,13 +182,13 @@ the canonical `/workflows` wording:
 - `docs/workflows.md` (16-18, 21-24, 111, 127, 134, 182, 223, 226, 247, 248, 296, 372, 394, 539)
 - `docs/script-workflows.md` (183, 387)
 - `docs/agent-orchestration.md` (51, 164)
-- `docs/architecture/workflows-and-skills.md` (5, 22, 40, 76, 82, 92, 197)
+- `docs/architecture/workflows-and-skills.md` (5, 11, 22, 40, 76, 82, 92, 197)
 - `docs/architecture/subagents-and-orchestration.md` (244)
 - `docs/control-center.md` (25)
 - `docs/effort.md` (115, 152, 203)
 - `docs/structured-output.md` (9)
 - `packages/extensions/third_party/subagent/SOURCE.md` (114, 130-131, 222), then regenerate
-  `THIRD_PARTY_NOTICES.md` with `node packages/core/gen-notices.ts` (not `npm run catalog`)
+  `THIRD_PARTY_NOTICES.md` (374) with `node packages/core/gen-notices.ts` (not `npm run catalog`)
 - `packages/extensions/third_party/subagent/control.ts` (15, 19, 142, 229, 254)
 - `packages/extensions/third_party/subagent/workflow-tools.ts` (187, 657)
 - `packages/extensions/third_party/subagent/wf-panel.ts` (347)

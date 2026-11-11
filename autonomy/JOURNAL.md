@@ -1,8 +1,8 @@
 # Team journal
 
 One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <outcome> | <summary> [| decisions: autonomy/decisions/<file>.md]`.
-`packages/core/lib/journal.ts` and `tests/docs-smoke.ts` keep this file in step with
-`autonomy/cycles/**/report.md`. Search by board ID with `grep <ID> autonomy/JOURNAL.md`.
+`packages/core/lib/journal.ts` and `tests/docs-smoke.ts` keep it in step with
+`autonomy/cycles/**/report.md`; search by board ID with `grep <ID> autonomy/JOURNAL.md`.
 
 - luna-improve-01/04 | Board: none | successful | Rejected at merge review for exceeding the review budget, with its real fixes taken up in cycle 05
 - luna-improve-01/05 | Board: none | successful | Re-applied the carried fixes on a clean base and ran the full acceptance suite

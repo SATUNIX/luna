@@ -8,10 +8,7 @@ Workflow: refused the second item plan — `plan-allowance`: E3 Standard allows 
 request and 7 were already planned or started, so only 1 more would fit; fell back to `subagent` for
 the implementer (and the reviewer, which then hung).
 
-Item: memory-vault first-turn recall let pinned memories crowd out relevant ones and hid a truncated
-pinned line from the relevance search — `3c1a9f3` — `smoke:memory-vault` 14/14, new check
-`pinned memories ranking above a relevant one do not crowd it out of the first-prompt recall` fails
-on base source (`expected: /### Relevant memories/`) and passes on head.
+Item: memory-vault first-turn recall let pinned memories crowd out relevant ones and hid a truncated pinned line from the relevance search - 3c1a9f39625473d513e26adda9f5d8f9681c035a - node tests/memory-vault-smoke.ts (new check `pinned memories ranking above a relevant one do not crowd it out of the first-prompt recall` fails on base source `expected: /### Relevant memories/` and passes on head; `smoke:memory-vault` 14/14)
 
 Finding: `packages/extensions/src/memory-vault/index.ts:143-146` built the search exclusion set from
 `injected` plus every pinned rel, but over-fetched only `cfg.recallLimit + injected.size`. On the

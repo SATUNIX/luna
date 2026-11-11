@@ -38,6 +38,10 @@ a regression test that fails at the base, and keep the docs that describe them a
   `npm run test:lint`.
 - Docs: `docs/status-bar-and-costs.md` already claims the todo widget is ASCII; verify the wording
   and adjust only if the implementation differs from the claim.
+- Shipped signature: for backward compatibility the ascii flag is a trailing positional parameter
+  (`renderTodoWidget(items, theme, max = 8, ascii = false)`), not the `{ ascii }` options object
+  sketched above. No caller outside the widget's own update path exists, and the existing `max`
+  parameter keeps its position.
 
 ## Checks that prove the cycle
 

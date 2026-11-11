@@ -27,11 +27,13 @@ item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
   negated or larger bracket class is matched against representative secret filenames, and a glob
   directory segment with at least three literal characters (`secre[t-u]`, `.ss[h-i]`) is matched
   against `secret`, `secrets`, `credentials` and `.ssh`. Quoted text is expanded as well, because
-  `sh -c 'cat .en[v]'` hands it to a second shell. Not covered: a backslash-escaped bracket
-  (`[v\]]`), a name with a non-empty quote fragment (`.e"n"v`), and a glob that matches only a
-  non-canonical file name through `?`, `*`, a negated class or a class of more than 32 characters
-  (`foo.p?m`, `foo.p[!x]m`). The `.env.example` and `.env.sample` exemption applies after
-  expansion. All of this is pinned by `tests/secret-guard-smoke.ts`.
+  `sh -c 'cat .en[v]'` hands it to a second shell. A quote inside a word is removed the way the
+  shell removes it before the scan (`.e'n'v`, `".e"nv`, `cred"entials"/db.txt`); a word quoted as a
+  whole keeps its quotes, because the quoting is what marks a search pattern as text. Not covered:
+  a backslash-escaped bracket (`[v\]]`), `$'...'` quoting, and a name reached only through `?`,
+  `*`, a negated class or a class of more than 32 characters when it is not canonical (`foo.p?m`,
+  `foo.p[!x]m`). The `.env.example` and `.env.sample` exemption applies after expansion. All of
+  this is pinned by `tests/secret-guard-smoke.ts`.
   For a plain leading `rg`, `grep`, `egrep` or `fgrep` command, a recognised search pattern is
   excluded from the secret-path token scan. The first positional argument is the pattern unless
   `-e` / `--regexp` or `-f` / `--file` supplies one; a pattern file is always scanned as a path.

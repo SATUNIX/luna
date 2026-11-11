@@ -374,6 +374,58 @@ function deobfuscateShellText(command: string): string {
   return command.replace(/'{2,}|"{2,}/g, "").replace(/\\(?=[A-Za-z])/g, "");
 }
 
+// Characters that end a word or start an operator outside quotes. Inside quotes they are plain
+// text, so joinQuoteFragments swaps them for a placeholder to keep a quoted phrase one word.
+const QUOTED_SEPARATORS = /[\s;|&<>()`]/;
+const QUOTED_SEPARATOR_PLACEHOLDER = "\u0001";
+
+// Index of the quote that closes the one opened at `open`, or -1. Inside double quotes a backslash
+// makes the next character literal.
+function closingQuote(command: string, open: number): number {
+  const quote = command.charAt(open);
+  if (quote === "'") return command.indexOf("'", open + 1);
+  for (let i = open + 1; i < command.length; i++) {
+    const ch = command.charAt(i);
+    if (ch === "\\") i++;
+    else if (ch === quote) return i;
+  }
+  return -1;
+}
+
+// Quote removal as the shell does it for a quote that sits inside a word: `.e'n'v`, `".e"nv` and
+// `cred"entials"/db.txt` become `.env` and `credentials/db.txt`, which no scan of the quoted text
+// could see. A word quoted as a whole (`"secret*"`, `".env"`) keeps its quotes, because the other
+// scans read the quoting (a quoted search pattern is text). Separators inside a removed quote are
+// swapped for a placeholder so a quoted phrase stays one word.
+function joinQuoteFragments(command: string): string {
+  const boundary = (ch: string): boolean => ch === "" || QUOTED_SEPARATORS.test(ch);
+  let out = "";
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === "\\" && i + 1 < command.length) {
+      out += ch + command.charAt(i + 1);
+      i += 2;
+    } else if (ch !== "'" && ch !== '"') {
+      out += ch;
+      i++;
+    } else {
+      const close = closingQuote(command, i);
+      if (close < 0) {
+        out += command.slice(i);
+        break;
+      }
+      if (boundary(command.charAt(i - 1)) && boundary(command.charAt(close + 1))) {
+        out += command.slice(i, close + 1);
+      } else {
+        for (const inner of command.slice(i + 1, close)) out += QUOTED_SEPARATORS.test(inner) ? QUOTED_SEPARATOR_PLACEHOLDER : inner;
+      }
+      i = close + 1;
+    }
+  }
+  return out;
+}
+
 // Suffix patterns like `\.env$` are anchored to end-of-string, which is correct for a
 // single isolated file path (isSecretPath) but wrong for scanning a whole command
 // line: `base64 .env; echo done` never matches because more text follows `.env`.
@@ -742,7 +794,10 @@ export default function (pi: ExtensionAPI) {
     if (toolName === "bash") {
       const command = commandField?.ok ? commandField.value : undefined;
       if (command) {
-        for (const candidate of new Set([command, deobfuscateShellText(command)])) {
+        const deobfuscated = deobfuscateShellText(command);
+        const candidates = new Set([command, deobfuscated]);
+        if (/['"]/.test(deobfuscated)) candidates.add(joinQuoteFragments(deobfuscated));
+        for (const candidate of candidates) {
           for (const pattern of SECRET_BASH_LEAK_PATTERNS) {
             if (pattern.test(candidate)) {
               return blocked(ctx, `secret-guard: blocked bash command matching secret-leak pattern: ${command.slice(0, 100)}`);

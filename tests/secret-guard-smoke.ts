@@ -325,6 +325,32 @@ async function run() {
       assert.ok(Date.now() - started < 1500, `${name} must stay cheap`);
     }
 
+    // 4f. Quotes that split a name are removed by the shell, so they must not hide it from the scan.
+    for (const command of [
+      "cat .e'n'v | head",
+      'cat ".e"nv | head',
+      'cat .e"n"v | head',
+      "cat .'e'nv",
+      "cat id_'rsa'",
+      'cat con"fig"/cred"entials"/db.txt',
+      'cat config/sec"ret"/x',
+      'cat ~/.s"sh"/known_hosts',
+      "base64 .e'n'v",
+      'cp .e"n"v /tmp/x',
+      "cat .e'n'v.prod | head",
+      `cat "$HOME"/.e"n"v`,
+    ]) await blocks("bash", { command }, `quote-fragmented secret name stays blocked: ${command}`);
+    for (const command of [
+      'echo "the credentials/ folder" | head',
+      'git log --format="%h %s" | head',
+      'grep "a b" docs/security.md | head',
+      'cat "my file.txt" | head',
+      'head -3 "docs/read me.md"',
+      'curl -s "https://example.test/a?b=1&c=2" | head',
+      "cat 'src/index.ts' | head",
+      'cat "src/"index.ts | head',
+    ]) await allows("bash", { command }, `quoted words that name nothing secret: ${command}`);
+
     // 5. Benign operations still pass.
     await allows("write", { path: "src/index.ts", content: "export const x = 1;" }, "normal source write");
     await allows("edit", { path: "README.md", new_string: "# Title" }, "normal edit");

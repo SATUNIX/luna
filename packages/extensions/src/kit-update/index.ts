@@ -301,6 +301,8 @@ export interface KitInstall {
   commit?: string | null;
   /** git only: the registered source is a retired private one; /update kit migrates it to the public source. */
   legacy?: boolean;
+  /** git only: commits the branch head is ahead of the checked-out commit (best effort; absent offline or in sync). */
+  trunkAhead?: number;
 }
 
 interface PackageEntry {
@@ -606,6 +608,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
   let note: string | null = null;
   let tags: Record<string, string> | null = kitTags;
   let commit: string | null = null;
+  let trunkAhead: number | undefined;
   let legacyOrigin = false;
   if (migrateSource && !migrateTo) {
     available = true;
@@ -646,6 +649,13 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
       const latest = latestRelease(releaseTags(remote, dist.tagPrefix));
       const main = branchHead(remote, dist.branch);
       tags = { latest: latest ?? "-", next: main ? `${dist.branch}@${main.slice(0, 7)}` : "-" };
+      // Best effort: the gap between the installed checkout and the branch head, for the
+      // trunk-ahead notice. No number (offline, not a checkout) means no notice.
+      if (kit.root && main) {
+        const count = await git(["-C", kit.root, "rev-list", "--count", `HEAD..${main}`]);
+        const parsed = count === null ? NaN : Number.parseInt(count.trim(), 10);
+        if (Number.isInteger(parsed) && parsed >= 0) trunkAhead = parsed;
+      }
       if (kit.channel === "next") {
         target = main ? `${dist.branch}@${main.slice(0, 7)}` : null;
         available = Boolean(main && commit && main !== commit);
@@ -700,7 +710,23 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     return { source: e.source, name: npm.name, scope: e.scope, installed, kitPin, latest, action };
   });
 
-  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(legacyOrigin ? { legacyOrigin } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
+  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(trunkAhead !== undefined ? { trunkAhead } : {}), ...(legacyOrigin ? { legacyOrigin } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
+}
+
+/** The state the trunk-ahead notice reads: the channel the install follows and the commit gap. */
+export interface TrunkAheadState {
+  channel: string;
+  ahead: number;
+}
+
+/**
+ * One line telling the owner the kit's trunk is ahead of the installed copy, or null when the
+ * trunk is not ahead or no channel is known. The wording names the install's real channel so
+ * `/update channel <name>` accepts it.
+ */
+export function trunkNotice(state: TrunkAheadState): string | null {
+  if (state.ahead <= 0 || !state.channel) return null;
+  return `trunk is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
 }
 
 /** Anything the user can act on (pinned-only notices do not count). */
@@ -732,6 +758,8 @@ export function formatReport(report: UpdateReport): string {
   lines.push(`  pi-system  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
   if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}`);
   if (k.note) lines.push(`             ${k.note}`);
+  const trunkGap = trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 });
+  if (trunkGap) lines.push(`             ${trunkGap}`);
   const piInfo = report.pi;
   const piState = piInfo.available
     ? `  →  ${piInfo.latest}`
@@ -1199,6 +1227,8 @@ export default function (pi: ExtensionAPI) {
     void check(cwd)
       .then((report) => {
         if (report.staleRoles?.length) ctx.ui.notify(`pi-system: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
+        const notice = trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 });
+        if (notice) ctx.ui.notify(notice, "info");
         if (!hasUpdates(report)) return;
         ctx.ui.setStatus("kit-update", "updates: /update");
         ctx.ui.notify(summaryLine(report), "info");

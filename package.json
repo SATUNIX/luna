@@ -251,6 +251,7 @@
     "smoke:kit-root-trust": "node tests/kit-root-trust-smoke.ts",
     "smoke:node-runtime": "node tests/node-runtime-smoke.ts",
     "smoke:kit-update": "node tests/kit-update-smoke.ts",
+    "smoke:update-notice": "node tests/update-notice-smoke.ts",
     "distribution:inspect": "node packages/core/distribution-contract.ts",
     "smoke:distribution-contract": "node tests/distribution-contract-smoke.ts",
     "smoke:distribution": "node tests/distribution-smoke.ts",

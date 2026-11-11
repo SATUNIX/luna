@@ -1,7 +1,10 @@
 # Proposal — human-console defers on a one-shot hold check
 
-- Run: `luna-ux-01`, cycle 01. Status: **deferred**, not implemented (see cycle 01 `review.md`,
-  "Checked and set aside").
+- Run: `luna-ux-01`, cycle 01. Status: **refuted**, no fix. The cited gap contains no `await`:
+  `inputHeld()` and the `ctx.ui.select` / `ctx.ui.confirm` calls run in one synchronous turn, so no
+  other holder can acquire input between them. See cycle 01 `review.md` (continuation) and the new
+  `luna-ux-01-01-human-console-multi-card-focus-theft.md`, which records the real weakness this one
+  obscured: a console card never takes a hold at all, so sibling requests can open concurrent cards.
 - Surface: TUI overlays / input owner (V-02 focus theft).
 
 ## Finding

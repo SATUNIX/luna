@@ -4,10 +4,10 @@
 
 - Branch `pi/luna-core-01`, base `363dba0b9a25` (head of `stream/core`, holds cycles 01–11).
   Cycle 12 commits, all pushed: `b8602c5`, `c6bc2ee` (PG-55), `d647f95` (PG-19), `34ee17a`
-  (V-81), `be8f294` (review fixes), plus the records under `autonomy/cycles/luna-core-01/12/`
+  (V-81), `be8f294` (review fixes), `8a0fbe9` (second review fixes), plus the records under `autonomy/cycles/luna-core-01/12/`
   and the `luna-core-01/12` line in `autonomy/JOURNAL.md`.
 - Cycle 12 outcome: **successful** (fix + improve).
-- Reviewable diff 44,268 chars — under the 60,000 read budget and the 30,000 stop-new-items mark.
+- Reviewable diff 50,945 chars — under the 60,000 review read budget.
 
 ## What cycle 12 did
 

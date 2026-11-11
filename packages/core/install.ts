@@ -221,6 +221,13 @@ if (mode === "npm" && !npmDeliveryEnabled()) {
     "(or PI_KIT_DELIVERY=npm) is refused. Install from git instead (`--mode git`), or see docs/releasing.md.");
   process.exit(1);
 }
+// `trunk` follows the integration branch of the kit's repository: there is no npm dist-tag for it,
+// so npm delivery cannot record or follow it.
+if (mode === "npm" && explicitChannel === "trunk") {
+  console.error("[install] trunk is a git channel: it follows the kit's integration branch and has no npm dist-tag. " +
+    "Use `latest`, `next` or an exact version with npm delivery.");
+  process.exit(1);
+}
 if (explicitChannel && !isChannel(explicitChannel)) {
   console.error(`[install] invalid --channel "${String(explicitChannel)}" (expected latest, next, trunk or an exact version such as 0.2.4-beta.0)`);
   process.exit(1);

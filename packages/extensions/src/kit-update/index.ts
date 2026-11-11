@@ -621,7 +621,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     note = `pi-system is now delivered from ${migrateTo}: /update kit moves this install (channel ${kit.channel ?? "latest"}, same profile)`;
   } else if (kit.kind === "npm") {
     if (kit.pinned) {
-      note = `pinned to ${kit.channel}; /update channel latest|next|trunk to follow a channel`;
+      note = `pinned to ${kit.channel}; /update channel latest|next to follow a channel`;
       target = kitTags?.latest ?? null;
     } else {
       target = kitTags?.[kit.channel ?? "latest"] ?? null;
@@ -664,7 +664,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
         if (!trunk) note = `no ${dist.trunkBranch} branch in ${source.repo} yet`;
       } else {
         target = latest;
-        note = `pinned to ${kit.channel}; /update channel latest|next|trunk to follow a channel`;
+        note = `pinned to ${kit.channel}; /update channel latest|next to follow a channel`;
       }
     }
   } else if (kit.kind === "local") {
@@ -1071,6 +1071,10 @@ function planChannelSwitchSteps(report: UpdateReport, channel: string): { steps:
   const notes: string[] = [];
   const delivery = kit.migrateTo ?? (kit.kind === "npm" || kit.kind === "git" ? kit.kind : readDistribution(kit.root).delivery ?? "git");
   if (kit.kind === "npm" && delivery === "npm") {
+    if (channel === "trunk") {
+      // trunk follows a git branch; npm has no such dist-tag, so refuse rather than publish a spec nothing serves.
+      return { steps: [], notes: [`${channel} is a git channel: it follows the kit's integration branch and no npm dist-tag publishes it. Use latest, next or an exact version.`] };
+    }
     // `pi install` rewrites the existing entry's source in place and keeps its filters.
     const name = parseNpmSource(kit.source ?? "")?.name ?? readDistribution(kit.root).npmPackage;
     const spec = channel === "latest" ? `npm:${name}` : `npm:${name}@${channel}`;

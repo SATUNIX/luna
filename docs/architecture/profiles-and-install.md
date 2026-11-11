@@ -249,7 +249,7 @@ Extensions are applied remove-then-append (`add`); skills and prompts use `exclu
 - `profile` is `"all"` for `--all`, `"custom"` for `--only`, and the canonical profile name otherwise.
 - `overrides` is `null` when empty.
 - `ref` is the git ref of the registered source (null for `next` and outside git mode).
-- `channel` is `latest`, `next`, a pinned version or (in git mode) a raw ref, and null for a local checkout.
+- `channel` is `latest`, `next`, `trunk` (the opt-in integration-branch canary), a pinned version or (in git mode) a raw ref, and null for a local checkout.
 - `companions` is the array of companion `source` strings this install is responsible for. Only the companions this run installs, or reinstalls at Luna's pin, are newly recorded, and companions already recorded by a previous install are carried over; a companion the operator registered at Luna's pin before the run is left out, so uninstall leaves it registered (`tests/install-marker-smoke.ts`). A recorded companion stays tracked until `pi remove` actually removes it. A later install that no longer selects it (including `--no-externals`) does not drop it. With no prior marker, `--no-externals` records `[]`. Each entry is exactly the string `uninstall.ts` passes to `pi remove`. A companion skipped for a missing prerequisite (only `pi-lean-ctx` without its CLI) is not newly recorded by that run, but one recorded by an earlier install is still carried over.
 
 The marker is the installer's last write, which is why `/profile` can use a fresh `installedAt` as evidence that the installer finished.

@@ -88,6 +88,34 @@ function fakeGit({ tags = [], main = SHA_MAIN, trunk = SHA_TRUNK, head = SHA_OLD
   };
 }
 
+// An npm-delivered kit: <agent>/npm/node_modules/, with a pinned package entry so
+// `checkForUpdates` reports the pinned note.
+function makeNpmWorld(): World {
+  const agent = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-npm-agent-"));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-npm-cwd-"));
+  const kitRoot = path.join(agent, "npm", "node_modules", "@satunix", "pi-system");
+  fs.mkdirSync(kitRoot, { recursive: true });
+  writeJson(path.join(kitRoot, "package.json"), { name: "@satunix/pi-system", version: "0.3.0-beta.2" });
+  fs.mkdirSync(path.join(kitRoot, "packages", "core"), { recursive: true });
+  fs.writeFileSync(path.join(kitRoot, "packages", "core", "install.ts"), "// stub\n");
+  writeJson(path.join(kitRoot, "packages", "core", "sources.json"), { external: [] });
+  writeJson(path.join(kitRoot, "packages", "core", "distribution.json"), { delivery: "npm", npm: { package: "@satunix/pi-system" } });
+  writeJson(path.join(agent, "settings.json"), { packages: [{ source: "npm:@satunix/pi-system@0.3.0-beta.2" }] });
+  const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
+  const restoreRoot = setEnv("PI_KIT_ROOT", undefined);
+  return {
+    agent,
+    cwd,
+    kitRoot,
+    cleanup() {
+      restoreAgent();
+      restoreRoot();
+      rmWorkspace(agent);
+      rmWorkspace(cwd);
+    },
+  };
+}
+
 // The registry lookups in a git check: only pi (and linked packages, none here) is queried.
 const fetchImpl: KitUpdate.FetchLike = async (url) => {
   const tags = url.includes("pi-coding-agent") ? { latest: "0.87.1" } : {};
@@ -206,6 +234,36 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(channelOfGitSource(`${GIT_SOURCE}@feature-x`), "feature-x");
       assert.ok(isChannel("trunk"));
       assert.ok(isChannel("latest"));
+    } finally {
+      w.cleanup();
+    }
+  },
+
+  "npm delivery refuses the git-only trunk channel and never advertises it in the pinned note": async () => {
+    // A minimal npm report: kind npm without a migrateTo means the npm branch of the switch plan.
+    const report: KitUpdate.UpdateReport = {
+      cwd: "/tmp",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      pi: { current: "0.87.1", latest: "0.87.1", available: false, tested: null, beyondTested: false },
+      kit: {
+        kind: "npm", scope: "user", source: "npm:@satunix/pi-system@0.3.0-beta.2", channel: "0.3.0-beta.2",
+        pinned: true, root: null, version: "0.3.0-beta.2", target: null, available: false, note: null,
+        tags: null, migrateTo: null,
+      },
+      packages: [], staleRoles: [], offline: false,
+    };
+    const refused = mod.planChannelSwitch(report, "trunk");
+    assert.equal(refused.steps.length, 0, "a trunk switch must not build an npm spec");
+    assert.match(refused.notes.join(" "), /git channel/i, refused.notes.join(" "));
+
+    const w = makeNpmWorld();
+    try {
+      const fetched = await mod.checkForUpdates(w.cwd, fetchImpl, "0.87.1", fakeGit());
+      assert.equal(fetched.kit.kind, "npm");
+      assert.equal(fetched.kit.pinned, true);
+      assert.match(fetched.kit.note ?? "", /latest\|next/, fetched.kit.note ?? "no pinned note");
+      assert.doesNotMatch(fetched.kit.note ?? "", /trunk/, fetched.kit.note ?? "no pinned note");
+      assert.equal(mod.planChannelSwitch(fetched, "trunk").steps.length, 0);
     } finally {
       w.cleanup();
     }

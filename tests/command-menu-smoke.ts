@@ -5,8 +5,8 @@
  * Hermetic (temporary agent dir, no live pi). Layers:
  *   - classification: pinned kit commands stay, every other extension command hides, and pi's
  *     built-ins, prompt templates and skill commands are untouched unless hiddenCommands names them;
- *   - the reveal rule: a hidden command returns at four typed characters, and dispatch/completion
- *     are never touched;
+ *   - the reveal rule: a hidden command returns at four typed characters (or at its full name when
+ *     shorter), and dispatch/completion are never touched;
  *   - the location: a hidden suggestion's description says where the command moved;
  *   - settings: commandMenu / pinnedCommands / hiddenCommands from pi-kit/ui.json, invalid values
  *     warned about once and replaced by the defaults;
@@ -66,6 +66,7 @@ const values = (suggestions: AutocompleteSuggestions | null): string[] => (sugge
 const COMMANDS: CommandMenuModule.CommandMenuCommand[] = [
   { name: "menu", source: "extension" },
   { name: "auto", source: "extension" },
+  { name: "kit", source: "extension" },
   { name: "effort", source: "extension" },
   { name: "todos", source: "extension" },
   { name: "totally-companion", source: "extension" },
@@ -275,6 +276,23 @@ tests.push([
     // Accepting a suggestion still goes through the base provider's applyCompletion.
     const applied = provider.applyCompletion(["/auto"], 0, 5, { value: "auto", label: "auto" }, "/auto");
     assert.deepEqual(applied, { lines: ["/auto"], cursorLine: 0, cursorCol: 5 }, "completion is delegated to the base provider");
+  },
+]);
+
+tests.push([
+  "a hidden command shorter than four characters reappears at its full name",
+  async () => {
+    const menu = await loadMenu();
+    const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
+    assert.ok(hidden.has("kit"), "/kit is hidden like every other non-pinned kit command");
+    const kitItems: AutocompleteItem[] = [{ value: "kit", label: "kit", description: "Open the kit hub" }];
+    const provider = menu.commandMenuProvider(fakeBase(kitItems), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
+
+    const atTwo = await suggest(provider, ["/ki"], 3);
+    assert.deepEqual(values(atTwo), [], "three-character /kit stays hidden at two typed characters");
+
+    const atThree = await suggest(provider, ["/kit"], 4);
+    assert.deepEqual(values(atThree), ["kit"], "three-character /kit is revealed once typed in full");
   },
 ]);
 

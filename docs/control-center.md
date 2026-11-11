@@ -120,7 +120,8 @@ In the TUI, typing `/` offers only the pinned commands plus pi's own built-ins, 
 and the skill commands. Every other Luna extension command, and every companion-package command, is
 hidden from the list. Nothing is unregistered: a hidden command runs exactly as before when it is
 typed in full, and it appears again once at least four characters of its name have been typed, so
-muscle memory still completes (`tests/command-menu-smoke.ts`).
+muscle memory still completes. A name shorter than four characters appears once its full name is
+typed, so the hidden `/kit` alias completes at `/kit` (`tests/command-menu-smoke.ts`).
 
 Hidden suggestions say where the command lives, for example
 `moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with

@@ -18,6 +18,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
+  cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
+  scan reads the whole pushed range, so removing the identifier in a later commit still left the
+  refused commit in range and the run parked again with the same question. Answering the question now
+  rolls the local integration branch back to the last published head (discarding the
+  merged-but-unpublished cycles; their `cycle-NN` tags remain) before the answer's cycle runs, and
+  `publishNow` clears the blocker and the unpublished count only on a real push. Pinned by
+  `tests/autonomy-selfimprove-smoke.ts`.
+
 - **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
   `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,
   so a step declaring `outputs: [report.md]` never learned the path it had to write. The subagent
@@ -35,8 +44,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (`selfImprove.publishBlockedCycles`, reset by a successful publish), shown by `pi-autonomy status`
   (`selfImprove.publishBlocker`/`selfImprove.unpublished` in `--json`, a `publication BLOCKED` line
   in the text), carried into the next cycle's prompt (the refused commit and location, locations
-  only, and the instruction to remove the identifier first), and after two consecutive merged cycles
-  stay unpublished, the host stops the run in `blocked` with an operator question. Pinned by
+  only, and the instruction to remove the identifier first), and after two merged-but-unpublished
+  cycles (an intervening non-merged cycle does not reset the count), the host stops the run in
+  `blocked` with an operator question. Pinned by
   `tests/autonomy-selfimprove-smoke.ts`; the leak scan and its patterns are unchanged.
 
 - **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured

@@ -228,6 +228,10 @@ function publishNow(ctx: StepContext): void {
   try {
     const r = gm.publish(repo.git(), siConfig(ctx.cfg), si.lastPushed);
     si.lastPushed = r.state;
+    // Nothing was pushed when the destination already holds the published state (for example after
+    // a blocked-publication reset). Only a real push is a successful publish, so only it clears the
+    // blocker and the streak; otherwise an unchanged state would silently reset the guard.
+    if (!r.pushed) return;
     if (si.publishError) log("publish recovered");
     si.publishError = null;
     si.publishBlocker = null;
@@ -239,6 +243,46 @@ function publishNow(ctx: StepContext): void {
     // A generic failure must not erase a real leak-scan blocker; only a PublishBlocked sets it (a successful publish clears it above).
     if (e instanceof gm.PublishBlocked) si.publishBlocker = message;
   }
+}
+
+/**
+ * The integration head recorded in the last successfully published refs state, or the seed when
+ * nothing has been published yet. The state string is `for-each-ref` output: `<sha> <refname>`.
+ */
+function lastPublishedHead(si: SelfImproveState, integrationBranch: string): string {
+  for (const line of (si.lastPushed ?? "").split("\n")) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (sha !== undefined && ref === `refs/heads/${integrationBranch}`) return sha;
+  }
+  return si.seedSha;
+}
+
+/**
+ * Roll the local integration branch back to the last published state after the operator answers the
+ * publish-blocked question. Merged-but-unpublished cycles cannot be pushed (the leak scan refuses
+ * their commits, and publication is fast-forward only), and removing the identifier in a later
+ * commit leaves the refused commit in the range. Discarding that local-only history is the only
+ * way the answer can reach a publishable state; the next cycle redoes the work. The streak is left
+ * set, so a cycle that reintroduces the identifier parks the run again as before.
+ */
+function resetToLastPublished(ctx: StepContext): void {
+  const { repo, log } = ctx;
+  const cfg = siConfig(ctx.cfg);
+  const si = siState(ctx.state);
+  const g = repo.git();
+  const ref = `refs/heads/${cfg.integrationBranch}`;
+  const current = g(["rev-parse", ref]);
+  const published = lastPublishedHead(si, cfg.integrationBranch);
+  if (published === current) return;
+  // The integration branch only ever fast-forwards, so the published head is an ancestor. A
+  // non-ancestor would mean the remote moved independently; publishing will surface that itself.
+  if (g(["merge-base", "--is-ancestor", published, current], { allowFail: true }) === null) return;
+  g(["update-ref", ref, published, current]);
+  // Record the post-reset state so the cycle-start publish is a no-op for the integration branch:
+  // discarding the unpublishable history must not itself look like a successful publish (the next
+  // real push, after the answer cycle, is what clears the blocker and the streak).
+  si.lastPushed = gm.refsState(g, cfg);
+  log(`publication blocked: moved ${cfg.integrationBranch} from ${current.slice(0, 12)} back to the last published ${published.slice(0, 12)}; the unpublished merges are discarded and the next cycle redoes the work`);
 }
 
 // --- one cycle ----------------------------------------------------------------------------------------
@@ -404,6 +448,7 @@ async function runStep(ctx: StepContext): Promise<void> {
     // single cycle. If the leak scan still refuses that cycle's publication, publishBlocker and
     // publishBlockedCycles stay set, so the next runStep parks here again with a fresh question.
     if (state.pendingAnswer?.id === "publish-blocked") {
+      resetToLastPublished(ctx);
       ctx.save((s) => { s.pendingAnswer = null; });
     } else {
       const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";

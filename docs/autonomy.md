@@ -579,10 +579,15 @@ changes, or scan errors refuse the push; automatic cycles continue locally with
 explicit promotion records `promotion.error`. The refusal is now surfaced instead of only logged:
 `pi-autonomy status` reports `selfImprove.publishBlocker` and `selfImprove.unpublished` (a
 `publication BLOCKED` line in the text view), the next cycle's prompt names the refused commit and
-location and makes removing the identifier its first job, and after **two** consecutive merged
-cycles stay unpublished, the host stops the run in `blocked` with an operator question (remove the
-identifier and resume, or stop the run). Answering that question lets exactly one cycle run — the
-answer is consumed as that one resume permission — and the run parks again if that cycle's
+location and makes removing the identifier its first job, and after **two** merged
+cycles stay unpublished (an intervening non-merged cycle does not reset the count), the host stops
+the run in `blocked` with an operator question (remove the identifier and resume, or stop the run).
+Answering that question first rolls the local integration branch back to the last published head,
+discarding the merged-but-unpublished cycles (their `cycle-NN` tags remain on the agent branch),
+then lets exactly one cycle run — the answer is consumed as that one resume permission. The
+rollback is required because publication is fast-forward only and the leak scan reads the whole
+pushed range, so merely removing the identifier in a later commit leaves the refused commit
+publishable; the answer's cycle redoes the discarded work. The run parks again if that cycle's
 publication is still refused. A successful publish clears the blocker and the count
 (`tests/autonomy-selfimprove-smoke.ts`). The worker has no push credentials and never performs host
 promotion; host pushes stay fast-forward

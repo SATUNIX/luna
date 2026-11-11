@@ -25,6 +25,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A human-console card holds input while it is open (V-02).** The console checked the shared
+  input-owner registry but never registered a hold, so two child requests written in one poll
+  opened two cards and the second took focus from the first. The console's card now holds input
+  and a sibling waits for the next poll; an interactive `ask_human` card holds input the same
+  way, so a console card cannot open over it. The notices name the open card rather than a
+  process. Pinned by `tests/firewall-overlay-queue-smoke.ts` (`npm run smoke:firewall-overlay-queue`).
+- **Framed overlays size their inner content and forward the mouse.** The hub's frame laid its
+  child out four cells wider than the drawn area and dropped pointer events, so content wrapped
+  or clipped and the list could not be clicked; a hidden command shorter than four characters
+  (`/kit`) never reappeared in the curated `/` menu. Both are fixed and pinned by
+  `npm run smoke:control-center` and `npm run smoke:command-menu`.
+
 - **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
   wall-clock time (`performance.now` / `Date.now`), which includes time the process spent
   descheduled; under load wall time inflated ~4–9x and correct code failed its own linear-time

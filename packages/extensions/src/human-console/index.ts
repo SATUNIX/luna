@@ -306,7 +306,7 @@ export default function humanConsole(pi: ExtensionAPI) {
     if (heldNoticed.has(id)) return;
     heldNoticed.add(id);
     const what = request.kind === "question" ? "A child's question" : `A child's approval (${text(request.toolName || "tool call")})`;
-    ctx.ui?.notify?.(`human-console: ${what} is waiting; close ${holder} to see it. It is refused at its timeout if ${holder} stays open.`, "warning");
+    ctx.ui?.notify?.(`human-console: ${what} is waiting; close ${holder} to see it. It is refused at its timeout if it stays open.`, "warning");
     audit(ctx.cwd, { event: "human_console_held", id, holder });
   };
   // A request nobody can answer any more: the requester has failed closed, so drop its file and say so.

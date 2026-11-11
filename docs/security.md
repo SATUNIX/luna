@@ -48,7 +48,9 @@ A recognised adapter with missing required inputs, unknown fields or unsupported
 forms is **high**, needs the operator and cannot gain learned or model-similarity authority.
 An exact `allow` cannot remove that finding or lower critical effects. The adapter covers legacy
 single-file edits, pi 1.3's single-file batch replacements and the pinned readseek single-file
-hashline operations; extra nested target fields remain incomplete
+hashline operations; extra nested target fields remain incomplete. A null/undefined-valued
+*unknown* key names no operation and does not make an adapter incomplete, while a known shape
+field with `null` stays a type mismatch and a non-null unknown field stays incomplete
 (`tests/firewall-shell-smoke.ts`, `tests/firewall-gate-smoke.ts`). Unattended runs refuse incomplete
 inputs without asking or executing a marker (`tests/firewall-unattended-smoke.ts`).
 

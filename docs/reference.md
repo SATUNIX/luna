@@ -61,7 +61,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
-| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
@@ -495,12 +495,13 @@ absolute or relative to the working directory.
 | `PI_KIT_GUARD_OSC` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_REPEAT` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_STALL` | `progress-guard` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_GUIDELINES_PATH` | `guidelines` | — | — |
+| `PI_KIT_GUIDELINES_PATH` | `guidelines` | Path to guidelines file (default `GUIDELINES.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_HANDOFF_AUTO` | `handoff` | — | — |
 | `PI_KIT_HANDOFF_FILE` | `handoff` | — | — |
 | `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [script-workflows](script-workflows.md) |
 | `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `pentest-governance-domain`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_INTERNAL_CHILD` | `control-center`, `trigger-compact` | — | [control-center](control-center.md) |
+| `PI_KIT_LEAN_CTX` | `session-helpers` | Set to `0` to disable the lean-ctx preflight warning | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_LOOP_MAX` | `autonomous-loop` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_MAX_BRANCHES` | `branch-lab` | — | — |
 | `PI_KIT_MEMORY_AUTOPROMOTE` | `memory-vault` | — | [memory](memory.md) |
@@ -565,6 +566,7 @@ absolute or relative to the working directory.
 | `PI_KIT_VAULT` | `memory-vault` | — | [memory](memory.md) |
 | `PI_KIT_VERIFY_CMD` | `verify-gate` | Check command for `/verify`; overrides `scripts.verify` (default unset) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_ON_TURN` | `verify-gate` | Set to `1` to run the check command after successful write/edit tools when the assistant finishes its tool sequence; projects without a verify script are skipped (default `0`) | [INSTALL](INSTALL.md#environment-variables) |
+| `PI_KIT_VERIFY_PENDING_TTL_MS` | `verify-gate` | How long a "verification pending" marker stays valid, in ms; an older marker is treated as absent (default `1800000`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW` | `verify-gate` | `0` turns off the independent completion reviewer in `/verify` and `verify_completion` (default on) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_MODEL` | `verify-gate` | Reviewer model as `provider/id` (default current model) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_TIMEOUT_MS` | `verify-gate` | Reviewer timeout (default `900000`) | [INSTALL](INSTALL.md#environment-variables) |

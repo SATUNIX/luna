@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { loadExtension, loadModule, fakePi, setEnv } from "../packages/core/eval/harness.ts";
 import type { CompressResult } from "../packages/extensions/src/compress/index.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 /**
  * The compress module as this test drives it. buildCompressedSummary takes pi's full
@@ -282,10 +283,9 @@ async function testIsFast(): Promise<void> {
     messages.push({ role: "assistant", content: [{ type: "text", text: "reply" }, { type: "toolCall", id: `${i}`, name: "bash", arguments: { command: "ls" } }] });
     messages.push({ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: BIG_OUTPUT.slice(0, 20000) }] });
   }
-  const started = performance.now();
-  buildCompressedSummary({ preparation: preparationFor(messages) });
-  const ms = performance.now() - started;
-  assert.ok(ms < 2000, `15k messages compress in ${ms.toFixed(0)} ms`);
+  assertCpuWithin("15k messages compress", 2000, () => {
+    buildCompressedSummary({ preparation: preparationFor(messages) });
+  });
 }
 
 const tests: Array<() => Promise<void>> = [

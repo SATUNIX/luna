@@ -24,7 +24,8 @@
     "PI_KIT_VERIFY_CMD",
     "PI_KIT_VERIFY_REVIEW",
     "PI_KIT_VERIFY_REVIEW_MODEL",
-    "PI_KIT_VERIFY_REVIEW_TIMEOUT_MS"
+    "PI_KIT_VERIFY_REVIEW_TIMEOUT_MS",
+    "PI_KIT_VERIFY_PENDING_TTL_MS"
   ],
   "provenance": { "origin": "custom" },
   "homeRepo": null,

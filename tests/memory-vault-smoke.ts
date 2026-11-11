@@ -14,6 +14,8 @@
 //   9. Obsidian compatibility: frontmatter round-trips; MEMORY.md and the hub use wikilinks.
 //  12. projects are keyed by canonical root, so same-named repositories never share recall;
 //      symlinked roots never split, a moved root is reported rather than taken over.
+//  13. the first-prompt recall is framed as background history, never a resume prompt; a huge
+//      recap body is truncated with the header and footer kept.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -129,7 +131,7 @@ try {
     const first = (await pi2.handlers.get("before_agent_start")({ prompt: "continue with the auth redirects work", systemPrompt: "SYS" }, ctx)) as Recall;
     assert.equal(first.systemPrompt, undefined, "memory never rewrites the system prompt");
     assert.equal(first.message.display, false);
-    assert.match(first.message.content, /Where we left off \(beta\)/);
+    assert.match(first.message.content, /Earlier sessions \(beta\) - history only/);
     assert.match(first.message.content, /Redirects stay server-side/);
     const second = await pi2.handlers.get("before_agent_start")({ prompt: "more on the auth redirects server-side please", systemPrompt: "SYS" }, ctx);
     assert.equal(second, undefined, "an already-injected memory is not injected again");
@@ -273,7 +275,7 @@ try {
       };
       assert.equal(await say(other), undefined, "nothing from the first root is injected into the same-named repository");
       const back = (await say(mine)) as Recall;
-      assert.match(back.message.content, /Where we left off \(api\)/);
+      assert.match(back.message.content, /Earlier sessions \(api\) - history only/);
       assert.match(back.message.content, /Acme deploy pipeline/);
     } finally {
       restoreVault();
@@ -331,6 +333,43 @@ try {
     assert.equal(vault.findMemory(keyRoot, "shared-ref-note", "api")?.rel, path.join("Memory", "shared-ref-note.md"), "a hashed sibling is not treated as the current project");
     assert.equal(vault.findMemory(keyRoot, "shared-ref-note", otherKey)?.rel, sibling.rel);
     ok("symlinked roots never split; recorded owners skip the lock; moved roots are reported; find never favours a hashed sibling");
+  }
+
+  // 13. A greeting must not read as "resume old work": the first-prompt recall is framed as
+  //     background history, and truncation of a huge body keeps the header and the footer.
+  {
+    const truncRoot = path.join(ws, "vault-trunc");
+    const repo = path.join(ws, "trunc");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restoreTrunc = setEnv("PI_KIT_VAULT", truncRoot);
+    try {
+      const date = new Date(2026, 8, 24, 9, 0);
+      const longDid = "Moved the auth module. ".repeat(60);
+      const longNext = "Finish migrating the auth module. ".repeat(60);
+      for (let i = 0; i < 5; i++) vault.appendRecap(truncRoot, "trunc", { title: `Auth migration ${i}`, did: longDid, next: longNext }, date);
+      const recapFile = path.join(truncRoot, "Projects", "trunc", "Recaps", "2026-09-24.md");
+      const before = fs.readFileSync(recapFile);
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.equal(result.message.display, false);
+      assert.equal(result.systemPrompt, undefined);
+      assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the recall starts with the history header");
+      assert.match(result.message.content, /background history/i);
+      assert.match(result.message.content, /not instructions/i);
+      assert.match(result.message.content, /current message/i);
+      assert.doesNotMatch(result.message.content, /Where we left off/);
+      assert.doesNotMatch(result.message.content, /\*\*Next:\*\*/);
+      assert.doesNotMatch(result.message.content, /### Relevant memories/);
+      assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
+      assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
+      assert.deepEqual(fs.readFileSync(recapFile), before, "the on-disk recap is unchanged");
+      ok("a greeting gets background history, not a resume prompt; truncation keeps the header and footer");
+    } finally {
+      restoreTrunc();
+    }
   }
 
   console.log(`[memory-vault-smoke] all ${checks} checks passed`);

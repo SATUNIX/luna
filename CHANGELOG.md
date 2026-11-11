@@ -15,6 +15,32 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
   `packages/extensions/third_party/subagent/overlay-frame.ts`; `npm run smoke:control-center` and
   `npm run smoke:workflow-panel`).
+### Added
+
+- **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture
+  suite's success rate, per-category counts and a chars/4 token estimate as
+  `packages/core/eval/baselines/YYYY-MM-DD.json`, and `--check` fails when the newest baseline is
+  missing, malformed, or older than 7 days (age from the dated name, not mtime). Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
+
+### Fixed
+
+- **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
+  wall-clock time (`performance.now` / `Date.now`), which includes time the process spent
+  descheduled; under load wall time inflated ~4–9x and correct code failed its own linear-time
+  bound. They now measure CPU time (`process.cpuUsage()` user + system, best of three) through
+  `tests/timing.ts`, keeping every original budget. CPU time ignores host load, but a quadratic
+  or catastrophically backtracking rule still blows the budget because its work explodes; a
+  self-test in `tests/firewall-gate-smoke.ts` proves that with `/^(a+)+$/`.
+  `tests/timing-load-check.ts` runs every changed smoke five times under full CPU load. Converted:
+  `firewall-gate-smoke`, `redaction-corpus-smoke`, `workflow-redaction-smoke`, `save-smoke`,
+  `tool-firewall-smoke`, `workflow-plan-smoke`, `skill-routing-smoke` and `compress-smoke`.
+  Under the same load the load-check surfaced the same defect in the skill-router's `re:` trigger
+  guard: `node:vm`'s 50 ms timeout is wall clock, so a busy host switched off triggers that used
+  almost no CPU and made `skill-routing-smoke` fail. The guard in
+  `packages/extensions/src/skill-router/match.ts` now decides on the same 50 ms CPU-time budget
+  (with a wall-clock cap only to interrupt a runaway match, and one retry for a descheduled fast
+  regex), so host load is ignored while catastrophic backtracking is still stopped.
 
 ## [0.3.0-beta.2]
 

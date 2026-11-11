@@ -29,6 +29,7 @@ import path from "node:path";
 import workerThreads from "node:worker_threads";
 import { ROOT, fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, textOf, tmpWorkspace, type FakePiApi } from "../packages/core/eval/harness.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
+import { assertCpuWithin } from "./timing.ts";
 import type * as AgentsModule from "../packages/extensions/third_party/subagent/agents.ts";
 import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
 import type * as PanelModule from "../packages/extensions/third_party/subagent/wf-panel.ts";
@@ -1233,9 +1234,9 @@ await check("malformed template whitespace is linear, and a literal {{}} is left
   assert.ok(compiled.ok);
   const state = workflowMod.newRunState(compiled.workflow, {});
   const render = (text: string): string => workflowMod.renderTemplate(text, { inputs: {}, state, runDir: ws, loop: 0 });
-  const start = Date.now();
-  render(`{{${" ".repeat(8000)}x`);
-  assert.ok(Date.now() - start < 300, "unclosed whitespace templates are linear");
+  assertCpuWithin("unclosed whitespace templates are linear", 300, () => {
+    render(`{{${" ".repeat(8000)}x`);
+  });
   assert.equal(render("<T>{{}}</T>"), "<T>{{}}</T>");
 });
 
@@ -1266,16 +1267,17 @@ await check("a FIFO in place of a run file refuses at once: {{file:}}, state.jso
 });
 
 await check("a member's output replaced by a FIFO or a link fails the group; it neither hangs nor pulls a file in", async () => {
-  const outside = path.join(ws, "outside-secret.md");
-  fs.writeFileSync(outside, "outside contents");
-  for (const plant of [fifo, (file: string): void => { fs.rmSync(file, { force: true }); fs.symlinkSync(outside, file); }]) {
+  for (const plant of [fifo, (file: string): void => { const outside = path.join(ws, "outside-secret.md"); fs.writeFileSync(outside, "outside contents"); fs.rmSync(file, { force: true }); fs.symlinkSync(outside, file); }]) {
     await session();
-    useFake((s) => {
-      if (s.task !== "slow") return { text: "quick" };
-      setTimeout(() => plant(path.join(lastDir(liveRun()), "steps", "m1.md")), 40);
-      return { text: "slow", delayMs: 120 };
-    });
-    const r = await call({ steps: [{ id: "g", parallel: [{ id: "m1", agent: "planner", task: "quick" }, { id: "m2", agent: "planner", task: "slow" }] }] });
+    useFake((s) => (s.task === "slow" ? { text: "slow", delayMs: 2000 } : { text: "quick" }));
+    const pending = call({ steps: [{ id: "g", parallel: [{ id: "m1", agent: "planner", task: "quick" }, { id: "m2", agent: "planner", task: "slow" }] }] });
+    // Replace the quick member's output while the group is still running. Wait for the file to
+    // exist rather than firing a timer: a fixed 40 ms timer could run after the run's own cleanup
+    // on a loaded host, so both the run directory and the file it planted were already gone
+    // (ENOENT on symlinkSync), and the smoke failed although the code was right.
+    await until("member m1 wrote its output", () => fs.existsSync(path.join(lastDir(liveRun()), "steps", "m1.md")));
+    plant(path.join(lastDir(liveRun()), "steps", "m1.md"));
+    const r = await pending;
     assert.equal(statusIn(textOf(r)), "failed", textOf(r));
     assert.match(textOf(r), /group g: run file/);
     assert.equal(fs.existsSync(path.join(lastDir(runIdIn(textOf(r))), "steps", "g.md")), false);
@@ -1283,10 +1285,10 @@ await check("a member's output replaced by a FIFO or a link fails the group; it 
 });
 
 await check("large plans are bounded before per-step reference analysis", () => {
-  const started = Date.now();
-  const c = plan.compilePlan(Array.from({ length: 4000 }, (_, i) => ({ id: `s${i}`, task: "t" })), roles);
-  assert.equal(c.ok, false);
-  assert.ok(Date.now() - started < 150, "refuse before building quadratic reference sets");
+  assertCpuWithin("refuse before building quadratic reference sets", 150, () => {
+    const c = plan.compilePlan(Array.from({ length: 4000 }, (_, i) => ({ id: `s${i}`, task: "t" })), roles);
+    assert.equal(c.ok, false);
+  });
 });
 
 await check("required references to conditional outputs are refused before a launch", () => {

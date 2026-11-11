@@ -46,7 +46,7 @@ Run it from the clone root: the installer path is relative to the current direct
 | Flag | Meaning |
 |---|---|
 | `--profile <name>` | One of the profiles in [Profiles](profiles.md). |
-| `--channel latest\|next\|X.Y.Z` | Which release line to register (below). Implies git delivery. |
+| `--channel latest\|next\|trunk\|X.Y.Z` | Which release line to register (below). Implies git delivery. |
 | `--git-ref <ref>` | Register an arbitrary branch, tag or commit (git delivery only). |
 | `--mode local\|git\|npm` | `local` registers this checkout in place; `git` and `npm` register a released kit. |
 | `--scope global\|project` | Global settings (default) or `.pi/settings.json` in the current repository. |
@@ -76,6 +76,7 @@ than those files hold, the installer prints a `WARN` naming the global file and 
 |---|---|---|
 | `latest` (default) | `node packages/core/install.ts --channel latest --profile balanced` | The newest release tag (betas count until the first stable release exists) |
 | `next` | `node packages/core/install.ts --channel next --profile balanced` | Every commit on `main` |
+| `trunk` (canary) | `node packages/core/install.ts --channel trunk --profile balanced` | The head of the kit's integration branch (`packages/core/distribution.json` `git.trunkBranch`, `integration/luna`), dogfoodable before it reaches `main`. Opt-in; never selected by default |
 | pinned | `node packages/core/install.ts --channel <version> --profile balanced` | Exactly that release (tag `v<version>`) |
 
 `latest` needs at least one `vX.Y.Z` tag on the repository. Until the first release is tagged the
@@ -106,7 +107,7 @@ Inside pi, `/profile` switches profile in place and verifies the result. See [Pr
 | Mode | Command | When |
 | --- | --- | --- |
 | Release from pi | `pi install git:github.com/SATUNIX/luna@vX.Y.Z` | Normal use; the profile is applied on first start |
-| Release from the installer | `node packages/core/install.ts --channel <latest\|next\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
+| Release from the installer | `node packages/core/install.ts --channel <latest\|next\|trunk\|X.Y.Z> --profile <name>` | You want the profile chosen up front or a scripted install |
 | Local checkout (editable) | `node packages/core/install.ts --profile <name> --yes` | Developing Luna: pi loads the checkout in place, edit and `/reload` |
 | Project auto-install | Ship `.pi/settings.json` in a repository | pi auto-installs on first trusted start |
 | npm (not published yet) | `npx @satunix/pi-system --profile <name>` | Only once npm delivery is switched on ([Releasing](releasing.md#npm-publication-optional)) |
@@ -212,7 +213,7 @@ MEM0_API_URL=http://localhost:8000
 
 | Var | Extension | Default | Purpose |
 | --- | --- | --- | --- |
-| `PI_KIT_GUIDELINES_FILE` | guidelines | `GUIDELINES.md` | Path to guidelines file |
+| `PI_KIT_GUIDELINES_PATH` | guidelines | `GUIDELINES.md` | Path to guidelines file |
 | `PI_KIT_TODO_FILE` | todo | `TODO.md` | Path to todo file |
 | `PI_KIT_PROTECTED_PATHS` | protected-paths | — | Semicolon-separated protected paths (denylist) |
 | `PI_KIT_WRITE_ALLOWLIST` | protected-paths | — | Semicolon-separated allowlist; blocks writes outside it (dream/print mode) |
@@ -221,6 +222,7 @@ MEM0_API_URL=http://localhost:8000
 | `PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS` | tool-firewall | `900000` | How long an approval card waits before the call is refused as uncertain |
 | `PI_KIT_EFFORT_CONFIG` | effort | `<agent dir>/pi-kit/effort.json` | Saved effort default and limit overrides ([Effort](effort.md)) |
 | `PI_KIT_AUTO_PROFILE` | session-helpers | `balanced` | Profile applied on the first interactive start; `0` disables |
+| `PI_KIT_LEAN_CTX` | session-helpers | — | Set to `0` to disable the lean-ctx preflight warning |
 | `PI_KIT_UPDATE_CHECK` | kit-update | on | `0` turns the background update check off ([Updates](updates.md#settings)) |
 | `PI_KIT_MEMORY_DIR` | memory-local | `~/.pi/agent/memory-local` | Memory store directory |
 | `PI_KIT_COMPACT_THRESHOLD_TOKENS` | trigger-compact | `100000` | Token count that triggers auto-compaction; locks out `/compact-threshold` when set. Without it, `/compact-threshold <amount>` (e.g. `500k`) persists to `~/.pi/agent/pi-kit/trigger-compact.json` |
@@ -229,6 +231,7 @@ MEM0_API_URL=http://localhost:8000
 | `PI_KIT_VERIFY_REVIEW` | verify-gate | on | `0` turns off the independent completion reviewer in `/verify` and `verify_completion` |
 | `PI_KIT_VERIFY_REVIEW_MODEL` | verify-gate | current model | Reviewer model as `provider/id` |
 | `PI_KIT_VERIFY_REVIEW_TIMEOUT_MS` | verify-gate | `900000` | Reviewer timeout |
+| `PI_KIT_VERIFY_PENDING_TTL_MS` | verify-gate | `1800000` | How long a "verification pending" marker stays valid, in ms; an older marker is treated as absent |
 | `MEM0_API_URL` | memory-mem0 | — | mem0 REST service URL |
 | `MEM0_API_KEY` | memory-mem0 | — | mem0 API key (if auth enabled) |
 | `MEM0_USER_ID` | memory-mem0 | `pi-agent` | mem0 user/agent ID |

@@ -1,6 +1,8 @@
 # Proposal — flag a journal entry with no cycle report
 
-Status: open. Stream: autonomy. Board: none. Raised by cycle `luna-ops-01/02` (A-01).
+Status: closed by cycle `luna-ops-01/03` (A-01), commit `378744c`, decision
+`autonomy/decisions/luna-ops-01-03-team-journal.md`. Stream: autonomy. Board: none. Raised by cycle
+`luna-ops-01/02` (A-01).
 
 ## What
 

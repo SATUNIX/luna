@@ -26,9 +26,9 @@ it.
 ## Delegation and recovery
 
 - **A child that fills its context window** is now told why (compaction off, a failed recovery,
-  clamped output) and is not retried in a loop, but `subagent`'s failure hints do not yet mention
-  overflow or compaction outcomes, so the parent sees the child's own message rather than a
-  kit-authored hint.
+  clamped output) and is not retried in a loop. `subagent` adds a kit-authored hint only to a
+  child that ended with no message at all (`tests/subagent-nesting-smoke.ts`); one that fills its
+  window after replying still shows the child's own message, with no overflow or compaction hint.
 - **`trigger-compact`'s mid-run resume** sends a visible user message and has been tested only
   with fakes. It never runs inside child sessions.
 - **Recovery itself starts only on a progress-guard escalation or a bare `/boost`.** A repeat

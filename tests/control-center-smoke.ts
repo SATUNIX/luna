@@ -306,7 +306,7 @@ tests.push([
       controls: [],
     });
     const main = modelMod.pageRows(model, "main");
-    assert.equal(main.length, 11, "the main page has the levels, the Security level fallback and five page rows");
+    assert.equal(main.length, 11, "the main page has the levels, the Security level fallback and six page rows");
     assert.equal(modelMod.parentPage(model, "delegation"), "work");
     const approvals = modelMod.findRow(model, "approvals");
     assert.equal(approvals?.value, "auto/coding");
@@ -321,18 +321,19 @@ tests.push([
 ]);
 
 tests.push([
-  "the Settings page holds the five settings rows and opens the Display page",
+  "the Settings page holds five setting item rows plus the Display page link",
   async () => {
     const modelMod = await loadModelModule();
     const model = await modelFor([]);
     assert.ok(modelMod.PAGES.some((page) => page.id === "settings" && page.parent === "main"), "a Settings page under main");
     const settings = modelMod.pageRows(model, "settings");
+    assert.equal(settings.length, 6, "five setting item rows plus the Display page link");
     assert.deepEqual(
       settings.map((row) => row.id),
       ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "settings.display"],
       "the Settings page rows",
     );
-    assert.equal(settings.filter((row) => row.kind !== "page").length, 5, "the five settings rows");
+    assert.equal(settings.filter((row) => row.kind !== "page").length, 5, "the five setting item rows");
     assert.equal(modelMod.findRow(model, "settings.pi")?.prefill, "/settings ");
     assert.equal(settings.find((row) => row.id === "settings.display")?.targetPage, "display");
   },

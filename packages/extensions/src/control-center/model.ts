@@ -117,7 +117,7 @@ function profileRow(name: string, title: string): RowDef {
 }
 
 export const ROWS: RowDef[] = [
-  // --- main: the levels, then the five pages ---
+  // --- main: the levels, then the six pages ---
   { id: "profile", label: "Profile", page: "main", kind: "page", targetPage: "profiles", valueKey: "profile", legacy: "/profile" },
   { id: "effort", label: "Effort", page: "main", kind: "action", valueKey: "effort", legacy: "/effort" },
   { id: "thinking", label: "Thinking", page: "main", kind: "value", special: "thinking", values: THINKING_VALUES, valueKey: "thinking", description: "This session only" },

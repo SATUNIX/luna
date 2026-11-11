@@ -52,7 +52,8 @@ flowchart TD
   M --> C[Connect]
   M --> Y[System]
   M --> G[Settings]
-  Y --> D[Doctor]
+  Y --> U[Updates & health]
+  U --> D[Doctor]
   Y --> L[All commands]
 ```
 

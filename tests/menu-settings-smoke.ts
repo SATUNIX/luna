@@ -131,8 +131,15 @@ tests.push([
     assert.ok(pi, "the pi-settings row exists");
     assert.equal(pi.prefill, "/settings ");
     assert.equal(modelMod.parentPage(model, "settings"), "main");
-    const settings = modelMod.pageRows(model, "settings").filter((row) => row.kind !== "page");
-    assert.equal(settings.length, 5, "five settings rows on the page");
+    const page = modelMod.pageRows(model, "settings");
+    assert.equal(page.length, 6, "five setting item rows plus the Display page link");
+    assert.deepEqual(
+      page.map((row) => row.id),
+      ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "settings.display"],
+      "the Settings page rows",
+    );
+    assert.equal(page.filter((row) => row.kind !== "page").length, 5, "the five setting item rows");
+    assert.equal(page.find((row) => row.id === "settings.display")?.kind, "page", "Display is the explicit page link");
   },
 ]);
 

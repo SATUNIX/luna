@@ -14,14 +14,22 @@ caller output is the evidence base for the inventory in section 2. The handler a
 outputs are the evidence for section 1. `git show --stat 3c4c571` is the evidence for section 3.
 
 ```
-$ git grep -n '/workflows\?\b' -- '*.ts' '*.md' '*.json' | wc -l
+$ git grep -n '/workflows\?\b' -- '*.ts' '*.md' '*.json' ':(exclude)autonomy/proposals/V-04-unify-workflows.md' | wc -l
 629
-$ git grep -n '/workflow' -- docs packages THIRD_PARTY_NOTICES.md | wc -l
+$ git grep -n '/workflow' -- docs packages THIRD_PARTY_NOTICES.md ':(exclude)autonomy/proposals/V-04-unify-workflows.md' | wc -l
 352
 ```
 
+Both counts exclude this proposal file itself, so they stay reproducible once the file is tracked.
+The filtered command below keeps only slash-command references; its `grep -E` drops filesystem
+paths such as `.github/workflows/`, `.pi/workflows/`, `packages/kit/workflows/...` and
+`tests/workflow-*.ts` because a `/` or `-` follows the name. It prints the 195 candidate command
+lines the inventory in section 2 is built from. A few escaped path fragments in test regexes
+(`tests/release-workflow-smoke.ts`, `tests/typescript-coverage-smoke.ts`) survive the filter; they
+are path assertions, not command callers.
+
 ```
-$ git grep -n '/workflows\?\b' -- '*.ts' '*.md' '*.json' | grep -E '(^|[^A-Za-z0-9_.-])/workflows?([^A-Za-z0-9_/-]|$)' | grep -vE 'github/workflows|\.pi/workflows|packages/kit/workflows/|tests/workflow|workflow-(smoke|policy|sandbox|hooks|resume|worktree|control|builtin|plan|strategy|ledger)'
+$ git grep -n '/workflows\?\b' -- '*.ts' '*.md' '*.json' ':(exclude)autonomy/proposals/V-04-unify-workflows.md' | grep -E '(^|[^A-Za-z0-9_.-])/workflows?([^A-Za-z0-9_/-]|$)'
 CHANGELOG.md:48:  and `/recover` are removed: use `workflow_status`, `workflow_control`, `/workflows` and a bare
 CHANGELOG.md:56:  Bare `/workflows` now lists runs instead of opening the panel; the panel is `/workflows panel [id]`,
 CHANGELOG.md:57:  and `/workflows <run-id>` is now `/workflows status <id>`. `/workflow` is an alias of the same
@@ -34,11 +42,13 @@ CHANGELOG.md:1182:- **The overlay tests pass on pi older than 1.3.0.** The contr
 CHANGELOG.md:1294:- **The /workflows panel for script runs.** A nested `workflow()` shows as a `▸ <name>` group in
 CHANGELOG.md:1305:- **The /workflows panel.** `/workflows [run-id]` shows this session's workflow runs, modelled on
 CHANGELOG.md:1335:  by the new `workflow_control {runId, action}` tool and `/workflow pause|resume|skip|stop`.
+CHANGELOG.md:1341:  (`<agent dir>/workflows`) and project (`.pi/workflows`) directories are now listed by
 CHANGELOG.md:1342:  `workflow_run list` and `/workflow list`, read from a literal-only `export const meta = {...}`
 CHANGELOG.md:1522:  `/workflow resume <id>`); the agent's `workflow_control` resume is refused with a message saying
 THIRD_PARTY_NOTICES.md:358:    frontmatter gains `effort` and `scout`; `/workflow` launches are kind "user". The
 THIRD_PARTY_NOTICES.md:374:    `workflow_control {runId, action}` tool, `/workflow pause|skip`, routes `/workflow stop` and a
 THIRD_PARTY_NOTICES.md:375:    live `/workflow resume` through it, and asks a No-first select before a resume re-runs an
+THIRD_PARTY_NOTICES.md:466:    `registerWorkflowTools`' `spawnChild` seam reaches `/workflow` (`tests/workflow-plan-smoke.ts`).
 autonomy/cycles/luna-ops-01/02/report.md:33:  re-register it — `a69f0ef` removed it and the panel is `/workflows`) and added
 autonomy/cycles/luna-ops-01/04/plan.md:16:## Item B (V-41 [P2]): inventory `/workflow` and `/workflows`
 autonomy/cycles/luna-ops-01/04/plan.md:26:  - every remaining `/workflow` or `/workflows` caller with an action for each: **change**, **keep**
@@ -56,12 +66,14 @@ docs/architecture/subagents-and-orchestration.md:244:| `/workflow run` and `/wor
 docs/architecture/subagents-and-orchestration.md:368:runs with `workflow_control` or `/workflows stop`, and `session_shutdown` stops all live children. Every
 docs/architecture/subagents-and-orchestration.md:409:    Running --> Stopped: workflow_control, /workflows stop or session_shutdown
 docs/architecture/workflows-and-skills.md:5:Each step is a subagent launch like any other, so it goes through the delegation launch contract: `delegation-guard` decides which extensions the step's child loads and reserves a slot in the shared effort ledger. A `/workflow` command is launch kind `user`, because you typed it, and is bounded only by the platform ceilings. The `workflow_run` tool is launch kind `workflow`: it opens a run scope, is charged its worst case against the tier's plan allowance before anything starts, and is hidden at E1. `/workflow run` is not tier-limited. See [Subagents, orchestration and the task graph](subagents-and-orchestration.md) for the contract and [Effort](../effort.md) for the limits.
+docs/architecture/workflows-and-skills.md:11:`discoverWorkflows` scans `*.md` (excluding `readme.md`) in `PI_KIT_WORKFLOWS_DIR` or the shipped kit directory, then the agent's `workflows` directory, then `<cwd>/.pi/workflows`, and a later source overrides an earlier one of the same name. Only project-sourced workflows are untrusted: they need an exact SHA-256 digest grant (listed in `PI_KIT_TRUSTED_WORKFLOWS`, or stored in `<agent dir>/pi-kit/trusted-workflows.json` by an earlier "Trust this digest") or the operator's answer to a No-first select ("No, don't run it" / "Run once" / "Trust this digest"), and the same check applies to a resumed run. A headless session has no select, so it is refused without a grant (`tests/workflow-smoke.ts`). `PI_KIT_INTERNAL_CHILD=1` means the workflow tools and the `/workflow` command are not registered inside a child at all. A step's role is resolved from the kit and user role directories only, so a project role cannot be used by a workflow.
 docs/architecture/workflows-and-skills.md:22:    OVER --> RUN["workflow_run tool and /workflow command"]
 docs/architecture/workflows-and-skills.md:40:    START["workflow_run or /workflow"] --> LOAD["discoverWorkflows, trust check, resolveInputs"]
 docs/architecture/workflows-and-skills.md:76:The shipped `feature` workflow has four steps (`scout`, `plan`, `implement`, `review`) with the gate on `review`: the last non-blank line of its reply must be `VERDICT: PASS` (case is ignored), or the cursor goes back to `implement` with the review as feedback, at most twice. Invoked as a slash command, `/workflow` runs in the background as launch kind `user` and posts its summary into the session with `sendMessage` using `deliverAs: "followUp"`, while the `workflow_run` tool is launch kind `workflow`, charged its worst case against the tier's plan allowance before the first launch, and returns the summary plus the run directory. Aborting (Esc) cancels the active child and leaves the run `interrupted`, which can be resumed with `workflow_run {resume: id}` or `/workflow resume <id>`.
 docs/architecture/workflows-and-skills.md:82:    participant T as workflow_run or /workflow
 docs/architecture/workflows-and-skills.md:92:        U->>T: /workflow run feature goal=...
 docs/architecture/workflows-and-skills.md:197:- `packages/extensions/third_party/subagent/workflow-tools.ts`: `workflow_run`, `workflow_status`, `workflow_control`, the `/workflow` command, the project-workflow trust prompt, the resume prompt for interrupted writer steps and the launch kind (`user` for the command).
+docs/architecture/workflows-and-skills.md:199:- `packages/extensions/third_party/subagent/wf-panel.ts`: the `/workflows` panel (overlay in the TUI, text elsewhere) and its narrator, checked by `tests/workflow-panel-smoke.ts`.
 docs/control-center.md:25:`/workflow` follows, so a subagent never advertises a terminal hub.
 docs/control-center.md:37:| Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
 docs/effort.md:115:| **User-directed** (`/workflow` and similar commands you run) | the platform ceilings only | You asked for it. |
@@ -116,6 +128,7 @@ packages/extensions/src/human-console/index.ts:339:        // paused, the same a
 packages/extensions/third_party/subagent/SOURCE.md:114:    frontmatter gains `effort` and `scout`; `/workflow` launches are kind "user". The
 packages/extensions/third_party/subagent/SOURCE.md:130:    `workflow_control {runId, action}` tool, `/workflow pause|skip`, routes `/workflow stop` and a
 packages/extensions/third_party/subagent/SOURCE.md:131:    live `/workflow resume` through it, and asks a No-first select before a resume re-runs an
+packages/extensions/third_party/subagent/SOURCE.md:222:    `registerWorkflowTools`' `spawnChild` seam reaches `/workflow` (`tests/workflow-plan-smoke.ts`).
 packages/extensions/third_party/subagent/control.ts:15: * resume (the `/workflow resume` command, the /workflows panel or the console's own Yes) clears
 packages/extensions/third_party/subagent/control.ts:19: * state.json and the run model). The `workflow_control` tool, the `/workflow` command and a
 packages/extensions/third_party/subagent/control.ts:142:        if (this.heldFlag && origin !== "operator") return { ok: false, message: `Run ${id} was paused by the operator's safety stop (too many distinct approvals); only the operator can resume it, with /workflow resume ${id} or from the console.` };
@@ -164,6 +177,8 @@ tests/effort-standing-smoke.ts:205:    assert.match(noTool.last(), /workflow too
 tests/effort-standing-smoke.ts:219:    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the switch-on notice");
 tests/effort-standing-smoke.ts:221:    assert.doesNotMatch(s.last(), /workflow tool is not available/, "the status line");
 tests/firewall-overlay-queue-smoke.ts:879:      for (const command of ["/kit", "/workflows panel"]) {
+tests/release-workflow-smoke.ts:106:    assert.match(jobs.get("gate") ?? "", /uses:\s*\.\/\.github\/workflows\/ci\.yml/, "the gate is the same CI workflow every pull request runs, by local path (the same commit)");
+tests/release-workflow-smoke.ts:108:    assert.match(jobs.get("security") ?? "", /uses:\s*\.\/\.github\/workflows\/security\.yml/, "the security workflow of the same commit is a gate too");
 tests/run-query-smoke.ts:11://   4. /workflows lists past runs; /workflow is an alias.
 tests/run-query-smoke.ts:13://      recorded orphans; /workflows stop does the same.
 tests/run-query-smoke.ts:268:// 4. /workflows lists past runs, and /workflow is an alias.
@@ -185,6 +200,31 @@ tests/subagent-observability-smoke.ts:140:  assert.match(summary, new RegExp(run
 tests/subagent-observability-smoke.ts:141:  assert.match(summary, /scout/, "/workflows must name the run's agent");
 tests/subagent-roles-isolation-smoke.ts:313:    assert.ok(pi.commands.find("workflows"), "/workflows survives the trim");
 tests/typescript-coverage-smoke.ts:29:  [/^packages\/kit\/workflows\/[^/]+\.js$/, "script workflows: the workflow tool runs them as plain JavaScript in the QuickJS sandbox, which does not strip types"],
+tests/workflow-control-smoke.ts:15://   6. the workflow_control tool drives a live run through the same API; /workflow pause, skip,
+tests/workflow-control-smoke.ts:17://      and yields to /workflow resume.
+tests/workflow-control-smoke.ts:437:  // 6. The workflow_control tool and the /workflow command drive the same API.
+tests/workflow-control-smoke.ts:471:    assert.equal(h.control.paused, false, "/workflow resume unpauses a live run");
+tests/workflow-control-smoke.ts:473:    assert.equal(h.control.paused, true, "/workflow pause");
+tests/workflow-control-smoke.ts:479:    assert.match(textOf(refused), /paused by the operator's safety stop .*only the operator can resume it, with \/workflow resume/);
+tests/workflow-control-smoke.ts:482:    assert.equal(h.control.paused, false, "/workflow resume lifts a held pause");
+tests/workflow-control-smoke.ts:487:    assert.match(notes.at(-1) ?? "", /Skipping a/, "/workflow skip");
+tests/workflow-control-smoke.ts:494:    ok("workflow_control and /workflow pause|resume|skip|stop use the same control API; a safety-stop pause yields only to the operator");
+tests/workflow-hooks-smoke.ts:5://      the /workflows panel (wf-panel.ts) lists the script run with its phases and agents.
+tests/workflow-hooks-smoke.ts:664:    assert.match(panel, /Workflows \(1 run/, "the /workflows panel lists the script run");
+tests/workflow-hooks-smoke.ts:668:    ok("parallel() and pipeline() run agents with labels and phases; a failed agent is null; log() lines and telemetry are recorded; /workflows shows the run");
+tests/workflow-panel-smoke.ts:2:// Offline checks for the /workflows panel (wf-panel.ts, E5 slice G5).
+tests/workflow-panel-smoke.ts:19://      its timer. `/workflows panel [id]` is the command that opens it (workflow-tools.ts).
+tests/workflow-panel-smoke.ts:21://      extension registers /workflows and /workflow, and neither in a subagent child.
+tests/workflow-panel-smoke.ts:230:    assert.deepEqual(P.renderListLines([], P.plainPaint), ["Workflows (0 runs, 0 active)", "No workflow runs in this session. Start one with /workflow run <name>."]);
+tests/workflow-panel-smoke.ts:436:  // 8. Text outside the TUI; an overlay in the TUI (opened by `/workflows panel`).
+tests/workflow-panel-smoke.ts:500:    assert.ok(pi.commands.find("workflows"), "/workflows is registered");
+tests/workflow-panel-smoke.ts:501:    assert.ok(pi.commands.find("workflow"), "/workflow is registered as its alias");
+tests/workflow-panel-smoke.ts:510:    assert.equal(child.commands.find("workflows"), undefined, "a subagent child has no /workflows");
+tests/workflow-panel-smoke.ts:511:    assert.equal(child.commands.find("workflow"), undefined, "a subagent child has no /workflow alias");
+tests/workflow-panel-smoke.ts:515:    ok("supportsOverlay matches control-center; /workflows and its alias registered, and neither they nor the workflow tools reach a child");
+tests/workflow-plan-smoke.ts:869:/** `/workflow resume <id>` as an operator types it, to the summary it posts. */
+tests/workflow-registry-smoke.ts:4://   1. `.js` scripts are found in the kit, user (<agent dir>/workflows) and project (.pi/workflows)
+tests/workflow-telemetry-smoke.ts:120:    // "user" launches (a typed /workflow) are bounded by platform ceilings, not the effort tier's
 ```
 
 ```
@@ -472,7 +512,8 @@ workflow helpers and `bindWorkflowPanelOpener`, not the command implementation.
 
 ## 2. Remaining `/workflow` and `/workflows` callers
 
-This table is built from the filtered grep output in the evidence section. **keep (alias)** means the
+This table is built by reading every hit in the evidence section — the filtered 195-line view and
+the raw 629-line list behind it — and classifying each line individually. **keep (alias)** means the
 singular `/workflow` is intentionally the working alias (or a legacy/trigger/history reference) and
 is correct as written. **keep (canonical)** means the plural `/workflows` is already the surface.
 **change** means the text uses the singular as the primary command name and should say `/workflows`
@@ -488,14 +529,13 @@ in the follow-up doc sweep. **regenerate** means the file is generated; do not h
 | `docs/agent-orchestration.md:137` | plural `/workflows` | **keep (canonical)** | already the surface |
 | `docs/architecture/subagents-and-orchestration.md:244` | singular `/workflow run` and `/workflow resume` | **change** to `/workflows ...` | architecture table's launch-kind row |
 | `docs/architecture/subagents-and-orchestration.md:85,368,409` | plural `/workflows ...` | **keep (canonical)** | already the surface |
-| `docs/architecture/workflows-and-skills.md:5,22,40,76,82,92,197` | singular `/workflow ...` | **change** to `/workflows ...` | architecture prose and diagrams; canonical surface |
+| `docs/architecture/workflows-and-skills.md:5,11,22,40,76,82,92,197` | singular `/workflow ...` | **change** to `/workflows ...` | architecture prose and diagrams; canonical surface. `:11` states the internal-child rule (`PI_KIT_INTERNAL_CHILD=1` means the `/workflow` command is not registered), the same rule as `control-center/index.ts:12`. |
 | `docs/architecture/workflows-and-skills.md:199` | plural `/workflows` | **keep (canonical)** | already the surface |
 | `docs/control-center.md:25` | singular `/workflow` | **change** to `/workflows` | control-centre rule prose; canonical surface |
 | `docs/control-center.md:37` | plural `/workflows` | **keep (canonical)** | already the surface |
 | `docs/effort.md:115,152,203` | singular `/workflow` and `/workflow run` | **change** to `/workflows ...` | effort prose; canonical surface |
 | `docs/structured-output.md:9` | singular `/workflow` | **change** to `/workflows` | structured-output prose; canonical surface |
 | `docs/reference.md:67-68` | alias row `:67`, canonical row `:68` | **keep; regenerate** | generated by `packages/core/reference.ts`; `npm run catalog` regenerates it. No hand edit. |
-| `docs/EXTENSIONS.md:58` | generated summary naming workflows | **keep; regenerate** | generated by `npm run catalog` (`packages/core/registry.ts --write-docs`). No hand edit. |
 | `CHANGELOG.md:48,56-58,114,132,382,426,440,1182,1294,1305,1335,1342,1522` | singular and plural command references | **keep (history)** | changelog entries describe past releases; do not rewrite history. `:56-58` records the 3c4c571 change itself. |
 | `THIRD_PARTY_NOTICES.md:358,374-375,466` | singular `/workflow ...` | **regenerate** | generated from `packages/extensions/third_party/subagent/SOURCE.md` by `node packages/core/gen-notices.ts`, not by `npm run catalog`. Change SOURCE.md first, then regenerate. |
 | `packages/extensions/third_party/subagent/SOURCE.md:114,130-131,222` | singular `/workflow ...` | **change** to `/workflows ...` | source of the generated third-party notices; then regenerate notices |
@@ -525,13 +565,13 @@ in the follow-up doc sweep. **regenerate** means the file is generated; do not h
 | `packages/kit/skills/workflow-authoring/references/scripts.md:28` | singular `shown in /workflow list` | **change** to `/workflows list` | authoring reference prose; canonical surface |
 | `packages/kit/workflows/feature.md:68` | singular `/workflow run feature ...` | **change** to `/workflows run feature ...` | shipped workflow example; canonical surface |
 | `tests/*` (e.g. `tests/run-query-smoke.ts:268-291`, `tests/docs-smoke.ts:423,435`) | singular and plural | **keep** | tests pin the alias and the canonical surface; changing them would weaken the pin |
-| `autonomy/cycles/luna-ops-01/04/{plan,review}.md` | the task record | **keep** | record of this inventory; not a caller to sweep |
+| `autonomy/cycles/luna-ops-01/04/{plan,review}.md`, `autonomy/cycles/luna-ops-01/02/report.md:33` | the task record | **keep** | records of this inventory; not callers to sweep |
 
 The table deliberately does not list filesystem paths such as `.github/workflows/`,
-`.pi/workflows/`, `packages/kit/workflows/`, `docs/workflows.md` as a document name, or test names
-like `workflow-smoke`; those are not slash-command callers. The raw first grep (629 lines) includes
-them; the filtered command in the evidence section removes them and keeps the 162 command callers
-shown above.
+`.pi/workflows/`, `packages/kit/workflows/` (`docs/EXTENSIONS.md:58` names one), `docs/workflows.md`
+as a document name, or test names like `workflow-smoke`; those are not slash-command callers. The
+raw first grep (629 lines) includes them; the filtered command in the evidence section prints the
+195 candidate command lines the table is checked against.
 
 ## 3. Superseded design — do not re-propose or re-implement
 

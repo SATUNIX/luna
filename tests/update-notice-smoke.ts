@@ -256,13 +256,15 @@ const tests: Record<string, () => void | Promise<void>> = {
     try {
       const pi = fakePi();
       kitUpdate(pi.api);
-      // A built-in pi notice may already be in the capture; the filter below must ignore it.
+      // A built-in pi notice may already be in the capture; it is ignored by identity, so a
+      // kit-generated summary with the same wording would still fail the assertion below.
       const builtIn = { m: "Updates available: pi 1.3.0 → 1.4.0. Run /update.", l: "info" };
+      assert.match(builtIn.m, PI_BUILTIN_UPDATE_NOTICE, "the fixture really is a pi built-in notice");
       const notes: Note[] = [builtIn];
       const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {} } };
       await pi.handlers.get("session_start")({}, ctx);
-      await waitFor(() => notes.some((n) => n.m.startsWith("trunk is")));
-      const kitNotes = notes.filter((n) => !PI_BUILTIN_UPDATE_NOTICE.test(n.m));
+      await waitFor(() => notes.some((n) => n !== builtIn && n.m.startsWith("trunk is")));
+      const kitNotes = notes.filter((n) => n !== builtIn);
       assert.deepEqual(kitNotes, [{ m: "trunk is 3 commits ahead — /update channel next", l: "info" }]);
       assert.ok(notes.includes(builtIn), "the built-in pi notice is left alone, not removed by the filter");
       assert.equal(

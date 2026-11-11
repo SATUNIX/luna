@@ -272,7 +272,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget(TODO_WIDGET, undefined);
       return;
     }
-    ctx.ui.setWidget(TODO_WIDGET, renderTodoWidget(cache.todos, theme));
+    ctx.ui.setWidget(TODO_WIDGET, renderTodoWidget(cache.todos, theme, 8, settings.ascii));
   }
 
   function availableTips(): Tip[] {

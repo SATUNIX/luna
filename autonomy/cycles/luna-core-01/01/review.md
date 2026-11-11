@@ -38,15 +38,17 @@ efficacy, token efficiency, defects (V-10, V-11, V-07, V-08).
 ## Items selected
 
 ### Item 1 (defect, agent efficacy — eval harness false green)
-`packages/core/eval/run.ts:24` reads the category filter as
-`args[args.indexOf("--category") + 1] ?? null`, so:
-- `node packages/core/eval/run.ts --category` (no value) → filter `null` → runs ALL fixtures;
-- `--category securty` (typo) → selects zero fixtures; `run.ts:72` exits
-  `failed > 0 ? 1 : 0` → **0** — the measurement flywheel reports success while running nothing.
-A silent green from the regression gate is a real agent-efficacy defect: a bad invocation is
-indistinguishable from a passing suite.
-Fix: validate the value against the categories present in `fixtures`; on missing/unknown category
-or a valid category that selects zero fixtures, print usage to stderr and exit non-zero.
+`packages/core/eval/run.ts:24` read the category filter as
+`args[args.indexOf("--category") + 1] ?? null`:
+- `node packages/core/eval/run.ts --category` (no value) → `?? null` → filter `null` → runs ALL 17
+  fixtures and exits **0**. This is the false green: a malformed invocation is indistinguishable
+  from a full pass. Independently reproduced by the reviewer against `dc71c739409e`.
+- `--category securty` (typo) already selected zero fixtures and exited **1** (the pre-change file
+  had a zero-fixture guard printing "no fixtures ran — check --category filter"), but with no
+  indication that the category name itself was unknown.
+Fix: validate the value against the categories present in `fixtures`; on missing value, unknown
+category, or an empty selection, print a usage line to stderr and exit 2 (the unknown-category
+message is new; the missing-value false green is removed).
 
 ### Item 2 (discoverability — user-facing env var absent from the reference)
 `packages/extensions/src/context-sieve/index.ts:298` reads

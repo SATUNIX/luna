@@ -79,7 +79,7 @@ function contentLines(opts: LaunchLineOptions): string[] {
   }
   const art = opts.ascii ? ASCII_ART : BLOCK_ART;
   const actions = [
-    `${opts.menuCmd}   control centre`,
+    `${opts.menuCmd}   command menu`,
     `${opts.hubKey}   control centre`,
     "/profile   switch profile",
     "/model   choose model",

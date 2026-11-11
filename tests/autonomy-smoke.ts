@@ -12,7 +12,8 @@ import { resolveConfig } from "../packages/autonomy/lib/config.ts";
 import { evaluate, runStop, reportOutcome, nothingFoundInARow } from "../packages/autonomy/lib/triggers.ts";
 import { itemShas, uncoveredCommits } from "../packages/autonomy/lib/ledger.ts";
 import { type ManagerBundle, type ManagerDecision, parseDecision, buildBundle, DECISIONS } from "../packages/autonomy/lib/manager.ts";
-import { uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HARNESS_COMMANDS } from "../packages/autonomy/lib/rpc.ts";
+import { uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
+import { registeredCommands } from "../packages/core/eval/footprint.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseReview, reviewCycle, buildReviewBundle } from "../packages/autonomy/lib/review.ts";
@@ -638,9 +639,47 @@ await check("models: OpenRouter specs become pi model entries pointed at the rel
 await check("harness check: a bare pi (kit not loaded) is detected from get_commands", () => {
   const full = { type: "response", id: "harness-check", data: { commands: [...HARNESS_COMMANDS, "lens-health", "skill:x"].map((name) => ({ name })) } };
   assert.deepEqual(missingHarness(full), []);
+  assert.ok(!HARNESS_COMMANDS.includes("subagents"), "the removed /subagents command is not required");
   const bare = { type: "response", id: "harness-check", data: { commands: [{ name: "lens-health" }, { name: "lens-tools" }] } };
   assert.deepEqual(missingHarness(bare), HARNESS_COMMANDS);
   assert.deepEqual(missingHarness({ success: false }), HARNESS_COMMANDS, "an error response fails closed");
+});
+
+await check("harness check: every required command is registered by the long-horizon worker profile", async () => {
+  const names = await registeredCommands("long-horizon");
+  for (const c of HARNESS_COMMANDS) assert.ok(names.includes(c), `the worker profile registers /${c} (registered: ${names.join(", ")})`);
+  assert.ok(!names.includes("subagents"), "re-adding /subagents would break the subset check");
+});
+
+await check("harness check: HarnessCheck is per-session, fails closed on missing commands and times out", () => {
+  const full = { type: "response", id: "harness-check", data: { commands: [...HARNESS_COMMANDS, "lens-health"].map((name) => ({ name })) } };
+  const check = new HarnessCheck();
+  assert.equal(check.verified, false, "pending is not verified");
+  assert.equal(check.failure, null, "pending has no failure");
+  assert.equal(check.settle(full), true);
+  assert.equal(check.verified, true);
+  assert.equal(check.failure, null);
+  // A bare reply records every missing command.
+  const bare = { type: "response", id: "harness-check", data: { commands: [{ name: "lens-health" }] } };
+  check.reset();
+  assert.equal(check.settle(bare), false);
+  assert.equal(check.verified, false);
+  const failure = check.failure ?? "";
+  assert.match(failure, /the kit harness did not load/);
+  for (const c of HARNESS_COMMANDS) assert.ok(failure.includes(c), `the failure names the missing /${c}: ${failure}`);
+  // A fresh check that never settles fails closed on expiry, and expiry is a no-op afterwards.
+  check.reset();
+  check.expire();
+  assert.equal(check.verified, false);
+  assert.match(check.failure ?? "", new RegExp(String(HARNESS_CHECK_TIMEOUT_MS)));
+  const timedOut = check.failure;
+  check.expire();
+  assert.equal(check.failure, timedOut, "expire after a failure is a no-op");
+  // A per-session reset clears the failure: the next full reply verifies again.
+  check.reset();
+  assert.equal(check.failure, null);
+  assert.equal(check.settle(full), true);
+  assert.equal(check.verified, true);
 });
 
 // --- the cycle loop against a fake runtime ---------------------------------------------------

@@ -206,12 +206,17 @@ export function isGuardEscalation(ev: RpcFrame): boolean {
 }
 
 /**
- * Commands the long-horizon harness must have registered. If the kit fails to load (a bad
- * package path, a broken extension) pi still starts, bare; the supervisor checks this list
- * against `get_commands` at the start of every session and stops the run rather than cycle
- * without the harness.
+ * Commands the long-horizon harness must have registered. The list is a marker subset of what the
+ * worker profile (long-horizon) registers: every name here is a harness command, so a kit that
+ * failed to load (a bad package path, a broken extension) is distinguishable from a bare pi. pi
+ * still starts, bare; the supervisor checks this list against `get_commands` at the start of every
+ * session and stops the run rather than cycle without the harness. The check fails closed: a
+ * missing command, a malformed reply or no reply at all is a failure.
  */
-export const HARNESS_COMMANDS: readonly string[] = ["goal", "subagents", "handoff", "verify", "firewall:status", "orchestrate", "trace"];
+export const HARNESS_COMMANDS: readonly string[] = ["goal", "handoff", "verify", "firewall:status", "orchestrate", "trace"];
+
+/** How long a worker session is given to answer the start-up get_commands check before it fails closed. */
+export const HARNESS_CHECK_TIMEOUT_MS = 30_000;
 
 /** Missing harness commands in a get_commands response (an empty list means the harness loaded). */
 export function missingHarness(response: unknown, required: readonly string[] = HARNESS_COMMANDS): string[] {
@@ -219,4 +224,52 @@ export function missingHarness(response: unknown, required: readonly string[] = 
   const list = (isRecord(data) ? data["commands"] : undefined) ?? data ?? [];
   const names = new Set((Array.isArray(list) ? list : []).map((c: unknown) => (isRecord(c) ? c["name"] : undefined)));
   return required.filter((name) => !names.has(name));
+}
+
+/**
+ * One worker session's harness verdict. The supervisor makes a fresh check per session (reset),
+ * settles it on the get_commands reply, and expires it when no reply arrives in time. It fails
+ * closed: pending and failed both leave `verified` false, and only a full reply verifies. The
+ * verdict is per session, so a previous session's failure cannot latch onto the next one.
+ */
+export class HarnessCheck {
+  readonly required: readonly string[];
+  private state: "pending" | "verified" | "failed" = "pending";
+  private reason: string | null = null;
+
+  constructor(required: readonly string[] = HARNESS_COMMANDS) {
+    this.required = required;
+  }
+
+  /** Start a new session: pending, with no verdict yet. */
+  reset(): void {
+    this.state = "pending";
+    this.reason = null;
+  }
+
+  /** Settle the check on a get_commands reply: true when every required command is present. */
+  settle(response: unknown): boolean {
+    const missing = missingHarness(response, this.required);
+    if (missing.length === 0) {
+      this.state = "verified";
+      this.reason = null;
+      return true;
+    }
+    this.state = "failed";
+    this.reason = `the kit harness did not load (missing commands: ${missing.join(", ")})`;
+    return false;
+  }
+
+  /** Fail closed when the reply has not arrived in time. A no-op once the check has settled. */
+  expire(): void {
+    if (this.state !== "pending") return;
+    this.state = "failed";
+    this.reason = `the kit harness check timed out after ${String(HARNESS_CHECK_TIMEOUT_MS)}ms`;
+  }
+
+  /** True only after a full get_commands reply settled this session. */
+  get verified(): boolean { return this.state === "verified"; }
+
+  /** Why the session is unusable, or null while pending or once verified. */
+  get failure(): string | null { return this.reason; }
 }

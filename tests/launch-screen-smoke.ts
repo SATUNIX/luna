@@ -222,6 +222,26 @@ tests.push([
 ]);
 
 tests.push([
+  "PI_KIT_ASCII=1 through the real registration keeps the screen printable",
+  async () => {
+    const started = await start({ env: { PI_KIT_ASCII: "1", PI_KIT_REDUCED_MOTION: "1" } });
+    try {
+      const factory = headerOf(started);
+      const { tui } = makeTui();
+      const component = factory(tui, plain as unknown as Theme);
+      for (const width of [20, 80, 120]) {
+        for (const line of component.render(width)) {
+          assert.doesNotMatch(line, /[^\x20-\x7e]/, `registered ASCII width ${width} is printable: ${JSON.stringify(line)}`);
+        }
+      }
+      component.dispose?.();
+    } finally {
+      started.cleanup();
+    }
+  },
+]);
+
+tests.push([
   "no header outside the TUI, in a child session, or when launchScreen is off",
   async () => {
     for (const mode of ["rpc", "print"]) {
@@ -260,6 +280,10 @@ tests.push([
         const lines = component.render(100).join("\n");
         assert.ok(lines.includes(expected), `expected ${expected} in the launch screen`);
         assert.ok(lines.includes("Luna"), "the launch screen still shows Luna");
+        for (const action of ["alt+m", "/profile", "/model", "/resume"]) {
+          assert.ok(lines.includes(action), `the final frame lists the ${action} action`);
+        }
+        assert.ok(lines.includes("command menu") || expected === "/kit", "the menu action is labelled");
         component.dispose?.();
       } finally {
         started.cleanup();
@@ -297,6 +321,7 @@ tests.push([
 tests.push([
   "the reveal requests renders, stops itself, and dispose stops it immediately",
   async () => {
+    const launch = await loadLaunch();
     const started = await start();
     try {
       const factory = headerOf(started);
@@ -304,11 +329,12 @@ tests.push([
       const component = factory(tui, plain as unknown as Theme);
       await delay(250);
       assert.ok(count() > 0, "the reveal called requestRender");
+      assert.ok(count() <= 4, "about 90 ms per frame, not a burst");
       await delay(1200);
       const settled = count();
       await delay(300);
       assert.equal(count(), settled, "the timer stops growing after the final frame");
-      assert.ok(settled >= 2, "the reveal ran for more than one frame");
+      assert.equal(settled, launch.REVEAL_FRAMES - 1, "the reveal advances once per frame after the first");
       const final = component.render(80).join("\n");
       assert.ok(final.includes("Luna") && final.includes("/menu"), "the final frame is the full launch screen");
       component.dispose?.();

@@ -15,18 +15,17 @@ were fixed, each by a gated implementer+reviewer plan, then independently verifi
 
 ## Items
 
-Item: F-1 — the narrow/default status line printed the merged critical-warning summary twice.
+Item: F-1 — narrow/default status bar printed the merged critical-warning summary twice - bec874847ccae92249dfdbbc01060cd1915e0ec1 - tests/status-bar-smoke.ts `criticalWarningSummaryAppearsOnceWhenNarrow` (fails at base with `2 !== 1`)
 `fitLine`'s `replace` helper scoped `let placed = false` inside its own body, so `replace(l)` and
 `replace(r)` each inserted the same `"<first> +N"` segment. Hoisted the flag so the summary is
-placed once across both sides. Regression test `criticalWarningSummaryAppearsOnceWhenNarrow`
-(fails at base with `2 !== 1`). `bec8748`
+placed once across both sides.
 `packages/extensions/third_party/custom-footer/render.ts`, `tests/status-bar-smoke.ts`
 
-Item: F-2 — `/footer ascii on` reached the status bar but not the todo checklist, contradicting
-`docs/status-bar-and-costs.md`. Added a trailing `ascii` parameter to `renderTodoWidget`, passed
-`settings.ascii` from the call site, and asserted both the parameter (`todoWidget`) and the wiring
-(`asciiSettingReachesTodoWidget`, which loads the extension, renders from a real todo file, runs
-the command and checks the widget pi holds). `d4f3ebd`, `b33ed76`
+Item: F-2 — `/footer ascii on` did not reach the todo checklist - d4f3ebd39cbf2f2cda0b1a21dfc76545abe0aa56 b33ed760b43dae6ba636ec5b6523351096dac79f - tests/status-bar-smoke.ts `todoWidget` (unit) and `asciiSettingReachesTodoWidget` (wiring through `/footer ascii on`)
+`docs/status-bar-and-costs.md` already says the todo widget uses plain characters. Added a trailing
+`ascii` parameter to `renderTodoWidget`, passed `settings.ascii` from the call site, and asserted
+both the parameter and the wiring (loads the extension, renders from a real todo file, runs the
+command and checks the widget pi holds).
 `packages/extensions/third_party/custom-footer/widgets.ts`, `.../index.ts`,
 `tests/status-bar-smoke.ts`
 

@@ -203,6 +203,14 @@ assert.ok(
   !capabilityMd.includes("includeInCompact}`); context-sieve assembles them under a token budget"),
   "docs/capability-research-workflow.md contains the orphaned duplicated injection-monopoly fragment",
 );
+assert.ok(
+  !capabilityMd.includes("wipes contributions on `session_start`"),
+  "docs/capability-research-workflow.md still claims context-sieve wipes contributions on session_start",
+);
+assert.ok(
+  capabilityMd.includes("module-load epoch"),
+  "docs/capability-research-workflow.md does not describe context-sieve's epoch admission",
+);
 const profilesMd = fs.readFileSync(path.join(ROOT, "docs", "architecture", "profiles-and-install.md"), "utf8");
 assert.ok(
   !profilesMd.includes("is not recorded, because this install never registered it"),

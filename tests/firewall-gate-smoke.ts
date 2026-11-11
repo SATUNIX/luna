@@ -10,6 +10,7 @@ import type * as Approvals from "../packages/extensions/src/tool-firewall/approv
 import type * as Feedback from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { array, number, object, optional, parseJsonAs, string, unknownValue } from "../packages/core/lib/guard.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
 /** What the firewall's tool_call handler returns when it blocks a call. */
@@ -586,12 +587,20 @@ try {
     for (const [input, want] of table) assert.equal(redact(input), want, input);
     for (const unit of ["x_token", "DB_", "a-", "mysql ", "curl -u ", "-----BEGIN RSA " + "PRIVATE KEY-----", "token="]) {
       const text = unit.repeat(Math.ceil((200 * 1024) / unit.length));
-      const t0 = performance.now();
-      redact(text);
-      const ms = performance.now() - t0;
-      assert.ok(ms < 200, `redact on 200 KB of ${JSON.stringify(unit)} took ${Math.round(ms)} ms`);
+      assertCpuWithin(`redact on 200 KB of ${JSON.stringify(unit)}`, 200, () => redact(text));
     }
     ok("redact covers PREFIX_TOKEN=value, mysql -p<pw> and curl -u user:pw, in linear time");
+    // The CPU-time guard must still have teeth. On a busy host CPU time ignores descheduled
+    // time, but a catastrophically backtracking rule does unbounded work, so its CPU time
+    // explodes. /^(a+)+$/ on 25 "a"s then a "b" is quadratic (about 2^25 backtracks, ~200 ms of
+    // CPU, three runs under a second) and must exceed a deliberately small 40 ms budget — on any
+    // host. If this stops throwing, the guard has been weakened into a no-op.
+    assert.throws(
+      () => assertCpuWithin("catastrophic regex self-test", 40, () => { /^(a+)+$/.test("a".repeat(25) + "b"); }),
+      /catastrophic regex self-test took \d+ ms of CPU \(budget 40 ms\)/,
+      "a quadratic rule must still fail the CPU-time guard",
+    );
+    ok("a catastrophically backtracking rule still fails the CPU-time guard");
   }
 
   // Judge precedents are scoped like every other learning input: a decision from another

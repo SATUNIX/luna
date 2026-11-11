@@ -3,7 +3,7 @@
 Luna is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
 extensions, skills, prompts, themes and agent definitions in one pi package
 (`@satunix/pi-system`), with **profiles** that choose what loads. This is a beta; read
-[Beta status](beta.md) first. Luna was previously published as **pi-system**, the name the pi
+[Beta status](beta.md) first. Luna was previously published as `pi-system`, the name the pi
 package still uses, so commands and settings are unchanged.
 
 <p align="center">
@@ -37,7 +37,7 @@ Use this guide if you want to:
 
 - **Luna** is the one package, installed from `github.com/SATUNIX/luna`.
 - A **profile** chooses which of Luna's extensions, skills and prompts load. Switch with `/profile`.
-- A **channel** is what you follow: `latest` (release tags), `next` (`main`), or a pinned version.
+- A **channel** is what you follow: `latest` (release tags), `next` (`main`), `trunk` (the opt-in integration-branch canary), or a pinned version.
 - **Effort** is a per-task dial (E1 to E5) for depth of work and delegation. It is not a
   permission and not a model setting.
 - The **catalogue** is the generated library of extensions in this repository.

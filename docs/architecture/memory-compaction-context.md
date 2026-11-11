@@ -91,7 +91,7 @@ Budgets are 4096 system tokens (`PI_KIT_CTX_BUDGET_TOKENS`) and 1200 message tok
 
 ## Memory lifecycle (save, search, recap)
 
-Explicit tools and the automatic recap queue both write deduplicated Markdown notes into scope-specific vault folders. Search and recall read a BM25 index built from those notes, but only the automatic recall path applies the relevance floor. Subagent children never recap or recall. The first prompt of a session also gets the three most recent recaps ("Where we left off") and the pinned memories; every prompt gets at most `recallLimit` (3) memories that clear the floor (`minScore` 1.5 and, for multi-term queries, two matching terms), each memory at most once per session. The recall message is capped at 2400 characters and is cleared for reinjection at compaction.
+Explicit tools and the automatic recap queue both write deduplicated Markdown notes into scope-specific vault folders. Search and recall read a BM25 index built from those notes, but only the automatic recall path applies the relevance floor. Subagent children never recap or recall. The first prompt of a session also gets the three most recent recaps (background history from earlier sessions, history-only — not instructions to resume) and the pinned memories; every prompt gets at most `recallLimit` (3) memories that clear the floor (`minScore` 1.5 and, for multi-term queries, two matching terms), each memory at most once per session. The recall message is capped at 2400 characters and is cleared for reinjection at compaction.
 
 ```mermaid
 flowchart LR

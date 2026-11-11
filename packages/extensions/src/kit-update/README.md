@@ -8,6 +8,7 @@ It checks three things:
   the kit is delivered:
   - `latest`: the newest release (a stable release once one exists, otherwise the newest beta).
   - `next`: every commit on `main`.
+  - `trunk`: the head of the integration branch `integration/luna` (canary, opt-in).
   - an exact version such as `0.2.1-beta.0`: a pin, never moved on its own.
 
   With **git delivery** (the current setting, `packages/core/distribution.json`), a release is a
@@ -28,7 +29,7 @@ It checks three things:
 | `/update status` | Show installed and available versions |
 | `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
-| `/update channel latest\|next\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
+| `/update channel latest\|next\|trunk\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
 Updates go through pi's own package manager (`pi update`, `pi install`). A new release on
 `latest` re-points Luna's registration to the new tag; `next` is pulled. After Luna or a

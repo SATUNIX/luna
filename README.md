@@ -31,7 +31,7 @@ one pi package, installed once.
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-**Renamed.** This project was previously published as **pi-system**; it is now **Luna**. The pi
+**Renamed.** This project was previously published as `pi-system`; it is now **Luna**. The pi
 package is still named `@satunix/pi-system`, so install commands, settings entries and environment
 variables are unchanged.
 

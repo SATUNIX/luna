@@ -31,6 +31,7 @@ import { redact as saveRedact } from "../packages/extensions/src/save/index.ts";
 import { redact as feedbackRedact } from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { redactText as workflowRedact } from "../packages/extensions/third_party/subagent/redact.ts";
 import { redactSecrets as notebookRedact } from "../packages/autonomy/lib/notebook.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 const restoreEnv = isolateKitEnv();
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -155,17 +156,12 @@ check("4. adversarial 1 MB inputs finish inside a linear-time budget", () => {
   // The private-key rule is the one that was quadratic, so it gets the tight budget the
   // roadmap sets (200 ms per MB); the rest are bounded scans with a larger constant.
   const budgetFor = (name: string): number => (name.startsWith("private-key") ? 200 : 1000);
-  const slow: string[] = [];
   for (const [name, text] of inputs) {
     const BUDGET_MS = budgetFor(name);
     for (const [label, fn] of [["table", canonical.redact], ["workflow redactText", (t: string) => workflowRedact(t).text]] as const) {
-      const started = performance.now();
-      fn(text);
-      const ms = performance.now() - started;
-      if (ms > BUDGET_MS) slow.push(`${label}, ${name}: ${ms.toFixed(0)} ms`);
+      assertCpuWithin(`${label}, ${name}`, BUDGET_MS, () => fn(text));
     }
   }
-  assert.deepEqual(slow, []);
 });
 
 restoreEnv();

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 // same either way:
 //   latest   the newest release (a stable release once one exists, otherwise the newest beta)
 //   next     every commit on main
+//   trunk    the head of the kit's integration branch (canary, opt-in)
 //   X.Y.Z    exactly that release, never moved automatically
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,6 +27,8 @@ export const DistributionConfigSchema = object({
   git: optional(object({
     source: optional(string()),
     branch: optional(string()),
+    /** The canary branch `trunk` follows (the head of the kit's integration branch). */
+    trunkBranch: optional(string()),
     tagPrefix: optional(string()),
     /** Retired private sources: host/path keys or `sha256:<hex of the key>` fingerprints. */
     legacySources: optional(array(string())),
@@ -44,6 +47,8 @@ export interface Distribution {
   git: {
     source: string;
     branch: string;
+    /** The canary branch `trunk` follows; a ref equal to it is the trunk channel. */
+    trunkBranch: string;
     tagPrefix: string;
     legacySources: string[];
     previousSources: string[];
@@ -98,6 +103,7 @@ export function readDistribution(file: string = DISTRIBUTION_PATH, env: Distribu
     git: {
       source: ((envIsLegacy ? "" : envSource) || config.git?.source || "").trim(),
       branch: config.git?.branch || "main",
+      trunkBranch: config.git?.trunkBranch || "integration/luna",
       tagPrefix: config.git?.tagPrefix ?? "v",
       legacySources,
       previousSources: config.git?.previousSources ?? [],
@@ -121,7 +127,7 @@ export function readRequiredProfileExtensions(file: string = DISTRIBUTION_PATH):
   return required;
 }
 
-const CHANNEL = /^(latest|next|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/;
+const CHANNEL = /^(latest|next|trunk|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/;
 
 export function isChannel(value: unknown): value is string {
   return typeof value === "string" && CHANNEL.test(value);
@@ -231,9 +237,10 @@ export function latestRelease(versions: readonly string[]): string | null {
 }
 
 /** Channel implied by a registered git source when nothing else records it. */
-export function channelOfGitSource(source: unknown, tagPrefix = "v"): string {
+export function channelOfGitSource(source: unknown, tagPrefix = "v", trunkBranch = "integration/luna"): string {
   const ref = parseGitSource(source)?.ref;
   if (!ref) return "next";
+  if (ref === trunkBranch) return "trunk";
   return ref.startsWith(tagPrefix) && parseSemver(ref.slice(tagPrefix.length)) ? "latest" : ref;
 }
 

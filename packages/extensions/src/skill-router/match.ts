@@ -36,23 +36,43 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * A project skill's `re:` trigger is text from the opened repository, tested against every prompt,
  * so it is untrusted. It is compiled only when the shared safe-regex check accepts it
  * (./shared/safe-regex.ts: no nested quantifiers, no backreferences, a length and choice cap), and
- * each test runs under a time limit; a trigger that hits the limit is switched off for the
- * session. tests/skill-routing-smoke.ts pins both.
+ * each test runs under a CPU-time budget; a trigger that exceeds the budget is switched off for
+ * the session. tests/skill-routing-smoke.ts pins both.
  */
 export const TRIGGER_TEST_MS = 50;
+// The budget above is CPU time, which a busy host does not inflate. `vm`'s timeout is wall clock,
+// so it exists only to interrupt a runaway match; it is set well above the budget (and a
+// descheduled fast regex gets one retry) so host load is not mistaken for a slow trigger.
+const TRIGGER_TEST_WALL_MS = TRIGGER_TEST_MS * 10;
 const triggerScript = new Script("re.test(s)");
 const triggerContext = createContext({ re: /(?:)/, s: "" });
 /** `re:` triggers refused or switched off, with the reason (for diagnostics and tests). */
 export const refusedTriggers = new Map<string, string>();
 
+const cpuMs = (): number => {
+  const u = process.cpuUsage();
+  return (u.user + u.system) / 1000;
+};
+
 function timedTest(re: RegExp, text: string): boolean | "slow" {
   triggerContext.re = re;
   triggerContext.s = text;
   try {
-    return triggerScript.runInContext(triggerContext, { timeout: TRIGGER_TEST_MS }) === true;
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return "slow";
-    throw error;
+    // Two rounds so a fast regex the host descheduled at the wall cap is not called slow. Only
+    // CPU time decides, so a busy host is ignored while catastrophic backtracking still shows.
+    for (let round = 0; round < 2; round++) {
+      const before = cpuMs();
+      try {
+        const passed = triggerScript.runInContext(triggerContext, { timeout: TRIGGER_TEST_WALL_MS }) === true;
+        return cpuMs() - before >= TRIGGER_TEST_MS ? "slow" : passed;
+      } catch (error) {
+        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ERR_SCRIPT_EXECUTION_TIMEOUT")) throw error;
+        // It hit the wall cap. If it also spent the CPU budget it is genuinely slow; if not, the
+        // host descheduled it, so try once more before switching it off.
+        if (cpuMs() - before >= TRIGGER_TEST_MS) return "slow";
+      }
+    }
+    return "slow";
   } finally {
     triggerContext.re = /(?:)/;
     triggerContext.s = "";
@@ -94,7 +114,7 @@ export function matchTriggers(prompt: string, skills: SkillEntry[], exclude: Set
         const hit = timedTest(re, text);
         if (hit === "slow") {
           compiled.set(t, null);
-          refusedTriggers.set(t, `took longer than ${TRIGGER_TEST_MS} ms on a prompt; switched off for this session`);
+          refusedTriggers.set(t, `used more than ${TRIGGER_TEST_MS} ms of CPU on a prompt; switched off for this session`);
           continue;
         }
         if (!hit) continue;

@@ -278,20 +278,22 @@ function resetToLastPublished(ctx: StepContext): void {
   const ref = `refs/heads/${cfg.integrationBranch}`;
   const current = g(["rev-parse", ref]);
   const published = lastPublishedHead(si, cfg.integrationBranch);
-  if (published === current) return;
   // The integration branch only ever fast-forwards, so the published head is an ancestor. A
   // non-ancestor would mean the remote moved independently; publishing will surface that itself.
   if (g(["merge-base", "--is-ancestor", published, current], { allowFail: true }) === null) return;
-  g(["update-ref", ref, published, current]);
+  if (published !== current) g(["update-ref", ref, published, current]);
   // The refused publish scanned the discarded cycle tags too, and with tag publication on (the
   // default) they would be scanned again and refuse the answer's push. Drop this run's tags for
   // the discarded history (cycle and abandoned tags alike); only tags that are not ancestors of
-  // the published head are affected.
+  // the published head are affected. This also runs when the branch is already back at the
+  // published head: an unmerged answer cycle can leave a refused tag that a later clean push
+  // would scan.
   const tagPrefix = `refs/tags/${cfg.tagPrefix}`;
+  let dropped = 0;
   for (const line of g(["for-each-ref", "--format=%(objectname) %(refname)", `${tagPrefix}*`]).split("\n")) {
     const [sha, tagRef] = line.trim().split(/\s+/);
     if (sha === undefined || tagRef === undefined) continue;
-    if (g(["merge-base", "--is-ancestor", sha, published], { allowFail: true }) === null) g(["update-ref", "-d", tagRef, sha], { allowFail: true });
+    if (g(["merge-base", "--is-ancestor", sha, published], { allowFail: true }) === null && g(["update-ref", "-d", tagRef, sha], { allowFail: true }) !== null) dropped += 1;
   }
   // The next cycle's prompt reads the last entry, and telling the worker that the work is
   // integrated (or pointing at a report that is no longer on the branch) would hide the redo.
@@ -308,7 +310,11 @@ function resetToLastPublished(ctx: StepContext): void {
   // discarding the unpublishable history must not itself look like a successful publish (the next
   // real push, after the answer cycle, is what clears the blocker and the streak).
   si.lastPushed = gm.refsState(g, cfg);
-  log(`publication blocked: moved ${cfg.integrationBranch} from ${current.slice(0, 12)} back to the last published ${published.slice(0, 12)}; the unpublished merges are discarded and the next cycle redoes the work`);
+  if (published === current) {
+    if (dropped > 0) log(`publication blocked: dropped ${String(dropped)} tag(s) for discarded history; the integration branch already matches the published ${published.slice(0, 12)}`);
+    return;
+  }
+  log(`publication blocked: moved ${cfg.integrationBranch} from ${current.slice(0, 12)} back to the last published ${published.slice(0, 12)}${dropped > 0 ? `, dropping ${String(dropped)} tag(s)` : ""}; the unpublished merges are discarded and the next cycle redoes the work`);
 }
 
 // --- one cycle ----------------------------------------------------------------------------------------

@@ -135,6 +135,16 @@ const tests: Array<[string, () => void]> = [
 
       writeJournal(journal, [line, line]);
       assert.equal(checkPaperworkBudget({ dir, journal, run: "luna-core-01", cycle: "12" }).ok, false, "two lines fail");
+
+      writeJournal(journal, ["- luna-core-01/05 | Board: none | successful | earlier"]);
+      assert.equal(checkPaperworkBudget({ dir, journal, run: "luna-core-01", cycle: "5" }).ok, true, "an unpadded --cycle matches the zero-padded journal key");
+      assert.equal(runCli([dir, `--journal=${journal}`, "--run=luna-core-01", "--cycle=5"]).status, 0);
+      const partial = runCli([dir, `--journal=${journal}`, "--run=luna-core-01"]);
+      assert.equal(partial.status, 2, "a partial journal triple is a usage error");
+      assert.match(partial.stderr, /go together/);
+      const unknown = runCli([dir, "--journl=x"]);
+      assert.equal(unknown.status, 2, "an unknown option is a usage error");
+      assert.match(unknown.stderr, /unknown option/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

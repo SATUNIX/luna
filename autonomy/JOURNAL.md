@@ -22,3 +22,4 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-core-01/09 | Board: PG-55, PG-57 | successful | Carried over the blocked-publication stop and made a declared-output step name the absolute output path in its task and its failure
 - luna-core-01/10 | Board: PG-55, PG-57 | successful | Made the publish-blocked operator answer resume exactly one cycle, fixing the no-op exit path in the cycle-09 stop
 - luna-core-01/11 | Board: none | successful | Carried the PG-51 thread-scoped CPU timing guards and fixed the /compress budget overrun by charging the omission marker and conversation newline to it
+- luna-core-01/12 | Board: PG-55, PG-19, V-81 | successful | Made the publish-blocked answer publish by rolling back to the last published head and dropping discarded tags, capped cycle paperwork at 60 lines with a journal-line check, and gave the footprint meter its documented CLI

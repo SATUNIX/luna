@@ -71,7 +71,9 @@ export function checkPaperworkBudget(input: PaperworkBudgetInput): PaperworkBudg
 
   let journal: PaperworkJournal | null = null;
   if (input.journal !== undefined && input.run !== undefined && input.cycle !== undefined) {
-    const marker = `- ${input.run}/${input.cycle} |`;
+    // JOURNAL.md keys are zero-padded (`run/05`), so accept `--cycle=5` as well.
+    const cycle = /^\d+$/.test(input.cycle) ? input.cycle.padStart(2, "0") : input.cycle;
+    const marker = `- ${input.run}/${cycle} |`;
     const found = fs.existsSync(input.journal)
       ? fs.readFileSync(input.journal, "utf8").split(/\r?\n/).filter((line) => line.startsWith(marker)).length
       : 0;
@@ -96,6 +98,19 @@ function option(argv: readonly string[], name: string): string | undefined {
 
 export function main(argv: readonly string[]): number {
   const optionNames = new Set(["--max-lines", "--journal", "--run", "--cycle"]);
+  for (const arg of argv) {
+    if (!arg.startsWith("--")) continue;
+    const name = arg.split("=")[0] ?? arg;
+    if (!optionNames.has(name)) {
+      console.error(`paperwork-budget: unknown option "${name}"\n${usage()}`);
+      return 2;
+    }
+  }
+  const optionValues = ["journal", "run", "cycle"].map((name) => option(argv, name));
+  if (optionValues.some((value) => value !== undefined) && optionValues.some((value) => value === undefined)) {
+    console.error(`paperwork-budget: --journal, --run and --cycle go together\n${usage()}`);
+    return 2;
+  }
   const positional = argv.filter((arg, i) => !arg.startsWith("--") && !optionNames.has(argv[i - 1] ?? ""));
   const dir = positional[0];
   if (dir === undefined) {

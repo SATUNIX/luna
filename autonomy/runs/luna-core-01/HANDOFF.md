@@ -2,40 +2,41 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `d5c2cffe6d06` (head of `stream/core`, holds cycles 01–10).
-  Cycle 11 commits, all pushed: `7ec19bf` (review+plan), `822fcc8` (PG-51 carry-over), `6c98e36`
-  (`/compress` budget fix), plus the records under `autonomy/cycles/luna-core-01/11/` and the
-  `luna-core-01/11` line in `autonomy/JOURNAL.md`.
-- Cycle 11 outcome: **successful** (fix).
-- Reviewable diff 23,627 chars — under the 60,000 read budget and the 30,000 stop-new-items mark.
+- Branch `pi/luna-core-01`, base `363dba0b9a25` (head of `stream/core`, holds cycles 01–11).
+  Cycle 12 commits, all pushed: `b8602c5`, `c6bc2ee` (PG-55), `d647f95` (PG-19), `34ee17a`
+  (V-81), `be8f294` (review fixes), plus the records under `autonomy/cycles/luna-core-01/12/`
+  and the `luna-core-01/12` line in `autonomy/JOURNAL.md`.
+- Cycle 12 outcome: **successful** (fix + improve).
+- Reviewable diff 44,268 chars — under the 60,000 read budget and the 30,000 stop-new-items mark.
 
-## What cycle 11 did
+## What cycle 12 did
 
-1. **Carried the PG-51 timing guards (HANDOFF item 1).** Applied the cycle-08 tests-only range:
-   `tests/timing.ts`'s `cpuMs()` now reads the calling thread's CPU (`process.threadCpuUsage()`,
-   `process.cpuUsage()` fallback), the `workflow-redaction` guard is best-of-nine and warms both
-   sizes, and the load harness lists only CPU-bound smokes. No product code changed.
-2. **Fixed a `/compress` budget overrun.** `packages/extensions/src/compress/index.ts` undercounted
-   the final summary: `previous` added a separator not in `fixed`, and the ~45-char omission marker
-   was never charged to `remaining`. Measured 4047 against a 4000 budget. The fix charges
-   `## Conversation\n` to `fixed` and reserves the marker and its separator before the older-turns
-   loop; a new case `testBudgetReservesOmissionMarker` fails before and passes after.
+1. **PG-55: the publish-blocked answer can now publish.** The answer rolls the local integration
+   branch back to the last published head with an ancestor-guarded `update-ref`, drops every run
+   tag whose commit is not an ancestor of that head (`cycle-NN` and `abandoned-NN` alike), marks
+   those history entries `discarded` so the next prompt says to redo the work, and keeps the
+   blocker/streak until a real push. A new smoke parks on two refused merges, answers, removes the
+   leak, and asserts a later cycle starts.
+2. **PG-19: paperwork budget.** `packages/core/paperwork-budget.ts` caps a cycle's four record
+   files at 60 lines and requires exactly one matching `JOURNAL.md` line (exit 1 on overrun, 2 on
+   bad args). It is a documented manual steward check, not a merge gate. This cycle's own four
+   files are 49/60.
+3. **V-81: footprint CLI.** `node packages/core/eval/footprint.ts --profile <name> [--json]
+   [--write-baseline]` prints the tool text, derived tokens and baseline problems; the write is
+   atomic and byte-identical when the record has not changed. Documented in
+   `docs/efficiency-and-loops.md`; `smoke:eval-footprint` is 13 checks.
 
 ## Checks that were run
 
-`compress-smoke` (9/9), `tool-capture-smoke` (14), `trace-ledger-bound-smoke` (5),
-`workflow-redaction-smoke` (4), `workflow-structured-smoke` (7), `workflow-sandbox-smoke` (19),
-`docs-smoke` (green, journal gate included) — all PASS. `timing-load-check` **53/55**: the two
-failures are `firewall-gate-smoke.ts`'s `redact on 200 KB` guard, which is not in this cycle's diff
-— see the new proposal below. Never ran `npm test` or `npm run check:all`. Independent reviewer on
-Item A: `VERDICT: PASS`; Item B had no independent reviewer (E3 child allowance exhausted) and needs
-one at merge review. See `verify.md`.
+`smoke:autonomy-selfimprove` (43/43), `smoke:paperwork-budget` (5/5), `smoke:eval-footprint`
+(13/13), `test:typecheck`, targeted `eslint`, `smoke:docs`, and the paperwork CLI on this cycle
+(49/60, one journal line). Never ran `npm test` or `npm run check:all`. Independent reviewer on
+`363dba0b9a25..be8f294`: **VERDICT PASS** after `be8f294`.
 
 ## Merge
 
-Every targeted check passes, but Item B lacks an independent review. Merge `pi/luna-core-01` into
-`stream/core` only after the host acceptance checks pass on a clean checkout and merge review covers
-Item B.
+All targeted checks pass and the independent review passed. Merge `pi/luna-core-01` into
+`stream/core` once the host acceptance checks pass on a clean checkout.
 
 ## Carry over to the next cycle
 

@@ -595,8 +595,8 @@ the run in `blocked` with an operator question (remove the identifier and resume
 Answering that question first rolls the local integration branch back to the last published head,
 discarding the merged-but-unpublished cycles and every one of the run's tags whose commit is not
 an ancestor of the published head (their `cycle-NN` and `abandoned-NN` tags are dropped so the
-leak scan is not shown the discarded commits again). Their history entries stop claiming `merged`
-and say the publication reset discarded them, so the next cycle's prompt tells the worker to redo
+leak scan is not shown the discarded commits again). Their history entries are marked `discarded`
+(while `merged` stays the historical fact), so the next cycle's prompt tells the worker to redo
 the work instead of looking for a report that is no longer on the branch. Then exactly one cycle
 runs — the answer is consumed as that one resume permission. The rollback is required because
 publication is fast-forward only and the leak scan reads the whole pushed range, so merely

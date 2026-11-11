@@ -466,11 +466,11 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const file = baselineFile ?? defaultBaselineFile();
-  const baseline = readBaseline(file);
+  const baseline: FootprintBaseline = fs.existsSync(file) ? readBaseline(file) : { schemaVersion: 1, profiles: {} };
   if (write) {
     baseline.profiles[profile] = baselineEntry(f, baseline.profiles[profile]);
     const text = serializeBaseline(baseline);
-    const current = fs.readFileSync(file, "utf8");
+    const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     if (text === current) console.log(`[footprint] ${profile}: baseline unchanged`);
     else {
       writeBaselineAtomic(file, text);

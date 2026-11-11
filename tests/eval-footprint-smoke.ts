@@ -463,6 +463,12 @@ function testFootprintCli(): void {
     assert.equal(liteWritten.status, 0, liteWritten.stderr);
     assert.match(liteWritten.stdout, /baseline unchanged/, "lite's reviewed shape is unchanged");
     assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "adding no delegation row keeps lite byte-identical");
+    // A baseline path that does not exist yet is created, not an unhandled read error.
+    const fresh = path.join(ws, "fresh-baseline.json");
+    const created = run(["--profile", "lite", "--write-baseline", `--baseline=${fresh}`]);
+    assert.equal(created.status, 0, created.stderr);
+    assert.match(created.stdout, /baseline written/, "a missing baseline file is written, not rejected");
+    assert.match(fs.readFileSync(fresh, "utf8"), /"toolText": 7614/, "the new file records the measurement");
   } finally {
     rmWorkspace(ws);
   }

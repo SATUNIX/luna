@@ -5,7 +5,8 @@ Mode: fix
 
 Base `559f2d99edbf` (head of `stream/core`, holds cycles 01–09). The two assigned board items were
 already implemented in cycle 09; the review found that PG-55's operator exit path — the option
-"Remove the identifier and resume" — did not work, and fixed it. Reviewable diff 7,317 chars.
+"Remove the identifier and resume" — did not work, and fixed it. Reviewable diff 8,357 chars at the
+final records head (7,317 at the fix commit).
 
 Board: PG-55 done - the publish-blocked operator answer now lets exactly one cycle run and re-parks if publication is still refused
 Board: PG-57 done - verified complete from cycle 09; the required-output block names the absolute path, no change needed

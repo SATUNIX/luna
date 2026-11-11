@@ -8,8 +8,9 @@ Base `559f2d99edbf` (head of `stream/core`). This cycle's commits: `106bc4d` (re
 `git diff --no-renames 559f2d99edbf..HEAD -- . ":(exclude)package-lock.json"
 ":(exclude)autonomy/cycles/luna-core-01/" ":(exclude)autonomy/runs/luna-core-01/" | wc -c`
 
-Measured **7,317 chars** at `f24a144` — well under the 60,000 read budget and the 30,000
-stop-new-items mark. Files: `docs/autonomy.md`, `packages/autonomy/lib/engine.ts`,
+Measured **7,317 chars** at `f24a144` and **8,357 chars** at the final records head (the growth is
+the `autonomy/JOURNAL.md` line) — well under the 60,000 read budget and the 30,000 stop-new-items
+mark. Files: `docs/autonomy.md`, `packages/autonomy/lib/engine.ts`,
 `packages/autonomy/lib/lifecycle.ts`, `packages/autonomy/lib/templates/self-improve.ts`,
 `tests/autonomy-selfimprove-smoke.ts` (+50/-5). No lockfile, charter, operator control path, or
 `package.json` `scripts` change, so the change is mergeable.

@@ -10,7 +10,7 @@ Board: V-02 done - the human console now holds input while a card is open, so tw
 ## Items
 
 - Item: Unblock the cycle 11 red gate and re-land its reviewed fixes - `faa6c2b`, `7394173`, `9dbd71c`, `1471cde` - `node tests/docs-smoke.ts` (exit 0) and `smoke:control-center` (34/34) / `smoke:command-menu` (12/12)
-- Item: Serialise human-console cards and hold input for `ask_human` (V-02) - `f2767e2`, `7a52139`, `2ee1e3f` - `smoke:firewall-overlay-queue` (35/35; the three new cases fail with the source reverted)
+- Item: Serialise human-console cards and hold input for `ask_human` (V-02) - `f2767e2`, `dc73bd8`, `7a52139`, `2ee1e3f` - `smoke:firewall-overlay-queue` (35/35; the three new cases fail with the source reverted)
 - Item: Correct the cycle 10 report's false "not on `stream/ux`" claim - `205590d` - record-only; `smoke:docs` exit 0
 
 ## What changed

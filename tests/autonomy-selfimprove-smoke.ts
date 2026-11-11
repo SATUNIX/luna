@@ -707,7 +707,7 @@ await check("PG-55: answering the publish-blocked question with a leak-free cycl
   const prompts: string[] = [];
   const slot: { engine?: MadeEngine } = {};
   let answered = 0;
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: false }], requiresOperatorApproval: false } }), {
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
     cfgOverride: { integrationRemote: bare, gitRemote: bare },
     manager: manager([]),
     hooks: { onSleep: () => {

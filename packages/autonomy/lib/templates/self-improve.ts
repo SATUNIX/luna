@@ -278,6 +278,15 @@ function resetToLastPublished(ctx: StepContext): void {
   // non-ancestor would mean the remote moved independently; publishing will surface that itself.
   if (g(["merge-base", "--is-ancestor", published, current], { allowFail: true }) === null) return;
   g(["update-ref", ref, published, current]);
+  // The refused publish scanned the discarded cycle tags too, and with tag publication on (the
+  // default) they would be scanned again and refuse the answer's push. Drop the cycle tags for
+  // the discarded history; only tags that are not ancestors of the published head are affected.
+  const tagPrefix = `refs/tags/${cfg.tagPrefix}cycle-`;
+  for (const line of g(["for-each-ref", "--format=%(objectname) %(refname)", `${tagPrefix}*`]).split("\n")) {
+    const [sha, tagRef] = line.trim().split(/\s+/);
+    if (sha === undefined || tagRef === undefined) continue;
+    if (g(["merge-base", "--is-ancestor", sha, published], { allowFail: true }) === null) g(["update-ref", "-d", tagRef, sha], { allowFail: true });
+  }
   // Record the post-reset state so the cycle-start publish is a no-op for the integration branch:
   // discarding the unpublishable history must not itself look like a successful publish (the next
   // real push, after the answer cycle, is what clears the blocker and the streak).

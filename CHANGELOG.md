@@ -23,7 +23,7 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   scan reads the whole pushed range, so removing the identifier in a later commit still left the
   refused commit in range and the run parked again with the same question. Answering the question now
   rolls the local integration branch back to the last published head (discarding the
-  merged-but-unpublished cycles; their `cycle-NN` tags remain) before the answer's cycle runs, and
+  merged-but-unpublished cycles; their `cycle-NN` tags are dropped) before the answer's cycle runs, and
   `publishNow` clears the blocker and the unpublished count only on a real push. Pinned by
   `tests/autonomy-selfimprove-smoke.ts`.
 

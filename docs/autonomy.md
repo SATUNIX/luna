@@ -583,14 +583,14 @@ location and makes removing the identifier its first job, and after **two** merg
 cycles stay unpublished (an intervening non-merged cycle does not reset the count), the host stops
 the run in `blocked` with an operator question (remove the identifier and resume, or stop the run).
 Answering that question first rolls the local integration branch back to the last published head,
-discarding the merged-but-unpublished cycles (their `cycle-NN` tags remain on the agent branch),
-then lets exactly one cycle run — the answer is consumed as that one resume permission. The
-rollback is required because publication is fast-forward only and the leak scan reads the whole
-pushed range, so merely removing the identifier in a later commit leaves the refused commit
-publishable; the answer's cycle redoes the discarded work. The run parks again if that cycle's
-publication is still refused. A successful publish clears the blocker and the count
-(`tests/autonomy-selfimprove-smoke.ts`). The worker has no push credentials and never performs host
-promotion; host pushes stay fast-forward
+discarding the merged-but-unpublished cycles (their `cycle-NN` tags are dropped so the leak scan
+is not shown the discarded commits again), then lets exactly one cycle run — the answer is
+consumed as that one resume permission. The rollback is required because publication is
+fast-forward only and the leak scan reads the whole pushed range, so merely removing the
+identifier in a later commit leaves the refused commit publishable; the answer's cycle redoes the
+discarded work. The run parks again if that cycle's publication is still refused. A successful
+publish clears the blocker and the count (`tests/autonomy-selfimprove-smoke.ts`). The worker has no
+push credentials and never performs host promotion; host pushes stay fast-forward
 only (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-smoke.ts`; scanner rules:
 `tests/prepush-scan-smoke.ts`). Approval-gated publication remains held for `promote`. Disabling tag
 publication avoids publishing rejected attempts, but the integration branch is still public as soon

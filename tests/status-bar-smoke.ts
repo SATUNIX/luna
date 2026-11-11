@@ -332,6 +332,13 @@ ${line}`);
     assert.deepEqual(footer.renderTodoWidget([], plain), []);
     const allDone = footer.renderTodoWidget([{ id: 1, text: "x", state: "done" }], plain).map(strip);
     assert.match(lineAt(allDone, 0), /all done/);
+    const asciiItems: TodoItem[] = [{ id: 1, text: "x", state: "active" }];
+    const forcedAscii = footer.renderTodoWidget(asciiItems, plain, 8, true).map(strip).join("\n");
+    let nonAscii = 0;
+    for (let i = 0; i < forcedAscii.length; i++) if (forcedAscii.charCodeAt(i) > 0x7f) nonAscii++;
+    assert.equal(nonAscii, 0, `the ascii flag reaches the todo widget: ${forcedAscii}`);
+    const defaultGlyphs = footer.renderTodoWidget(asciiItems, plain).map(strip).join("\n");
+    assert.ok(defaultGlyphs.includes("▸"), "without the ascii flag the widget keeps the Unicode glyphs");
   },
 
   phrasesAndActivity() {

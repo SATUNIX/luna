@@ -64,3 +64,10 @@ Static checks (`verify`) + behavioural checks (`eval`, `test:security`) + docs c
 (`smoke:docs`, `docs:check`) together form the release gate. See `WRITING_EXTENSIONS.md` for the
 full check list and `docs/roadmap.md` for the current plan. [Concepts](concepts.md) defines the
 tiers, layers and design rules the extensions follow.
+
+A CPU-bound smoke bound (for example "redact 200 KB in under 200 ms") uses the CPU-time guards
+in `tests/timing.ts` (`cpuMs`, `bestCpuMs`, `assertCpuWithin`), which measure `process.cpuUsage()`
+rather than wall clock. A busy host therefore does not turn correct code red, while a quadratic or
+catastrophically backtracking rule still blows the same budget because its CPU *work* explodes;
+the budgets themselves are unchanged. `tests/timing-load-check.ts` runs every such smoke five
+times under full CPU load as the acceptance evidence and is intentionally not part of the gate.

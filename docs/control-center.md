@@ -76,7 +76,8 @@ The header strip combines the profile, effort, thinking level, security level an
   filters the list. It opens as an overlay on pi 1.3.0 or newer, where the overlay `done()` bug is
   fixed; on older pi it opens without an overlay. `tests/control-center-smoke.ts` checks the
   version rule (1.3.0 and newer only) and that the hub asks for an overlay exactly when the
-  installed pi passes it.
+  installed pi passes it. Both this hub and the `/workflows` panel draw a theme-coloured rounded
+  border and dim the transcript behind the overlay (`overlay-frame.ts`).
 - **rpc** (a UI is present but not the TUI, as in a session the web console runs): a chain of
   `ctx.ui.select` dialogs. Every dialog carries a 60-second timeout, and a timeout counts as
   cancel, so a dialog nobody answers closes the hub instead of holding the session.

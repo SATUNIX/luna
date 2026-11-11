@@ -25,6 +25,7 @@ import { Container, SettingsList, type SettingItem } from "@earendil-works/pi-tu
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
+import { withOverlayFrame } from "./overlay-frame.ts";
 import type { HubValues } from "./values.ts";
 
 /** A command as `pi.getCommands()` reports it, plus the built-ins the hub adds itself. */
@@ -305,47 +306,48 @@ function tuiRenderer(deps: HubDeps): Renderer {
     async show(input: PageInput): Promise<PageChoice> {
       const overlay = supportsOverlay();
       const result = await deps.ctx.ui.custom<PageChoice>(
-        (_tui, theme, _keybindings, done) => {
-          const items: SettingItem[] = input.rows.map((row) => {
-            const description = row.available ? row.description : row.unavailableReason;
+        (tui, theme, _keybindings, done) =>
+          withOverlayFrame(tui, theme, (finish) => {
+            const items: SettingItem[] = input.rows.map((row) => {
+              const description = row.available ? row.description : row.unavailableReason;
+              return {
+                id: row.id,
+                label: row.available ? row.label : `${row.label} (unavailable)`,
+                ...(description ? { description } : {}),
+                currentValue: row.value ?? "",
+                // Every row carries `values` so Enter/Space activates it: a multi-value row cycles, an
+                // action row re-selects its one value and fires onChange.
+                values: row.values && row.values.length > 0 ? row.values : [row.value ?? ""],
+              };
+            });
+            const container = new Container();
+            container.addChild({
+              render: () => [theme.fg("accent", theme.bold(input.title)), ""],
+              invalidate: () => {},
+            });
+            const list = new SettingsList(
+              items,
+              15,
+              getSettingsListTheme(),
+              (id, newValue) => {
+                const row = input.rows.find((r) => r.id === id);
+                if (!row) return;
+                finish({ id, value: row.values && row.values.length > 0 ? newValue : undefined });
+              },
+              () => finish(input.parent ? "back" : undefined),
+              { enableSearch: true },
+            );
+            if (input.focus) list.selectItem(input.focus);
+            container.addChild(list);
             return {
-              id: row.id,
-              label: row.available ? row.label : `${row.label} (unavailable)`,
-              ...(description ? { description } : {}),
-              currentValue: row.value ?? "",
-              // Every row carries `values` so Enter/Space activates it: a multi-value row cycles, an
-              // action row re-selects its one value and fires onChange.
-              values: row.values && row.values.length > 0 ? row.values : [row.value ?? ""],
+              render: (width: number) => container.render(width),
+              invalidate: () => container.invalidate(),
+              handleInput: (data: string) => {
+                list.handleInput?.(data);
+                tui.requestRender();
+              },
             };
-          });
-          const container = new Container();
-          container.addChild({
-            render: () => [theme.fg("accent", theme.bold(input.title)), ""],
-            invalidate: () => {},
-          });
-          const list = new SettingsList(
-            items,
-            15,
-            getSettingsListTheme(),
-            (id, newValue) => {
-              const row = input.rows.find((r) => r.id === id);
-              if (!row) return;
-              done({ id, value: row.values && row.values.length > 0 ? newValue : undefined });
-            },
-            () => done(input.parent ? "back" : undefined),
-            { enableSearch: true },
-          );
-          if (input.focus) list.selectItem(input.focus);
-          container.addChild(list);
-          return {
-            render: (width: number) => container.render(width),
-            invalidate: () => container.invalidate(),
-            handleInput: (data: string) => {
-              list.handleInput?.(data);
-              _tui.requestRender();
-            },
-          };
-        },
+          }, done),
         overlay ? { overlay: true } : undefined,
       );
       return result;

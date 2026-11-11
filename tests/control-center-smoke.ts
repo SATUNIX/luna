@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { initTheme, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { fakePi, isolateKitEnv, loadExtension, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
 import type * as ControlsModule from "../packages/extensions/src/control-center/controls.ts";
@@ -26,6 +26,7 @@ import type * as ModelModule from "../packages/extensions/src/control-center/mod
 import type * as ValuesModule from "../packages/extensions/src/control-center/values.ts";
 import type * as DoctorModule from "../packages/extensions/src/control-center/doctor.ts";
 import { headerLine, openHub, supportsOverlay, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
+import { frameLines, withOverlayFrame, type OverlayTheme } from "../packages/extensions/src/control-center/overlay-frame.ts";
 import type { HubRow } from "../packages/extensions/src/control-center/model.ts";
 import type { HubValues } from "../packages/extensions/src/control-center/values.ts";
 import { PI_BUILTIN_SLASH_COMMANDS as CORE_BUILTINS } from "../packages/core/lib/pi-builtins.ts";
@@ -549,6 +550,69 @@ tests.push([
     await openHub(makeDeps({ model: await modelFor([]), commands: [], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: recorded.ui } }), "autonomy");
     assert.equal(recorded.customCalls.length, 2);
     assert.match(recorded.rendered[1] ?? "", /→ Autonomy/);
+  },
+]);
+
+tests.push([
+  "the hub overlay draws a theme border and dims the transcript behind it",
+  async () => {
+    initTheme();
+    const borderTag = "\x1b[35m";
+    const dimTag = "\x1b[2m";
+    const theme: OverlayTheme & { bold(text: string): string } = {
+      fg: (color: string, text: string): string => `${color === "border" ? borderTag : dimTag}${text}\x1b[39m\x1b[22m`,
+      bold: (text: string): string => text,
+    };
+    const base = ["base line"];
+    const tui = {
+      requestRender: (): void => {},
+      hasOverlay: (): boolean => true,
+      compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines,
+    };
+    let component: { render(width: number): string[]; dispose?(): void } | undefined;
+    const ui = {
+      notify: (): void => {},
+      custom: (
+        factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: PageChoice) => void) => { render(width: number): string[]; dispose?(): void },
+      ): Promise<PageChoice> => {
+        component = factory(tui, theme, {}, () => {});
+        return new Promise<PageChoice>(() => {});
+      },
+    };
+    const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui };
+    void openHub(makeDeps({ model: await modelFor([]), commands: [], ctx: ctx as unknown as FakeCtx }));
+    assert.ok(component, "the hub opened a custom component");
+    // (a) every bordered line is exactly the requested width and the border colour is used.
+    for (const width of [40, 12]) {
+      const lines = component.render(width);
+      for (const line of lines) assert.ok(visibleWidth(line) <= width, `width ${width}: ${JSON.stringify(line)}`);
+      assert.ok(lines.some((line) => line.includes(borderTag)), `a border at width ${width}`);
+    }
+    // (b) while the overlay is open the base transcript is dimmed; dispose restores it.
+    const dimmed = tui.compositeOverlays(base, 40, 20);
+    assert.ok(dimmed.some((line) => line.includes(dimTag)), "the transcript is dimmed while open");
+    assert.ok(stripTerminalSequences(dimmed[0] ?? "").includes("base line"), "the base text survives dimming");
+    component.dispose?.();
+    assert.deepEqual(tui.compositeOverlays(base, 40, 20), base, "dispose restores the transcript");
+    // (c) the wrapped done also restores it, before it calls the caller's done.
+    let finishWrapped: (() => void) | undefined;
+    let closed = 0;
+    const tui2 = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
+    withOverlayFrame<undefined>(tui2 as unknown as TUI, theme, (finish) => {
+      finishWrapped = finish;
+      return { render: () => ["inner"], invalidate: () => {} };
+    }, () => {
+      closed++;
+    });
+    assert.ok(tui2.compositeOverlays(base, 40, 20).some((line) => line.includes(dimTag)), "the second overlay dims too");
+    finishWrapped?.();
+    assert.equal(closed, 1, "the wrapped done reached the caller's done");
+    assert.deepEqual(tui2.compositeOverlays(base, 40, 20), base, "the wrapped done restores the transcript");
+    // (d) a narrow width is left alone, and (e) the vendor copy is byte-identical.
+    assert.deepEqual(frameLines(["x"], 8, theme), ["x"]);
+    const srcFrame = fs.readFileSync("packages/extensions/src/control-center/overlay-frame.ts");
+    const vendorFrame = fs.readFileSync("packages/extensions/third_party/subagent/overlay-frame.ts");
+    assert.ok(srcFrame.equals(vendorFrame), "the two overlay-frame.ts copies are byte-identical");
   },
 ]);
 

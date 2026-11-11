@@ -8,6 +8,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
+  `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
+  behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
+  `packages/extensions/third_party/subagent/overlay-frame.ts`; `npm run smoke:control-center` and
+  `npm run smoke:workflow-panel`).
+
 ## [0.3.0-beta.2]
 
 ### Fixed

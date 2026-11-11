@@ -217,6 +217,8 @@ export interface SelfImproveState {
   lastPushed: string | null;
   publishError?: string | null;
   publishBlocker?: string | null;
+  /** Consecutive merged cycles whose close-out publication the leak scan refused (0 when clear). */
+  publishBlockedCycles?: number;
   lastSyncError?: string | null;
 }
 

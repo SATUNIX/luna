@@ -269,7 +269,7 @@ function statusReport(store: RunStore, deps: CliDeps) {
     worker: state.worker, promotion: { status: state.promotion.status, error: state.promotion.error ?? null, targets: state.promotion.targets ?? [] },
     questions: state.pendingQuestions ?? [], ui: state.ui ?? null, reconfigurations: state.reconfigurations.length,
     generations: generationsReport(store, state, contract),
-    selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null, history: state.selfImprove.history } : null,
+    selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null, publishBlocker: state.selfImprove.publishBlocker ?? null, unpublished: state.selfImprove.publishBlockedCycles ?? 0, history: state.selfImprove.history } : null,
     history: state.history.slice(-8), boundaryDigest: state.boundaryDigest, authorisation: state.authorisation,
     paths: { root: store.p.root, log: store.p.log, results: store.p.results }, title: contract.objective.title,
   };
@@ -295,6 +295,7 @@ function statusText(s: StatusReport): string {
     else if (g.notebook) lines.push(`  latest notebook (redacted; the next worker's briefing shows the same):`, ...g.notebook.text.split("\n").map((l) => `    ${l}`));
   }
   if (s.selfImprove) lines.push(`  cycles: ${s.selfImprove.cycles} done, ${s.selfImprove.merged} merged${s.selfImprove.current ? `, cycle ${s.selfImprove.current} in progress` : ""}`);
+  if (s.selfImprove?.publishBlocker) lines.push(`  publication BLOCKED: ${s.selfImprove.publishBlocker} (${s.selfImprove.unpublished} merged cycle(s) not published; the leak scan refuses the commit above)`);
   if (s.promotion.status !== "none") lines.push(`  promotion: ${s.promotion.status}${s.promotion.error ? ` (${s.promotion.error})` : ""}${s.promotion.status === "awaiting_approval" ? `; approve with: pi-autonomy promote --run ${s.run}` : ""}`);
   lines.push(`  logs: ${s.paths.log}`);
   return lines.join("\n");

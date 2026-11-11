@@ -18,6 +18,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A publication the pre-push leak scan refuses no longer lets the run cycle on.** `publishNow` in
+  the self-improve template caught every error, stored `selfImprove.publishBlocker` and returned;
+  nothing read it, so a leak-scan refusal was logged once and the supervisor kept merging and
+  leaving cycles unpublished, with the run status showing no blocker. The blocker is now counted
+  (`selfImprove.publishBlockedCycles`, reset by a successful publish), shown by `pi-autonomy status`
+  (`selfImprove.publishBlocker`/`selfImprove.unpublished` in `--json`, a `publication BLOCKED` line
+  in the text), carried into the next cycle's prompt (the refused commit and location, locations
+  only, and the instruction to remove the identifier first), and after two consecutive merged cycles
+  stay unpublished, the host stops the run in `blocked` with an operator question. Pinned by
+  `tests/autonomy-selfimprove-smoke.ts`; the leak scan and its patterns are unchanged.
+
 - **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
   wall-clock time (`performance.now` / `Date.now`), which includes time the process spent
   descheduled; under load wall time inflated ~4–9x and correct code failed its own linear-time

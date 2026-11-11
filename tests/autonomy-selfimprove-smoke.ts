@@ -667,6 +667,41 @@ await check("PG-55: two consecutive leak-scan-refused merges stop the run with a
   assert.equal(prompts.length, 2, "the run waits for the operator instead of starting a third cycle");
 });
 
+await check("PG-55: answering the publish-blocked question runs exactly one cycle, then parks again", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let answered = 0;
+  let stopped = false;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      if (!slot.engine) return;
+      const s = h.state();
+      if (s.status !== "blocked" || s.blocker?.id !== "publish-blocked") return;
+      if (answered === 0) { answered += 1; h.store.enqueue("answer", { text: "Remove the identifier and resume" }); return; }
+      if (!stopped) { stopped = true; slot.engine.engine.signalled = true; }
+    } },
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(answered, 1, "the operator answered the publish-blocked question once");
+  assert.equal(prompts.length, 3, "exactly one cycle ran after the answer, not zero and not more");
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "publish-blocked", "the still-refused publication parks the run again");
+  assert.equal(state.pendingAnswer ?? null, null, "the answer was consumed");
+});
+
 await check("PG-55: a non-merged cycle between refused merges does not reset the blocked-cycle count", async () => {
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const prompts: string[] = [];

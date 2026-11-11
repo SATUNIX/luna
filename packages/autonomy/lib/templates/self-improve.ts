@@ -400,9 +400,16 @@ async function runStep(ctx: StepContext): Promise<void> {
   const g = repo.git();
   // Two merged cycles the leak scan has refused: stop adding unpublished merges and wait for a person.
   if (!si.current && (si.publishBlockedCycles ?? 0) >= 2) {
-    const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";
-    await engine.enterBlocked({ kind: "external", id: "publish-blocked", method: "publish", question: `Publication of ${si.publishBlockedCycles} merged cycle(s) is blocked by the pre-push leak scan at ${detail}; remove the identifier or stop the run.`, options: ["Remove the identifier and resume", "Stop the run"] });
-    return;
+    // One cycle per operator answer: consume the answer to the publish-blocked question and run a
+    // single cycle. If the leak scan still refuses that cycle's publication, publishBlocker and
+    // publishBlockedCycles stay set, so the next runStep parks here again with a fresh question.
+    if (state.pendingAnswer?.id === "publish-blocked") {
+      ctx.save((s) => { s.pendingAnswer = null; });
+    } else {
+      const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";
+      await engine.enterBlocked({ kind: "external", id: "publish-blocked", method: "publish", question: `Publication of ${si.publishBlockedCycles} merged cycle(s) is blocked by the pre-push leak scan at ${detail}; remove the identifier or stop the run.`, options: ["Remove the identifier and resume", "Stop the run"] });
+      return;
+    }
   }
   if (!si.current && nothingFoundInARow(si.history) >= cfg.limits.nothingFoundToStop) { await finalize(ctx, "backlog_exhausted"); return; }
   const resume = Boolean(si.current);

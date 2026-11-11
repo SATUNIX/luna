@@ -200,6 +200,7 @@ export interface SetupState {
 /** The operator's answer to the question a blocked run waited on, kept for the next session's briefing (lib/engine.ts). */
 export interface PendingAnswer {
   text: string;
+  id?: string;
   question?: string;
   kind?: BlockerRecord["kind"];
   approved?: boolean;

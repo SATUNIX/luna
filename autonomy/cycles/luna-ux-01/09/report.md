@@ -58,4 +58,4 @@ directly-opened page falls back to its declared parent.
 - Process: the `workflow_run` implementer committed `dbf1c35` but did not push (same as cycles 06
   and 08); checked `git status`/remote and pushed directly. The cycle's own reviewer step returned
   no visible text, so an independent reviewer was run separately and passed.
-- Diff excluding lockfile and records: 4538 characters. No control path touched.
+- Diff excluding the lockfile, `autonomy/cycles/luna-ux-01/` and `autonomy/runs/luna-ux-01/`: 5722 characters (code change plus the `JOURNAL.md` line). No control path touched.

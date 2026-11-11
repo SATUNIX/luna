@@ -33,7 +33,7 @@ directly.
 ## Diff size
 
 `git diff --no-renames 25cc6eab64b5..HEAD -- . ":(exclude)package-lock.json"
-":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c` → **4538**
+":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c` → **5722**
 characters, well under the 30000 review budget.
 
 ## Failures found and fixed in this phase

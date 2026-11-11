@@ -3,7 +3,7 @@ Mode: fix
 
 Cycle 1 of run `luna-core-01` (stream `core`), continuation from base `d932d6f02e41`. Two
 evidenced docs-vs-code defects fixed, each with a check that fails without it. Diff 8,856 chars
-(limit 30,000). No operator control path, `.github/`, `package.json` script or charter changed.
+for code and docs (12,082 including this cycle's proposal); limit 30,000. No operator control path, `.github/`, `package.json` script or charter changed.
 
 Item: install page documented `PI_KIT_GUIDELINES_FILE`, which nothing reads; renamed to `PI_KIT_GUIDELINES_PATH` and pinned every INSTALL env row to a manifest `env[]` - 486d3d2 - `npm run smoke:docs` (new assertion fails on the old row: `docs/INSTALL.md lists PI_KIT_GUIDELINES_FILE for "guidelines", but its manifest env[] does not declare it`)
 Item: documented settings `PI_KIT_LEAN_CTX` and `PI_KIT_VERIFY_PENDING_TTL_MS` were missing from the generated reference; declared them in their manifests and INSTALL table - a9b6f21 - `npm run smoke:docs` + `node packages/core/reference.ts --check` (both rows now appear with Purpose and link; dropping either manifest entry fails the assertion)

@@ -42,5 +42,5 @@ excluded), against `autonomy/CHARTER.md`: **VERDICT: PASS**. The only non-record
 
 ## Diff budget
 
-`git diff --no-renames d932d6f02e41..HEAD` excluding lockfile and cycle/run records: **8,856 chars**
-(limit 30,000).
+`git diff --no-renames d932d6f02e41..HEAD` excluding lockfile and cycle/run records: **12,082
+chars** (8,856 for code and docs; the rest is this cycle's proposal); limit 30,000.

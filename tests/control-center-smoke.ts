@@ -523,6 +523,8 @@ tests.push([
       const label = `/${name}`;
       assert.equal(options.filter((option) => option === label).length, 1, `${label} must be listed exactly once`);
     }
+    // A built-in that getCommands() does not report is still there: dedupe must not drop built-ins.
+    assert.equal(options.filter((option) => option === "/settings").length, 1, "a built-in absent from getCommands() is listed once");
   },
 ]);
 
@@ -550,7 +552,9 @@ tests.push([
     // First answer opens the value dialog; the second cancels (undefined), which must close the hub.
     const recorded = makeUi([], ["Display mode: compact", undefined]);
     const ctx = { mode: "rpc" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
-    await openHub(makeDeps({ model, commands: [], ctx }), "display");
+    const sent: string[] = [];
+    await openHub(makeDeps({ model, commands: [], ctx, sent }), "display");
+    assert.deepEqual(sent, [], "a cancel dispatches nothing");
     assert.equal(recorded.selects.length, 2, "a cancelled value dialog closes the hub; it must not open the parent page");
     assert.match(recorded.selects[1]?.title ?? "", /^Display mode \(now compact\)/, "the second dialog is the value picker");
   },

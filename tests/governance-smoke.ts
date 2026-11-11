@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadExtension, fakePi } from "../packages/core/eval/harness.ts";
+import { loadExtension, fakePi, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
 
 function withCwd<T>(cwd: string, fn: () => T | Promise<T>): Promise<T> {
@@ -145,6 +145,61 @@ async function testOutOfScopeNeverReachesBroker() {
       assert.equal(fs.existsSync(path.join(consoleDir, "pending")), false, "out-of-scope action must never reach the broker");
     });
   } finally { restoreConsole(); }
+}
+
+// A repository can commit a link under .pi. A headless pentest request must refuse that
+// path before waiting for an answer; a real console request must still accept a signed answer.
+async function testHumanConsoleRequestStaysInWorkspace() {
+  const restoreKit = isolateKitEnv();
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-console-link-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-console-outside-"));
+  const restoreHome = setEnv("HOME", path.join(workspace, "home"));
+  const restoreAgent = setEnv("PI_CODING_AGENT_DIR", path.join(workspace, "agent"));
+  const restoreDataRoot = setEnv("PENTEST_DATA_ROOT", undefined);
+  const restoreConsole = setEnv("PI_KIT_HUMAN_CONSOLE_DIR", undefined);
+  const restoreTimeout = setEnv("PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS", "1200");
+  const keepAlive = setInterval(() => {}, 1000);
+  const input = { tool: "remote_request", url: "https://example.test/" };
+  try {
+    writeCompleteEngagement(workspace);
+    fs.mkdirSync(path.join(workspace, ".pi"), { recursive: true });
+    fs.symlinkSync(outside, path.join(workspace, ".pi", "human-console"));
+    startConsole();
+    await withCwd(workspace, async () => {
+      const pi = await loadGovernance(workspace);
+      const abort = new AbortController();
+      const call = pi.handlers.get("tool_call")({ toolName: "mcp", input }, { hasUI: false, ui: {}, signal: abort.signal }) as Promise<Decision | undefined>;
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.deepEqual(fs.readdirSync(outside), [], "a linked console directory must not receive a request or subdirectories");
+        const result = await call;
+        assert.equal(result?.block, true, "an unfilable request must block the action");
+        const audit = fs.readFileSync(path.join(workspace, ".pi", "pentest", "audit", "audit.jsonl"), "utf8");
+        assert.match(audit, /human_console_request_unfilable/, "the refusal must be audited");
+      } finally {
+        abort.abort();
+        await call;
+      }
+
+      fs.unlinkSync(path.join(workspace, ".pi", "human-console"));
+      const approved = callTool(pi, "mcp", input);
+      const pending = path.join(workspace, ".pi", "human-console", "pending");
+      let id: string | undefined;
+      for (let i = 0; i < 100 && !id; i++) {
+        const file = fs.existsSync(pending) ? fs.readdirSync(pending).find((name) => name.endsWith(".json")) : undefined;
+        id = file?.replace(/\.json$/, "");
+        if (!id) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(id, "a normal request is filed inside the workspace");
+      answerPending(path.join(workspace, ".pi", "human-console"), id, { approved: true });
+      assert.equal((await approved)?.block, undefined, "the console's signed answer approves the normal request");
+    });
+  } finally {
+    clearInterval(keepAlive);
+    restoreTimeout(); restoreConsole(); restoreDataRoot(); restoreAgent(); restoreHome(); restoreKit();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 }
 
 // 6. Checked-in env templates are not protected paths. The installer scaffolds
@@ -408,6 +463,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["configured engagement locks down direct tools by default", testConfiguredEngagementLocksDownDirectTools],
   ["PI_ALLOW_DIRECT_TOOLS overrides in both directions", testOperatorOverrideBothDirections],
   ["out-of-scope target never reaches the broker", testOutOfScopeNeverReachesBroker],
+  ["pentest console request refuses a workspace link and accepts a signed normal answer", testHumanConsoleRequestStaysInWorkspace],
   ["env templates are not protected paths", testEnvTemplatesAreNotProtectedPaths],
   ["broker settles, and blocks the action, when the audit chain is corrupt", testBrokerResolvesWhenAuditFails],
   ["an unauditable allow fails closed; read-only tools stay available", testUnauditableAllowFailsClosed],

@@ -428,6 +428,9 @@ link to a directory, drives those writers through their real entry points, and c
 outside the workspace changed; it also checks the helper's refusals and modes directly. ESLint
 (`eslint.config.ts`) rejects a raw `writeFileSync`, `appendFileSync`, `createWriteStream` or
 write-mode `openSync` in an extension unless the file is on a reviewed allowlist with its reason.
+The pentest governance extension also files human-console approval requests through the helper;
+`tests/governance-smoke.ts` checks that a linked console directory cannot redirect a request and
+that a signed answer still approves a request filed inside the workspace.
 
 Profile restores (`/profile` rollback and the installer's `--settings-only` rollback) write
 through an exclusive temporary file created 0600 before it is given the snapshot's mode, so a
@@ -446,10 +449,6 @@ Not covered:
 - On Windows `O_NOFOLLOW` and the owner check do not exist; the `lstat` checks still run.
 - A path the operator sets (for example `PI_KIT_FIREWALL_AUDIT_LOG` or
   `PI_KIT_BRANCH_LEASES_FILE`) is trusted: only its final name is checked.
-- The `pentest-governance-domain` extension's human-console approval request is still written
-  with plain `fs` calls, and that file is on the ESLint allowlist as a known gap. Answers are
-  signed, so a planted answer file cannot approve, but a committed link can still redirect where
-  a request is written.
 
 ## The Luna installer and install markers
 

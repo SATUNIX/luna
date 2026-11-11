@@ -366,23 +366,29 @@ export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> 
   const renderer = deps.ctx.mode === "tui" ? tuiRenderer(deps) : selectRenderer(deps);
   let page = startPage;
   let focus: string | undefined;
+  // Pages reached by navigation, most recent last. Back pops here first, so a page opened through
+  // another page returns there even when PAGES declares a different static parent.
+  const stack: string[] = [];
   const loop = async (): Promise<void> => {
     for (;;) {
       const rows = rowsForPage(page, deps);
-      const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: parentPage(deps.model, page), focus });
+      // The effective back target: where navigation came from, else the page's declared parent.
+      const back = stack.at(-1) ?? parentPage(deps.model, page);
+      const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: back, focus });
       focus = undefined;
       if (result === undefined) return;
       if (result === "back") {
-        const parent = parentPage(deps.model, page);
-        if (!parent) return;
-        // Back on the parent, the cursor returns to the row that opened this page.
-        focus = deps.model.rows.find((r) => r.page === parent && r.targetPage === page)?.id;
-        page = parent;
+        const target = stack.pop() ?? parentPage(deps.model, page);
+        if (!target) return;
+        // Back on the returned-to page, the cursor returns to the row that opened this page.
+        focus = deps.model.rows.find((r) => r.page === target && r.targetPage === page)?.id;
+        page = target;
         continue;
       }
       const row = findRow(deps.model, result.id) ?? rows.find((r) => r.id === result.id);
       if (!row) continue;
       if (row.kind === "page" && row.targetPage) {
+        stack.push(page);
         page = row.targetPage;
         continue;
       }

@@ -604,6 +604,21 @@ tests.push([
 ]);
 
 tests.push([
+  "Back follows the path the operator took, not the page's static parent",
+  async () => {
+    initTheme();
+    // Settings -> Display: Display's declared parent is System, so a static parent would land there.
+    const recorded = makeUi([{ id: "settings.display" }, "back"]);
+    await openHub(makeDeps({ model: await modelFor([]), commands: [], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: recorded.ui } }), "settings");
+    assert.equal(recorded.customCalls.length, 3);
+    assert.match(recorded.rendered[1] ?? "", /│ Display/, "the Display page opened from Settings");
+    assert.match(recorded.rendered[2] ?? "", /│ Settings/, "Back returns to the page that opened Display");
+    assert.match(recorded.rendered[2] ?? "", /→ Display/, "the cursor is on the row that opened Display");
+    assert.doesNotMatch(recorded.rendered[2] ?? "", /│ System/, "Back does not fall back to the static parent");
+  },
+]);
+
+tests.push([
   "the hub overlay draws a theme border and dims the transcript behind it",
   async () => {
     initTheme();

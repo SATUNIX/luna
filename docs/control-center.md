@@ -92,7 +92,9 @@ The header strip combines the profile, effort, thinking level, security level an
 A row that runs a typed command, or pre-fills the editor, closes the hub, so the command's own
 dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/menu`. Changing the
 thinking level, or choosing a row that only shows information, keeps the hub open: it reopens on
-the same row with every value read again. Back returns the cursor to the row that opened the page.
+the same row with every value read again. Back follows the path the operator took: it returns to the
+page the current one was opened from and puts the cursor back on the row that opened it. Only a page
+opened directly, rather than reached from another page, falls back to the page's declared parent.
 
 ## The curated `/` menu
 

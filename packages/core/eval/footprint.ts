@@ -126,6 +126,29 @@ export async function measureFootprint(profile: string): Promise<Footprint> {
   });
 }
 
+/**
+ * Every slash command a profile registers, sorted. It loads the profile exactly as
+ * `measureFootprint` does (the same hermetically isolated environment, fake pi and session_start
+ * handler) and collects `pi.commands` instead of tools. Used to keep the autonomy supervisor's
+ * start-up harness check a marker subset of what the worker profile really registers.
+ */
+export async function registeredCommands(profile: string): Promise<string[]> {
+  return hermetically("pi-kit-commands-", async (workspace) => {
+    const definition = loadProfileDef(profile);
+    const commands = new Set<string>();
+    for (const resolved of resolveProfile(definition.include ?? [])) {
+      if (resolved.avenue === "external") continue;
+      const register = await loadExtension(extensionRelPath(resolved.name, resolved.avenue));
+      const pi = fakePi();
+      register(pi.api);
+      const onSessionStart = pi.handlers.find("session_start");
+      if (onSessionStart) await onSessionStart({}, headlessContext(workspace));
+      for (const name of pi.commands.keys()) commands.add(name);
+    }
+    return [...commands].sort();
+  });
+}
+
 /** The two consecutive turns' prompts and what they say about the effort block. */
 export interface PromptPrefix {
   /** The system prompt of each measured turn, in order. */

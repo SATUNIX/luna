@@ -1,25 +1,19 @@
 # Cycle 14 plan — `luna-core-01`, stream `core`
 
-Mode: fix. Goal: repair two evidenced defects without widening scope.
+Mode: fix. Two evidenced defects.
 
 ## Item 1 — `/compress` must not crash on a history with no groupable turns
-- Justification: charter "fixes a real, evidenced problem"; user-visible (`/compress` cancels).
-- Change: guard the first/last-turn loop in `buildCompressedSummary` so an empty `turns` array
-  yields the header/objective/files summary with `turns: 0` instead of throwing.
-- Checks: add an empty-turn case to `tests/compress-smoke.ts`; run `npm run smoke:compress`.
-- Docs: none (no user-visible command change; the bug is that it failed to behave as documented).
+- Justification: real evidenced bug, user-visible (`/compress` cancels instead of summarising).
+- Change: guard `buildCompressedSummary`'s first/newest loop with `turns.length > 0`; an empty
+  `turns` returns the normal header/objective/files summary with `details.turns` 0.
+- Checks: new empty-turn case in `tests/compress-smoke.ts`; `npm run smoke:compress`.
 
 ## Item 2 — footprint CLI must report a malformed baseline cleanly
-- Justification: cycle-12 consolidation; today a corrupt `--baseline` crashes with a stack trace.
-- Change: wrap the baseline read; on parse failure print one `footprint: cannot read baseline ...`
-  line and return 2, leaving the file untouched (operator removes it to regenerate).
-- Checks: add a malformed-file case to `tests/eval-footprint-smoke.ts`; run
-  `npm run smoke:eval-footprint`.
-- Docs: `docs/efficiency-and-loops.md` if it documents CLI exit codes; otherwise none.
+- Justification: cycle-12 consolidation; a corrupt `--baseline` crashes with a stack trace.
+- Change: wrap the baseline read; clean `footprint: cannot read baseline ...` line, exit 2, file
+  untouched in both report and `--write-baseline` modes; a missing file is still created.
+- Checks: malformed-file case in `tests/eval-footprint-smoke.ts`; `npm run smoke:eval-footprint`;
+  one sentence in `docs/efficiency-and-loops.md`.
+- Deferred: dead code (#9), memory-vault `firstPrompt` (#3), orchestrate-smoke env (#4).
 
-## Deferred (HANDOFF/proposals)
-Dead code (`effort:838`, `context-sieve:67`), memory-vault `firstPrompt` (#3), orchestrate-smoke
-env (#4) — out of this cycle's budget; next cycle.
-
-## Board
-No assigned items.
+Board: none.

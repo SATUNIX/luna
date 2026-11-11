@@ -2,16 +2,18 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `fc13571d21c7` (head of `stream/core`, holds cycles 01–12).
-  Cycle 13 commits, both pushed: `c088feb` (review + plan), `47f48d0` (the fix), plus the records
-  under `autonomy/cycles/luna-core-01/13/` and the `luna-core-01/13` line in `autonomy/JOURNAL.md`.
-- Cycle 13 outcome: **successful** (fix / consolidate). The board re-listed PG-19 and V-81, both
-  merged in cycle 12; they were re-verified green and left untouched. The one change fixes a real
-  docs-drift defect: `docs/capability-research-workflow.md` and the caveman comment claimed
-  context-sieve wipes contributions on `session_start`, while the code never deletes and skips
-  files older than `SESSION_EPOCH_NS`; two `tests/docs-smoke.ts` guards now pin the corrected text.
-- Reviewable diff is tiny (48 insertions / 5 deletions across 5 files) — well under the 60,000
-  review read budget.
+- Branch `pi/luna-core-01`, base `68d70c78940c` (head of `stream/core`, holds cycles 01–13).
+  Cycle 14 commits: `aa676c2` (compress zero-turn guard), `003b36b` (footprint baseline guard),
+  plus the records under `autonomy/cycles/luna-core-01/14/` and the `luna-core-01/14` line in
+  `autonomy/JOURNAL.md`.
+- Cycle 14 outcome: **successful** (fix). Board empty. Two evidenced defects fixed: `/compress`
+  threw `turn 0 is out of range` on a history with no groupable turns, and the footprint CLI
+  crashed with a stack trace on a malformed `--baseline` (now a clean exit 2). Targeted smokes
+  green, independent reviewer PASS. Reviewable diff 47 insertions / 6 deletions over 5 files.
+- Deferred with evidence in `autonomy/cycles/luna-core-01/14/review.md`: dead code
+  (`effort/index.ts:838` empty ternary; `context-sieve/index.ts:67` two dead `DYNAMIC_IDS` entries),
+  `memory-vault/index.ts:133` consuming `firstPrompt` on a promptless run, and
+  `tests/orchestrate-commands-smoke.ts` not clearing `PI_KIT_INTERNAL_CHILD`.
 
 ## What cycle 12 did
 

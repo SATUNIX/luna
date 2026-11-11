@@ -215,10 +215,10 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): 
     const first = critical[0];
     if (first && critical.length >= 2) {
       const merged: Seg = { id: "critical", prio: 0, text: `${first.text} +${critical.length - 1}` };
-      const replace = (segs: Seg[]) => {
-        let placed = false;
-        return segs.flatMap((s) => (s.prio !== 0 ? [s] : placed ? [] : ((placed = true), [merged])));
-      };
+      // One merged summary across both sides: placed in the first side that carries a critical
+      // segment (left, when it has one), every other critical segment dropped.
+      let placed = false;
+      const replace = (segs: Seg[]) => segs.flatMap((s) => (s.prio !== 0 ? [s] : placed ? [] : ((placed = true), [merged])));
       l = replace(l);
       r = replace(r);
     }

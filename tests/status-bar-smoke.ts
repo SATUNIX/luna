@@ -233,6 +233,19 @@ const tests = {
     assert.match(misconfigured, /unattended NOT enforced/, "an unattended request that nothing enforces is a loud warning, not a reassurance");
   },
 
+  criticalWarningSummaryAppearsOnceWhenNarrow() {
+    // Both the left warnings and the right verify-gate chip are priority 0, so the narrow line has
+    // to merge several criticals into one "<first> +N" summary. The summary must be placed once,
+    // not once per side (the pre-fix bug printed it twice).
+    const state = baseState({ unattended: { active: true, label: "unattended", boundary: "container", autoApprove: true }, compaction: { enabled: false, reason: "disabled in settings" }, agents: { live: 0, failed: 2 }, statuses: [{ key: "verify-gate", text: "FAIL" }] });
+    const line = footer.renderFooter(state, plain, 40, "default").map(strip).join("\n");
+    const summaries = line.match(/! UNATTENDED \+\d+/g) ?? [];
+    assert.equal(summaries.length, 1, `the merged critical summary is placed exactly once:
+${line}`);
+    assert.match(line, /! UNATTENDED/, `at least one critical warning is still named:
+${line}`);
+  },
+
   unknownAndMissingValuesAreNotZero() {
     const unknownCtx = footer.renderFooter(baseState({ context: { contextWindow: 200000, percent: null, tokens: null } }), plain, 100, "default").map(strip).join("\n");
     assert.match(unknownCtx, /ctx \?\/200k/);

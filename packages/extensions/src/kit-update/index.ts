@@ -305,6 +305,8 @@ export interface KitInstall {
   commit?: string | null;
   /** git only: the registered source is a retired private one; /update kit migrates it to the public source. */
   legacy?: boolean;
+  /** git only: commits the branch head is ahead of the checked-out commit (best effort; 0 in sync, absent when it cannot be computed). */
+  trunkAhead?: number;
 }
 
 interface PackageEntry {
@@ -610,6 +612,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
   let note: string | null = null;
   let tags: Record<string, string> | null = kitTags;
   let commit: string | null = null;
+  let trunkAhead: number | undefined;
   let legacyOrigin = false;
   if (migrateSource && !migrateTo) {
     available = true;
@@ -651,6 +654,13 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
       const main = branchHead(remote, dist.branch);
       const trunk = branchHead(remote, dist.trunkBranch);
       tags = { latest: latest ?? "-", next: main ? `${dist.branch}@${main.slice(0, 7)}` : "-", trunk: trunk ? `${dist.trunkBranch}@${trunk.slice(0, 7)}` : "-" };
+      // Best effort: the gap between the installed checkout and the branch head, for the
+      // trunk-ahead notice. No number (offline, not a checkout) means no notice.
+      if (kit.root && main) {
+        const count = await git(["-C", kit.root, "rev-list", "--count", `HEAD..${main}`]);
+        const parsed = count === null ? NaN : Number.parseInt(count.trim(), 10);
+        if (Number.isInteger(parsed) && parsed >= 0) trunkAhead = parsed;
+      }
       if (kit.channel === "next") {
         target = main ? `${dist.branch}@${main.slice(0, 7)}` : null;
         available = Boolean(main && commit && main !== commit);
@@ -709,12 +719,49 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     return { source: e.source, name: npm.name, scope: e.scope, installed, kitPin, latest, action };
   });
 
-  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(legacyOrigin ? { legacyOrigin } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
+  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(trunkAhead !== undefined ? { trunkAhead } : {}), ...(legacyOrigin ? { legacyOrigin } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
+}
+
+/** The state the trunk-ahead notice reads: the channel the install follows and the commit gap. */
+export interface TrunkAheadState {
+  channel: string;
+  ahead: number;
+}
+
+/**
+ * One line telling the owner the kit's trunk is ahead of the installed copy, or null when the
+ * trunk is not ahead or no channel is known. The wording names the install's real channel so
+ * `/update channel <name>` accepts it.
+ */
+/** The channel that follows the repository's branch (the trunk): `next` tracks `main` in git delivery. */
+export const TRUNK_CHANNEL = "next";
+
+export function trunkNotice(state: TrunkAheadState): string | null {
+  if (!Number.isFinite(state.ahead) || state.ahead <= 0 || !state.channel) return null;
+  return `trunk is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
 }
 
 /** Anything the user can act on (pinned-only notices do not count). */
 export function hasUpdates(report: UpdateReport): boolean {
   return report.pi.available || report.kit.available || report.packages.some((p) => p.action === "reconcile" || p.action === "update");
+}
+
+/** What a session-start check should show: the notices to send, and whether the status bar points at /update. */
+export interface SessionStartNotice {
+  notices: string[];
+  setStatus: boolean;
+}
+
+/**
+ * The session-start decision. A trunk gap owns the kit notice: showing the generic summary next
+ * to it would say the same thing twice, and the trunk line names the command that actually
+ * moves the copy forward. pi's own built-in update notice is separate and is not part of this.
+ */
+export function sessionStartNotice(report: UpdateReport): SessionStartNotice {
+  const trunk = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
+  if (trunk) return { notices: [trunk], setStatus: hasUpdates(report) };
+  if (!hasUpdates(report)) return { notices: [], setStatus: false };
+  return { notices: [summaryLine(report)], setStatus: true };
 }
 
 export function summaryLine(report: UpdateReport): string {
@@ -741,6 +788,8 @@ export function formatReport(report: UpdateReport): string {
   lines.push(`  pi-system  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
   if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}${k.tags.trunk !== undefined ? `, trunk ${k.tags.trunk}` : ""}`);
   if (k.note) lines.push(`             ${k.note}`);
+  const trunkGap = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
+  if (trunkGap) lines.push(`             ${trunkGap}`);
   const piInfo = report.pi;
   const piState = piInfo.available
     ? `  →  ${piInfo.latest}`
@@ -1216,9 +1265,9 @@ export default function (pi: ExtensionAPI) {
     void check(cwd)
       .then((report) => {
         if (report.staleRoles?.length) ctx.ui.notify(`pi-system: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
-        if (!hasUpdates(report)) return;
-        ctx.ui.setStatus("kit-update", "updates: /update");
-        ctx.ui.notify(summaryLine(report), "info");
+        const { notices, setStatus } = sessionStartNotice(report);
+        for (const notice of notices) ctx.ui.notify(notice, "info");
+        if (setStatus) ctx.ui.setStatus("kit-update", "updates: /update");
       })
       .catch(() => {});
   });
@@ -1258,6 +1307,9 @@ export default function (pi: ExtensionAPI) {
         const other = (report.kit.kind === "npm" || report.kit.kind === "git") && report.kit.channel === "next" ? "latest" : "next";
         options.push({ label: `Switch pi-system channel to ${other}${other === "next" ? " (tracks main)" : " (releases)"}`, value: `channel ${other}` });
         options.push({ label: "Show details", value: "status" });
+        // The bare /update screen already carries the trunk gap; the selector title is a single line.
+        const trunkGap = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
+        if (trunkGap) c.ui.notify(trunkGap, "info");
         const choice = await c.ui.select(summaryLine(report), options.map((o) => o.label));
         if (choice === undefined) return;
         arg = options.find((o) => o.label === choice)?.value ?? "status";

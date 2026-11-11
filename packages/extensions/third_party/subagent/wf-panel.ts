@@ -45,6 +45,7 @@ import type { ToolContext } from "./types.ts";
 import { META_NAME } from "./wf-meta.ts";
 import { bindWorkflowPanelOpener, rememberDigest } from "./workflow-tools.ts";
 import { withInputHold } from "./shared/input-owner.ts";
+import { withOverlayFrame } from "./overlay-frame.ts";
 
 // --- formatting -------------------------------------------------------------------------------
 
@@ -729,42 +730,43 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
   // on a reload, which never settles the overlay.
   await withInputHold("the workflow panel", () =>
     ctx.ui.custom<undefined>(
-      (tui, theme, keybindings, done) => {
-        let closed = false;
-        const offRegistry = registry.subscribe(() => tui.requestRender());
-        // Elapsed times tick while the panel is open.
-        const timer = setInterval(() => tui.requestRender(), 1000);
-        timer.unref?.();
-        const cleanup = () => {
-          if (closed) return;
-          closed = true;
-          clearInterval(timer);
-          offRegistry();
-        };
-        const panel = new WorkflowPanel(
-          {
-            registry,
-            narrator: narration,
-            cwd,
-            paint: themePaint(theme),
-            requestRender: () => tui.requestRender(),
-            close: () => {
-              cleanup();
-              done(undefined);
+      (tui, theme, keybindings, done) =>
+        withOverlayFrame(tui, theme, (finish) => {
+          let closed = false;
+          const offRegistry = registry.subscribe(() => tui.requestRender());
+          // Elapsed times tick while the panel is open.
+          const timer = setInterval(() => tui.requestRender(), 1000);
+          timer.unref?.();
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            clearInterval(timer);
+            offRegistry();
+          };
+          const panel = new WorkflowPanel(
+            {
+              registry,
+              narrator: narration,
+              cwd,
+              paint: themePaint(theme),
+              requestRender: () => tui.requestRender(),
+              close: () => {
+                cleanup();
+                finish(undefined);
+              },
             },
-          },
-          runId,
-        );
-        return {
-          render: (width: number) => panel.render(width),
-          invalidate: () => {},
-          handleInput: (data: string) => {
-            const key = keyOf(data, keybindings);
-            if (key) panel.press(key);
-          },
-          dispose: cleanup,
-        };
-      },
+            runId,
+          );
+          return {
+            render: (width: number) => panel.render(width),
+            invalidate: () => {},
+            handleInput: (data: string) => {
+              const key = keyOf(data, keybindings);
+              if (key) panel.press(key);
+            },
+            dispose: cleanup,
+          };
+        }, done),
       supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
     ),
   );

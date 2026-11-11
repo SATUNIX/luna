@@ -1,70 +1,74 @@
 # Cycle 01 — Report (run luna-ux-01, stream `ux`)
 
 Outcome: successful
-Mode: fix
-Base: afecc1bbb33d  Head (last code commit): e7f29cc  Branch: pi/luna-ux-01 (pushed)
+Mode: improve
 
-## What ran
+Board: V-05 done - a TUI session now opens on a Luna launch screen (wordmark, pi version, five first actions) with a self-stopping reveal, reduced-motion, narrow-terminal and ASCII fallbacks, wired through the existing `session_start` handler.
 
-First cycle of the run; no board items and no HANDOFF, so the review started from discovered
-defects. Three parallel `scout` agents surveyed the stream surfaces (`/` menu, TUI overlays, cat
-animation/status-bar polish), each told to treat the docs as hypotheses and cite `file:line` with a
-reproduction. That produced two confirmed custom-footer defects (F-1, F-2), each fixed by a gated
-implementer+reviewer plan and independently verified. A second session re-reviewed the `/` command
-menu, found candidate C-1, and independent review **refuted** it before merge, so it was reverted.
-Cycle 01 therefore ships F-1 and F-2; C-1 is a no-op.
+Item: launch screen renderer and factory - `f22cfe5` (with the ASCII fix and generated reference), `29569d1` (menu label), `84e52cf` (test hardening) - proven by the new `npm run -s smoke:launch-screen` (10/10), which fails at base because `tests/launch-screen-smoke.ts` cannot load the module; the wiring assertions pin one `setHeader` in the TUI (including `commandMenu: "all"`) and none over rpc/print, in a child, or with `launchScreen: "off"`.
 
-## Items
+Item: records and plan - `b6fd708` - proven by `npm run -s smoke:docs` (the cycle's own record/journal consistency gate).
 
-Item: F-1 — narrow/default status bar printed the merged critical-warning summary twice - bec874847ccae92249dfdbbc01060cd1915e0ec1 - tests/status-bar-smoke.ts `criticalWarningSummaryAppearsOnceWhenNarrow` (fails at base with `2 !== 1`)
-`fitLine`'s `replace` helper scoped `let placed = false` inside its own body, so `replace(l)` and
-`replace(r)` each inserted the same `"<first> +N"` segment. Hoisted the flag so the summary is
-placed once across both sides.
-`packages/extensions/third_party/custom-footer/render.ts`, `tests/status-bar-smoke.ts`
+## What changed
 
-Item: F-2 — `/footer ascii on` did not reach the todo checklist - d4f3ebd39cbf2f2cda0b1a21dfc76545abe0aa56 b33ed760b43dae6ba636ec5b6523351096dac79f - tests/status-bar-smoke.ts `todoWidget` (unit) and `asciiSettingReachesTodoWidget` (wiring through `/footer ascii on`)
-`docs/status-bar-and-costs.md` says the todo widget uses plain characters. Added a trailing `ascii`
-parameter to `renderTodoWidget`, passed `settings.ascii` from the call site, and asserted both the
-parameter and the wiring (loads the extension, renders from a real todo file, runs the command and
-checks the widget pi holds).
-`packages/extensions/third_party/custom-footer/widgets.ts`, `.../index.ts`, `tests/status-bar-smoke.ts`
-
-Record commits: `a732895` (first review + plan), `e4b3da5` (continuation review + plan).
-
-## Continuation — second session, base `afecc1bbb33d`
-
-Item: C-1 (refuted, reverted) — claimed curated `/` menu lost after `/new`, `/resume`, `/fork` - 0e77b67 (false fix) reverted by e7f29cc - no regression test (the change is a revert); refuted by host source and a live RPC run
-The reconnaissance inferred that pi does not re-import the extension module on a session
-replacement, so `registerCommandMenu`'s closure `curated` would stay `true`. Independent review
-falsified this: `core/extensions/loader.js:513-517` calls `await factory(load.api)` on every
-`loadExtension`, and `agent-session-runtime.js` rebuilds the runtime through `createRuntime` for
-`/new`, `/resume` and `/fork`, so `curated` is fresh and the provider is re-registered by the new
-invocation. The attempted fix `0e77b67` and its synthetic smoke case (fire `session_shutdown`,
-clear providers, fire `session_start` without re-invoking the factory — a sequence the host never
-produces) were reverted in `e7f29cc`. No functional change remains.
+- `packages/extensions/src/control-center/launch-screen.ts` (new): pure
+  `launchLines({ width, frame, reducedMotion, ascii, version, hubKey, menuCmd, theme })` and the
+  `launchHeader({ version, hubKey, menuCmd, ascii, reducedMotion })` factory, plus exported
+  `isReducedMotion(ui)` and `REVEAL_FRAMES`/`REVEAL_FRAME_MS`/`COMPACT_WIDTH`. The reveal is a
+  progressive slice of the same content over at most twelve 90 ms frames on an `unref()`ed
+  interval, each frame calling `tui.requestRender()`; the interval stops itself at the final frame
+  and again in `dispose()`. Reduced motion (`PI_KIT_REDUCED_MOTION=1`, `ui.json`
+  `reducedMotion: true`, `TERM=dumb`, or `CI`) returns the final frame with no timer. Every line is
+  `truncateToWidth`-clipped and `visibleWidth`-fits the given width; below 60 columns the art is
+  replaced by one compact line that keeps `Luna` and the menu command adjacent; ASCII mode strips
+  terminal escapes so the output is printable US-ASCII.
+- `packages/extensions/src/control-center/index.ts`: `installLaunchHeader(pi, ctx)` runs inside
+  the **one existing** `pi.on("session_start")` handler, after `curated = true` and before the
+  `commandMenu === "all"` early return, so it also runs for the all-commands menu. It requires
+  `ctx.mode === "tui"`, `PI_KIT_INTERNAL_CHILD !== "1"`, a `setHeader` function, and
+  `launchScreen !== "off"`. The menu action is `/menu` when `pi.getCommands()` lists it, else
+  `/kit`. No second `session_start` handler was added.
+- `packages/extensions/src/control-center/extension.json`: declares `PI_KIT_ASCII` and
+  `PI_KIT_REDUCED_MOTION`; `docs/reference.md` regenerated with `npm run catalog`.
+- `package.json`: exactly one added script, `smoke:launch-screen`; no existing script changed.
+- `docs/control-center.md`: new "Launch screen" section with the actions, reveal and reduced
+  motion, narrow and ASCII modes, and the `launchScreen: "off"` opt-out.
+- `tests/launch-screen-smoke.ts` (new): 10 cases covering the renderer, widths, ASCII, reduced
+  motion from both sources, the reveal timer and `dispose()`, the registration guards, `commandMenu:
+  "all"`, and the `/menu`/`/kit` fallback.
 
 ## Verification
 
-`smoke:status-bar` 25/25, `smoke:cat-status` 11/11 at the first-batch head; `smoke:command-menu`
-11/11, `test:typecheck`, `test:lint` at `e7f29cc`. Each F-1/F-2 assertion was shown to fail against
-the base file and pass after. A read-only `reviewer` subagent reviewed the first batch and returned
-**PASS**; its warning (F-2 test did not pin the call site) was fixed in `b33ed76`. The continuation
-diff against `afecc1bb` is net zero for non-record files. Full gate (`/opt/autonomy/gate.sh`) left
-to the supervisor.
+`smoke:launch-screen` 10/10, `smoke:command-menu` 11/11, `smoke:control-center` 31/31,
+`smoke:docs`, `test:typecheck`, `test:lint`, and `node packages/core/reference.ts --check` all pass
+at `84e52cf`. An independent `reviewer` subagent read the charter, the plan and the whole diff and
+returned REVIEW-PASS; its coverage warnings are fixed in `84e52cf` and its two accepted deviations
+are recorded in `verify.md`. The cycle diff excluding the records and lockfile is 27,672 chars.
+Never ran `npm test` or `npm run check:all`.
 
-## Recorded, not taken
+## The steward P0 (not a board item)
 
-- `autonomy/proposals/luna-ux-01-01-idle-cat-blink.md` — the `idle` blink frame is dead code
-  (`cat.ts:36` vs `index.ts:387-391`) while the smoke asserts it and the docs say it does not
-  happen. Intent is ambiguous (two commits disagree); needs an operator decision.
-- `autonomy/proposals/luna-ux-01-01-human-console-multi-card-focus-theft.md` — a console card never
-  takes an input hold, so `processPending` can open two cards at once. The older
-  `human-console-input-hold-race` proposal is refuted (no `await` in the cited gap).
-- Also checked and left: `frameAt` returning `""` for non-finite elapsed (unreachable); RPC value
-  sub-dialog timeout returning `"back"` (latent); weakening-confirm with no dialog timeout.
+The steward reports `ci-complete` and both `pi-compat` lanes red on candidate `d827f5063521`. That
+candidate is not in this checkout or the remote (`git cat-file -t d827f5063521` fails; the only
+refs are this branch and `refs/autonomy/reset`, both at the base), only pi 1.4.0 is installed and
+only `pi-tui-1.4.0.tgz` is cached, so an older-pi lane cannot be run offline. Every
+plausible version-sensitive check is green at this head: `smoke:docs`, `smoke:control-center`,
+`smoke:command-contract`, `smoke:observability-contracts`, `smoke:pi-host-peers`,
+`smoke:prompt-arguments`, `smoke:liveness-containment`, `smoke:command-menu`. The change adds no new
+pi-tui import (control-center's overlay-frame already imports `stripTerminalSequences`,
+`visibleWidth` and `truncateToWidth` at the base). No speculative compat edit was made: it would
+lack an evidenced problem and risk the pinned lane. A rebuilt integration candidate is required to
+reproduce; if it is still red, the failing job's log is the missing evidence.
 
-## Notes for the next cycle
+## Left and notes for the next cycle
 
-- The idle-blink intent decision is the strongest carry-over (see `autonomy/runs/luna-ux-01/HANDOFF.md`).
-- The `/` command-menu surface is reviewed and is not defective; do not re-file C-1.
-- Verify host-behaviour claims against the installed host before writing a fix.
+- P0: reproduce on a rebuilt candidate; if red, capture the failing `pi-compat` step's log — it
+  cannot be reached from here.
+- The earlier incarnation's cycle-01 report was replaced; `autonomy/JOURNAL.md`'s
+  `luna-ux-01/01` line now names V-05 and this cycle's summary (the old line named the status-bar
+  fixes, which remain in git history and on the base).
+- Not taken (unchanged proposals): idle-cat blink, human-console focus theft, web-console shared
+  runtime, trunk channel alias.
+- Process: the `workflow_run` implementer committed but did not push (same as cycles 06, 08, 09);
+  the coordinator checked and pushed each commit. One reviewer step again produced no visible text,
+  so this cycle ran a separate independent reviewer for the verdict.

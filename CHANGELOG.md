@@ -8,6 +8,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
+  `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
+  behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
+  `packages/extensions/third_party/subagent/overlay-frame.ts`; `npm run smoke:control-center` and
+  `npm run smoke:workflow-panel`).
 ### Added
 
 - **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture
@@ -38,6 +45,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   only, and the instruction to remove the identifier first), and after two consecutive merged cycles
   stay unpublished, the host stops the run in `blocked` with an operator question. Pinned by
   `tests/autonomy-selfimprove-smoke.ts`; the leak scan and its patterns are unchanged.
+- **A non-run human-console card holds input while it is open (V-02).** The console checked the
+  shared input-owner registry but never registered a hold, so two child requests written in one poll
+  opened two cards and the second took focus from the first. A non-run card now holds input and a
+  sibling waits for the next poll; an interactive `ask_human` card holds input the same way, so a
+  console card cannot open over it. A workflow run's approval card is the exception: the run broker
+  allows two outstanding prompts per run, so those cards keep their two slots and a non-run request
+  waits behind them. The notices name the open card rather than a process. Pinned by
+  `tests/firewall-overlay-queue-smoke.ts` and `tests/firewall-workflow-approvals-smoke.ts`.
+- **Framed overlays size their inner content and forward the mouse.** The hub's frame laid its
+  child out four cells wider than the drawn area and dropped pointer events, so content wrapped
+  or clipped and the list could not be clicked; a hidden command shorter than four characters
+  (`/kit`) never reappeared in the curated `/` menu. Both are fixed and pinned by
+  `npm run smoke:control-center` and `npm run smoke:command-menu`.
 
 - **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
   wall-clock time (`performance.now` / `Date.now`), which includes time the process spent

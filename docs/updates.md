@@ -20,6 +20,17 @@ The `kit-update` extension, loaded in every profile, checks all three parts.
   bar shows `updates: /update`.
 - **On demand**: `/update` checks now and lists what can be updated.
 
+When the kit is installed from git and its `main` branch has moved ahead of your checked-out
+commit, the check adds one line: `trunk is N commits ahead — /update channel next`. It appears at
+start-up (subject to the once-a-day background throttle), on `/update`, and under `/update status`.
+`next` is the channel that follows `main`, so the suggested command actually moves your copy to
+the newer commits; naming the installed release channel (`latest`, or an exact version) would not.
+The line shows even when the release channel you follow is otherwise current, and it is silent
+when your copy is in sync or ahead and when the remote could not be reached (offline, or no git
+credentials). When the trunk gap exists, this trunk line is the whole start-up kit notice: the
+generic `Updates available: ...` summary is not stacked on it. pi's own built-in update notice is
+separate and may still appear.
+
 | Command | What it does |
 |---|---|
 | `/update` | Check now, then pick: everything, Luna, pi, linked packages, or a channel switch |

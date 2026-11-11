@@ -28,6 +28,14 @@ export interface CommandSource {
   manifestCommands: string[];
   /** `pi.registerCommand("<name>", ...)` names found in the extension's `.ts` files. */
   codeCommands: string[];
+  /** `{ command, description }` for every command whose declaration carries a description. */
+  aliasDescriptions: AliasDeclaration[];
+}
+
+/** A command's registered name paired with its description, for alias-target checking. */
+export interface AliasDeclaration {
+  command: string;
+  description: string;
 }
 
 /** Everything the pure check needs: no filesystem access. */
@@ -40,7 +48,7 @@ export interface CommandContractInput {
 }
 
 export interface CommandContractProblem {
-  code: "duplicate-command" | "shadows-prompt" | "shadows-builtin" | "manifest-drift";
+  code: "duplicate-command" | "shadows-prompt" | "shadows-builtin" | "manifest-drift" | "alias-target-missing";
   message: string;
 }
 
@@ -101,6 +109,24 @@ export function commandContractProblems(input: CommandContractInput): CommandCon
     }
   }
 
+  // 4. An "Alias of /target" description names a command, prompt template or built-in that exists.
+  const knownTargets = new Set<string>([...owners.keys(), ...input.promptTemplates, ...input.builtinCommands]);
+  for (const ext of input.extensions) {
+    for (const alias of ext.aliasDescriptions) {
+      if (!alias.description.startsWith("Alias of /")) continue;
+      const match = /^Alias of \/(\S+)/.exec(alias.description);
+      const rawTarget = match?.[1];
+      if (rawTarget === undefined) continue;
+      const target = rawTarget.replace(/[.,]$/, "");
+      if (!knownTargets.has(target)) {
+        problems.push({
+          code: "alias-target-missing",
+          message: `${ext.label}: command "${alias.command}" says Alias of /${target}, but no command, prompt template or built-in named ${target} exists`,
+        });
+      }
+    }
+  }
+
   return problems;
 }
 
@@ -116,6 +142,44 @@ export function registeredCommandsInSource(source: string): string[] {
   while (match) {
     const name = match[1];
     if (name !== undefined) out.push(name);
+    match = re.exec(code);
+  }
+  return out;
+}
+
+/** The first `description: "..."` (double-quoted or template literal) in a slice, if any. */
+function firstDescriptionInSlice(slice: string): string | undefined {
+  const re = /description:\s*(?:"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`|'((?:[^'\\]|\\.)*)')/;
+  const match = re.exec(slice);
+  if (!match) return undefined;
+  return match[1] ?? match[2] ?? match[3];
+}
+
+/**
+ * Every `pi.registerCommand("<name>", { description: "..." })` in a source text, as
+ * `{ command, description }`. Comments are stripped first, and the declaration slice stops at the
+ * first `handler:` or `getArgumentCompletions:` so a nested `description` inside a handler or a
+ * completion item cannot be attributed to the command. A description literal that itself contains
+ * `handler:` or `getArgumentCompletions:` would truncate the slice early; registrations use
+ * those tokens only as object keys, so this is accepted rather than parsed structurally.
+ */
+export function aliasDeclarationsInSource(source: string): AliasDeclaration[] {
+  const out: AliasDeclaration[] = [];
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|\s)\/\/[^\n]*/g, "$1");
+  const re = /registerCommand\(\s*["']([^"']+)["']/g;
+  let match = re.exec(code);
+  while (match) {
+    const name = match[1];
+    const start = match.index;
+    const next = code.indexOf("registerCommand(", start + 1);
+    let slice = code.slice(start, next === -1 ? code.length : next);
+    const boundary = ["handler:", "getArgumentCompletions:"]
+      .map((marker) => slice.indexOf(marker))
+      .filter((index) => index >= 0)
+      .reduce((a, b) => Math.min(a, b), slice.length);
+    slice = slice.slice(0, boundary);
+    const description = firstDescriptionInSlice(slice);
+    if (name !== undefined && description !== undefined) out.push({ command: name, description });
     match = re.exec(code);
   }
   return out;
@@ -162,10 +226,13 @@ export function readCommandSources(): CommandSource[] {
         ? registers.commands.filter((c): c is string => typeof c === "string")
         : [];
       const codeCommands: string[] = [];
+      const aliasDescriptions: AliasDeclaration[] = [];
       for (const tsFile of collectTsFiles(extDir)) {
-        codeCommands.push(...registeredCommandsInSource(fs.readFileSync(path.join(extDir, tsFile), "utf8")));
+        const source = fs.readFileSync(path.join(extDir, tsFile), "utf8");
+        codeCommands.push(...registeredCommandsInSource(source));
+        aliasDescriptions.push(...aliasDeclarationsInSource(source));
       }
-      out.push({ label: `${avenue}/${entry}`, name: meta.name, manifestCommands, codeCommands });
+      out.push({ label: `${avenue}/${entry}`, name: meta.name, manifestCommands, codeCommands, aliasDescriptions });
     }
   }
   return out;

@@ -1397,10 +1397,10 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
   pi.registerCommand("firewall", { description: "Tool firewall: /firewall [status | list | revoke <id>|session|workspace|all|host:<name> | reload]. Lists remembered approvals with their scope and revokes them.", handler: async (args, ctx) => {
     await firewallCommand(args, ctx);
   } });
-  pi.registerCommand("firewall:reload", { description: "Reload the tool-firewall policy from disk (alias of /firewall reload)", handler: async (_args, ctx) => {
+  pi.registerCommand("firewall:reload", { description: "Alias of /firewall reload - reload the tool-firewall policy from disk", handler: async (_args, ctx) => {
     await firewallCommand("reload", ctx);
   } });
-  pi.registerCommand("firewall:status", { description: "Show tool-firewall status: policy, mode, judge, learning, approvals (alias of /firewall status)", handler: async (_args, ctx) => {
+  pi.registerCommand("firewall:status", { description: "Alias of /firewall status - show policy, mode, judge, learning and remembered approvals", handler: async (_args, ctx) => {
     await firewallCommand("status", ctx);
   } });
 

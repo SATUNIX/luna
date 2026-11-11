@@ -1,7 +1,7 @@
 /**
  * The control centre: one navigable hub for the kit's settings and actions.
  *
- * `/kit` (and its `/helpers` alias, and the `alt+m` shortcut) opens a searchable tree. Every row
+ * `/menu` (and its `/kit` and `/helpers` aliases, and the `alt+m` shortcut) opens a searchable tree. Every row
  * carries its typed command; the hub never renames anything, and the TUI's `/` menu only filters
  * autocomplete suggestions (see `command-menu.ts`) while every command keeps running when typed.
  *
@@ -24,6 +24,7 @@ import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts"
 import { builtinCommandNames } from "./builtins.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
 import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile } from "./command-menu.ts";
+import { isReducedMotion, launchHeader } from "./launch-screen.ts";
 
 const DEFAULT_HUB_KEY = "alt+m";
 
@@ -32,6 +33,29 @@ export function readHubKey(): string {
   const key = readUiFile()?.hubKey;
   if (typeof key === "string" && key.trim() !== "") return key.trim();
   return DEFAULT_HUB_KEY;
+}
+
+/**
+ * Install the launch screen on the existing `session_start` handler. Only a real TUI gets it:
+ * RPC and print have no header, a child session stays quiet, and `launchScreen: "off"` in
+ * `pi-kit/ui.json` disables it. The caller passes the same `isTui` predicate it uses for the menu,
+ * so older pi without `ctx.mode` gets the header too when `hasUI` is true. The menu command is
+ * `/menu`, or `/kit` when `/menu` is absent.
+ */
+function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean): void {
+  if (!isTui) return;
+  if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
+  if (typeof ctx.ui.setHeader !== "function") return;
+  const ui = readUiFile();
+  if (ui?.launchScreen === "off") return;
+  const menuCmd = pi.getCommands().some((command) => command.name === "menu") ? "/menu" : "/kit";
+  ctx.ui.setHeader(launchHeader({
+    version: VERSION,
+    hubKey: readHubKey(),
+    menuCmd,
+    ascii: process.env.PI_KIT_ASCII === "1",
+    reducedMotion: isReducedMotion(ui),
+  }));
 }
 
 /**
@@ -48,6 +72,7 @@ function registerCommandMenu(pi: ExtensionAPI): void {
     const isTui = mode === undefined ? ctx.hasUI : mode === "tui";
     if (!isTui) return;
     curated = true;
+    installLaunchHeader(pi, ctx, isTui);
     const settings = readCommandMenuSettings();
     if (settings.commandMenu === "all") return;
     const commands = pi.getCommands().map((command) => ({ name: command.name, source: command.source }));
@@ -77,11 +102,24 @@ function thinkingLevelOf(pi: ExtensionAPI): string | undefined {
   }
 }
 
-/** Every command: pi's own built-ins plus what `pi.getCommands()` reports, tagged by source. */
+/**
+ * Every command: pi's own built-ins plus what `pi.getCommands()` reports, tagged by source.
+ * Built-ins come first; a `pi.getCommands()` entry whose name is already present is skipped, because
+ * pi's always-loaded extensions report the built-in extension commands (`mcp`, `llama`) too.
+ */
 function allCommands(pi: ExtensionAPI): CommandInfo[] {
   const out: CommandInfo[] = [];
-  for (const name of builtinCommandNames()) out.push({ name, source: "built-in" });
-  for (const command of pi.getCommands()) out.push({ name: command.name, source: command.source ?? "extension" });
+  const seen = new Set<string>();
+  for (const name of builtinCommandNames()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({ name, source: "built-in" });
+  }
+  for (const command of pi.getCommands()) {
+    if (seen.has(command.name)) continue;
+    seen.add(command.name);
+    out.push({ name: command.name, source: command.source ?? "extension" });
+  }
   return out;
 }
 
@@ -123,7 +161,7 @@ export default function controlCenter(pi: ExtensionAPI): void {
     const cwd = ctx.cwd || process.cwd();
     const commands = pi.getCommands().map((command) => command.name);
     const build = () => {
-      const values = readValues({ cwd, thinkingLevel: thinkingLevelOf(pi) });
+      const values = readValues({ cwd, thinkingLevel: thinkingLevelOf(pi), commandMenu: readCommandMenuSettings(), hubKey });
       return { values, model: buildModel({ values, commands, controls: getOrCreateControls().list() }) };
     };
     const { values, model } = build();
@@ -168,22 +206,27 @@ export default function controlCenter(pi: ExtensionAPI): void {
     await openHub(deps, startPage);
   };
 
-  pi.registerCommand("kit", {
+  pi.registerCommand("menu", {
     description: `Open the control centre: profile, effort, thinking, security and every page (also ${hubKey})`,
     getArgumentCompletions: (prefix: string) =>
       PAGES.filter((page) => page.id.startsWith(prefix.trim())).map((page) => ({ value: page.id, label: page.id, description: page.title })),
     handler: open,
   });
 
+  pi.registerCommand("kit", {
+    description: "Alias of /menu",
+    handler: open,
+  });
+
   pi.registerCommand("helpers", {
-    description: "Alias of /kit - open the control centre",
+    description: "Alias of /menu",
     handler: open,
   });
 
   pi.registerShortcut(hubKey as Parameters<ExtensionAPI["registerShortcut"]>[0], {
     description: "Open the control centre",
     handler: () => {
-      pi.sendUserMessage("/kit", { expandPromptTemplates: true });
+      pi.sendUserMessage("/menu", { expandPromptTemplates: true });
     },
   });
 

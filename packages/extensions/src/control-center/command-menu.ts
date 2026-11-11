@@ -2,10 +2,10 @@
  * The curated `/` menu: in the TUI, autocomplete hides the kit commands that moved into the hub.
  *
  * The filter never changes what runs. A hidden command appears again once at least four characters
- * are typed, and a fully typed hidden command still runs unchanged; only the suggestion list is
- * touched. pi's built-ins, prompt templates and skill commands are never hidden unless the operator
- * asks for it, and every other extension command - including companion-package commands - is
- * hidden unless it is pinned.
+ * are typed, or at its full name when the name is shorter than four characters, and a fully typed
+ * hidden command still runs unchanged; only the suggestion list is touched. pi's built-ins, prompt
+ * templates and skill commands are never hidden unless the operator asks for it, and every other
+ * extension command - including companion-package commands - is hidden unless it is pinned.
  *
  * Settings come from the same `<agent dir>/pi-kit/ui.json` the hub key uses: `commandMenu` is
  * "curated" (the default) or "all", and `pinnedCommands` / `hiddenCommands` add names to either
@@ -23,11 +23,11 @@ import { agentDir } from "./values.ts";
 export const HIDDEN_VISIBLE_PREFIX_LENGTH = 4;
 
 /** The location shown when no hub row runs the command. */
-export const ALL_COMMANDS_LOCATION = "moved → /kit ▸ All commands";
+export const ALL_COMMANDS_LOCATION = "moved → /menu ▸ All commands";
 
 /** The kit commands that stay in the `/` menu in every profile. */
 export const PINNED_KIT_COMMANDS: readonly string[] = [
-  "kit",
+  "menu",
   "goal",
   "verify",
   "save",
@@ -190,7 +190,7 @@ export function pageTrail(model: HubModel, page: string): string[] {
 }
 
 function locationOfRow(model: HubModel, page: string, label: string): string {
-  return `moved → ${["/kit", ...pageTrail(model, page), label].join(" ▸ ")}`;
+  return `moved → ${["/menu", ...pageTrail(model, page), label].join(" ▸ ")}`;
 }
 
 /** Where a command lives in the hub, for a hidden suggestion's description. */
@@ -218,7 +218,8 @@ export interface CurationOptions {
 /**
  * Filter a command-token suggestion list. A hidden item is dropped below the reveal length and
  * otherwise kept with its hub location prefixed to the description. `prefix` is the editor's
- * command token including the leading slash.
+ * command token including the leading slash. A name shorter than the reveal length is revealed
+ * once its full name is typed, so a three-character alias such as `/kit` can still complete.
  */
 export function curateSuggestions(items: readonly AutocompleteItem[], prefix: string, options: CurationOptions): AutocompleteItem[] {
   const typed = prefix.startsWith("/") ? prefix.slice(1) : prefix;
@@ -229,7 +230,7 @@ export function curateSuggestions(items: readonly AutocompleteItem[], prefix: st
       kept.push(item);
       continue;
     }
-    if (typed.length < HIDDEN_VISIBLE_PREFIX_LENGTH) continue;
+    if (typed.length < Math.min(HIDDEN_VISIBLE_PREFIX_LENGTH, name.length)) continue;
     const location = options.locationOf(name);
     kept.push(item.description ? { ...item, description: `${location} — ${item.description}` } : { ...item, description: location });
   }

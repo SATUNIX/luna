@@ -425,7 +425,12 @@ outside the workspace changed; it also checks the helper's refusals and modes di
 write-mode `openSync` in an extension unless the file is on a reviewed allowlist with its reason.
 The pentest governance extension also files human-console approval requests through the helper;
 `tests/governance-smoke.ts` checks that a linked console directory cannot redirect a request and
-that a signed answer still approves a request filed inside the workspace.
+that a signed answer still approves a request filed inside the workspace. Its data directories and
+audit ledger are bounded by the data root: an operator-set `PENTEST_DATA_ROOT` is trusted as given
+(it may itself be a link the operator made), but a link below it is refused, as is one below the
+default `.pi/pentest` (`tests/governance-smoke.ts`). An operator-set `PI_KIT_HUMAN_CONSOLE_DIR` is
+trusted as given in the same way, and nothing pins what happens when it is itself a committed link
+(see [Future work](future-work.md)).
 
 Profile restores (`/profile` rollback and the installer's `--settings-only` rollback) write
 through an exclusive temporary file created 0600 before it is given the snapshot's mode, so a

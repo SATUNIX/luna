@@ -202,6 +202,53 @@ async function testHumanConsoleRequestStaysInWorkspace() {
   }
 }
 
+// An operator-set PENTEST_DATA_ROOT is trusted as given, including when it is itself a link the
+// operator made, but a link below it (a repository that ships `<root>/evidence -> elsewhere`) must
+// not redirect the data directories or the audit ledger.
+async function testOperatorDataRootRefusesLinkBelowIt() {
+  const restoreKit = isolateKitEnv();
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-dataroot-"));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-dataroot-outside-"));
+  const operatorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-dataroot-ok-"));
+  const restoreHome = setEnv("HOME", path.join(workspace, "home"));
+  const restoreAgent = setEnv("PI_CODING_AGENT_DIR", path.join(workspace, "agent"));
+  const restoreConsole = setEnv("PI_KIT_HUMAN_CONSOLE_DIR", undefined);
+  const input = { tool: "remote_request", url: "https://example.test/" };
+  let restoreDataRoot = setEnv("PENTEST_DATA_ROOT", path.join(workspace, "data"));
+  try {
+    writeCompleteEngagement(workspace);
+    fs.mkdirSync(path.join(workspace, "data"));
+    fs.symlinkSync(outside, path.join(workspace, "data", "evidence"));
+    await withCwd(workspace, async () => {
+      let refused: boolean;
+      try {
+        const pi = await loadGovernance(workspace);
+        const result = await callTool(pi, "mcp", input);
+        refused = result?.block === true;
+      } catch {
+        refused = true;
+      }
+      assert.equal(refused, true, "a link below the operator's data root must stop the action, not be followed");
+      assert.deepEqual(fs.readdirSync(outside), [], "a link below the data root must not receive directories or ledger records");
+
+      // An ordinary operator root works, and so does one that is itself a link the operator made.
+      restoreDataRoot();
+      const real = path.join(operatorRoot, "real");
+      fs.mkdirSync(real);
+      fs.symlinkSync(real, path.join(operatorRoot, "link"));
+      restoreDataRoot = setEnv("PENTEST_DATA_ROOT", path.join(operatorRoot, "link"));
+      const pi = await loadGovernance(workspace);
+      await callTool(pi, "mcp", input).catch(() => undefined);
+      assert.ok(fs.existsSync(path.join(real, "audit", "audit.jsonl")), "an operator-made link as the data root itself is trusted");
+    });
+  } finally {
+    restoreDataRoot(); restoreConsole(); restoreAgent(); restoreHome(); restoreKit();
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+    fs.rmSync(operatorRoot, { recursive: true, force: true });
+  }
+}
+
 // 6. Checked-in env templates are not protected paths. The installer scaffolds
 // `.env.example`, so both the write path and shell commands naming it must stay allowed —
 // while the real `.env` and any copy onto it remain blocked.
@@ -464,6 +511,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["PI_ALLOW_DIRECT_TOOLS overrides in both directions", testOperatorOverrideBothDirections],
   ["out-of-scope target never reaches the broker", testOutOfScopeNeverReachesBroker],
   ["pentest console request refuses a workspace link and accepts a signed normal answer", testHumanConsoleRequestStaysInWorkspace],
+  ["pentest data root: a link below an operator-set root is refused, the root itself is trusted", testOperatorDataRootRefusesLinkBelowIt],
   ["env templates are not protected paths", testEnvTemplatesAreNotProtectedPaths],
   ["broker settles, and blocks the action, when the audit chain is corrupt", testBrokerResolvesWhenAuditFails],
   ["an unauditable allow fails closed; read-only tools stay available", testUnauditableAllowFailsClosed],

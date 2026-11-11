@@ -152,6 +152,8 @@ async function run() {
     await blocks("bash", { command: "cp secrets.yaml /tmp" }, "cp secrets.yaml still blocked");
     await blocks("bash", { command: "base64 ~/.ssh/id_rsa" }, "base64 id_rsa still blocked");
     await blocks("bash", { command: "tar czf /tmp/x .env" }, "tar .env still blocked");
+    await blocks("bash", { command: "cat config/credentials/db.txt" }, "read below a credentials directory");
+    await blocks("bash", { command: "cat config/secret/notes.txt" }, "read below a secret directory");
 
     // 5. Benign operations still pass.
     await allows("write", { path: "src/index.ts", content: "export const x = 1;" }, "normal source write");

@@ -251,15 +251,21 @@ function shellTokens(command: string): string[] {
 }
 
 const SECRET_READ_PATH_PATTERNS_FOR_COMMANDS = SECRET_READ_PATH_PATTERNS.map(toCommandScanPattern);
+// The broad write-side patterns match /secret/ and /credentials/ anywhere, which made an
+// ordinary source path such as packages/extensions/src/secret-guard/index.ts look secret.
+// A directory component counts only when it is exactly one of these names.
+const SECRET_PATH_SEGMENTS = new Set(["secret", "secrets", "credentials"]);
 
 function commandReferencesSecret(command: string): boolean {
   const normalized = stripEnvTemplateTokens(normalizePath(command));
   if (commandHasGlobTokenMatchingSecret(normalized)) return true;
   for (const token of shellTokens(normalized)) {
-    const base = token.split(/[\\/]/).pop() || token;
+    const segments = token.split(/[\\/]/);
+    const base = segments.pop() || token;
     if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;
     if (SECRET_READ_BASENAME_PATTERNS.some(p => p.test(base))) return true;
     if (SECRET_READ_PATH_PATTERNS_FOR_COMMANDS.some(p => p.test(token))) return true;
+    if (segments.some(segment => SECRET_PATH_SEGMENTS.has(segment))) return true;
   }
   return false;
 }

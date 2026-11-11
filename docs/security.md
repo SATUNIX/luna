@@ -187,6 +187,9 @@ are pinned by `tests/governance-smoke.ts`.
     material or tokens to any file, and `cat`, `cp`, `mv`, `base64`, `curl -F @file` and PowerShell
     style reads of `.env`, `*.pem`, `*.key`, `id_rsa` and protected engagement paths, including
     glob-obscured and quote-fragmented references. The firewall separately classifies credential
+    Source files below a directory whose name merely contains `secret` (such as
+    `packages/extensions/src/secret-guard/`) stay readable, while an exact `secret`, `secrets` or
+    `credentials` path segment still counts as a secret reference (`tests/secret-guard-smoke.ts`).
     files as credential reads whether or not `secret-guard` is loaded. For a tool the policy
     allows, it checks every path the call names in a `path`, `file_path`, `filePath`, `file`,
     `files`, `paths`, `cwd`, `dir`, `directory`, `root`, `analysisRoot`, `newFilePath`,

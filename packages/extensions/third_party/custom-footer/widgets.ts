@@ -6,12 +6,12 @@ import path from "node:path";
 import { footerGlyphs } from "./render.ts";
 import type { Theme, TodoItem } from "./render.ts";
 
-export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8): string[] {
+export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii = false): string[] {
   if (!items.length) return [];
   const done = items.filter((i) => i.state === "done").length;
   const cells = 10;
   const filled = Math.round((done / items.length) * cells);
-  const glyphs = footerGlyphs(theme);
+  const glyphs = footerGlyphs(theme, ascii);
   const header = `${theme.bold(theme.fg("accent", "Todos"))} ${theme.fg(done === items.length ? "success" : "text", `${done}/${items.length}`)} ${theme.fg("success", glyphs.filled.repeat(filled))}${theme.fg("dim", glyphs.empty.repeat(cells - filled))}`;
   if (done === items.length) return [`${header} ${theme.fg("success", "all done")}`];
   // The hint rides on the header line, so it costs no row; hiding the list is otherwise easy to miss.

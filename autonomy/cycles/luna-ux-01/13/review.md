@@ -39,7 +39,7 @@ control-inbox delivery field at `:574`. The evidence paths named by the assignme
 (`docs/2026-11-11-completion-plan.md`, `luna-steward/state/notes.md`) are not in the repository.
 
 Not started this cycle. Cherry-picking the reviewed cycle 11/12 work already puts the branch diff
-at **44289 characters**, over the cycle rule's 30000 stop-new-items line (and under the 60000
+at about 44600 characters, over the cycle rule's 30000 stop-new-items line (and under the 60000
 merge-review budget). Adding a new subsystem and its smoke would risk pushing the diff past the
 merge budget, so the item is recorded as blocked by that budget rather than half-built.
 

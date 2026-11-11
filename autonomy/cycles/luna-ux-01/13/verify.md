@@ -42,7 +42,7 @@ to keep the diff scoped.
 
 ## Scope and budget
 
-- Diff from `7647d1b2f347`: **44307 characters** (lockfiles and this run's cycle/run record
+- Diff from `7647d1b2f347`: **about 44600 characters** (lockfiles and this run's cycle/run record
   directories excluded), under the 60000 merge-review budget but over the 30000 stop-new-items
   line. No new board item was started for that reason.
 - No changes to `autonomy/CHARTER.md`, operator control paths, or any `package.json` `scripts`.

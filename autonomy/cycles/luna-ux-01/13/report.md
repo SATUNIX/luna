@@ -2,7 +2,7 @@
 
 Outcome: successful
 Mode: fix
-Board: PG-09 blocked - the re-landed cycle 12 diff is 44307 characters, over the 30000 stop-new-items line, so the new inbox command was not started.
+Board: PG-09 blocked - the re-landed cycle 12 diff is about 44600 characters, over the 30000 stop-new-items line, so the new inbox command was not started.
 
 Item: Re-land the reviewed cycle 11 overlay-frame, mouse-forwarding and `/kit` reveal work - fdfce6b, f6a1dfd - smoke:control-center 34/34, smoke:command-menu 12/12
 Item: Re-land the reviewed cycle 12 non-run console hold and `ask_human` hold (V-02) - 06ac984, 7846eab, 4d686da, f66d741 - smoke:firewall-overlay-queue
@@ -25,7 +25,7 @@ existing workflow smoke keeps the broker contract unchanged. Docs, CHANGELOG and
 pages state the exception.
 
 No board item was started after that: the branch already carries the reviewed cycle 11/12 work
-and measures 44307 characters from base (under the 60000 merge-review budget, over the 30000
+and measures about 44600 characters from base (under the 60000 merge-review budget, over the 30000
 stop-new-items line).
 
 ## Verification

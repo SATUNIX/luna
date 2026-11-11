@@ -6,8 +6,8 @@
  * every moment the process is descheduled, so on a busy host running other gates the same,
  * correct implementation reads 4–9x slower and fails its own linear-time guard.
  *
- * CPU time (`process.cpuUsage()` user + system) does not count descheduled time: it measures
- * only the work the process actually did. That keeps the guard meaningful while ignoring host
+ * CPU time (the calling thread's user + system time) does not count descheduled time: it measures
+ * only the work the code actually did. That keeps the guard meaningful while ignoring host
  * load. It does not weaken what the guard proves — a quadratic or catastrophically backtracking
  * rule does unbounded CPU *work*, so its CPU time still explodes and blows the same budget. Only
  * waiting (a lock, a sleep, a slow socket) is elided, and those bounds are wait-time assertions,
@@ -16,15 +16,33 @@
  * The minimum of a few repeats (best-of-N) discards a one-off GC pause or a scheduling blip so a
  * single unlucky sample cannot fail a correct implementation.
  *
- * `tests/timing-load-check.ts` runs every smoke that uses these guards under full CPU load five
- * times, as the evidence that they are load-tolerant; it is CPU-heavy by design and is not part
- * of the CI gate.
+ * The rule for which bounds use this helper: a guard on work the process itself does in-process
+ * (regex match/compile, redaction, classification, sizing) is CPU-bound and uses `cpuMs` /
+ * `assertCpuWithin`. A bound on waiting — a subprocess, a socket, a `node:vm` or `setTimeout`
+ * timeout, a `Date.now()` deadline, a lock — stays wall clock on purpose and is deliberately NOT
+ * converted: CPU time does not advance while the process waits, so measuring CPU there would make
+ * the hang/cut-off guard a no-op.
+ *
+ * `tests/timing-load-check.ts` runs the smokes whose timing assertions are CPU-bound under full
+ * CPU load five times, as the evidence that they are load-tolerant; it is CPU-heavy by design and
+ * is not part of the CI gate. A smoke that keeps a wall-clock hang or wait guard is left out of
+ * that run (see its header), and a noisier measurement may need more repeats than the default
+ * three — `workflow-redaction-smoke.ts` uses best-of-nine.
  */
 import assert from "node:assert/strict";
 
-/** CPU milliseconds (user + system) this process has consumed so far. */
+/**
+ * CPU milliseconds (user + system) the calling thread has consumed so far.
+ *
+ * `threadCpuUsage` scopes the reading to this thread, excluding the process's other threads (V8's
+ * concurrent marking/compilation helpers, libuv workers). Their CPU is charged to process-wide
+ * `cpuUsage` and, on a saturated host, lands in every measurement window while the heap is under
+ * pressure — which made a linear redaction read as quadratic. The guarded work runs on the main
+ * thread, so the thread reading is the honest measure. `threadCpuUsage` is new in Node 22.13 /
+ * 23.9; on an older runtime (engines floor is 22.19) fall back to the process-wide reading.
+ */
 export function cpuMs(): number {
-  const u = process.cpuUsage();
+  const u = typeof process.threadCpuUsage === "function" ? process.threadCpuUsage() : process.cpuUsage();
   return (u.user + u.system) / 1000;
 }
 

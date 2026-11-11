@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-11",
+  "generatedAt": "2026-11-11T10:45:35.933Z",
+  "fixtures": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0,
+    "successRate": 1
+  },
+  "perCategory": {
+    "security": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "successRate": 1
+    },
+    "verification": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "successRate": 1
+    },
+    "orchestration": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "successRate": 1
+    },
+    "recovery": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "successRate": 1
+    },
+    "memory": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "successRate": 1
+    }
+  },
+  "tokens": 256,
+  "tokensBasis": "offline chars/4 estimate (context-sieve CHARS_PER_TOKEN); the offline harness has no provider usage"
+}

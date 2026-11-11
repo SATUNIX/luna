@@ -8,6 +8,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Added
+
+- **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture
+  suite's success rate, per-category counts and a chars/4 token estimate as
+  `packages/core/eval/baselines/YYYY-MM-DD.json`, and `--check` fails when the newest baseline is
+  missing, malformed, or older than 7 days (age from the dated name, not mtime). Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
+
 ## [0.3.0-beta.2]
 
 ### Fixed

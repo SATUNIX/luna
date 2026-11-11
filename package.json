@@ -281,6 +281,7 @@
     "smoke:run-query": "node tests/run-query-smoke.ts",
     "smoke:workflow-strategy": "node tests/workflow-strategy-smoke.ts",
     "smoke:eval-footprint": "node tests/eval-footprint-smoke.ts",
+    "smoke:eval-baseline": "node tests/eval-baseline-smoke.ts",
     "smoke:workflow-notify": "node tests/workflow-notify-smoke.ts",
     "smoke:workflow-builtin": "node tests/workflow-builtin-smoke.ts",
     "smoke:workspace-root": "node tests/workspace-root-smoke.ts",

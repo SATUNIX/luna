@@ -59,30 +59,31 @@ a regression test that fails at the base, and keep the docs that describe them a
 
 # Plan — second session, cycle base `afecc1bbb33d`
 
-- Mode: **fix**. Prior batch is merged into the base; this session takes the C-1 defect from the
-  continuation review. Budget ~$5, ~3 h; one small item in one file plus its test.
+- Mode: **fix**. Prior batch is merged into the base; this session investigated the C-1 finding
+  from the continuation review. Budget ~$5, ~3 h. Outcome: C-1 was refuted and reverted, so this
+  session ships no code of its own.
 
-## Goal
+## Outcome
 
-Keep the curated `/` menu active for the whole session, including after `/new`, `/resume` and
-`/fork`, with a regression test that fails at the base.
+C-1 was planned as a fix and then **refuted by independent review before it could merge**. The
+host re-invokes the extension factory on every session replacement, so `registerCommandMenu`
+already runs again with a fresh `curated = false`; the curated `/` menu survives `/new`, `/resume`
+and `/fork` at the base. The attempted fix (`0e77b67`) and its synthetic smoke case were reverted
+(`e7f29cc`). See the corrected `review.md` C-1 section for the host evidence.
 
-## Item C-1 — curated `/` menu lost on session replacement
+  ## Item C-1 — curated `/` menu lost on session replacement (REFUTED, reverted)
 
-- Justification (charter 1, 3, 4): a reproduced TUI/`/`-menu defect. The hidden-command filter is
-  documented (`docs/control-center.md:88-124`) as always active in the TUI; after the first session
-  replacement it silently stops until `/reload`, so every kit command reappears in the `/` menu.
-  The wrapper is dropped by pi (`interactive-mode.js:1913`) but the extension is not re-imported.
-- Change: in `registerCommandMenu` (`packages/extensions/src/control-center/index.ts`), register a
-  `session_shutdown` handler that sets `curated = false`, so the next TUI `session_start`
-  re-registers the provider. No other behaviour changes; the in-session duplicate guard is kept.
-- Proof: add a case to `tests/command-menu-smoke.ts` that loads control-center once, fires
-  `session_start` (TUI), asserts one provider, emulates pi's replacement (fire `session_shutdown`,
-  clear `providers`, fire `session_start` again) and asserts one provider again; also assert two
-  `session_start`s without a shutdown still yield one provider. Must fail at the base (second
-  registration yields zero providers).
-- Checks: `npm run smoke:command-menu`; `npm run test:typecheck`; `npm run test:lint`.
-- Docs: none change — `docs/control-center.md` already says the filter is TUI-only and always on.
+  - Original justification (charter 1, 3, 4): a claimed TUI/`/`-menu defect. The initial reconnaissance
+  assumed the extension module was not re-imported and therefore that `curated` stayed `true`.
+  - Refutation: `core/extensions/loader.js:513-517` calls `await factory(load.api)` on every
+  `loadExtension`, and `core/agent-session-runtime.js` rebuilds the runtime through `createRuntime`
+  for `/new`, `/resume` and `/fork`; a live RPC run logged the factory once per session and one
+  provider registration per session. The provider is re-added by the new factory invocation.
+  - Action: reverted the code change and the synthetic smoke case (`e7f29cc`). The smoke's sequence
+  (fire `session_shutdown`, clear providers, fire `session_start` without re-invoking the factory)
+  does not occur in the host.
+- Checks after revert: `npm run smoke:command-menu` (11 checks), `npm run test:typecheck`,
+  `npm run test:lint`. All pass.
 
 ## Checks that prove the session
 

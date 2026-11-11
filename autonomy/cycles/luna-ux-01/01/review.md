@@ -83,12 +83,12 @@ setting on the widget.
 - `npm run smoke:command-menu` passes all 11 checks at the base, so the defect below is by
   construction not pinned.
 
-## Confirmed finding
+## Finding C-1 — investigated, then REFUTED
 
-### C-1 (fix) — the curated `/` menu switches off after `/new`, `/resume` or `/fork` until `/reload`
+### C-1 (no fix) — the curated `/` menu does *not* switch off after a session replacement
 
 `packages/extensions/src/control-center/index.ts:43-46`. `registerCommandMenu` guards its
-`session_start` handler with a module-closure `curated` flag that is never reset:
+`session_start` handler with a closure `curated` flag:
 
 ```ts
 let curated = false;
@@ -96,16 +96,21 @@ pi.on("session_start", (_event, ctx) => {
   if (curated) return;
 ```
 
-On a session replacement pi emits `session_shutdown`, clears `autocompleteProviderWrappers` (so
-the registered provider is dropped) and then emits a new `session_start` — but the extension module
-is not re-imported, so `curated` is still `true` and the provider is never re-added. Verified in the
-installed host: `agent-session-runtime.js:105-114` (`teardownCurrent`: `emitSessionShutdownEvent`
-then `beforeSessionInvalidate`), `interactive-mode.js:358-369` + `:1898-1913`
-(`resetExtensionUI` sets `autocompleteProviderWrappers = []`), and `agent-session-runtime.js:141`,
-`:165`, `:211` (`sessionStartEvent` reason `resume` / `new` / `fork`). Repro (headless, load
-control-center once): first `session_start` gives `providers: 1`; after `session_shutdown` +
-wrapper reset + second `session_start`, `providers: 0`. Not pinned: `tests/command-menu-smoke.ts`
-cache-busts and reloads the module per case, so it never exercises the closure across a replacement.
+The first session emits `session_shutdown`, clears `autocompleteProviderWrappers`, and emits a new
+`session_start`; the initial reconnaissance concluded the extension module is not re-imported, so
+`curated` would still be `true` and the provider would never be re-added. That conclusion was
+wrong, and an independent `reviewer` subagent falsified it before the change could merge. A live
+RPC run that logged the extension factory showed the host **re-invokes the factory on every
+session replacement**, so `registerCommandMenu` runs again with a fresh `curated = false` and the
+provider is re-registered by the new invocation. Confirmed in the installed host:
+`core/extensions/loader.js:513-517` (`initializeExtension` calls `await factory(load.api)` on
+every `loadExtension`), and `core/agent-session-runtime.js` rebuilds the runtime through
+`createRuntime` for `/new`, `/resume` and `/fork`. The provider is dropped by
+`resetExtensionUI` (`interactive-mode.js:1898-1913`) *before* the new runtime binds, so it is
+present after the replacement at the base. Not a defect; no fix taken. The attempted fix
+(`0e77b67`) and its synthetic smoke case were reverted (`e7f29cc`); the case emulated a
+`session_shutdown` + wrapper reset without re-invoking the factory, a sequence the host never
+produces.
 
 ## Proposals triaged
 
@@ -131,5 +136,6 @@ cache-busts and reloads the module per case, so it never exercises the closure a
 
 ## Chosen for this session
 
-1. C-1: reset `curated` on `session_shutdown` so the curated `/` menu survives a session
-   replacement; add a smoke case that emulates pi's wrapper reset across two `session_start`s.
+None from the continuation reconnaissance. C-1 is refuted and reverted (`e7f29cc`); the two
+proposals were triaged (one refuted, one still needs an intent decision). This session contributes
+no code change of its own; the cycle's merged items remain F-1 and F-2 from the first session.

@@ -500,6 +500,7 @@ absolute or relative to the working directory.
 | `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [script-workflows](script-workflows.md) |
 | `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `pentest-governance-domain`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_INTERNAL_CHILD` | `control-center`, `trigger-compact` | — | [control-center](control-center.md) |
+| `PI_KIT_LEAN_CTX` | `session-helpers` | Set to `0` to disable the lean-ctx preflight warning | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_LOOP_MAX` | `autonomous-loop` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_MAX_BRANCHES` | `branch-lab` | — | — |
 | `PI_KIT_MEMORY_AUTOPROMOTE` | `memory-vault` | — | [memory](memory.md) |
@@ -563,6 +564,7 @@ absolute or relative to the working directory.
 | `PI_KIT_VAULT` | `memory-vault` | — | [memory](memory.md) |
 | `PI_KIT_VERIFY_CMD` | `verify-gate` | Check command for `/verify`; overrides `scripts.verify` (default unset) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_ON_TURN` | `verify-gate` | Set to `1` to run the check command after successful write/edit tools when the assistant finishes its tool sequence; projects without a verify script are skipped (default `0`) | [INSTALL](INSTALL.md#environment-variables) |
+| `PI_KIT_VERIFY_PENDING_TTL_MS` | `verify-gate` | How long a "verification pending" marker stays valid, in ms; an older marker is treated as absent (default `1800000`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW` | `verify-gate` | `0` turns off the independent completion reviewer in `/verify` and `verify_completion` (default on) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_MODEL` | `verify-gate` | Reviewer model as `provider/id` (default current model) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_TIMEOUT_MS` | `verify-gate` | Reviewer timeout (default `900000`) | [INSTALL](INSTALL.md#environment-variables) |

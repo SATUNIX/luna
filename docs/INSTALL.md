@@ -221,6 +221,7 @@ MEM0_API_URL=http://localhost:8000
 | `PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS` | tool-firewall | `900000` | How long an approval card waits before the call is refused as uncertain |
 | `PI_KIT_EFFORT_CONFIG` | effort | `<agent dir>/pi-kit/effort.json` | Saved effort default and limit overrides ([Effort](effort.md)) |
 | `PI_KIT_AUTO_PROFILE` | session-helpers | `balanced` | Profile applied on the first interactive start; `0` disables |
+| `PI_KIT_LEAN_CTX` | session-helpers | — | Set to `0` to disable the lean-ctx preflight warning |
 | `PI_KIT_UPDATE_CHECK` | kit-update | on | `0` turns the background update check off ([Updates](updates.md#settings)) |
 | `PI_KIT_MEMORY_DIR` | memory-local | `~/.pi/agent/memory-local` | Memory store directory |
 | `PI_KIT_COMPACT_THRESHOLD_TOKENS` | trigger-compact | `100000` | Token count that triggers auto-compaction; locks out `/compact-threshold` when set. Without it, `/compact-threshold <amount>` (e.g. `500k`) persists to `~/.pi/agent/pi-kit/trigger-compact.json` |
@@ -229,6 +230,7 @@ MEM0_API_URL=http://localhost:8000
 | `PI_KIT_VERIFY_REVIEW` | verify-gate | on | `0` turns off the independent completion reviewer in `/verify` and `verify_completion` |
 | `PI_KIT_VERIFY_REVIEW_MODEL` | verify-gate | current model | Reviewer model as `provider/id` |
 | `PI_KIT_VERIFY_REVIEW_TIMEOUT_MS` | verify-gate | `900000` | Reviewer timeout |
+| `PI_KIT_VERIFY_PENDING_TTL_MS` | verify-gate | `1800000` | How long a "verification pending" marker stays valid, in ms; an older marker is treated as absent |
 | `MEM0_API_URL` | memory-mem0 | — | mem0 REST service URL |
 | `MEM0_API_KEY` | memory-mem0 | — | mem0 API key (if auth enabled) |
 | `MEM0_USER_ID` | memory-mem0 | `pi-agent` | mem0 user/agent ID |

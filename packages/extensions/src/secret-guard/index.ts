@@ -256,10 +256,105 @@ const SECRET_READ_PATH_PATTERNS_FOR_COMMANDS = SECRET_READ_PATH_PATTERNS.map(toC
 // A directory component counts only when it is exactly one of these names.
 const SECRET_PATH_SEGMENTS = new Set(["secret", "secrets", "credentials"]);
 
+interface SearchWord { value: string; start: number; end: number; quoted: boolean }
+
+// Recognise only plain, leading grep/rg invocations. If shell syntax or option roles are
+// uncertain, leave the command untouched for the existing fail-closed token scan.
+function searchPatternSpans(command: string): SearchWord[] {
+  // Escapes change quote and word boundaries; this narrow recogniser does not model them.
+  if (command.includes("\\")) return [];
+  let quote: "'" | '"' | null = null;
+  for (const ch of command) {
+    if (ch === quote) quote = null;
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch;
+  }
+  if (quote !== null) return [];
+
+  const words: SearchWord[] = [];
+  let i = 0;
+  while (i < command.length) {
+    if (/\s/.test(command.charAt(i))) { i++; continue; }
+    if (command.charAt(i) === "|") break;
+    const start = i;
+    let value: string;
+    const quoted = command.charAt(i) === "'" || command.charAt(i) === '"';
+    if (quoted) {
+      const closing = command.indexOf(command.charAt(i), i + 1);
+      if (closing < 0) return [];
+      value = command.slice(i + 1, closing);
+      i = closing + 1;
+      if (i < command.length && !/\s|\|/.test(command.charAt(i))) return [];
+    } else {
+      while (i < command.length && !/\s|\|/.test(command.charAt(i))) i++;
+      value = command.slice(start, i);
+    }
+    // Includes substitutions, shell operators, escaping and joined quote fragments.
+    if (/[`$;&<>()\\]/.test(value)) return [];
+    words.push({ value, start, end: i, quoted });
+  }
+  if (i < command.length && command.charAt(i + 1) === "|") return [];
+  if (!/^(?:rg|grep|egrep|fgrep)$/i.test(words[0]?.value ?? "")) return [];
+
+  const positions: SearchWord[] = [];
+  const explicitPatterns: SearchWord[] = [];
+  let hasPatternFile = false;
+  let options = true;
+  const shortNoValue = new Set("nrRivlcqshHowxFE");
+  const longNoValue = new Set(["--line-number", "--recursive", "--ignore-case", "--fixed-strings", "--extended-regexp", "--count", "--quiet", "--no-heading"]);
+  const longWithValue = new Set(["--glob", "--type", "--max-count", "--after-context", "--before-context", "--context"]);
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index];
+    if (!word) return [];
+    if (options && word.value === "--") { options = false; continue; }
+    if (options && word.value.startsWith("--")) {
+      if (word.value === "--regexp" || word.value === "--file") {
+        const next = words[++index];
+        if (!next) return [];
+        if (word.value === "--file") hasPatternFile = true;
+        else explicitPatterns.push(next);
+      } else if (word.value.startsWith("--regexp=")) {
+        explicitPatterns.push(word);
+      } else if (word.value.startsWith("--file=")) {
+        hasPatternFile = true;
+      } else if (longWithValue.has(word.value)) {
+        if (!words[++index]) return [];
+      } else if (!longNoValue.has(word.value)) return [];
+      continue;
+    }
+    if (options && word.value.startsWith("-") && word.value !== "-") {
+      for (let flag = 1; flag < word.value.length; flag++) {
+        const ch = word.value.charAt(flag);
+        if (ch === "e" || ch === "f" || "ABCmgt".includes(ch)) {
+          const attached = flag + 1 < word.value.length;
+          const operand = attached ? word : words[++index];
+          if (!operand) return [];
+          if (ch === "e") explicitPatterns.push(operand);
+          if (ch === "f") hasPatternFile = true;
+          break;
+        }
+        if (!shortNoValue.has(ch)) return [];
+      }
+      continue;
+    }
+    positions.push(word);
+  }
+  if (explicitPatterns.length === 0 && hasPatternFile) return [];
+  const patterns = explicitPatterns.length > 0 ? explicitPatterns : positions.slice(0, 1);
+  // The shell expands an unquoted glob, brace or tilde word before the search tool sees it,
+  // so it can name a file (`grep sec* x`, `grep ~/.ssh/id_* x`) even where it sits in the
+  // pattern position. Only a quoted pattern is certainly text.
+  if (patterns.some((word) => !word.quoted && /[*?[\]{}~]/.test(word.value))) return [];
+  return patterns;
+}
+
 function commandReferencesSecret(command: string): boolean {
-  const normalized = stripEnvTemplateTokens(normalizePath(command));
-  if (commandHasGlobTokenMatchingSecret(normalized)) return true;
-  for (const token of shellTokens(normalized)) {
+  let scanned = command;
+  for (const span of searchPatternSpans(command).reverse()) {
+    scanned = `${scanned.slice(0, span.start)} ${scanned.slice(span.end)}`;
+  }
+  scanned = stripEnvTemplateTokens(normalizePath(scanned));
+  if (commandHasGlobTokenMatchingSecret(scanned)) return true;
+  for (const token of shellTokens(scanned)) {
     const segments = token.split(/[\\/]/);
     const base = segments.pop() || token;
     if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;

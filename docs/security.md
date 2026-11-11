@@ -192,11 +192,16 @@ are pinned by `tests/governance-smoke.ts`.
 10. **`secret-guard`, when enabled, blocks the obvious secret paths.** It blocks writing key
     material or tokens to any file, and `cat`, `cp`, `mv`, `base64`, `curl -F @file` and PowerShell
     style reads of `.env`, `*.pem`, `*.key`, `id_rsa` and protected engagement paths, including
-    glob-obscured and quote-fragmented references. The firewall separately classifies credential
-    Source files below a directory whose name merely contains `secret` (such as
+    glob-obscured and quote-fragmented references. In a plain leading `rg` or grep-family
+    command, it treats a recognised search pattern as text while still scanning pattern files
+    and file operands; ambiguous options, substitutions, malformed quoting and an unquoted
+    glob, brace or tilde pattern (which the shell expands) retain the full scan
+    (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`). Source files below a
+    directory whose name merely contains `secret` (such as
     `packages/extensions/src/secret-guard/`) stay readable, while an exact `secret`, `secrets` or
     `credentials` path segment still counts as a secret reference (`tests/secret-guard-smoke.ts`).
-    files as credential reads whether or not `secret-guard` is loaded. For a tool the policy
+    The firewall separately classifies credential files as credential reads whether or not
+    `secret-guard` is loaded. For a tool the policy
     allows, it checks every path the call names in a `path`, `file_path`, `filePath`, `file`,
     `files`, `paths`, `cwd`, `dir`, `directory`, `root`, `analysisRoot`, `newFilePath`,
     `scriptPath` or `trace_path` field (`tests/firewall-shell-smoke.ts`);

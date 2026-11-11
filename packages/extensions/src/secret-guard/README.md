@@ -21,6 +21,15 @@ item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
   `password=`-style assignment, `curl` / `wget` posting credentials; `SECRET_BASH_LEAK_PATTERNS`),
   or that read, copy, encode or transfer a secret or protected path (`cat`, `cp`, `mv`,
   `base64`, `curl` uploads), including glob- and quote-obscured names.
+  For a plain leading `rg`, `grep`, `egrep` or `fgrep` command, a recognised search pattern is
+  excluded from the secret-path token scan. The first positional argument is the pattern unless
+  `-e` / `--regexp` or `-f` / `--file` supplies one; a pattern file is always scanned as a path.
+  File operands, including those after `--`, are still scanned. Unknown options, ambiguous shell
+  syntax, unbalanced quotes and shell substitutions receive the unchanged full scan, and so does
+  an unquoted pattern containing `*`, `?`, `[`, `]`, `{`, `}` or `~`, which the shell expands
+  before the tool runs (a quoted pattern is text). This
+  precision rule is pinned by `tests/secret-guard-smoke.ts`; the four piped searches through all
+  three guards are pinned by `tests/firewall-benign-corpus.ts` via `tests/tool-firewall-smoke.ts`.
 - any tool call whose `path` or `file` argument (or, for `bash`, `command`, `cmd` or `script`) is truthy
   but not a string; the reason names the field (`tests/untrusted-input-guards-smoke.ts`).
 

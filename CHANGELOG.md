@@ -166,6 +166,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   redirects its path, records the refusal and blocks the action. Its default data directories
   also use the workspace safe-write helper, and a link below an operator-set `PENTEST_DATA_ROOT`
   is refused as well (`tests/governance-smoke.ts`).
+- Piped `rg` and grep-family searches no longer treat a recognised search pattern as a secret
+  path. File operands, pattern files and ambiguous shell commands retain the full secret scan
+  (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`).
 
 ## [0.3.0-beta.2]
 

@@ -13,7 +13,7 @@ Board: PG-57 done - verified complete from cycle 09; the required-output block n
 
 ## Items
 
-Item: Let an operator answer to a blocked publication resume one cycle - `f24a144` (with `106bc4d` review+plan) - `node tests/autonomy-selfimprove-smoke.ts` 42/42, `autonomy-smoke` 32, `autonomy-cli-smoke` 16, tsc, `test:lint`, `docs-smoke`
+Item: Let an operator answer to a blocked publication resume one cycle - `f24a144`, `90384c2` (doc clarification) with `106bc4d` review+plan - `node tests/autonomy-selfimprove-smoke.ts` 42/42, `autonomy-smoke` 32, `autonomy-cli-smoke` 16, tsc, `test:lint`, `docs-smoke`
 Item: PG-57 declared-output step (carried from cycle 09) - `3c643fc` (cycle 09, unchanged) - `workflow-smoke` 13/13, `workflow-plan-smoke` 91 (cycle 09)
 
 ## What was done

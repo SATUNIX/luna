@@ -2,70 +2,71 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `f0d6ede22af4` (head of `stream/core`, cycle 06 merged). Cycle 07
-  commits, all pushed: `8e290d3` (PG-51), `29d7379` (reviewer's skill-routing bound fix), plus the
-  records under `autonomy/cycles/luna-core-01/07/` and
-  `autonomy/proposals/luna-core-01-07-skill-trigger-wall-cap.md`.
-- Cycle 07 outcome: **successful** (fix).
-- Reviewable diff 36,933 chars — under the 60,000 read budget, past the 30,000 stop-new-items mark.
+- Branch `pi/luna-core-01`, base `5a888fe5dcf2` (head of `stream/core`; cycle 08 was never merged).
+  Cycle 09 commits, all pushed: `21d75cf` (review+plan), `0471c71` + `bf74303` (PG-55 carry-over,
+  cherry-picked from the cycle-08 attempt branch), `3c643fc` (PG-57), plus the records under
+  `autonomy/cycles/luna-core-01/09/` and the `luna-core-01/09` line in `autonomy/JOURNAL.md`.
+- Cycle 09 outcome: **successful** (fix).
+- Reviewable diff 26,740 chars — under the 60,000 read budget, past the 30,000 stop-new-items mark.
 
-## What cycle 07 did
+## What cycle 09 did
 
-1. **Board PG-51 (fix).** Eight smoke guards bounded linear time with wall clock
-   (`performance.now` / `Date.now`), which includes descheduled time; on a busy host they failed
-   correct code (`redact on 200 KB of "a-" took 799 ms` vs 200 ms; redaction-corpus 1854 ms vs
-   1000 ms; `env-isolation-smoke` downstream). New `tests/timing.ts` (`cpuMs`, `bestCpuMs`,
-   `assertCpuWithin`) measures `process.cpuUsage()` user+system; all eight guards converted with
-   every budget unchanged. A self-test in `tests/firewall-gate-smoke.ts` proves a catastrophic
-   `/^(a+)+$/` rule still blows a 40 ms CPU budget. New `tests/timing-load-check.ts` runs each
-   changed smoke 5× under a CPU burner per core — 40/40 passed.
-2. **The same load exposed two real defects, both fixed in `8e290d3`.** (a) The skill-router's
-   untrusted `re:` guard used `node:vm`'s 50 ms timeout, which is wall clock, so a busy host
-   switched off a correct `codebase-navigation` trigger (`expected ["codebase-navigation"] got []`,
-   2/5 under load); `match.ts` now decides on a 50 ms CPU budget with a 500 ms wall cap to
-   interrupt a runaway match and one retry. (b) `workflow-plan-smoke`'s 40 ms plant timer fired
-   after run cleanup (`ENOENT ... symlink`); it now waits for m1's output file.
-3. **Reviewer fix in `29d7379`.** The skill-routing bound wrapped a caching function in
-   best-of-three (two cached no-ops made it vacuous); it now times one real run.
-4. **Board PG-27** was already done and merged in cycle 06; recorded, no work needed.
+1. **Root cause of the cycle-08 rejection.** `smoke:docs` (and so `check-all`) failed on the cycle-08
+   tree only because `autonomy/cycles/luna-core-01/08/report.md` had no matching `autonomy/JOURNAL.md`
+   line (`report with no journal entry: luna-core-01/08`, `tests/docs-smoke.ts:518`). Cycle 09 did not
+   carry the cycle-08 records, so it owes no cycle-08 entry, and it added its own.
+2. **Board PG-55 (P0, fix).** Carried over by cherry-pick; the run exposes the leak-scan publish
+   blocker and merged-but-unpublished count in status and `state.json`, the next cycle's prompt names
+   the refused commit and locations only, the run blocks with an operator question after two
+   merged-but-unpublished cycles, and a clean publish clears all three. `node
+   tests/autonomy-selfimprove-smoke.ts` 41/41, `autonomy-cli-smoke` 16, `autonomy-smoke` 32.
+3. **Board PG-57 (P1, fix).** `runStep` now appends a `## Required output` block to the step task
+   naming each declared file by absolute path and stating the step fails if the exact file is absent;
+   the failure names the absolute path. `workflow-smoke` 13/13, `workflow-plan-smoke` 91. Independent
+   `subagent` reviewer: `VERDICT: PASS`.
 
 ## Checks that were run
 
-`node tests/timing-load-check.ts` (40/40 under full CPU load), the eight changed smokes plus
-`env-isolation`, `npx tsc -p tests/tsconfig.json`, `npx tsc -p packages/core/tsconfig.json`,
-`npm run test:lint`, `node packages/core/check-all.ts --check-wiring`, `node tests/docs-smoke.ts`,
-`node tests/eval-baseline-smoke.ts`, `node packages/core/eval/baseline.ts --check` — all PASS. Never
-run `npm test` or `npm run check:all`. See `verify.md`.
+`autonomy-selfimprove-smoke` (41), `autonomy-cli-smoke` (16), `autonomy-smoke` (32),
+`workflow-smoke` (13), `workflow-plan-smoke` (91), `npx tsc -p tests/tsconfig.json`, `test:lint`,
+`docs-smoke` (green, journal gate included), `check-all --check-wiring` — all PASS. Never ran
+`npm test` or `npm run check:all`. See `verify.md`.
 
 ## Merge
 
-Cycle complete; every targeted check passes and an independent `subagent` reviewer returned
-`VERDICT: PASS`. Its one warning was fixed before the cycle closed. Merge `pi/luna-core-01` into
-`stream/core` only after the acceptance checks pass on a clean checkout.
+Every targeted check passes and an independent reviewer returned PASS for PG-57 (PG-55 was reviewed
+PASS in cycle 08 and re-ran green). Merge `pi/luna-core-01` into `stream/core` only after the host
+acceptance checks pass on a clean checkout.
 
 ## Carry over to the next cycle
 
-1. The skill-router `re:` trigger wall cap is now 500 ms per trigger (was 50 ms wall) because a CPU
-   budget cannot interrupt a running match. Bounded (switch-off is per session, `safe-regex.ts`
-   caps the pattern), but tightening it is an operator choice —
-   `autonomy/proposals/luna-core-01-07-skill-trigger-wall-cap.md`.
-2. `packages/core/install.ts`'s npm/`trunk` guard is untested while `distribution.json` has no
-   `npm.enabled`; add a test when npm delivery is enabled. The rest of
-   `autonomy/proposals/luna-core-01-05-npm-trunk-channel.md` is implemented and can be closed.
-3. Cycle 03's env-ownership work (`472a37f`, `0b02622`, `31d77ca`) is on
+1. **PG-51 (cycle-08 carry-over, not carried).** The load-tolerant smoke timing guards are sound and
+   verified on `origin/attempts/luna-core-01/cycle-08` (`cfe2ea0`, `84894cc`, `3329032`, `ea8027b`,
+   27,519 reviewable chars) but did not fit this cycle's diff budget next to PG-55 + PG-57. Re-carry
+   or re-implement and run `tests/timing-load-check.ts` green end to end (cycle 08 left it 54/55 with
+   the redaction fix applied and never re-ran the full 11-smoke sweep).
+2. **Cycle-08 records live only on the attempt branch.** If a later cycle brings
+   `autonomy/cycles/luna-core-01/08/report.md` over, it must add the matching journal line
+   `- luna-core-01/08 | Board: PG-55, PG-51 | successful | ...` or `smoke:docs` goes red again.
+3. Skill-router `re:` trigger wall cap is 500 ms per trigger (was 50 ms) because a CPU budget cannot
+   interrupt a match — operator choice: `autonomy/proposals/luna-core-01-07-skill-trigger-wall-cap.md`.
+4. `packages/core/install.ts`'s npm/`trunk` guard is untested until `distribution.json` has an npm
+   channel (`autonomy/proposals/luna-core-01-05-npm-trunk-channel.md`).
+5. Cycle 03's env-ownership work (`472a37f`, `0b02622`, `31d77ca`) is on
    `origin/attempts/luna-core-01/cycle-03` only; sound but not re-verified on this base.
-4. Proposal `luna-core-01-03-codeowners-dead-path.md`: `.github/CODEOWNERS:43` names a path with 0
-   tracked files. `.github/` is a control path — operator decision.
-5. Defect IDs V-07/V-08/V-10 still have no in-tree finding list; need the operator's list.
-6. The `coverage` CI job is red owner-side; not touched, per the steward.
+6. `.github/CODEOWNERS:43` names a path with 0 tracked files — `.github/` is a control path; operator
+   decision (`autonomy/proposals/luna-core-01-03-codeowners-dead-path.md`).
+7. Sandbox `sliceMs` loses to the wall-clock `idleMs` watchdog under load; operator decision on the
+   runner's watchdog semantics (`autonomy/proposals/luna-core-01-08-sandbox-watchdog-load.md`).
+8. Defect IDs V-07/V-08/V-10 still need the operator's in-tree finding list; the owner-side
+   `coverage` CI job is red and untouched.
 
 ## Rules for the next session
 
 One logical change per commit (finding, root cause, fix, verification), push after each commit,
-targeted checks only, diff read budget 60,000 chars and stop new items past 30,000, never edit
-`.github/`, `autonomy/CHARTER.md`, or operator control paths (propose them instead). The only
-allowed `package.json` edit is adding `smoke:<name>` → `node tests/<name>-smoke.ts`. Cite only the
-new board-id shape (`PG-<n>`, `DE-<n>`); old single-letter-hyphen-digit ids are blocked by the
-pre-push leak scan. Never run `npm test` or `npm run check:all`; run targeted smokes. A long
-subagent can hit the 30-minute wall limit — check its staged output rather than re-dispatching
-blind.
+targeted checks only, reviewable-diff read budget 60,000 chars and stop new items past 30,000, never
+edit `.github/`, `autonomy/CHARTER.md`, or operator control paths (propose them instead). Cite only
+the new board-id shape (`PG-<n>`, `DE-<n>`). Never run `npm test` or `npm run check:all`. A
+`workflow_run` task text must not contain a literal `{{...}}` that is not a valid template — it fails
+the step before any agent launches. A long subagent can hit the wall limit — check its staged output
+rather than re-dispatching blind.

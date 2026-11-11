@@ -667,6 +667,35 @@ await check("PG-55: two consecutive leak-scan-refused merges stop the run with a
   assert.equal(prompts.length, 2, "the run waits for the operator instead of starting a third cycle");
 });
 
+await check("PG-55: a non-merged cycle between refused merges does not reset the blocked-cycle count", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let stopped = false;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => { if (slot.engine && !stopped && h.state().status === "blocked") { stopped = true; slot.engine.engine.signalled = true; } } },
+    script: async (t) => {
+      prompts.push(t.message);
+      if (t.step === 2) { t.remove("AUDIT_OK"); report(t, "successful"); t.commit("red gate cycle"); return; }
+      t.write("AUDIT_OK", "1");
+      t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+      report(t, "successful");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "publish-blocked");
+  assert.equal(state.selfImprove?.publishBlockedCycles, 2, "the intervening non-merged cycle did not clear the count");
+  assert.equal(state.selfImprove?.history.filter((c) => c.merged).length, 2, "only the two leak-bearing cycles merged");
+  assert.equal(prompts.length, 3, "the run stops before a fourth cycle");
+});
+
 await check("PG-55: a clean publish clears the blocker, the unpublished count and the status line", async () => {
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const slot: { engine?: MadeEngine } = {};

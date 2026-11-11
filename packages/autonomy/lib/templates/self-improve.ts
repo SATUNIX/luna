@@ -236,7 +236,8 @@ function publishNow(ctx: StepContext): void {
     const message = errorMessage(e);
     if (message !== si.publishError) log(`publish failed (will retry): ${message}`);
     si.publishError = message;
-    si.publishBlocker = e instanceof gm.PublishBlocked ? message : null;
+    // A generic failure must not erase a real leak-scan blocker; only a PublishBlocked sets it (a successful publish clears it above).
+    if (e instanceof gm.PublishBlocked) si.publishBlocker = message;
   }
 }
 
@@ -503,9 +504,9 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   }
   if (merge.merged) { si.lastGoodSha = sha; si.merged = (si.merged ?? 0) + 1; }
   publishNow(ctx);
-  // A merged cycle the leak scan refused is one more unpublished cycle stacked; anything else clears the run.
+  // A merged cycle the leak scan refused is one more unpublished cycle stacked; a non-merged cycle
+  // leaves the count unchanged. Only a successful publish (in publishNow) clears it.
   if (merge.merged && si.publishBlocker) si.publishBlockedCycles = (si.publishBlockedCycles ?? 0) + 1;
-  else si.publishBlockedCycles = 0;
   const entry: CycleEntry = { n, outcome: result.outcome, reason: result.reason, attempts: result.attempts, start, head: sha, gate: gate.skipped ? "skipped" : gate.green ? "green" : "red", gateFailing: failing,
     reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, costUsd: +result.costUsd.toFixed(4),
     decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}) };

@@ -50,6 +50,7 @@ is the evidence for the tests. That gap is recorded in `verify.md`, not papered 
   the framed area; proposal `autonomy/proposals/luna-ux-01-10-hub-overlay-mouse-and-width.md`.
 - `TRUNK_CHANNEL = "next"` naming proposal (`...-07-trunk-channel-alias.md`) is still open; do
   not change the notice wording without it.
-- Cycle 08 and 09 records exist in the history/JOURNAL but their code is not on `stream/ux`;
-  the two control-center fixes were re-landed here under new commits. Do not assume cycle-08
-  fixes are present from the old HANDOFF text.
+- Cycle 08 and 09 records exist in the history/JOURNAL and their code is on `stream/ux`
+  (`git merge-base --is-ancestor 4dfac36 7647d1b` and `... 43fbfb0` both succeed); the two
+  control-center fixes were re-landed here under new commits. The shas those older records name
+  (`dbf1c35`, `be6c1bb`) are not objects in this clone, so read the code, not the records.

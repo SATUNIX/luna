@@ -25,15 +25,16 @@ or the charter.
 
 - Files: `packages/extensions/src/session-helpers/extension.json`,
   `packages/extensions/src/verify-gate/extension.json`, `docs/INSTALL.md`, regenerated
-  `docs/reference.md`, `tests/extension-manifest-hooks-smoke.ts`.
+  `docs/reference.md`.
 - Change: declare `PI_KIT_LEAN_CTX` in session-helpers' `env[]` and
-  `PI_KIT_VERIFY_PENDING_TTL_MS` in verify-gate's `env[]`; add both rows to the INSTALL.md
-  environment table (extension, default, purpose) so `docs/reference.md` shows a purpose and a
-  link and Item 1's checker covers them; regenerate `docs/reference.md`; add both extensions to the
-  targeted `ENV_ALLOWLIST` in `tests/extension-manifest-hooks-smoke.ts` so the exact declared set
-  is pinned.
-- Proving checks: `node tests/extension-manifest-hooks-smoke.ts` (the allowlist `deepEqual` fails
-  before the manifest change), `npm run smoke:docs`, `node packages/core/reference.ts --check`.
+  `PI_KIT_VERIFY_PENDING_TTL_MS` in verify-gate's `env[]` (the extension that defines the TTL);
+  add both rows to the INSTALL.md environment table (extension, default, purpose) so
+  `docs/reference.md` shows a purpose and a link; regenerate `docs/reference.md`.
+- Regression guard: the Item 1 assertion in `tests/docs-smoke.ts` already pins each new INSTALL
+  row to its manifest `env[]`, so `tests/extension-manifest-hooks-smoke.ts` is not changed (its
+  message claims an exact code-read set that session-helpers and verify-gate do not satisfy, and
+  the new checker covers the drift).
+- Proving checks: `npm run smoke:docs`, `node packages/core/reference.ts --check`.
 
 ## Checks to run (targeted only — never `npm test` / `npm run check:all`)
 

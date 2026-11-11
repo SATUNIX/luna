@@ -429,6 +429,41 @@ ${line}`);
     }
   },
 
+  async asciiSettingReachesTodoWidget() {
+    // F-2 wiring: /footer ascii on must change the todo checklist that is handed to pi, not only
+    // the status bar. The unit test pins renderTodoWidget's ascii parameter; this pins the call site.
+    const agent = tmpWorkspace("pi-kit-footer-ascii-");
+    const workspace = tmpWorkspace("pi-kit-footer-ascii-ws-");
+    const todoFile = path.join(workspace, "todos.md");
+    fs.writeFileSync(todoFile, "- [~] #1: write the test\n- [ ] #2: open item\n");
+    const restore = [setEnv("PI_CODING_AGENT_DIR", agent), setEnv("PI_KIT_TODO_FILE", todoFile)];
+    try {
+      const pi = fakePi();
+      footer.default(pi.api);
+      const widgets = new Map<string, unknown>();
+      const ctx = {
+        cwd: workspace, hasUI: true, model: { id: "m", provider: "p" },
+        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
+        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
+        ui: { theme: plain, setFooter() {}, setWidget: (k: string, v: unknown) => (v === undefined ? widgets.delete(k) : widgets.set(k, v)), setWorkingMessage() {}, notify() {} },
+      };
+      await pi.handlers.get("session_start")({}, ctx);
+      const todoWidget = (): string => {
+        const value = widgets.get("pi-kit-todos");
+        return Array.isArray(value) ? value.map((line) => strip(String(line))).join("\n") : "";
+      };
+      assert.match(todoWidget(), /▸ #1 write the test/, "the checklist renders with Unicode glyphs by default");
+      await pi.commands.get("footer").handler("ascii on", ctx);
+      const ascii = todoWidget();
+      assert.ok(/^\p{ASCII}*$/u.test(ascii), `the ASCII setting reaches the todo widget: ${ascii}`);
+      assert.ok(!ascii.includes("▸"), "the Unicode marker is gone once ascii is on");
+    } finally {
+      restore.reverse().forEach((r) => r());
+      rmWorkspace(agent);
+      rmWorkspace(workspace);
+    }
+  },
+
   async nonInteractiveSessionsGetTextNotSilence() {
     const agent = tmpWorkspace("pi-kit-footer-headless-");
     const workspace = tmpWorkspace("pi-kit-footer-headless-ws-");

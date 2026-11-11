@@ -56,7 +56,7 @@ type KitUpdateModule = Omit<typeof KitUpdate, "default"> & {
 
 const restoreKitEnv = isolateKitEnv();
 const mod: KitUpdateModule = await loadModule("extensions/kit-update/index.ts");
-const { default: kitUpdate, trunkNotice, checkForUpdates } = mod;
+const { default: kitUpdate, trunkNotice, checkForUpdates, formatReport, TRUNK_CHANNEL } = mod;
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -163,8 +163,10 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(report.kit.channel, "latest");
       assert.equal(report.kit.trunkAhead, 7);
       assert.equal(report.kit.available, false, "the release channel is current; only the trunk has moved");
-      const notice = trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 });
-      assert.equal(notice, "trunk is 7 commits ahead — /update channel latest");
+      const notice = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
+      assert.equal(notice, "trunk is 7 commits ahead — /update channel next");
+      assert.match(formatReport(report), /trunk is 7 commits ahead — \/update channel next/, "the /update output carries the lossless line");
+      assert.equal(report.kit.trunkAhead, 7, "the suggested channel follows the trunk, not the installed release channel");
     } finally {
       w.cleanup();
     }
@@ -175,7 +177,8 @@ const tests: Record<string, () => void | Promise<void>> = {
     try {
       const report = await checkForUpdates(w.cwd, fakeRegistry(PI_TAGS), "1.4.0", fakeGit({ tags: ["0.2.1-beta.0"], count: 0 }).git);
       assert.equal(report.kit.trunkAhead, 0);
-      assert.equal(trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 }), null);
+      assert.equal(trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 }), null);
+      assert.doesNotMatch(formatReport(report), /trunk is/, "in sync, /update shows no gap line");
     } finally {
       w.cleanup();
     }
@@ -187,7 +190,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       const report = await checkForUpdates(w.cwd, fakeRegistry(PI_TAGS), "1.4.0", fakeGit({ reachable: false }).git);
       assert.equal(report.offline, true);
       assert.equal(report.kit.trunkAhead, undefined);
-      assert.equal(trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 }), null);
+      assert.equal(trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 }), null);
     } finally {
       w.cleanup();
     }
@@ -254,7 +257,42 @@ const tests: Record<string, () => void | Promise<void>> = {
       const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {} } };
       await pi.handlers.get("session_start")({}, ctx);
       await waitFor(() => notes.length > 0);
-      assert.deepEqual(notes, [{ m: "trunk is 3 commits ahead — /update channel latest", l: "info" }]);
+      assert.deepEqual(notes, [{ m: "trunk is 3 commits ahead — /update channel next", l: "info" }]);
+    } finally {
+      globalThis.fetch = realFetch;
+      restoreOffline();
+      restorePids();
+      restoreMode();
+      restorePath();
+      shim.cleanup();
+      w.cleanup();
+    }
+  },
+
+  "the bare /update screen notifies the trunk gap before its selector": async () => {
+    const w = makeGitWorld();
+    const shim = makeGitShim();
+    const restorePath = setEnv("PATH", `${shim.dir}${path.delimiter}${process.env.PATH ?? ""}`);
+    const restoreMode = setEnv("FAKE_GIT_MODE", "normal");
+    const restorePids = setEnv("FAKE_GIT_PIDS", path.join(shim.dir, "pids"));
+    const restoreOffline = setEnv("PI_OFFLINE", undefined);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fakeRegistry(PI_TAGS) as typeof fetch;
+    try {
+      const pi = fakePi();
+      kitUpdate(pi.api);
+      const notes: Note[] = [];
+      const ctx = {
+        hasUI: true,
+        cwd: w.cwd,
+        ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {}, confirm: async () => true, select: async () => undefined },
+        reload: async () => {},
+      };
+      await pi.commands.get("update").handler("", ctx);
+      assert.ok(
+        notes.some((n) => n.m === "trunk is 3 commits ahead — /update channel next" && n.l === "info"),
+        `the bare /update screen names the gap: ${JSON.stringify(notes)}`,
+      );
     } finally {
       globalThis.fetch = realFetch;
       restoreOffline();

@@ -20,9 +20,10 @@ The channel that actually follows the trunk (the `main` branch, `packages/core/d
 ## Why the cycle-07 notice names `next` instead
 
 The PG-12 notice is implemented as a pure `trunkNotice({ channel, ahead })` that renders whatever
-channel the state carries. The wiring passes the install's real channel, so the owner sees
-`trunk is N commits ahead — /update channel next` — an action that works. Naming `trunk` there
-would have printed a command the same extension rejects.
+channel the state carries. The wiring always passes `next`, the channel that follows `main`, so
+whatever channel the install is on (`latest`, `next`, or a pin) the owner sees
+`trunk is N commits ahead — /update channel next` — an action that actually moves the copy to the
+newer commits. Naming `trunk` there would have printed a command the same extension rejects.
 
 ## Proposed change (if the team wants the board's exact wording)
 

@@ -21,11 +21,13 @@ The `kit-update` extension, loaded in every profile, checks all three parts.
 - **On demand**: `/update` checks now and lists what can be updated.
 
 When the kit is installed from git and its `main` branch has moved ahead of your checked-out
-commit, start-up and `/update status` add one line: `trunk is N commits ahead — /update channel
-<channel>`. It appears even when the release channel you follow is otherwise current, and it is
-silent when your copy is in sync and when the remote could not be reached (offline, or no git
-credentials). The channel it names is the real one the install follows — `latest`, `next`, or an
-exact version — so `/update channel <channel>` accepts it.
+commit, the check adds one line: `trunk is N commits ahead — /update channel next`. It appears at
+start-up (subject to the once-a-day background throttle), on `/update`, and under `/update status`.
+`next` is the channel that follows `main`, so the suggested command actually moves your copy to
+the newer commits; naming the installed release channel (`latest`, or an exact version) would not.
+The line shows even when the release channel you follow is otherwise current, and it is silent
+when your copy is in sync or ahead and when the remote could not be reached (offline, or no git
+credentials).
 
 | Command | What it does |
 |---|---|

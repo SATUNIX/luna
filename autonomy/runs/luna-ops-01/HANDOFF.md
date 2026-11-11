@@ -1,26 +1,29 @@
 # Run `luna-ops-01` — handoff
 
-State after cycle 03 (branch `pi/luna-ops-01`, base `a5d1811ab5da`):
+State after cycle 04 (branch `pi/luna-ops-01`, base `43ace850dc29`):
 
-- Cycle 03: **successful**, mode fix. The base was red before any work: `smoke:docs` failed with
-  `report with no journal entry: luna-core-01/01` because `integration/luna` had been merged in
-  carrying the core stream's report with no ops journal line. Fixed by adding that line
-  (`e7a91c8`) and by hardening `checkJournal` so an entry whose cycle directory has no `report.md`
-  is also a failure (`378744c`, with a `tests/docs-smoke.ts` fixture). A-91 needed no change: the
-  cycle-02 harness fix (`bd90afe`, `13e608f`) is present and `smoke:autonomy` (32) and
-  `smoke:eval-footprint` (11) pass.
-- Operator note carried from the board: after the harness fix merges, the running supervisor and
-  worker image still carry the old `HARNESS_COMMANDS` list, so run `upgrade-harness.sh`; streams
-  keep working meanwhile because the check fails open after resume.
-- Never re-register `/subagents`: three tests pin it as removed (`tests/docs-smoke.ts`,
+- Cycle 04: **successful**, mode fix. Two things: (1) repaired the red gate — `smoke:docs` failed
+  because `integration/luna` had merged in `autonomy/cycles/luna-ux-01/01/report.md` with no journal
+  line; added the line (`d9143a6`). (2) board item V-41, docs-only: one new record
+  `autonomy/proposals/V-04-unify-workflows.md` inventories the shipped `/workflow` / `/workflows`
+  surface and every remaining caller, marks the pre-`3c4c571` design as superseded, and names the
+  doc sweep as follow-up (`86a6b44`, `64edc7b`, `8a5a0de`, `e112c29`). No code changed.
+- The journal-drift failure has now happened twice (`luna-core-01/01` cycle 03, `luna-ux-01/01`
+  cycle 04). The in-repo `checkJournal` is correct and must not be weakened; the durable fix is in
+  the merge step that brings another stream's report onto `integration/luna`, which is outside this
+  repository. Do not re-add a per-merge manual line as the "solution"; consider raising the merge
+  step as an operator-owned proposal only if a future cycle is asked to.
+- Open follow-up from V-41: the **doc sweep** — apply the change rows in §2 of
+  `autonomy/proposals/V-04-unify-workflows.md`; regenerate `docs/reference.md`/`docs/EXTENSIONS.md`
+  with `npm run catalog` and `THIRD_PARTY_NOTICES.md` with `node packages/core/gen-notices.ts`, never
+  by hand. The next board item should drive this, not this proposal.
+- Never re-register `/subagents`: three tests pin its removal (`tests/docs-smoke.ts`,
   `tests/run-query-smoke.ts`, `tests/subagent-observability-smoke.ts`).
-- A-01 is complete: the journal now detects drift both ways. The cycle-02 proposal
-  `autonomy/proposals/luna-ops-01-02-journal-orphan-entry.md` is closed by
-  `autonomy/decisions/luna-ops-01-03-team-journal.md`.
-- Process gap noted but not filed: a report merged from another stream must add its journal line
-  or the branch goes red; see `autonomy/cycles/luna-ops-01/03/review.md`. A future proposal could
-  make the merge step append the line.
+- Proposal-size lesson: the V-41 proposal was first written at 58 KB with pasted grep/source
+  transcripts and pushed the cycle diff to 60206 bytes, over the 60000 review cap. Record findings
+  and counts, not transcripts; measure `git diff … | wc -c` after every commit.
+- A-01 is complete (journal detects drift both ways). Cycle 03's decisions stand.
 - Open but not taken: installer doc drift (lite skill count, `--scope project` `.env` claim,
   unknown `--profile` stack trace); `npmDeliveryEnabled()` vs `docs/releasing.md`.
-- Next cycle: take the top ready board item verbatim. Working tree clean and pushed; targeted
-  checks and the independent whole-diff review pass.
+- Next cycle: take the top ready board item verbatim. Working tree clean and pushed; targeted checks
+  pass and the independent whole-diff review returned PASS.

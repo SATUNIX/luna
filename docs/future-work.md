@@ -167,6 +167,13 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   URL, the script's content hash) would close it, at the cost of more prompts.
 - **A script the agent wrote can set the unattended variables** where the classifier sees only
   `bash run.sh`. The provenance rule stops it from working; the classifier cannot see it.
+- **An operator-set human-console directory is trusted as given.** `PI_KIT_HUMAN_CONSOLE_DIR` is the
+  root of the request write in both the tool firewall and the pentest governance extension, and the
+  helper trusts a root itself. If the operator points it at a path inside a repository that ships a
+  link there, the `pending` and `resolved` directories and the request file are created through that
+  link. The default `.pi/human-console` path is the checked one. Refusing a linked root would also
+  refuse a link the operator made on purpose, so this needs a decision on what a console root may be.
+  Nothing pins the linked-root case.
 
 ## Profiles and compaction
 

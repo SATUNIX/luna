@@ -150,7 +150,7 @@ are pinned by `tests/governance-smoke.ts`.
    timeout, so it can expire behind the overlay and fail closed. The console itself holds input while
    a non-run card is open, so two child requests that arrive in one poll are shown one at a time: the
    sibling waits for the next poll. A workflow-run approval card does not take that hold, because the
-   run broker deliberately allows two outstanding prompts per run; non-run cards and child requests
+   run broker deliberately allows two outstanding prompts per run; non-run approval cards and child requests
    still wait behind those open run cards. An `ask_human` question holds input the same way while its
    card is open. Aborting a turn ends that turn's wait, and a pentest action asks
    scope and RoE again after the wait and after your Yes. A reload or the

@@ -39,7 +39,9 @@ decisions. It is appended to `Projects/<project>/Recaps/<date>.md`. Decisions, p
 and gotchas it flags are promoted to memory notes in that project, deduplicated; a promoted
 note is never global (`tests/memory-vault-smoke.ts`, check 5). Trivial turns and subagent
 children are skipped. The first user prompt of every new session gets the last three recaps as
-background history, clearly labelled history only and not instructions to resume
+background history, clearly labelled history only and not instructions to resume; the recaps
+only take the room left over once the pinned and relevant memories are placed, and an
+oversized recap is dropped whole rather than crowding them out
 (`tests/memory-vault-smoke.ts`, check 13).
 
 **On request: memory notes.** When you say "remember …", the agent uses the `memory` skill

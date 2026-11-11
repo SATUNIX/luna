@@ -350,13 +350,17 @@ try {
       const longDid = "Moved the auth module. ".repeat(60);
       const longNext = "Finish migrating the auth module. ".repeat(60);
       for (let i = 0; i < 5; i++) vault.appendRecap(truncRoot, "trunc", { title: `Auth migration ${i}`, did: longDid, next: longNext }, date);
+      // Pinned and relevant memories must survive the oversized recaps, and must be marked
+      // injected only if their own line survives truncation.
+      vault.saveMemory(truncRoot, { title: "Pinned anchor memory", body: "The operator pinned this for every session.", pinned: true, project: "trunc" });
+      vault.saveMemory(truncRoot, { title: "Auth migration checkpoint", body: "The auth module migration was paused mid-move; resume it next.", project: "trunc" });
       const recapFile = path.join(truncRoot, "Projects", "trunc", "Recaps", "2026-09-24.md");
       const before = fs.readFileSync(recapFile);
       const pi = fakePi();
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello, continue the auth migration", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.equal(result.message.display, false);
       assert.equal(result.systemPrompt, undefined);
       assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the recall starts with the history header");
@@ -365,11 +369,14 @@ try {
       assert.match(result.message.content, /current message/i);
       assert.doesNotMatch(result.message.content, /Where we left off/);
       assert.doesNotMatch(result.message.content, /\*\*Next:\*\*/);
-      assert.doesNotMatch(result.message.content, /### Relevant memories/);
+      assert.match(result.message.content, /### Pinned memories/, "the pinned block survives the oversized recaps");
+      assert.match(result.message.content, /Pinned anchor memory/, "the pinned memory survives the cap");
+      assert.match(result.message.content, /### Relevant memories/, "the relevant block survives the oversized recaps");
+      assert.match(result.message.content, /Auth migration checkpoint/, "the relevant memory survives the cap");
       assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
       assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
       assert.deepEqual(fs.readFileSync(recapFile), before, "the on-disk recap is unchanged");
-      ok("a greeting gets background history, not a resume prompt; truncation keeps the header and footer");
+      ok("a greeting gets background history, not a resume prompt; oversized recaps leave room for pinned and relevant memories");
     } finally {
       restoreTrunc();
     }

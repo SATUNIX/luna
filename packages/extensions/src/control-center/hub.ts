@@ -21,7 +21,7 @@ import {
   type ExtensionContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { Container, SettingsList, type SettingItem, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
@@ -365,6 +365,7 @@ function tuiRenderer(deps: HubDeps): Renderer {
                 list.handleInput?.(data);
                 tui.requestRender();
               },
+              handleMouse: (event: TuiMouseEvent): TuiMouseEventResult | undefined => container.handleMouse(event),
             };
           }, done),
         overlay ? { overlay: true } : undefined,

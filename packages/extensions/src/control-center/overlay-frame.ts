@@ -14,7 +14,15 @@
  * (`packages/extensions/third_party/subagent/overlay-frame.ts`) is byte-identical to this one, like
  * `supportsOverlay`; the smokes assert the equality.
  */
-import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import {
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+  type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 
 /** The theme surface the border and dimming need; pi's `Theme` satisfies it. */
 export interface OverlayTheme {
@@ -133,10 +141,24 @@ export function withOverlayFrame<T>(
     throw error;
   }
   return {
-    render: (width: number): string[] => frameLines(inner.render(width), width, theme),
+    render: (width: number): string[] => frameLines(inner.render(width >= 10 ? width - 4 : width), width, theme),
     invalidate: (): void => inner.invalidate(),
     handleInput: (data: string): void => {
       inner.handleInput?.(data);
+    },
+    handleMouse: (event: TuiMouseEvent): TuiMouseEventResult | undefined => {
+      if (!inner.handleMouse) return undefined;
+      // Below 10 no frame is drawn, so the inner component owns the whole overlay.
+      if (event.width < 10) return inner.handleMouse(event);
+      // Only points inside the framed content area reach the inner; the border and padding do not.
+      if (event.x < 2 || event.x >= event.width - 2 || event.y < 1 || event.y >= event.height - 1) return undefined;
+      return inner.handleMouse({
+        ...event,
+        x: event.x - 2,
+        y: event.y - 1,
+        width: event.width - 4,
+        height: event.height - 2,
+      });
     },
     dispose: (): void => {
       if (!restored) {

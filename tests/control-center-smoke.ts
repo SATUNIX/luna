@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { initTheme, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { fakePi, isolateKitEnv, loadExtension, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
 import type * as ControlsModule from "../packages/extensions/src/control-center/controls.ts";
@@ -719,11 +719,11 @@ tests.push([
       hasOverlay: (): boolean => true,
       compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines,
     };
-    let component: { render(width: number): string[]; dispose?(): void } | undefined;
+    let component: { render(width: number): string[]; handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined; dispose?(): void } | undefined;
     const ui = {
       notify: (): void => {},
       custom: (
-        factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: PageChoice) => void) => { render(width: number): string[]; dispose?(): void },
+        factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: PageChoice) => void) => { render(width: number): string[]; handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined; dispose?(): void },
       ): Promise<PageChoice> => {
         component = factory(tui, theme, {}, () => {});
         return new Promise<PageChoice>(() => {});
@@ -739,6 +739,11 @@ tests.push([
       assert.ok(lines.some((line) => line.includes(borderTag)), `a border at width ${width}`);
     }
     // (b) while the overlay is open the base transcript is dimmed; dispose restores it.
+    // (e) the hub's overlay component exposes mouse handling, and a press on a row body is handled
+    // by the SettingsList rather than dropped by the frame.
+    assert.equal(typeof component.handleMouse, "function", "the hub's overlay component handles mouse");
+    const hubMouse: TuiMouseEvent = { type: "press", button: "left", x: 5, y: 5, width: 40, height: 12, screenX: 105, screenY: 55, shift: false, alt: false, ctrl: false };
+    assert.equal(component.handleMouse?.(hubMouse)?.handled, true, "a press on a row body reaches the SettingsList");
     const dimmed = tui.compositeOverlays(base, 40, 20);
     assert.ok(dimmed.some((line) => line.includes(dimTag)), "the transcript is dimmed while open");
     assert.ok(stripTerminalSequences(dimmed[0] ?? "").includes("base line"), "the base text survives dimming");
@@ -772,6 +777,45 @@ tests.push([
     assert.deepEqual(tui3.compositeOverlays(base, 40, 20), base, "a throwing build restores the transcript");
     // (d) a narrow width is left alone, and (e) the vendor copy is byte-identical.
     assert.deepEqual(frameLines(["x"], 8, theme), ["x"]);
+    // (g) the frame lays the inner out at the framed width and forwards mouse events.
+    const renderWidths: number[] = [];
+    let innerMouse: TuiMouseEvent | undefined;
+    let innerMouseCalls = 0;
+    const mouseResult: TuiMouseEventResult = { handled: true };
+    const mouseTui = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
+    const framed = withOverlayFrame<undefined>(mouseTui as unknown as TUI, theme, () => ({
+      render: (width: number): string[] => {
+        renderWidths.push(width);
+        return ["inner"];
+      },
+      invalidate: (): void => {},
+      handleMouse: (event: TuiMouseEvent): TuiMouseEventResult => {
+        innerMouseCalls += 1;
+        innerMouse = event;
+        return mouseResult;
+      },
+    }), () => {});
+    const wideLines = framed.render(40);
+    assert.equal(renderWidths.at(-1), 36, "the inner is laid out four cells narrower than the frame");
+    for (const line of wideLines) assert.equal(visibleWidth(line), 40, `framed line is 40 cells: ${JSON.stringify(line)}`);
+    framed.render(8);
+    assert.equal(renderWidths.at(-1), 8, "a narrow overlay renders the inner at the full width");
+    framed.render(12);
+    assert.equal(renderWidths.at(-1), 8, "a 12-cell frame renders the inner at 8 cells");
+    const press: TuiMouseEvent = { type: "press", button: "left", x: 5, y: 2, width: 40, height: 12, screenX: 105, screenY: 52, shift: false, alt: false, ctrl: false };
+    const forwarded = framed.handleMouse?.(press);
+    assert.equal(innerMouseCalls, 1, "a content point is forwarded exactly once");
+    assert.deepEqual(innerMouse, { ...press, x: 3, y: 1, width: 36, height: 10 }, "the point is translated into the content area");
+    assert.equal(forwarded, mouseResult, "the inner's result is returned");
+    for (const point of [{ x: 0, y: 2 }, { x: 1, y: 2 }, { x: 38, y: 2 }, { x: 39, y: 2 }, { x: 5, y: 0 }, { x: 5, y: 11 }]) {
+      framed.handleMouse?.({ ...press, ...point });
+    }
+    assert.equal(innerMouseCalls, 1, "border and outside points are not forwarded");
+    const narrowEvent: TuiMouseEvent = { ...press, x: 7, width: 8 };
+    framed.handleMouse?.(narrowEvent);
+    assert.equal(innerMouseCalls, 2, "a narrow overlay forwards the event");
+    assert.deepEqual(innerMouse, narrowEvent, "a narrow overlay forwards untranslated");
+    framed.dispose?.();
     const srcFrame = fs.readFileSync("packages/extensions/src/control-center/overlay-frame.ts");
     const vendorFrame = fs.readFileSync("packages/extensions/third_party/subagent/overlay-frame.ts");
     assert.ok(srcFrame.equals(vendorFrame), "the two overlay-frame.ts copies are byte-identical");

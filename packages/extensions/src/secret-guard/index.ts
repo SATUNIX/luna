@@ -98,30 +98,229 @@ const CANONICAL_SECRET_BASENAMES = [
   "secret", "secrets.json", "secrets.yaml", "secrets.yml",
 ];
 
-function globTokenToRegExp(token: string): RegExp | null {
-  if (!/[*?]/.test(token)) return null;
-  let pattern = "^";
-  for (const ch of token) {
-    if (ch === "*") pattern += ".*";
-    else if (ch === "?") pattern += ".";
-    else pattern += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+// Where the last `]` and the last `:]` of a token are, so that finding the end of a bracket class
+// can say "none" in constant time. Without it a token of ten thousand `[` rescans the whole token
+// from every `[` (quadratic).
+interface ClassLimits { close: number; posix: number }
+
+// Index of the `]` that closes the bracket class opened at `open`, or -1 when there is none. A `]`
+// straight after the `[` (or after `[!` / `[^`) is a member, and `[:alpha:]` inside is one unit.
+function bracketClassEnd(token: string, open: number, limits: ClassLimits): number {
+  if (limits.close <= open) return -1;
+  let i = open + 1;
+  if (token.charAt(i) === "!" || token.charAt(i) === "^") i++;
+  if (token.charAt(i) === "]") i++;
+  while (i < token.length) {
+    if (token.startsWith("[:", i)) {
+      if (limits.posix < i + 2) return -1;
+      i = token.indexOf(":]", i + 2) + 2;
+      continue;
+    }
+    if (token.charAt(i) === "]") return i;
+    i++;
   }
-  pattern += "$";
+  return -1;
+}
+
+// What each POSIX class inside a bracket expression matches, as a RegExp class fragment.
+const POSIX_CLASS_FRAGMENTS = new Map<string, string>([
+  ["alpha", "a-zA-Z"], ["digit", "0-9"], ["alnum", "a-zA-Z0-9"], ["lower", "a-z"], ["upper", "A-Z"],
+  ["xdigit", "0-9A-Fa-f"], ["word", "a-zA-Z0-9_"], ["blank", " \\t"], ["space", " \\t\\n\\r\\f\\v"],
+  ["punct", "!-\\/:-@\\[-`{-~"], ["graph", "!-~"], ["print", " -~"], ["cntrl", "\\x00-\\x1f\\x7f"],
+]);
+
+// RegExp source for the inside of a bracket class. A POSIX class this does not know, or a range the
+// engine rejects, becomes "any one character", which can only match more than the shell would.
+function bracketClassSource(body: string): string {
+  const negated = body.startsWith("!") || body.startsWith("^");
+  const members = negated ? body.slice(1) : body;
+  let inside = "";
+  for (let i = 0; i < members.length; i++) {
+    if (members.startsWith("[:", i)) {
+      const end = members.indexOf(":]", i + 2);
+      const fragment = end < 0 ? undefined : POSIX_CLASS_FRAGMENTS.get(members.slice(i + 2, end));
+      if (fragment === undefined) return ".";
+      inside += fragment;
+      i = end + 1;
+      continue;
+    }
+    const ch = members.charAt(i);
+    inside += ch === "\\" || ch === "]" || ch === "^" || ch === "[" ? `\\${ch}` : ch;
+  }
+  const source = `[${negated ? "^" : ""}${inside}]`;
   try {
-    return new RegExp(pattern, "i");
+    new RegExp(source);
+    return source;
+  } catch {
+    return ".";
+  }
+}
+
+// Every element of a glob except `*` stands for exactly one character, so a glob with more of them
+// than this cannot match a canonical secret name (the longest is sixteen characters). It also keeps
+// the RegExp small: a token of sixty thousand `[` would otherwise build one V8 refuses to run.
+const MAX_GLOB_ELEMENTS = 32;
+
+interface GlobElement { source: string; literal: boolean; star: boolean }
+
+// A glob token as RegExp pieces, or null when it has no glob character or cannot match a name of
+// canonical length. One pass, linear in the token.
+function parseGlob(token: string): GlobElement[] | null {
+  if (!/[*?[]/.test(token)) return null;
+  const limits: ClassLimits = { close: token.lastIndexOf("]"), posix: token.lastIndexOf(":]") };
+  // One failed search for a class end makes the rest of the token literal, so a malformed token
+  // costs one scan, not one per `[`.
+  let classes = true;
+  let consuming = 0;
+  const elements: GlobElement[] = [];
+  for (let i = 0; i < token.length; i++) {
+    const ch = token.charAt(i);
+    const end = ch === "[" && classes ? bracketClassEnd(token, i, limits) : -1;
+    if (ch === "[" && end < 0) classes = false;
+    if (ch === "*") {
+      if (!elements.at(-1)?.star) elements.push({ source: ".*", literal: false, star: true });
+      continue;
+    }
+    if (++consuming > MAX_GLOB_ELEMENTS) return null;
+    if (ch === "?") elements.push({ source: ".", literal: false, star: false });
+    else if (end > i) {
+      elements.push({ source: bracketClassSource(token.slice(i + 1, end)), literal: false, star: false });
+      i = end;
+    } else elements.push({ source: ch.replace(/[.+^${}()|[\]\\]/g, "\\$&"), literal: true, star: false });
+  }
+  return elements;
+}
+
+function globElementsToRegExp(elements: GlobElement[]): RegExp | null {
+  try {
+    return new RegExp(`^${elements.map((element) => element.source).join("")}$`, "i");
   } catch {
     return null;
   }
 }
 
-// Detects glob-obscured secret references (`base64 .e??`, `cp .e??`) that never
+function globTokenToRegExp(token: string): RegExp | null {
+  const elements = parseGlob(token);
+  return elements ? globElementsToRegExp(elements) : null;
+}
+
+// Bounds on one token's expansion: how many words, and how many characters in all, so that a long
+// token cannot multiply the cost of the scans that follow. A group that would pass either bound
+// widens to `*`.
+const MAX_GLOB_ALTERNATIVES = 1024;
+const MAX_GLOB_EXPANDED_CHARS = 1048576;
+const MAX_GLOB_ROUNDS = 16;
+const PLAIN_CLASS_MEMBER = /[^\][!^\\:-]/;
+
+interface GlobGroup { start: number; end: number; alternatives: string[] }
+
+// The first complete group in a word, scanning once: a `{a,b}` (the innermost, because its `}`
+// comes first; `{x}` without a comma is literal in the shell) or a bracket class of up to sixteen
+// plain members (`[v]`, `[vV]`).
+function findGlobGroup(word: string): GlobGroup | null {
+  const opens: number[] = [];
+  for (let i = 0; i < word.length; i++) {
+    const ch = word.charAt(i);
+    if (ch === "{") opens.push(i);
+    else if (ch === "}") {
+      const start = opens.pop();
+      if (start === undefined) continue;
+      const body = word.slice(start + 1, i);
+      if (body.includes(",")) return { start, end: i + 1, alternatives: body.split(",") };
+    } else if (ch === "[") {
+      let j = i + 1;
+      while (j < word.length && j - i <= 16 && PLAIN_CLASS_MEMBER.test(word.charAt(j))) j++;
+      if (j > i + 1 && word.charAt(j) === "]") return { start: i, end: j + 1, alternatives: Array.from(word.slice(i + 1, j)) };
+    }
+  }
+  return null;
+}
+
+// Replace each outermost `{...}` with `*` in one pass: the widest reading of a group the rounds
+// did not finish, which can only match more than the group did.
+function widenBraceGroups(word: string): string {
+  let result = "";
+  let copied = 0;
+  let depth = 0;
+  let open = 0;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word.charAt(i);
+    if (ch === "{") {
+      if (depth === 0) open = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0) {
+        result += `${word.slice(copied, open)}*`;
+        copied = i + 1;
+      }
+    }
+  }
+  return result + word.slice(copied);
+}
+
+// The shell expands `{a,b}` and a bracket class of plain members before a command runs, so
+// `.e{n,x}v`, `.en[v]` and `[.]env` name `.env` although no secret name appears in the text.
+// Expand them, bounded: duplicates collapse (`{,,,}` is one empty word), at most 64 words are
+// kept, and a group left over after the bound or 16 levels of nesting widens to `*`. Ranges,
+// negations and POSIX classes (`[a-c]`, `[!x]`, `[[:lower:]]`) stay in the token for
+// globTokenToRegExp. Quoted text is expanded too, deliberately: `sh -c 'cat .en[v]'` is a quoted
+// word whose content a second shell expands.
+function expandGlobGroups(token: string): string[] {
+  let words = new Set([token]);
+  for (let round = 0; round < MAX_GLOB_ROUNDS; round++) {
+    const next = new Set<string>();
+    let chars = 0;
+    let expanded = false;
+    for (const word of words) {
+      const group = findGlobGroup(word);
+      if (!group) {
+        next.add(word);
+        chars += word.length;
+        continue;
+      }
+      expanded = true;
+      const alternatives = new Set(group.alternatives);
+      const before = word.slice(0, group.start);
+      const after = word.slice(group.end);
+      let added = alternatives.size * (before.length + after.length);
+      for (const alternative of alternatives) added += alternative.length;
+      if (next.size + alternatives.size > MAX_GLOB_ALTERNATIVES || chars + added > MAX_GLOB_EXPANDED_CHARS) {
+        next.add(`${before}*${after}`);
+        chars += before.length + 1 + after.length;
+      } else {
+        for (const alternative of alternatives) next.add(`${before}${alternative}${after}`);
+        chars += added;
+      }
+    }
+    words = next;
+    if (!expanded) break;
+  }
+  return Array.from(words, widenBraceGroups);
+}
+
+// A glob segment names a secret directory only when enough of it is literal to be about that
+// name: `secre[t-u]` and `.ss[h-i]` do, `*` and `s*` do not (`cat docs/*/README.md` is ordinary).
+const MIN_LITERAL_GLOB_CHARS = 3;
+function globSegmentReachesSecretDirectory(segment: string): boolean {
+  const elements = parseGlob(segment);
+  if (!elements || elements.filter((element) => element.literal).length < MIN_LITERAL_GLOB_CHARS) return false;
+  const re = globElementsToRegExp(elements);
+  return re !== null && [...SECRET_PATH_SEGMENTS, ".ssh"].some((name) => re.test(name));
+}
+
+// Detects glob-obscured secret references (`base64 .e??`, `cp .e??`, `cat .en[v]`) that never
 // appear as a literal secret filename substring in the command text (F-04).
 function commandHasGlobTokenMatchingSecret(command: string): boolean {
   for (const rawToken of command.split(/\s+/)) {
-    const token = rawToken.replace(/^["']|["']$/g, "");
-    const base = token.split(/[\\/]/).pop() || token;
-    const re = globTokenToRegExp(base);
-    if (re && CANONICAL_SECRET_BASENAMES.some(name => re.test(name))) return true;
+    for (const expanded of expandGlobGroups(rawToken)) {
+      const token = expanded.replace(/^["']|["']$/g, "");
+      const segments = token.split(/[\\/]/);
+      const base = segments.at(-1) || token;
+      const re = globTokenToRegExp(base);
+      if (re && CANONICAL_SECRET_BASENAMES.some(name => re.test(name))) return true;
+      if (segments.some(globSegmentReachesSecretDirectory)) return true;
+    }
   }
   return false;
 }
@@ -354,7 +553,7 @@ function commandReferencesSecret(command: string): boolean {
   }
   scanned = stripEnvTemplateTokens(normalizePath(scanned));
   if (commandHasGlobTokenMatchingSecret(scanned)) return true;
-  for (const token of shellTokens(scanned)) {
+  for (const token of shellTokens(scanned).flatMap(expandGlobGroups)) {
     const segments = token.split(/[\\/]/);
     const base = segments.pop() || token;
     if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;

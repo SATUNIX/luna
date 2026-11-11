@@ -192,7 +192,8 @@ are pinned by `tests/governance-smoke.ts`.
 10. **`secret-guard`, when enabled, blocks the obvious secret paths.** It blocks writing key
     material or tokens to any file, and `cat`, `cp`, `mv`, `base64`, `curl -F @file` and PowerShell
     style reads of `.env`, `*.pem`, `*.key`, `id_rsa` and protected engagement paths, including
-    glob-obscured and quote-fragmented references. In a plain leading `rg` or grep-family
+    glob-, bracket-class-, brace- and quote-obscured references (`.en[v]`, `[.]env`, `.e{n,x}v`;
+    pinned by `tests/secret-guard-smoke.ts`). In a plain leading `rg` or grep-family
     command, it treats a recognised search pattern as text while still scanning pattern files
     and file operands; ambiguous options, substitutions, malformed quoting and an unquoted
     glob, brace or tilde pattern (which the shell expands) retain the full scan

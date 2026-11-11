@@ -227,6 +227,81 @@ async function run() {
       'grep "secret" docs/*.md | head',
     ]) await allows("bash", { command }, `quoted glob or glob operand: ${command}`);
 
+    // 4e. The shell expands a bracket class and a brace group before the command runs, so neither
+    // may hide a secret name from the scan.
+    for (const command of [
+      'cat [.]env | head',
+      'cat .en[v] | head',
+      'cat .e[n]v',
+      'cat .e[nN]v',
+      'cat .en[u-w]',
+      'cat .en[!x]',
+      'cat .e[[:lower:]]v',
+      'cat id_rs[a] | head',
+      'cat server.pe[m] | head',
+      'cat config/secret[s]/prod.txt',
+      'base64 .en[v]',
+      'cp [.]env /tmp/x',
+      'cat .e{n,m}v | head',
+      'cat .{env,x}',
+      'cat id_{rsa,x}',
+      'cat {a,b}/.en[v]',
+      'cat {x,y}{.en[v],z}',
+      'cat .en[]v]',
+      'cat .e[[:lower:]]v | head',
+      'cat id_rs[[:alpha:]]',
+      // A directory segment can name a secret directory through a class too.
+      'cat config/secre[t-u]/notes.txt',
+      'cat config/creden[t-u]ials/db.txt',
+      'cat ./config/secre[t-u]/x',
+      'cat ../config/secre[t-u]/x',
+      'cat /tmp/secret[s-t]/x',
+      'cat config/secret[!z]/x',
+      'cat ~/.ss[h-i]/foo.txt',
+      'cat config/sec*/x',
+      // Nesting past the expansion rounds widens to `*` instead of leaving a group unresolved.
+      `cat .e${"{n,".repeat(10)}z${"}".repeat(10)}v`,
+      `cat .e${"{n,".repeat(40)}z${"}".repeat(40)}v`,
+    ]) await blocks("bash", { command }, `bracket class or brace group stays blocked: ${command}`);
+    for (const command of [
+      'cat src/[a-c]*.ts | head',
+      'head -3 file[12].txt',
+      'cat a{b,c}d | head',
+      'grep -E "[a-z]+" docs/security.md | head',
+      'cat file[0-9].log | head',
+      'curl -s https://example.test/{a,b} | head',
+      'cat [ab]c.ts | head',
+      // A POSIX class means what it says: a digit class cannot match the letters of `.env`.
+      'cat .en[[:digit:]]',
+      'cat id_rs[[:digit:]]',
+      // Empty alternatives collapse to one empty word.
+      'cat {,,,,}{,,,,}{,,,,}',
+      'cat {,,}{,,}{,,}{,,}',
+      // A glob directory segment with little literal text is ordinary, and one that cannot spell a
+      // secret directory is too.
+      'cat docs/*/README.md | head',
+      'cat packages/*/package.json | head',
+      'cat packages/ext*/src/index.ts | head',
+      'cat packages/extensions/src/secret-g*/index.ts | head',
+      // A compact JSON body is one brace group with many commas; it must not widen to `*`.
+      `curl -s -d '{${Array.from({ length: 200 }, (_, i) => `"field${i}":${i}`).join(",")}}' https://example.test | head`,
+    ]) await allows("bash", { command }, `benign bracket class or brace group: ${command}`);
+    // Hostile tokens stay cheap: a huge brace product is bounded, and unclosed or nested bracket and
+    // brace runs cost one scan, not one per character (60,000 `[` took several seconds when each
+    // `[` rescanned the rest of the token).
+    for (const [name, command] of [
+      ["a 2^40 brace product", `cat ${"{a,b}".repeat(40)} | head`],
+      ["60,000 unclosed brackets", `cat ${"[".repeat(60000)} | head`],
+      ["an unclosed brace with 50,000 commas", `cat {${",".repeat(50000)} | head`],
+      ["30,000 unterminated POSIX openers", `cat ${"[:".repeat(30000)} | head`],
+      ["20,000 nested POSIX openers with one closer", `cat ${"[[:".repeat(20000)}:] | head`],
+      ["10,000 two-way groups", `cat ${"{a,b}".repeat(10000)} | head`],
+    ] as const) {
+      const started = Date.now();
+      await allows("bash", { command }, `${name} is bounded`);
+      assert.ok(Date.now() - started < 1500, `${name} must stay cheap`);
+    }
+
     // 5. Benign operations still pass.
     await allows("write", { path: "src/index.ts", content: "export const x = 1;" }, "normal source write");
     await allows("edit", { path: "README.md", new_string: "# Title" }, "normal edit");

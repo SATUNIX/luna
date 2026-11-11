@@ -237,7 +237,8 @@ The choices are:
 - *Deny and tell the agent why*.
 
 Headless sessions and subagents send the same menu through the human console. A console
-without menu support still answers yes/no.
+without menu support still answers yes/no. The console holds input while its card is open, so a
+second child request waits for the next poll and only one card is shown at a time.
 
 **Console answers are authenticated.** The console's files live in the workspace
 (`.pi/human-console`), where the agent can write, so a file in `resolved/` is not evidence that a

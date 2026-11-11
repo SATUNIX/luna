@@ -489,6 +489,9 @@ try {
     // Set for a case that needs a card nobody answers, so only its timeout can close it.
     let unanswered = false;
     let endsEarly = false;
+    // Set for a case that keeps a card open until the test releases it.
+    let manual = false;
+    const manualCards: Array<() => void> = [];
     // The options each card was opened with, and what it told the operator.
     const cardOptions: unknown[] = [];
     const consoleNotices: string[] = [];
@@ -503,6 +506,7 @@ try {
         select: async (title: string, _options?: string[], opts?: unknown): Promise<string | undefined> => {
           selects.push(title);
           cardOptions.push(opts);
+          if (manual) return new Promise<string | undefined>((resolve) => { manualCards.push(() => resolve(pick)); });
           if (endsEarly) {
             const { timeout } = opts as { timeout: number };
             return new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), Math.max(0, timeout - 3)));
@@ -789,6 +793,36 @@ try {
           assert.equal(selects.length, 0, "no card under the hold");
         } finally {
           hold();
+        }
+      });
+      // 24b. Two child requests that arrive in one scan: the console holds input while its card is
+      //      open, so the sibling waits for the next 1 Hz poll instead of opening a second card that
+      //      steals focus from the first (V-02).
+      await attempt("two child approvals in one scan open one card at a time", async () => {
+        selects.length = 0;
+        manual = true;
+        manualCards.length = 0;
+        pick = "Allow once";
+        const first = brokerRequest(ws, { id: "serial-first", kind: "approval", title: "Approve tool call?", body: "first child", choices: ["Allow once", "Deny"], timeoutMs: 30000 });
+        const second = brokerRequest(ws, { id: "serial-second", kind: "approval", title: "Approve tool call?", body: "second child", choices: ["Allow once", "Deny"], timeoutMs: 30000 });
+        try {
+          await until(() => selects.length === 1, 2500);
+          assert.equal(selects.length, 1, "one card opens for two requests written in the same scan");
+          await sleep(1500);
+          assert.equal(selects.length, 1, "the sibling waits for the next poll instead of opening a second card");
+          assert.equal(owner.inputHeld(), "human-console", "the console holds input while its card is open");
+          manualCards.shift()?.();
+          await until(() => selects.length === 2, 2500);
+          assert.equal(selects.length, 2, "the sibling card opens only after the first closes");
+          manualCards.shift()?.();
+          const [a, b] = await Promise.all([first, second]);
+          assert.equal(a.approved, true, "the first request resolves approved");
+          assert.equal(b.approved, true, "the second request resolves approved");
+        } finally {
+          manual = false;
+          while (manualCards.length) manualCards.shift()?.();
+          for (const id of ["serial-first", "serial-second"]) fs.rmSync(pendingFile(id), { force: true });
+          await Promise.race([Promise.all([first, second]), sleep(1500)]);
         }
       });
     } finally {

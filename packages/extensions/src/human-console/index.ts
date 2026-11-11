@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
-import { cardTimeoutMs, inputHeld, showWhenFree } from "./shared/input-owner.ts";
+import { cardTimeoutMs, inputHeld, releaseInputHolds, showWhenFree, withInputHold } from "./shared/input-owner.ts";
 import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 
 const POLL_MS = 1000;
@@ -337,12 +337,19 @@ export default function humanConsole(pi: ExtensionAPI) {
       if (typeof ctx.ui?.select === "function") {
         // Keys meant for an open overlay must not answer this. A hold that outlasts it leaves the run
         // paused, the same as No: /workflow resume still lifts it.
-        const asked = await showWhenFree((card) => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal), {
+        const asked = await showWhenFree(async (card): Promise<{ shown: boolean; answer: string | null }> => {
+          // Another card can take the keyboard between the wait and this callback. Leave the run
+          // paused rather than stack a second prompt on top of that card.
+          if (inputHeld()) return { shown: false, answer: null };
+          // Hold input for our own prompt too, so a sibling pause prompt cannot stack on it.
+          const picked = await withInputHold("human-console", () => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal));
+          return { shown: true, answer: picked.settled && typeof picked.value === "string" ? picked.value : null };
+        }, {
           signal: cards.signal,
           timeoutMs: DEFAULT_TIMEOUT_MS,
           onHeld: (holder) => ctx.ui?.notify?.(`human-console: workflow run ${runId} is paused and asks to resume; close ${holder} to answer.`, "warning"),
         });
-        resume = asked.kind === "shown" && asked.value.settled && asked.value.value === PAUSE_CHOICE_YES;
+        resume = asked.kind === "shown" && asked.value.shown && asked.value.answer === PAUSE_CHOICE_YES;
       }
       if (resume) controlWorkflowRun(runId, "resume");
       audit(ctx.cwd, { event: "workflow_approvals_resume_answer", runId, resumed: resume });
@@ -375,7 +382,9 @@ export default function humanConsole(pi: ExtensionAPI) {
     const { signal } = cards;
     try {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}${run.step === undefined ? "" : ` · step ${run.step}`}`;
-      const result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal);
+      // Hold input for the card and release it before settling and asking to resume: askToResume's
+      // showWhenFree must not wait on our own hold.
+      const result = await withInputHold("human-console", () => answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal));
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
       // No answer before the requester's deadline: it has already failed closed; decide nothing.
@@ -441,25 +450,27 @@ export default function humanConsole(pi: ExtensionAPI) {
         return;
       }
       // The card runs for the time left, not the full timeout: past the deadline an answer is discarded.
+      // The hold is taken synchronously, before the first await, so a sibling request in the same scan
+      // sees it and leaves its pending file for the next 1 Hz poll instead of opening a second card
+      // that would steal focus from this one (V-02).
       const { signal } = cards;
-      let result: Answer;
-      if (request.kind === "approval") result = await answerApproval(ctx, request, cardMs(request, deadline), signal);
-      else {
-        const asked = await answerQuestion(ctx, request, signal, cardMs(request, deadline));
-        result = { approved: asked.outcome === "answered", answer: asked.answer };
-      }
-      // The session ended under the card: nobody answered, and the requester's own deadline decides.
-      if (signal.aborted) return;
-      if (pastDeadline(deadline)) {
-        // The requester gave up at its deadline (brokerRequest unlinks both files in its
-        // finally); do not recreate an orphan resolved file. Drop the pending file too so
-        // the watcher does not re-answer it forever.
-        expire(ctx, id, file);
-        return;
-      }
-      // writeAnswer tolerates a pending file that is already gone: an unguarded unlinkSync
-      // here is an unhandled rejection that kills pi.
-      writeAnswer(ctx.cwd, id, file, result, digest);
+      await withInputHold("human-console", async () => {
+        const result = request.kind === "approval"
+          ? await answerApproval(ctx, request, cardMs(request, deadline), signal)
+          : await answerQuestion(ctx, request, signal, cardMs(request, deadline)).then((asked): Answer => ({ approved: asked.outcome === "answered", answer: asked.answer }));
+        // The session ended under the card: nobody answered, and the requester's own deadline decides.
+        if (signal.aborted) return;
+        if (pastDeadline(deadline)) {
+          // The requester gave up at its deadline (brokerRequest unlinks both files in its
+          // finally); do not recreate an orphan resolved file. Drop the pending file too so
+          // the watcher does not re-answer it forever.
+          expire(ctx, id, file);
+          return;
+        }
+        // writeAnswer tolerates a pending file that is already gone: an unguarded unlinkSync
+        // here is an unhandled rejection that kills pi.
+        writeAnswer(ctx.cwd, id, file, result, digest);
+      });
     } finally { processing.delete(file); }
   };
   const processPending = (ctx: ExtensionContext) => {
@@ -504,7 +515,7 @@ export default function humanConsole(pi: ExtensionAPI) {
     processPending(ctx);
     watcher = setInterval(() => { processPending(ctx); }, POLL_MS); watcher.unref?.();
   });
-  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; cards.abort(); heldNoticed.clear(); runBroker.clear(); });
+  pi.on("session_shutdown", async () => { if (watcher) clearInterval(watcher); watcher = null; cards.abort(); heldNoticed.clear(); runBroker.clear(); releaseInputHolds(); });
   pi.registerTool({ name: "ask_human", label: "Ask human", description: "Ask the operator a concise clarifying question.", parameters: Type.Object({ question: Type.String(), options: Type.Optional(Type.Array(Type.String())), context: Type.Optional(Type.String()), timeoutMs: Type.Optional(Type.Number({ minimum: 1 })) }), async execute(_id, params, signal, _onUpdate, ctx) {
     let outcome: AskOutcome;
     let answer: string | null;

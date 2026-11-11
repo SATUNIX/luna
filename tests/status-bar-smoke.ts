@@ -233,6 +233,19 @@ const tests = {
     assert.match(misconfigured, /unattended NOT enforced/, "an unattended request that nothing enforces is a loud warning, not a reassurance");
   },
 
+  criticalWarningSummaryAppearsOnceWhenNarrow() {
+    // Both the left warnings and the right verify-gate chip are priority 0, so the narrow line has
+    // to merge several criticals into one "<first> +N" summary. The summary must be placed once,
+    // not once per side (the pre-fix bug printed it twice).
+    const state = baseState({ unattended: { active: true, label: "unattended", boundary: "container", autoApprove: true }, compaction: { enabled: false, reason: "disabled in settings" }, agents: { live: 0, failed: 2 }, statuses: [{ key: "verify-gate", text: "FAIL" }] });
+    const line = footer.renderFooter(state, plain, 40, "default").map(strip).join("\n");
+    const summaries = line.match(/! UNATTENDED \+\d+/g) ?? [];
+    assert.equal(summaries.length, 1, `the merged critical summary is placed exactly once:
+${line}`);
+    assert.match(line, /! UNATTENDED/, `at least one critical warning is still named:
+${line}`);
+  },
+
   unknownAndMissingValuesAreNotZero() {
     const unknownCtx = footer.renderFooter(baseState({ context: { contextWindow: 200000, percent: null, tokens: null } }), plain, 100, "default").map(strip).join("\n");
     assert.match(unknownCtx, /ctx \?\/200k/);
@@ -319,6 +332,13 @@ const tests = {
     assert.deepEqual(footer.renderTodoWidget([], plain), []);
     const allDone = footer.renderTodoWidget([{ id: 1, text: "x", state: "done" }], plain).map(strip);
     assert.match(lineAt(allDone, 0), /all done/);
+    const asciiItems: TodoItem[] = [{ id: 1, text: "x", state: "active" }];
+    const forcedAscii = footer.renderTodoWidget(asciiItems, plain, 8, true).map(strip).join("\n");
+    let nonAscii = 0;
+    for (let i = 0; i < forcedAscii.length; i++) if (forcedAscii.charCodeAt(i) > 0x7f) nonAscii++;
+    assert.equal(nonAscii, 0, `the ascii flag reaches the todo widget: ${forcedAscii}`);
+    const defaultGlyphs = footer.renderTodoWidget(asciiItems, plain).map(strip).join("\n");
+    assert.ok(defaultGlyphs.includes("▸"), "without the ascii flag the widget keeps the Unicode glyphs");
   },
 
   phrasesAndActivity() {
@@ -404,6 +424,41 @@ const tests = {
       assert.match(noteAt(0).m, /compaction\s+not reported/);
     } finally {
       restore();
+      rmWorkspace(agent);
+      rmWorkspace(workspace);
+    }
+  },
+
+  async asciiSettingReachesTodoWidget() {
+    // F-2 wiring: /footer ascii on must change the todo checklist that is handed to pi, not only
+    // the status bar. The unit test pins renderTodoWidget's ascii parameter; this pins the call site.
+    const agent = tmpWorkspace("pi-kit-footer-ascii-");
+    const workspace = tmpWorkspace("pi-kit-footer-ascii-ws-");
+    const todoFile = path.join(workspace, "todos.md");
+    fs.writeFileSync(todoFile, "- [~] #1: write the test\n- [ ] #2: open item\n");
+    const restore = [setEnv("PI_CODING_AGENT_DIR", agent), setEnv("PI_KIT_TODO_FILE", todoFile)];
+    try {
+      const pi = fakePi();
+      footer.default(pi.api);
+      const widgets = new Map<string, unknown>();
+      const ctx = {
+        cwd: workspace, hasUI: true, model: { id: "m", provider: "p" },
+        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
+        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
+        ui: { theme: plain, setFooter() {}, setWidget: (k: string, v: unknown) => (v === undefined ? widgets.delete(k) : widgets.set(k, v)), setWorkingMessage() {}, notify() {} },
+      };
+      await pi.handlers.get("session_start")({}, ctx);
+      const todoWidget = (): string => {
+        const value = widgets.get("pi-kit-todos");
+        return Array.isArray(value) ? value.map((line) => strip(String(line))).join("\n") : "";
+      };
+      assert.match(todoWidget(), /▸ #1 write the test/, "the checklist renders with Unicode glyphs by default");
+      await pi.commands.get("footer").handler("ascii on", ctx);
+      const ascii = todoWidget();
+      assert.ok(/^\p{ASCII}*$/u.test(ascii), `the ASCII setting reaches the todo widget: ${ascii}`);
+      assert.ok(!ascii.includes("▸"), "the Unicode marker is gone once ascii is on");
+    } finally {
+      restore.reverse().forEach((r) => r());
       rmWorkspace(agent);
       rmWorkspace(workspace);
     }

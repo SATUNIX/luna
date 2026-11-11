@@ -19,7 +19,7 @@
     "models": []
   },
   "pulls": [],
-  "env": ["PI_KIT_CTX_BUDGET_TOKENS"],
+  "env": ["PI_KIT_CTX_BUDGET_TOKENS", "PI_KIT_CTX_MESSAGE_BUDGET_TOKENS"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
   "status": "beta"

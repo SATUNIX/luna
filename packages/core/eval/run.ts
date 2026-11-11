@@ -7,6 +7,9 @@
  *
  * Usage:
  *   node packages/core/eval/run.ts [--category security|verification|orchestration] [--json]
+ *
+ * `--category` with a missing value, or a value that names no registered fixture category, is
+ * refused (exit 2) rather than silently running every fixture or none.
  */
 import { fixtures } from "./fixtures.ts";
 import { prop } from "./dynamic.ts";
@@ -21,10 +24,33 @@ export interface FixtureResult {
 }
 
 const args = process.argv.slice(2);
-const categoryFilter = args.includes("--category") ? args[args.indexOf("--category") + 1] ?? null : null;
 const asJson = args.includes("--json");
 
+// The categories actually present in the fixtures, so a typo cannot select zero of them and pass.
+const CATEGORIES: readonly string[] = [...new Set<string>(fixtures.map((f) => f.category))].sort();
+const usage = `usage: node packages/core/eval/run.ts [--category ${CATEGORIES.join("|")}] [--json]`;
+
+let categoryFilter: string | null = null;
+const categoryIndex = args.indexOf("--category");
+if (categoryIndex !== -1) {
+  const value = args[categoryIndex + 1];
+  if (value === undefined || value.startsWith("--")) {
+    console.error(usage);
+    process.exit(2);
+  }
+  if (!CATEGORIES.includes(value)) {
+    console.error(`unknown category "${value}"`);
+    console.error(usage);
+    process.exit(2);
+  }
+  categoryFilter = value;
+}
+
 const selected = categoryFilter ? fixtures.filter((f) => f.category === categoryFilter) : fixtures;
+if (selected.length === 0) {
+  console.error("[eval] no fixtures selected — check --category filter");
+  process.exit(2);
+}
 
 const results: FixtureResult[] = [];
 for (const fixture of selected) {
@@ -65,8 +91,4 @@ if (asJson) {
   console.log(`\n[eval] ${passed}/${results.length} fixtures passed${failed ? `, ${failed} FAILED` : ""}.`);
 }
 
-if (results.length === 0) {
-  console.error("[eval] no fixtures ran — check --category filter");
-  process.exit(1);
-}
 process.exit(failed > 0 ? 1 : 0);

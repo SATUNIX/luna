@@ -9,9 +9,9 @@ was required.
 
 ## Board
 
-- Board: V-11 done — first-prompt memory recall is now framed as background history, so a
+Board: V-11 done - first-prompt memory recall is now framed as background history, so a
   bare greeting no longer reads as a request to resume old work.
-- Board: V-101 done — the Luna rename is finished across the docs/README/mkdocs scope and
+Board: V-101 done - the Luna rename is finished across the docs/README/mkdocs scope and
   guarded by `tests/brand-smoke.ts`; `docs/branding.md` records the two names.
 
 ## Items

@@ -50,5 +50,5 @@ Item: A-01 team journal - `ff5d8ed`, `d1d0292` - `npm run smoke:docs` (real tree
 - Not taken from HANDOFF: B-011 (`eval/run.ts:21` ignores `--category` with no value); installer
   doc drift (lite skill count, `--scope project` `.env` claim, unknown `--profile` stack trace);
   `npmDeliveryEnabled()` vs `docs/releasing.md`. Next cycle should take the top ready board item.
-- Diff under the review cap: 30,515 chars. Target checks and the independent whole-diff review all
+- Diff under the review cap: 32,392 chars. Target checks and the independent whole-diff review all
   pass; the host gate owns `npm test` and `npm run check:all`.

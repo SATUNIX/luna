@@ -40,7 +40,7 @@ suite on a clean checkout. Each line is one run, command then result and the lin
 
 `git diff --no-renames dc71c739409e..HEAD -- . ":(exclude)package-lock.json"
 ":(exclude)autonomy/cycles/luna-ops-01/" ":(exclude)autonomy/runs/luna-ops-01/" | wc -c`
-— 30,515 chars, inside the 60,000-char review cap.
+— 32,392 chars, inside the 60,000-char review cap.
 
 ## Not run (by rule)
 

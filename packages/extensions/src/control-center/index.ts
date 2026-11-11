@@ -42,11 +42,6 @@ export function readHubKey(): string {
  */
 function registerCommandMenu(pi: ExtensionAPI): void {
   let curated = false;
-  // pi drops the autocomplete wrappers when it replaces a session (/new, /resume, /fork) but
-  // reuses the loaded extension, so clear the guard or the filter is never re-registered.
-  pi.on("session_shutdown", () => {
-    curated = false;
-  });
   pi.on("session_start", (_event, ctx) => {
     if (curated) return;
     const mode: string | undefined = ctx.mode;

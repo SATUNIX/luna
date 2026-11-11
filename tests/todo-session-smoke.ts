@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, textOf } from "../packages/core/eval/harness.ts";
+import { ROOT, isolateKitEnv, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, textOf } from "../packages/core/eval/harness.ts";
 import type * as TodoFile from "../packages/extensions/third_party/todo/todo-file.ts";
 import type * as Todo from "../packages/extensions/third_party/todo/index.ts";
 import type * as CustomFooter from "../packages/extensions/third_party/custom-footer/index.ts";
@@ -30,6 +30,7 @@ interface TodoItem {
 // An extension module as this test drives it: registered against the harness's fakePi() api.
 type RegisteredOnFakePi<M> = Omit<M, "default"> & { default: (pi: ReturnType<typeof fakePi>["api"]) => void };
 
+const restoreEnv = isolateKitEnv();
 const tf = await loadModule<typeof TodoFile>("vendor/todo/todo-file.ts");
 const todo = await loadModule<RegisteredOnFakePi<typeof Todo>>("vendor/todo/index.ts");
 const footer = await loadModule<typeof CustomFooter>("vendor/custom-footer/index.ts");
@@ -37,6 +38,21 @@ const vg = await loadModule<typeof VerifyGate>("extensions/verify-gate/index.ts"
 const vb = await loadModule<RegisteredOnFakePi<typeof VerifierBoard>>("extensions/verifier-board/index.ts");
 
 const tests = {
+  readerCopiesMatch() {
+    // Each extension is self-contained, but all three read the same todo file format.
+    const canonical = "packages/extensions/third_party/custom-footer/todo-read.ts";
+    const expected = fs.readFileSync(path.join(ROOT, canonical));
+    for (const copy of [
+      "packages/extensions/src/verifier-board/todo-read.ts",
+      "packages/extensions/src/verify-gate/todo-read.ts",
+    ]) {
+      assert.ok(
+        fs.readFileSync(path.join(ROOT, copy)).equals(expected),
+        `${copy} differs from ${canonical}; keep the todo-read.ts copies byte-identical when updating the todo format`,
+      );
+    }
+  },
+
   pathResolution() {
     const ws = tmpWorkspace("pi-kit-todo-path-");
     try {
@@ -218,6 +234,7 @@ for (const [name, fn] of Object.entries(tests)) {
   }
 }
 const total = Object.keys(tests).length;
+restoreEnv();
 if (failed) {
   console.error(`todo-session-smoke: ${failed}/${total} failed`);
   process.exit(1);

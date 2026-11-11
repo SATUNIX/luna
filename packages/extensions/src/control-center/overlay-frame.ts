@@ -121,7 +121,17 @@ export function withOverlayFrame<T>(
     }
     done(result);
   };
-  const inner: Component & { dispose?(): void } = build(finish);
+  let inner: Component & { dispose?(): void };
+  try {
+    inner = build(finish);
+  } catch (error) {
+    // A throwing build never returns a component to dispose, so restore the dim patch here.
+    if (!restored) {
+      restored = true;
+      restore();
+    }
+    throw error;
+  }
   return {
     render: (width: number): string[] => frameLines(inner.render(width), width, theme),
     invalidate: (): void => inner.invalidate(),

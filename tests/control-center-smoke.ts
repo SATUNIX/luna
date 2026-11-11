@@ -658,6 +658,18 @@ tests.push([
     finishWrapped?.();
     assert.equal(closed, 1, "the wrapped done reached the caller's done");
     assert.deepEqual(tui2.compositeOverlays(base, 40, 20), base, "the wrapped done restores the transcript");
+    // (f) a build() that throws must restore the patch and rethrow, not leak the dim.
+    const tui3 = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
+    let buildError: unknown;
+    try {
+      withOverlayFrame<undefined>(tui3 as unknown as TUI, theme, () => {
+        throw new Error("build failed");
+      }, () => {});
+    } catch (error) {
+      buildError = error;
+    }
+    assert.ok(buildError instanceof Error && buildError.message === "build failed", "a throwing build propagates its error");
+    assert.deepEqual(tui3.compositeOverlays(base, 40, 20), base, "a throwing build restores the transcript");
     // (d) a narrow width is left alone, and (e) the vendor copy is byte-identical.
     assert.deepEqual(frameLines(["x"], 8, theme), ["x"]);
     const srcFrame = fs.readFileSync("packages/extensions/src/control-center/overlay-frame.ts");

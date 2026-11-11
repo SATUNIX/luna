@@ -86,12 +86,14 @@ type FakeUi = ReturnType<typeof makeUi>;
  * A fake UI context that records dialogs and custom-component options. Each custom() call answers
  * with the next scripted choice (none closes the hub) and records what the component rendered.
  */
-function makeUi(script: PageChoice[] = [], selectScript: Array<string | undefined> = []) {
+function makeUi(script: PageChoice[] = [], selectScript: Array<string | undefined> = [], terminalRows?: number) {
   const selects: RecordedSelect[] = [];
   const customCalls: Array<{ overlay?: boolean } | undefined> = [];
   const rendered: string[] = [];
   let editor = "";
   const fakeTheme = { fg: (_colour: string, text: string): string => text, bold: (text: string): string => text };
+  // Only a test that names terminal rows gets one; the rest keep the original terminal-less fake.
+  const fakeTui = terminalRows === undefined ? { requestRender: () => {} } : { requestRender: () => {}, terminal: { rows: terminalRows } };
   const ui = {
     select: async (title: string, options: string[], opts?: { timeout?: number }): Promise<string | undefined> => {
       selects.push({ title, options, timeout: opts?.timeout });
@@ -113,7 +115,7 @@ function makeUi(script: PageChoice[] = [], selectScript: Array<string | undefine
       const promise = new Promise<PageChoice>((resolve) => {
         finish = resolve;
       });
-      const component = factory({ requestRender: () => {} }, fakeTheme, {}, finish) as { render?: (width: number) => string[] };
+      const component = factory(fakeTui, fakeTheme, {}, finish) as { render?: (width: number) => string[] };
       try {
         rendered.push(stripTerminalSequences((component.render?.(120) ?? []).join("\n")));
       } catch {
@@ -174,6 +176,7 @@ interface DepsOptions {
   confirmed?: boolean;
   isChild?: boolean;
   write?: (text: string) => void;
+  allCommands?: Array<{ name: string; source: string }>;
 }
 
 /** Build hub deps for a direct openHub/dispatchRow test. */
@@ -195,7 +198,7 @@ function makeDeps(o: DepsOptions): HubDeps {
     },
     notify: () => {},
     doctor: () => [],
-    allCommands: () => [],
+    allCommands: () => o.allCommands ?? [],
     isChild: o.isChild ?? false,
   };
 }
@@ -593,6 +596,37 @@ tests.push([
     // Both branches of the gate, whatever pi is installed.
     for (const v of ["1.3.0", "1.3.1-beta.1", "1.4.0", "2.0.0", "v1.3.0"]) assert.equal(supportsOverlay(v), true, `supportsOverlay(${v})`);
     for (const v of ["1.2.9", "1.2.0", "0.99.2", "0.85.1"]) assert.equal(supportsOverlay(v), false, `supportsOverlay(${v})`);
+  },
+]);
+
+tests.push([
+  "the hub overlay fits a short terminal and keeps its 15-row default when no size is known",
+  async () => {
+    initTheme();
+    const model = await modelFor([]);
+    const allCommands = Array.from({ length: 20 }, (_, index) => ({ name: `cmd${index}`, source: "extension" }));
+    const open = async (rows?: number): Promise<string> => {
+      const recorded = makeUi([], [], rows);
+      const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
+      await openHub(makeDeps({ model, commands: [], ctx, allCommands }), "all-commands");
+      return recorded.rendered[0] ?? "";
+    };
+    // 24 rows, 20 commands: the framed box must not exceed the terminal, so its top and bottom stay visible.
+    const short = (await open(24)).split("\n");
+    assert.ok(short.length <= 24, `the overlay fits 24 rows, got ${short.length}`);
+    assert.match(short[0] ?? "", /╭/, "the top border is not scrolled off");
+    assert.match(short.at(-1) ?? "", /╰/, "the bottom border is visible");
+    assert.match(short.join("\n"), /→ \/cmd0\b/, "the focused row survives the shrink");
+    // 60 rows: the cap is still 15, so only cmd0..cmd14 show and the scroll indicator appears.
+    const tall = await open(60);
+    assert.match(tall, /\/cmd0\b/, "the first command is listed");
+    assert.match(tall, /\/cmd14\b/, "the fifteenth command is listed");
+    assert.doesNotMatch(tall, /\/cmd15\b/, "the sixteenth command stays below the 15-row cap");
+    assert.match(tall, /\(1\/20\)/, "a scroll indicator shows there are more commands");
+    // No terminal height (fake hosts, other tests): the original 15-row list still renders.
+    const unknown = await open();
+    assert.match(unknown, /\/cmd14\b/, "the fallback keeps 15 rows");
+    assert.doesNotMatch(unknown, /\/cmd15\b/, "the fallback still caps at 15");
   },
 ]);
 

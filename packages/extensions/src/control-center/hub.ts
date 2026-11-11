@@ -341,8 +341,25 @@ function tuiRenderer(deps: HubDeps): Renderer {
             );
             if (input.focus) list.selectItem(input.focus);
             container.addChild(list);
+            // The host centers an overlay on the terminal and clips it, so a list taller than the
+            // screen loses its top border, title and search line. Read the live row count per
+            // render; a host that exposes no terminal (the smoke fake) keeps the 15-row default.
             return {
-              render: (width: number) => container.render(width),
+              render: (width: number) => {
+                // The trusted in-process SettingsList: `maxVisible` is private and has no setter.
+                const runtime = list as unknown as { maxVisible: number };
+                // Reset first, so a terminal that grew again recovers the full 15 rows.
+                runtime.maxVisible = 15;
+                const rows = tui.terminal?.rows;
+                if (typeof rows !== "number" || !Number.isFinite(rows)) return container.render(width);
+                const budget = Math.max(1, rows - 2); // the frame's top and bottom border lines
+                let lines = container.render(width);
+                while (lines.length > budget && runtime.maxVisible > 1) {
+                  runtime.maxVisible -= 1;
+                  lines = container.render(width);
+                }
+                return lines;
+              },
               invalidate: () => container.invalidate(),
               handleInput: (data: string) => {
                 list.handleInput?.(data);

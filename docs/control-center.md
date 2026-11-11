@@ -54,7 +54,7 @@ at any time.
 | Connect | Remote control, web console | `/remote`, `/console` |
 | System | Display, updates and health, diagnostics, companions, all commands, help | `/footer`, `/tips`, `/caveman`, `/update`, `/trace`, `/capture`, `/skills`, `/firewall reload` |
 | Settings | pi settings, command menu, hub key, pinned commands, hidden commands, display | `/settings` |
-| All commands | Every command from `pi.getCommands()` plus pi's built-ins, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
+| All commands | Every command once, pi's built-ins first and then `pi.getCommands()` entries not already listed, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
 | Doctor | Read-only health checks (see below) | the command on each line |
 
 ```mermaid

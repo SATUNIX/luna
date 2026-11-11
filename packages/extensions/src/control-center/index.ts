@@ -102,11 +102,24 @@ function thinkingLevelOf(pi: ExtensionAPI): string | undefined {
   }
 }
 
-/** Every command: pi's own built-ins plus what `pi.getCommands()` reports, tagged by source. */
+/**
+ * Every command: pi's own built-ins plus what `pi.getCommands()` reports, tagged by source.
+ * Built-ins come first; a `pi.getCommands()` entry whose name is already present is skipped, because
+ * pi's always-loaded extensions report the built-in extension commands (`mcp`, `llama`) too.
+ */
 function allCommands(pi: ExtensionAPI): CommandInfo[] {
   const out: CommandInfo[] = [];
-  for (const name of builtinCommandNames()) out.push({ name, source: "built-in" });
-  for (const command of pi.getCommands()) out.push({ name: command.name, source: command.source ?? "extension" });
+  const seen = new Set<string>();
+  for (const name of builtinCommandNames()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({ name, source: "built-in" });
+  }
+  for (const command of pi.getCommands()) {
+    if (seen.has(command.name)) continue;
+    seen.add(command.name);
+    out.push({ name: command.name, source: command.source ?? "extension" });
+  }
   return out;
 }
 

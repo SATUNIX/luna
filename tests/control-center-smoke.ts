@@ -510,6 +510,23 @@ tests.push([
 ]);
 
 tests.push([
+  "All commands lists a built-in extension command once, not again from getCommands()",
+  async () => {
+    // pi's always-loaded extensions report mcp and llama through getCommands() as well as being built-ins.
+    const { api, registered } = makeApi(["mcp", "llama", "auto"]);
+    await registerControl(api);
+    const recorded = makeUi();
+    const ctx = { mode: "rpc" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
+    await registered.get("menu")?.handler("all-commands", ctx);
+    const options = recorded.selects[0]?.options ?? [];
+    for (const name of ["mcp", "llama", "auto"]) {
+      const label = `/${name}`;
+      assert.equal(options.filter((option) => option === label).length, 1, `${label} must be listed exactly once`);
+    }
+  },
+]);
+
+tests.push([
   "print mode writes every row and its typed command",
   async () => {
     const model = await modelFor(["auto", "effort"]);

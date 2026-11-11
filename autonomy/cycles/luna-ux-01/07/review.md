@@ -1,73 +1,74 @@
-# Cycle 07 — Review (run luna-ux-01, stream `ux`)
+# Cycle 07 review — stream ux (luna-ux-01)
 
-Base: `629d99874c10` (head of `stream/ux`). Branch `pi/luna-ux-01`. Area: TUI overlays, the `/`
-menu, launch screen, animation and polish (V-01, V-02, V-03, V-05, V-09).
+Base: `b91bc34ec41d` (head of `stream/ux`). Cycle mode: **fix**.
 
-## State at the start
+## Inputs read
 
-- `git log --oneline 629d99874c10..HEAD` is empty and `git status` is clean: the cycle starts on
-  the `stream/ux` head that already carries cycles 01, 03, 04 and 06.
-- No red gate reproduced on the base. `smoke:command-contract` (9), `smoke:command-menu` (11),
-  `smoke:control-center` (30), `smoke:menu-settings` (4), `smoke:docs` and
-  `node packages/core/reference.ts --check` all pass. The steward backlog names `smoke:docs` as
-  fixed by cycle 06; the advisory's missing `luna-ux-01/03` journal line is already present
-  (`autonomy/JOURNAL.md`), so no bookkeeping change is due this cycle.
-- Steward backlog correction acknowledged: the wall-clock board item is **DE-95**, not DE-93, and
-  belongs to the ops slice. `smoke:workflow-resume`, `smoke:env-isolation` and `smoke:web-console`
-  are real checks; if this cycle's gate reports `tests/workflow-resume-smoke.ts:392` ("a stopped
-  run's writer leaves the checkout queue") the report must quote it and not treat it as a flake.
+- `autonomy/CHARTER.md` (acceptance standard).
+- `autonomy/runs/luna-ux-01/HANDOFF.md` (current state after cycle 06).
+- Previous cycle records under `autonomy/cycles/luna-ux-01/06/` and the branch log
+  `git log --oneline b91bc34..HEAD` (empty at cycle start).
+- Open proposals under `autonomy/proposals/luna-ux-01-*.md`, including
+  `luna-ux-01-06-duplicate-builtin-commands.md` (the handoff names it, but only the handoff
+  copy exists on this branch).
 
-## Board items checked against the code
+## P0 — upstream merge conflict (priority 1)
 
-### V-03 — fold `/settings` into `/` menu; `kit` → `menu` (P1)
+`git merge refs/upstream/trunk` conflicted in exactly two files:
 
-**Already complete on the base.** The cycle-06 report records it as done and the code matches the
-acceptance:
+- `package.json`: each side added one smoke script. Resolution keeps both
+  `smoke:update-notice` (stream) and `smoke:kit-update-channel` (upstream).
+- `packages/extensions/src/kit-update/index.ts`: upstream added the `trunk` branch/tag fields
+  and the `trunk` channel planner; the stream added `trunkAhead` (the commit-gap count that
+  feeds the trunk notice). Resolution keeps both: `branchHead(remote, dist.trunkBranch)` and
+  `tags.trunk`, plus the `HEAD..main` count that sets `trunkAhead`.
 
-- `packages/extensions/src/control-center/index.ts:169` registers `menu` as primary with page
-  completions; `:178` and `:183` register `kit`/`helpers` on the same `open` handler with
-  `description: "Alias of /menu"`; the shortcut (alt+m default, `hubKey`) sends `/menu`
-  (`:190`).
-- `packages/extensions/src/control-center/extension.json` registers `commands: ["menu","kit","helpers"]`.
-- `packages/extensions/src/control-center/command-menu.ts:26` builds `moved → /menu ▸ All commands`,
-  so hidden-command locations read `moved -> /menu ...`; `:29` pins `menu`.
-- `model.ts` carries the `settings` page (`{id:"settings",...}`) with the `/settings ` prefill row
-  and the commandMenu/hubKey/pinnedCommands/hiddenCommands rows plus the Display page link
-  (pinned by `tests/menu-settings-smoke.ts`).
-- No kit command named `settings` is registered (pi's `/settings` built-in is untouched).
-- `npm run smoke:command-contract`, `smoke:command-menu`, `smoke:control-center` and
-  `smoke:menu-settings` pass on the base.
+Evidence: merge commit `03bc064`; `grep '^<<<<<<<\|^=======\|^>>>>>>>'` on both files returns
+nothing. After the merge `npm run test:typecheck`, `npm run test:lint`,
+`npm run smoke:update-notice`, `npm run smoke:kit-update-channel` and
+`npm run smoke:launch-screen` all pass.
 
-No further V-03 change is needed; re-doing it would churn merged code.
+## Board items
 
-### PG-12 — tell the owner when the trunk is ahead, in one line (P1)
+### PG-59 [P0] smoke:update-notice reddens pi-compat lanes
 
-**Confirmed absent.** No code computes or prints a trunk-ahead/commits-ahead line:
+Confirmed against the code, not just the advisory:
 
-- `packages/extensions/src/kit-update/index.ts:1190-1207` (`session_start`) only calls
-  `ctx.ui.setStatus` and `ctx.ui.notify(summaryLine(report), "info")`.
-- `formatReport` (`:711-770`) lists per-target version state but no commit gap.
-- The git/local branches (`:636-686`) compare commit hashes (`main !== commit`,
-  `merge-base --is-ancestor`) and set `available`/`target`, but never count commits and never
-  surface "N commits ahead".
+- `tests/update-notice-smoke.ts:260-266` asserts the whole `notes` array deep-equals exactly one
+  trunk notice.
+- The session-start handler (`packages/extensions/src/kit-update/index.ts:1254-1257`) notifies the
+  trunk notice and then falls through to `hasUpdates(report)` → `ctx.ui.notify(summaryLine(...))`.
+  On a pi older than the test pin (`PI_TAGS` latest `1.4.0`), `report.pi.available` is true, so a
+  second kit notice `Updates available: pi X → 1.4.0. Run /update.` follows. On the pinned
+  pi 1.4.0 there is no pi update, which is why the test only fails in pi-compat.
+- Root cause: no precedence rule between the trunk-gap notice and the generic summary notice.
 
-The owner only learns the gap by running git manually. This is a real discoverability gap
-(charter §What counts as an improvement 1) with a pure-function shape that is cheap to test
-offline, so it is this cycle's item.
+### V-05 [P2] Luna launch screen
 
-## Carried over, not taken this cycle
+Already shipped on this branch by cycles 01–02. A scout checked every acceptance point against
+`launch-screen.ts`, `control-center/index.ts`, `tests/launch-screen-smoke.ts`,
+`docs/control-center.md` and `extension.json`: all PASS (single `setHeader` from the existing
+`session_start`, TUI-only, child-safe, `launchScreen: "off"`, widths 20/40/60/80/120 within
+`visibleWidth`, reduced motion starts no timer, animated timer self-stops and `dispose` stops it,
+ASCII printable, env declared, docs section present). `npm run smoke:launch-screen` reports
+`all 11 checks passed`. No V-05 code change is needed this cycle.
 
-- **V-73** (canonical `Alias of /<target>` wording + the `alias-target-missing` contract rule)
-  is still not on the base (`command-contract.ts` has no such rule). Its two reviewed commits
-  (`384dcf4`, `00ff7c8` on `origin/attempts/luna-ux-01/cycle-05`) are ~33k characters and would
-  push the review budget past the 30k stop-taking threshold once PG-12 lands, so it waits again.
-- Proposals re-confirmed against the code but not blocking: Settings → Display back navigation
-  (single static `parent`), overlay mouse forwarding, idle-cat blink (`catView` passes
-  `now - now`), human-console concurrent cards, web-console shared-runtime smoke,
-  `withOverlayFrame` dim leak.
+## Carry-overs and defects (not taken)
 
-## Mode
+HANDOFF carry-overs remain real; a scout confirmed both against the code:
 
-**Fix/improve mix; taken as improve for PG-12.** The only remaining board item names a missing
-capability (PG-12), and V-03 needs no change. Fix mode applies only if a targeted check is red,
-and none is.
+1. `/mcp` and `/llama` are listed twice on All commands: `allCommands()`
+   (`packages/extensions/src/control-center/index.ts:106-111`) pushes
+   `builtinCommandNames()` (which includes `mcp`/`llama`) and then every `pi.getCommands()`
+   entry, which also reports those extension commands. No test covers duplicate rows.
+2. A cancelled/timeout value dialog returns `"back"` (`hub.ts:283`), so on a subpage it reopens
+   the parent instead of closing, contradicting `docs/control-center.md` ("a timeout counts as
+   cancel ... closes the hub"). The existing RPC test never reaches the second dialog.
+
+They are not taken this cycle because the mandatory upstream merge alone puts the review diff far
+past the 30000-character stop line; the handoff records them for a later cycle.
+
+## Diff budget
+
+`git diff --no-renames b91bc34..HEAD` excluding lockfile and record paths is 263,044 characters
+after the merge, dominated by upstream files. Cycle-owned changes are kept to PG-59 only.

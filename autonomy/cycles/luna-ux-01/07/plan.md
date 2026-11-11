@@ -1,95 +1,61 @@
-# Cycle 07 — Plan (run luna-ux-01, stream `ux`)
+# Cycle 07 plan — stream ux (luna-ux-01)
 
-Base `629d99874c10` (head of `stream/ux`). Mode: **improve**, one board item (PG-12). V-03 is
-already complete on the base (see `review.md`), so no change is made for it.
+Mode: **fix**.
 
-Goal: tell the owner when the kit's trunk is ahead of the installed copy, in one line, at start-up
-and at `/update`, without blocking start-up.
+## Items, in work-precedence order
 
-## Item PG-12 (P1, steward board)
+### 1. P0 upstream merge (priority 1) — done
 
-### Finding and evidence
+Merge `refs/upstream/trunk` (5a888fe) into `stream/ux`, preserving both sides' intent, then
+re-run the targeted checks. Resolution: keep both `package.json` smoke scripts and keep
+upstream's trunk branch/tag/channel fields alongside this branch's `trunkAhead` gap count.
+Proof: conflict markers gone; `npm run test:typecheck`, `npm run test:lint`,
+`npm run smoke:update-notice`, `npm run smoke:kit-update-channel`,
+`npm run smoke:launch-screen`.
 
-`packages/extensions/src/kit-update/index.ts` never computes or prints a commit gap. The git path
-(`:636-660`) compares the installed commit with the branch head (`main !== commit`) and moves the
-`next` target to `main@<sha>`, but reports only a target string. `session_start` (`:1190-1207`)
-notifies `summaryLine(report)` and returns early when `hasUpdates(report)` is false, so an install
-on the `latest` release whose `main` has moved learns nothing. `/update`'s `formatReport`
-(`:711-770`) has no gap line either. Confirmed by reading the code and by the existing
-`smoke:kit-update` suite, which has no "commits ahead" assertion.
+### 2. PG-59 [P0] — pi-compat red gate
 
-### Change
+Change `packages/extensions/src/kit-update/index.ts` so the trunk-gap notice takes precedence in
+session start. Extract a pure decision helper (notices + whether the status bar is set) used by
+the handler:
 
-1. Add an exported pure function in `packages/extensions/src/kit-update/index.ts`:
+- gap report → exactly the trunk notice; the generic `summaryLine` notice is suppressed.
+- no gap but updates → the existing summary notice (unchanged).
+- nothing to do → no notice.
 
-   ```ts
-   export interface TrunkAheadState { channel: string; ahead: number }
-   export function trunkNotice(state: TrunkAheadState): string | null
-   ```
+Test `tests/update-notice-smoke.ts`:
 
-   Returns `null` when `ahead <= 0` or `channel` is empty, else exactly
-   `trunk is ${ahead} commit${ahead === 1 ? "" : "s"} ahead — /update channel ${channel}`.
-   The wording is fixed and uses the real channel the install follows; the notice never itself
-   names a channel that `/update channel` rejects.
+- Replace the exact-single-notification assertion with: the trunk notice is present exactly once
+  and no second kit notice is added. A pi built-in update notice
+  (`Updates available: pi X → Y. Run /update.`) is tolerated and does not count as the kit
+  notice; a simulated built-in entry proves the filter.
+- Add a case that builds the report with pi `0.99.2` against the `1.4.0` registry, so
+  `report.pi.available` is true, and asserts the session-start decision is still only the trunk
+  notice. This fails with the old fall-through.
+- Keep the missing-trunk-notice failure: the gap report must still yield the trunk line, so a
+  change that drops it fails the case.
+- Docs: note the precedence in `docs/updates.md` and
+  `packages/extensions/src/kit-update/README.md`.
 
-2. Compute the gap in `checkForUpdates` for a git install: after `ls-remote` gives the branch head,
-   run the injected `git` as `["-C", kit.root, "rev-list", "--count", `HEAD..${main}`]` (best
-   effort, same `git` seam as the rest). Store the parsed non-negative integer on the report as
-   `kit.trunkAhead`; leave it absent when git fails or returns no number, so the notice is silent
-   when offline or in sync. For the `local` kind leave `trunkAhead` unset (no channel; the existing
-   `/update kit` path already covers it).
+Checks: `npm run smoke:update-notice`, `npm run smoke:kit-update-channel`,
+`npm run test:typecheck`, `npm run test:lint`. On a pi older than the pin the same test must
+produce only the trunk kit notice (pi's own built-in notice is ignored by the filter).
 
-3. Surface it:
-   - `session_start`: notify `trunkNotice(...)` **before** the `if (!hasUpdates(report)) return;`
-     early return, so a trunk gap shows even when the release channel is otherwise current. Keep
-     the existing background `void check(cwd).then(...).catch(() => {})` shape so start-up never
-     blocks on the check or its timeout.
-   - `formatReport`: append the notice as its own line when present, so `/update status` and the
-     non-UI `/update` output print it; the interactive bare `/update` (no argument, UI mode) also
-     notifies it before its selector.
-   Do not change `summaryLine` (its single-line "up to date" contract is tested).
+### 3. V-05 [P2] — already satisfied
 
-4. `tests/update-notice-smoke.ts` (`smoke:update-notice`, added to `package.json` scripts as the
-   allowed exact new smoke script):
-   - pure function: `{channel:"trunk", ahead:19}` → `trunk is 19 commits ahead — /update channel trunk`;
-     `{channel:"next", ahead:1}` → singular; `ahead:0` and empty channel → `null`;
-   - integration with the existing fake git: a `latest` install whose `main` is N ahead yields
-     `report.kit.trunkAhead === N` and a non-null `trunkNotice`; an in-sync install yields no gap
-     and a null notice; an unreachable remote (`reachable:false`) yields no gap and the check still
-     returns offline;
-   - start-up: with a fake git whose promise never resolves, the `session_start` handler resolves
-     promptly and records no notice; with a gap report it notifies exactly the one notice line.
+No change. Verified by `npm run smoke:launch-screen` (11/11) and the scout's acceptance matrix;
+recorded as done in `report.md`.
 
-5. Docs: `docs/updates.md` (one paragraph: the notice, when it appears, that it is silent offline
-   or in sync), `packages/extensions/src/kit-update/README.md`. Run `node packages/core/reference.ts --check`
-   (no command/extension metadata change is intended).
+## Not taken
 
-### Deviation from the board wording
+- HANDOFF carry-overs (duplicate `/mcp` and `/llama` rows; cancelled RPC value dialog returns
+  `"back"`) are confirmed real but are left for a later cycle: the mandatory merge already puts
+  the review diff far past the 30000-character stop line. They stay in
+  `autonomy/runs/luna-ux-01/HANDOFF.md`.
+- No new proposals unless the implementation uncovers a separate problem.
 
-The board's example action is `/update channel trunk`, but `trunk` is not an accepted channel:
-`packages/core/lib/distribution.ts:124` (`/^(latest|next|X.Y.Z)$/`) and `kit-update`'s
-`isChannelName` (`:1035`) both reject it. The channel that follows the trunk (`main`) is `next`.
-The notice therefore names the install's real channel; the pure function still names whatever
-channel the state carries, so a repo whose branch is `trunk` would read `/update channel trunk`.
-Adding `trunk` as a channel alias is proposed separately, not done here.
+## Verification
 
-## Checks that prove it
-
-- `npm run smoke:update-notice` (new) — the acceptance test.
-- `npm run smoke:kit-update` — no regression in `/update` behaviour, channels and plumbing.
-- `npm run test:typecheck` and `npm run test:lint` — strict TypeScript.
-- `node packages/core/reference.ts --check` and `npm run smoke:docs` — docs/metadata coherence.
-- Do **not** run `npm test` or `npm run check:all`; the host gate runs the full suite.
-
-## Not this cycle
-
-- **V-73** re-land: its ~33k-character diff would cross the 30k stop-taking threshold after PG-12.
-- Settings → Display back navigation, overlay mouse forwarding, idle-cat blink, human-console
-  multi-card focus theft, web-console shared-runtime smoke, `withOverlayFrame` dim leak — carried
-  proposals, none blocking PG-12.
-
-## Proposal to file
-
-`autonomy/proposals/luna-ux-01-07-trunk-channel-alias.md` — make `trunk` an accepted alias of the
-`next` channel so the board's exact `/update channel trunk` wording becomes valid, or none if the
-team prefers `next` only.
+Run only targeted scripts (`smoke:update-notice`, `smoke:kit-update-channel`,
+`smoke:launch-screen`, `smoke:command-menu`, `smoke:control-center`, `test:typecheck`,
+`test:lint`). Never `npm test` or `npm run check:all`; the host gate owns the full suite.

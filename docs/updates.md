@@ -160,7 +160,7 @@ profile and project scope. An exact version remains an exact version. This list 
 `tests/distribution-contract-smoke.ts`).
 
 Luna also recognises itself under the package name `@satunix/luna` and the repository
-`github.com/SATUNIX/luna` (any ref, any URL form), as well as every pi-system form. A repository
+`github.com/SATUNIX/luna` (any ref, any URL form), as well as every `pi-system` form. A repository
 named `luna` under another owner or host is not Luna, so a fork of it is recognised only
 through an explicit `previousSources` entry. The unrelated npm package `luna` is never touched by
 duplicate-registration cleanup (`tests/install-profile-filter-smoke.ts`,

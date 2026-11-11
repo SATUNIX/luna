@@ -3,7 +3,7 @@
 Luna is a capability layer for the [pi coding agent](https://github.com/earendil-works/pi):
 extensions, skills, prompts, themes and agent definitions in one pi package
 (`@satunix/pi-system`), with **profiles** that choose what loads. This is a beta; read
-[Beta status](beta.md) first. Luna was previously published as **pi-system**, the name the pi
+[Beta status](beta.md) first. Luna was previously published as `pi-system`, the name the pi
 package still uses, so commands and settings are unchanged.
 
 <p align="center">

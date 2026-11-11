@@ -169,6 +169,7 @@
     "smoke:control-center": "node tests/control-center-smoke.ts",
     "smoke:ctx-contributions": "node tests/ctx-contributions-smoke.ts",
     "smoke:docs": "node tests/docs-smoke.ts",
+    "smoke:brand": "node tests/brand-smoke.ts",
     "smoke:site": "node tests/site-smoke.ts",
     "smoke:dual-review": "node tests/dual-review-smoke.ts",
     "smoke:delegation-guard": "node tests/delegation-guard-smoke.ts",

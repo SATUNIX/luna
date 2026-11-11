@@ -467,6 +467,7 @@ absolute or relative to the working directory.
 | `PI_KIT_COST_INPUT_PER_MTOK` | `custom-footer` | Override input-token dollars per million tokens | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_COST_OUTPUT_PER_MTOK` | `custom-footer` | Override output-token dollars per million tokens | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_CTX_BUDGET_TOKENS` | `context-sieve` | — | — |
+| `PI_KIT_CTX_MESSAGE_BUDGET_TOKENS` | `context-sieve` | — | — |
 | `PI_KIT_DELIVERY` | `kit-update` | — | [updates](updates.md) |
 | `PI_KIT_EFFORT` | `effort` | — | [INSTALL](INSTALL.md) |
 | `PI_KIT_EFFORT_CAP` | `effort` | — | [effort](effort.md) |

@@ -51,7 +51,9 @@
   "pulls": [],
   "env": [
     "PI_CODING_AGENT_DIR",
-    "PI_KIT_INTERNAL_CHILD"
+    "PI_KIT_ASCII",
+    "PI_KIT_INTERNAL_CHILD",
+    "PI_KIT_REDUCED_MOTION"
   ],
   "provenance": {
     "origin": "custom"

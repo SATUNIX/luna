@@ -443,7 +443,7 @@ absolute or relative to the working directory.
 | `PI_CONSOLE_TOKEN` | `web-console` | — | [web-console](web-console.md) |
 | `PI_CONSOLE_TOKEN_FILE` | `web-console` | — | [web-console](web-console.md) |
 | `PI_KIT_AGENTS_DIR` | `subagent` | — | — |
-| `PI_KIT_ASCII` | `custom-footer` | — | — |
+| `PI_KIT_ASCII` | `control-center`, `custom-footer` | — | [control-center](control-center.md) |
 | `PI_KIT_AUTO_MODE` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_AUTO_MODE_MODEL` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_AUTO_MODE_STATE_DIR` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
@@ -522,6 +522,7 @@ absolute or relative to the working directory.
 | `PI_KIT_RECAP_MODEL` | `memory-vault` | — | [memory](memory.md) |
 | `PI_KIT_RECOVERY_MAX_ATTEMPTS` | `recovery-orchestrator` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_RECOVERY_SCOUTS` | `recovery-orchestrator` | — | — |
+| `PI_KIT_REDUCED_MOTION` | `control-center` | — | [control-center](control-center.md) |
 | `PI_KIT_ROOT` | `kit-update`, `session-helpers` | — | [security](security.md) |
 | `PI_KIT_ROUTING_POLICY` | `provider-router` | — | — |
 | `PI_KIT_SAVE_DIR` | `save` | — | — |

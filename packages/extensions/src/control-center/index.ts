@@ -24,6 +24,7 @@ import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts"
 import { builtinCommandNames } from "./builtins.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
 import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile } from "./command-menu.ts";
+import { isReducedMotion, launchHeader } from "./launch-screen.ts";
 
 const DEFAULT_HUB_KEY = "alt+m";
 
@@ -32,6 +33,27 @@ export function readHubKey(): string {
   const key = readUiFile()?.hubKey;
   if (typeof key === "string" && key.trim() !== "") return key.trim();
   return DEFAULT_HUB_KEY;
+}
+
+/**
+ * Install the launch screen on the existing `session_start` handler. Only a real TUI gets it:
+ * RPC and print have no header, a child session stays quiet, and `launchScreen: "off"` in
+ * `pi-kit/ui.json` disables it. The menu command is `/menu`, or `/kit` when `/menu` is absent.
+ */
+function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext): void {
+  if (ctx.mode !== "tui") return;
+  if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
+  if (typeof ctx.ui.setHeader !== "function") return;
+  const ui = readUiFile();
+  if (ui?.launchScreen === "off") return;
+  const menuCmd = pi.getCommands().some((command) => command.name === "menu") ? "/menu" : "/kit";
+  ctx.ui.setHeader(launchHeader({
+    version: VERSION,
+    hubKey: readHubKey(),
+    menuCmd,
+    ascii: process.env.PI_KIT_ASCII === "1",
+    reducedMotion: isReducedMotion(ui),
+  }));
 }
 
 /**
@@ -48,6 +70,7 @@ function registerCommandMenu(pi: ExtensionAPI): void {
     const isTui = mode === undefined ? ctx.hasUI : mode === "tui";
     if (!isTui) return;
     curated = true;
+    installLaunchHeader(pi, ctx);
     const settings = readCommandMenuSettings();
     if (settings.commandMenu === "all") return;
     const commands = pi.getCommands().map((command) => ({ name: command.name, source: command.source }));

@@ -25,6 +25,20 @@ other settings in the file, so the status bar's own settings there are untouched
 The hub is not registered in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the same rule
 `/workflow` follows, so a subagent never advertises a terminal hub.
 
+## Launch screen
+
+At the top of a new terminal session Luna shows a launch screen: its wordmark, the running pi
+version and five first actions — `/menu` or `/kit`, the configured hub key (`alt+m` by default),
+`/profile`, `/model` and `/resume`. The menu action follows the command that is registered:
+`/menu` when it exists, otherwise `/kit`.
+
+The content is revealed over at most twelve frames, about 90 ms apart. Reduced motion shows the
+final content at once and starts no timer. It is on when `PI_KIT_REDUCED_MOTION=1`, when
+`reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`, when `TERM=dumb`, or when `CI` is set.
+A terminal narrower than 60 columns drops the art for one compact line, and `PI_KIT_ASCII=1` uses
+printable ASCII only. Put `"launchScreen": "off"` in `<agent dir>/pi-kit/ui.json` to turn the
+launch screen off (`tests/launch-screen-smoke.ts`).
+
 ## Pages
 
 The main page is the levels strip plus six pages (`tests/docs-smoke.ts` checks the count against

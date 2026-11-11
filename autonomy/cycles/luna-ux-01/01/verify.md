@@ -1,6 +1,7 @@
 # Cycle 01 — Verify (run luna-ux-01, stream `ux`)
 
-- Base `6accaa653a47`, verified head `b33ed76`. Branch `pi/luna-ux-01`, pushed.
+- Base `afecc1bbb33d`, verified head `e7f29cc`. Branch `pi/luna-ux-01`, pushed. (The first batch
+  below was verified against its own base `6accaa653a47` before the base moved.)
 - Reviewed diff (excluding records and lockfile): 7,736 characters — well under the 30,000 limit.
 - Changes: `custom-footer/render.ts` (F-1), `custom-footer/widgets.ts`, `custom-footer/index.ts`
   (F-2), `tests/status-bar-smoke.ts` (regression tests). No other file touched.
@@ -51,3 +52,25 @@ the head file; the working tree was confirmed clean afterwards.
   proposals, not fixed; they are out of this cycle's scope.
 - The host acceptance gate (`/opt/autonomy/gate.sh`) is run by the supervisor on the pushed head;
   it was not run here by policy.
+
+## Continuation — second session, verified head `e7f29cc`
+
+The only code change this session is the **revert** `e7f29cc` of the refuted C-1 fix `0e77b67`.
+C-1 claimed the curated `/` menu stopped filtering after `/new`, `/resume` or `/fork`; independent
+review showed the host re-invokes the extension factory on every session replacement
+(`core/extensions/loader.js:513-517`), so `registerCommandMenu` re-runs with a fresh `curated` and
+re-registers the provider at the base. The revert removes both the code change and the synthetic
+regression case (fire `session_shutdown`, clear providers, fire `session_start` without re-invoking
+the factory), a sequence the host never produces.
+
+| Check (at `e7f29cc`) | Result |
+|---|---|
+| `npm run smoke:command-menu` | 11/11 passed |
+| `npm run test:typecheck` | passed (all workspaces) |
+| `npm run test:lint` | passed (`--max-warnings 0`) |
+
+The refutation itself is not pinned by a test: it rests on reading the installed host source and a
+live RPC run that logged the extension factory once per session. The revert commit message records
+that evidence. No regression test is added, because the behaviour under test was already correct.
+The reviewed diff for the continuation is the revert plus cycle records, under the 30,000-character
+limit. The host acceptance gate stays with the supervisor.

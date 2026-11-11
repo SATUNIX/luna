@@ -68,3 +68,74 @@ setting on the widget.
 
 1. F-1: fix the double merge in `fitLine`; add a test that counts the summary occurrences.
 2. F-2: thread the ASCII setting into `renderTodoWidget`; update the doc that already claims it.
+
+---
+
+# Continuation — second session, cycle base `afecc1bbb33d`
+
+- The prior batch above (`6accaa653a47..b33ed76`) is already merged into the new cycle base
+  `afecc1bbb33d` (head of `stream/ux`). This session ran a fresh reconnaissance against the new
+  base: one parallel `scout` plan of three agents (workflow run
+  `2026-11-11T04-55-50-111Z-plan-c530`) covering the `/` command menu, the open human-console
+  proposal, and the idle-cat blink proposal. Docs were treated as hypotheses; every candidate
+  needed a reproduction.
+- Mode: **fix** (a real `/` menu defect plus proposal triage). Assigned board: still none.
+- `npm run smoke:command-menu` passes all 11 checks at the base, so the defect below is by
+  construction not pinned.
+
+## Finding C-1 — investigated, then REFUTED
+
+### C-1 (no fix) — the curated `/` menu does *not* switch off after a session replacement
+
+`packages/extensions/src/control-center/index.ts:43-46`. `registerCommandMenu` guards its
+`session_start` handler with a closure `curated` flag:
+
+```ts
+let curated = false;
+pi.on("session_start", (_event, ctx) => {
+  if (curated) return;
+```
+
+The first session emits `session_shutdown`, clears `autocompleteProviderWrappers`, and emits a new
+`session_start`; the initial reconnaissance concluded the extension module is not re-imported, so
+`curated` would still be `true` and the provider would never be re-added. That conclusion was
+wrong, and an independent `reviewer` subagent falsified it before the change could merge. A live
+RPC run that logged the extension factory showed the host **re-invokes the factory on every
+session replacement**, so `registerCommandMenu` runs again with a fresh `curated = false` and the
+provider is re-registered by the new invocation. Confirmed in the installed host:
+`core/extensions/loader.js:513-517` (`initializeExtension` calls `await factory(load.api)` on
+every `loadExtension`), and `core/agent-session-runtime.js` rebuilds the runtime through
+`createRuntime` for `/new`, `/resume` and `/fork`. The provider is dropped by
+`resetExtensionUI` (`interactive-mode.js:1898-1913`) *before* the new runtime binds, so it is
+present after the replacement at the base. Not a defect; no fix taken. The attempted fix
+(`0e77b67`) and its synthetic smoke case were reverted (`e7f29cc`); the case emulated a
+`session_shutdown` + wrapper reset without re-invoking the factory, a sequence the host never
+produces.
+
+## Proposals triaged
+
+- **human-console `inputHeld()` TOCTOU** (`autonomy/proposals/luna-ux-01-01-human-console-input-hold-race.md`)
+  — **REFUTED.** The cited lines are off by one and the gap contains **no `await`**: `inputHeld()`
+  (`human-console/index.ts:368`, `:438`) and the `ctx.ui.select`/`ctx.ui.confirm` inside
+  `answerApproval`/`answerQuestion` run in one synchronous turn (`index.ts:223`, `:236`, `:187`),
+  so no other holder can acquire input there. `showWhenFree` re-checks only because it actually
+  waits (`core/shared/input-owner.ts:156-164,193-211`); these paths do not. No fix; mark the
+  proposal closed. The scout found a different, real focus-theft weakness: `processPending`
+  (`index.ts:487-501`) fires `void processOne(...)` for every pending file synchronously, so a
+  second card opens over the first. That is a new, separate proposal, not this one.
+- **idle-cat blink** (`autonomy/proposals/luna-ux-01-01-idle-cat-blink.md`) — **CONFIRMED dead at
+  runtime.** `catView` (`custom-footer/index.ts:387-391`) passes `now - now` for any non-TRANSIENT
+  state, so `renderCat("idle", 0)` is the only idle call ever made; the `=^-.-^=` blink in
+  `cat.ts:36` is unreachable while `tests/cat-status-smoke.ts:95` asserts the table blinks and
+  `docs/status-bar-and-costs.md:108-110` says it does not. Intent is split (commit `3a245e6` added
+  the frame deliberately; the renderer and docs never followed). Deferred again: option (a) drive a
+  timer contradicts the documented "nothing ticks while idle" and needs a new idle-clock and timer
+  lifecycle; option (b) delete the frame removes a face the operator added. Neither is clearly the
+  intended one, and this cycle's chosen fix is higher-value. Kept as a proposal needing an intent
+  decision.
+
+## Chosen for this session
+
+None from the continuation reconnaissance. C-1 is refuted and reverted (`e7f29cc`); the two
+proposals were triaged (one refuted, one still needs an intent decision). This session contributes
+no code change of its own; the cycle's merged items remain F-1 and F-2 from the first session.

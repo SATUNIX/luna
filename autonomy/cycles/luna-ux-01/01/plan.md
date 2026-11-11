@@ -54,3 +54,45 @@ a regression test that fails at the base, and keep the docs that describe them a
 
 - Idle-blink dead code (`cat.ts:36` vs `index.ts:387-391`): ambiguous intent, deferred.
 - human-console `inputHeld()` TOCTOU: proposal for the owner.
+
+---
+
+# Plan — second session, cycle base `afecc1bbb33d`
+
+- Mode: **fix**. Prior batch is merged into the base; this session investigated the C-1 finding
+  from the continuation review. Budget ~$5, ~3 h. Outcome: C-1 was refuted and reverted, so this
+  session ships no code of its own.
+
+## Outcome
+
+C-1 was planned as a fix and then **refuted by independent review before it could merge**. The
+host re-invokes the extension factory on every session replacement, so `registerCommandMenu`
+already runs again with a fresh `curated = false`; the curated `/` menu survives `/new`, `/resume`
+and `/fork` at the base. The attempted fix (`0e77b67`) and its synthetic smoke case were reverted
+(`e7f29cc`). See the corrected `review.md` C-1 section for the host evidence.
+
+  ## Item C-1 — curated `/` menu lost on session replacement (REFUTED, reverted)
+
+  - Original justification (charter 1, 3, 4): a claimed TUI/`/`-menu defect. The initial reconnaissance
+  assumed the extension module was not re-imported and therefore that `curated` stayed `true`.
+  - Refutation: `core/extensions/loader.js:513-517` calls `await factory(load.api)` on every
+  `loadExtension`, and `core/agent-session-runtime.js` rebuilds the runtime through `createRuntime`
+  for `/new`, `/resume` and `/fork`; a live RPC run logged the factory once per session and one
+  provider registration per session. The provider is re-added by the new factory invocation.
+  - Action: reverted the code change and the synthetic smoke case (`e7f29cc`). The smoke's sequence
+  (fire `session_shutdown`, clear providers, fire `session_start` without re-invoking the factory)
+  does not occur in the host.
+- Checks after revert: `npm run smoke:command-menu` (11 checks), `npm run test:typecheck`,
+  `npm run test:lint`. All pass.
+
+## Checks that prove the session
+
+- `npm run smoke:command-menu` (the changed file's smoke), `npm run test:typecheck`,
+  `npm run test:lint`.
+- Independent `reviewer` subagent on `git diff afecc1bbb33d..HEAD` against `autonomy/CHARTER.md`.
+- Never `npm test` or `npm run check:all` (host gate runs the full suite).
+
+## Out of scope (recorded)
+
+- human-console proposal refuted; new `processPending` multi-card focus-theft proposal to be filed.
+- idle-cat blink still needs an intent decision (proposal kept open).

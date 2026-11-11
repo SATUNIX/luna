@@ -30,7 +30,7 @@ import { agentModelsJson, modelEntries, plainModelEntries, type ModelEntry, type
 import type { RunPaths } from "./paths.ts";
 import type { RunConfig } from "./runcfg.ts";
 import { reviewTask, type TaskReview, type TaskReviewBundle } from "./review.ts";
-import { lineParser, missingHarness } from "./rpc.ts";
+import { HARNESS_CHECK_TIMEOUT_MS, HarnessCheck, lineParser } from "./rpc.ts";
 import type { RunStore } from "./store.ts";
 
 const LIB = path.dirname(fileURLToPath(import.meta.url));
@@ -161,8 +161,8 @@ export class DockerRuntime implements Runtime {
   apiKey: string | null;
   relay: ChildProcess | null;
   proxy: ChildProcess | null;
-  harnessFailure: string | null;
-  harnessOk: boolean;
+  /** This session's harness verdict: fail closed until a full get_commands reply verifies it. */
+  readonly harness = new HarnessCheck();
   /** The directories bind-mount sources must be inside. */
   readonly roots: string[];
 
@@ -179,15 +179,13 @@ export class DockerRuntime implements Runtime {
     this.apiKey = null;
     this.relay = null;
     this.proxy = null;
-    this.harnessFailure = null;
-    this.harnessOk = false;
     this.roots = [this.p.root, PKG];
   }
 
   now(): number { return Date.now(); }
   sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
   log(line: string): void { console.log(`${new Date().toISOString()} ${line}`); }
-  workerProblem(): string | null { return this.harnessFailure; }
+  workerProblem(): string | null { return this.harness.failure; }
 
   /** The inference key; preflight() reads it before anything needs it. */
   key(): string {
@@ -493,6 +491,7 @@ export class DockerRuntime implements Runtime {
   // --- the worker -------------------------------------------------------------------------------------
   startWorker({ step, attempt, resetWorkspace, effort, onEvent }: StartWorkerOptions): WorkerAgent {
     const { cfg, p, names } = this;
+    this.harness.reset();
     const dir = path.join(p.steps, pad(step));
     fs.mkdirSync(dir, { recursive: true });
     const args = dk.agentRunArgs(cfg, p, { n: step, attempt, reset: resetWorkspace, effort });
@@ -502,18 +501,24 @@ export class DockerRuntime implements Runtime {
     const child = spawn(this.bin, args, { stdio: ["pipe", "pipe", "pipe"], env: engineEnv() });
     child.stderr.pipe(stderr);
     child.stdin.on("error", () => {});
+    const timer = setTimeout(() => {
+      this.harness.expire();
+      this.log(`HARNESS FAIL: ${this.harness.failure ?? "the kit harness check expired"}`);
+    }, HARNESS_CHECK_TIMEOUT_MS);
+    timer.unref?.();
     child.stdout.on("data", lineParser((msg) => {
       if (msg.type === "response" && msg.id === "harness-check") {
-        const missing = missingHarness(msg);
-        if (missing.length) { this.harnessFailure = `the kit harness did not load (missing commands: ${missing.join(", ")}); see ${path.join(dir, `agent-${attempt}.log`)}`; this.log(`HARNESS FAIL: ${this.harnessFailure}`); }
-        else if (!this.harnessOk) { this.harnessOk = true; this.log("harness verified: kit commands registered"); }
+        clearTimeout(timer);
+        const settled = this.harness.settle(msg);
+        if (!settled) this.log(`HARNESS FAIL: ${this.harness.failure ?? "the kit harness did not load"}`);
+        else this.log("harness verified: kit commands registered");
         return;
       }
       // Streaming deltas and partial tool output are most of the volume and none of the signal.
       if (msg.type !== "message_update" && msg.type !== "tool_execution_update") events.write(`${JSON.stringify({ at: new Date().toISOString(), ...msg })}\n`);
       onEvent(msg);
     }, (bad) => { stderr.write(`[non-json stdout] ${bad.slice(0, 500)}\n`); }));
-    const exited = new Promise<{ code: number }>((resolve) => { child.on("close", (code: number | null) => { events.end(); resolve({ code: code ?? 1 }); }); });
+    const exited = new Promise<{ code: number }>((resolve) => { child.on("close", (code: number | null) => { clearTimeout(timer); events.end(); resolve({ code: code ?? 1 }); }); });
     child.stdin.write(`${JSON.stringify({ id: "harness-check", type: "get_commands" })}\n`); // pi answers commands in order
     const name = names.agent(step, attempt);
     return {

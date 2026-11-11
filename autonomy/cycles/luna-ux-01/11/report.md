@@ -5,8 +5,8 @@ Mode: fix
 
 ## Board
 
-- Board: PG-59 done - `smoke:update-notice` is already green at base `7647d1b2f347` (8/8, including the pi 0.99.2 update-notice case); no change was needed.
-- Board: V-05 done - `smoke:launch-screen` is already green at base (11/11); the launch screen ships with the wordmark, first actions, animation and reduced-motion path.
+Board: PG-59 done - `smoke:update-notice` is already green at base `7647d1b2f347` (8/8, including the pi 0.99.2 update-notice case); no change was needed.
+Board: V-05 done - `smoke:launch-screen` is already green at base (11/11); the launch screen ships with the wordmark, first actions, animation and reduced-motion path.
 
 Both assigned items were already fixed and merged before this cycle, so the cycle spent its
 budget on real defects found in review.

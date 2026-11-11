@@ -120,11 +120,13 @@ for (const root of EXTENSION_ROOTS) {
 console.log(`OK: ${extensionCount} extension manifests declare only schema hooks that are registered in code`);
 
 // --- B-021: targeted env[] allowlist for extensions whose manifest drifted from code ---
-// Only these two are pinned; a general bidirectional env check would fail on many other
-// extensions (skill-router, todo, verifier-board, orchestrator internal vars, ...).
+// Only these are pinned; a general bidirectional env check would fail on many other extensions
+// (skill-router, todo, verifier-board, orchestrator internal vars, ...). context-sieve is pinned
+// because both of its vars are user-facing and the generated docs/reference.md reads this manifest.
 const ENV_ALLOWLIST: Record<string, string[]> = {
   orchestrator: ["PI_KIT_ORCH_THRESHOLD", "PI_KIT_ORCH_DISABLE"],
   "branch-lab": ["PI_KIT_BRANCH_LEASES_FILE", "PI_KIT_MAX_BRANCHES"],
+  "context-sieve": ["PI_KIT_CTX_BUDGET_TOKENS", "PI_KIT_CTX_MESSAGE_BUDGET_TOKENS"],
 };
 let envChecked = 0;
 for (const root of EXTENSION_ROOTS) {

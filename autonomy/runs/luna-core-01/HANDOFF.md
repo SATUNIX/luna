@@ -2,24 +2,24 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `8669a88` (head of `stream/core`, holds cycles 01–15).
-  Cycle 16 commits: `d3bb1a1`, `7e5b03a` (memory-vault first-prompt recall keeps pinned/relevant
-  memories and still truncates a lone recap), `1f3d0c0` (context-sieve charges join separators and
-  clears `lastInjected` when all contributions go), plus the records under
-  `autonomy/cycles/luna-core-01/16/` and the `luna-core-01/16` line in `autonomy/JOURNAL.md`.
-- Cycle 16 outcome: **complete** (fix). Two scout-found defects fixed and each pinned by a test that
-  fails on base `8669a88` and passes on head: memory-vault lost pinned/relevant recalls when recaps
-  were oversized (the `RECALL_CHARS` 2400 cap head-sliced them after they were marked injected), and
-  context-sieve left join separators uncharged and skipped the `lastInjected` cleanup on the
-  empty-contribution early return. All targeted checks green; diff 18,358 chars over 5 files,
-  +134/−31.
-- The independent reviewer hung without a verdict again (`2026-11-11T21-56-01-599Z-reviewer-98919c`
-  ends on a bare `tool_execution_start` frame). Verdict replaced by objective base-vs-head checks;
-  recovery record `.pi/recovery/1-osc-bash-sleep-60-echo-done-workflow-sta.md`.
-- Deferred with evidence: HANDOFF #4 `tests/orchestrate-commands-smoke.ts` not clearing
+- Branch `pi/luna-core-01`, base `ff6083ca18b2` (head of `stream/core`, holds cycles 01–16).
+  Cycle 17 commit: `3c1a9f3` (memory-vault first-turn recall over-fetches by the pinned count and
+  only excludes already-injected rels, so pins no longer crowd out relevant memories and a
+  truncated pin stays searchable), plus the records under `autonomy/cycles/luna-core-01/17/`.
+  - Cycle 17 outcome: **successful** (fix). One scout-found defect fixed and pinned by a new
+  `smoke:memory-vault` check 15 that fails on base `ff6083ca18b2` (`expected: /### Relevant
+  memories/`) and passes on head. All targeted checks green; diff 11,112 chars over 3 files,
+  +81/−26.
+  - The independent reviewer subagent hung without a verdict for the second cycle running
+  (`2026-11-11T22-23-38-772Z-reviewer-20dbf0` ends on a bare `tool_execution_start`). Verdict
+  replaced by objective base-vs-head checks, as in cycle 16. A second item plan was refused
+  (`plan-allowance`, 7/8 agents used); the implementer/reviewer fell back to `subagent`.
+  - Cycle 17 left three proposals: `luna-core-01-17-context-sieve-message-framing.md` (LOW),
+  `luna-core-01-17-doc-drift-64-token-and-guidelines.md` (doc-only one-liners), and
+  `luna-core-01-17-skill-trigger-session-lifetime.md` (security-adjacent, operator decision).
+  - Still deferred: HANDOFF #4 `tests/orchestrate-commands-smoke.ts` not clearing
   `PI_KIT_INTERNAL_CHILD` (test robustness only); V-07/V-08/V-10 still need the operator's finding
-  list; #1 firewall timing noise is out of stream; two low doc drifts (memory "at most once per
-  session", the 64-token floor).
+  list; #1 firewall timing noise is out of stream.
 
 ## What cycle 15 did
 
@@ -86,6 +86,19 @@ All targeted checks pass and the independent review passed. Merge `pi/luna-core-
 9. Remaining lower-priority found defect: HANDOFF #4, `tests/orchestrate-commands-smoke.ts` does
    not clear `PI_KIT_INTERNAL_CHILD`; test robustness only. The cycle-13 stale "wipe" docs and the
    cycle-15 dead-code sites are already fixed. V-07/V-08/V-10 still need the operator's finding list.
+10. **context-sieve hidden-message framing is outside its budget** (LOW, token efficiency):
+    `assembleWithBudget` bounds only the contribution text while the 78-char header and the
+    `stillCurrent` line are appended after, and `message.tokens` measures only the blocks. Suggested
+    fix and tests in `autonomy/proposals/luna-core-01-17-context-sieve-message-framing.md`.
+11. **Two doc drifts, one line each:** `docs/architecture/memory-compaction-context.md`'s "never
+    below 64 tokens" is false (the floor is itself capped at half the window; `tests/context-budget-smoke.ts:321`
+    pins 50 for a 100-token window), and `packages/extensions/src/guidelines/README.md` lists a
+    search path (`AGENTS.md`) the code never reads and omits the `pentest` profile. See
+    `autonomy/proposals/luna-core-01-17-doc-drift-64-token-and-guidelines.md`.
+12. **skill-router `re:` switch-off outlives the session** (security-adjacent, operator decision):
+    `match.ts` mutates process-lifetime `compiled`/`refusedTriggers` and `session_start` never clears
+    them, while the comment and two docs say "for the session". Options in
+    `autonomy/proposals/luna-core-01-17-skill-trigger-session-lifetime.md`.
 
 ## Rules for the next session
 

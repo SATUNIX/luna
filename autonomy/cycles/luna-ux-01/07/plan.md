@@ -44,8 +44,9 @@ on the `latest` release whose `main` has moved learns nothing. `/update`'s `form
      early return, so a trunk gap shows even when the release channel is otherwise current. Keep
      the existing background `void check(cwd).then(...).catch(() => {})` shape so start-up never
      blocks on the check or its timeout.
-   - `formatReport`: append the notice as its own line when present, so `/update` and
-     `/update status` print it.
+   - `formatReport`: append the notice as its own line when present, so `/update status` and the
+     non-UI `/update` output print it; the interactive bare `/update` (no argument, UI mode) also
+     notifies it before its selector.
    Do not change `summaryLine` (its single-line "up to date" contract is tested).
 
 4. `tests/update-notice-smoke.ts` (`smoke:update-notice`, added to `package.json` scripts as the

@@ -301,7 +301,7 @@ export interface KitInstall {
   commit?: string | null;
   /** git only: the registered source is a retired private one; /update kit migrates it to the public source. */
   legacy?: boolean;
-  /** git only: commits the branch head is ahead of the checked-out commit (best effort; absent offline or in sync). */
+  /** git only: commits the branch head is ahead of the checked-out commit (best effort; 0 in sync, absent when it cannot be computed). */
   trunkAhead?: number;
 }
 
@@ -758,7 +758,7 @@ export function formatReport(report: UpdateReport): string {
   lines.push(`  pi-system  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
   if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}`);
   if (k.note) lines.push(`             ${k.note}`);
-  const trunkGap = trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 });
+  const trunkGap = trunkNotice({ channel: report.kit.channel ?? "", ahead: report.kit.trunkAhead ?? 0 });
   if (trunkGap) lines.push(`             ${trunkGap}`);
   const piInfo = report.pi;
   const piState = piInfo.available
@@ -1227,7 +1227,7 @@ export default function (pi: ExtensionAPI) {
     void check(cwd)
       .then((report) => {
         if (report.staleRoles?.length) ctx.ui.notify(`pi-system: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
-        const notice = trunkNotice({ channel: report.kit.channel ?? "next", ahead: report.kit.trunkAhead ?? 0 });
+        const notice = trunkNotice({ channel: report.kit.channel ?? "", ahead: report.kit.trunkAhead ?? 0 });
         if (notice) ctx.ui.notify(notice, "info");
         if (!hasUpdates(report)) return;
         ctx.ui.setStatus("kit-update", "updates: /update");
@@ -1271,6 +1271,9 @@ export default function (pi: ExtensionAPI) {
         const other = (report.kit.kind === "npm" || report.kit.kind === "git") && report.kit.channel === "next" ? "latest" : "next";
         options.push({ label: `Switch pi-system channel to ${other}${other === "next" ? " (tracks main)" : " (releases)"}`, value: `channel ${other}` });
         options.push({ label: "Show details", value: "status" });
+        // The bare /update screen already carries the trunk gap; the selector title is a single line.
+        const trunkGap = trunkNotice({ channel: report.kit.channel ?? "", ahead: report.kit.trunkAhead ?? 0 });
+        if (trunkGap) c.ui.notify(trunkGap, "info");
         const choice = await c.ui.select(summaryLine(report), options.map((o) => o.label));
         if (choice === undefined) return;
         arg = options.find((o) => o.label === choice)?.value ?? "status";

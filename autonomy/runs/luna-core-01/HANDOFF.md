@@ -2,49 +2,46 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `5a888fe5dcf2` (head of `stream/core`; cycle 08 was never merged).
-  Cycle 09 commits, all pushed: `21d75cf` (review+plan), `0471c71` + `bf74303` (PG-55 carry-over,
-  cherry-picked from the cycle-08 attempt branch), `3c643fc` (PG-57), plus the records under
-  `autonomy/cycles/luna-core-01/09/` and the `luna-core-01/09` line in `autonomy/JOURNAL.md`.
-- Cycle 09 outcome: **successful** (fix).
-- Reviewable diff 26,740 chars — under the 60,000 read budget, past the 30,000 stop-new-items mark.
+- Branch `pi/luna-core-01`, base `559f2d99edbf` (head of `stream/core`, holds cycles 01–09).
+  Cycle 10 commits, all pushed: `106bc4d` (review+plan), `f24a144` (PG-55 exit-path fix), plus the
+  records under `autonomy/cycles/luna-core-01/10/` and the `luna-core-01/10` line in
+  `autonomy/JOURNAL.md`.
+- Cycle 10 outcome: **successful** (fix).
+- Reviewable diff 7,317 chars — under the 60,000 read budget and the 30,000 stop-new-items mark.
 
-## What cycle 09 did
+## What cycle 10 did
 
-1. **Root cause of the cycle-08 rejection.** `smoke:docs` (and so `check-all`) failed on the cycle-08
-   tree only because `autonomy/cycles/luna-core-01/08/report.md` had no matching `autonomy/JOURNAL.md`
-   line (`report with no journal entry: luna-core-01/08`, `tests/docs-smoke.ts:518`). Cycle 09 did not
-   carry the cycle-08 records, so it owes no cycle-08 entry, and it added its own.
-2. **Board PG-55 (P0, fix).** Carried over by cherry-pick; the run exposes the leak-scan publish
-   blocker and merged-but-unpublished count in status and `state.json`, the next cycle's prompt names
-   the refused commit and locations only, the run blocks with an operator question after two
-   merged-but-unpublished cycles, and a clean publish clears all three. `node
-   tests/autonomy-selfimprove-smoke.ts` 41/41, `autonomy-cli-smoke` 16, `autonomy-smoke` 32.
-3. **Board PG-57 (P1, fix).** `runStep` now appends a `## Required output` block to the step task
-   naming each declared file by absolute path and stating the step fails if the exact file is absent;
-   the failure names the absolute path. `workflow-smoke` 13/13, `workflow-plan-smoke` 91. Independent
-   `subagent` reviewer: `VERDICT: PASS`.
+1. **Assigned board work was already merged.** PG-55 (blocked publication stops the run loudly) and
+   PG-57 (declared-output step names its file) were both implemented in cycle 09; PG-57 needed no
+   further action.
+2. **Found and fixed a defect in the merged PG-55 work.** The block offered the operator "Remove the
+   identifier and resume", but `runStep` re-parked before any worker started, so the answer was
+   lost and only "Stop the run" worked. Root cause: the stop condition is a pure predicate over
+   `publishBlockedCycles`, and `pendingAnswer` is cleared only on a cycle resume. Fix: carry the
+   blocker `id` on `PendingAnswer` (`lifecycle.ts`), set it in `engine.answer` (`engine.ts`), and
+   consume a `publish-blocked` answer once in `runStep` (`self-improve.ts`) so exactly one cycle
+   runs, re-parking if publication is still refused. `docs/autonomy.md` states the rule; a new smoke
+   case fails before the fix (`2 !== 3`) and passes after. `autonomy-selfimprove-smoke` 42/42.
 
 ## Checks that were run
 
-`autonomy-selfimprove-smoke` (41), `autonomy-cli-smoke` (16), `autonomy-smoke` (32),
-`workflow-smoke` (13), `workflow-plan-smoke` (91), `npx tsc -p tests/tsconfig.json`, `test:lint`,
-`docs-smoke` (green, journal gate included), `check-all --check-wiring` — all PASS. Never ran
-`npm test` or `npm run check:all`. See `verify.md`.
+`autonomy-selfimprove-smoke` (42), `autonomy-smoke` (32), `autonomy-cli-smoke` (16),
+`npx tsc -p tests/tsconfig.json` and `-p packages/autonomy/tsconfig.json` (exit 0), `test:lint`
+(exit 0), `docs-smoke` (green, journal gate included) — all PASS. Never ran `npm test` or
+`npm run check:all`. Independent reviewer on `git diff 106bc4d..HEAD`: `VERDICT: PASS`. See
+`verify.md`.
 
 ## Merge
 
-Every targeted check passes and an independent reviewer returned PASS for PG-57 (PG-55 was reviewed
-PASS in cycle 08 and re-ran green). Merge `pi/luna-core-01` into `stream/core` only after the host
-acceptance checks pass on a clean checkout.
+Every targeted check passes and an independent reviewer returned PASS. Merge `pi/luna-core-01` into
+`stream/core` only after the host acceptance checks pass on a clean checkout.
 
 ## Carry over to the next cycle
 
 1. **PG-51 (cycle-08 carry-over, not carried).** The load-tolerant smoke timing guards are sound and
    verified on `origin/attempts/luna-core-01/cycle-08` (`cfe2ea0`, `84894cc`, `3329032`, `ea8027b`,
-   27,519 reviewable chars) but did not fit this cycle's diff budget next to PG-55 + PG-57. Re-carry
-   or re-implement and run `tests/timing-load-check.ts` green end to end (cycle 08 left it 54/55 with
-   the redaction fix applied and never re-ran the full 11-smoke sweep).
+   27,519 reviewable chars) but did not fit this cycle's diff budget. Re-carry or re-implement and
+   run `tests/timing-load-check.ts` green end to end.
 2. **Cycle-08 records live only on the attempt branch.** If a later cycle brings
    `autonomy/cycles/luna-core-01/08/report.md` over, it must add the matching journal line
    `- luna-core-01/08 | Board: PG-55, PG-51 | successful | ...` or `smoke:docs` goes red again.

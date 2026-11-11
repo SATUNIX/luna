@@ -86,7 +86,7 @@ type FakeUi = ReturnType<typeof makeUi>;
  * A fake UI context that records dialogs and custom-component options. Each custom() call answers
  * with the next scripted choice (none closes the hub) and records what the component rendered.
  */
-function makeUi(script: PageChoice[] = []) {
+function makeUi(script: PageChoice[] = [], selectScript: Array<string | undefined> = []) {
   const selects: RecordedSelect[] = [];
   const customCalls: Array<{ overlay?: boolean } | undefined> = [];
   const rendered: string[] = [];
@@ -95,7 +95,7 @@ function makeUi(script: PageChoice[] = []) {
   const ui = {
     select: async (title: string, options: string[], opts?: { timeout?: number }): Promise<string | undefined> => {
       selects.push({ title, options, timeout: opts?.timeout });
-      return undefined;
+      return selectScript.length > 0 ? selectScript.shift() : undefined;
     },
     confirm: async (): Promise<boolean> => false,
     input: async (): Promise<string | undefined> => undefined,
@@ -523,6 +523,36 @@ tests.push([
       const label = `/${name}`;
       assert.equal(options.filter((option) => option === label).length, 1, `${label} must be listed exactly once`);
     }
+  },
+]);
+
+tests.push([
+  "a cancelled RPC value dialog closes the hub instead of reopening the parent page",
+  async () => {
+    const model: ModelModule.HubModel = {
+      pages: [
+        { id: "main", title: "Control centre", parent: null },
+        { id: "system", title: "System", parent: "main" },
+        { id: "display", title: "Display", parent: "system" },
+      ],
+      rows: [
+        {
+          id: "display.mode",
+          page: "display",
+          label: "Display mode",
+          kind: "value",
+          value: "compact",
+          values: ["compact", "full"],
+          available: true,
+        },
+      ],
+    };
+    // First answer opens the value dialog; the second cancels (undefined), which must close the hub.
+    const recorded = makeUi([], ["Display mode: compact", undefined]);
+    const ctx = { mode: "rpc" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
+    await openHub(makeDeps({ model, commands: [], ctx }), "display");
+    assert.equal(recorded.selects.length, 2, "a cancelled value dialog closes the hub; it must not open the parent page");
+    assert.match(recorded.selects[1]?.title ?? "", /^Display mode \(now compact\)/, "the second dialog is the value picker");
   },
 ]);
 

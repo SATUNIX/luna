@@ -280,7 +280,9 @@ function selectRenderer(deps: HubDeps): Renderer {
         } catch {
           return undefined;
         }
-        if (value === undefined) return "back";
+        // A cancelled or timed-out value dialog counts as cancel: close the hub, do not
+        // reopen the page the operator came from (docs/control-center.md, "Renderers by mode").
+        if (value === undefined) return undefined;
         return { id: row.id, value };
       }
       return { id: row.id };

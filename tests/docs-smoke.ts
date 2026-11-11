@@ -5,8 +5,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkJournal, journalWarnings } from "../packages/core/lib/journal.ts";
 import { installPinFiles, installPinVersions, readmeBadgeAltVersion, readmeBadgeVersion, setInstallPins, setReadmeBadgeVersion } from "../packages/core/lib/version-badge.ts";
 import { skillsCatalogueContent } from "../packages/core/skills-catalogue.ts";
 
@@ -483,5 +485,118 @@ assert.ok(
   !/A verification that\s+still fails after an edit, or a check that regresses,\s+is not detected as a trigger/.test(readRel("docs/recovery-orchestration-mode.md")),
   "docs/recovery-orchestration-mode.md still says a repeat verification FAIL is not detected; the verify-fail signal returns `split` (tests/verify-failclosed-smoke.ts, tests/workflow-strategy-smoke.ts)",
 );
+
+// A-01 team journal: the committed journal must match the cycle reports, and the checker must
+// fail on each drift a later cycle can introduce. Each fixture is its own temp tree.
+assert.deepEqual(checkJournal(ROOT), [], "autonomy/JOURNAL.md disagrees with the cycle reports");
+
+interface JournalFixture {
+  root: string;
+  write(rel: string, text: string): void;
+  journal(lines: string[]): void;
+}
+
+function journalFixture(): JournalFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "luna-journal-"));
+  const write = (rel: string, text: string): void => {
+    const file = path.join(root, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  };
+  const journal = (lines: string[]): void => {
+    write("autonomy/JOURNAL.md", ["# Team journal", "", ...lines, ""].join("\n"));
+  };
+  return { root, write, journal };
+}
+
+function removeJournalFixture(fixture: JournalFixture): void {
+  fs.rmSync(fixture.root, { recursive: true, force: true });
+}
+
+// A report whose entry is deleted fails, naming the key and the line to add.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal(["- run-01/01 | Board: none | successful | did a thing"]);
+    fixture.journal([]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("report with no journal entry: run-01/01") && problem.includes("add: - run-01/01 | Board: none | successful |")),
+      `journal checker missed a deleted entry: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A decisions link to a file that is gone fails, naming the file.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal(["- run-01/01 | Board: none | successful | did a thing | decisions: autonomy/decisions/missing.md"]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("links a missing decisions file: autonomy/decisions/missing.md")),
+      `journal checker missed a missing decisions file: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// An entry whose board IDs disagree with the report's Board lines fails.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\nBoard: A-91 done - fixed\n");
+    fixture.journal(["- run-01/01 | Board: A-01 | successful | did a thing"]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("board mismatch") && problem.includes("entry says A-01") && problem.includes("report has A-91")),
+      `journal checker missed a board mismatch: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// The legacy cycles/<NN>/report.md layout is covered too.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/03/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("report with no journal entry: 03")),
+      `journal checker missed a legacy report: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A host close-out report needs no entry: no failure, but a named warning.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "Outcome: partial\n\nHost close-out: the worker exited before recording report.md.\n",
+    );
+    fixture.journal([]);
+    const problems = checkJournal(fixture.root);
+    assert.deepEqual(problems, [], `a host close-out report produced a failure: ${problems.join("; ")}`);
+    const warnings = journalWarnings(fixture.root);
+    assert.ok(
+      warnings.some((warning) => warning.includes("run-01/01")),
+      `journal warnings missed a host close-out report: ${warnings.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
 
 console.log(`[docs-smoke] OK: ${checked} documented commands validated, ${linksChecked} relative links resolved; balanced profile resolved; ${skipped.length} external lines skipped; skills catalogue visible ${skillsVisible}/${skillsTotal}; ${shippedPages.length} shipped pages name no removed delegation surface.`);

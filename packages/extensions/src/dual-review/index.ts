@@ -16,6 +16,27 @@ function piChildArgv(cli: string, args: string[], execPath: string = process.exe
 const DUAL_REVIEW_MODEL = process.env.DUAL_REVIEW_MODEL ?? "";
 const REVIEW_TIMEOUT_MS = 45000;
 
+/** Added and removed lines in a unified diff, not counting its file headers. */
+function changedLines(diff: string): number {
+  return diff.split("\n").filter((line) => /^[+-]/.test(line) && !/^(?:\+\+\+|---)/.test(line)).length;
+}
+
+/** What this extension asks of the effort registry. */
+interface StrategyView {
+  report(signal: { trigger: "review"; changedLines: number }): { steer: string | null } | null;
+}
+
+/** The effort policy's line for a diff of this size, if any; its absence is a line of its own. Never throws. */
+function reviewHint(lines: number): string | null {
+  const absent = "dual-review: the effort policy is not loaded, so a workflow was not considered for this diff.";
+  try {
+    const decision = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { strategy?: StrategyView } | undefined)?.strategy?.report({ trigger: "review", changedLines: lines });
+    return decision ? decision.steer : absent;
+  } catch {
+    return absent;
+  }
+}
+
 export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, runExecFile: typeof execFile = execFile) {
   let epoch = 0;
   const pending = new Set<() => void>();
@@ -141,6 +162,8 @@ export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, run
         return;
       }
       ctx.ui.notify("dual-review: reviewer launched. Result will follow.", "info");
+      const hint = reviewHint(changedLines(diff));
+      if (hint) ctx.ui.notify(hint, "info");
     },
   });
 

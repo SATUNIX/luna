@@ -27,6 +27,7 @@ import type { PublishedCompaction } from "../packages/extensions/src/session-hel
 import type * as SessionHelpers from "../packages/extensions/src/session-helpers/index.ts";
 import type * as DelegationGuard from "../packages/extensions/src/delegation-guard/index.ts";
 import { array, object, optional, parseJsonAs, string, union, unknownValue } from "../packages/core/lib/guard.ts";
+import { loadProfileDef, profileSettings } from "../packages/core/lib/profiles.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
 // The extension factory is typed for pi's ExtensionAPI; this smoke drives it with the fake pi.
@@ -370,7 +371,11 @@ for (const profile of PROFILES) {
     try {
       assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
       const settings = parseJsonAs(InstalledSettings, fs.readFileSync(path.join(agent, "settings.json"), "utf8"));
-      assert.equal(settings.compaction, undefined, "the installer never writes compaction settings: pi's defaults are in force");
+      // The installer writes compaction settings only from a profile's own `settings.compaction` block
+      // (lite's small-window values); every other profile leaves pi's defaults in force.
+      const wanted = profileSettings(loadProfileDef(profile))?.compaction;
+      if (wanted === undefined) assert.equal(settings.compaction, undefined, "a profile without a settings block writes no compaction settings: pi's defaults are in force");
+      else assert.deepEqual(settings.compaction, wanted, "the installer writes exactly the profile's settings.compaction block");
       const entry = settings.packages.find((p) => (typeof p === "string" ? p : p.source) === ROOT);
       assert.ok(entry !== undefined, "the kit package entry must be in the installed settings");
       const extensions = typeof entry === "string" ? undefined : entry.extensions;
@@ -379,9 +384,9 @@ for (const profile of PROFILES) {
       try {
         const st = computeCompactionState({ cwd: dir, contextWindow: 200_000, kitTriggerLoaded: loaded.includes("trigger-compact") });
         assert.equal(st.enabled, true);
-        assert.equal(st.source, "default");
+        assert.equal(st.source, wanted?.enabled === undefined ? "default" : "global");
         assert.equal(st.reason, null);
-        assert.equal(st.reserveTokens, 16384);
+        assert.equal(st.reserveTokens, wanted?.reserveTokens ?? 16384);
         assert.equal(st.kitTrigger.loaded, loaded.includes("trigger-compact"));
         rows.push({ profile, trigger: loaded.includes("trigger-compact"), custom: loaded.includes("custom-compaction"), sieve: loaded.includes("context-sieve"), compress: loaded.includes("compress"), threshold: st.thresholdTokens, native: st.nativeThresholdTokens });
       } finally { restore(); }

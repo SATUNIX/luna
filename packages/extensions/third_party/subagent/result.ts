@@ -8,12 +8,6 @@
 import { isRecord, MAX_STORED_MESSAGE_TEXT, PER_TASK_OUTPUT_CAP } from "./config.ts";
 import type { Msg, MsgPart, SingleResult } from "./types.ts";
 
-// Thread a chain step's output into the next task. A function replacer is required: a string
-// replacement interprets `$&`, `$'`, `$1`… inside the previous output and corrupts it.
-export function substitutePrevious(task: string, previous: string): string {
-  return task.replace(/\{previous\}/g, () => previous);
-}
-
 export function getFinalOutput(messages: Msg[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -74,7 +68,7 @@ function failureHint(result: SingleResult): string {
   if (result.stopReason === "timeout") return "Raise PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS, or set it to 0 to disable the idle watchdog.";
   if (result.stopReason === "wall-clock") return "Raise or unset PI_KIT_SUBAGENT_MAX_RUNTIME_MS for longer tasks.";
   if (result.stopReason === "stream-cap") return "Raise PI_KIT_SUBAGENT_STREAM_CAP_BYTES for exploration-heavy tasks.";
-  if (result.stopReason === "stopped") return "Stopped by operator (/subagent-stop).";
+  if (result.stopReason === "stopped") return "Stopped by operator (workflow_control or /workflows stop).";
   if (result.stderr.includes("Unknown agent")) return "Built-in roles come from the kit; add your own in ~/.pi/agent/agents, or pass agentScope \"both\" to include this project's .pi/agents.";
   return "";
 }
@@ -82,7 +76,7 @@ function failureHint(result: SingleResult): string {
 export function getResultOutput(result: SingleResult): string {
   // A detached run has no answer yet by design; say so plainly instead of "(no output)".
   if (result.detached) {
-    return `Subagent ${result.agent} is still running in the background (run ${result.runId ?? "?"}). The parent stopped waiting; the child will finish on its own and record its result in ${result.logPath ?? "its run log"}. Use subagent_status id=${result.runId ?? "<run>"} to follow it.`;
+    return `Subagent ${result.agent} is still running in the background (run ${result.runId ?? "?"}). The parent stopped waiting; the child will finish on its own and record its result in ${result.logPath ?? "its run log"}. Use workflow_status {id: "${result.runId ?? "<run>"}"} to follow it, or workflow_control {runId: "${result.runId ?? "<run>"}", action: "stop"} to stop it.`;
   }
   if (isFailedResult(result)) {
     const partial = result.finalOutput || getFinalOutput(result.messages);

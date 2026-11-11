@@ -136,7 +136,7 @@ Environment overrides:
 - **Agents** — browse, **create, edit, rename and delete** the agents discovered from
   the user directory `<agent dir>/agents` (`~/.pi/agent/agents` unless `PI_CODING_AGENT_DIR`
   moves it; the same directory the subagent tool reads user roles from) and the project
-  directory, which is the kit's own `packages/kit/agents` unless `PI_CONSOLE_PROJECT_AGENTS`
+  directory, which is Luna's own `packages/kit/agents` unless `PI_CONSOLE_PROJECT_AGENTS`
   names another (`server/config.ts`; the tests point both at temporary directories,
   `tests/web-ui-api-smoke.ts`); start a session pre-bound to any of them.
   Agent GET/DELETE/PUT accept `?source=user|project` to disambiguate duplicate names
@@ -176,7 +176,7 @@ Browser (public/)  ──HTTP──▶  server/server.ts  ──JSONL stdin/stdo
 | `server/spawn.ts` | spawn/kill one `pi --mode rpc` child per session; JSONL framing; response correlation; event fan-out |
 | `server/tailer.ts` | follow a session file written by another process (live CLI sync) |
 | `server/stats.ts` | token/cost/context stats (live RPC, or computed from the session file) |
-| `server/todos.ts` | read the kit's per-session todo file |
+| `server/todos.ts` | read Luna's per-session todo file |
 | `server/lens.ts` | pi-lens session diagnostics |
 | `server/configinfo.ts` | installation config + prompt templates + skills |
 | `server/routes.ts` | REST endpoints + SSE stream |
@@ -201,8 +201,8 @@ Cross-origin requests and requests with a foreign `Host` are refused.
 | GET | `/api/health` | liveness + uptime + `auth` mode (open; reveals nothing else) |
 | GET | `/api/auth` | 200 when the presented token is valid (used by the login prompt) |
 | GET | `/api/config` | installation configuration (paths, settings, models, lens) |
-| GET | `/api/prompts` | prompt templates shipped with the kit |
-| GET | `/api/skills` | skills shipped with the kit |
+| GET | `/api/prompts` | prompt templates shipped with Luna |
+| GET | `/api/skills` | skills shipped with Luna |
 | GET | `/api/agents` | discovered agents + the known tool list |
 | GET | `/api/agents/:name` | one agent including its system-prompt body |
 | POST | `/api/agents` | create an agent (`name`, `description`, `tools`, `model`, `body`, `source`) |

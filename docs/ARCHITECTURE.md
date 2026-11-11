@@ -1,6 +1,6 @@
 # Architecture
 
-`pi-system` is one pi package, `@satunix/pi-system`. The repository root is the package: it declares its full resource set under the `pi` key in `package.json` (and a `files` allowlist for the npm tarball). Profiles, not separate packages, narrow what loads.
+Luna is one pi package, `@satunix/pi-system`. The repository root is the package: it declares its full resource set under the `pi` key in `package.json` (and a `files` allowlist for the npm tarball). Profiles, not separate packages, narrow what loads.
 
 ## The three avenues
 
@@ -28,11 +28,11 @@ Skills (`packages/kit/skills/*/SKILL.md`) are markdown instruction sets loaded b
 
 ## Profiles
 
-Profiles (`packages/kit/profiles/*.json`) are lists of extension names, plus optional skill and prompt filters. The installer applies a profile by registering the kit with pi and writing `extensions` / `skills` / `prompts` filters on the kit's package entry in pi's settings. Profile files never change shape as extensions move between avenues. The `lite` profile uses `skills.only` / `prompts.only` allowlists for small models.
+Profiles (`packages/kit/profiles/*.json`) are lists of extension names, plus optional skill and prompt filters. The installer applies a profile by registering Luna with pi and writing `extensions` / `skills` / `prompts` filters on the kit's package entry in pi's settings. Profile files never change shape as extensions move between avenues. The `lite` profile uses `skills.only` / `prompts.only` allowlists for small models.
 
 ## Distribution
 
-`packages/core/distribution.json` sets how the kit reaches users. Today it is **git**: pi installs the repository from the public GitHub repository, `latest` is the newest `vX.Y.Z` tag and `next` is `main`. **npm** (dist-tags of `@satunix/pi-system`, published from GitHub Actions with trusted publishing and provenance) is built and tested but not enabled; the package is not published. The installer, `/profile` and the `kit-update` extension (`/update`) all read the setting. See `docs/releasing.md` and `docs/updates.md`.
+`packages/core/distribution.json` sets how Luna reaches users. Today it is **git**: pi installs the repository from the public GitHub repository, `latest` is the newest `vX.Y.Z` tag and `next` is `main`. **npm** (dist-tags of `@satunix/pi-system`, published from GitHub Actions with trusted publishing and provenance) is built and tested but not enabled; the package is not published. The installer, `/profile` and the `kit-update` extension (`/update`) all read the setting. See `docs/releasing.md` and `docs/updates.md`.
 
 ## Toolchain
 
@@ -44,7 +44,7 @@ profile protections, contribution producers' required context assembler and uniq
 names within each profile.
 
 `packages/core/` is the toolchain only — never imported at extension runtime:
-- `install.ts` — installs the kit + profile, from a checkout or as a release (git or npm; also the package's `npx` entry point)
+- `install.ts` — installs Luna + profile, from a checkout or as a release (git or npm; also the package's `npx` entry point)
 - `lib/distribution.ts` — reads `distribution.json`; git sources, release tags and channels
 - `release.ts` / `release-notes.ts` — cut a release commit and tag (never pushes); write its notes (the GitHub Release itself is created by `.github/workflows/release.yml`)
 - `pack-check.ts` — checks the npm tarball; `publish-plan.ts` / `snapshot-version.ts` pick the npm version and dist-tag; `lockfile-check.ts` checks lockfile integrity

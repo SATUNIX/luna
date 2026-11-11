@@ -241,11 +241,16 @@ try {
       },
     },
     {
-      name: "recovery-orchestrator (/recover writes an escalation, a report and a contribution)",
+      name: "recovery-orchestrator (an escalation marker writes a report and a contribution)",
       run: async (ws) => {
         const pi = fakePi();
         (await loadExtension("extensions/recovery-orchestrator/index.ts"))(pi.api);
-        await pi.commands.get("recover").handler("stuck", quietCtx(ws));
+        try {
+          writeFileSafe(path.join(ws, ".pi", "recovery", "escalation.json"), JSON.stringify({ signature: "stuck", reason: "fixture", count: 1, at: new Date().toISOString() }), { root: ws });
+        } catch {
+          /* the marker may be a committed symlink; the entry then finds no readable marker */
+        }
+        await pi.handlers.get("turn_end")({}, quietCtx(ws));
       },
     },
     {

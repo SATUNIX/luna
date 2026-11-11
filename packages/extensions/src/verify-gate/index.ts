@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { usableFingerprint, workspaceFingerprint } from "./shared/fingerprint.ts";
 import { createFileExclusive, openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 import {
 	resolveSessionId,
@@ -351,12 +352,15 @@ function updateBoard(cwd: string, mutate: (board: BoardFile) => void): void {
 // Same file contract as verifier-board (self-containment forbids importing it). Exported so
 // the eval harness can exercise it directly. Returns null when the verdict was written, or
 // the reason it was not, so callers can report a lost write (REL-6) instead of only logging it.
+// `revision` is the checkout fingerprint the check left behind; it is kept only when it names a
+// revision, so a verdict outside git carries none.
 export function recordVerifyVerdict(
 	cwd: string,
 	source: string,
 	pass: boolean,
 	summary: string,
 	stale = false,
+	revision?: string,
 ): string | null {
 	try {
 		const locked = withBoardLock(cwd, () => {
@@ -367,6 +371,9 @@ export function recordVerifyVerdict(
 							pass,
 							summary: summary.slice(0, 200),
 							at: new Date().toISOString(),
+							...(revision !== undefined && usableFingerprint(revision)
+								? { revision }
+								: {}),
 						};
 			});
 		});
@@ -405,8 +412,13 @@ function removeVerdict(cwd: string, source: string): string | null {
 // makes that PASS stale, so it is turned into a FAIL ("stale") and completion stays blocked
 // until verification runs again. A PASS that a run is about to record is checked against the
 // edit count taken when that run started (VerificationOptions.editCount), so an edit made while
-// the run is in progress also leaves a stale FAIL. Known limitation: a `bash` tool result
-// (sed -i, git checkout, a formatter) and edits by another process are not seen as edits.
+// the run is in progress also leaves a stale FAIL.
+// G1: in a git checkout a verdict also carries the revision (workspaceFingerprint, `.pi` left
+// out) its check left behind. After any tool result but a read-only one, and at every turn_end,
+// a standing PASS whose revision differs from the checkout's is made stale the same way, so a
+// shell edit (sed -i, git checkout, a formatter), a sub-agent's writes or another process's edit
+// is seen at the next event. No fingerprint is taken while no such PASS stands. Known limitation:
+// outside a git checkout there is no revision, and only `write` and `edit` count as edits.
 // Returns null when nothing needed changing or the board was updated, else the reason.
 const VERIFY_GATE_SOURCES = ["verify", "review"];
 function staleVerdict(): Record<string, unknown> {
@@ -417,25 +429,58 @@ function staleVerdict(): Record<string, unknown> {
 		at: new Date().toISOString(),
 	};
 }
-function passingOwnSources(board: BoardFile): string[] {
+// With `revision`, only a PASS bound to a different revision counts; one without a revision
+// (recorded outside git, or by an older build) is left to the write/edit rule.
+function passingOwnSources(board: BoardFile, revision?: string): string[] {
 	return VERIFY_GATE_SOURCES.filter((source) => {
 		const verdict = board.verdicts[source];
-		return isRecord(verdict) && verdict.pass === true;
+		if (!isRecord(verdict) || verdict.pass !== true) return false;
+		return (
+			revision === undefined ||
+			(typeof verdict.revision === "string" && verdict.revision !== revision)
+		);
 	});
 }
-export function invalidateVerdictsAfterEdit(cwd: string): string | null {
-	const file = path.join(cwd, ".pi", "verdicts.json");
+function readBoardFile(cwd: string): BoardFile | null {
 	try {
-		const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-		if (!isBoardFile(parsed) || passingOwnSources(parsed).length === 0)
-			return null;
+		const parsed: unknown = JSON.parse(
+			fs.readFileSync(path.join(cwd, ".pi", "verdicts.json"), "utf8"),
+		);
+		return isBoardFile(parsed) ? parsed : null;
 	} catch {
 		return null; // no board: nothing recorded, completion already fails closed
 	}
+}
+/** True when a verify/review PASS bound to a revision stands, so the checkout is worth a fingerprint. */
+export function revisionBoundPassStands(cwd: string): boolean {
+	const board = readBoardFile(cwd);
+	return (
+		board !== null &&
+		VERIFY_GATE_SOURCES.some((source) => {
+			const verdict = board.verdicts[source];
+			return (
+				isRecord(verdict) &&
+				verdict.pass === true &&
+				typeof verdict.revision === "string"
+			);
+		})
+	);
+}
+/**
+ * Marks the standing verify/review PASS verdicts stale. With `revision` (the checkout's current
+ * fingerprint), only those recorded at a different revision.
+ */
+export function invalidateVerdictsAfterEdit(
+	cwd: string,
+	revision?: string,
+): string | null {
+	const current = readBoardFile(cwd);
+	if (current === null || passingOwnSources(current, revision).length === 0)
+		return null;
 	try {
 		const locked = withBoardLock(cwd, () => {
 			updateBoard(cwd, (board) => {
-				for (const source of passingOwnSources(board))
+				for (const source of passingOwnSources(board, revision))
 					board.verdicts[source] = staleVerdict();
 			});
 		});
@@ -944,6 +989,8 @@ export type VerificationReport = {
 	boardErrors: string[];
 	/** A write or edit happened while this run was in progress, so its PASS was recorded as stale. */
 	stale: boolean;
+	/** The checkout fingerprint the check left behind: `no-git` or `unreadable:` when it names none. */
+	revision: string;
 	reportFile: string;
 	text: string;
 };
@@ -1038,15 +1085,19 @@ export async function runVerification(
 	};
 	const editsAtStart = options.editCount?.();
 	let stale = false;
+	let revision = "unreadable:not taken";
 	// A PASS is only recorded when no write/edit happened since this run started.
 	const record = (source: string, pass: boolean, summary: string): string | null => {
 		const changed =
 			options.editCount !== undefined && options.editCount() !== editsAtStart;
 		if (pass && changed) stale = true;
-		return recordVerifyVerdict(cwd, source, pass, summary, pass && changed);
+		return recordVerifyVerdict(cwd, source, pass, summary, pass && changed, revision);
 	};
 	try {
 		const check = await runCheck(cwd);
+		// Taken after the check, so a check that writes files (coverage output, a formatter) does
+		// not stale its own PASS. A write or edit during the run is still caught by editCount.
+		revision = await workspaceFingerprint(cwd);
 		if (check.ran)
 			note(record(
 				"verify",
@@ -1118,7 +1169,7 @@ export async function runVerification(
 		const pass =
 			!stale && (!check.ran || check.ok) && review.ran && review.review.pass;
 		const at = new Date();
-		const base = { pass, check, review, done, boardErrors, stale };
+		const base = { pass, check, review, done, boardErrors, stale, revision };
 		const reportFile = path.join(cwd, ".pi", "verify-report.md");
 		const report = renderReport(base, at);
 		try {
@@ -1157,14 +1208,65 @@ function shortResult(report: VerificationReport): string {
 	return `${head}\n${check}\n${review}${board}\nreport: ${report.reportFile}`;
 }
 
+// Built-in tools that only read: their results cannot change the checkout, so they take no fingerprint.
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+/** What this extension asks of the effort registry. */
+interface StrategyView {
+	report(signal: { trigger: "verify-fail"; repeatFail: boolean }): {
+		move: string;
+		steer: string | null;
+	} | null;
+}
+
+/** The effort policy's steer for a FAIL, when it moves to `split`. Never throws. */
+function verifyFailSteer(repeatFail: boolean): string | null {
+	try {
+		const decision = ((globalThis as Record<symbol, unknown>)[Symbol.for("pi-kit.effort")] as { strategy?: StrategyView } | undefined)?.strategy?.report({ trigger: "verify-fail", repeatFail });
+		return decision?.move === "split" ? decision.steer : null;
+	} catch {
+		return null;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	let projectCwd = "";
 	let dirty = false;
 	let editCount = 0;
 	const edits = (): number => editCount;
 	let correctionSent = false;
+	let splitSent = false;
 	let running = false;
+	// The revision of the last FAIL since the user's last request: a FAIL at another revision is a repeat.
+	let failRevision: string | undefined;
 	const isReviewerChild = process.env[CHILD_ENV_FLAG] === "1";
+
+	/**
+	 * Notes a verification result for the verify-fail signal and returns the policy's steer, if any.
+	 * A first FAIL changes nothing (the existing correction stands); a FAIL after the work changed is
+	 * a repeat. Outside git there is no revision, so no FAIL reads as a repeat.
+	 */
+	const noteResult = (pass: boolean, revision: string): string | null => {
+		if (pass) {
+			failRevision = undefined;
+			return null;
+		}
+		const usable = usableFingerprint(revision);
+		const repeatFail = usable && failRevision !== undefined && failRevision !== revision;
+		if (usable) failRevision = revision;
+		return verifyFailSteer(repeatFail);
+	};
+
+	// One fingerprint at a time: a burst of tool results queues behind the one in flight.
+	let revisionCheck: Promise<void> = Promise.resolve();
+	const checkRevision = (cwd: string, notify: (message: string) => void): Promise<void> => {
+		revisionCheck = revisionCheck.then(async () => {
+			if (!cwd || !revisionBoundPassStands(cwd)) return;
+			const lost = invalidateVerdictsAfterEdit(cwd, await workspaceFingerprint(cwd));
+			if (lost) notify(`verify: ${lost}`);
+		});
+		return revisionCheck;
+	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		projectCwd = ctx.cwd;
@@ -1176,15 +1278,24 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event) => {
-		if (event.source !== "extension") correctionSent = false;
+		if (event.source === "extension") return;
+		correctionSent = false;
+		splitSent = false;
+		failRevision = undefined;
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
-		if (event.isError || !["write", "edit"].includes(event.toolName)) return;
+		const cwd = projectCwd || ctx?.cwd || "";
+		const notify = (message: string): void => ctx?.ui?.notify?.(message, "error");
+		if (event.isError || !["write", "edit"].includes(event.toolName)) {
+			// A failed shell command can still have changed files, so only a read-only tool is skipped.
+			if (!READ_ONLY_TOOLS.has(event.toolName)) await checkRevision(cwd, notify);
+			return;
+		}
 		dirty = true;
 		editCount++;
-		const lost = invalidateVerdictsAfterEdit(projectCwd || ctx?.cwd || "");
-		if (lost) ctx?.ui?.notify?.(`verify: ${lost}`, "error");
+		const lost = invalidateVerdictsAfterEdit(cwd);
+		if (lost) notify(`verify: ${lost}`);
 	});
 
 	pi.registerCommand("verify", {
@@ -1211,7 +1322,12 @@ export default function (pi: ExtensionAPI) {
 						editCount: edits,
 					});
 					ctx.ui?.setStatus?.(STATUS_KEY, report.pass ? "pass" : "FAIL");
-					ctx.ui?.notify?.(shortResult(report), report.pass ? "info" : "error");
+					// A stale run is not a FAIL of the work, so it is not a verify-fail signal (as at turn_end).
+					const steer = report.stale ? null : noteResult(report.pass, report.revision);
+					ctx.ui?.notify?.(
+						steer ? `${shortResult(report)}\n${steer}` : shortResult(report),
+						report.pass ? "info" : "error",
+					);
 				} catch (error) {
 					ctx.ui?.setStatus?.(STATUS_KEY, "error");
 					ctx.ui?.notify?.(
@@ -1268,8 +1384,15 @@ export default function (pi: ExtensionAPI) {
 						sessionId: resolveSessionId(ctx.sessionManager),
 						editCount: edits,
 					});
+					// A stale run is not a FAIL of the work, so it is not a verify-fail signal (as at turn_end).
+					const steer = report.stale ? null : noteResult(report.pass, report.revision);
 					return {
-						content: [{ type: "text" as const, text: report.text }],
+						content: [
+							{
+								type: "text" as const,
+								text: steer ? `${report.text}\n${steer}\n` : report.text,
+							},
+						],
 						details: undefined,
 					};
 				} finally {
@@ -1280,6 +1403,9 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	pi.on("turn_end", async (event, ctx) => {
+		await checkRevision(projectCwd || ctx?.cwd || "", (message) =>
+			ctx?.ui?.notify?.(message, "error"),
+		);
 		if (process.env.PI_KIT_VERIFY_ON_TURN !== "1") return;
 		if (!dirty) return;
 		// Wait until the assistant has finished its tool sequence. Running checks
@@ -1305,6 +1431,8 @@ export default function (pi: ExtensionAPI) {
 		const editsAtStart = editCount;
 		try {
 			const { ok, output, label } = await runCheck(cwd, true);
+			// After the check, as in runVerification: the verdict describes what the check left.
+			const revision = await workspaceFingerprint(cwd);
 			const stale = ok && editCount !== editsAtStart;
 			ctx.ui.setStatus(STATUS_KEY, stale ? "stale" : ok ? "pass" : "FAIL");
 			const boardError = recordVerifyVerdict(
@@ -1313,6 +1441,7 @@ export default function (pi: ExtensionAPI) {
 				ok,
 				ok ? `${label} passed` : firstLine(output),
 				stale,
+				revision,
 			);
 			// REL-6: a lost write leaves the previous verdict on the board; say so.
 			if (boardError)
@@ -1322,13 +1451,26 @@ export default function (pi: ExtensionAPI) {
 				);
 			// The verifier owns automatic run results in either extension load order.
 			// Orchestrator defers its board diagnostic for these dirty final turns.
+			// A repeat FAIL after the work changed may move to `split`: its steer is sent once per request.
+			const steer = stale ? null : noteResult(ok, revision);
+			const split = steer !== null && !splitSent ? steer : null;
+			if (split) splitSent = true;
 			if (!ok && !correctionSent) {
 				correctionSent = true;
 				pi.sendMessage(
 					{
 						customType: "verify-gate-result",
 						display: true,
-						content: `[verify-gate diagnostic] ${label} failed after your edits:\n${output.slice(0, 1500)}\nFix the reported failure if possible; otherwise report the blocker. Do not fabricate verification results.`,
+						content: `[verify-gate diagnostic] ${label} failed after your edits:\n${output.slice(0, 1500)}\nFix the reported failure if possible; otherwise report the blocker. Do not fabricate verification results.${split ? `\n${split}` : ""}`,
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			} else if (split) {
+				pi.sendMessage(
+					{
+						customType: "verify-gate-result",
+						display: true,
+						content: `[verify-gate] ${label} failed again after the work changed. ${split}`,
 					},
 					{ triggerTurn: true, deliverAs: "followUp" },
 				);

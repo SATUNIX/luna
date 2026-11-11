@@ -1,6 +1,6 @@
 # Code of conduct
 
-Luna (`pi-system`) adopts the
+Luna (the `@satunix/pi-system` package) adopts the
 [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)
 as its code of conduct. It applies in every project space: issues, pull requests, reviews,
 discussions and any other channel where you represent the project.

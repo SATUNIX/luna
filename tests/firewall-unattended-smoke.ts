@@ -805,6 +805,23 @@ console.log(JSON.stringify({ ro: held?.ro === true, active: st.active, why: st.w
     ok("an ask rule or an unknown tool in the policy fails closed in an unattended run (UNCERTAIN, nobody to ask), never silently runs");
   }
 
+  // 9c. The improver's door under the shipped policy: an inline plan runs, a script stays an operator's call. ----
+  {
+    const b = await boot({ env: envFor(contract), session: "U-plan" });
+    const plan = { steps: [{ id: "implement", agent: "implementer", task: "make the change" }, { agent: "reviewer", task: "review it", gate: { pass: "PASS", retry: "implement", max_loops: 1 } }] };
+    assert.equal(await call(b, "workflow_run", plan, headless(b)), undefined, "an inline workflow_run {steps} passes the unattended path");
+    assert.equal(await call(b, "subagent", { agent: "scout", task: "look" }, headless(b)), undefined, "and so does the subagent fallback");
+    for (const input of [{ name: "improve" }, { script: "await agent('implementer', 'x')" }] satisfies Array<Record<string, unknown>>) {
+      const r = await call(b, "workflow", input, headless(b));
+      assert.deepEqual(TAGS(reasonOf(r)), ["UNCERTAIN"], `workflow ${JSON.stringify(input)}: a script needs a person, and nobody is there`);
+      assert.match(reasonOf(r), /Nothing ran\./);
+    }
+    assert.equal(pendingRequests(), 0, "no console request");
+    assert.equal(b.judged.length, 0, "no judge call");
+    b.close();
+    ok("under the shipped policy an inline workflow_run plan and subagent pass the unattended path; workflow (scripts) stays denied");
+  }
+
   // 10. Children inherit the environment and validate the contract themselves. -----------------------------------
   {
     // A subagent / grandchild is another process with the parent's environment: same contract, same result.

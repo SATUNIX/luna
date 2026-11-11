@@ -38,7 +38,7 @@ import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
 import { mergePackageBlock, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
-import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, globalGateDrift, type Profile } from "./lib/profiles.ts";
+import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, SOURCES_PATH, ENV_EXAMPLE, extensionRelPath } from "./lib/paths.ts";
@@ -170,7 +170,7 @@ const markerPath = scope === "global"
 let installCommitted = false;
 const packageChanges: string[] = [];
 if (settingsOnly && !dryRun) {
-  const snapshots = snapshotFiles([settingsPath, markerPath, firewallConfigPath(), securityConfigPath(), overridesPath(), path.join(globalAgentDir(), ".env")]);
+  const snapshots = snapshotFiles([settingsPath, markerPath, firewallConfigPath(), securityConfigPath(), overridesPath(), profileSettingsPath(), path.join(globalAgentDir(), ".env")]);
   process.on("exit", (code) => {
     if (installCommitted || code === 0) return;
     const failed = restoreSnapshots(snapshots);
@@ -768,6 +768,44 @@ if (profileDef && scope === "project") {
       // The firewall config is safety-critical: continuing would record a profile whose gate was
       // never applied. Fail closed (the run rolls back under --settings-only).
       console.error(`[install] FAIL: could not write ${firewallConfigPath()}: ${errorMessage(error)}`);
+      process.exit(1);
+    }
+  }
+}
+
+// 4c. Compaction settings from the profile's `settings` block (the consumer for the lite profile's
+// small-window numbers). settings.json is machine-global, so a --scope project install leaves it
+// alone and only warns, as 4b does for the gate. Keys an earlier profile set and this one does not
+// go back to the operator's own values (or away, when they had none), so switching to a profile
+// with no settings block leaves nothing of the kit's behind. The earlier record is passed forward,
+// so reinstalling the same profile keeps the operator's values on record, not the profile's.
+if (profileDef) {
+  const keys = profileSettingsKeys(profileDef);
+  if (scope === "project") {
+    if (keys.length > 0) {
+      console.warn(
+        `[install] WARN: profile "${String(profileDef.name)}" sets ${keys.join(", ")} in ${globalSettingsPath()}, which is machine-global: ` +
+          `a --scope project install does not change it. To apply it, run install.ts --profile ${String(profileDef.name)} --scope global.`,
+      );
+    }
+  } else {
+    try {
+      const previous = readProfileSettingsRecord();
+      const released = ownedSettingKeys(previous).filter((key) => !keys.includes(key));
+      if (dryRun) {
+        if (released.length > 0) console.log(`[install] Dry run: would restore or remove ${released.join(", ")} in ${settingsPath}`);
+        if (keys.length > 0) console.log(`[install] Dry run: would set ${keys.join(", ")} in ${settingsPath}`);
+      } else {
+        const applied = applyProfileSettings(profileDef, settingsPath, previous);
+        for (const warning of applied.warnings) console.warn(`[install] WARN: ${warning}`);
+        if (ownedSettingKeys(applied.record).length > 0) writeProfileSettingsRecord(applied.record);
+        else fs.rmSync(profileSettingsPath(), { force: true });
+        if (released.length > 0) console.log(`[install] Settings: restored the operator's own ${released.join(", ")} in ${settingsPath}`);
+        if (keys.length > 0) console.log(`[install] Settings: ${keys.join(", ")} -> ${settingsPath}`);
+      }
+    } catch (error) {
+      // Never continue half-applied: the marker must not record a profile whose settings failed.
+      console.error(`[install] FAIL: could not apply the profile's settings to ${settingsPath}: ${errorMessage(error)}`);
       process.exit(1);
     }
   }

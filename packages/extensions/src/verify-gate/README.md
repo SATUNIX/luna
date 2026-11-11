@@ -50,9 +50,30 @@ automatic-mode notifications; the board keeps its earlier verdict (`tests/verify
 A successful `write` or `edit` tool result turns a recorded `verify` or `review` PASS into a FAIL
 marked `stale`. A run during which such an edit happened records its PASS as that stale FAIL and
 its report has a "Stale" section. Either way mission completion stays blocked until verification
-runs again. Only `write` and `edit` tool results in this pi process count as edits: a `bash`
-command that changes files (`sed -i`, `git checkout`, a formatter) or an edit by another process
-does not mark a verdict stale (`tests/verify-failclosed-smoke.ts`).
+runs again.
+
+In a git checkout each verdict also records the `revision` its check left behind: a fingerprint of
+HEAD and the whole working copy, untracked files included, ignored files and `.pi` left out. It is
+taken after the check command finishes, so a check that writes files that are not ignored
+(coverage output, `prettier --write`, a snapshot update) does not stale its own PASS. The
+trade-off: a shell edit made by another process while the check runs is credited to the PASS; a
+`write` or `edit` tool result during the run still makes it stale. After
+any tool result other than `read`, `grep`, `find` or `ls`, and at every `turn_end`, a standing PASS
+whose revision differs from the checkout's turns stale the same way. So a `bash` command that
+changes files (`sed -i`, `git checkout`, a formatter), even one that failed, a sub-agent's writes,
+or an edit by another process is seen at the next of those events, not before. No fingerprint is
+taken while no such PASS stands (`tests/verify-failclosed-smoke.ts`).
+
+Outside a git checkout there is no revision: only `write` and `edit` tool results in this pi
+process count as edits, and a `bash` command or another process that changes files does not mark
+a verdict stale (`tests/verify-failclosed-smoke.ts`).
+
+A FAIL is also reported to the effort policy as a `verify-fail` signal. The first FAIL changes
+nothing. A later FAIL at a different revision, with no user message between, is a repeat: at effort
+level 3 and above, with `workflow_run` active, the policy answers `split`, and its steer is
+appended to the `verify_completion` result and the `/verify` notification, and sent once per
+request after an automatic-mode FAIL. Outside git no FAIL reads as a repeat
+(`tests/verify-failclosed-smoke.ts`).
 
 ## Automatic mode
 

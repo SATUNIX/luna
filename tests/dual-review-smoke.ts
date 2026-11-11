@@ -292,6 +292,34 @@ async function run(): Promise<void> {
     installGuard();
   }
 
+  // (i) A large diff still gets its reviewer, and the effort policy adds one line. Without the
+  // policy that line says so; a broken policy is the same, and neither stops the review.
+  {
+    const KEY = Symbol.for("pi-kit.effort");
+    const lines = (n: number): string => `diff --git a/x b/x\n--- a/x\n+++ b/x\n${Array.from({ length: n }, (_v, i) => `${i % 2 ? "+" : "-"}line ${String(i)}`).join("\n")}\n context`;
+    const review = async (diff: string): Promise<{ notes: ReviewNote[]; spawned: number }> => {
+      let spawned = 0;
+      const setup = await loadForReview(() => { spawned++; return fakeChild(); }, (_c, _a, _o, cb) => cb(null, diff, ""));
+      await setup.cmd.handler("", setup.ctx);
+      return { notes: setup.notes, spawned };
+    };
+    const seen: unknown[] = [];
+    Reflect.set(globalThis, KEY, { strategy: { report: (signal: { changedLines: number }) => { seen.push(signal); return signal.changedLines >= 400 ? { move: "plan", steer: "POLICY LINE", card: false } : { move: "none", steer: null, card: false }; } } });
+    const large = await review(lines(400));
+    assert.equal(large.spawned, 1, "the reviewer still runs");
+    assert.ok(large.notes.some((n) => n.msg === "POLICY LINE"), "and the policy's line is added");
+    assert.deepEqual(seen, [{ trigger: "review", changedLines: 400 }], "file headers are not changed lines");
+    assert.ok(!(await review(lines(399))).notes.some((n) => n.msg === "POLICY LINE"), "a smaller diff adds nothing");
+    Reflect.set(globalThis, KEY, { strategy: { report: () => { throw new Error("policy failed"); } } });
+    const broken = await review(lines(400));
+    assert.equal(broken.spawned, 1, "a broken policy does not stop the review");
+    assert.ok(broken.notes.some((n) => /effort policy is not loaded/.test(n.msg)));
+    Reflect.deleteProperty(globalThis, KEY);
+    const absent = await review(lines(400));
+    assert.equal(absent.spawned, 1);
+    assert.equal(absent.notes.filter((n) => /effort policy is not loaded/.test(n.msg)).length, 1, "absent: one line");
+  }
+
   console.log("[test:smoke dual-review] OK");
 }
 

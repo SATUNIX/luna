@@ -36,3 +36,11 @@
     has any write- or exec-capable call is blocked whatever path it builds, by the shared fail-closed rule
     in `shared/inline-guard.ts` (a generated copy of `packages/core/shared/inline-guard.ts`, also used by
     tool-firewall; `tests/protected-paths-corpus-smoke.ts`)
+  - a bash command that applies a patch (`git apply`, `git am`, `patch` and their alternate names) treats
+    every file the patch's headers name as a write target, at every strip level and directory the call
+    could use, by `patchCallTargets` in `shared/inline-guard.ts`; stdin it cannot read, unreadable `cd`,
+    backup options, series files, computed git subcommands and shells fed by a pipe or a heredoc fail
+    closed, while quoted text and data-only heredocs stay inert (`tests/protected-paths-corpus-smoke.ts`)
+  - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
+    wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
+    so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)

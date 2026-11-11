@@ -8,7 +8,143 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.3.0-beta.2]
+
+### Fixed
+
+- **Calls a workflow script sends as it returns never start.** `agent("a"); agent("b"); return 1`
+  sends the calls and the return in one slice of the script. The runner wrote each line as it was
+  made, so whether the host started the calls before it read the return depended on how the pipe
+  split the writes: on the CI runners all three started (and were killed), failing
+  `smoke:workflow-hooks` on `main` and in the v0.3.0-beta.1 release gate. The runner now ends a
+  slice that made calls with a `turn` line, and the host starts a slice's calls only when it reads
+  one; a slice that returns sends `done` instead, so its calls are cancelled with the script and
+  are not started, charged or counted (`tests/workflow-sandbox-smoke.ts`,
+  `tests/workflow-hooks-smoke.ts`).
+
+## [0.3.0-beta.1]
+
 ### Changed
+
+- **The improver plans its items.** The autonomy cycle prompt sends each item through an inline
+  `workflow_run {steps}` plan, an implementer then a reviewer gated with `max_loops` 1 (worst case 4),
+  and lets review send scouts as one parallel plan; at the default contract effort one request's plans
+  may launch 8 agents, and the rest or any refused plan fall back to `subagent`, with a
+  `Workflow: refused <reason>` report line. Host gate, review and containment are unchanged
+  (`docs/autonomy.md`, `tests/autonomy-selfimprove-smoke.ts`, `tests/firewall-unattended-smoke.ts`).
+- **The delegation surfaces teach plans.** E5 now plans substantial work as a small inline
+  `workflow_run` plan by default and keeps the trivial rule for one step, one file and one check; it
+  grants no tool, tier or firewall authority. The workflow card (1,183 characters) teaches when to
+  plan, roles and skills, success and failure, bounded gate loops and `expand`. Standing mode drops
+  its per-call rule. The `workflow-authoring` skill leads with inline plans and moves the full script
+  API to `references/scripts.md`; `agent-orchestration` drops `delegator`, `chain`, `subagent_status`,
+  `subagent_stop` and `/subagents`. `docs/workflows.md` gains four plan examples, each compiled by
+  the smoke (`docs/workflows.md`, `docs/script-workflows.md`, `tests/workflow-strategy-smoke.ts`,
+  `tests/workflow-plan-smoke.ts`).
+- **A smaller delegation surface.** `subagent` keeps single and parallel mode; `chain` mode and the
+  ignored `confirmProjectAgents` parameter are removed, since `workflow_run` covers chains. The
+  `delegator` kit role is removed, and subagents nest one level by default (`DEFAULT_MAX_DEPTH` is 1;
+  `PI_KIT_SUBAGENT_MAX_DEPTH=2` restores a second level). `/subagents`, `/subagent-stop`, `/reflect`
+  and `/recover` are removed: use `workflow_status`, `workflow_control`, `/workflows` and a bare
+  `/boost`. The delegation tool text drops from 6,266 to 4,730 characters, measured by the
+  `smoke:eval-footprint` meter on the merge base and here (`docs/agent-orchestration.md`, `tests/subagent-roles-isolation-smoke.ts`,
+  `tests/run-query-smoke.ts`).
+- **One query and one control surface for every run.** `workflow_status` lists and shows script,
+  YAML and background subagent runs, finished ones too, and a step's id still shows its log.
+  `workflow_control` stops a background subagent by id, or everything with `all: true`.
+  `subagent_status` and `subagent_stop` are removed, with their entries in both policy files.
+  Bare `/workflows` now lists runs instead of opening the panel; the panel is `/workflows panel [id]`,
+  and `/workflows <run-id>` is now `/workflows status <id>`. `/workflow` is an alias of the same
+  commands. A `workflow_run` plan with `inputs` no longer fails with "not extensible" (`docs/workflows.md`,
+  `tests/run-query-smoke.ts`, `tests/workflow-control-smoke.ts`, `tests/workflow-plan-smoke.ts`).
+- One decision policy now chooses what a stall, a large task or a large diff turns into: a pure
+  `decide()` in `src/effort/strategy.ts`, tuned by the `strategy` block of `policy/effort.json`, in
+  place of nudges each source wrote for itself. Progress-guard, recovery, the orchestrator and
+  dual-review deliver what it returns, and a move never touches a tool set, a firewall decision or a
+  tier. `strategy.delegateScore` is the one threshold for the directive and for provider-router's
+  classification; `PI_KIT_ORCH_THRESHOLD` still overrides it. At level 3 or above, with `workflow_run`
+  active, a second recovery attempt becomes a split, and a workflow card comes once per epoch, never
+  in a child (`docs/effort.md`, `tests/workflow-strategy-smoke.ts`,
+  `tests/orchestrate-commands-smoke.ts`, `tests/dual-review-smoke.ts`).
+- **Recovery attempts survive a write.** An edit outside `.pi` no longer clears them, so a cosmetic edit
+  cannot get round the cap. They clear on a user turn, on a board pass from a trusted source newer
+  than the attempt, or after `quietTurns` turns in which the stall did not fire. Bare `/boost` now
+  reassesses and spends an attempt; `/boost status` shows the state, and the hub's Auto-boost row
+  sends that. Recovery's bus listeners follow the session, so a stale instance cannot take `/boost`
+  after `/reload` (`tests/workflow-strategy-smoke.ts`, `tests/recovery-grounding-smoke.ts`,
+  `tests/control-center-smoke.ts`).
+- Holding prompts behind an open overlay now covers every prompt an agent can raise on its own: the
+  project-agent, specialist and project-workflow trust prompts, the resume prompts and the
+  reduced-sandbox and wake-chain questions join approvals and `ask_human`. A hold and its card share one
+  timeout, so an overlay left open fails closed; a reload drops the hold; a pentest action asks scope
+  and RoE again after the wait and after the Yes; deferred cards are dismissed by pi at their deadline
+  and tell you when an overlay holds them (`tests/firewall-overlay-queue-smoke.ts`,
+  `tests/governance-smoke.ts`).
+- E1 also hides `dual_review` and `dispatch_specialist`, and recovery no longer brings `workflow` back
+  at E1, where a run scope always refuses it (`tests/effort-smoke.ts`). `workflow_status` and
+  the `pause` and `stop` actions of `workflow_control` pass pentest MCP-only mode; `resume` and `skip`
+  stay blocked (`tests/governance-smoke.ts`).
+- The idle watchdog counts open tool calls per id, holds a conductor specialist's too, and a limit
+  above 2^31-1 ms no longer fires at once. A specialist now has a 30-minute wall clock by default, as
+  a subagent does, so a hung tool cannot pin the parent (`PI_KIT_SPECIALIST_MAX_RUNTIME_MS`, 0 turns
+  it off; `tests/subagent-progress-smoke.ts`, `tests/conductor-specialist-bounds-smoke.ts`).
+- `ask_human` files only its declared fields: an undeclared argument can no longer set `kind`,
+  `workflowRun`, `actionHash`, `createdAt` or a card's text. A pending request's `createdAt` can no
+  longer stretch its card, and one that does not parse is expired (`tests/firewall-overlay-queue-smoke.ts`).
+- Held prompts, input holds and child open-tool-call counting each have one implementation:
+  `ask_human`, the firewall card and the pentest card go through `showWhenFree`, the card timeout
+  default comes from `cardTimeoutMs()`, and `withInputHold`, `releaseInputHolds`, `timerMs` and the
+  generated `open-tool-calls.ts` replace the copies. A tool-event line is parsed once, and the console
+  poll lists the pending directory once. An over-range timeout is still refused at once
+  (`tests/firewall-overlay-queue-smoke.ts`).
+- Run statuses, step statuses, the resume rule and the run file helpers each have one definition, in
+  `run-contract.ts`, `run-model.ts` and `workflow.ts`, and a bad `agent()` call is recorded through its
+  own `refused` route. Outcomes, refusals, launches and grants are unchanged, with one exception: a
+  script's own `invalid` option on `agent()` is now an ordinary unknown option, so that call launches
+  (`tests/workflow-hooks-smoke.ts`, `tests/workflow-sandbox-smoke.ts`).
+- **Authority change:** the model starting a YAML workflow with `workflow_run` no longer spends the
+  discretionary budget. Each tier has a `workflowAgents` allowance per user request (E1 0, E2 1, E3 8,
+  E4 16, E5 64), additive to the `subagent` limit, so E3 goes from 3 agents a request to 8 for plans.
+  A run's worst case is charged before anything launches and never refunded; a plan that does not
+  fit is refused with code `plan-allowance`, a reason naming `/effort`, and no run directory. Only a
+  user message renews the allowance, which includes one an extension sends on your behalf, such as
+  the resume after an automatic compaction. Children run at E1 without `subagent`, parallel groups
+  run at the tier's `maxConcurrent`, a resume is charged only what is left, and a crash during a
+  sequential step now leaves it `running`, so a resume cannot rerun a writer without asking.
+  `/workflow run` and approved scripts are unchanged. See [Effort](docs/effort.md#plan-allowance)
+  (`tests/effort-smoke.ts`, `tests/workflow-builtin-smoke.ts`).
+- **Authority change:** `workflow_run` now takes a plan as data. `name` is optional and exactly one of
+  `name`, `steps` or `resume` is required, so `{name, resume}` is refused. A plan may only narrow
+  tools; it cannot set a model, thinking, extensions, a runtime or a skill, and a plan with a bad
+  reference, role, target or a worst case over the execution limit is refused before anything
+  launches, with no run directory. A plan is charged like a saved workflow, and resuming one whose
+  `plan.json` this process did not write asks the operator, or needs a digest grant when headless.
+  A live plan, YAML or script run with the same digest and arguments now refuses a duplicate and
+  names the live run (`tests/workflow-plan-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`).
+- **Authority change:** a plan step may set `expand: true`, so it can answer with more steps
+  (`{"steps":[...]}`) or `{"done":"..."}`. The host checks the answer and splices its steps into the
+  same run, so process depth stays 1. `strategy.expandDepth` in the effort policy limits generations
+  (3 by default). Every expansion is compiled like a plan, charged at its worst case to the run's
+  allowance and saved to `plan.json`, and a resume replays it under the same digest gate. A bad answer
+  is resampled once. An expansion cannot pass its parent's tools, reach a role with different model,
+  thinking, extensions, runtime or effort, or name a role that can start agents unless `tools` narrows
+  it. Over depth, allowance or `MAX_EXECUTIONS` launches nothing, records an omission and ends the run
+  `partial`; a typed `/workflow resume` refuses a new expansion the same way. `expand` is refused with
+  a gate, on a parallel member and in a saved YAML workflow. See
+  [Workflows](docs/workflows.md) (`tests/workflow-plan-smoke.ts`).
+- The project is named **Luna** in the README and documentation. The pi package keeps the name
+  `@satunix/pi-system`, so install commands, settings entries and environment variables are
+  unchanged.
+
+- The README and the documentation home are illustrated with animated SVGs in the Proof style
+  (`docs/assets/luna-*.svg`, light and dark variants): the hero, the session panel, the firewall,
+  delegation, verification and the profiles. They are generated by `packages/core/readme-art.ts`,
+  about 135 KB in all, and replace the 1.2 MB GIF; a viewer who prefers reduced motion sees a still
+  frame (`tests/site-smoke.ts`).
+
+- A project website (`website/`, built by `packages/core/build-site.ts`) with the install
+  commands, the illustrations and the documentation under `/docs/`, deployed to GitHub Pages by
+  `.github/workflows/pages.yml` from `main`. See [Website](docs/website.md).
 
 - Self-improve cycles can add a test without `allowControlChanges`: a root `package.json` change that
   only adds `smoke:<name>` scripts running exactly `node tests/<name>-smoke.ts`, leaving every existing
@@ -85,9 +221,178 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `npm run settings:check` (`packages/core/github-settings-check.ts`, GET requests only, needs an
   administrator's `gh` login), and the README shows the OpenSSF Best Practices badge
   (`tests/github-settings-check-smoke.ts`).
+- **A metered small-model floor, and compaction for `lite`.** `smoke:eval-footprint` now measures
+  each profile's kit tool text against a reviewed baseline (`packages/core/eval/footprint-baseline.json`:
+  `balanced` 8,919 characters over 13 tools under a 9,500 ceiling, its delegation tools 4,730 under
+  4,900; `lite` 7,614) and checks that the system prompt prefix stays stable up to the effort block
+  through the profile's whole `before_agent_start` chain. A profile may carry a `settings.compaction`
+  block; `lite` sets `reserveTokens` 4096 and `keepRecentTokens` 6000 for a 32k window. Install
+  records the operator's previous compaction values and hands them back on a profile switch and on a
+  global uninstall; a rolled-back `/profile` switch restores the record too. A live-only
+  `small-model/plan-valid-rate` fixture scores recorded plans per model and never reaches a model in
+  CI (`packages/core/eval/footprint.ts`, `tests/eval-footprint-smoke.ts`,
+  `tests/profile-transaction-smoke.ts`, `docs/architecture/profiles-and-install.md`).
+- **Shipped pages cannot name a removed delegation surface.** `smoke:docs` checks 96 shipped pages
+  for the removed tools, commands, parameter and role, deriving removed-ness from the extension
+  source and the kit agent list, and pins the corrected verify-fail sentences. `docs/future-work.md`
+  gains the delegation kernel's limits and known issues, and `docs/workflows.md` names the test for
+  each claim (`tests/docs-smoke.ts`, `docs/future-work.md`).
 - **`pi-autonomy backlog --message` queues steward priorities for the next cycle.** File-based delivery survives resumes; the steward interface documents monitoring, controls and the self-improve recovery contract (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 
 ### Fixed
+
+- **The website names a release tag that exists.** The install command on the website came from
+  `package.json`, which a release branch bumps before its tag can be pushed, so the site named
+  `v0.2.4-beta.11`, a tag that was never pushed. `build-site.ts` now names the newest pushed `v*`
+  tag merged into main at or below `package.json`, the pages build warns `Release tag missing`
+  while one is pending and fails without any tag, and `docs/releasing.md` lists the steps after a
+  release pull request merges: tag, push, redeploy the site, run the release workflow
+  (`tests/site-smoke.ts`).
+- **Docs corrections.** Getting started names the one runtime dependency (`quickjs-wasi`); the
+  security model lists patch writes among the protected-paths writes; Effort states the default
+  subagent depth of 1; Concepts points at the capability matrix for tiers; the website links the
+  Workflows guide.
+- **The docs no longer say a repeat verification FAIL starts nothing.** A repeat FAIL at a new
+  revision returns the `split` steer at E3 and above; `docs/future-work.md` and
+  `docs/recovery-orchestration-mode.md` now say so (`tests/docs-smoke.ts`,
+  `tests/verify-failclosed-smoke.ts`, `tests/workflow-strategy-smoke.ts`).
+- **A verify or review PASS is bound to the checkout it checked.** A recorded PASS in a git checkout
+  carries the workspace revision taken after its check ran, and goes stale when the revision changes:
+  after any tool result but `read`, `grep`, `find` and `ls` (a shell `sed -i`, `git checkout`, a
+  formatter or a sub-agent's writes) and at every `turn_end`, so completion stays blocked until it is
+  re-verified. Files the check itself writes no longer stale its own PASS. Outside git the previous
+  behaviour stands. A FAIL at a new revision after an earlier FAIL now steers to `split` at level 3
+  and above, once per request; a stale run is not counted as a FAIL. The workspace fingerprint is
+  shared with the subagent workflow engine (`packages/core/shared/fingerprint.ts`,
+  `tests/verify-failclosed-smoke.ts`).
+- **Protected files cannot be written through a patch.** `git apply`, `git am` and `patch` (and
+  `git-apply`, `git-am`, `gpatch`) now count every file their patch names as a write target, in both
+  protected-paths and the tool firewall, including rename and copy lines, at every strip level and
+  every directory the call could run in. Forms the guard cannot read fail closed: stdin with nothing
+  readable behind it, an unreadable `cd`, backup options, series files, computed git subcommands, and a
+  shell or `parallel` fed the call through a pipe or heredoc. Quoted text, commit messages and
+  data-only heredocs no longer count, and `patch --version`/`--help` write nothing. `sed -i -e`,
+  `perl -pi -e`, `git checkout <ref> -- <path>` and `git restore --source` are rated with their paths.
+  Remaining limits are listed in the tool-firewall README (`tests/protected-paths-corpus-smoke.ts`,
+  `tests/firewall-shell-smoke.ts`). The patch file is checked and read through one
+  file descriptor, and the wrapper pattern in front of a patch reader runs in linear time on any line.
+- **A model-started workflow step reads at the session's depth, and retries count against the
+  request.** A YAML or plan step keeps the E1 delegation limit, but its prompt now reads at the
+  session's tier, or lower when its role sets `effort:`, through the new `PI_KIT_EFFORT_PROMPT`, with
+  a line saying the step cannot start other agents. Every agent a planned run starts, retries
+  included, now counts against the request's allowance: at E3, eight one-step plans that each retry
+  once start 8 agents, not 16, and the rest are refused with code `plan-allowance`. Scripts are not
+  counted (`docs/effort.md`, `tests/effort-smoke.ts`).
+- **`ask_human` says what happened.** `details.outcome` is exactly one of `answered`, `dismissed`,
+  `timeout`, `aborted` or `unavailable`, each with its own text, and `details.answer` is null unless
+  answered. A blank typed answer is asked once more with the draft kept, then dismissed. A card that
+  times out or is aborted now closes instead of staying open and focused. Outside the terminal a
+  free-text card uses a single-line input that honours the deadline, and in the terminal Ctrl+G uses
+  `VISUAL` or `EDITOR` rather than pi's `externalEditor` setting
+  (`tests/human-console-broker-smoke.ts`).
+- Human-console requests, answers and the audit log, and the tool firewall's request, are written
+  through the safe-write helper. A console directory under a workspace's `.pi` is bounded by that
+  workspace, so a committed symlink there is refused and the outcome is `unavailable`
+  (`docs/security.md`, `tests/human-console-broker-smoke.ts`).
+- Every YAML and inline-plan workflow run now tags its approvals with its run id, and a resumed
+  `.rN` scope groups with its control id, so the two-prompt cap, sticky denials and pause apply to
+  them; run-scoped cards name the step. A run whose scope id is a digest groups the same way, but
+  its pause reports that it could not be paused (`tests/firewall-workflow-approvals-smoke.ts`).
+- A workflow resume no longer repeats or misreports finished work. A redacted result is never
+  replayed as the real one: a read runs again, and a finished writer that cannot be replayed is
+  refused with code `redacted` on this and every later resume, even when the live read ends the run
+  first. A writer that cannot journal its `started` row is refused with code `journal`. Fingerprints
+  ignore all of `.pi`, see an edit that restores its mtime, leave the real object store untouched and
+  refuse reuse across a nested repository. Worktree finish cannot hang on a fifo or oversized `.git`
+  link, and its errors carry host text only, never git output. Failed and denied launches now count
+  correctly against the agent limit, and a stopped run's writer leaves the checkout queue
+  (`docs/script-workflows.md`, `tests/workflow-resume-smoke.ts`, `tests/workflow-worktree-smoke.ts`,
+  `tests/workflow-control-smoke.ts`).
+- Plan allowances hold under what the review found. A pi that reports no `messageType` renews the
+  allowance on each prompt, where it was one-shot per session; a custom message still renews nothing.
+  An expansion counts the larger of a run's started and planned agents, so a renewed allowance cannot
+  hide unstarted work. An operator's lower `maxTotal` lowers the allowance. A tier with
+  `workflowAgents` 0 refuses plans only, with code `plan-allowance`, and `maxTotal` 0 refuses every
+  scope. A policy older than the field still loads and plans nothing. A stale effort lock that
+  cannot be broken now refuses within the lock wait instead of spinning the event loop
+  (`docs/effort.md`, `tests/effort-smoke.ts`).
+- Plans and expansions run the text they were given. An expansion is parsed from the child's own
+  answer, not its redacted copy, and `plan.json` keeps the steps a resume compiles; a plan or
+  expansion the secret table matches is refused by field path, never quoting the value, and an
+  expansion is resampled once before any charge. Run files are read through one bounded read that
+  refuses links and FIFOs, regex gates run in a worker off the host loop on the last 64 KiB of an
+  answer, and a resume gates an answer this process did not see. Argument order no longer defeats
+  the live duplicate refusal, and an expansion may land exactly on `MAX_EXECUTIONS`
+  (`docs/workflows.md`, `tests/workflow-plan-smoke.ts`, `tests/workflow-builtin-smoke.ts`).
+- Plans now fail for reasons the tools explain. `outputs` are paths relative to the run directory:
+  prose is refused at compile, and a miss names the directory checked. A gate refusal names a real
+  step id, and the text says the host adds the review to the retry step. The allowance refusals say
+  what would fit: a size only when one fits, "no workflow of any size" with when it renews, and a run
+  at its own cap says so and names what a new plan could start. A plan's resume refusal says "plan",
+  and the gate is as strict as before (`tests/workflow-plan-smoke.ts`, `tests/effort-smoke.ts`).
+- A parallel plan or workflow member that settled is saved at once, so a host kill no longer loses it
+  and a resume re-runs only what is left (`tests/workflow-plan-smoke.ts`).
+- `docs/reference.md` documents `workflow_run` from its source instead of "No description."; the
+  generator now resolves an imported constant (`tests/workflow-plan-smoke.ts`).
+- A workflow's limits now hold at the moment an agent starts. The pause and the budget are checked last, after
+  the checkout lock and the worktree-slot wait; output is charged as soon as a child ends, including when
+  a later step throws; a script's leftover calls stop with that script; and a run waits for stopped calls
+  before reporting, so their tokens and kept worktrees are recorded (`tests/workflow-hooks-smoke.ts`).
+- A failed workflow can no longer read `passed`. An oversized result is refused before it is journaled, so
+  resume does not reuse it, and a model's skip of a required YAML step reads `partial`. An operator's skip keeps
+  its meaning. Shipped kit scripts mark their final deliverable `required` (`tests/workflow-hooks-smoke.ts`).
+- A `gate` on a parallel member and a `when` on a parallel group were ignored, so a rejecting review could
+  read `passed`; see Migration. Group members count against the run's execution ceiling
+  (`tests/workflow-hooks-smoke.ts`).
+- A resumed workflow no longer replays results that stopped being true. A journaled call is reused only
+  when the checkout still matches what the earlier run left, reads included, and when the call would
+  launch the same thing: tools, model, thinking, skills and their text, extensions, effort, runtime and
+  system prompt. A kept worktree also needs its path, git link, branch head and contents, uncommitted
+  changes included. Outside a git checkout nothing is reused, and a journal from an older version
+  reuses nothing, once. Each refused reuse logs `reuse.rejected` and the completion message names it.
+  A run killed during a writer now leaves a `started` row: if the checkout changed, every main-checkout
+  writer of a resume is `blocked:unknown-effect`, nothing from that resume is reused later, and a killed
+  writer that changed nothing no longer blocks. Interrupted reads and worktree writers replay
+  (F1, F2, `tests/workflow-resume-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).
+- A workflow's `maxAgents` and `budget.total` now hold across a fan-out. A call takes its slot before
+  it is checked, so queued calls can no longer all pass the checks at once, and a pause reaches a queued
+  call. A run can pass `budget.total` by at most what its live agents spend. A call still waiting for
+  admission when the script returns is stopped and never starts a child
+  (`tests/workflow-kernel-regress-smoke.ts`,
+  `tests/workflow-hooks-smoke.ts`).
+- A human-console card that runs out on its own timeout no longer writes an answer when its timer fires
+  a moment before the deadline. This made `check-all` fail intermittently; the request failed closed
+  either way (`tests/firewall-overlay-queue-smoke.ts`).
+- A workflow run's status now comes from what its steps did, not from whether the script returned. A
+  failed required step no longer reads `passed` in the outcome, `run.json`, the run model or the
+  completion message. New status `partial`: the value is shown with its omissions named. New
+  `agent(prompt, {required: true})` throws when the step does not complete and fails the run even if
+  the throw is caught. YAML runs report the same way, so a `continue_on_error` failure is `partial`
+  (F4, `tests/workflow-hooks-smoke.ts`, `tests/workflow-kernel-regress-smoke.ts`).
+- A human prompt no longer opens under the control-center hub or the workflow panel. A new input-owner
+  registry (`whenInputFree`, generated into each package) holds firewall approvals, child approvals,
+  `ask_human` and the pentest action approval until the overlay closes. These cards start on an
+  affirmative choice, so Enter typed into the overlay used to answer them. A hold adds a wait and
+  grants nothing: an abort during the hold blocks the action, a deferred card gets only the time left
+  on its request, and an expired request is dropped before the hold check (V-02,
+  `tests/firewall-overlay-queue-smoke.ts`, `tests/governance-smoke.ts`).
+- Both no-delegation controls now cover the `workflow` tool: E1 hides it with the other
+  delegation tools and `openRunScope()` refuses with code `tier` when the tier's maximum total is 0,
+  so a pi without active-tool control launches nothing either, and an engagement blocks it like
+  `subagent`. A typed `/workflow run` still works at E1, `workflow_status` and `workflow_control` stay
+  active, and `/effort ultracode` from E1 counts the tool effort hid itself as available
+  (`tests/effort-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`).
+
+- A subagent running a long silent tool call is no longer killed with `stopReason: "timeout"`: the idle
+  watchdog is held from `tool_execution_start` until the matching `tool_execution_end` and rearms for a
+  full timeout after the last open call ends. A child silent outside a tool is still killed. The
+  wall-clock ceiling is now the only limit on a tool call that never ends, so
+  `PI_KIT_SUBAGENT_MAX_RUNTIME_MS=0` leaves a hung tool unbounded (`tests/subagent-progress-smoke.ts`).
+
+- `pi-autonomy start` from a desktop terminal no longer fails its boundary probe with "make mountpoint
+  /run/notify ... Read-only file system": every container-engine call drops `NOTIFY_SOCKET`, which a
+  terminal inherits from the user's systemd manager and which makes podman mount the socket into the
+  read-only root (`tests/autonomy-boundary-smoke.ts`).
 
 - Workflow writers of one checkout now take the writer lock in call order. `withCheckoutLock` resolved the checkout root (a git subprocess) before queueing, so a later caller whose lookup finished first ran ahead (`tests/workflow-worktree-smoke.ts`, section 8).
 - `pi-autonomy resume` brings a run back up after its supervisor stopped: the new supervisor runs
@@ -108,6 +413,34 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (`tests/auto-mode-smoke.ts`, `npm run test:lint`).
 - **Unattended self-improve cycles recover dead workers without manager calls.** Three automatic restarts by default, persisted across resumes; next-tick exit detection, green-gate host report salvage with independent merge review, STOP parking, and an engine heartbeat for external stewards (`tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **Host publication and promotion scan every outgoing commit before pushing**, including unmerged attempt tags, using the repository pre-push leak scanner; findings or scan failures record a publication blocker and keep work local (`tests/autonomy-selfimprove-smoke.ts`, `tests/prepush-scan-smoke.ts`).
+
+### Migration
+
+- **Saved YAML that relied on an ignored `gate` or `when` is refused.** A `gate` on a parallel
+  member or a `when` on a parallel group is refused at parse time; move the check onto a step after
+  the group (`tests/workflow-hooks-smoke.ts`).
+- **A model-started YAML run is charged to a tier allowance.** A run whose worst case exceeds the
+  tier's `workflowAgents` allowance is refused before launch with code `plan-allowance`, and no run
+  directory is created. E3 now affords 8 agents per request for plans instead of 3, additive to the
+  `subagent` limit. This reverses the previous policy, which counted workflow agents against the
+  `subagent` allowance. `/workflow run` and approved scripts are unchanged.
+- **A YAML step can no longer use `subagent`.** Kit workflows do not; a user step that relied on it
+  needs a script workflow (`workflow`) or the central agent.
+- **A run with omissions reports `partial`.** This includes a refused launch a script catches: the
+  value is kept and the omissions are named.
+- **Resume reuses nothing outside git, or after any workspace edit.** A v1 journal reuses nothing
+  once.
+- **`chain` becomes `workflow_run {steps}`.** `subagent` keeps single and parallel mode; the
+  `delegator` role is gone.
+- **A custom role that delegates needs `PI_KIT_SUBAGENT_MAX_DEPTH=2`.** Depth 1 is the default, so
+  a direct child cannot start another agent.
+- **A bare `/boost` reassesses and spends an attempt; `/boost status` reports it.**
+- **Removed names and their replacements.** `/reflect` and `/recover` map to a bare `/boost`;
+  `subagent_status` to `workflow_status`; `subagent_stop` and `/subagent-stop` to
+  `workflow_control` with `action: "stop"`; `/subagents` to `/workflows`; and
+  `confirmProjectAgents` to `agentScope` with the project trust prompt. No aliases are registered,
+  because aliases would cost prompt text, so a custom skill that names a removed tool gets an
+  unknown-tool error.
 
 ## [0.2.4-beta.11]
 

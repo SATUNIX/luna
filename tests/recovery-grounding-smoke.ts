@@ -120,8 +120,10 @@ function readSteer(ws: string): string {
   return raw.content;
 }
 
-// REL-3: separate stall episodes, each resolved by a successful write, must not add up to the cap.
-async function testProgressResetsAttemptCap() {
+// G6: a write is not proof, so an edit then a re-stall stays the same stall (the reverse of REL-3's
+// reset); a message from you starts the count again. tests/workflow-strategy-smoke.ts drives the
+// other ways out, and this extension together with progress-guard.
+async function testUserTurnResetsAttemptCap() {
   const ws = tmpWorkspace("pi-kit-recovery-cap-");
   try {
     const register = await loadExtension("extensions/recovery-orchestrator/index.ts");
@@ -135,32 +137,19 @@ async function testProgressResetsAttemptCap() {
       const steer = readSteer(ws);
       assert.match(steer, /attempt 1\//, `episode ${episode} must enter recovery as attempt 1, got: ${steer.split("\n")[0]}`);
       assert.doesNotMatch(steer, /give up gracefully/, `episode ${episode} must not hit the cap`);
-      await pi.handlers.get("tool_result")({ toolName: "write", isError: false, input: { path: "src/fix.ts" } }, ctx);
+      await pi.handlers.get("input")({ source: "interactive", text: "look at the other module" }, ctx);
     }
     const recoveryFiles = fs.readdirSync(path.join(ws, ".pi", "recovery"));
-    assert.equal(recoveryFiles.filter((f) => f.startsWith("blocked-")).length, 0, "no blocked disposition after resolved episodes");
+    assert.equal(recoveryFiles.filter((f) => f.startsWith("blocked-")).length, 0, "no blocked disposition after your messages");
     // Each episode restarts at attempt 1 but gets its own report, never a previous episode's.
     assert.deepEqual(recoveryFiles.filter((f) => f.endsWith("-stall.md")).sort(), ["1-stall.md", "2-stall.md", "3-stall.md"], "one fresh report per episode");
-
-    // A failed write is not progress: within one episode the cap still applies.
-    writeEscalation(ws, "stall");
-    await pi.handlers.get("turn_end")({}, ctx);
-    await pi.handlers.get("tool_result")({ toolName: "write", isError: true }, ctx);
-    await pi.handlers.get("tool_result")({ toolName: "read", isError: false }, ctx);
-    writeEscalation(ws, "stall");
-    await pi.handlers.get("turn_end")({}, ctx);
-    assert.match(readSteer(ws), /attempt 2\//, "a second escalation without progress is attempt 2");
-    writeEscalation(ws, "stall");
-    await pi.handlers.get("turn_end")({}, ctx);
-    assert.match(readSteer(ws), /give up gracefully/, "the third escalation without progress hits the cap");
   } finally {
     rmWorkspace(ws);
   }
 }
 
-// REL-3: the steer asks the model to fill in the recovery report; writes under .pi/ (that
-// report) and writes naming no path are not progress, so the cap is still reached.
-async function testRecoveryBookkeepingDoesNotResetCap() {
+// Filling in the report, or any other write, changes nothing: the cap is reached without your word.
+async function testWritesDoNotResetCap() {
   const ws = tmpWorkspace("pi-kit-recovery-cap-report-");
   try {
     const register = await loadExtension("extensions/recovery-orchestrator/index.ts");
@@ -174,12 +163,9 @@ async function testRecoveryBookkeepingDoesNotResetCap() {
       await pi.handlers.get("turn_end")({}, ctx);
       const steer = readSteer(ws);
       seen.push(/give up gracefully/.test(steer) ? "cap" : (steer.match(/attempt \d+\//)?.[0] ?? "?"));
-      const report = steer.match(/recovery report at `([^`]+)`/)?.[1];
-      await pi.handlers.get("tool_result")({ toolName: "edit", isError: false, input: { path: report ?? ".pi/recovery/1-stall.md" } }, ctx);
-      await pi.handlers.get("tool_result")({ toolName: "write", isError: false, input: { file_path: path.join(ws, ".pi", "notes.md") } }, ctx);
-      await pi.handlers.get("tool_result")({ toolName: "write", isError: false }, ctx);
     }
-    assert.deepEqual(seen, ["attempt 1/", "attempt 2/", "cap"], "report-only writes must not reset the attempt count");
+    assert.deepEqual(seen, ["attempt 1/", "attempt 2/", "cap"]);
+    assert.equal(pi.handlers.has("tool_result"), false, "no write can reach the count: nothing listens for one");
     assert.equal(fs.readdirSync(path.join(ws, ".pi", "recovery")).filter((f) => f.startsWith("blocked-")).length, 1, "the cap emits a blocked disposition");
   } finally {
     rmWorkspace(ws);
@@ -338,8 +324,8 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["recovery report is grounded in real trace-ledger data", testReportIncludesRealTraceData],
   ["recovery report degrades gracefully with no trace data", testReportHandlesMissingTraceGracefully],
   ["recovery report drops trace fields of the wrong type (REL-11)", testReportDropsMistypedTraceFields],
-  ["a successful write resets the recovery attempt cap (REL-3)", testProgressResetsAttemptCap],
-  ["writes to the recovery report do not reset the attempt cap (REL-3)", testRecoveryBookkeepingDoesNotResetCap],
+  ["a message from you resets the recovery attempt cap (G6)", testUserTurnResetsAttemptCap],
+  ["writes do not reset the attempt cap (G6)", testWritesDoNotResetCap],
   ["the recovery steer names only model-callable tools, no slash commands (REL-4)", testSteerNamesOnlyModelCallableActions],
 ];
 

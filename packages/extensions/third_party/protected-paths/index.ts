@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 
 import os from "node:os";
-import { inlineAgentConfigWrite } from "./shared/inline-guard.ts";
+import { inlineAgentConfigWrite, patchCallTargets, patchCallsInText } from "./shared/inline-guard.ts";
 
 // Protected paths depend on the firewall policy (the same `policy` tool-firewall reads):
 //   coding  — secrets, key files and the agent-control/audit surfaces. `.git/`,
@@ -306,7 +306,7 @@ function directWriteTargets(command: string): string[] {
   // `sed -i`/`perl -i` rewrite every file operand in place. Scan all operands after the
   // flag (skipping flags and the inline s/…/…/ program) so a protected operand is caught
   // wherever it sits in the argument list, not only when it happens to be last.
-  for (const m of command.matchAll(/\b(?:sed|perl)\b[^\n|;&]*?\s-i\S*([^\n|;&]*)/g)) {
+  for (const m of command.matchAll(/\b(?:sed|perl)\b[^\n|;&]*?\s(?:-[A-Za-z]*i\S*|--in-place\S*)([^\n|;&]*)/g)) {
     for (const rawToken of (m[1] ?? "").split(/\s+/)) {
       const stripped = stripQuotes(rawToken);
       if (!stripped || stripped.startsWith("-") || looksLikeInlineProgram(rawToken, stripped)) continue;
@@ -458,6 +458,49 @@ function inlineTargetsOf(command: string): string[] {
   return out.filter((t) => t.length > 0 && t.length < 4096);
 }
 
+// A copy into a directory lands on `<dir>/<source name>`, which the destination alone does not show.
+function intoDirectoryTargets(command: string, cwd: string): string[] {
+  const out: string[] = [];
+  for (const m of command.matchAll(/(?<![\w./-])(?:cp|mv|install|rsync)\b([^\n|;&]*)/g)) {
+    const operands = (m[1] ?? "").trim().split(/\s+/).filter((w) => w && !w.startsWith("-")).map((w) => expandHome(w.replace(/^["']|["']$/g, "")));
+    const dest = operands.pop();
+    if (!dest || !operands.length || !(dest.endsWith("/") || isDirectory(path.resolve(cwd, dest)))) continue;
+    for (const source of operands) {
+      const name = source.replace(/\/+$/, "").split("/").pop();
+      if (name) out.push(`${dest.replace(/\/+$/, "")}/${name}`);
+    }
+  }
+  return out;
+}
+
+// `git checkout <ref> [--] <path>` and `git restore [--source <ref>] <path>` rewrite each path.
+function gitRestoreTargets(command: string): string[] {
+  const out: string[] = [];
+  for (const m of command.matchAll(/(?<![\w./-])git\b(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(checkout|restore)\b([^\n|;&]*)/g)) {
+    const words = (m[2] ?? "").trim().split(/\s+/).filter(Boolean).map((w) => w.replace(/^["']|["']$/g, ""));
+    const dashdash = words.indexOf("--");
+    if (dashdash >= 0) { out.push(...words.slice(dashdash + 1)); continue; }
+    const operands = words.filter((w, i) => !w.startsWith("-") && !/^(?:-s|--source|-b|-B|--orphan|-t|--track|--conflict)$/.test(words[i - 1] ?? ""));
+    out.push(...(m[1] === "restore" ? operands : operands.slice(1)));
+  }
+  return out;
+}
+
+// What the patch writers in a command change, read from the patches themselves. `unreadable` fails the command
+// closed; the same reading in tool-firewall is classify.ts patchWrites.
+function patchWriteTargets(command: string, cwd: string): { targets: string[]; unreadable: string | null } {
+  const targets: string[] = [];
+  for (const found of patchCallsInText(command)) {
+    if (!found.call.writes) continue;
+    if (found.unseen) return { targets, unreadable: "the patch arrives through arguments that cannot be seen" };
+    const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));
+    const resolved = patchCallTargets(command, cwd, found.call, found.chdirs, toAbsolute, { text: found.stdinText, file: found.stdinFile });
+    targets.push(...resolved.targets);
+    if (resolved.unreadable !== null) return { targets, unreadable: resolved.unreadable };
+  }
+  return { targets, unreadable: null };
+}
+
 // git subcommands that rewrite files in the working tree.
 const GIT_TREE_WRITERS = "pull|checkout|switch|restore|reset|merge|rebase|cherry-pick|revert|am|apply|stash|submodule|mv|rm|clean|read-tree|checkout-index|sparse-checkout";
 
@@ -603,6 +646,16 @@ export default function (pi: ExtensionAPI) {
     }
     // The shell deletes a backslash-newline before splitting words; read the command as it will run.
     if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value.replace(/\\\r?\n/g, "")) : [field.value];
+    if (toolName === "bash" && field?.value) {
+      const command = field.value.replace(/\\\r?\n/g, "");
+      const patches = patchWriteTargets(command, cwd);
+      if (patches.unreadable !== null) {
+        const msg = `protected-paths: blocked ${toolName}: ${patches.unreadable}, so it may touch a protected path`;
+        if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+        return { block: true, reason: msg };
+      }
+      candidatePaths.push(...patches.targets, ...intoDirectoryTargets(command, cwd), ...gitRestoreTargets(command));
+    }
     if (candidatePaths.length === 0) return undefined;
 
     const git = trustedGitControl(cwd);

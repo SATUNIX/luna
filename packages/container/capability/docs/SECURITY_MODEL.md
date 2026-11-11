@@ -17,7 +17,7 @@
 
 ## Tool Governance
 
-The Pi governance extension installed from `pi-system` intercepts `tool_call` events.
+The Pi governance extension installed from Luna intercepts `tool_call` events.
 
 It:
 

@@ -1,7 +1,7 @@
 ---
 name: validation-test-maintainer
 category: maintainer
-description: Keep the kit's validation checks aligned with required profile and runtime contracts. Use when adding required files, prompts, skills, policy fields, or runtime behavior — add deterministic, offline-runnable checks so contracts can't silently drift.
+description: Keep Luna's validation checks aligned with required profile and runtime contracts. Use when adding required files, prompts, skills, policy fields, or runtime behavior — add deterministic, offline-runnable checks so contracts can't silently drift.
 disable-model-invocation: true
 triggers: ["add a smoke test", "smoke test for", "check:all", "verify.ts", "validation check"]
 ---
@@ -20,7 +20,7 @@ requirement, add the check that enforces it.
    where the contract says).
 2. **Content checks** (string or schema) for high-value safety defaults — not just that a
    file exists, but that the critical field/default is right.
-3. **Runnable in CI and local Git Bash** — the checks the kit already uses
+3. **Runnable in CI and local Git Bash** — the checks Luna already uses
    (`packages/core/verify.ts`, `tests/epic*-smoke.mjs`) are the model; extend them.
 4. **Deterministic and offline.** No dependency on a live target or network.
 5. **Document** any verification that genuinely cannot run offline, and why.

@@ -1,6 +1,6 @@
 # Autonomous runs
 
-`packages/autonomy` runs a task with the kit's agent **without you at the keyboard**: implement
+`packages/autonomy` runs a task with Luna's agent **without you at the keyboard**: implement
 something to a specification, build and deploy it against services inside the run, or improve a
 repository in reviewed cycles. Each run happens inside a hardened container boundary that you read
 and authorise first, is bounded by a budget in money, steps and time, judges its own success only
@@ -66,7 +66,7 @@ anything runs:
 
 ### Unattended operation, and how it stays inside the zone
 
-With `permissions.unattended.authorised`, the worker runs the kit's tool firewall in
+With `permissions.unattended.authorised`, the worker runs Luna's tool firewall in
 [unattended mode](autonomy-gate.md#unattended-mode): in-zone actions run without prompts, hard
 denials stay, and anything that would need authority outside the zone fails closed. The supervisor
 gives the worker `PI_KIT_UNATTENDED=1`, `PI_KIT_UNATTENDED_BOUNDARY=container` and a read-only,
@@ -276,9 +276,19 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   `report.md` and `verify.md` under 5,000 characters each, because the review keeps only the
   first and last 3,000. Assigned board items come right after the budget, and the precedence is
   stated once (`tests/autonomy-selfimprove-smoke.ts`).
+- **The worker delegates through plans.** The cycle prompt sends each item through an inline
+  `workflow_run {steps}` plan: an `implementer`, then a `reviewer` gated with `max_loops: 1`, a
+  worst case of 4 agents. Review may send scouts as one parallel plan. At the default contract
+  effort, `standard`, one request's plans may launch 8 agents, so two items, or a scouts plan and
+  one item; the rest, and any plan the tool refuses, go through the `subagent` tool, and a refusal
+  adds a `Workflow: refused <reason>` line to the report. The prompt's item plan compiles through
+  the same compiler `workflow_run` uses (`tests/autonomy-selfimprove-smoke.ts`). Unattended, an
+  inline plan and `subagent` run without a prompt while `workflow` scripts stay denied, because
+  the policy asks a person for them (`tests/firewall-unattended-smoke.ts`). Whether the model
+  follows the prompt is not tested.
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
-  The kit's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
+  Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
   `--jobs=<the container's CPU quota>` (at most 16) and `--check-timeout=600` when the checked-out
   tree's `packages/core/check-all.ts` supports those flags, and one check at a time on an older
   tree. A red `check:all` adds a `check-all:<label> (<detail>)` step for each failed check (up to
@@ -593,7 +603,7 @@ evidence and are not made safe for public posting by the commit scan.
    packages/autonomy/build-image.sh --kit-ref v<version> --base-ref origin/main
    ```
 
-   `--kit-ref` is the kit release the worker runs. Without it the script uses the release tag of the
+   `--kit-ref` is the Luna release the worker runs. Without it the script uses the release tag of the
    checkout's `package.json` version (`v<version>`), so a build never quietly bakes an older kit, and it
    stops before building when that tag is not in the clone (`tests/autonomy-build-image-smoke.ts`).
    Before the release tag exists, pass a branch such as `origin/main`. `--base-ref` optionally prebakes that repository's dependencies for offline

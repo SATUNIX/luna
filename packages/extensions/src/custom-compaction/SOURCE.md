@@ -1,6 +1,6 @@
 # SOURCE
 
-- Written from scratch for this kit (no upstream pi example exists for custom compaction).
+- Written from scratch for Luna (no upstream pi example exists for custom compaction).
 - Date: 2026-06-17
 - Purpose: none at present. The extension is a **no-op**: it does not change compaction. On
   `session_start`, when `PI_KIT_COMPACT_TEMPLATE` is set, it warns that template injection is

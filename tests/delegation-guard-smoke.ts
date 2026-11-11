@@ -334,7 +334,7 @@ const tests: Record<string, () => unknown> = {
       const scope: unknown = typeof open === "function" ? Reflect.apply(open, kitGlobals[EFFORT_KEY], ["wf-guard-1"]) : null;
       const runToken: unknown = Reflect.get(Object(scope), "runToken");
       assert.ok(typeof runToken === "string" && runToken.length > 0, "the run scope opens");
-      const p = granted(prepareChild({ cwd: process.cwd(), kind: "workflow", role: "delegator", runId: "wf-guard-1", runToken, needsSubagent: true, extraExtensions: ["subagent"] }));
+      const p = granted(prepareChild({ cwd: process.cwd(), kind: "workflow", role: "implementer", runId: "wf-guard-1", runToken, needsSubagent: true, extraExtensions: ["subagent"] }));
       assert.ok(!argsOf(p).includes("subagent"), "a workflow agent never gets the subagent extension");
       assert.equal(envOf(p, "PI_KIT_EFFORT"), "minimal", "workflow agents run at E1");
       assert.equal(envOf(p, "PI_KIT_EFFORT_CAP"), "minimal");
@@ -349,8 +349,8 @@ const tests: Record<string, () => unknown> = {
   },
 
   "the subagent runner starts a workflow agent without the subagent tool and with its nesting limit at its own depth": async () => {
-    const delegator = kitAgents().find((a) => a.name === "delegator");
-    assert.ok(delegator, "the kit delegator resolves");
+    // A custom role that names subagent: the workflow launch must still drop the tool and extension.
+    const delegating: AgentConfig = { name: "delegating-role", description: "fixture", tools: ["read", "grep", "find", "ls", "subagent"], systemPrompt: "", source: "user", filePath: "fixture" };
     const w = world({ registered: ["delegation-guard", "effort"] });
     guard(fakePi().api);
     const e = await withEffort("standard");
@@ -363,7 +363,7 @@ const tests: Record<string, () => unknown> = {
       let seen: string[] = [];
       let env: Record<string, string | undefined> = {};
       const result = await subagentMod.runAgent({
-        defaultCwd: cwd, agents: [delegator], agentName: "delegator", task: "look", launchKind: "workflow", workflowRun: { runId: "wf-guard-2", runToken },
+        defaultCwd: cwd, agents: [delegating], agentName: "delegating-role", task: "look", launchKind: "workflow", workflowRun: { runId: "wf-guard-2", runToken },
         spawnChild: (_cmd, args, options?: { env?: Record<string, string | undefined> }) => { seen = args; env = options?.env ?? {}; return fakeChild(); },
       });
       assert.equal(result.exitCode, 0, result.errorMessage ?? "the agent ran");
@@ -371,7 +371,7 @@ const tests: Record<string, () => unknown> = {
       assert.ok(!seen.some((a) => a.includes(`${path.sep}subagent${path.sep}`)), "no subagent extension is loaded");
       assert.equal(env.PI_KIT_SUBAGENT_DEPTH, "1");
       assert.equal(env.PI_KIT_SUBAGENT_MAX_DEPTH, "1", "a workflow agent cannot delegate further");
-      const denied = await subagentMod.runAgent({ defaultCwd: cwd, agents: [delegator], agentName: "delegator", task: "look", launchKind: "workflow", workflowRun: { runId: "wf-guard-2", runToken: "wrong" }, spawnChild: () => fakeChild() });
+      const denied = await subagentMod.runAgent({ defaultCwd: cwd, agents: [delegating], agentName: "delegating-role", task: "look", launchKind: "workflow", workflowRun: { runId: "wf-guard-2", runToken: "wrong" }, spawnChild: () => fakeChild() });
       assert.equal(denied.stopReason, "denied");
       assert.equal(denied.deniedCode, "run-scope", "the denial code reaches the caller");
     } finally { rmWorkspace(cwd); e.done(); w.cleanup(); }
@@ -419,8 +419,8 @@ const tests: Record<string, () => unknown> = {
     const w = world({ registered: ["tool-firewall", "delegation-guard", "effort"], fixture: { "delegation-guard": { childGovernance: true }, effort: { childGovernance: true }, "tool-firewall": { childGovernance: true }, subagent: { avenue: "third_party" } } });
     const parent = await withEffort("thorough");
     try {
-      const child = granted(prepareChild({ cwd: process.cwd(), kind: "discretionary", role: "delegator", requestedTier: "standard", needsSubagent: true }));
-      assert.ok(argsOf(child).includes("subagent"), "a delegator child gets the subagent extension");
+      const child = granted(prepareChild({ cwd: process.cwd(), kind: "discretionary", role: "implementer", requestedTier: "standard", needsSubagent: true }));
+      assert.ok(argsOf(child).includes("subagent"), "a child granted delegation gets the subagent extension");
       // Become the child process: its env pins the tier and shares the parent's ledger.
       const restore = ["PI_KIT_EFFORT", "PI_KIT_EFFORT_CAP", "PI_KIT_EFFORT_LEDGER", "PI_KIT_CHILD_REQUIRE"].map((k) => setEnv(k, child.env[k]));
       try {

@@ -22,6 +22,7 @@ import { openHub, terminalConfirm, type CommandInfo, type HubDeps } from "./hub.
 import { readMarker, readCompaction, readDelegation, readEffort, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
 import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts";
 import { builtinCommandNames } from "./builtins.ts";
+import { releaseInputHolds } from "./shared/input-owner.ts";
 import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile } from "./command-menu.ts";
 
 const DEFAULT_HUB_KEY = "alt+m";
@@ -112,6 +113,10 @@ export default function controlCenter(pi: ExtensionAPI): void {
 
   // Publish the registry at load so an owning extension can register before the hub ever opens.
   getOrCreateControls();
+  // pi's reload removes an open hub without settling it, so its hold ends here or never.
+  pi.on("session_shutdown", () => {
+    releaseInputHolds();
+  });
   const hubKey = readHubKey();
 
   const open = async (args: string | string[], ctx: ExtensionCommandContext): Promise<void> => {

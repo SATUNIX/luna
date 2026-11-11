@@ -7,12 +7,14 @@
 > enters this deep mode once per signature: it writes a recovery report scaffold and steers the
 > §2 flow via a `context-sieve` contribution (never a system prompt). It is non-destructive
 > (plans and steers; the repair is a delegated `implementer` after a checkpoint) and bounded to
-> `PI_KIT_RECOVERY_MAX_ATTEMPTS` per signature; a successful write or edit to a named file outside
-> `.pi/` resets the count, and writes to the recovery report do not (`tests/recovery-grounding-smoke.ts`). The
+> `PI_KIT_RECOVERY_MAX_ATTEMPTS` per signature. Attempts clear on a passing board (a trusted verdict
+> newer than the attempt, every source passing), a user turn, or `quietTurns` (20) turns without that
+> signature; writes do not clear them (`tests/recovery-grounding-smoke.ts`). Attempt 2 at E3 or above
+> with `workflow_run` active steers to a split instead of scouts (`tests/workflow-strategy-smoke.ts`). The
 > steer names only tools the model can call: `subagent` stands in for the `/fork` of step 2 (a task
 > given a digest of the history) and the `verify_completion` tool for re-verifying, since `/fork`
-> and `/verify` are operator commands (`tests/recovery-grounding-smoke.ts`). Manual trigger:
-> `/recover`. While recovery is active it opens the separate recovery budget in the [effort ledger](effort.md#how-delegation-is-budgeted)
+> and `/verify` are operator commands (`tests/recovery-grounding-smoke.ts`). A bare `/boost`
+> enters the same flow on demand. While recovery is active it opens the separate recovery budget in the [effort ledger](effort.md#how-delegation-is-budgeted)
 > (two read-only scouts), so a session at the lowest effort can still get help when stuck. The
 > `npm run eval` recovery fixtures cover it. This document is the specification of the method the
 > extension drives.
@@ -58,24 +60,33 @@ hand.
   `recovery-orchestrator` enters recovery for that signature (`tests/progress-guard-agsix-smoke.ts`,
   `tests/recovery-grounding-smoke.ts`).
 
-Nothing else triggers it. A verification that still fails after an edit, or a check that
-regresses, is not detected as a trigger; see [Future work](future-work.md#delegation-and-recovery).
+Nothing else enters recovery. A repeat verification FAIL at a new revision is detected by the
+`verify-fail` signal and, at E3 or above with `workflow_run` active, returns the policy's `split`
+move: a steer plus the workflow card, which is text and not a recovery activation. A first FAIL
+returns no move, and a check that regresses sends nothing
+(`tests/verify-failclosed-smoke.ts`, `tests/workflow-strategy-smoke.ts`). The wider evidence gap is
+in [Future work](future-work.md#delegation-and-recovery).
 
-### Manual
-- `/recover [signature]` enters the same flow on demand (signature `manual` when none is
-  given), writing the report scaffold and the steering contribution
-  (`tests/ctx-contributions-smoke.ts`). It is the only recovery command.
+### On demand
+- A bare `/boost` in `progress-guard` writes the marker and enters the same flow on demand
+  (signature `manual` when no signature is detected), writing the report scaffold and the
+  steering contribution (`tests/ctx-contributions-smoke.ts`). There is no separate recovery
+  command.
 
 ### Anti-trigger / debounce
 - It enters recovery at most once per escalation marker: the marker is consumed on entry, and a
   marker that names another session is ignored (`tests/recovery-grounding-smoke.ts`).
-- Attempts per signature are capped at `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default `2`) until a
-  successful write or edit to a named file outside `.pi/`; past the cap it tells the operator to
-  escalate instead of entering again (`tests/recovery-grounding-smoke.ts`).
+- Attempts per signature are capped at `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default `2`) until
+  they clear: on a passing board (a trusted verdict newer than the attempt, every source passing),
+  a user turn, or `quietTurns` (20) turns without that signature. Writes do not clear them. Past the
+  cap it tells the operator to escalate instead of entering again
+  (`tests/recovery-grounding-smoke.ts`).
+- Attempt 2 at E3 or above with `workflow_run` active steers to a split, not to more scouts
+  (`tests/workflow-strategy-smoke.ts`).
 
 ## 4. Mapping onto existing kit primitives
 
-This mode is an *orchestration* over pieces the kit already ships; it should not
+This mode is an *orchestration* over pieces Luna already ships; it should not
 reinvent them.
 
 | Method step | Existing primitive |
@@ -120,7 +131,7 @@ single big context; blur them and you just pay more tokens for the same anchored
 
 The recovery-orchestrator's steering contribution is intentionally session-scoped. It is written
 when recovery is entered or the attempt cap is hit (`writeContribution` in
-`recovery-orchestrator/index.ts`, from the `turn_end` hook and the `/recover` command) and is
+`recovery-orchestrator/index.ts`, from the `turn_end` hook and `/boost`) and is
 cleared only on `session_start`, so it can persist for the rest of the session. It does not
 repeat verbatim within a session because `context-sieve`'s message dedup suppresses an unchanged
 contribution until compaction, comparing each contribution on its own
@@ -143,9 +154,9 @@ test pins the lifetime.
 
 ## 8. Shape
 
-`recovery-orchestrator` is an extension: it hooks `session_start`, `tool_result` and `turn_end`,
-keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
-steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers `/recover`.
+`recovery-orchestrator` is an extension: it hooks `session_start`, `session_shutdown`, `input`
+and `turn_end`, keeps the per-signature attempt count, and on entry writes a priority-90 `ctx-contribution`
+steering the main agent through §2 (`tests/ctx-contributions-smoke.ts`). It registers no command.
 The steer names the `recovery-debugging` skill, which covers recovering from a broken state by
 hand. Open design questions (signature definition, a "worse" metric, scout independence, fork
 automation, a budget ceiling) are listed in [Future work](future-work.md#delegation-and-recovery).

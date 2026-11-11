@@ -4,20 +4,20 @@ Tells you when something in your pi setup can be updated, and `/update` applies 
 
 It checks three things:
 
-- **pi-system**: the kit, on the channel it is registered on. The channels are the same however
+- **Luna**: the package, on the channel it is registered on. The channels are the same however
   the kit is delivered:
   - `latest`: the newest release (a stable release once one exists, otherwise the newest beta).
   - `next`: every commit on `main`.
   - an exact version such as `0.2.1-beta.0`: a pin, never moved on its own.
 
   With **git delivery** (the current setting, `packages/core/distribution.json`), a release is a
-  `vX.Y.Z` tag of the kit's repository, checked with `git ls-remote` using your own git
+  `vX.Y.Z` tag of Luna's repository, checked with `git ls-remote` using your own git
   credentials, and `next` is the repository's `main` branch. With **npm delivery**, the
   channels are dist-tags of `@satunix/pi-system`. A local checkout is checked against its
   upstream branch.
 - **pi** itself (`@earendil-works/pi-coding-agent`, from the npm registry).
-- **Linked packages**: the other npm packages in your pi settings. A companion that the kit pins
-  (`packages/core/sources.json`) is moved to the kit's reviewed pin when the kit changes it.
+- **Linked packages**: the other npm packages in your pi settings. A companion that Luna pins
+  (`packages/core/sources.json`) is moved to Luna's reviewed pin when Luna changes it.
   Unpinned packages move to their latest release. Other pinned packages are listed but not moved.
 
 ## Commands
@@ -28,16 +28,16 @@ It checks three things:
 | `/update status` | Show installed and available versions |
 | `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
-| `/update channel latest\|next\|X.Y.Z` | Switch the kit's channel, or pin a release. From a checkout, this installs the released kit instead |
+| `/update channel latest\|next\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
 Updates go through pi's own package manager (`pi update`, `pi install`). A new release on
-`latest` re-points the kit's registration to the new tag; `next` is pulled. After the kit or a
-companion changes, the recorded profile is re-applied with the kit's installer
+`latest` re-points Luna's registration to the new tag; `next` is pulled. After Luna or a
+companion changes, the recorded profile is re-applied with Luna's installer
 (`--settings-only`), so extensions a new release adds to your profile load. A pi update needs a
 restart of pi; everything else reloads in place. For a local checkout, `/update kit` runs
 `git pull --ff-only`.
 
-pi is updated only up to the version the kit's `package.json` pins for its test suite. A newer pi
+pi is updated only up to the version Luna's `package.json` pins for its test suite. A newer pi
 is reported, not offered, because `pi update --self` always installs the newest pi (see
 [Updates](../../../../docs/updates.md); `tests/kit-update-smoke.ts`).
 

@@ -1,8 +1,8 @@
-# pi-system container
+# Luna container
 
 Deployable Pi coding agent. A minimal Alpine container that runs
 `@earendil-works/pi-coding-agent` with the `pi_system_governance` MCP server, seeded pi config,
-and engagement scaffolding. Behaviour and skills are installed from the `pi-system` monorepo.
+and engagement scaffolding. Behaviour and skills are installed from the Luna monorepo.
 
 ## Runtime shape
 
@@ -33,7 +33,7 @@ profile, or `PI_KIT_PROFILE=lite` for small local models.
 
 Ollama at `http://host.docker.internal:11434/v1`, model `gemma4:latest`.
 Override via `OLLAMA_BASE_URL` and edit `overlays/pi/models.json`. Local-model costs default to
-zero; kit pricing and the status bar are documented in
+zero; Luna pricing and the status bar are documented in
 [`docs/status-bar-and-costs.md`](../../docs/status-bar-and-costs.md).
 
 ## Build modes
@@ -129,7 +129,7 @@ for example to add a package that pi would install at the next start; only the a
 
 ## CI
 
-The root [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs the kit verify gate and
+The root [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs Luna's verify gate and
 test suite. Container builds are exercised by `docker build --build-arg BUILD_MODE=dev .` plus the
 governance MCP smoke test.
 

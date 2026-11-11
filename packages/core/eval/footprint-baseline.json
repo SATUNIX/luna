@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "balanced": {
+      "toolText": 8919,
+      "ceiling": 9500,
+      "delegation": {
+        "tools": ["subagent", "workflow", "workflow_control", "workflow_run", "workflow_status"],
+        "toolText": 4730,
+        "ceiling": 4900
+      },
+      "tools": {
+        "ask_human": 264,
+        "loop_complete": 268,
+        "memory_forget": 228,
+        "memory_save": 1124,
+        "memory_search": 349,
+        "skill_search": 427,
+        "subagent": 1083,
+        "todo": 1023,
+        "verify_completion": 506,
+        "workflow": 908,
+        "workflow_control": 1063,
+        "workflow_run": 1085,
+        "workflow_status": 591
+      }
+    },
+    "lite": {
+      "toolText": 7614,
+      "tools": {
+        "record_verdict": 700,
+        "skill_search": 427,
+        "subagent": 1083,
+        "todo": 1023,
+        "verdict_status": 228,
+        "verify_completion": 506,
+        "workflow": 908,
+        "workflow_control": 1063,
+        "workflow_run": 1085,
+        "workflow_status": 591
+      }
+    }
+  }
+}

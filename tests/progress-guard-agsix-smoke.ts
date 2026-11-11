@@ -53,6 +53,146 @@ async function testRepeatedStallEscalates() {
   }
 }
 
+const EFFORT_KEY = Symbol.for("pi-kit.effort");
+
+/** Stand in for the effort registry for one call. */
+async function withPolicy(report: (signal: { trigger: string; detections?: number }) => unknown, body: () => Promise<void>): Promise<void> {
+  Reflect.set(globalThis, EFFORT_KEY, { strategy: { report } });
+  try {
+    await body();
+  } finally {
+    Reflect.deleteProperty(globalThis, EFFORT_KEY);
+  }
+}
+
+async function stallTurns(pi: Awaited<ReturnType<typeof loadGuard>>, ctx: object, turns: number, event: { entries?: unknown[] } = { entries: [] }): Promise<unknown[]> {
+  const results: unknown[] = [];
+  for (let i = 0; i < turns; i++) {
+    await pi.handlers.get("tool_call")({ toolName: "read", input: { path: "a.txt" } }, ctx);
+    results.push(await pi.handlers.get("turn_end")(event, ctx));
+  }
+  return results;
+}
+
+async function testStallFollowsThePolicy() {
+  const restoreMode = setEnv("PI_KIT_GUARD_MODE", "auto");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  try {
+    const signals: Array<{ trigger: string; detections?: number }> = [];
+    const words = tmpWorkspace("pi-kit-guard-policy-");
+    await withPolicy((signal) => {
+      signals.push(signal);
+      return (signal.detections ?? 0) >= 2 ? { move: "angle", steer: "POLICY ANGLE", card: false } : { move: "reorient", steer: "POLICY REORIENT", card: false };
+    }, async () => {
+      const pi = await loadGuard();
+      const ctx = { cwd: words, hasUI: false, ui: { notify() {} } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const results = await stallTurns(pi, ctx, 4);
+      assert.match(JSON.stringify(results[2]), /POLICY REORIENT/, "a first detection delivers the policy's reorient");
+      assert.match(JSON.stringify(results[3]), /POLICY ANGLE/, "a recurring one delivers its angle");
+      assert.match(JSON.stringify(results[3]), /Recent actions: read:a\.txt/, "the digest stays with the signal");
+      assert.deepEqual(signals.map((s) => [s.trigger, s.detections]), [["stall", 1], ["stall", 2]]);
+      assert.ok(fs.existsSync(path.join(words, ".pi", "recovery", "escalation.json")), "angle writes the marker");
+    });
+    rmWorkspace(words);
+
+    const none = tmpWorkspace("pi-kit-guard-none-");
+    await withPolicy(() => ({ move: "none", steer: null, card: false }), async () => {
+      const pi = await loadGuard();
+      const ctx = { cwd: none, hasUI: false, ui: { notify() {} } };
+      await pi.handlers.get("session_start")({}, ctx);
+      assert.deepEqual(await stallTurns(pi, ctx, 6), Array.from({ length: 6 }, () => undefined), "a child's none delivers nothing");
+      assert.ok(!fs.existsSync(path.join(none, ".pi", "recovery", "escalation.json")), "and writes no marker");
+    });
+    rmWorkspace(none);
+
+    for (const report of [() => { throw new Error("policy failed"); }, () => null]) {
+      const broken = tmpWorkspace("pi-kit-guard-broken-");
+      await withPolicy(report, async () => {
+        const pi = await loadGuard();
+        const ctx = { cwd: broken, hasUI: false, ui: { notify() {} } };
+        await pi.handlers.get("session_start")({}, ctx);
+        const results = await stallTurns(pi, ctx, 4);
+        assert.match(JSON.stringify(results[2]), /effort policy is not loaded/, "one line, no throw");
+        assert.ok(fs.existsSync(path.join(broken, ".pi", "recovery", "escalation.json")), "and the stall still escalates");
+      });
+      rmWorkspace(broken);
+    }
+  } finally {
+    restoreMode();
+  }
+}
+
+async function testEscalateEnvWithoutPolicy() {
+  const ws = tmpWorkspace("pi-kit-guard-env-");
+  const restoreEscalate = setEnv("PI_KIT_GUARD_ESCALATE", "5");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  try {
+    const pi = await loadGuard();
+    const ctx = { cwd: ws, hasUI: false, ui: { notify() {} } };
+    await pi.handlers.get("session_start")({}, ctx);
+    const marker = path.join(ws, ".pi", "recovery", "escalation.json");
+    await stallTurns(pi, ctx, 6);
+    assert.ok(!fs.existsSync(marker), "four detections are under the operator's threshold");
+    await stallTurns(pi, ctx, 1);
+    assert.ok(fs.existsSync(marker), "the fifth reaches it");
+  } finally {
+    restoreEscalate();
+    rmWorkspace(ws);
+  }
+}
+
+async function testNoNudgeTextHere() {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("../packages/extensions/src/progress-guard/index.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Stop and self-reflect|review \/ delegate checkpoint \(automatic\)|## Self-reflection checkpoint/);
+}
+
+async function testBareBoostReassesses() {
+  const ws = tmpWorkspace("pi-kit-guard-boost-");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  try {
+    const notes: string[] = [];
+    const ctx = { cwd: ws, hasUI: true, ui: { notify: (m: string) => notes.push(m), setStatus() {} } };
+    const listeners: Array<(data: unknown) => void> = [];
+    const events = { emit: (_channel: string, data: unknown) => { for (const listen of listeners) listen(data); }, on: (_channel: string, listen: (data: unknown) => void) => { listeners.push(listen); return () => {}; } };
+    const guard = fakePi();
+    (await loadExtension("extensions/progress-guard/index.ts"))({ ...guard.api, events });
+    const recovery = fakePi();
+    (await loadExtension("extensions/recovery-orchestrator/index.ts"))({ ...recovery.api, events });
+    await guard.handlers.get("session_start")({}, ctx);
+    await recovery.handlers.get("session_start")({}, ctx);
+
+    await guard.commands.get("boost").handler("status", ctx);
+    assert.match(notes.at(-1) ?? "", /mode=suggest \| reads-since-edit=0/, "status is explicit");
+    assert.ok(!fs.existsSync(path.join(ws, ".pi", "ctx-contributions", "recovery-orchestrator.json")), "status changes nothing");
+
+    await guard.commands.get("boost").handler("", ctx);
+    const steer = fs.readFileSync(path.join(ws, ".pi", "ctx-contributions", "recovery-orchestrator.json"), "utf8");
+    assert.match(steer, /stuck on 'manual' \(attempt 1\//, "bare /boost enters the recovery flow at once");
+    assert.ok(!fs.existsSync(path.join(ws, ".pi", "recovery", "escalation.json")), "the marker is consumed");
+    assert.ok(notes.some((m) => m.includes("recovery queued")), "the operator is told");
+
+    await guard.commands.get("boost").handler("sideways", ctx);
+    assert.match(notes.at(-1) ?? "", /unknown option "sideways"/, "a typo reassesses nothing");
+
+    // A pi without the event bus: the marker waits for the next turn_end.
+    const alone = fakePi();
+    (await loadExtension("extensions/progress-guard/index.ts"))(alone.api);
+    const lone = tmpWorkspace("pi-kit-guard-boost-lone-");
+    const loneCtx = { cwd: lone, hasUI: false, ui: { notify() {} } };
+    await alone.handlers.get("session_start")({}, loneCtx);
+    await alone.commands.get("boost").handler("", loneCtx);
+    assert.ok(fs.existsSync(path.join(lone, ".pi", "recovery", "escalation.json")), "no bus: the marker stands, and no throw");
+    rmWorkspace(lone);
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
 // Independent repro #2: a distinct-reads-then-failed-edit cycle, repeated, previously
 // produced neither a nudge nor an escalation, because a write ATTEMPT (tool_call) reset
 // progress state before the result (success or failure) was known — so a repeatedly
@@ -236,13 +376,12 @@ async function testNudgeReachesTheLoopingRun() {
     await session.prompt("read a.txt");
 
     assert.equal(requests.length, 7, "the scripted run makes seven model requests");
-    const loop = /progress-guard: possible loop/;
-    const checkpoint = /progress-guard: review \/ delegate checkpoint/;
+    const loop = /progress-guard: you have repeated the same action/;
     // Three identical reads (PI_KIT_GUARD_REPEAT default 3) fire after the third turn.
     for (let i = 0; i < 3; i++) assert.doesNotMatch(requests[i] ?? "", loop, `request ${i} precedes the loop`);
     assert.match(requests[3] ?? "", loop, "the nudge reaches the next model request of the same run");
-    assert.match(requests[4] ?? "", checkpoint, "the review/delegate checkpoint reaches the same run on the first escalation");
     const delivered = session.sessionManager.getBranch().filter((e) => e.type === "custom_message" && e.customType === "progress-guard");
+    assert.ok(delivered.length >= 2, "the first escalation reaches the same run too, inside the cooldown");
     assert.ok(delivered.length <= 3, `in-run delivery stays debounced by the cooldown (got ${delivered.length} in 7 turns)`);
   } finally {
     dispose();
@@ -278,14 +417,14 @@ async function testInRunDeliveryOnBothTurnEndShapes() {
     assert.ok(last !== null && typeof last === "object" && "entries" in last && Array.isArray(last.entries), "pi >=0.87.0: the third identical turn returns entries");
     assert.equal(last.entries.length, 2, "the earlier handler's entry is kept and the nudge is appended");
     assert.deepEqual(last.entries[0], earlier);
-    assert.match(JSON.stringify(last.entries[1]), /"customType":"progress-guard".*progress-guard: possible loop/);
+    assert.match(JSON.stringify(last.entries[1]), /"customType":"progress-guard".*progress-guard: you have repeated/);
 
     const legacy = await loopTurns({});
     assert.deepEqual(legacy.results, [undefined, undefined, undefined], "pi <0.87.0: turn_end returns nothing");
     assert.equal(legacy.steers.length, 1, "pi <0.87.0: the nudge is steered into the running loop once");
     const steer = legacy.steers[0];
     assert.deepEqual(steer?.opts, { deliverAs: "steer" });
-    assert.match(JSON.stringify(steer?.message), /"customType":"progress-guard".*progress-guard: possible loop/);
+    assert.match(JSON.stringify(steer?.message), /"customType":"progress-guard".*progress-guard: you have repeated/);
     assert.match(JSON.stringify(steer?.message), /"display":false/);
   } finally {
     restoreMode();
@@ -294,6 +433,10 @@ async function testInRunDeliveryOnBothTurnEndShapes() {
 
 const tests: Array<[string, SmokeTest]> = [
   ["repeated read-stalls eventually escalate (stable signature)", testRepeatedStallEscalates],
+  ["the policy's words reach the run, its none stays silent, and a broken policy is a one-line fallback", testStallFollowsThePolicy],
+  ["PI_KIT_GUARD_ESCALATE still sets the threshold without the policy", testEscalateEnvWithoutPolicy],
+  ["the nudge texts live in the policy, not here", testNoNudgeTextHere],
+  ["bare /boost reassesses through the recovery entry; status is explicit", testBareBoostReassesses],
   ["a repeatedly-failing edit does not reset progress tracking", testFailedEditDoesNotResetProgress],
   ["a successful write still resets progress tracking", testSuccessfulWriteStillResetsProgress],
   ["the escalation marker is written once per detection episode", testEscalationMarkerWrittenOncePerEpisode],

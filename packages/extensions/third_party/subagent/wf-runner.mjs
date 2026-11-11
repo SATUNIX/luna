@@ -24,7 +24,7 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
   "use strict";
   const parse = JSON.parse, stringify = JSON.stringify, freeze = Object.freeze, define = Object.defineProperty;
   const keys = Object.keys, isArray = Array.isArray, all = Promise.all.bind(Promise), then = Promise.prototype.then;
-  const MAX_ITEMS = 4096;
+  const MAX_ITEMS = 4096, MAX_CALL = 1024 * 1024;
   const disabled = (what) => function () {
     throw new Error(what + " is not available in workflow scripts: it would make resume non-deterministic. Pass timestamps in through args and vary prompts by index instead.");
   };
@@ -40,17 +40,37 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
       return String(e);
     } catch (_) { return "unprintable error"; }
   };
-  const call = (op, payload) => then.call(H.call(op, stringify(payload)), (s) => parse(s));
+  const send = (op, text) => then.call(H.call(op, text), (s) => parse(s));
+  const call = (op, payload) => send(op, stringify(payload));
   const budget = freeze({
     total,
     spent: () => H.spent(),
     remaining: () => (total === null ? Infinity : Math.max(0, total - H.spent())),
   });
+  // A call that is not sent goes to the host all the same: it records a step for every call, and the
+  // throw it sends back is one a catch or parallel() can swallow without hiding the call.
+  const nameOf = (read) => {
+    try { const v = read(); return typeof v === "string" ? v.slice(0, 200) : undefined; } catch (_) { return undefined; }
+  };
   const agent = async (prompt, opts) => {
-    if (typeof prompt !== "string") throw new TypeError("agent(prompt, opts): prompt must be a string");
-    if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) throw new TypeError("agent(prompt, opts): opts must be an object");
-    if (total !== null && H.spent() >= total) throw new Error("budget exhausted: " + H.spent() + " of " + total + " output tokens spent");
-    return call("agent", { prompt, opts: opts === undefined ? null : opts });
+    const refused = (reason) => {
+      // A malformed required asks for one, as the host reads it; a throwing getter requires nothing.
+      let required = false;
+      try { const r = opts?.required; required = r !== undefined && r !== null && r !== false; } catch (_) { /* no value to read */ }
+      const label = nameOf(() => opts?.label);
+      return call("refused", label === undefined ? { reason, required } : { reason, required, label });
+    };
+    if (typeof prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
+    if (opts !== undefined && opts !== null && (typeof opts !== "object" || isArray(opts))) return refused("agent(prompt, opts): opts must be an object");
+    let text;
+    try { text = stringify({ prompt, opts: opts === undefined ? null : opts }); } catch (_) { return refused("agent(prompt, opts): opts must be JSON-serialisable"); }
+    if (typeof text !== "string") return refused("agent(prompt, opts): opts must be JSON-serialisable");
+    if (text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    // A toJSON decides what stringify wrote, so the host's schema is checked against that.
+    const sent = parse(text);
+    if (typeof sent?.prompt !== "string") return refused("agent(prompt, opts): prompt must be a string");
+    if (sent.opts === undefined || (sent.opts !== null && (typeof sent.opts !== "object" || isArray(sent.opts)))) return refused("agent(prompt, opts): opts must be an object");
+    return send("agent", text);
   };
   const items = (name, list) => {
     if (!isArray(list)) throw new TypeError(name + ": expected an array");
@@ -75,9 +95,17 @@ const PRELUDE = String.raw`(function (H, total, argsJson) {
   const log = (text) => { H.emit("log", String(text)); };
   const phase = (title) => { H.emit("phase", String(title)); };
   const workflow = async (ref, childArgs) => {
-    const ok = typeof ref === "string" || (ref !== null && typeof ref === "object" && typeof ref.scriptPath === "string");
-    if (!ok) throw new TypeError("workflow(nameOrRef, args): expected a name or {scriptPath}");
-    return call("workflow", { ref: typeof ref === "string" ? ref : { scriptPath: ref.scriptPath }, args: childArgs === undefined ? null : childArgs });
+    const name = nameOf(() => (typeof ref === "string" ? ref : ref?.scriptPath));
+    const refused = (reason) => call("refused", name === undefined ? { reason, required: false, op: "workflow" } : { reason, required: false, op: "workflow", label: name });
+    if (name === undefined) return refused("workflow(nameOrRef, args): expected a name or {scriptPath}");
+    let text;
+    try { text = stringify({ ref: typeof ref === "string" ? ref : { scriptPath: ref.scriptPath }, args: childArgs === undefined ? null : childArgs }); } catch (_) { return refused("workflow(nameOrRef, args): args must be JSON-serialisable"); }
+    if (typeof text !== "string") return refused("workflow(nameOrRef, args): args must be JSON-serialisable");
+    if (text.length > MAX_CALL) return refused("the call's arguments exceed 1 MiB");
+    const sent = parse(text);
+    if (sent?.args === undefined) return refused("workflow(nameOrRef, args): args must be JSON-serialisable");
+    if (typeof sent.ref !== "string" && typeof sent.ref?.scriptPath !== "string") return refused("workflow(nameOrRef, args): expected a name or {scriptPath}");
+    return send("workflow", text);
   };
   const args = argsJson === undefined ? undefined : deepFreeze(parse(argsJson));
   const globals = { agent, parallel, pipeline, log, phase, workflow, budget, args };
@@ -170,6 +198,7 @@ async function run() {
   let seq = 0;
   let logs = 0;
   let result = null;
+  let called = false;
   const pending = new Map();
 
   const host = vm.newObject();
@@ -185,6 +214,7 @@ async function run() {
     }
     const id = ++seq;
     pending.set(id, d);
+    called = true;
     send({ t: "call", id, op: op.toString(), payload: text });
     return d.handle;
   });
@@ -202,6 +232,7 @@ async function run() {
   // Runs the VM's queued jobs as one slice under the slice deadline, then decides whether the run is over.
   const slice = (work) => {
     deadline = Date.now() + start.sliceMs;
+    called = false;
     try {
       work();
       vm.executePendingJobs();
@@ -214,6 +245,9 @@ async function run() {
     if (interrupted) finish(timeout());
     else if (result) finish(result.ok || result.kind !== "script" ? result : { ...result, kind: kindOf(result.error) });
     else if (pending.size === 0) finish({ t: "done", ok: false, kind: "stalled", error: "the script is waiting on a promise that nothing will settle" });
+    // The slice is over and the run goes on: the host starts this slice's calls now. A slice that ended
+    // the run sent `done` instead, so the host cancels its calls rather than starting them.
+    else if (called) send({ t: "turn" });
   };
 
   onLine = (line) => {

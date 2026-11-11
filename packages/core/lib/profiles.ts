@@ -19,8 +19,9 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { array, boolean, isRecord, object, optional, parseJson, string, unknownValue, ValidationError, type Infer } from "./guard.ts";
-import { globalAgentDir, readSettings, type PackageObject } from "./settings.ts";
+import { isDeepStrictEqual } from "node:util";
+import { array, boolean, isRecord, literal, object, optional, parseJson, parseJsonAs, record, string, unknownValue, ValidationError, type Infer } from "./guard.ts";
+import { globalAgentDir, readSettings, updateSettings, writeSettingsAtomic, type PackageObject } from "./settings.ts";
 import { PROFILES_DIR, WORKSPACE_ROOT } from "./paths.ts";
 
 export const SKILLS_DIR = path.join(WORKSPACE_ROOT, "packages", "kit", "skills");
@@ -196,29 +197,100 @@ export interface ProfileFirewall {
   mode?: FirewallMode;
 }
 
+/** A profile's `compaction` settings: pi's own auto-compaction knobs, sized for the window it targets. */
+export interface ProfileCompactionSettings {
+  enabled?: boolean;
+  reserveTokens?: number;
+  keepRecentTokens?: number;
+}
+
+/** A profile's `settings` block: pi settings.json keys the profile tunes (only compaction today). */
+export interface ProfileSettings {
+  compaction?: ProfileCompactionSettings;
+}
+
+/** The keys a profile's `settings.compaction` block may set; anything else is refused, not carried. */
+const COMPACTION_SETTINGS_KEYS: ReadonlySet<string> = new Set(["enabled", "reserveTokens", "keepRecentTokens"]);
+
 const names = optional(array(string()));
 
-// `firewall` is checked by profileFirewall() below, whose messages name the profile.
+// `firewall`, `securityLevel` and `settings` are checked by their functions below, whose messages
+// name the profile and the field.
 const ProfileFileSchema = object({
   name: optional(string()),
   description: optional(string()),
   experimental: optional(boolean()),
   firewall: optional(unknownValue()),
   securityLevel: optional(unknownValue()),
+  settings: optional(unknownValue()),
   skills: optional(object({ excludeCategories: names, exclude: names, only: names })),
   prompts: optional(object({ exclude: names, only: names })),
   include: names,
 });
 
 /** A profile definition, validated (see loadProfileDef). */
-export type Profile = Omit<Infer<typeof ProfileFileSchema>, "firewall" | "securityLevel"> & { firewall?: ProfileFirewall; securityLevel?: SecurityLevel };
+export type Profile = Omit<Infer<typeof ProfileFileSchema>, "firewall" | "securityLevel" | "settings"> & {
+  firewall?: ProfileFirewall;
+  securityLevel?: SecurityLevel;
+  settings?: ProfileSettings;
+};
 
-/** A profile definition from JSON: the shape checked, the firewall block checked by profileFirewall(). */
+/** A profile definition from JSON: the shape checked, then firewall, securityLevel and settings. */
 export function parseProfile(value: unknown, where = "profile"): Profile {
-  const { firewall: _raw, securityLevel: _security, ...def } = ProfileFileSchema.parse(value, where);
+  const { firewall: _raw, securityLevel: _security, settings: _settings, ...def } = ProfileFileSchema.parse(value, where);
   const firewall = profileFirewall(value);
   const securityLevel = profileSecurityLevel(value);
-  return { ...def, securityLevel, ...(firewall === undefined ? {} : { firewall }) };
+  const settings = profileSettings(value);
+  return {
+    ...def,
+    securityLevel,
+    ...(firewall === undefined ? {} : { firewall }),
+    ...(settings === undefined ? {} : { settings }),
+  };
+}
+
+/**
+ * The `settings` block of a profile definition (validated or straight from JSON), checked. Absent
+ * (or null) is undefined. An unknown key, a non-boolean `enabled` or a token count that is not a
+ * positive safe integer names the profile and the field: a small-window profile whose compaction
+ * silently did not apply would run against a window it cannot fit.
+ */
+export function profileSettings(profileDef: unknown): ProfileSettings | undefined {
+  const settings = field(profileDef, "settings");
+  if (settings === undefined || settings === null) return undefined;
+  const name = String(field(profileDef, "name"));
+  if (!isRecord(settings)) {
+    throw new ValidationError(`profile "${name}" settings`, 'expected an object like {"compaction":{"enabled":true,"reserveTokens":4096}}');
+  }
+  const compaction = settings.compaction;
+  if (compaction === undefined || compaction === null) return {};
+  if (!isRecord(compaction)) {
+    throw new ValidationError(`profile "${name}" settings.compaction`, 'expected an object like {"enabled":true,"reserveTokens":4096,"keepRecentTokens":6000}');
+  }
+  const out: ProfileCompactionSettings = {};
+  for (const key of Object.keys(compaction)) {
+    if (!COMPACTION_SETTINGS_KEYS.has(key)) {
+      throw new ValidationError(
+        `profile "${name}" settings.compaction.${key}`,
+        `unknown compaction setting (known: ${[...COMPACTION_SETTINGS_KEYS].join(", ")})`,
+      );
+    }
+  }
+  const enabled = compaction.enabled;
+  if (enabled !== undefined) {
+    if (typeof enabled !== "boolean") throw new ValidationError(`profile "${name}" settings.compaction.enabled`, `expected a boolean, got ${typeof enabled}`);
+    out.enabled = enabled;
+  }
+  for (const key of ["reserveTokens", "keepRecentTokens"] as const) {
+    const value = compaction[key];
+    if (value === undefined) continue;
+    // pi's SettingsManager refuses anything but a safe integer, and would then fail every session.
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+      throw new ValidationError(`profile "${name}" settings.compaction.${key}`, `expected a positive safe integer, got ${JSON.stringify(value)}`);
+    }
+    out[key] = value;
+  }
+  return { compaction: out };
 }
 
 export function loadProfileDef(name: string, dir: string = PROFILES_DIR): Profile {
@@ -510,6 +582,175 @@ export function writeFirewallConfig(profileDef: unknown, file: string = firewall
   fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
   fs.renameSync(tmp, file);
   return next;
+}
+
+// --- the profile's `settings` block -> pi's settings.json -------------------------------------
+// A profile may tune pi settings that only make sense with what it loads (today: compaction, which
+// `lite` sizes for a small window). The keys are pi's, so a merge preserves every other setting and
+// changes only what the block names. Before it overwrites a key the install records what was there
+// (the operator's value, or that the key was absent) and what it wrote, so a later profile that does
+// not set the key, or an uninstall, puts the operator's own value back. A value the operator changed
+// while the profile was active no longer matches what the kit wrote, so it is theirs and stays.
+
+/** The dotted settings.json keys a profile's `settings` block sets (none when it has no block). */
+export function profileSettingsKeys(profileDef: unknown): string[] {
+  const compaction = profileSettings(profileDef)?.compaction;
+  if (compaction === undefined) return [];
+  return Object.keys(compaction)
+    .map((key) => `compaction.${key}`)
+    .sort();
+}
+
+/** Where the kit records the settings.json keys the last profile install set. */
+export function profileSettingsPath(): string {
+  return path.join(globalAgentDir(), "pi-kit", "profile-settings.json");
+}
+
+/** One settings.json key a profile install owns: what was there before it, and what it wrote. */
+export interface ProfileSettingEntry {
+  /** Whether the key existed before the kit first wrote it. */
+  present: boolean;
+  /** The operator's value before the kit wrote it; absent when `present` is false. */
+  value?: unknown;
+  /** The value the kit wrote. */
+  wrote: unknown;
+}
+
+/** The pi settings a profile install owns, keyed by dotted settings.json key. */
+export interface ProfileSettingsRecord {
+  previous: Record<string, ProfileSettingEntry>;
+}
+
+const OWNED_KEY = /^compaction\.(enabled|reserveTokens|keepRecentTokens)$/;
+const ProfileSettingsRecordSchema = object({
+  schemaVersion: literal(2),
+  previous: record(object({ present: boolean(), value: optional(unknownValue()), wrote: unknownValue() }), { key: OWNED_KEY }),
+});
+
+/** The dotted keys `owned` records as the kit's, sorted. */
+export function ownedSettingKeys(owned: ProfileSettingsRecord): string[] {
+  return Object.keys(owned.previous).sort();
+}
+
+/** The ownership record a previous profile install wrote (machine-global, like the profile itself). */
+export function readProfileSettingsRecord(file: string = profileSettingsPath()): ProfileSettingsRecord {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return { previous: {} };
+    throw new Error(`cannot read ${file}: ${errorMessage(error)}`, { cause: error });
+  }
+  let parsed: Infer<typeof ProfileSettingsRecordSchema>;
+  try {
+    parsed = parseJsonAs(ProfileSettingsRecordSchema, raw, file);
+  } catch (error) {
+    throw new Error(`${file} is not a valid profile-settings record (${errorMessage(error)}); delete it and reinstall`, { cause: error });
+  }
+  // record() returns a null-prototype dictionary; hand callers plain objects.
+  const previous: Record<string, ProfileSettingEntry> = {};
+  for (const [key, entry] of Object.entries(parsed.previous)) previous[key] = { ...entry };
+  return { previous };
+}
+
+/** Record the pi settings a profile install owns (safe write: mkdir, temp file, rename). */
+export function writeProfileSettingsRecord(owned: ProfileSettingsRecord, file: string = profileSettingsPath()): void {
+  const previous: Record<string, ProfileSettingEntry> = {};
+  for (const key of ownedSettingKeys(owned)) {
+    const entry = owned.previous[key];
+    if (entry !== undefined) previous[key] = entry;
+  }
+  writeSettingsAtomic(file, { schemaVersion: 2, previous });
+}
+
+/**
+ * `block` with the owned compaction keys in `owned` handed back to the operator: their recorded
+ * value when they had one, no key when they did not. A key whose value is no longer what the kit
+ * wrote was changed (or removed) by the operator, so it is left as it is. `skip` names dotted keys
+ * the caller is about to set again. Returns the new block and whether anything changed.
+ */
+function releaseSettings(
+  block: Record<string, unknown>,
+  owned: ProfileSettingsRecord,
+  skip: ReadonlySet<string> = new Set(),
+): { block: Record<string, unknown>; changed: boolean } {
+  const out: Record<string, unknown> = {};
+  let changed = false;
+  for (const [key, value] of Object.entries(block)) {
+    const dotted = `compaction.${key}`;
+    const entry = owned.previous[dotted];
+    if (entry === undefined || skip.has(dotted) || !OWNED_KEY.test(dotted) || !isDeepStrictEqual(value, entry.wrote)) {
+      out[key] = value;
+      continue;
+    }
+    changed = true;
+    if (entry.present) out[key] = entry.value;
+  }
+  return { block: out, changed };
+}
+
+/**
+ * Merge `profileDef`'s `settings` block into the pi settings file `settingsFile`, creating it when
+ * absent, and release the keys `prior` (the record an earlier install wrote) owns that this profile
+ * does not set. Every other key is preserved, and the write is settings.ts's locked
+ * read-modify-write (atomic, and it refuses to rewrite a file it cannot parse). Returns the warnings
+ * to show the operator and the record to save: a key the kit already owned keeps the operator's
+ * original value on record, so reinstalling a profile never records its own numbers as theirs.
+ */
+export function applyProfileSettings(
+  profileDef: unknown,
+  settingsFile: string,
+  prior: ProfileSettingsRecord,
+): { warnings: string[]; record: ProfileSettingsRecord } {
+  const wanted = Object.entries(profileSettings(profileDef)?.compaction ?? {});
+  const warnings: string[] = [];
+  const owned: ProfileSettingsRecord = { previous: {} };
+  if (wanted.length === 0) {
+    warnings.push(...removeProfileSettings(settingsFile, prior));
+    return { warnings, record: owned };
+  }
+  const setting = new Set(wanted.map(([key]) => `compaction.${key}`));
+  updateSettings(settingsFile, (settings) => {
+    if (settings.compaction !== undefined && !isRecord(settings.compaction)) {
+      warnings.push(`${settingsFile}: compaction was ${JSON.stringify(settings.compaction)}, not an object; the profile's settings replaced it`);
+    }
+    const { block } = releaseSettings(isRecord(settings.compaction) ? settings.compaction : {}, prior, setting);
+    for (const [key, value] of wanted) {
+      const dotted = `compaction.${key}`;
+      const earlier = prior.previous[dotted];
+      const present = Object.hasOwn(block, key);
+      // Still what the kit wrote last time: the operator's value is the one already on record.
+      const keep = earlier !== undefined && present && isDeepStrictEqual(block[key], earlier.wrote);
+      const before: Omit<ProfileSettingEntry, "wrote"> = keep
+        ? earlier.present ? { present: true, value: earlier.value } : { present: false }
+        : present ? { present: true, value: block[key] } : { present: false };
+      owned.previous[dotted] = { ...before, wrote: value };
+      block[key] = value;
+    }
+    settings.compaction = block;
+    return undefined;
+  });
+  return { warnings, record: owned };
+}
+
+/**
+ * Release every key `owned` records (see releaseSettings): the operator's own value comes back, a
+ * key they did not have is removed, and one they changed since is left alone. A block left empty
+ * is dropped, so the file stays the shape pi would write. Returns the warnings for the operator:
+ * none today, because a file it cannot read throws (the caller fails closed) and an absent file or
+ * a key with nothing to release is simply nothing to do.
+ */
+export function removeProfileSettings(settingsFile: string, owned: ProfileSettingsRecord): string[] {
+  if (ownedSettingKeys(owned).length === 0 || !fs.existsSync(settingsFile)) return [];
+  updateSettings(settingsFile, (settings) => {
+    if (!isRecord(settings.compaction)) return false;
+    const { block, changed } = releaseSettings(settings.compaction, owned);
+    if (!changed) return false;
+    if (Object.keys(block).length === 0) delete settings.compaction;
+    else settings.compaction = block;
+    return undefined;
+  });
+  return [];
 }
 
 // --- project-scope installs and the machine-global gate --------------------------------------

@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-system",
-  "version": "0.2.4-beta.11",
+  "version": "0.3.0-beta.2",
   "description": "Safety-first kit for the pi coding agent: tool firewall, secret guard, checkpoints, verification, memory, orchestration, skills and themes. One package; pick a profile with /profile.",
   "type": "module",
   "keywords": [
@@ -93,7 +93,7 @@
     "jsdom": "30.1.3",
     "mermaid": "12.2.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.0",
+    "typescript-eslint": "8.72.1",
     "zod": "4.6.7"
   },
   "scripts": {
@@ -169,6 +169,7 @@
     "smoke:control-center": "node tests/control-center-smoke.ts",
     "smoke:ctx-contributions": "node tests/ctx-contributions-smoke.ts",
     "smoke:docs": "node tests/docs-smoke.ts",
+    "smoke:site": "node tests/site-smoke.ts",
     "smoke:dual-review": "node tests/dual-review-smoke.ts",
     "smoke:delegation-guard": "node tests/delegation-guard-smoke.ts",
     "smoke:effort": "node tests/effort-smoke.ts",
@@ -272,6 +273,12 @@
     "smoke:workflow-registry": "node tests/workflow-registry-smoke.ts",
     "smoke:workflow-hooks": "node tests/workflow-hooks-smoke.ts",
     "smoke:workflow-resume": "node tests/workflow-resume-smoke.ts",
+    "smoke:workflow-kernel-regress": "node tests/workflow-kernel-regress-smoke.ts",
+    "smoke:firewall-overlay-queue": "node tests/firewall-overlay-queue-smoke.ts",
+    "smoke:workflow-plan": "node tests/workflow-plan-smoke.ts",
+    "smoke:run-query": "node tests/run-query-smoke.ts",
+    "smoke:workflow-strategy": "node tests/workflow-strategy-smoke.ts",
+    "smoke:eval-footprint": "node tests/eval-footprint-smoke.ts",
     "smoke:workflow-notify": "node tests/workflow-notify-smoke.ts",
     "smoke:workflow-builtin": "node tests/workflow-builtin-smoke.ts",
     "smoke:workspace-root": "node tests/workspace-root-smoke.ts",
@@ -302,6 +309,8 @@
     "catalog": "node packages/core/registry.ts --write-docs && node packages/core/skills-catalogue.ts && node packages/core/capability-matrix.ts && node packages/core/reference.ts",
     "docs:check": "node packages/core/docs-nav-check.ts",
     "docs:mermaid": "node packages/core/check-mermaid.ts",
+    "art": "node packages/core/readme-art.ts",
+    "site:build": "node packages/core/build-site.ts",
     "profile:check": "node packages/core/profile-check.ts",
     "new": "node packages/core/new-extension.ts",
     "extract": "node packages/core/extract-extension.ts",

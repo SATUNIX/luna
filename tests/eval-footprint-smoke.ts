@@ -458,9 +458,24 @@ function testFootprintCli(): void {
     assert.equal(written.status, 0, written.stderr);
     assert.match(written.stdout, /baseline unchanged/, "an unchanged record is reported as unchanged");
     assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "an unchanged baseline is not reformatted");
+    // lite's reviewed row has no delegation block; the writer must not add one (V-81 byte-identical).
+    const liteWritten = run(["--profile", "lite", "--write-baseline", `--baseline=${baselineFile}`]);
+    assert.equal(liteWritten.status, 0, liteWritten.stderr);
+    assert.match(liteWritten.stdout, /baseline unchanged/, "lite's reviewed shape is unchanged");
+    assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "adding no delegation row keeps lite byte-identical");
   } finally {
     rmWorkspace(ws);
   }
+}
+
+/** A profile the reviewed baseline does not list must fail loudly, not silently pass (docs claim). */
+function testMissingBaselineRow(): void {
+  const baseline = readBaseline();
+  const f: Footprint = { profile: "no-such-profile", tools: [], toolText: 0, delegation: null };
+  const problems = footprintProblems(f, baseline);
+  assert.equal(problems.length, 1, JSON.stringify(problems));
+  assert.match(problems[0] ?? "", /no-such-profile: no baseline entry in footprint-baseline\.json/);
+  assert.doesNotMatch(problems[0] ?? "", /over the/, "a missing row is not reported as an over-ceiling failure");
 }
 
 // ---- runner ---------------------------------------------------------------------------------
@@ -478,6 +493,7 @@ const tests: Array<[string, () => void | Promise<void>]> = [
   ["the live-only plan-valid fixture is registered and skipped offline", testLiveOnlyFixtureIsSkippedOffline],
   ["the eval --category gate refuses an unknown or missing value", testEvalCategoryGate],
   ["the footprint CLI measures, prints deterministic JSON, rejects bad arguments, and preserves an unchanged baseline", testFootprintCli],
+  ["a profile with no baseline row fails until it is recorded", testMissingBaselineRow],
   ];
 
 const restoreEnv = isolateKitEnv();

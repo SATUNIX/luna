@@ -52,6 +52,8 @@ export interface CycleEntry {
   mode: ReportMode | null;
   merged: boolean;
   mergeReason: string;
+  /** True when the publish-blocked answer's rollback discarded this cycle's local-only history. */
+  discarded?: boolean;
   review: CycleReview["verdict"] | null;
   costUsd: number;
   decisions: Array<Pick<CycleDecision, "decision" | "reason" | "triggers">>;
@@ -257,6 +259,9 @@ function lastPublishedHead(si: SelfImproveState, integrationBranch: string): str
   return si.seedSha;
 }
 
+/** The mergeReason the publish-blocked rollback writes on the cycles it discarded. */
+const DISCARDED_BY_RESET = "discarded by the publish-blocked reset to ";
+
 /**
  * Roll the local integration branch back to the last published state after the operator answers the
  * publish-blocked question. Merged-but-unpublished cycles cannot be pushed (the leak scan refuses
@@ -279,14 +284,26 @@ function resetToLastPublished(ctx: StepContext): void {
   if (g(["merge-base", "--is-ancestor", published, current], { allowFail: true }) === null) return;
   g(["update-ref", ref, published, current]);
   // The refused publish scanned the discarded cycle tags too, and with tag publication on (the
-  // default) they would be scanned again and refuse the answer's push. Drop the cycle tags for
-  // the discarded history; only tags that are not ancestors of the published head are affected.
-  const tagPrefix = `refs/tags/${cfg.tagPrefix}cycle-`;
+  // default) they would be scanned again and refuse the answer's push. Drop this run's tags for
+  // the discarded history (cycle and abandoned tags alike); only tags that are not ancestors of
+  // the published head are affected.
+  const tagPrefix = `refs/tags/${cfg.tagPrefix}`;
   for (const line of g(["for-each-ref", "--format=%(objectname) %(refname)", `${tagPrefix}*`]).split("\n")) {
     const [sha, tagRef] = line.trim().split(/\s+/);
     if (sha === undefined || tagRef === undefined) continue;
     if (g(["merge-base", "--is-ancestor", sha, published], { allowFail: true }) === null) g(["update-ref", "-d", tagRef, sha], { allowFail: true });
   }
+  // The next cycle's prompt reads the last entry, and telling the worker that the work is
+  // integrated (or pointing at a report that is no longer on the branch) would hide the redo.
+  // Keep `merged` as the historical fact (the cycle-start bundle logic also treats an unmerged
+  // cycle's tag as fetchable, and the rollback just dropped those tags), but mark every entry
+  // whose head is not an ancestor of the published head as discarded so the prompt says so.
+  for (const entry of si.history) {
+    if (g(["merge-base", "--is-ancestor", entry.head, published], { allowFail: true }) !== null) continue;
+    entry.discarded = true;
+    entry.mergeReason = `${DISCARDED_BY_RESET}${published.slice(0, 12)}`;
+  }
+  si.lastGoodSha = published;
   // Record the post-reset state so the cycle-start publish is a no-op for the integration branch:
   // discarding the unpublishable history must not itself look like a successful publish (the next
   // real push, after the answer cycle, is what clears the blocker and the streak).
@@ -313,7 +330,9 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
-    if (last.merged) {
+    if (last.discarded) {
+      previous += `its local work was discarded when the publish-blocked answer rolled ${cfg.integrationBranch} back to the last published head; redo it in this cycle instead of looking for its report on the branch.`;
+    } else if (last.merged) {
       previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
       if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider ${stewarded ? "any assigned improvements" : "improve mode"}.`;

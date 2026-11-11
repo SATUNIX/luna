@@ -455,9 +455,11 @@ The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `
 `verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
 `node packages/core/paperwork-budget.ts <cycle-dir>` (add `--journal=autonomy/JOURNAL.md
 --run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
-exits non-zero on an overrun or a missing or duplicate journal line. `smoke:paperwork-budget`
-pins the 120-line failure and the 40-line pass (`tests/paperwork-budget-smoke.ts`). The cap
-counts the cycle's record, not its work: commit messages, code and tests are not counted.
+exits non-zero on an overrun or a missing or duplicate journal line. It is a manual check run by
+the steward, not a gate that blocks a merge, and `--max-lines` only overrides the cap for an
+experiment. `smoke:paperwork-budget` pins the 120-line failure and the 40-line pass
+(`tests/paperwork-budget-smoke.ts`). The cap counts the cycle's record, not its work: commit
+messages, code and tests are not counted.
 
 The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
 items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (6) tests/docs,
@@ -591,12 +593,15 @@ location and makes removing the identifier its first job, and after **two** merg
 cycles stay unpublished (an intervening non-merged cycle does not reset the count), the host stops
 the run in `blocked` with an operator question (remove the identifier and resume, or stop the run).
 Answering that question first rolls the local integration branch back to the last published head,
-discarding the merged-but-unpublished cycles (their `cycle-NN` tags are dropped so the leak scan
-is not shown the discarded commits again), then lets exactly one cycle run — the answer is
-consumed as that one resume permission. The rollback is required because publication is
-fast-forward only and the leak scan reads the whole pushed range, so merely removing the
-identifier in a later commit leaves the refused commit publishable; the answer's cycle redoes the
-discarded work. The run parks again if that cycle's publication is still refused. A successful
+discarding the merged-but-unpublished cycles and every one of the run's tags whose commit is not
+an ancestor of the published head (their `cycle-NN` and `abandoned-NN` tags are dropped so the
+leak scan is not shown the discarded commits again). Their history entries stop claiming `merged`
+and say the publication reset discarded them, so the next cycle's prompt tells the worker to redo
+the work instead of looking for a report that is no longer on the branch. Then exactly one cycle
+runs — the answer is consumed as that one resume permission. The rollback is required because
+publication is fast-forward only and the leak scan reads the whole pushed range, so merely
+removing the identifier in a later commit leaves the refused commit publishable; the answer's
+cycle redoes the discarded work. The run parks again if that cycle's publication is still refused. A successful
 publish clears the blocker and the count (`tests/autonomy-selfimprove-smoke.ts`). The worker has no
 push credentials and never performs host promotion; host pushes stay fast-forward
 only (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-smoke.ts`; scanner rules:

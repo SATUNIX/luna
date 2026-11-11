@@ -272,6 +272,13 @@ function defaultBaselineFile(): string {
   return fileURLToPath(new URL("./footprint-baseline.json", import.meta.url));
 }
 
+/** Whole-file replacement: a crash while writing must not leave a half-written baseline. */
+function writeBaselineAtomic(file: string, text: string): void {
+  const tmp = `${file}.${String(process.pid)}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 /** Read and validate the baseline. A malformed record is an error: a silent default hides a drift. */
 export function readBaseline(file = defaultBaselineFile()): FootprintBaseline {
   return parseJsonAs(FootprintBaselineSchema, fs.readFileSync(file, "utf8"), file);
@@ -363,13 +370,15 @@ export function serializeBaseline(baseline: FootprintBaseline): string {
 
 /** The baseline row `--write-baseline` records: measured numbers, keeping any reviewed ceiling. */
 export function baselineEntry(f: Footprint, previous: FootprintProfileBaseline | undefined): FootprintProfileBaseline {
+  // Keep the reviewed shape: a profile whose baseline has no delegation row (lite) must stay
+  // byte-identical, so only extend delegation when the reviewed row already pins it.
   const delegation =
-    f.delegation === null
+    previous?.delegation === undefined || f.delegation === null
       ? undefined
       : {
           tools: [...f.delegation.tools],
           toolText: f.delegation.toolText,
-          ...(previous?.delegation?.ceiling === undefined ? {} : { ceiling: previous.delegation.ceiling }),
+          ...(previous.delegation.ceiling === undefined ? {} : { ceiling: previous.delegation.ceiling }),
         };
   return {
     toolText: f.toolText,
@@ -464,7 +473,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     const current = fs.readFileSync(file, "utf8");
     if (text === current) console.log(`[footprint] ${profile}: baseline unchanged`);
     else {
-      fs.writeFileSync(file, text);
+      writeBaselineAtomic(file, text);
       console.log(`[footprint] ${profile}: baseline written`);
     }
     return 0;

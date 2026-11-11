@@ -90,7 +90,7 @@ Any other argument, or a value flag with no value or followed by another `--` fl
 flowchart TD
     M{"delivery mode"}
     L["local: the source is the checkout path, no channel"]
-    N["npm: keep the registered entry and its channel, else latest or next"]
+    N["npm: keep the registered entry and its channel, else latest or next (or trunk)"]
     G["git: gitKitSource"]
     REG{"a kit git entry is registered?"}
     LEG["retired private source: migrate to the public source, capture hand edits, pi remove the old entry"]

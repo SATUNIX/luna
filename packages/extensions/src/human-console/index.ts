@@ -342,7 +342,7 @@ export default function humanConsole(pi: ExtensionAPI) {
           // paused rather than stack a second prompt on top of that card.
           if (inputHeld()) return { shown: false, answer: null };
           // Hold input for our own prompt too, so a sibling pause prompt cannot stack on it.
-          const picked = await withInputHold("human-console", () => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal));
+          const picked = await withInputHold("the open resume card", () => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal));
           return { shown: true, answer: picked.settled && typeof picked.value === "string" ? picked.value : null };
         }, {
           signal: cards.signal,
@@ -384,7 +384,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}${run.step === undefined ? "" : ` · step ${run.step}`}`;
       // Hold input for the card and release it before settling and asking to resume: askToResume's
       // showWhenFree must not wait on our own hold.
-      const result = await withInputHold("human-console", () => answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal));
+      const result = await withInputHold("the open console card", () => answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal));
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
       // No answer before the requester's deadline: it has already failed closed; decide nothing.
@@ -454,7 +454,7 @@ export default function humanConsole(pi: ExtensionAPI) {
       // sees it and leaves its pending file for the next 1 Hz poll instead of opening a second card
       // that would steal focus from this one (V-02).
       const { signal } = cards;
-      await withInputHold("human-console", async () => {
+      await withInputHold("the open console card", async () => {
         const result = request.kind === "approval"
           ? await answerApproval(ctx, request, cardMs(request, deadline), signal)
           : await answerQuestion(ctx, request, signal, cardMs(request, deadline)).then((asked): Answer => ({ approved: asked.outcome === "answered", answer: asked.answer }));
@@ -527,7 +527,13 @@ export default function humanConsole(pi: ExtensionAPI) {
     if (ctx.hasUI && ctx.ui) {
       // An open overlay owns the keyboard here too (see processOne): `select` would take focus and Enter
       // would return the first option as the human's answer. The wait and the card share the timeout.
-      const asked = await showWhenFree((card) => answerQuestion(ctx, { kind: "question", ...question }, signal, card.timeout), {
+      const asked = await showWhenFree(async (card): Promise<Asked> => {
+        // A console card can take the keyboard between the wait and this callback. Fail closed
+        // rather than stack a second card on top of it.
+        if (inputHeld()) return { outcome: "dismissed", answer: null };
+        // Hold input for the question too, so a console card cannot open over it.
+        return withInputHold("the open question card", () => answerQuestion(ctx, { kind: "question", ...question }, signal, card.timeout));
+      }, {
         signal,
         timeoutMs: requestedTimeout(params, cardTimeoutMs()),
         rawTimeout: true,

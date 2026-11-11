@@ -800,6 +800,7 @@ try {
       //      steals focus from the first (V-02).
       await attempt("two child approvals in one scan open one card at a time", async () => {
         selects.length = 0;
+        consoleNotices.length = 0;
         manual = true;
         manualCards.length = 0;
         pick = "Allow once";
@@ -810,7 +811,9 @@ try {
           assert.equal(selects.length, 1, "one card opens for two requests written in the same scan");
           await sleep(1500);
           assert.equal(selects.length, 1, "the sibling waits for the next poll instead of opening a second card");
-          assert.equal(owner.inputHeld(), "human-console", "the console holds input while its card is open");
+          assert.equal(owner.inputHeld(), "the open console card", "the console holds input while its card is open");
+          assert.ok(consoleNotices.some((n) => /close the open console card to see it/.test(n)), `the sibling's notice names the open card: ${JSON.stringify(consoleNotices)}`);
+          assert.ok(!consoleNotices.some((n) => /close human-console/.test(n)), "the notice never tells the operator to close a process name");
           manualCards.shift()?.();
           await until(() => selects.length === 2, 2500);
           assert.equal(selects.length, 2, "the sibling card opens only after the first closes");
@@ -823,6 +826,38 @@ try {
           while (manualCards.length) manualCards.shift()?.();
           for (const id of ["serial-first", "serial-second"]) fs.rmSync(pendingFile(id), { force: true });
           await Promise.race([Promise.all([first, second]), sleep(1500)]);
+        }
+      });
+
+      // 24c. The reverse direction: an ask_human card holds input too, so a console request that
+      //      arrives while it is open waits for the next poll instead of opening over it (V-02).
+      await attempt("ask_human holds input so a console card does not open over it", async () => {
+        selects.length = 0;
+        manual = true;
+        manualCards.length = 0;
+        pick = "No";
+        const asked = askHuman();
+        await until(() => selects.length === 1, 2500);
+        assert.equal(owner.inputHeld(), "the open question card", "ask_human holds input while its card is open");
+        const pending = brokerRequest(ws, { id: "after-question", kind: "approval", title: "Approve tool call?", body: "child", choices: ["Allow once", "Deny"], timeoutMs: 30000 });
+        try {
+          await sleep(1500);
+          assert.equal(selects.length, 1, "the console card did not open over the ask_human card");
+          assert.ok(fs.existsSync(pendingFile("after-question")), "the console request keeps its pending file");
+          manualCards.shift()?.();
+          const answer = await asked;
+          assert.match(answer, /Human answer: No/);
+          pick = "Allow once";
+          await until(() => selects.length === 2, 2500);
+          assert.equal(selects.length, 2, "the console card opens after the question closes");
+          manualCards.shift()?.();
+          const result = await pending;
+          assert.equal(result.approved, true, "the console request is asked after the question closes");
+        } finally {
+          manual = false;
+          while (manualCards.length) manualCards.shift()?.();
+          fs.rmSync(pendingFile("after-question"), { force: true });
+          await Promise.race([pending, sleep(1500)]);
         }
       });
     } finally {

@@ -247,8 +247,9 @@ export class HarnessCheck {
     this.reason = null;
   }
 
-  /** Settle the check on a get_commands reply: true when every required command is present. */
+  /** Settle the check on a get_commands reply: true when every required command is present. Once settled (including by `expire()`), a later reply must not overwrite the verdict. */
   settle(response: unknown): boolean {
+    if (this.state !== "pending") return this.state === "verified";
     const missing = missingHarness(response, this.required);
     if (missing.length === 0) {
       this.state = "verified";

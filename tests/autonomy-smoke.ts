@@ -675,6 +675,10 @@ await check("harness check: HarnessCheck is per-session, fails closed on missing
   const timedOut = check.failure;
   check.expire();
   assert.equal(check.failure, timedOut, "expire after a failure is a no-op");
+  // A reply that arrives after the timeout must not revive the session: fail-closed wins.
+  assert.equal(check.settle(full), false, "a late reply must not overwrite the timeout");
+  assert.equal(check.verified, false);
+  assert.equal(check.failure, timedOut);
   // A per-session reset clears the failure: the next full reply verifies again.
   check.reset();
   assert.equal(check.failure, null);

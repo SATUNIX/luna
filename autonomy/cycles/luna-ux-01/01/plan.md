@@ -1,98 +1,75 @@
 # Cycle 01 — Plan (run luna-ux-01, stream `ux`)
 
-- Mode: **fix** (defects F-1 and F-2 from `review.md`; no board items, no HANDOFF).
-- Base: `6accaa653a47`. Branch: `pi/luna-ux-01`.
-- Budget: ~$5, ~3 h. Two small items in one extension; highest-value first.
+- Mode: **improve** (assigned board item V-05; steward P0 checked and recorded, no code change
+  justified).
+- Base: `a43f32bae871`. Branch: `pi/luna-ux-01`.
+- Budget: ~$5 model spend, ~3 h. One item, finished and verified.
 
 ## Goal
 
-Fix the two confirmed, evidenced defects in the custom-footer status bar and todo widget, each with
-a regression test that fails at the base, and keep the docs that describe them accurate.
+Give a Luna terminal session a custom launch screen: a "Luna" wordmark with the pi version and up
+to five useful first actions, a short reveal animation that respects reduced motion, a narrow-
+terminal fallback, and an ASCII mode — wired through the one existing `session_start` handler in
+control-center, tested, and documented.
 
-## Item 1 — critical-warning merge prints twice (F-1)
+## Item V-05 — launch screen
 
-- Justification (charter 1, 4): a reproduced rendering bug in the status bar; the narrow-terminal
-  case is where boundary warnings matter most. Code contradicts its own comment.
-- Change: in `packages/extensions/third_party/custom-footer/render.ts` `fitLine`, hoist the
-  `placed` flag out of `replace` so the merged `"<first> +N"` segment is placed once across both
-  `l` and `r`; all other priority-0 segments are dropped. No other behaviour changes.
-- Proof: extend `tests/status-bar-smoke.ts` (the `criticalWarningsOutliveTelemetryWhenNarrow`
-  area) with an assertion that the merged summary appears exactly once on the default line at a
-  narrow width, with a right-hand critical chip present. It must fail on the base code (which
-  prints it twice).
-- Checks: `npm run smoke:status-bar`; `npm run test:typecheck`; `npm run test:lint`.
-- Docs: none needed (the doc already says the rest are counted).
+Justification (charter 1, 2, 3): pi 1.4 offers `ctx.ui.setHeader` and Luna does not use it
+(`grep -rn "setHeader" packages tests` → no `ctx.ui.setHeader`), so the first screen of the
+product is pi's stock header with no Luna identity or first actions. The API and examples exist in
+the installed host (`types.d.ts:114-117`, `examples/extensions/custom-header.ts`); the need is
+the `ux` stream's assigned V-05.
 
-## Item 2 — `/footer ascii on` misses the todo checklist (F-2)
+### Change
 
-- Justification (charter 1, 3): persisted setting is documented to affect the todo widget and does
-  not; keyboard-only terminals keep getting Unicode glyphs.
-- Change: give `renderTodoWidget` an `ascii` parameter/option and pass `settings.ascii` from
-  `updateTodoWidget` (`packages/extensions/third_party/custom-footer/index.ts:275`), so
-  `footerGlyphs(theme, ascii)` is used. Backward compatible: default keeps current behaviour.
-- Proof: extend `tests/status-bar-smoke.ts` (or `tests/cat-status-smoke.ts` where the widget is
-  exercised) with an assertion that `renderTodoWidget(items, theme, { ascii: true })` output is
-  printable ASCII only, while the default still uses the Unicode glyphs. Must fail at the base
-  (no ascii parameter exists / no effect).
-- Checks: `npm run smoke:status-bar`; `npm run smoke:cat-status`; `npm run test:typecheck`;
-  `npm run test:lint`.
-- Docs: `docs/status-bar-and-costs.md` already claims the todo widget is ASCII; verify the wording
-  and adjust only if the implementation differs from the claim.
-- Shipped signature: for backward compatibility the ascii flag is a trailing positional parameter
-  (`renderTodoWidget(items, theme, max = 8, ascii = false)`), not the `{ ascii }` options object
-  sketched above. No caller outside the widget's own update path exists, and the existing `max`
-  parameter keeps its position.
+1. New `packages/extensions/src/control-center/launch-screen.ts`:
+   - `launchLines(opts: { width, frame, reducedMotion, ascii, version, hubKey, menuCmd, theme })`
+     — pure. Returns the rendered lines for the given reveal `frame` (0-based); final frame when
+     `reducedMotion`. Every line through `truncateToWidth` and `visibleWidth`-checked at `width`.
+     Below 60 columns: no art, one compact action line. ASCII mode: printable ASCII only.
+     Content: "Luna" wordmark + `v<version>` (pi VERSION) and up to 5 actions: `<menuCmd>`,
+     `<hubKey>` for the control centre, `/profile`, `/model`, `/resume`.
+   - `launchHeader(deps)` — the `ctx.ui.setHeader` factory: keeps a frame counter, starts at most
+     12 frames on `setInterval(..., 80..120).unref()`, calls `tui.requestRender()` per frame,
+     clears the timer when the reveal finishes and in `dispose()`. Reduced motion (env
+     `PI_KIT_REDUCED_MOTION=1`, `ui.json` `reducedMotion: true`, `TERM=dumb`, or `CI` set) → final
+     frame, no timer.
+   - Pure helpers exported for tests; no new dependencies, only node builtins and pi-tui peers.
+2. Wire into the existing `session_start` handler in `control-center/index.ts` **after**
+   `curated = true` and **before** the `commandMenu === "all"` early return. Run only when the
+   session is TUI, `PI_KIT_INTERNAL_CHILD !== "1"`, `typeof ctx.ui.setHeader === "function"`, and
+   `readUiFile()?.launchScreen !== "off"`. `menuCmd` is `/menu` when `pi.getCommands()` lists it,
+   else `/kit` (works after V-03).
+3. `packages/extensions/src/control-center/extension.json`: add `PI_KIT_REDUCED_MOTION` to `env`.
+4. `package.json`: add `"smoke:launch-screen": "node tests/launch-screen-smoke.ts"` (the only
+   scripts change; no existing script is modified).
+5. `docs/control-center.md`: new `## Launch screen` section (behaviour, actions, reduced motion,
+   narrow and ASCII modes, `launchScreen: "off"`). Run `npm run catalog` so `docs/reference.md`
+   lists the new env var.
 
-## Checks that prove the cycle
+### Proof — `tests/launch-screen-smoke.ts`
 
-- Targeted smokes for every changed file: `npm run smoke:status-bar`, `npm run smoke:cat-status`.
-- `npm run test:typecheck`, `npm run test:lint` (repo is strict TS).
-- Independent `reviewer` subagent on `git diff 6accaa653a47..HEAD` against `autonomy/CHARTER.md`.
-- Never `npm test` or `npm run check:all` (host gate runs the full suite).
+Uses `harness` `loadModule`/`fakePi`/`isolateKitEnv`/`setEnv`/`tmpWorkspace`, and asserts:
 
-## Out of scope (recorded, not taken)
+- the TUI `session_start` calls `setHeader` exactly once;
+- no header over rpc/print mode, in a child session, or with `launchScreen: "off"`;
+- at widths 20, 40, 60, 80 and 120 every line has `visibleWidth(line) <= width`, and the output
+  contains "Luna" and the menu command; width 20 does not throw;
+- reduced motion via env and via `ui.json`: no timer starts and successive frames are identical;
+- animated mode clears its timer by itself after the reveal and on `dispose()`;
+- ASCII mode output is printable ASCII only;
+- the menu command falls back to `/kit` when `getCommands()` lacks `menu`.
 
-- Idle-blink dead code (`cat.ts:36` vs `index.ts:387-391`): ambiguous intent, deferred.
-- human-console `inputHeld()` TOCTOU: proposal for the owner.
+### Checks to run
 
----
+- `npm run smoke:launch-screen` (new), `npm run smoke:command-menu`, `npm run smoke:control-center`,
+  `npm run smoke:docs`, `npm run test:typecheck`, `npm run test:lint`.
+- `npm run catalog` then `git status` (generated reference committed with the change).
+- Independent `reviewer` subagent on the cycle diff against `autonomy/CHARTER.md`.
+- Never `npm test` or `npm run check:all` (host gate runs the full suite on a clean checkout).
 
-# Plan — second session, cycle base `afecc1bbb33d`
+## Out of scope
 
-- Mode: **fix**. Prior batch is merged into the base; this session investigated the C-1 finding
-  from the continuation review. Budget ~$5, ~3 h. Outcome: C-1 was refuted and reverted, so this
-  session ships no code of its own.
-
-## Outcome
-
-C-1 was planned as a fix and then **refuted by independent review before it could merge**. The
-host re-invokes the extension factory on every session replacement, so `registerCommandMenu`
-already runs again with a fresh `curated = false`; the curated `/` menu survives `/new`, `/resume`
-and `/fork` at the base. The attempted fix (`0e77b67`) and its synthetic smoke case were reverted
-(`e7f29cc`). See the corrected `review.md` C-1 section for the host evidence.
-
-  ## Item C-1 — curated `/` menu lost on session replacement (REFUTED, reverted)
-
-  - Original justification (charter 1, 3, 4): a claimed TUI/`/`-menu defect. The initial reconnaissance
-  assumed the extension module was not re-imported and therefore that `curated` stayed `true`.
-  - Refutation: `core/extensions/loader.js:513-517` calls `await factory(load.api)` on every
-  `loadExtension`, and `core/agent-session-runtime.js` rebuilds the runtime through `createRuntime`
-  for `/new`, `/resume` and `/fork`; a live RPC run logged the factory once per session and one
-  provider registration per session. The provider is re-added by the new factory invocation.
-  - Action: reverted the code change and the synthetic smoke case (`e7f29cc`). The smoke's sequence
-  (fire `session_shutdown`, clear providers, fire `session_start` without re-invoking the factory)
-  does not occur in the host.
-- Checks after revert: `npm run smoke:command-menu` (11 checks), `npm run test:typecheck`,
-  `npm run test:lint`. All pass.
-
-## Checks that prove the session
-
-- `npm run smoke:command-menu` (the changed file's smoke), `npm run test:typecheck`,
-  `npm run test:lint`.
-- Independent `reviewer` subagent on `git diff afecc1bbb33d..HEAD` against `autonomy/CHARTER.md`.
-- Never `npm test` or `npm run check:all` (host gate runs the full suite).
-
-## Out of scope (recorded)
-
-- human-console proposal refuted; new `processPending` multi-card focus-theft proposal to be filed.
-- idle-cat blink still needs an intent decision (proposal kept open).
+- Steward P0 compat lane: not reproducible offline; see `review.md`. Recorded, not edited.
+- Proposals (idle-cat blink, human-console focus theft, web-console shared runtime, trunk channel
+  alias): remain proposals, not this cycle.

@@ -406,6 +406,41 @@ tests.push([
   },
 ]);
 
+tests.push([
+  "the curated provider is re-registered after pi replaces a session",
+  async () => {
+    // Load control-center once: startWith reloads the module, which would reset the closure.
+    const register = await loadControl();
+    const fake = makeApi(COMMANDS);
+    register(fake.api);
+
+    const sessionStart = fake.handlers.get("session_start");
+    const sessionShutdown = fake.handlers.get("session_shutdown");
+    assert.ok(sessionStart, "control-center must register a session_start handler");
+    assert.ok(sessionShutdown, "control-center must register a session_shutdown handler");
+
+    const start = async (): Promise<void> => {
+      await sessionStart({}, { mode: "tui", hasUI: true, cwd: process.cwd(), ui: fake.ui });
+    };
+
+    // (a) the first TUI start installs the curated filter.
+    await start();
+    assert.equal(fake.providers.length, 1, "the first TUI start registers the curated provider");
+
+    // (b) a repeated session_start in the same session must not stack providers.
+    await start();
+    assert.equal(fake.providers.length, 1, "a duplicate session_start does not register a second provider");
+
+    // (c) pi's session replacement (/new, /resume, /fork): resetExtensionUI empties
+    // autocompleteProviderWrappers, teardownCurrent emits session_shutdown, then a fresh
+    // session_start arrives while the extension module is reused. The filter must return.
+    fake.providers.length = 0;
+    await sessionShutdown({}, {});
+    await start();
+    assert.equal(fake.providers.length, 1, "the curated provider is registered again after a session replacement");
+  },
+]);
+
 // --- runner ------------------------------------------------------------------------------------
 
 let failed = 0;

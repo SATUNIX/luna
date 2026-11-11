@@ -2,18 +2,28 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `68d70c78940c` (head of `stream/core`, holds cycles 01–13).
-  Cycle 14 commits: `aa676c2` (compress zero-turn guard), `003b36b` (footprint baseline guard),
-  plus the records under `autonomy/cycles/luna-core-01/14/` and the `luna-core-01/14` line in
-  `autonomy/JOURNAL.md`.
-- Cycle 14 outcome: **successful** (fix). Board empty. Two evidenced defects fixed: `/compress`
-  threw `turn 0 is out of range` on a history with no groupable turns, and the footprint CLI
-  crashed with a stack trace on a malformed `--baseline` (now a clean exit 2). Targeted smokes
-  green, independent reviewer PASS. Reviewable diff 47 insertions / 6 deletions over 5 files.
-- Deferred with evidence in `autonomy/cycles/luna-core-01/14/review.md`: dead code
-  (`effort/index.ts:838` empty ternary; `context-sieve/index.ts:67` two dead `DYNAMIC_IDS` entries),
-  `memory-vault/index.ts:133` consuming `firstPrompt` on a promptless run, and
-  `tests/orchestrate-commands-smoke.ts` not clearing `PI_KIT_INTERNAL_CHILD`.
+- Branch `pi/luna-core-01`, base `a0ded595f7bc` (head of `stream/core`, holds cycles 01–14).
+  Cycle 15 commits: `1148397` (memory-vault first-user-prompt recall), `5febfc1` (dead-code
+  cleanup in effort/context-sieve), plus the records under `autonomy/cycles/luna-core-01/15/`
+  and the `luna-core-01/15` line in `autonomy/JOURNAL.md`.
+- Cycle 15 outcome: **partial** (fix). Both items landed and targeted checks pass, but the planned
+  independent reviewer died without a verdict. Memory-vault now keeps the recap/pinned recall for
+  the real first user prompt after a custom-message run; the effort always-empty ternary and two
+  dead `DYNAMIC_IDS` entries were removed. Diff 8576 chars over 6 files, +13/−9.
+- Deferred with evidence in `autonomy/cycles/luna-core-01/15/review.md`: HANDOFF #4
+  `tests/orchestrate-commands-smoke.ts` not clearing `PI_KIT_INTERNAL_CHILD` (test robustness only);
+  V-07/V-08/V-10 still need the operator's finding list; #1 firewall timing noise is out of stream.
+
+## What cycle 15 did
+
+1. **Memory-vault first-prompt recall.** `memory-vault/index.ts` cleared `firstPrompt` on every
+   `before_agent_start`, including a run started by an extension custom message, so the real first
+   user prompt lost the earlier-session recap and pinned-memory block. Now the flag clears only on
+   a user prompt and the recap block is gated on `firstPrompt && "prompt" in event`. Pinned by a
+   new assertion in `tests/memory-vault-smoke.ts`; docs say "first user prompt".
+2. **Dead code.** Removed the always-empty ternary in `effort/index.ts` and the `memory-vault` /
+   `skill-router` ids in `context-sieve/index.ts` that no producer writes. Behaviour unchanged;
+   `smoke:effort` 38/38 and `smoke:ctx-contributions` 13/13.
 
 ## What cycle 12 did
 
@@ -66,9 +76,9 @@ All targeted checks pass and the independent review passed. Merge `pi/luna-core-
    runner's watchdog semantics (`autonomy/proposals/luna-core-01-08-sandbox-watchdog-load.md`).
 8. Defect IDs V-07/V-08/V-10 still need the operator's in-tree finding list; the owner-side
    `coverage` CI job is red and untouched.
-9. Lower-priority found defects, not chosen: stale `session_start` "wipe" docs
-   (`docs/capability-research-workflow.md:45-48`, `third_party/caveman/index.ts:194`; code is
-   mtime-scoped) and dead code (`effort/index.ts:838`, `context-sieve/index.ts:67`).
+9. Remaining lower-priority found defect: HANDOFF #4, `tests/orchestrate-commands-smoke.ts` does
+   not clear `PI_KIT_INTERNAL_CHILD`; test robustness only. The cycle-13 stale "wipe" docs and the
+   cycle-15 dead-code sites are already fixed. V-07/V-08/V-10 still need the operator's finding list.
 
 ## Rules for the next session
 

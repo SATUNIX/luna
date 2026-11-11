@@ -923,6 +923,10 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   try {
     task = renderTemplate(step.task ?? "", { inputs: state.inputs, state, runDir, loop });
     if (st.expandMiss !== undefined) task = `${task}\n\n${st.expandMiss}`;
+    if (step.outputs?.length) {
+      const required = step.outputs.map((o) => path.join(runDir, o));
+      task = `${task}\n\n## Required output\n${required.map((p) => `Write your report to ${p}. The step fails if that exact file is absent.`).join("\n")}`;
+    }
   } catch (error) {
     st.status = "failed";
     st.error = error instanceof Error ? error.message : String(error);
@@ -1015,7 +1019,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   const missingOutputs = (step.outputs ?? []).filter((o) => !fs.existsSync(path.join(runDir, o)));
   if (missingOutputs.length) {
     st.status = "failed";
-    st.error = `declared output(s) not written in ${runDir}: ${missingOutputs.join(", ")}`;
+    st.error = `declared output(s) not written in ${runDir}: ${missingOutputs.map((o) => path.join(runDir, o)).join(", ")}`;
     settle("failed");
     return settled();
   }

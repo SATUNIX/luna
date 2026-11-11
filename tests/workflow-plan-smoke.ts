@@ -314,7 +314,7 @@ await check("outputs are paths in the run directory: prose is refused at compile
   const dir = path.join(workflowMod.runsRoot(project), runId);
   const saved: unknown = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
   const stepState: unknown = Reflect.get(Object(Reflect.get(Object(saved), "steps")), "step-1");
-  assert.equal(Reflect.get(Object(stepState), "error"), `declared output(s) not written in ${dir}: report.md`);
+  assert.equal(Reflect.get(Object(stepState), "error"), `declared output(s) not written in ${dir}: ${path.join(dir, "report.md")}`);
   assert.match(textOf(missing), /declared output\(s\) not written/);
 });
 

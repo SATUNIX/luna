@@ -18,6 +18,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
+  `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,
+  so a step declaring `outputs: [report.md]` never learned the path it had to write. The subagent
+  finished, the executor found the file absent, and the step failed after its tokens were already
+  spent (`step <id> failed: declared output(s) not written in <runDir>: report.md`); a gated review
+  step then never ran and the parent redid the review by hand. The task now ends with a
+  `## Required output` block naming each declared file by its absolute path and stating the step
+  fails if that exact file is absent, and the failure message names the absolute paths too. Pinned
+  by `tests/workflow-smoke.ts` and `tests/workflow-plan-smoke.ts`.
+
 - **A publication the pre-push leak scan refuses no longer lets the run cycle on.** `publishNow` in
   the self-improve template caught every error, stored `selfImprove.publishBlocker` and returned;
   nothing read it, so a leak-scan refusal was logged once and the supervisor kept merging and

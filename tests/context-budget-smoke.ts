@@ -324,6 +324,47 @@ async function testBudgetForPureFunction() {
     assert.equal(knownContextWindow(bad), null);
   }
 }
+// The "\n\n" that joins system-channel blocks must be charged: an exact fill with two
+// contributions used to exceed budgetChars (100 + 2 + 100 = 202 over a 200-char budget) and
+// record totalTokens above budget.
+async function testSeparatorChargedInBudget() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-sep-");
+  const restore = setEnv("PI_KIT_CTX_BUDGET_TOKENS", "50"); // 200 chars total
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "sep-a", 10, 1000, "a".repeat(100));
+    writeContrib(ws, "sep-b", 5, 1000, "b".repeat(100));
+    const result = await sieveTurn(pi, { systemPrompt: "base" });
+    const joined = result.systemPrompt.slice("base\n\n".length);
+    assert.ok(joined.length <= 200, `joined blocks must not exceed budgetChars (got ${joined.length})`);
+    const budget = readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.ok(budget.totalTokens <= budget.budget, "recorded totalTokens must not exceed the recorded budget");
+    assert.deepEqual(budget.truncated, ["sep-b"], "the separator room truncates the tail contribution");
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
+// When every contribution disappears, lastInjected must be forgotten, so a contribution that
+// comes back byte-identical is injected again (docs/architecture/memory-compaction-context.md).
+async function testAllContributionsGoneClearsLastInjected() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-empty-");
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "orchestrator", 80, 800, "DELEGATION POLICY score=3");
+    const r1 = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(r1.message && /DELEGATION POLICY score=3/.test(r1.message.content), "the first turn injects the directive");
+    fs.rmSync(path.join(ws, ".pi", "ctx-contributions", "orchestrator.json"));
+    const r2 = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.equal(r2?.message, undefined, "with no contributions nothing is injected");
+    writeContrib(ws, "orchestrator", 80, 800, "DELEGATION POLICY score=3");
+    const r3 = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(r3.message && /DELEGATION POLICY score=3/.test(r3.message.content), "a byte-identical return after an empty turn is injected again");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
 
 const tests: Array<[string, () => Promise<void>]> = [
   ["budgets scale with the model's real context window; unknown stays unknown", testBudgetsScaleWithContextWindow],
@@ -337,6 +378,8 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["the message channel is deduplicated per contribution, not as one block", testMessageDedupeIsPerContribution],
   ["equal-priority contributions are ordered by id, not directory order", testEqualPriorityOrderedById],
   ["a non-finite priority is normalised to 0", testNonFinitePriorityNormalisedToZero],
+  ["join separators are charged against the budget", testSeparatorChargedInBudget],
+  ["all contributions gone clears lastInjected so a return is injected again", testAllContributionsGoneClearsLastInjected],
   ["an oversized contribution file is skipped before parse", testOversizedContributionFileSkippedBeforeParse],
 ];
 

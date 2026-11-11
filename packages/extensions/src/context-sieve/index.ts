@@ -232,7 +232,10 @@ function assembleWithBudget(
   const truncatedIds: string[] = [];
 
   for (const contrib of sorted) {
-    const remaining = budgetChars - used;
+    // Charge the "\n\n" that joins the assembled blocks, so the joined text never exceeds
+    // budgetChars (an uncharged separator let totalTokens exceed the recorded budget).
+    const separator = assembled.length > 0 ? 2 : 0;
+    const remaining = budgetChars - used - separator;
     if (remaining <= 0) {
       dropped.push(contrib.id);
       continue;
@@ -248,7 +251,7 @@ function assembleWithBudget(
     assembled.push(text);
     included.push(contrib.id);
     if (truncated) truncatedIds.push(contrib.id);
-    used += text.length;
+    used += text.length + separator;
   }
 
   return { assembled, included, dropped, truncatedIds };
@@ -287,7 +290,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     const dir = contribDir;
     const contributions = readContributions(dir);
-    if (contributions.length === 0) return undefined;
+    if (contributions.length === 0) {
+      // Nothing is current, so forget what was injected: a contribution that comes back later
+      // (even byte-identical) must be injected again.
+      lastInjected.clear();
+      return undefined;
+    }
 
     // The budgets are absolute token counts, but a fixed 4096 + 1200 is a third of a 16k window and
     // most of an 8k one (the lite profile is for exactly those). Size them against the model's real

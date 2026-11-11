@@ -5,7 +5,7 @@ Mode: fix
 
 Board: PG-12 done - a git install now prints one line, `trunk is N commits ahead — /update channel next`, at start-up, on bare `/update`, and under `/update status`, without ever blocking start-up.
 
-Board: V-03 done (already on the base) - verified `/menu` primary with `/kit` and `/helpers` aliases, the `alt+m` shortcut and the Settings page; no change was needed or made this cycle.
+Board: V-03 done - already on the base: verified `/menu` primary with `/kit` and `/helpers` aliases, the `alt+m` shortcut and the Settings page; no change was needed or made this cycle.
 
 Item: PG-12 trunk-ahead notice - `fc6f1d4` (pure `trunkNotice`, best-effort `trunkAhead` via the git seam, start-up notify before the `hasUpdates` return, `formatReport` line, `tests/update-notice-smoke.ts`, docs), `115758e` (review fixes: accurate `trunkAhead` comment, empty-channel contract, bare-`/update` notify, alias proposal), `d1df582` (point the notice at `next`, the channel that follows `main`; harden the non-finite guard; extend the smoke to 7 checks) - `npm run smoke:update-notice` (7), `npm run smoke:kit-update` (40), `npm run test:typecheck`, `npm run test:lint`, `node packages/core/reference.ts --check`, `npm run smoke:docs`.
 

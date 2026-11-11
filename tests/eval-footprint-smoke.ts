@@ -469,6 +469,18 @@ function testFootprintCli(): void {
     assert.equal(created.status, 0, created.stderr);
     assert.match(created.stdout, /baseline written/, "a missing baseline file is written, not rejected");
     assert.match(fs.readFileSync(fresh, "utf8"), /"toolText": 7614/, "the new file records the measurement");
+
+    // A malformed baseline is a clean usage error, not a raw parse crash, and is left untouched.
+    const malformed = path.join(ws, "malformed-baseline.json");
+    fs.writeFileSync(malformed, "not json");
+    const malformedBytes = fs.readFileSync(malformed, "utf8");
+    const badRead = run(["--profile", "lite", `--baseline=${malformed}`]);
+    assert.equal(badRead.status, 2, "a malformed baseline exits 2");
+    assert.match(badRead.stderr, /cannot read baseline/, "the malformed baseline is named on stderr");
+    assert.equal(fs.readFileSync(malformed, "utf8"), malformedBytes, "a malformed baseline is left untouched on read");
+    const badWrite = run(["--profile", "lite", "--write-baseline", `--baseline=${malformed}`]);
+    assert.equal(badWrite.status, 2, "--write-baseline refuses to clobber a malformed baseline");
+    assert.equal(fs.readFileSync(malformed, "utf8"), malformedBytes, "a malformed baseline is left untouched on write");
   } finally {
     rmWorkspace(ws);
   }

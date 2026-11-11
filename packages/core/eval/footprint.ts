@@ -466,7 +466,18 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const file = baselineFile ?? defaultBaselineFile();
-  const baseline: FootprintBaseline = fs.existsSync(file) ? readBaseline(file) : { schemaVersion: 1, profiles: {} };
+  let baseline: FootprintBaseline;
+  if (fs.existsSync(file)) {
+    try {
+      baseline = readBaseline(file);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`footprint: cannot read baseline ${file}: ${message}. Remove the file to regenerate it.`);
+      return 2;
+    }
+  } else {
+    baseline = { schemaVersion: 1, profiles: {} };
+  }
   if (write) {
     baseline.profiles[profile] = baselineEntry(f, baseline.profiles[profile]);
     const text = serializeBaseline(baseline);

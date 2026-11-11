@@ -109,7 +109,8 @@ and a reminder to update the baseline only when the change is deliberate; a prof
 baseline row fails until `--write-baseline` records it. `--json` prints the same measurement as
 one deterministic object, so two runs of unchanged code are byte-identical. `--write-baseline`
 keeps the reviewed ceilings and rewrites the file only when the measured numbers changed, so an
-up-to-date baseline stays byte-for-byte the same.
+up-to-date baseline stays byte-for-byte the same. A malformed or foreign baseline is a clean
+error (exit 2) and is left untouched, so remove the file to regenerate it.
 
 `smoke:eval-footprint` pins the balanced and lite text against that baseline, the prompt prefix
 that survives a turn, and the CLI's JSON, argument errors and byte-identical rewrite

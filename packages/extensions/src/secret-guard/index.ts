@@ -233,11 +233,35 @@ function withinAny(absolutePath: string, roots: string[]): boolean {
   return roots.some((root) => absolutePath === root || absolutePath.startsWith(`${root}/`));
 }
 
-const SECRET_PATH_PATTERNS_FOR_COMMANDS = SECRET_PATH_PATTERNS.map(toCommandScanPattern);
+// Shell commands are sequences of words. A secret path is a secret in a path position,
+// so the broad write-side patterns are tested against each token's basename rather than
+// the whole command line. Matching the line made ordinary source under a secret-named
+// directory (packages/extensions/src/secret-guard/index.ts) look like a secret read.
+function shellTokens(command: string): string[] {
+  const tokens: string[] = [];
+  // Quoted runs are one token; unquoted runs stop at whitespace, quotes, backticks and
+  // shell operators, so `server.pem;` and `ReadAllBytes('.env')` split cleanly.
+  const re = /"([^"]*)"|'([^']*)'|([^\s"'`;|&<>()]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(command)) !== null) {
+    const token = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+    if (token) tokens.push(token);
+  }
+  return tokens;
+}
+
+const SECRET_READ_PATH_PATTERNS_FOR_COMMANDS = SECRET_READ_PATH_PATTERNS.map(toCommandScanPattern);
 
 function commandReferencesSecret(command: string): boolean {
   const normalized = stripEnvTemplateTokens(normalizePath(command));
-  return SECRET_PATH_PATTERNS_FOR_COMMANDS.some(p => p.test(normalized)) || commandHasGlobTokenMatchingSecret(normalized);
+  if (commandHasGlobTokenMatchingSecret(normalized)) return true;
+  for (const token of shellTokens(normalized)) {
+    const base = token.split(/[\\/]/).pop() || token;
+    if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;
+    if (SECRET_READ_BASENAME_PATTERNS.some(p => p.test(base))) return true;
+    if (SECRET_READ_PATH_PATTERNS_FOR_COMMANDS.some(p => p.test(token))) return true;
+  }
+  return false;
 }
 
 function commandReferencesProtected(command: string, cwd: string = process.cwd()): boolean {

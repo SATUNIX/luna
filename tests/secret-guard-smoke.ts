@@ -141,6 +141,18 @@ async function run() {
     // be caught (previously only matched when the filename was the very end of the string).
     await blocks("bash", { command: "base64 server.pem; echo done" }, "trailing shell syntax after .pem must not bypass detection");
 
+    // 4c. Transfer-verb reads of ordinary source under a secret-named directory are not
+    // secret reads. The directory name must not turn every file beneath it into a secret.
+    await allows("bash", { command: "cat packages/extensions/src/secret-guard/index.ts" }, "cat secret-guard source");
+    await allows("bash", { command: "head -5 packages/extensions/src/secret-guard/index.ts" }, "head secret-guard source");
+    await allows("bash", { command: "sed -n 1,5p packages/extensions/src/secret-guard/index.ts" }, "sed secret-guard source");
+    await allows("bash", { command: "cp packages/extensions/src/secret-guard/index.ts /tmp/x" }, "cp secret-guard source");
+    // The true positives the same basename-aware scan must keep blocking.
+    await blocks("bash", { command: "cat .env" }, "cat .env still blocked");
+    await blocks("bash", { command: "cp secrets.yaml /tmp" }, "cp secrets.yaml still blocked");
+    await blocks("bash", { command: "base64 ~/.ssh/id_rsa" }, "base64 id_rsa still blocked");
+    await blocks("bash", { command: "tar czf /tmp/x .env" }, "tar .env still blocked");
+
     // 5. Benign operations still pass.
     await allows("write", { path: "src/index.ts", content: "export const x = 1;" }, "normal source write");
     await allows("edit", { path: "README.md", new_string: "# Title" }, "normal edit");

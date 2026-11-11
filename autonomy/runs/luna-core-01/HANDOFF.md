@@ -2,17 +2,24 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `a0ded595f7bc` (head of `stream/core`, holds cycles 01–14).
-  Cycle 15 commits: `1148397` (memory-vault first-user-prompt recall), `5febfc1` (dead-code
-  cleanup in effort/context-sieve), plus the records under `autonomy/cycles/luna-core-01/15/`
-  and the `luna-core-01/15` line in `autonomy/JOURNAL.md`.
-- Cycle 15 outcome: **partial** (fix). Both items landed and targeted checks pass, but the planned
-  independent reviewer died without a verdict. Memory-vault now keeps the recap/pinned recall for
-  the real first user prompt after a custom-message run; the effort always-empty ternary and two
-  dead `DYNAMIC_IDS` entries were removed. Diff 8576 chars over 6 files, +13/−9.
-- Deferred with evidence in `autonomy/cycles/luna-core-01/15/review.md`: HANDOFF #4
-  `tests/orchestrate-commands-smoke.ts` not clearing `PI_KIT_INTERNAL_CHILD` (test robustness only);
-  V-07/V-08/V-10 still need the operator's finding list; #1 firewall timing noise is out of stream.
+- Branch `pi/luna-core-01`, base `8669a88` (head of `stream/core`, holds cycles 01–15).
+  Cycle 16 commits: `d3bb1a1`, `7e5b03a` (memory-vault first-prompt recall keeps pinned/relevant
+  memories and still truncates a lone recap), `1f3d0c0` (context-sieve charges join separators and
+  clears `lastInjected` when all contributions go), plus the records under
+  `autonomy/cycles/luna-core-01/16/` and the `luna-core-01/16` line in `autonomy/JOURNAL.md`.
+- Cycle 16 outcome: **complete** (fix). Two scout-found defects fixed and each pinned by a test that
+  fails on base `8669a88` and passes on head: memory-vault lost pinned/relevant recalls when recaps
+  were oversized (the `RECALL_CHARS` 2400 cap head-sliced them after they were marked injected), and
+  context-sieve left join separators uncharged and skipped the `lastInjected` cleanup on the
+  empty-contribution early return. All targeted checks green; diff 18,358 chars over 5 files,
+  +134/−31.
+- The independent reviewer hung without a verdict again (`2026-11-11T21-56-01-599Z-reviewer-98919c`
+  ends on a bare `tool_execution_start` frame). Verdict replaced by objective base-vs-head checks;
+  recovery record `.pi/recovery/1-osc-bash-sleep-60-echo-done-workflow-sta.md`.
+- Deferred with evidence: HANDOFF #4 `tests/orchestrate-commands-smoke.ts` not clearing
+  `PI_KIT_INTERNAL_CHILD` (test robustness only); V-07/V-08/V-10 still need the operator's finding
+  list; #1 firewall timing noise is out of stream; two low doc drifts (memory "at most once per
+  session", the 64-token floor).
 
 ## What cycle 15 did
 

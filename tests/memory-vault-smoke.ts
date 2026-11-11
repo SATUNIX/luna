@@ -15,7 +15,9 @@
 //  12. projects are keyed by canonical root, so same-named repositories never share recall;
 //      symlinked roots never split, a moved root is reported rather than taken over.
 //  13. the first-prompt recall is framed as background history, never a resume prompt; a huge
-//      recap body is truncated with the header and footer kept.
+//      recap body is truncated with the header and footer kept; oversized recaps leave room
+//      for pinned/relevant memories, and with none present the recap is still truncated.
+//  14. oversized recaps with no pinned or matching memory are truncated, not dropped.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -379,6 +381,34 @@ try {
       ok("a greeting gets background history, not a resume prompt; oversized recaps leave room for pinned and relevant memories");
     } finally {
       restoreTrunc();
+    }
+  }
+
+  // 14. Oversized recaps with no pinned and no matching memory are still truncated (header,
+  //     marker and footer kept), not dropped when the recap cannot share room.
+  {
+    const soloRoot = path.join(ws, "vault-trunc-solo");
+    const repo = path.join(ws, "trunc-solo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restoreSolo = setEnv("PI_KIT_VAULT", soloRoot);
+    try {
+      const date = new Date(2026, 8, 24, 9, 0);
+      const longDid = "Moved the auth module. ".repeat(60);
+      const longNext = "Finish migrating the auth module. ".repeat(60);
+      for (let i = 0; i < 5; i++) vault.appendRecap(soloRoot, "trunc-solo", { title: `Solo migration ${i}`, did: longDid, next: longNext }, date);
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc-solo" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the header survives a recap-only truncation");
+      assert.match(result.message.content, /### Earlier sessions/, "an oversized recap is still shown");
+      assert.match(result.message.content, /truncated; use memory_search for more/, "the recap is truncated, not dropped");
+      assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
+      assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
+      ok("oversized recaps alone are truncated, not dropped");
+    } finally {
+      restoreSolo();
     }
   }
 

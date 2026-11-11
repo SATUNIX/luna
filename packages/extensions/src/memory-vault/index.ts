@@ -151,7 +151,9 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
       // which used to hide pinned and relevant memories while still counting them as injected.
       const preferred = [pinnedBlock, hitsBlock].filter(Boolean);
       const preferredRoom = preferred.reduce((n, b) => n + b.length + 2, 0);
-      if (recapBlock && recapBlock.length > room - preferredRoom) recapBlock = "";
+      // Only drop the recap when a preferred block actually needs the room; with no pinned or
+      // relevant block an oversized recap is still truncated (header/footer/marker kept).
+      if (preferred.length > 0 && recapBlock && recapBlock.length > room - preferredRoom) recapBlock = "";
       const blocks = [recapBlock, ...preferred].filter(Boolean);
       if (blocks.length === 0) return undefined;
       const body = blocks.join("\n\n");

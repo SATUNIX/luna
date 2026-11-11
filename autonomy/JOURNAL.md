@@ -15,3 +15,4 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-ops-01/03 | Board: A-01, A-91 | successful | Added the missing luna-core-01/01 entry that reddened smoke:docs and made the journal check flag an entry with no report | decisions: autonomy/decisions/luna-ops-01-03-team-journal.md
 - luna-ux-01/01 | Board: none | successful | Fixed the duplicated narrow status-bar critical-warning merge and made /footer ascii on reach the todo widget
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
+- luna-guard-01/01 | Board: F-12, PG-23 | partial | Ignored null-valued extra adapter keys in the firewall classifier (F-12) and fixed the secret-guard transfer-verb false positive on source reads, with the 40-command benign corpus now in the gate (PG-23 progress)

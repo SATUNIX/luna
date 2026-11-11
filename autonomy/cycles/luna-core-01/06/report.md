@@ -23,14 +23,8 @@ estimate; `--check` fails closed on none/malformed/older-than-7-days), committed
 
 ## Items
 
-Item: PG-27 dated offline eval baseline and 7-day freshness check - `9139ad6` -
-`node tests/eval-baseline-smoke.ts` (4 checks: --write shape/date/17-17/per-category/tokens, empty
-and stale --check, the exact-7-day boundary plus newest-selection and malformed fail-closed, and the
-pure summariser/token estimator); independent `reviewer` subagent returned `VERDICT: PASS`.
-Item: Consolidate cycle 05's `trunk` channel: document it in the four prose enumerations and refuse
-the git-only channel on npm delivery - `5fe9e95` - `npm run smoke:kit-update-channel` (7 checks,
-including the new npm + `trunk` refusal and the npm pinned note no longer advertising `trunk`);
-`npm run smoke:kit-update` (40), `npm run smoke:distribution` (14), `node tests/docs-smoke.ts`.
+Item: PG-27 dated offline eval baseline and 7-day freshness check - `9139ad6` - `node tests/eval-baseline-smoke.ts` (4 checks: --write shape/date/17-17/per-category/tokens, empty and stale --check, the exact-7-day boundary plus newest-selection and malformed fail-closed, and the pure summariser/token estimator); independent `reviewer` subagent returned `VERDICT: PASS`.
+Item: Consolidate cycle 05's `trunk` channel: document it in the four prose enumerations and refuse the git-only channel on npm delivery - `5fe9e95` - `npm run smoke:kit-update-channel` (7 checks, including the new npm + `trunk` refusal and the npm pinned note no longer advertising `trunk`); `npm run smoke:kit-update` (40), `npm run smoke:distribution` (14), `node tests/docs-smoke.ts`.
 
 ## Test justification
 

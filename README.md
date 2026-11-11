@@ -13,7 +13,9 @@
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.3.0--beta.2-blue" alt="version 0.3.0-beta.2"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a> <br>
+  <a href="https://gitdiagram.com/satunix/luna?utm_source=readme&utm_medium=badge"><img src="https://gitdiagram.com/diagram-badge.svg" alt="diagram"></a>
+
 </p>
 
 **Luna** is an opinionated distribution of the [pi coding agent](https://github.com/earendil-works/pi):

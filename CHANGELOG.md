@@ -109,6 +109,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   main-thread GC spike can still touch several samples in a row, so the helper takes best of nine
   and warms both input sizes; the 10x bound is unchanged. The rule is stated in the `tests/timing.ts`
   header.
+### Fixed
+
+- Pentest governance refuses a human-console approval request when a committed workspace link
+  redirects its path, records the refusal and blocks the action. Its default data directories
+  also use the workspace safe-write helper (`tests/governance-smoke.ts`).
 
 ## [0.3.0-beta.2]
 

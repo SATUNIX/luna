@@ -160,10 +160,6 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   and would also let workers under a rootless engine run unattended, which the namespace rule
   currently refuses. The autonomy boundary probe does not yet report whether the worker is in the
   initial user namespace.
-- **The `pentest-governance-domain` extension's human-console approval request** is still written
-  with plain `fs` calls and remains on the ESLint allowlist as a known gap; moving it to the
-  safe-write helper is pending. The human console's own request, answer and audit files and the
-  tool firewall's request file use the helper.
 - **Inline interpreter code that builds a credential path at run time** (rather than naming it
   literally) is not recognised by the classifier.
 - **Approvals bind command text, not effect.** An approved `git push` follows a re-pointed remote,

@@ -46,7 +46,10 @@ function makeTui(): { tui: TUI; count: () => number } {
 }
 
 interface StartOptions {
-  mode?: string;
+  /** Omit the property for a TUI; `mode: undefined` models an older pi without `ctx.mode`. */
+  mode?: string | undefined;
+  /** Overrides the derived flag, so `mode: undefined` can be paired with either value. */
+  hasUI?: boolean;
   ui?: Record<string, unknown>;
   child?: boolean;
   noMenu?: boolean;
@@ -91,8 +94,9 @@ async function start(options: StartOptions = {}): Promise<Started> {
     assert.equal(options.child, true, "only a child session may register no session_start handler");
     return { headers, cleanup };
   }
-  const mode = options.mode ?? "tui";
-  await handler({}, { mode, hasUI: mode === "tui" || mode === "rpc", cwd: dir, ui });
+  const mode = "mode" in options ? options.mode : "tui";
+  const hasUI = options.hasUI ?? (mode === "tui" || mode === "rpc");
+  await handler({}, { mode, hasUI, cwd: dir, ui });
   return { headers, cleanup };
 }
 
@@ -263,6 +267,24 @@ tests.push([
       assert.equal(off.headers.length, 0, "launchScreen: off disables the header");
     } finally {
       off.cleanup();
+    }
+  },
+]);
+
+tests.push([
+  "an older host without ctx.mode follows hasUI for the header",
+  async () => {
+    const withoutMode = await start({ mode: undefined, hasUI: true });
+    try {
+      assert.equal(withoutMode.headers.length, 1, "mode undefined with hasUI installs exactly one header");
+    } finally {
+      withoutMode.cleanup();
+    }
+    const withoutUi = await start({ mode: undefined, hasUI: false });
+    try {
+      assert.equal(withoutUi.headers.length, 0, "mode undefined without hasUI installs no header");
+    } finally {
+      withoutUi.cleanup();
     }
   },
 ]);

@@ -38,10 +38,12 @@ export function readHubKey(): string {
 /**
  * Install the launch screen on the existing `session_start` handler. Only a real TUI gets it:
  * RPC and print have no header, a child session stays quiet, and `launchScreen: "off"` in
- * `pi-kit/ui.json` disables it. The menu command is `/menu`, or `/kit` when `/menu` is absent.
+ * `pi-kit/ui.json` disables it. The caller passes the same `isTui` predicate it uses for the menu,
+ * so older pi without `ctx.mode` gets the header too when `hasUI` is true. The menu command is
+ * `/menu`, or `/kit` when `/menu` is absent.
  */
-function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext): void {
-  if (ctx.mode !== "tui") return;
+function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean): void {
+  if (!isTui) return;
   if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
   if (typeof ctx.ui.setHeader !== "function") return;
   const ui = readUiFile();
@@ -70,7 +72,7 @@ function registerCommandMenu(pi: ExtensionAPI): void {
     const isTui = mode === undefined ? ctx.hasUI : mode === "tui";
     if (!isTui) return;
     curated = true;
-    installLaunchHeader(pi, ctx);
+    installLaunchHeader(pi, ctx, isTui);
     const settings = readCommandMenuSettings();
     if (settings.commandMenu === "all") return;
     const commands = pi.getCommands().map((command) => ({ name: command.name, source: command.source }));

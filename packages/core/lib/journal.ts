@@ -29,11 +29,7 @@ const REPORT_BOARD = /^Board: (.+?) (done|progress|blocked) - /gm;
 const REPORT_OUTCOME = /^Outcome: (.+)$/m;
 const CLOSE_OUT = "Host close-out: the worker exited before recording report.md";
 
-/**
- * Parse journal entry lines (`- <key> | Board: ... | <outcome> | <summary> [| decisions: ...]`).
- * The header and blank lines are ignored. A line that starts with `- ` but does not match the
- * grammar throws, so a typo cannot silently hide an entry.
- */
+/** Parse entry lines; the header and blanks are ignored, and a malformed `- ` line throws. */
 export function parseJournal(text: string): JournalEntry[] {
   const entries: JournalEntry[] = [];
   for (const [index, raw] of text.split(/\r?\n/).entries()) {
@@ -58,7 +54,7 @@ export function parseJournal(text: string): JournalEntry[] {
   return entries;
 }
 
-/** Every cycle report under `root`: `autonomy/cycles/<run>/<NN>/report.md` and legacy `autonomy/cycles/<NN>/report.md`, sorted by key. */
+/** Every cycle report under `root`: `cycles/<run>/<NN>/report.md` and legacy `cycles/<NN>/report.md`, sorted. */
 export function cycleReports(root: string): CycleReport[] {
   const cycles = path.join(root, "autonomy", "cycles");
   if (!fs.existsSync(cycles)) return [];

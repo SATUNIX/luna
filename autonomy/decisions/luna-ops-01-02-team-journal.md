@@ -5,12 +5,11 @@ Board: A-01
 ## Context
 
 Cycle reports live only under `autonomy/cycles/**/report.md`, so finding every cycle that
-touched a board item meant reading each report, and a cycle could close with no visible record
-of the board item it worked.
+touched a board item meant reading each report.
 
 ## Decision
 
-Add `autonomy/JOURNAL.md`: one line per cycle report, naming the run/cycle key, board IDs (or
+Add `autonomy/JOURNAL.md`: one line per cycle report with the run/cycle key, board IDs (or
 `none`), outcome, a one-clause summary and any linked `autonomy/decisions/` record.
 `packages/core/lib/journal.ts` parses and checks it; `tests/docs-smoke.ts` fails on a missing,
 duplicate or mismatched entry, an unknown cycle directory, a missing or unlinked decision file,
@@ -21,5 +20,5 @@ journal `merge=union` so parallel cycles append without conflict.
 ## Consequences
 
 Every cycle adds its journal line and decision record before the docs smoke can pass, and
-`grep <ID> autonomy/JOURNAL.md` gives the history for a board item. The journal is a derived
-summary: the report and the linked decision record stay authoritative.
+`grep <ID> autonomy/JOURNAL.md` gives a board item's history. The journal is a derived summary:
+the report and linked decision record stay authoritative.

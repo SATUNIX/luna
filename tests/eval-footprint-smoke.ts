@@ -397,6 +397,32 @@ async function testLiveOnlyFixtureIsSkippedOffline(): Promise<void> {
   }
 }
 
+// ---- h. the --category gate refuses a missing or unknown value -------------------------------
+// The finding: `--category` with no value ran every fixture and exited 0, a false green from the
+// regression gate. A value naming no category was refused only as a side effect of running zero
+// fixtures, without saying the category was unknown. Both must be an explicit exit 2.
+function testEvalCategoryGate(): void {
+  const ws = tmpWorkspace("pi-footprint-eval-category-");
+  try {
+    const agentDir = path.join(ws, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const policyPath = path.join(ws, "firewall.json");
+    fs.writeFileSync(policyPath, JSON.stringify({ defaults: { unknown: "allow" }, tools: {}, command_rules: { deny: [], ask: [] } }));
+    const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_KIT_FIREWALL_POLICY: policyPath };
+    const run = (args: string[]): { status: number | null; stderr: string } => {
+      const result = spawnSync(process.execPath, ["packages/core/eval/run.ts", ...args], { cwd: ROOT, env, encoding: "utf8" });
+      return { status: result.status, stderr: result.stderr ?? "" };
+    };
+    const unknown = run(["--category", "__no_such_category__"]);
+    assert.notEqual(unknown.status, 0, "an unknown category must not exit 0");
+    assert.match(unknown.stderr, /unknown category/, "an unknown category is named on stderr");
+    const missing = run(["--category"]);
+    assert.notEqual(missing.status, 0, "a --category with no value must not exit 0");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
 // ---- runner ---------------------------------------------------------------------------------
 
 const tests: Array<[string, () => void | Promise<void>]> = [
@@ -410,6 +436,7 @@ const tests: Array<[string, () => void | Promise<void>]> = [
   ["uninstall leaves no profile compaction key in the global settings.json", testUninstallRestoresCompaction],
   ["plan-valid rate per model, malformed records ignored", testPlanValidRate],
   ["the live-only plan-valid fixture is registered and skipped offline", testLiveOnlyFixtureIsSkippedOffline],
+  ["the eval --category gate refuses an unknown or missing value", testEvalCategoryGate],
 ];
 
 const restoreEnv = isolateKitEnv();

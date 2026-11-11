@@ -21,15 +21,17 @@ item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
   `password=`-style assignment, `curl` / `wget` posting credentials; `SECRET_BASH_LEAK_PATTERNS`),
   or that read, copy, encode or transfer a secret or protected path (`cat`, `cp`, `mv`,
   `base64`, `curl` uploads), including glob-, bracket-class-, brace- and quote-obscured names
-  (`.e?v`, `.en[v]`, `[.]env`, `.e{n,x}v`). Brace groups and bracket classes of plain members are
-  expanded before the name scan (duplicates collapse, at most 1024 words and 1 MiB per token, 16
-  levels of nesting; a group past a bound widens to `*`, which can only block more). A bracket
-  range, negation or POSIX class is matched against representative secret filenames, and a glob
+  (`.e?v`, `.en[v]`, `[.]env`, `.e{n,x}v`). Brace groups and bracket classes of up to 32 characters
+  (`[v]`, `[c-c]`, `[[:lower:]]`) are expanded before the name scan (duplicates collapse, at most 1024 words and 1 MiB per token, 16
+  levels of nesting; a group past a bound widens to `*`, which can only block more). A
+  negated or larger bracket class is matched against representative secret filenames, and a glob
   directory segment with at least three literal characters (`secre[t-u]`, `.ss[h-i]`) is matched
   against `secret`, `secrets`, `credentials` and `.ssh`. Quoted text is expanded as well, because
   `sh -c 'cat .en[v]'` hands it to a second shell. Not covered: a backslash-escaped bracket
   (`[v\]]`), a name with a non-empty quote fragment (`.e"n"v`), and a glob that matches only a
-  non-canonical file name (`foo.[p-r]em`). All of this is pinned by `tests/secret-guard-smoke.ts`.
+  non-canonical file name through `?`, `*`, a negated class or a class of more than 32 characters
+  (`foo.p?m`, `foo.p[!x]m`). The `.env.example` and `.env.sample` exemption applies after
+  expansion. All of this is pinned by `tests/secret-guard-smoke.ts`.
   For a plain leading `rg`, `grep`, `egrep` or `fgrep` command, a recognised search pattern is
   excluded from the secret-path token scan. The first positional argument is the pattern unless
   `-e` / `--regexp` or `-f` / `--file` supplies one; a pattern file is always scanned as a path.

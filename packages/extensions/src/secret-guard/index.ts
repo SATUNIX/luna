@@ -210,15 +210,53 @@ function globTokenToRegExp(token: string): RegExp | null {
 const MAX_GLOB_ALTERNATIVES = 1024;
 const MAX_GLOB_EXPANDED_CHARS = 1048576;
 const MAX_GLOB_ROUNDS = 16;
-const PLAIN_CLASS_MEMBER = /[^\][!^\\:-]/;
+const MAX_CLASS_MEMBERS = 32;
+
+// The characters a POSIX class stands for, for the ones small enough to enumerate.
+const POSIX_CLASS_RANGES = new Map<string, Array<[string, string]>>([
+  ["lower", [["a", "z"]]], ["upper", [["A", "Z"]]], ["digit", [["0", "9"]]], ["xdigit", [["0", "9"], ["A", "F"], ["a", "f"]]],
+]);
+
+// Every character a bracket class can match, when that is at most MAX_CLASS_MEMBERS and the class
+// is not negated: `[v]`, `[vV]`, `[c-c]`, `[m-o]`, `[[:lower:]]`. Null for anything else, which
+// stays a pattern for globTokenToRegExp. A class with an inverted range matches nothing in bash and
+// is left alone too.
+function classMembers(body: string): string[] | null {
+  if (body.startsWith("!") || body.startsWith("^")) return null;
+  const members = new Set<string>();
+  const add = (from: number, to: number): boolean => {
+    if (to < from) return false;
+    for (let code = from; code <= to; code++) {
+      members.add(String.fromCharCode(code));
+      if (members.size > MAX_CLASS_MEMBERS) return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < body.length; i++) {
+    if (body.startsWith("[:", i)) {
+      const end = body.indexOf(":]", i + 2);
+      const ranges = end < 0 ? undefined : POSIX_CLASS_RANGES.get(body.slice(i + 2, end));
+      if (!ranges) return null;
+      for (const [from, to] of ranges) if (!add(from.charCodeAt(0), to.charCodeAt(0))) return null;
+      i = end + 1;
+    } else if (body.charAt(i + 1) === "-" && i + 2 < body.length) {
+      if (!add(body.charCodeAt(i), body.charCodeAt(i + 2))) return null;
+      i += 2;
+    } else if (!add(body.charCodeAt(i), body.charCodeAt(i))) return null;
+  }
+  return Array.from(members);
+}
 
 interface GlobGroup { start: number; end: number; alternatives: string[] }
 
 // The first complete group in a word, scanning once: a `{a,b}` (the innermost, because its `}`
-// comes first; `{x}` without a comma is literal in the shell) or a bracket class of up to sixteen
-// plain members (`[v]`, `[vV]`).
+// comes first; `{x}` without a comma is literal in the shell) or a bracket class small enough to
+// enumerate (see classMembers). One failed search for a class end ends the class handling for the
+// word, so a malformed word costs one scan.
 function findGlobGroup(word: string): GlobGroup | null {
   const opens: number[] = [];
+  let limits: ClassLimits | null = null;
+  let classes = true;
   for (let i = 0; i < word.length; i++) {
     const ch = word.charAt(i);
     if (ch === "{") opens.push(i);
@@ -227,10 +265,14 @@ function findGlobGroup(word: string): GlobGroup | null {
       if (start === undefined) continue;
       const body = word.slice(start + 1, i);
       if (body.includes(",")) return { start, end: i + 1, alternatives: body.split(",") };
-    } else if (ch === "[") {
-      let j = i + 1;
-      while (j < word.length && j - i <= 16 && PLAIN_CLASS_MEMBER.test(word.charAt(j))) j++;
-      if (j > i + 1 && word.charAt(j) === "]") return { start: i, end: j + 1, alternatives: Array.from(word.slice(i + 1, j)) };
+    } else if (ch === "[" && classes) {
+      limits ??= { close: word.lastIndexOf("]"), posix: word.lastIndexOf(":]") };
+      const end = bracketClassEnd(word, i, limits);
+      if (end < 0) classes = false;
+      else {
+        const members = classMembers(word.slice(i + 1, end));
+        if (members && members.length > 0) return { start: i, end: end + 1, alternatives: members };
+      }
     }
   }
   return null;
@@ -314,7 +356,7 @@ function globSegmentReachesSecretDirectory(segment: string): boolean {
 function commandHasGlobTokenMatchingSecret(command: string): boolean {
   for (const rawToken of command.split(/\s+/)) {
     for (const expanded of expandGlobGroups(rawToken)) {
-      const token = expanded.replace(/^["']|["']$/g, "");
+      const token = stripEnvTemplateTokens(expanded).replace(/^["']|["']$/g, "");
       const segments = token.split(/[\\/]/);
       const base = segments.at(-1) || token;
       const re = globTokenToRegExp(base);
@@ -553,7 +595,7 @@ function commandReferencesSecret(command: string): boolean {
   }
   scanned = stripEnvTemplateTokens(normalizePath(scanned));
   if (commandHasGlobTokenMatchingSecret(scanned)) return true;
-  for (const token of shellTokens(scanned).flatMap(expandGlobGroups)) {
+  for (const token of shellTokens(scanned).flatMap(expandGlobGroups).map(stripEnvTemplateTokens)) {
     const segments = token.split(/[\\/]/);
     const base = segments.pop() || token;
     if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;

@@ -259,6 +259,21 @@ async function run() {
       'cat config/secret[!z]/x',
       'cat ~/.ss[h-i]/foo.txt',
       'cat config/sec*/x',
+      // A class of a few characters is enumerated, so it can spell a name outside the canonical list.
+      'cat server.p[e-e]m',
+      'cat server.p[[:lower:]]m',
+      'cat se[c-c][r-r][e-e][t-t]/x',
+      'cat .s[s-s][h-h]/x',
+      'cat .p[i-i]/agent/auth.json',
+      'cat .en[m-v]',
+      // The env-template exemption covers the template only: a second operand is still the real file.
+      'cat .en[v].example .en[v]',
+      'cp .en[v].example .en[v]',
+      // Quoted text that spells a secret name by expansion is the name, as the literal is: the baseline
+      // blocks `git log --format='%h .env' | head` and `curl -g "https://example.test/.env"` too.
+      "git log --format='%h .env' | head",
+      "git log --format='%h .en[v]' | head",
+      'curl -g "https://example.test/.en[v]"',
       // Nesting past the expansion rounds widens to `*` instead of leaving a group unresolved.
       `cat .e${"{n,".repeat(10)}z${"}".repeat(10)}v`,
       `cat .e${"{n,".repeat(40)}z${"}".repeat(40)}v`,
@@ -271,6 +286,14 @@ async function run() {
       'cat file[0-9].log | head',
       'curl -s https://example.test/{a,b} | head',
       'cat [ab]c.ts | head',
+      // The env-template exemption survives expansion.
+      'cat .en[v].example',
+      'cat .e{n,m}v.example',
+      'cat .en[v].sample',
+      // A small class that cannot spell a secret name.
+      'cat .en[m-o]',
+      'cat .e[[:digit:]]v',
+      'cat [a-z][a-z][a-z][a-z]/x | head',
       // A POSIX class means what it says: a digit class cannot match the letters of `.env`.
       'cat .en[[:digit:]]',
       'cat id_rs[[:digit:]]',

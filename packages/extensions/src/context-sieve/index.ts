@@ -64,7 +64,7 @@ export function compareContributions(a: Contribution, b: Contribution): number {
 //    (memory recall, delegation directives, loop/progress nudges). Appending a message keeps
 //    the cached prefix intact; rewriting the system prompt every turn (the previous behaviour
 //    for all contributions) threw the cache away on nearly every prompt.
-const DYNAMIC_IDS = new Set(["memory-local", "memory-vault", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop", "skill-router"]);
+const DYNAMIC_IDS = new Set(["memory-local", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop"]);
 
 function channelOf(c: Contribution): "system" | "message" {
   if (c.channel === "system" || c.channel === "message") return c.channel;

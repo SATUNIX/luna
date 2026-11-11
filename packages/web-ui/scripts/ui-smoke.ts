@@ -906,6 +906,12 @@ console.log("pi-console ui smoke");
 	check(/id="go-end"/.test(html), "go-to-end button present", "go-to-end button missing");
 	check(/dom\.goEnd\.addEventListener/.test(app), "go-to-end wired", "go-to-end not wired");
 	check(/goToEnd\(\)/.test(app), "go-to-end calls renderer", "go-to-end does not scroll");
+	const unknownBarBlock = (css.split(".bar.unknown {")[1] || "").split("}")[0] || "";
+	check(
+		/border-style:\s*dashed/.test(unknownBarBlock),
+		"context bar: unknown state has a visible dashed border",
+		"context bar: unknown state is not visibly distinct from 0%",
+	);
 }
 
 const modules = [
@@ -1031,6 +1037,41 @@ try {
 		{ id: "abc", cwd: "/home/operator" },
 	);
 	ok("renderStats");
+	for (const [label, percent] of [
+		["undefined", undefined],
+		["null", null],
+		["NaN", Number.NaN],
+		["non-numeric", "abc"],
+	] as const) {
+		renderStats(target, { contextUsage: { tokens: 1, contextWindow: 100, percent } }, null);
+		const bars = findAll(target, hasClass("bar"));
+		const bar = bars[0];
+		check(
+			bars.length === 1 && bar !== undefined && hasClass("unknown")(bar) &&
+			findAll(target, hasClass("bar-fill")).length === 0,
+			`context bar: ${label} is unknown with no fill`,
+			`context bar: ${label} rendered as a known percentage`,
+		);
+	}
+	for (const [percent, width, state] of [
+		[0, "width:0%", ""],
+		[50, "width:50%", ""],
+		[75, "width:75%", "mid"],
+		[150, "width:100%", "high"],
+	] as const) {
+		renderStats(target, { contextUsage: { tokens: 1, contextWindow: 100, percent } }, null);
+		const bars = findAll(target, hasClass("bar"));
+		const fills = findAll(target, hasClass("bar-fill"));
+		const bar = bars[0];
+		const fill = fills[0];
+		check(
+			bars.length === 1 && bar !== undefined && !hasClass("unknown")(bar) &&
+			fills.length === 1 && fill?.style.cssText === width &&
+			(state ? hasClass(state)(fill) : !hasClass("mid")(fill) && !hasClass("high")(fill)),
+			`context bar: ${percent}% has ${width} and ${state || "normal"} state`,
+			`context bar: ${percent}% has the wrong fill or state`,
+		);
+	}
 
 	renderTodos(target, {
 		exists: true,

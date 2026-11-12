@@ -39,6 +39,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/progress-guard/shared/safe-fs.ts",
     "packages/extensions/src/recovery-orchestrator/shared/safe-fs.ts",
     "packages/extensions/src/save/shared/safe-fs.ts",
+    "packages/extensions/src/secret-guard/shared/safe-fs.ts",
     "packages/extensions/src/self-improvement/shared/safe-fs.ts",
     "packages/extensions/src/skill-forge/shared/safe-fs.ts",
     "packages/extensions/src/task-graph/shared/safe-fs.ts",
@@ -50,6 +51,10 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/third_party/plan-mode/shared/safe-fs.ts",
     "packages/extensions/third_party/subagent/shared/safe-fs.ts",
     "packages/extensions/third_party/todo/shared/safe-fs.ts",
+  ],
+  "refusal-record.ts": [
+    "packages/extensions/src/secret-guard/shared/refusal-record.ts",
+    "packages/extensions/src/tool-firewall/shared/refusal-record.ts",
   ],
   "redact.ts": [
     "packages/extensions/src/memory-mem0/shared/redact.ts",

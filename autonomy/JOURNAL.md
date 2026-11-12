@@ -86,3 +86,4 @@ journal: every report has a journal entry
 - luna-ux-01/34 | Board: none | successful | Fixed the carry-over ui.json clobber: /footer and /tips now merge their owned fields over the parsed shared file instead of overwriting it, so hubKey, commandMenu, pinned/hidden commands, launchScreen and reducedMotion survive; a seeded-file case fails on the base source and passes at HEAD, docs and CHANGELOG updated, read-only independent reviewer PASS
 - luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
 - luna-ux-01/04 | Board: V-93, V-09 | successful | Cycle 04: hidden-character filter consolidated (V-93)
+- luna-guard-01/03 | Board: PG-24 | successful | Repaired the red manifest gate (`node:crypto` for secret-guard) and pinned the secret-content refusal record as the pattern label only, closing cycle-02 PG-24 review gaps; targeted smokes, typecheck, lint, verify and independent reviewer PASS

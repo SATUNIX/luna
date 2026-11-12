@@ -56,6 +56,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   merged-but-unpublished cycles; their `cycle-NN` tags are dropped) before the answer's cycle runs, and
   `publishNow` clears the blocker and the unpublished count only on a real push. Pinned by
   `tests/autonomy-selfimprove-smoke.ts`.
+- **An attended `ask_human` question waits behind workflow approval cards.** Run cards do not
+  take the shared input hold because the broker allows two open prompts per run; the question
+  previously opened over them and could take an unintended first-option answer. It now waits for
+  the last run card to close, sharing its timeout and abort signal with that wait, and still fails
+  closed if another card opens at the handoff (`tests/firewall-overlay-queue-smoke.ts`).
 
 - **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
   `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,

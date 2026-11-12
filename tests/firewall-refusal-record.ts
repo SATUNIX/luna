@@ -97,6 +97,26 @@ export async function checkRefusalRecords(): Promise<number> {
       assert.ok(!JSON.stringify(record).includes("abcd1234"), "the refusal record never contains the secret value");
       ok("a secret-guard path refusal appends one record naming the rule and no secret value");
     }
+    // 2b. A secret-content refusal: the matched value is the pattern label, never the content.
+    {
+      const before = records().length;
+      const fake = "sk-" + "test".repeat(8);
+      const register = await loadExtension("extensions/secret-guard/index.ts");
+      const pi = fakePi();
+      register(pi.api);
+      const ctx = { cwd: ws, hasUI: false, sessionManager: { getSessionId: () => "S-refusal-content" }, ui: {} };
+      const result = await pi.handlers.get("tool_call")({ toolName: "write", input: { path: "src/notes.txt", content: `API_KEY=${fake}` } }, ctx);
+      assert.equal((result as { block?: boolean } | undefined)?.block, true, "secret-guard refused the content");
+      const record = onlyAfter(before);
+      assert.equal(record.guard, "secret-guard");
+      assert.equal(record.cause, "secret-content");
+      assert.equal(record.matched, "provider API key (sk-)", "matched is the pattern label");
+      assert.equal(record.commandDigest, undefined, "a write has no command to digest");
+      assert.equal(record.tool, "write");
+      assert.equal(record.sessionId, "S-refusal-content");
+      assert.ok(!JSON.stringify(record).includes(fake), "the refusal record never contains the secret content");
+      ok("a secret-content refusal names the pattern label and never the content");
+    }
 
     // 3. A secret-guard shell refusal: a command digest, not the command text.
     {

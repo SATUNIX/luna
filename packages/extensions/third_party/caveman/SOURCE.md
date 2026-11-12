@@ -4,6 +4,7 @@
   Concept in turn based on [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee.
 - Date: 2026-07-03
 - Changes (reimplementation, not a verbatim port):
+  - **Vendored upstream (2026-07-03):** reimplementation of `pi-caveman`; the changes below are Luna's.
   - Upstream injects its compression directive by returning `{ systemPrompt }` from
     `before_agent_start`. That is **forbidden** in Luna — `packages/core/verify.ts` lint 5b reserves
     system-prompt assembly to `extensions/context-sieve`. Rewritten to instead write a

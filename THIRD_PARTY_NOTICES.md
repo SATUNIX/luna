@@ -45,6 +45,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/auto-commit-on-exit.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `pi.exec("git", [...])`, which is cross-platform
   - Stages with `git add -A -- . ":(exclude).pi"` instead of `git add -A`, so kit artefacts under `<cwd>/.pi/` are never committed
   - In no profile and `enabledByDefault: false`: opt-in only
@@ -57,6 +58,7 @@ SOFTWARE.
   Concept in turn based on [caveman](https://github.com/JuliusBrussee/caveman) by Julius Brussee.
 - Date: 2026-07-03
 - Changes (reimplementation, not a verbatim port):
+  - **Vendored upstream (2026-07-03):** reimplementation of `pi-caveman`; the changes below are Luna's.
   - Upstream injects its compression directive by returning `{ systemPrompt }` from
     `before_agent_start`. That is **forbidden** in Luna — `packages/core/verify.ts` lint 5b reserves
     system-prompt assembly to `extensions/context-sieve`. Rewritten to instead write a
@@ -92,6 +94,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/custom-footer.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Preserves the `custom-footer` extension id for compatibility while presenting it as the GitOps status bar in user docs.
   - Adds token totals, estimated cost, model id, git branch, context percentage, and `/footer status|reload`.
   - Reads pricing from `.pi-kit/costs.json`, `<agent dir>/pi-kit/costs.json`, or `PI_KIT_COST_*_PER_MTOK` environment overrides.
@@ -163,6 +166,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/dirty-repo-guard.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `ctx.ui.select()` for interactive prompt; kept but with fallback to block when `!ctx.hasUI`
   - No functional changes needed for Windows (pi.exec handles cross-platform git calls)
   - `provenance.origin` set to `"vendored"`
@@ -173,6 +177,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/git-checkpoint.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Verbatim from upstream; pi.exec handles cross-platform git
   - `provenance.origin` set to `"vendored"`
 
@@ -181,6 +186,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/handoff.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream generates a handoff prompt via a live model call (`complete()` from @earendil-works/pi-ai).
   - Simplified: `/handoff <note>` appends a timestamped entry to HANDOFF.md (no model call).
   - The LM-powered version (session summary + prompt generation) is TODO in a future extension revision.
@@ -196,6 +202,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/notify.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `require("child_process")` dynamically; changed to static `import { execFile } from "node:child_process"` for clarity and self-containment compliance
   - Windows notification path unchanged (upstream already handles WT_SESSION)
   - `provenance.origin` set to `"vendored"`
@@ -206,6 +213,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/plan-mode/index.ts` + `utils.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `@earendil-works/pi-tui` for widget rendering (Key, progress widget) and `@earendil-works/pi-ai`/`@earendil-works/pi-agent-core` for message parsing.
   - Simplified to single index.ts with no external deps.
   - Core functionality preserved: `/plan` toggle, read-only tool restriction via `before_agent_start`, `--plan` flag.
@@ -222,6 +230,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/protected-paths.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Changed from hardcoded array to env-var `PI_KIT_PROTECTED_PATHS` (colon-separated on Unix, semicolon on Windows)
   - Added `path.normalize` for Windows path comparison
   - Added `node:path` import (not needed upstream since it used string includes)
@@ -558,6 +567,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/todo.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream stores state in session entries and uses `@earendil-works/pi-tui` + `@earendil-works/pi-ai` for the `/todos` UI widget.
   - Simplified: state is persisted in a `TODO.md` file in the project root (visible to humans, git-trackable).
   - Removed all TUI rendering and pi-ai imports.
@@ -573,6 +583,7 @@ SOFTWARE.
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/trigger-compact.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - 2026-09-15: The upstream `COMPACT_THRESHOLD_TOKENS` constant was hardcoded at 100k, which
     fires auto-compaction far too early on large-context-window models (e.g. a 1.3M window).
     Made the threshold configurable: `PI_KIT_COMPACT_THRESHOLD_TOKENS` env var (managed-install

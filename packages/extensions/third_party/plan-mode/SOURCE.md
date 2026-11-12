@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/plan-mode/index.ts` + `utils.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `@earendil-works/pi-tui` for widget rendering (Key, progress widget) and `@earendil-works/pi-ai`/`@earendil-works/pi-agent-core` for message parsing.
   - Simplified to single index.ts with no external deps.
   - Core functionality preserved: `/plan` toggle, read-only tool restriction via `before_agent_start`, `--plan` flag.

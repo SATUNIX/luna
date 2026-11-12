@@ -8,7 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkJournal, journalWarnings, syncJournal } from "../packages/core/lib/journal.ts";
+import { syncJournal } from "../packages/core/journal.ts";
+import { checkJournal, journalWarnings } from "../packages/core/lib/journal.ts";
 import { installPinFiles, installPinVersions, readmeBadgeAltVersion, readmeBadgeVersion, setInstallPins, setReadmeBadgeVersion } from "../packages/core/lib/version-badge.ts";
 import { skillsCatalogueContent } from "../packages/core/skills-catalogue.ts";
 

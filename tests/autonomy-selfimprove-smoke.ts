@@ -1717,8 +1717,14 @@ await check("check-map: a changed-path diff implies the host gate's checks, and 
   for (const name of ["smoke:workflow-policy", "smoke:github-settings-check"]) assert.ok(settings.includes(name), `${name} is planned for an expected-settings change`);
   const owners = checksForChangedPaths([".github/CODEOWNERS"]);
   assert.ok(owners.includes("smoke:codeowners-coverage"), "smoke:codeowners-coverage is planned for a CODEOWNERS change");
+  const zizmor = checksForChangedPaths([".github/zizmor.yml"]);
+  for (const name of ["smoke:workflow-policy", "smoke:suppression-inventory"]) assert.ok(zizmor.includes(name), `${name} is planned for a zizmor config change`);
+  const codeql = checksForChangedPaths([".github/codeql/codeql-config.yml"]);
+  assert.ok(codeql.includes("smoke:suppression-inventory"), "smoke:suppression-inventory is planned for a CodeQL config change");
+  const dependabot = checksForChangedPaths([".github/dependabot.yml"]);
+  assert.ok(dependabot.includes("smoke:scan-coverage"), "smoke:scan-coverage is planned for a dependabot change");
   const installer = checksForChangedPaths(["packages/core/install.ts"]);
-  for (const name of ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction"]) assert.ok(installer.includes(name), `${name} is planned for an install.ts change`);
+  for (const name of ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install"]) assert.ok(installer.includes(name), `${name} is planned for an install.ts change`);
   assert.ok(!installer.includes("smoke:codeowners-coverage"), "an unrelated check is not planned for an install.ts change");
   const coverage = checksForChangedPaths(["packages/core/coverage.ts"]);
   assert.ok(coverage.includes("smoke:check-all-npm"), "smoke:check-all-npm is planned for a coverage.ts change");

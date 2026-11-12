@@ -51,14 +51,18 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   { glob: "packages/autonomy/**", checks: ["smoke:autonomy", "smoke:autonomy-run", "smoke:autonomy-selfimprove"] },
   { glob: "packages/core/check-all.ts", checks: ["smoke:check-all-npm", "smoke:docs"] },
   { glob: "packages/core/lib/**", checks: ["smoke:check-all-npm", "smoke:docs"] },
-  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction"] },
+  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install"] },
   { glob: "packages/core/coverage.ts", checks: ["smoke:check-all-npm"] },
   // CI policy: the workflow policy check pins ci.yml itself and every other workflow, while the
-  // settings and ownership checks pin their own .github files (tests/workflow-policy-smoke.ts,
-  // tests/github-settings-check-smoke.ts, tests/codeowners-coverage-smoke.ts).
+  // settings, ownership and scanner-config checks pin their own .github files (tests/workflow-policy-smoke.ts,
+  // tests/github-settings-check-smoke.ts, tests/codeowners-coverage-smoke.ts,
+  // tests/suppression-inventory-smoke.ts, tests/scan-coverage-smoke.ts).
   { glob: ".github/workflows/**", checks: ["smoke:workflow-policy", "smoke:release-workflow"] },
   { glob: ".github/expected-settings.json", checks: ["smoke:workflow-policy", "smoke:github-settings-check"] },
   { glob: ".github/CODEOWNERS", checks: ["smoke:codeowners-coverage"] },
+  { glob: ".github/zizmor.yml", checks: ["smoke:workflow-policy", "smoke:suppression-inventory"] },
+  { glob: ".github/codeql/**", checks: ["smoke:suppression-inventory"] },
+  { glob: ".github/dependabot.yml", checks: ["smoke:scan-coverage"] },
 ];
 
 /** Checks every change must run, whatever paths it touches. */

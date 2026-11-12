@@ -46,8 +46,12 @@ data table in `packages/core/lib/check-map.ts` plus the checks whose `package.js
 runs a changed file (`lib/wiring.ts` `scriptTargets`): a changed test file, or either side of a
 byte-copy pair such as the fence functions copied into
 `packages/extensions/third_party/subagent/`, plans the check that runs or asserts it. The table also
-covers the CI policy files under `.github/` and the `packages/core/install.ts` and
-`packages/core/coverage.ts` entry scripts, so a change to them plans the checks that pin them. It prints the
+covers the CI policy files it names: the workflow definitions (`.github/workflows/**`), the expected
+repository settings (`.github/expected-settings.json`), `CODEOWNERS`, the zizmor and CodeQL scanner
+configurations (`.github/zizmor.yml`, `.github/codeql/**`) and the Dependabot configuration
+(`.github/dependabot.yml`); plus the `packages/core/install.ts` entry script (which also plans the
+compiled-installer `smoke:clean-install` check) and `packages/core/coverage.ts`, so a change to one
+of them plans the checks that pin it. It prints the
 plan as `check-all: run: <name>` / `check-all: skipped: <name>` lines, listing exactly the checks
 the gate would run (a covered aggregate such as `test:security` is not one of them), running nothing
 and exiting 0. A cycle derives the paths from its own diff this way so every check the host gate

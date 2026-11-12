@@ -61,6 +61,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   previously opened over them and could take an unintended first-option answer. It now waits for
   the last run card to close, sharing its timeout and abort signal with that wait, and still fails
   closed if another card opens at the handoff (`tests/firewall-overlay-queue-smoke.ts`).
+- **Stopping after a blocked publication now ends the self-improve run.** The supervisor previously
+  consumed the answer to the pre-push leak scan question and started another cycle even when the
+  operator chose "Stop the run" or denied it. Those answers now take the final acceptance path with
+  reason `publish_blocked_stopped`; a resume answer still permits exactly one cycle before another
+  refusal parks the run. Pinned by `tests/autonomy-selfimprove-smoke.ts` and
+  `tests/autonomy-lifecycle-smoke.ts`.
 
 - **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
   `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,

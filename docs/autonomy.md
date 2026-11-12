@@ -365,7 +365,9 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   gate, upstream conflict and board work. A run whose reviews find nothing three times in a row (`nothingFoundToStop`)
   stops rather than inventing work: the acceptance checks run once more on the integration branch,
   and if they pass the run **succeeds** with the reason `backlog_exhausted`; if they are red it fails
-  as `final_gate_red`. The same final check ends a run that reaches its cycle limit.
+  as `final_gate_red`. The same final check ends a run that reaches its cycle limit or when the
+  operator chooses to stop after blocked publication; a green check records that stop as
+  `succeeded` with reason `publish_blocked_stopped` (`tests/autonomy-selfimprove-smoke.ts`).
 
 The charter, backlog and handoff a repository is seeded with are in `packages/autonomy/seed/`.
 
@@ -598,13 +600,13 @@ explicit promotion records `promotion.error`. The refusal is now surfaced instea
 location and makes removing the identifier its first job, and after **two** merged
 cycles stay unpublished (an intervening non-merged cycle does not reset the count), the host stops
 the run in `blocked` with an operator question (remove the identifier and resume, or stop the run).
-Answering that question first rolls the local integration branch back to the last published head,
+Answering it to resume (any answer except the stop option or a denial) first rolls the local integration branch back to the last published head,
 discarding the merged-but-unpublished cycles and every one of the run's tags whose commit is not
 an ancestor of the published head (their `cycle-NN` and `abandoned-NN` tags are dropped so the
 leak scan is not shown the discarded commits again). Their history entries are marked `discarded`
 (while `merged` stays the historical fact), so the next cycle's prompt tells the worker to redo
 the work instead of looking for a report that is no longer on the branch. Then exactly one cycle
-runs — the answer is consumed as that one resume permission. The rollback is required because
+runs — the answer is consumed as that one resume permission. The stop option ("Stop the run", ignoring surrounding space and case) or a denial does neither: it leaves that unpublished history and its tags untouched and ends through the final acceptance check without starting another cycle (reason `publish_blocked_stopped`; `tests/autonomy-selfimprove-smoke.ts`). The rollback is required because
 publication is fast-forward only and the leak scan reads the whole pushed range, so merely
 removing the identifier in a later commit leaves the refused commit publishable; the answer's
 cycle redoes the discarded work. The run parks again if that cycle's publication is still refused. A successful

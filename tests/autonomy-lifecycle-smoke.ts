@@ -135,6 +135,9 @@ await check("resume semantics are defined for every state", () => {
   assert.equal(r("blocked", { blocker: blockerOf({ kind: "approval" }) }, { approve: true }).ok, true);
   assert.equal(r("blocked", { blocker: blockerOf({ kind: "approval" }) }, { deny: true }).ok, true);
   assert.equal(r("blocked", { blocker: blockerOf({ kind: "external", question: "waiting for the DBA" }) }, { answer: "done" }).ok, true);
+  assert.equal(r("blocked", { blocker: blockerOf({ kind: "external", id: "publish-blocked" }) }, { deny: true }).ok, true, "a bare denial can stop blocked publication");
+  assert.equal(r("blocked", { blocker: blockerOf({ kind: "external", id: "publish-blocked" }) }, { approve: true }).ok, true, "a bare approval can resume blocked publication");
+  assert.equal(r("blocked", { blocker: blockerOf({ kind: "external", question: "waiting for the DBA" }) }, { deny: true }).ok, false, "other external questions still need an answer");
   for (const terminal of ["succeeded", "failed", "cancelled"] as const) assert.equal(r(terminal, { outcome: { status: terminal, reason: "x", at: "2026-09-30T00:00:00.000Z" } }).ok, false, terminal);
   const ex = r("budget_exhausted", { outcome: { status: "budget_exhausted", reason: "total_usd", at: "2026-09-30T00:00:00.000Z" } });
   assert.equal(ex.ok, false);

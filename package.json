@@ -1,6 +1,6 @@
 {
   "name": "@satunix/pi-system",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "description": "Safety-first kit for the pi coding agent: tool firewall, secret guard, checkpoints, verification, memory, orchestration, skills and themes. One package; pick a profile with /profile.",
   "type": "module",
   "keywords": [

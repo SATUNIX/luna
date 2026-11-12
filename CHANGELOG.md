@@ -67,6 +67,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   reason `publish_blocked_stopped`; a resume answer still permits exactly one cycle before another
   refusal parks the run. Pinned by `tests/autonomy-selfimprove-smoke.ts` and
   `tests/autonomy-lifecycle-smoke.ts`.
+- **Dated eval baselines refuse future records and linked write targets.** `--check` now fails
+  closed when the newest record is dated after today UTC, and `--write --date` refuses a future
+  date before running the fixture suite. Baseline writes use the guarded atomic writer, so a
+  linked output directory or record cannot redirect a write outside its trusted root. Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
 
 - **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
   `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,

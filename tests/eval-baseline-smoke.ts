@@ -40,7 +40,7 @@ const SAMPLE_RUN: EvalRun = {
 
 function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8", timeout: 240_000 });
-  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr || result.error?.message || "" };
 }
 
 /** Write a schema-valid baseline file for `dir` under `date`, using the pure summariser. */
@@ -158,6 +158,67 @@ function testCheckBoundaryNewestMalformed(): void {
   }
 }
 
+function testFutureAndRecentDates(): void {
+  const ws = tmpWorkspace("pi-eval-baseline-dates-");
+  const now = new Date("2026-01-09T23:59:59Z");
+  try {
+    const dir = path.join(ws, "dated");
+    writeBaselineFile(dir, "2026-01-01");
+    assert.equal(checkBaselineDir(dir, now).ok, false, "8 days ago still fails");
+
+    writeBaselineFile(dir, "2026-01-03");
+    assert.equal(checkBaselineDir(dir, now).ok, true, "6 days ago passes");
+
+    writeBaselineFile(dir, "2026-01-09");
+    assert.equal(checkBaselineDir(dir, now).ok, true, "today passes");
+
+    writeBaselineFile(dir, "9999-12-31");
+    const future = checkBaselineDir(dir, now);
+    assert.equal(future.ok, false, "a future-dated newest record fails closed");
+    assert.match(future.message, /future|after today/i, "the failure explains the future date");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
+function testFutureWriteRefused(): void {
+  const ws = tmpWorkspace("pi-eval-baseline-future-write-");
+  try {
+    const dir = path.join(ws, "baselines");
+    const result = runCli(["--write", "--dir", dir, "--date", "9999-12-31"]);
+    assert.equal(result.status, 2, `a future --date exits like an invalid date: ${result.stderr}`);
+    assert.match(result.stderr, /future|after today/i, "the error explains the future date");
+    assert.equal(fs.existsSync(dir), false, "a refused future write creates no output directory");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
+function testSymlinkedWritesRefused(): void {
+  const ws = tmpWorkspace("pi-eval-baseline-links-");
+  try {
+    const outside = path.join(ws, "outside");
+    fs.mkdirSync(outside);
+    const linkedDir = path.join(ws, "linked-baselines");
+    fs.symlinkSync(outside, linkedDir, "dir");
+    const linkedDirResult = runCli(["--write", "--dir", linkedDir]);
+    assert.equal(linkedDirResult.status, 1, `a linked output directory is refused: ${linkedDirResult.stderr}`);
+    assert.match(linkedDirResult.stderr, /symbolic link/, "the linked directory error is clear");
+    assert.deepEqual(fs.readdirSync(outside), [], "a linked directory leaves the outside target empty");
+
+    const operatorRoot = path.join(ws, "operator-root");
+    fs.mkdirSync(operatorRoot);
+    const today = new Date().toISOString().slice(0, 10);
+    fs.symlinkSync(path.join(outside, `${today}.json`), path.join(operatorRoot, `${today}.json`));
+    const linkedFileResult = runCli(["--write", "--dir", operatorRoot, "--date", today]);
+    assert.equal(linkedFileResult.status, 1, `a linked file below the operator root is refused: ${linkedFileResult.stderr}`);
+    assert.match(linkedFileResult.stderr, /symbolic link/, "the linked file error is clear");
+    assert.deepEqual(fs.readdirSync(outside), [], "a linked file leaves the outside target empty");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
 // ---- d. pure summariser, canonical text, token estimate, and the usage gate -------------------
 
 function testPureHelpers(): void {
@@ -188,10 +249,18 @@ const tests: Array<[string, () => void]> = [
   ["--write records one dated file with 17/17, per-category counts and tokens", testWrite],
   ["--check fails closed on an empty or stale baseline dir", testCheckEmptyAndStale],
   ["the 7-day boundary, newest selection and malformed files behave", testCheckBoundaryNewestMalformed],
+  ["future dates fail while today and recent dates keep their freshness boundary", testFutureAndRecentDates],
+  ["--write refuses a future date without creating output", testFutureWriteRefused],
+  ["--write refuses linked output paths and leaves outside targets empty", testSymlinkedWritesRefused],
   ["summariser, canonical text, token estimate and the usage gate", testPureHelpers],
 ];
 
 const restoreEnv = isolateKitEnv();
+const testHome = tmpWorkspace("pi-eval-baseline-home-");
+const previousHome = process.env.HOME;
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.HOME = testHome;
+process.env.PI_CODING_AGENT_DIR = path.join(testHome, "agent");
 let failed = 0;
 try {
   for (const [name, fn] of tests) {
@@ -205,6 +274,11 @@ try {
     }
   }
 } finally {
+  if (previousHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+  else process.env.HOME = previousHome;
+  if (previousAgentDir === undefined) Reflect.deleteProperty(process.env, "PI_CODING_AGENT_DIR");
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  rmWorkspace(testHome);
   restoreEnv();
 }
 if (failed > 0) {

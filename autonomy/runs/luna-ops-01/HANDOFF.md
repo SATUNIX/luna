@@ -1,6 +1,31 @@
 # Run `luna-ops-01` — handoff
 
-## Cycle 05 close (current checkout)
+## Cycle 06 close (current checkout)
+
+State after cycle 06 on `pi/luna-ops-01`, base `70650a313022`, head `7da244a8`:
+
+- Cycle 06: **successful**, mode fix. (1) **DE-105** verified without code change: check 5 of
+  `smoke:redaction-corpus` uses the injected fake clock and passes deterministically; under two busy
+  cores 20/20 runs passed. Under four busy cores real-timing check 4 still failed in 5/20 runs;
+  check 5 never failed, so the residual is the intentionally real-time check, not the guard.
+  (2) **DE-106** `3da123a9` - `coverage` is a 4-shard matrix with `--coverage-out`, raw V8 and eval
+  cache uploads that run even on failure, and a measure-only `coverage-merge` that downloads all
+  shards with `merge-multiple` and runs `coverage --report`; both stay outside `ci-complete.needs`.
+  `coverage.ts` adds the tested splitter and `--coverage-out`/`--report`. The 12-minute PR median
+  was **not measured** offline; GitHub-hosted PR runs remain the measurement. No threshold was
+  added (none exists after `25f9c40e`); the proposal records the policy question.
+  (3) Review fixes `83992142 7da244a8` - `--coverage-out` refuses the checkout, ancestors and
+  filesystem roots and clears only `coverage-*.json` (no recursive delete); hidden cache uploads,
+  docs and policy tests updated. Independent reviewer returned `VERDICT: PASS` after running
+  `smoke:workflow-policy` (48 mutations) and `smoke:check-all-npm` itself.
+- Checks at head: `smoke:redaction-corpus` 6/6, `smoke:workflow-policy`, `smoke:check-all-npm`,
+  `test:typecheck`, `test:lint`, `smoke:docs`, `docs:check`, `verify`, `smoke:release-workflow`
+  all pass. Never run `npm test` or `npm run check:all` here.
+- Push state: `origin/pi/luna-ops-01` carries `70650a31..7da244a8` plus the cycle records. Diff
+  excluding lockfiles and cycle/run records is 50123 chars, over the 30000 new-item budget, so no
+  post-board item was started. Cycle-07+ items remain unstarted.
+
+## Cycle 05 close (historical)
 
 State after cycle 05 on `pi/luna-ops-01` at base `4da2716e9c9f`:
 

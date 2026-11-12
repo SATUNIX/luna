@@ -77,6 +77,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
+  the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave
+  `render()` showing the list body while `footer()` still showed the run legend and the first `↓`
+  was consumed by the run view's missing-run fallback instead of moving the list cursor. A new
+  `inRun()` (view is `run` and the run is still in the registry) now drives `press()`, `footer()`
+  and `render()`; `view` and an open save/stop confirm keep their state. Pinned by
+  `tests/workflow-panel-smoke.ts`.
+
 - `node packages/core/journal.ts` no longer checks for `autonomy/JOURNAL.md` and then writes it
   with a plain write. It reads the file once and replaces it through the safe write helper, so a
   committed symbolic link there is refused, and a cycle directory name that could forge a second

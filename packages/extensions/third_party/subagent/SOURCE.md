@@ -286,3 +286,8 @@
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Workflow panel prune fallback (2026-11-12):** `wf-panel.ts` adds `inRun()`, which is true only
+    while the view is `run` and its run is still in the registry, and uses it in `press()`,
+    `footer()` and `render()`. A run pruned while open now shows the list body and list keys, and
+    the first `↓` moves the list cursor; `view` and an open confirm are kept
+    (`tests/workflow-panel-smoke.ts`).

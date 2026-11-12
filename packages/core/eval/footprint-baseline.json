@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "profiles": {
     "balanced": {
-      "toolText": 8919,
+      "toolText": 8914,
       "ceiling": 9500,
       "delegation": {
         "tools": ["subagent", "workflow", "workflow_control", "workflow_run", "workflow_status"],
-        "toolText": 4730,
+        "toolText": 4725,
         "ceiling": 4900
       },
       "tools": {
@@ -21,12 +21,12 @@
         "verify_completion": 506,
         "workflow": 908,
         "workflow_control": 1063,
-        "workflow_run": 1085,
-        "workflow_status": 591
+        "workflow_run": 1098,
+        "workflow_status": 573
       }
     },
     "lite": {
-      "toolText": 7614,
+      "toolText": 7609,
       "tools": {
         "record_verdict": 700,
         "skill_search": 427,
@@ -36,8 +36,8 @@
         "verify_completion": 506,
         "workflow": 908,
         "workflow_control": 1063,
-        "workflow_run": 1085,
-        "workflow_status": 591
+        "workflow_run": 1098,
+        "workflow_status": 573
       }
     }
   }

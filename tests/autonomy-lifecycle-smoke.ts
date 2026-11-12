@@ -16,6 +16,7 @@ import { STATES, TERMINAL, TRANSITIONS, IllegalTransition, applyResultsToBoard a
 import { assessLock, createRunLock as createLock, type RunLockOptions } from "../packages/autonomy/lib/runlock.ts";
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { runPaths } from "../packages/autonomy/lib/paths.ts";
+import { GATE_SLOTS_ENV, acquireGateSlot, resolveGateSlots, type GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 
 
@@ -372,5 +373,123 @@ await check("store: state round-trips atomically; transitions persist; the contr
   assert.equal(os.hostname().length > 0, true);
 });
 
+// --- host-wide gate slots (PG-50) ----------------------------------------------------------
+await check("gate slots: the setting parses, defaults and rejects bad values", () => {
+  assert.equal(resolveGateSlots({}), 2);
+  assert.equal(resolveGateSlots({ [GATE_SLOTS_ENV]: "0" }), 0);
+  assert.equal(resolveGateSlots({ [GATE_SLOTS_ENV]: "3" }), 3);
+  assert.equal(resolveGateSlots({ [GATE_SLOTS_ENV]: "nope" }), 2);
+  assert.equal(resolveGateSlots({ [GATE_SLOTS_ENV]: "-1" }), 2);
+  assert.equal(resolveGateSlots({ [GATE_SLOTS_ENV]: "" }), 2);
+});
+
+await check("gate slots: at most two run at once; a third waits for a freed slot", async () => {
+  const home = tempDir("autonomy-slots-");
+  const state: { live: number; max: number } = { live: 0, max: 0 };
+  const hold = async (): Promise<GateSlot> => {
+    const slot = await acquireGateSlot({ home, limit: 2, pollMs: 20 });
+    state.live += 1;
+    if (state.live > state.max) state.max = state.live;
+    return { index: slot.index, release: () => { state.live -= 1; slot.release(); } };
+  };
+  const a = await hold();
+  const b = await hold();
+  const pending: { slot: GateSlot | null } = { slot: null };
+  void hold().then((s) => { pending.slot = s; });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(pending.slot === null, true, "the third acquisition waits while both slots are held");
+  a.release();
+  for (let i = 0; i < 250 && !pending.slot; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(pending.slot, "the third acquisition proceeds once a slot is free");
+  const third = pending.slot;
+  b.release();
+  third.release();
+  assert.ok(state.max <= 2, `at most two gates ran at once (saw ${state.max})`);
+  rm(home);
+});
+
+await check("gate slots: a zero limit is unbounded and touches no directory", async () => {
+  const home = tempDir("autonomy-slots-zero-");
+  const s1 = await acquireGateSlot({ home, limit: 0 });
+  const s2 = await acquireGateSlot({ home, limit: 0 });
+  assert.equal(s1.index, -1);
+  assert.equal(fs.existsSync(path.join(home, "gate-slots")), false);
+  s1.release();
+  s2.release();
+  rm(home);
+});
+
+await check("gate slots: killing a holder frees its slot for the next waiter", async () => {
+  const home = tempDir("autonomy-slots-kill-");
+  const marker = path.join(home, "held");
+  const mod = pathToFileURL(path.resolve("packages/autonomy/lib/gate-slots.ts")).href;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    const { acquireGateSlot } = await import(${JSON.stringify(mod)});
+    const fs = await import("node:fs");
+    const slot = await acquireGateSlot({ home: process.env.SLOT_HOME, limit: 1, pollMs: 20 });
+    fs.writeFileSync(process.env.SLOT_MARKER, String(slot.index));
+    await new Promise(() => {});
+  `], { env: { ...process.env, SLOT_HOME: home, SLOT_MARKER: marker } });
+  for (let i = 0; i < 250 && !fs.existsSync(marker); i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(fs.existsSync(marker), "the child acquired the only slot");
+  child.kill("SIGKILL");
+  await new Promise((r) => setTimeout(r, 100));
+  const slot = await Promise.race([
+    acquireGateSlot({ home, limit: 1, pollMs: 20 }),
+    new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
+  ]);
+  assert.ok(slot, "the killed holder's slot is freed");
+  slot.release();
+  rm(home);
+});
+
+await check("gate slots: release is idempotent and frees the slot for the next holder", async () => {
+  const home = tempDir("autonomy-slots-release-");
+  const a = await acquireGateSlot({ home, limit: 1, pollMs: 20 });
+  assert.equal(a.index, 0);
+  a.release();
+  a.release();
+  const b = await Promise.race([
+    acquireGateSlot({ home, limit: 1, pollMs: 20 }),
+    new Promise<null>((r) => setTimeout(() => r(null), 5_000)),
+  ]);
+  assert.ok(b, "the freed slot is available again");
+  b.release();
+  rm(home);
+});
+
+await check("gate slots: a missing flock fails loudly instead of waiting forever", async () => {
+  const home = tempDir("autonomy-slots-noflock-");
+  const previous = process.env.PATH;
+  process.env.PATH = home;
+  try {
+    await assert.rejects(() => acquireGateSlot({ home, limit: 1, pollMs: 20 }), /ENOENT/);
+  } finally {
+    process.env.PATH = previous;
+    rm(home);
+  }
+});
+
+await check("gate slots: a non-contention flock failure rejects loudly instead of polling forever", async () => {
+  const home = tempDir("autonomy-slots-flockfail-");
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const stub = path.join(bin, "flock");
+  fs.writeFileSync(stub, "#!/bin/sh\necho 'flock: cannot open lock file: Permission denied' >&2\nexit 1\n", { mode: 0o755 });
+  fs.chmodSync(stub, 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previous ?? ""}`;
+  try {
+    const result = await Promise.race([
+      acquireGateSlot({ home, limit: 1, pollMs: 20 }).then(() => "resolved" as const, (error: unknown) => error),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2_000)),
+    ]);
+    assert.ok(result instanceof Error, `a non-contention flock failure rejects (got ${String(result)})`);
+    assert.match(result.message, /Permission denied/);
+  } finally {
+    process.env.PATH = previous;
+    rm(home);
+  }
+});
 rm(tmp);
 done();

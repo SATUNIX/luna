@@ -2,7 +2,7 @@
   "name": "@satunix/pi-core",
   "version": "0.3.0-beta.2",
   "private": true,
-  "description": "pi-system runtime, installer, verification gate, registry, schemas, and policies.",
+  "description": "Luna runtime, installer, verification gate, registry, schemas, and policies.",
   "type": "module",
   "license": "MIT",
   "files": [

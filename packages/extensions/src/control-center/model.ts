@@ -62,6 +62,8 @@ export interface HubRow {
   targetPage?: string | undefined;
   special?: RowSpecial | undefined;
   prefill?: string | undefined;
+  /** A command an informational row names for the operator; it is printed, never dispatched. */
+  command?: string | undefined;
   risk?: ControlRisk | undefined;
   asksItself?: boolean | undefined;
   changesSession?: boolean | undefined;

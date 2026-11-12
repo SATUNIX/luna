@@ -65,9 +65,10 @@ const reviewer = (seen: Seen[]): ManagerFn => async (system: string, user: strin
 };
 const reviews = (seen: readonly Seen[]): Seen[] => seen.filter((c) => /You review one cycle/.test(c.system));
 
-async function cycle(name: string, edit: (t: ScriptContext) => void, integration: Record<string, unknown> = {}, reportText?: string) {
+async function cycle(name: string, edit: (t: ScriptContext) => void, integration: Record<string, unknown> = {}, reportText?: string, prepare?: (src: string) => void) {
   const seen: Seen[] = [];
   const src = sourceRepo();
+  prepare?.(src);
   const h = harness(raw(src, name, integration), { manager: reviewer(seen), script: async (t) => { t.write("AUDIT_OK", "1\n"); edit(t); report(t); if (reportText) t.write(`${cycleDirOf(t.prompts[0] ?? "")}/report.md`, reportText); t.commit("cycle"); } });
   const { state } = await runOnce(h);
   const entry = state.selfImprove?.history[0];
@@ -403,6 +404,67 @@ await check("an over-budget or over-cap diff is rejected, never clipped (review 
   assert.match(asked[0]?.user ?? "", /- tests\/marker-smoke\.ts/);
   assert.doesNotMatch(asked[0]?.user ?? "", /characters cut|chars cut/, "the reviewed diff is whole");
   assert.equal(ok.entry.merged, true);
+});
+
+await check("a host upstream sync of a large trunk is not counted as the cycle's own diff; an oversized own diff is still rejected", async () => {
+  // The upstream branch brings a ~100 KB unrelated file. The host merges it into the integration
+  // branch before the cycle (outcome "merged"), the cycle then adds one small own file. The merge
+  // review must judge only the cycle's own change, never the whole merge side.
+  const upstreamTrunk = (src: string): void => {
+    sh(src, "checkout", "--quiet", "-b", "integration/trunk");
+    fs.mkdirSync(path.join(src, "lib"), { recursive: true });
+    fs.writeFileSync(path.join(src, "lib", "upstream-bulk.txt"), `${"u".repeat(99)}\n`.repeat(1_100));
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk: large unrelated file");
+    sh(src, "checkout", "--quiet", "main");
+  };
+  const small = await cycle("ri-upstream-small", (t) => t.write("own.txt", "small own change\n"), { upstream: "integration/trunk" }, undefined, upstreamTrunk);
+  assert.equal(small.entry.upstream?.outcome, "merged", "the host merged the large trunk itself");
+  const asked = reviews(small.seen);
+  assert.equal(asked.length, 1, "the merge review is asked");
+  const diff = (asked[0]?.user ?? "").split("## Diff\n")[1] ?? "";
+  assert.match(diff, /\+small own change/, "the cycle's own change is judged");
+  assert.doesNotMatch(diff, /upstream-bulk/, "the upstream trunk's own file is not the cycle's work");
+  assert.ok(diff.length < REVIEW_DIFF_BUDGET, `judged diff ${diff.length} is under the ${REVIEW_DIFF_BUDGET} budget`);
+  assert.equal(small.entry.merged, true, small.entry.mergeReason);
+
+  const large = await cycle("ri-upstream-large", (t) => t.write("own.txt", `${"x".repeat(REVIEW_DIFF_BUDGET + 1_000)}\n`), { upstream: "integration/trunk" }, undefined, upstreamTrunk);
+  assert.equal(large.entry.upstream?.outcome, "merged");
+  assert.equal(large.entry.merged, false, "a genuinely oversized own code diff is still rejected");
+  assert.match(large.entry.mergeReason, /exceeds the merge review's budget of 60000 characters/);
+  assert.equal(reviews(large.seen).length, 0, "an over-budget diff is refused before the model is asked");
+});
+
+await check("a conflict-resolving cycle that merges a large upstream trunk is judged on its own paths, not the merge side", async () => {
+  // The conflict is on a small README while the trunk also brings a ~100 KB unrelated file. The
+  // worker merges refs/upstream/trunk and adds one small own file; the multi-parent scope must
+  // judge the resolution and that file only, never the trunk's bulk.
+  const prepare = (src: string): void => {
+    sh(src, "checkout", "--quiet", "-b", "pi-autonomy/integration", "main");
+    fs.writeFileSync(path.join(src, "README.md"), "stream prior cycle\n");
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "stream prior cycle");
+    sh(src, "checkout", "--quiet", "main");
+    sh(src, "checkout", "--quiet", "-b", "integration/trunk", "main");
+    fs.writeFileSync(path.join(src, "README.md"), "trunk intent\n");
+    fs.mkdirSync(path.join(src, "lib"), { recursive: true });
+    fs.writeFileSync(path.join(src, "lib", "upstream-bulk.txt"), `${ "v".repeat(99)}\n`.repeat(1_100));
+    sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "trunk: conflict and large unrelated file");
+    sh(src, "checkout", "--quiet", "main");
+  };
+  const result = await cycle("ri-upstream-conflict", (t) => {
+    assert.match(t.message, /## P0: upstream merge conflict/);
+    assert.equal(t.git(["merge", "--quiet", "refs/upstream/trunk"]).status, 1, "the trunk merge conflicts");
+    t.write("README.md", "stream prior cycle\ntrunk intent\n");
+    t.write("own.txt", "small own change\n");
+  }, { upstream: "integration/trunk" }, undefined, prepare);
+  assert.equal(result.entry.upstream?.outcome, "conflict", "the host left the conflicting merge to the cycle");
+  const asked = reviews(result.seen);
+  assert.equal(asked.length, 1, "the merge review is asked");
+  const diff = (asked[0]?.user ?? "").split("## Diff\n")[1] ?? "";
+  assert.match(diff, /\+small own change/, "the cycle's own file is judged");
+  assert.match(diff, /\+stream prior cycle/, "the conflict resolution is judged against the upstream head");
+  assert.doesNotMatch(diff, /upstream-bulk/, "the trunk's unrelated bulk is not the cycle's work");
+  assert.ok(diff.length < REVIEW_DIFF_BUDGET, `judged diff ${diff.length} is under the ${REVIEW_DIFF_BUDGET} budget`);
+  assert.equal(result.entry.merged, true, result.entry.mergeReason);
 });
 
 cleanup();

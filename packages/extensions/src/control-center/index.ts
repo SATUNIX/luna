@@ -14,25 +14,83 @@
  *
  * Self-containment rule: import only node:* builtins, pi peers and sibling modules.
  */
+import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { getOrCreateControls } from "./controls.ts";
 import { buildModel, PAGES } from "./model.ts";
 import { openHub, terminalConfirm, type CommandInfo, type HubDeps } from "./hub.ts";
-import { readMarker, readCompaction, readDelegation, readEffort, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
+import { agentDir, readMarker, readCompaction, readDelegation, readEffort, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
 import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts";
 import { builtinCommandNames } from "./builtins.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
-import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile } from "./command-menu.ts";
+import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile, warnOnce } from "./command-menu.ts";
 import { isReducedMotion, launchHeader } from "./launch-screen.ts";
 
-const DEFAULT_HUB_KEY = "alt+m";
+const DEFAULT_HUB_KEY: KeyId = "alt+m";
 
-/** The shortcut key: `hubKey` in `<agent dir>/pi-kit/ui.json`, else alt+m. Never rewrites the file. */
-export function readHubKey(): string {
+// Whitespace, C0, DEL and C1 controls: rejected before any shape check because a trimmed value
+// could otherwise carry one (a trailing newline is removed by `trim`, an inner one is not).
+function hasControlOrSpace(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || char.trim() === "") return true;
+  }
+  return false;
+}
+const HUB_KEY_MODIFIERS = ["ctrl", "shift", "alt", "super"] as const;
+const HUB_KEY_SYMBOLS = new Set(["`", "-", "=", "[", "]", "\\", ";", "'", ",", ".", "/", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "|", "~", "{", "}", ":", "<", ">", "?"]);
+const HUB_KEY_NAMES = new Set([
+  "escape", "esc", "enter", "return", "tab", "space", "backspace", "delete", "insert", "clear", "home", "end", "pageup", "pagedown", "up", "down", "left", "right", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+]);
+
+/**
+ * True when `value` is one key pi-tui can parse, mirroring `parseKeyId` in its `keys.js`: any
+ * number (including zero) of distinct modifiers, then one base key. A duplicate modifier is not a
+ * key pi-tui can match, and `+` is the one base key that itself contains `+`.
+ */
+function isHubKey(value: string): value is KeyId {
+  if (hasControlOrSpace(value)) return false;
+  let rest = value.toLowerCase();
+  const seen = new Set<string>();
+  for (;;) {
+    const modifier = HUB_KEY_MODIFIERS.find((name) => rest.startsWith(`${name}+`));
+    if (modifier === undefined) break;
+    if (seen.has(modifier)) return false;
+    seen.add(modifier);
+    rest = rest.slice(modifier.length + 1);
+  }
+  if (rest === "") return false;
+  if (rest.includes("+")) return rest === "+";
+  return /^[a-z0-9]$/.test(rest) || HUB_KEY_SYMBOLS.has(rest) || HUB_KEY_NAMES.has(rest);
+}
+
+/**
+ * The shortcut key: `hubKey` in `<agent dir>/pi-kit/ui.json`, else alt+m. Never rewrites the file.
+ * Surrounding whitespace is trimmed, then the value is accepted only when it is one key pi-tui can
+ * parse; anything else is ignored with one warning naming the default, never echoing the value.
+ */
+export function readHubKey(): KeyId {
   const key = readUiFile()?.hubKey;
-  if (typeof key === "string" && key.trim() !== "") return key.trim();
-  return DEFAULT_HUB_KEY;
+  if (key === undefined) return DEFAULT_HUB_KEY;
+  if (typeof key !== "string") {
+    warnInvalidHubKey();
+    return DEFAULT_HUB_KEY;
+  }
+  const trimmed = key.trim();
+  if (!isHubKey(trimmed)) {
+    warnInvalidHubKey();
+    return DEFAULT_HUB_KEY;
+  }
+  return trimmed;
+}
+
+function warnInvalidHubKey(): void {
+  warnOnce(
+    `${path.join(agentDir(), "pi-kit", "ui.json")}:hubKey`,
+    `pi-kit/ui.json: hubKey must be one key such as "alt+k" or "ctrl+shift+k"; using "${DEFAULT_HUB_KEY}"`,
+  );
 }
 
 /**
@@ -42,7 +100,7 @@ export function readHubKey(): string {
  * so older pi without `ctx.mode` gets the header too when `hasUI` is true. The menu command is
  * `/menu`, or `/kit` when `/menu` is absent.
  */
-function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean): void {
+function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean, hubKey: KeyId): void {
   if (!isTui) return;
   if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
   if (typeof ctx.ui.setHeader !== "function") return;
@@ -51,7 +109,7 @@ function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boo
   const menuCmd = pi.getCommands().some((command) => command.name === "menu") ? "/menu" : "/kit";
   ctx.ui.setHeader(launchHeader({
     version: VERSION,
-    hubKey: readHubKey(),
+    hubKey,
     menuCmd,
     ascii: process.env.PI_KIT_ASCII === "1",
     reducedMotion: isReducedMotion(ui),
@@ -64,15 +122,14 @@ function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boo
  * The provider hides the kit commands that moved into the hub while leaving every built-in, prompt
  * and skill command visible (`commandMenu: "all"` turns the filter off entirely).
  */
-function registerCommandMenu(pi: ExtensionAPI): void {
-  let curated = false;
+function registerCommandMenu(pi: ExtensionAPI, hubKey: KeyId): void {
+  // Re-run for every session: pi clears the autocomplete wrappers and the extension header when a
+  // session is replaced (/new, /resume, /fork), so a one-shot guard would silently drop both.
   pi.on("session_start", (_event, ctx) => {
-    if (curated) return;
     const mode: string | undefined = ctx.mode;
     const isTui = mode === undefined ? ctx.hasUI : mode === "tui";
     if (!isTui) return;
-    curated = true;
-    installLaunchHeader(pi, ctx, isTui);
+    installLaunchHeader(pi, ctx, isTui, hubKey);
     const settings = readCommandMenuSettings();
     if (settings.commandMenu === "all") return;
     const commands = pi.getCommands().map((command) => ({ name: command.name, source: command.source }));
@@ -223,12 +280,12 @@ export default function controlCenter(pi: ExtensionAPI): void {
     handler: open,
   });
 
-  pi.registerShortcut(hubKey as Parameters<ExtensionAPI["registerShortcut"]>[0], {
+  pi.registerShortcut(hubKey, {
     description: "Open the control centre",
     handler: () => {
       pi.sendUserMessage("/menu", { expandPromptTemplates: true });
     },
   });
 
-  registerCommandMenu(pi);
+  registerCommandMenu(pi, hubKey);
 }

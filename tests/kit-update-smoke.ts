@@ -383,7 +383,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       const byName = Object.fromEntries(report.packages.map((p) => [p.name, p.action]));
       assert.deepEqual(byName, { "pi-lens": "reconcile", "some-tool": "update", "pi-readseek": "pinned" });
       assert.ok(hasUpdates(report));
-      assert.match(summaryLine(report), /pi-system 0\.2\.1-beta\.0 → 0\.2\.1-beta\.1 \(latest\).*pi 0\.85\.1 → 0\.87\.1.*2 linked packages/);
+      assert.match(summaryLine(report), /Luna 0\.2\.1-beta\.0 → 0\.2\.1-beta\.1 \(latest\).*pi 0\.85\.1 → 0\.87\.1.*2 linked packages/);
     } finally {
       w.cleanup();
     }
@@ -397,11 +397,11 @@ const tests: Record<string, () => void | Promise<void>> = {
       const report = await checkForUpdates(w.cwd, fakeRegistry(past).fetchImpl, "0.85.1");
       assert.deepEqual(report.pi, { current: "0.85.1", latest: "0.99.0", available: false, tested: "0.87.1", beyondTested: true });
       assert.doesNotMatch(summaryLine(report), /pi 0\.85\.1/, "the summary must not advertise a pi update past the tested version");
-      assert.match(formatReport(report), /0\.99\.0 is out, past the tested 0\.87\.1: update pi-system first, or run "pi update --self" yourself/);
+      assert.match(formatReport(report), /0\.99\.0 is out, past the tested 0\.87\.1: update Luna first, or run "pi update --self" yourself/);
       for (const what of ["pi", "all"] as const) {
         const plan = planUpdate(report, what);
         assert.equal(plan.steps.some((s) => s.args.includes("--self")), false, `/update ${what} must not update pi past the tested version`);
-        assert.match(plan.notes.join("\n"), /0\.99\.0 is newer than 0\.87\.1, the pi this pi-system release is tested with/);
+        assert.match(plan.notes.join("\n"), /0\.99\.0 is newer than 0\.87\.1, the pi this Luna release is tested with/);
       }
 
       // Up to the tested version, the update is offered as before.
@@ -597,9 +597,9 @@ const tests: Record<string, () => void | Promise<void>> = {
       await pi.commands.get("update").handler("bogus", ctx);
       process.stderr.write = realWrite;
       const text = written.join("");
-      assert.match(text, /pi-system update status/, "no argument prints the status instead of doing nothing");
+      assert.match(text, /Luna update status/, "no argument prints the status instead of doing nothing");
       assert.match(text, /Non-interactive session/);
-      assert.match(text, /"update pi-system to [^"]+" failed: exit 1[\s\S]*npm ERR! network/, "a failed step is reported with its output");
+      assert.match(text, /"update Luna to [^"]+" failed: exit 1[\s\S]*npm ERR! network/, "a failed step is reported with its output");
       assert.match(text, /unknown option "bogus"/);
     } finally {
       process.stderr.write = realWrite;
@@ -700,7 +700,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.ok(notes.some((n) => /Updated \(verified\)/.test(n.m)), "success says the result was verified");
 
       await handler("status", ctx);
-      assert.ok(notes.at(-1)?.m.includes("pi-system update status"));
+      assert.ok(notes.at(-1)?.m.includes("Luna update status"));
     } finally {
       globalThis.fetch = realFetch;
       w.cleanup();
@@ -764,8 +764,8 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(reloaded, 0);
       const error = notes.find((n) => n.l === "error")?.m ?? "";
       assert.match(error, /"re-apply the balanced profile" failed/);
-      assert.match(error, /does not undo "update pi-system to 0\.2\.1-beta\.1": the new kit is installed, but the profile was not re-applied/);
-      assert.match(error, /Before the update it was pi-system 0\.2\.1-beta\.0 on latest; \/update channel 0\.2\.1-beta\.0 goes back to it\./);
+      assert.match(error, /does not undo "update Luna to 0\.2\.1-beta\.1": the new kit is installed, but the profile was not re-applied/);
+      assert.match(error, /Before the update it was Luna 0\.2\.1-beta\.0 on latest; \/update channel 0\.2\.1-beta\.0 goes back to it\./);
       assert.match(error, /re-apply the profile with: \(cd "[^"]+" && \S*node\S* \S*install\.ts --profile balanced --yes --settings-only --scope global\)$/);
       assert.doesNotMatch(error, /run \/update again/, "a second /update sees no kit update and would not re-apply the profile");
 
@@ -791,7 +791,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(report.kit.available, true);
       assert.equal(report.kit.target, "0.2.1-beta.1");
       assert.equal(report.kit.tags?.latest, "0.2.1-beta.1");
-      assert.match(summaryLine(report), /pi-system 0\.2\.1-beta\.0 → 0\.2\.1-beta\.1 \(latest\)/);
+      assert.match(summaryLine(report), /Luna 0\.2\.1-beta\.0 → 0\.2\.1-beta\.1 \(latest\)/);
       assert.match(formatReport(report), /\[git, channel latest\]/);
       const argv = planUpdate(report, "kit").steps.map((s) => s.args.join(" "));
       assert.equal(argv[0], `install ${GIT_SOURCE}@v0.2.1-beta.1`);
@@ -866,7 +866,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(reconcile.cwd, w.cwd, "reconcile must run install.ts in the project");
       assert.notEqual(reconcile.cwd, w.kitRoot);
 
-      const installer = planChannelSwitch(report, "next").steps.find((s) => s.label.includes("switch pi-system"));
+      const installer = planChannelSwitch(report, "next").steps.find((s) => s.label.includes("switch Luna"));
       assert.ok(installer, "the channel switch must go through the kit installer");
       assert.ok(installer.args.join(" ").includes("--scope project"), installer.args.join(" "));
       assert.equal(installer.cwd, w.cwd, "installer must run install.ts in the project");

@@ -217,7 +217,7 @@ def verify_data_dirs(data_root, reporter):
     default_runtime_root = data_root == DEFAULT_DATA_ROOT
     if data_root == DEFAULT_DATA_ROOT and not data_root.exists():
         reporter.warn(
-            f"{data_root} is absent on this host; directory creation is deferred to container/Pi System runtime"
+            f"{data_root} is absent on this host; directory creation is deferred to container/Luna runtime"
         )
         return
 
@@ -228,7 +228,7 @@ def verify_data_dirs(data_root, reporter):
         except Exception as exc:
             if default_runtime_root and os.name == "nt":
                 reporter.warn(
-                    f"cannot create {target} on this Windows host; directory creation is deferred to container/Pi System runtime: {exc}"
+                    f"cannot create {target} on this Windows host; directory creation is deferred to container/Luna runtime: {exc}"
                 )
                 continue
             reporter.fail(f"cannot create required data directory {target}: {exc}")

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
 import type * as LaunchModule from "../packages/extensions/src/control-center/launch-screen.ts";
@@ -33,6 +33,15 @@ async function loadControl(): Promise<(api: unknown) => void> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** True when the text contains a C0, DEL or C1 control character. */
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
 }
 
 function makeTui(): { tui: TUI; count: () => number } {
@@ -255,6 +264,55 @@ tests.push([
       for (const width of [20, 80, 120]) {
         for (const line of component.render(width)) {
           assert.doesNotMatch(line, /[^\x20-\x7e]/, `registered ASCII width ${width} is printable: ${JSON.stringify(line)}`);
+        }
+      }
+      component.dispose?.();
+    } finally {
+      started.cleanup();
+    }
+  },
+]);
+
+tests.push([
+  "an invalid hubKey is ignored in the rendered header",
+  async () => {
+    // Capture the one warning so the smoke's own output stays quiet and the count stays pinned.
+    const captured: string[] = [];
+    const capture = (chunk: string | Uint8Array): boolean => {
+      captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    };
+    Object.defineProperty(process.stderr, "write", { value: capture, configurable: true, writable: true });
+    let started: Started;
+    try {
+      started = await start({ ui: { hubKey: "alt+m\u001b[2J\n" }, env: { PI_KIT_REDUCED_MOTION: "1" } });
+    } finally {
+      Reflect.deleteProperty(process.stderr, "write");
+    }
+    try {
+      assert.equal(captured.filter((line) => line.includes("control-center:")).length, 1, "the invalid key warns exactly once");
+      assert.ok(!captured.join("").includes("\u001b"), "the warning contains no escape character");
+      const factory = headerOf(started);
+      const { tui } = makeTui();
+      const component = factory(tui, plain as unknown as Theme);
+      for (const width of [40, 100]) {
+        const lines = component.render(width);
+        const joined = lines.join("\n");
+        assert.ok(joined.includes("alt+m"), `width ${width} shows the default hub key`);
+        for (const line of lines) {
+          assert.doesNotMatch(line, /[\r\n]/, `width ${width} has no raw newline inside a line: ${JSON.stringify(line)}`);
+          // The renderer's own reset is allowed; any other control character came from the key.
+          const withoutReset = line.replaceAll("\u001b[0m", "");
+          assert.equal(
+            hasControlCharacter(withoutReset),
+            false,
+            `width ${width} has no injected control character outside the renderer reset: ${JSON.stringify(line)}`,
+          );
+          assert.equal(
+            hasControlCharacter(stripTerminalSequences(line)),
+            false,
+            `width ${width} has no stray control character after stripping renderer sequences: ${JSON.stringify(line)}`,
+          );
         }
       }
       component.dispose?.();

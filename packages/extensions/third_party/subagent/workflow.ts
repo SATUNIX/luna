@@ -139,7 +139,7 @@ function parseStep(raw: unknown, where: string, errors: string[], inline: boolea
     const loopsOk = Number.isInteger(maxLoops) && maxLoops >= 0 && maxLoops <= MAX_GATE_LOOPS;
     if (!loopsOk) errors.push(`${where}: gate max_loops must be a whole number from 0 to ${String(MAX_GATE_LOOPS)}`);
     step.gate = { pass: toText(g.pass ?? g.expect ?? ""), retry: toText(g.retry ?? g.on_fail ?? ""), maxLoops: loopsOk ? maxLoops : DEFAULT_GATE_LOOPS };
-    if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text or /regex/ the output must contain)`);
+    if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text or /regex/ the verdict line, the last non-empty line, must contain)`);
   }
   return step;
 }
@@ -660,7 +660,17 @@ function testInWorker(re: RegExp, output: string): Promise<boolean> {
 /** Whether a step's answer passes its gate. Verdicts come last, so a long answer is tested on its tail. */
 export async function gatePasses(pattern: string, output: string): Promise<boolean> {
   const checked = compileGate(pattern);
-  if (!checked) return output.toLowerCase().includes(pattern.toLowerCase());
+  if (!checked) {
+    // Plain text must appear on the verdict line: the last non-empty line of the output. A verdict
+    // comes last, and matching the pass token anywhere else in the prose lets a reviewer's FAIL pass.
+    const lastLine = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .at(-1);
+    if (lastLine === undefined) return false;
+    return lastLine.toLowerCase().includes(pattern.toLowerCase());
+  }
   return checked.ok ? testInWorker(checked.re, output.slice(-MAX_FILE_INCLUDE)) : false;
 }
 

@@ -96,4 +96,22 @@ assert.ok(chars / 4 < 700, `listed skills cost ~${Math.round(chars / 4)} tokens;
   assert.equal(match.matchTriggers("please deploy it", [{ ...skill, name: "plain-probe", triggers: [plain] }]).length, 1);
 }
 
+// 6. Hint clipping: a fixed 160-char slice cut 25 of 34 descriptions mid-word and dropped the
+// "Use when …" decision clause. hintText backs up to a word boundary and appends one ellipsis.
+{
+  assert.equal(match.hintText("short text"), "short text", "a short description is unchanged");
+  // The space before "supercalifragilistic" is the boundary the cap must back up to: the 160th
+  // character lands inside that word, so the whole partial word is dropped.
+  const spaced = "x".repeat(155) + " supercalifragilistic tail";
+  assert.equal(match.hintText(spaced), "x".repeat(155) + "…", "a word split by the cap is dropped whole");
+  const long = all.find((s) => s.description.length > 160 && s.description.includes(" "));
+  assert.ok(long, "the catalogue has a long description to clip");
+  const hint = match.hintText(long.description);
+  assert.ok(hint.length <= 161, `a clipped hint stays <= 161 chars (got ${hint.length})`);
+  const body = hint.slice(0, -1);
+  const src = long.description.trim();
+  assert.ok(src.startsWith(body), `${long.name}: the hint body is a prefix of the description`);
+  assert.ok(!/[\p{L}\p{N}]/u.test(src.charAt(body.length)), `${long.name}: the hint does not end mid-word`);
+}
+
 console.log(`[skill-routing-smoke] routing exact on all fixtures; ${all.length} skills, ${listed.length} listed (~${Math.round(chars / 4)} tokens), ${all.length - listed.length} on demand`);

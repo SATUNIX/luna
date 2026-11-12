@@ -51,7 +51,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/pentest:status` | `pentest-governance-domain` | Show pentest data-root and governance status | [security](security.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
 | `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
-| `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [control-center](control-center.md) |
+| `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [memory](memory.md) |
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
@@ -66,7 +66,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
 | `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
-| `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
+| `/workflows` | `subagent` | Every workflow, subagent and autonomous run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
 ## Tools
 
@@ -401,7 +401,7 @@ Extension `subagent`. Control a live workflow run in this session: pause (start 
 
 ### `workflow_run`
 
-Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
+Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the last non-empty line has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -412,7 +412,7 @@ Extension `subagent`. Run subagent steps with a shared directory, gates and resu
 
 ### `workflow_status`
 
-Extension `subagent`. List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.
+Extension `subagent`. List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. With id: YAML steps, script counters, a subagent's log tail, or an autonomous run's template, spend, blocker and liveness.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -433,6 +433,7 @@ absolute or relative to the working directory.
 | `MEM0_API_URL` | `memory-mem0` | mem0 REST service URL | [INSTALL](INSTALL.md#environment-variables) |
 | `MEM0_USER_ID` | `memory-mem0` | mem0 user/agent ID (default `pi-agent`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_AUTONOMY_CLI` | `autonomy-run` | — | — |
+| `PI_AUTONOMY_GATE_SLOTS` | `autonomy-run` | — | [autonomy](autonomy.md) |
 | `PI_AUTONOMY_HOME` | `autonomy-run` | — | [autonomy](autonomy.md) |
 | `PI_CODING_AGENT_DIR` | `control-center`, `finish-reason-retry`, `caveman`, `protected-paths`, `trigger-compact` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_CONSOLE_ALLOWED_HOSTS` | `web-console` | — | [web-console](web-console.md) |

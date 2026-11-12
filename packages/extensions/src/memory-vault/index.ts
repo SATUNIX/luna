@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { completeSimple, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import path from "node:path";
+import fs from "node:fs";
+import crypto from "node:crypto";
 import {
   MEMORY_TYPES,
   appendRecap,
@@ -29,7 +31,8 @@ import { AUTO_PROMOTE_TYPES, RECAP_SYSTEM, digestTurn, isTrivial, parseRecap, re
 //  - Recall: the first prompt of a session gets background history (earlier-session recaps +
 //    pinned memories), framed as history only; every prompt gets at most a few memories that
 //    clear a relevance floor. Both are injected as a hidden message (never the system prompt,
-//    which would break caching), and a memory is injected at most once per session.
+//    which would break caching), and a memory is injected at most once per session per unchanged
+//    content (a note edited mid-session is offered again).
 //
 // Subagent children never recap or recall: they are isolated from the operator's history.
 
@@ -85,11 +88,22 @@ function formatHits(hits: ReturnType<typeof searchMemories>): string {
   return hits.map((h) => `- **${h.meta.title}** (${h.meta.type}${h.meta.scope === "global" ? ", global" : ""}) — ${h.snippet.replace(/\s+/g, " ").slice(0, 300)} [${h.rel}]`).join("\n");
 }
 
+// The atomic rewrite in saveMemory keeps the same rel, so the path alone cannot tell an updated
+// note from the one already shown this session. A body hash is also stronger than mtime+size,
+// which can collide on a same-millisecond, same-size rewrite.
+function noteFingerprint(file: string): string {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    return "\u0000missing";
+  }
+}
+
 export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}): void {
   let cfg: VaultConfig = loadConfig();
   let project = "default";
   let firstPrompt = true;
-  const injected = new Set<string>();
+  const injected = new Map<string, string>();
   let queue: Promise<void> = Promise.resolve();
   let pending = 0;
   const now = deps.now ?? (() => new Date());
@@ -137,12 +151,14 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
         if (recaps.length) recapBlock = `### Earlier sessions (${project}) - history only\n\n${recaps.map((r) => `${r.date} ${r.text.replace(/^## /, "").replace(/\*\*Next:\*\*/g, "**Was open then:**")}`).join("\n\n")}`;
         for (const [rel, e] of pinned) pinnedLines.push({ rel, line: `- **${e.meta.title}** [${rel}]` });
       }
-      if (isUserPrompt) firstPrompt = false;
       // Only already-injected memories are claimed up front. The over-fetch also adds the pinned
       // count: every pinned line below is offered to the search and filtered out, so without it an
       // all-pinned top-`recallLimit` leaves the turn with no relevant memory even when one ranks
       // just below the pins on the first turn (when `injected` is empty).
-      const chosen = new Set(injected);
+      const chosen = new Set<string>();
+      for (const [rel, fingerprint] of injected) {
+        if (noteFingerprint(path.join(cfg.root, rel)) === fingerprint) chosen.add(rel);
+      }
       const candidates = searchMemories(cfg.root, isUserPrompt ? event.prompt : "", { project, limit: cfg.recallLimit + injected.size + pinnedLines.length, minScore: cfg.minScore, gate: true })
         .filter((h) => !chosen.has(h.rel));
       const pinnedBlock = pinnedLines.length ? `### Pinned memories\n\n${pinnedLines.map((p) => p.line).join("\n")}` : "";
@@ -177,11 +193,15 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
         hits = next;
         final = assemble(hits) ?? current;
       }
+      // Consume the first-prompt flag only once recall has succeeded (or decided to inject
+      // nothing). If searchMemories or assemble throws, the catch below must not leave the flag
+      // consumed, or the earlier-session recap and pinned block are never offered again this session.
+      if (isUserPrompt) firstPrompt = false;
       if (!final) return undefined;
       // A memory counts as injected only when its own rendered line survived into the final
       // content; anything cut by the cap is recalled again on a later turn.
-      for (const { rel } of pinnedLines) if (final.pinnedShown.has(rel)) injected.add(rel);
-      for (const h of hits) if (final.content.includes(formatHits([h]))) injected.add(h.rel);
+      for (const { rel } of pinnedLines) if (final.pinnedShown.has(rel)) injected.set(rel, noteFingerprint(path.join(cfg.root, rel)));
+      for (const h of hits) if (final.content.includes(formatHits([h]))) injected.set(h.rel, noteFingerprint(h.file));
       return { message: { customType: "memory-recall", content: final.content, display: false } };
     } catch (error) {
       logError(cfg.root, `recall failed: ${String(error)}`);

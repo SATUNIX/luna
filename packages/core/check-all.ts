@@ -24,6 +24,12 @@
  *   node packages/core/check-all.ts --shard=1/4 # run one deterministic quarter of the checks
  *   node packages/core/check-all.ts --jobs=4    # run up to four checks at once
  *   node packages/core/check-all.ts --check-timeout=600   # fail a check still running after 600s
+ *   node packages/core/check-all.ts --for-changed=docs/guide.md,packages/core/lib/x.ts   # print the plan, run nothing
+ *
+ * `--for-changed=<a,b>` maps the named changed paths to the checks they imply (lib/check-map.ts)
+ * and prints the plan as `check-all: run: <name>` / `check-all: skipped: <name>` lines, then exits
+ * 0 without running any check. A cycle derives the paths from its own diff so every check the host
+ * gate would run is either run or explicitly skipped.
  *
  * `--shard=<i>/<n>` splits the selected runs by round-robin over their sorted order, so
  * every run lands in exactly one shard and the shards stay balanced; a CI matrix can run
@@ -44,12 +50,11 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CHECK_NAME_EXACT, CHECK_NAME_PREFIXES, verifyPlan } from "./lib/check-map.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { describeProblems, findWiringProblems } from "./lib/wiring.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const INCLUDE_PREFIX = ["smoke:", "test:"];
-const INCLUDE_EXACT = ["verify", "eval", "docs:check", "docs:mermaid", "profile:check"];
 
 /**
  * Checks that must not run beside another check on the same machine, even under `--jobs`.
@@ -99,6 +104,8 @@ interface CheckAllOptions {
   jobs: number;
   /** Seconds a single check may run before it is stopped and failed; null means no limit. */
   checkTimeout: number | null;
+  /** Changed paths to map to checks and print, instead of running anything; null when not asked. */
+  forChanged: string[] | null;
 }
 
 /** One `npm run <name> [-- args]` invocation. */
@@ -133,7 +140,7 @@ function positiveInteger(text: string): number | null {
 }
 
 function parseArgs(argv: readonly string[]): CheckAllOptions {
-  const options: CheckAllOptions = { list: false, wiring: false, skip: new Set(), shard: null, jobs: 1, checkTimeout: null };
+  const options: CheckAllOptions = { list: false, wiring: false, skip: new Set(), shard: null, jobs: 1, checkTimeout: null, forChanged: null };
   for (const arg of argv) {
     if (arg === "--list") options.list = true;
     else if (arg === "--check-wiring") options.wiring = true;
@@ -159,6 +166,12 @@ function parseArgs(argv: readonly string[]): CheckAllOptions {
         process.exit(2);
       }
       options.jobs = jobs;
+    } else if (arg.startsWith("--for-changed=")) {
+      options.forChanged = arg
+        .slice("--for-changed=".length)
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p !== "");
     } else if (arg.startsWith("--check-timeout=")) {
       const value = arg.slice("--check-timeout=".length);
       const seconds = positiveInteger(value);
@@ -168,7 +181,7 @@ function parseArgs(argv: readonly string[]): CheckAllOptions {
       }
       options.checkTimeout = seconds;
     } else if (arg === "--help" || arg === "-h") {
-      console.log("usage: node packages/core/check-all.ts [--list] [--check-wiring] [--skip=a,b] [--shard=<i>/<n>] [--jobs=<n>] [--check-timeout=<s>]");
+      console.log("usage: node packages/core/check-all.ts [--list] [--check-wiring] [--skip=a,b] [--shard=<i>/<n>] [--jobs=<n>] [--check-timeout=<s>] [--for-changed=a,b]");
       process.exit(0);
     } else {
       console.error(`check-all: unknown argument "${arg}" (try --help)`);
@@ -191,9 +204,15 @@ export function shardRuns<T>(runs: readonly T[], shard: Shard): T[] {
 interface CheckNames {
   run: string[];
   known: Set<string>;
+  scripts: Record<string, string>;
 }
 
-function checkNames(root: string): CheckNames {
+/**
+ * The selected checks read from `root`'s package.json. `announce` prints the covered-aggregate
+ * skip line; callers that only need the names (or are planning) pass false so it is printed once
+ * per real run and never in `--for-changed` mode.
+ */
+function checkNames(root: string, announce = true): CheckNames {
   const manifest = path.join(root, "package.json");
   let pkg: unknown;
   try {
@@ -206,12 +225,12 @@ function checkNames(root: string): CheckNames {
   }
   const scripts = scriptsOf(pkg);
   const names = Object.keys(scripts)
-    .filter((name) => INCLUDE_PREFIX.some((prefix) => name.startsWith(prefix)))
-    .concat(INCLUDE_EXACT)
+    .filter((name) => CHECK_NAME_PREFIXES.some((prefix) => name.startsWith(prefix)))
+    .concat(CHECK_NAME_EXACT)
     .filter((name) => name in scripts);
   const covered = coveredAggregates(scripts, names);
-  for (const [name, via] of covered) console.log(`check-all: skipping ${name}: every file it runs is already its own check (${via.join(", ")})`);
-  return { run: names.filter((name) => !covered.has(name)).sort(), known: new Set(names) };
+  if (announce) for (const [name, via] of covered) console.log(`check-all: skipping ${name}: every file it runs is already its own check (${via.join(", ")})`);
+  return { run: names.filter((name) => !covered.has(name)).sort(), known: new Set(names), scripts };
 }
 
 /** `--skip` names that are not a check, so a typo is an error rather than a silent full run. */
@@ -279,7 +298,7 @@ function wiringFailures(root: string): string[] {
 
 /** The selected runs, one entry per `npm run` invocation (profile:check expands per profile). */
 function buildRuns(options: CheckAllOptions, root: string): CheckRun[] {
-  const { run: names } = checkNames(root);
+  const { run: names } = checkNames(root, false);
   const runs: CheckRun[] = [];
   for (const name of names) {
     if (options.skip.has(name)) continue;
@@ -466,11 +485,25 @@ function report(run: CheckRun, result: RunResult): string | null {
  * scratch manifest to exercise `--jobs` over fake checks.
  */
 export async function runAll(options: CheckAllOptions, root: string = ROOT): Promise<number> {
-  const { run: names, known } = checkNames(root);
+  // Plan mode runs nothing, so the covered-aggregate skip line would contradict the plan; it is
+  // printed once here for a real run and not at all while planning.
+  const { run: names, known, scripts } = checkNames(root, options.forChanged === null);
 
   if (names.length === 0) {
     console.error("check-all: no check scripts found — is package.json correct?");
     return 2;
+  }
+
+  // A plan request never runs anything: it maps the changed paths to checks and prints the split,
+  // so a cycle can list every check as RAN or SKIPPED before it commits.
+  if (Array.isArray(options.forChanged)) {
+    // `names` is the runnable gate list (covered aggregates already removed), so the plan lists
+    // exactly the checks the gate runs; the aggregate is not a gate check and is not skipped here.
+    const plan = verifyPlan(options.forChanged, names, scripts);
+    console.log(`check-all: plan for ${options.forChanged.length} changed path(s)`);
+    for (const name of plan.run) console.log(`check-all: run: ${name}`);
+    for (const name of plan.skipped) console.log(`check-all: skipped: ${name}`);
+    return 0;
   }
 
   const unknown = unknownSkips(options.skip, known);

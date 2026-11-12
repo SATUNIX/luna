@@ -52,8 +52,8 @@ patterns are limited:
   is the backstop for patterns the check allows but that are slow to match, such as `a*a*a*$`.
   The limit covers matching only, not compilation, which the check-time caps bound.
 
-The limits on strings and matching time are in the validator (`packages/role-runner/src/schema.ts`
-and its copy), so role-runner result schemas get them too; the check-time caps apply to subagent
+The limits on strings and matching time are in the validator
+(`packages/extensions/third_party/subagent/schema.ts`); the check-time caps apply to subagent
 result schemas. `tests/workflow-structured-smoke.ts` (check 1b) pins each limit, including that
 the slow-to-compile `a?` run is refused at check time.
 
@@ -74,8 +74,8 @@ the slow-to-compile `a?` run is refused at check time.
    `{"output": <result>}`. The result is wrapped because the tool firewall reads top-level
    fields such as `command` and `path` as actions, and a result field with one of those names
    must stay data.
-4. The child checks the arguments as the model wrote them, before pi coerces any types, with a
-   copy of the role-runner validator (`third_party/subagent/schema.ts`). A rejected call is an
+4. The child checks the arguments as the model wrote them, before pi coerces any types, with the
+   vendored validator (`third_party/subagent/schema.ts`). A rejected call is an
    error result that lists the problems, so the model can call again. An accepted call ends the
    child's turn.
 5. The host does not trust the child's answer. From the child's JSON event stream it takes the
@@ -96,8 +96,11 @@ The tool firewall allows `StructuredOutput` (`risk_class: "verdict"`) in both po
 ## Tests
 
 - `tests/workflow-structured-smoke.ts` (`npm run smoke:workflow-structured`) covers the schema
-  checks, the pattern limits, that the validator copy is byte-identical to `packages/role-runner/src/schema.ts`,
-  when the child-only tool registers, the raw and executed argument checks, the host's own
+  checks, the pattern limits, when the child-only tool registers, the raw and executed argument checks, the host's own
   validation, the single charged retry, and `null` after it.
+
+Not covered here: the vendored validator is a copy of an upstream source that this repository does
+not carry. The test compares the two byte for byte only where that source exists, so in this tree
+nothing pins the copy against it.
 - `tests/tool-firewall-smoke.ts` checks that `StructuredOutput` is allowed headlessly and that a
   result with `command` and `path` fields is not read as a command or a credential read.

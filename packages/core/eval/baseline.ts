@@ -14,8 +14,8 @@
  * rather than the status alone deciding: only exit 2, a signal/timeout, or unparseable text is an
  * error. The payload is validated with `lib/guard.ts` — no casts, no `any`.
  *
- * `--check` fails closed: no dated file, a malformed newest file, or a newest record older than
- * MAX_AGE_DAYS (7) all exit 1. The age comes from the filename/embedded date, never the mtime: a
+ * `--check` fails closed: no dated file, a malformed newest file, or a newest record outside the
+ * MAX_AGE_DAYS (7) freshness window all exit 1. The age comes from the filename/embedded date, never the mtime: a
  * fresh `git clone` rewrites every file's mtime, so an mtime check would call a year-old baseline
  * current.
  *
@@ -29,7 +29,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { WORKSPACE_ROOT } from "../lib/paths.ts";
-import { writeSettingsAtomic } from "../lib/settings.ts";
+import { ensureDirSafe, writeFileSafe } from "../shared/safe-fs.ts";
 import { array, boolean, literal, number, object, parseJsonAs, record, string, type Infer } from "../lib/guard.ts";
 
 /** `run.ts` and the default `baselines/` live beside this module. */
@@ -150,7 +150,7 @@ const DATED_FILE = /^\d{4}-\d{2}-\d{2}\.json$/;
 
 /**
  * Judge the newest dated baseline in `dir` against `now`. Fails closed: no dated file, a malformed
- * newest file, a filename/embedded date mismatch, or an age over MAX_AGE_DAYS all return ok:false.
+ * newest file, a filename/embedded date mismatch, or an age outside 0..MAX_AGE_DAYS all return ok:false.
  * A non-matching file (e.g. a README.md) is ignored. Never reads an mtime.
  */
 export function checkBaselineDir(dir: string, now: Date): BaselineCheck {
@@ -190,6 +190,14 @@ export function checkBaselineDir(dir: string, now: Date): BaselineCheck {
     };
   }
   const ageDays = baselineAgeDays(date, now);
+  if (ageDays < 0) {
+    return {
+      ok: false,
+      date,
+      ageDays,
+      message: `newest eval baseline ${newest} is dated after today (UTC); the check fails closed`,
+    };
+  }
   if (ageDays > MAX_AGE_DAYS) {
     return {
       ok: false,
@@ -262,16 +270,24 @@ export function main(argv: readonly string[] = process.argv.slice(2)): number {
   const targetDir = dir ?? DEFAULT_DIR;
 
   if (mode === "write") {
-    const baselineDate = date ?? todayUtc(new Date());
+    const now = new Date();
+    const baselineDate = date ?? todayUtc(now);
     if (!DATE_RE.test(baselineDate)) {
       console.error(`[eval-baseline] invalid --date "${baselineDate}" (expected YYYY-MM-DD)`);
       console.error(USAGE);
       return 2;
     }
+    if (baselineDate > todayUtc(now)) {
+      console.error(`[eval-baseline] invalid --date "${baselineDate}" (after today UTC)`);
+      console.error(USAGE);
+      return 2;
+    }
     try {
+      const writeRoot = dir === undefined ? WORKSPACE_ROOT : path.dirname(path.resolve(targetDir));
+      ensureDirSafe(targetDir, { root: writeRoot });
       const baseline = BaselineSchema.parse(summarise(runEvalJson(), baselineDate, new Date().toISOString()));
       const file = path.join(targetDir, `${baselineDate}.json`);
-      writeSettingsAtomic(file, baseline);
+      writeFileSafe(file, JSON.stringify(baseline, null, 2) + "\n", { root: writeRoot, mode: 0o644 });
       console.log(
         `[eval-baseline] wrote ${file}: ${String(baseline.fixtures.passed)}/${String(baseline.fixtures.total)} passed ` +
           `(${String(baseline.fixtures.successRate)}), ${String(Object.keys(baseline.perCategory).length)} categories, ~${String(baseline.tokens)} tokens`,

@@ -10,6 +10,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
+  `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
+  was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes
+  and passed on the previous pull request; recent runs took 18 to 27 minutes. `coverage` measures and
+  never gated on a threshold, and the same suite already gates through the `verify` shards, so
+  `ci-complete` no longer needs it and its `timeout-minutes` is 45. `tests/workflow-policy-smoke.ts`
+  names the one measure-only job, refuses to let `ci-complete` need it again or let its timeout fall
+  below 40, requires the exempt job to really run coverage, and still requires every other job in
+  `needs`; its job-header check now also sees a header with a trailing comment. The repository ruleset
+  is unchanged: it requires only `ci-complete`. Not covered: a release run calls the whole of `ci.yml`,
+  so a failed `coverage` job still stops a release (`docs/ci-security.md`).
+- **The update notice names the branch it counts against.** The line `trunk is N commits ahead — /update
+  channel next` counted commits on `main`, while the `trunk` channel follows `integration/luna`, so the
+  word meant two different branches. It now reads `main is N commits ahead — /update channel next`; the
+  suggested command is unchanged. Pinned by `tests/update-notice-smoke.ts` (`smoke:update-notice`).
+
 - **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
   `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
   behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
@@ -25,6 +41,26 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A second publish-blocked answer no longer wedges the run on a deleted cycle tag.** The reset that
+  an answer triggers deletes every run tag that is not an ancestor of the published head and marks
+  those cycles `discarded`, but the next cycle start still named `refs/tags/<prefix>cycle-NN` of the
+  last cycle whenever that cycle was unmerged. After an answer cycle that failed its gate and was
+  refused again, the second answer deleted that cycle's tag, `git bundle create` failed on the missing
+  ref (`git bundle failed: fatal: ambiguous argument`) and every later answer repeated the error. The
+  cycle start now names a tag only for a cycle that was not discarded, so the run starts the next
+  cycle. Pinned by `tests/autonomy-selfimprove-smoke.ts`.
+- **Two pages no longer point at material this repository does not carry.** `docs/structured-output.md`
+  named the removed `packages/role-runner` as the home of the result validator and said a test pins the
+  vendored copy byte for byte against it; the validator is `packages/extensions/third_party/subagent/schema.ts`,
+  and the comparison runs only where the upstream source exists, which the page now says. `docs/autonomy-gate.md`
+  linked a specification file that is not in the tree. A mechanical scan of 97 pages found no other
+  `npm run` script, test file or linked page that does not exist.
+
+- **The context sieve charges its hidden-message framing to the message budget.** The header, the block
+  separator and the optional "still current" line were outside the budget, so the injected message could
+  exceed it (about 40% on a 50-token budget) and `sieve-budget.json` under-reported it. The whole message is
+  now bounded: the still-current line names only the ids that fit, a budget smaller than the framing injects
+  nothing, and `message.tokens` records the injected content (`tests/context-budget-smoke.ts`).
 - **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
   cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
   scan reads the whole pushed range, so removing the identifier in a later commit still left the
@@ -33,6 +69,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   merged-but-unpublished cycles; their `cycle-NN` tags are dropped) before the answer's cycle runs, and
   `publishNow` clears the blocker and the unpublished count only on a real push. Pinned by
   `tests/autonomy-selfimprove-smoke.ts`.
+- **An attended `ask_human` question waits behind workflow approval cards.** Run cards do not
+  take the shared input hold because the broker allows two open prompts per run; the question
+  previously opened over them and could take an unintended first-option answer. It now waits for
+  the last run card to close, sharing its timeout and abort signal with that wait, and still fails
+  closed if another card opens at the handoff (`tests/firewall-overlay-queue-smoke.ts`).
+- **Stopping after a blocked publication now ends the self-improve run.** The supervisor previously
+  consumed the answer to the pre-push leak scan question and started another cycle even when the
+  operator chose "Stop the run" or denied it. Those answers now take the final acceptance path with
+  reason `publish_blocked_stopped`; a resume answer still permits exactly one cycle before another
+  refusal parks the run. Pinned by `tests/autonomy-selfimprove-smoke.ts` and
+  `tests/autonomy-lifecycle-smoke.ts`.
+- **Dated eval baselines refuse future records and linked write targets.** `--check` now fails
+  closed when the newest record is dated after today UTC, and `--write --date` refuses a future
+  date before running the fixture suite. Baseline writes use the guarded atomic writer, so a
+  linked output directory or record cannot redirect a write outside its trusted root. Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
 
 - **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
   `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,
@@ -109,6 +161,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   main-thread GC spike can still touch several samples in a row, so the helper takes best of nine
   and warms both input sizes; the 10x bound is unchanged. The rule is stated in the `tests/timing.ts`
   header.
+
+- Pentest governance refuses a human-console approval request when a committed workspace link
+  redirects its path, records the refusal and blocks the action. Its default data directories
+  also use the workspace safe-write helper, and a link below an operator-set `PENTEST_DATA_ROOT`
+  is refused as well (`tests/governance-smoke.ts`).
+- Piped `rg` and grep-family searches no longer treat a recognised search pattern as a secret
+  path. File operands, pattern files and ambiguous shell commands retain the full secret scan
+  (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`).
 
 ## [0.3.0-beta.2]
 

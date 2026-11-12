@@ -11,8 +11,11 @@
  *     `workflow_run`, `issue_comment`);
  *   - every deployment `environment:` is listed in `.github/expected-settings.json`, so the drift
  *     check verifies it exists and is protected, and every listed one is used;
- *   - `ci-complete` (the single required check for ci.yml) needs every other ci.yml job and fails
- *     unless each succeeded;
+ *   - `ci-complete` (the single required check for ci.yml) needs every other ci.yml job, except the
+ *     measure-only jobs named in MEASURE_ONLY_JOBS (which it must not need, and which must really run
+ *     what the list says, so a job cannot borrow the exemption by name), and fails unless each needed
+ *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
+ *     COVERAGE_MIN_TIMEOUT_MINUTES;
  *   - every required check in the expected settings names a job that exists;
  *   - ci.yml's `verify` job runs `check:all` as a shard matrix whose shard count matches the
  *     `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check), with `--jobs`
@@ -50,7 +53,7 @@ export function jobsOf(text: string): Map<string, string> {
   let current: string | null = null;
   for (const line of lines.slice(start + 1)) {
     if (/^\S/.test(line)) break;
-    const name = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/)?.[1];
+    const name = line.match(/^ {2}([A-Za-z0-9_-]+):[ \t]*(?:#.*)?$/)?.[1];
     if (name !== undefined) { current = name; jobs.set(current, []); } else if (current) jobs.get(current)?.push(line);
   }
   return new Map([...jobs].map(([name, body]) => [name, body.join("\n")]));
@@ -108,6 +111,19 @@ export function pullRequestBranchProblems(file: string, text: string): string[] 
   return ["main", "integration/**"].filter((b) => !names.has(b)).map((b) => `${file}: pull_request does not run on ${b}`);
 }
 
+/**
+ * Jobs that report a measurement and never gate: `ci-complete` deliberately does not need them. A job
+ * joins this list only by an edit here, a reviewed change to what the required check stands for.
+ * `coverage` measures the suite and "does not gate on a threshold" (ci.yml). It runs check:all one
+ * check at a time, so it is the slowest lane, and a runner-speed timeout must not block a promotion.
+ * Each entry maps the job to the command it must run, so the exemption cannot be borrowed by a job that
+ * merely has the same name.
+ */
+export const MEASURE_ONLY_JOBS: Readonly<Record<string, RegExp>> = { coverage: /\bnpm run(?: -s)? coverage\b/ };
+
+/** The coverage lane took 18 to 27 minutes against a 30 limit and was cancelled once; it must keep headroom. */
+export const COVERAGE_MIN_TIMEOUT_MINUTES = 40;
+
 /** Problems in one workflow file's text; [] when it keeps every rule. */
 export function fileProblems(file: string, text: string): string[] {
   const out: string[] = [];
@@ -133,7 +149,15 @@ export function fileProblems(file: string, text: string): string[] {
     if (complete === undefined) out.push("ci.yml: no ci-complete job");
     else {
       const needs = new Set(needsOf(complete));
-      for (const job of jobs.keys()) if (job !== "ci-complete" && !needs.has(job)) out.push(`ci.yml ci-complete: does not need ${job}`);
+      for (const job of jobs.keys()) if (job !== "ci-complete" && !Object.hasOwn(MEASURE_ONLY_JOBS, job) && !needs.has(job)) out.push(`ci.yml ci-complete: does not need ${job}`);
+      for (const [job, runs] of Object.entries(MEASURE_ONLY_JOBS)) {
+        const body = jobs.get(job);
+        if (body === undefined) out.push(`ci.yml: the measure-only job ${job} no longer exists; remove it from MEASURE_ONLY_JOBS`);
+        else if (!runs.test(code(body).join("\n"))) out.push(`ci.yml ${job}: the measure-only job does not run ${runs.source}, so it cannot keep the exemption`);
+        if (needs.has(job)) out.push(`ci.yml ci-complete: needs the measure-only job ${job}; it must not gate`);
+      }
+      const coverageMinutes = Number(jobs.get("coverage")?.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1] ?? 0);
+      if (Object.hasOwn(MEASURE_ONLY_JOBS, "coverage") && jobs.has("coverage") && coverageMinutes < COVERAGE_MIN_TIMEOUT_MINUTES) out.push(`ci.yml coverage: timeout-minutes ${coverageMinutes} is below ${COVERAGE_MIN_TIMEOUT_MINUTES}; the lane was cancelled at 30 on a slow runner`);
       if (!/^ {4}if:\s*always\(\)\s*$/m.test(complete)) out.push("ci.yml ci-complete: must run with if: always()");
       if (!/join\(needs\.\*\.result/.test(complete) || !/!= "success"/.test(complete)) out.push("ci.yml ci-complete: must fail unless every needed job succeeded");
     }
@@ -187,7 +211,12 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["|| true on a scan", "security.yml", security.replace("./gitleaks git --redact --verbose --exit-code 1 .", "./gitleaks git --redact --verbose --exit-code 1 . || true"), /gitleaks: "\|\| true"/],
   ...FAIL_OPEN_SAMPLES.map((sample): [string, string, string, RegExp] => [`a fail-open "${sample}"`, "security.yml", security.replace("./gitleaks git --redact --verbose --exit-code 1 .", `./gitleaks git --redact --verbose --exit-code 1 .\n      - run: ${sample}`), /gitleaks: "(?:\|\| true|\|\| exit 0|\|\| echo|set \+e)"/]),
   ["an unlisted environment", "ci.yml", ci.replace(/(\n {2}verify:\n)/, "$1    environment: staging\n"), /environment staging is not in/],
-  ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
+  ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
+  ["ci-complete gating on the measure-only coverage job again", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]"), /needs the measure-only job coverage/],
+  ["the coverage timeout lowered back to 30", "ci.yml", ci.replace(/(\n {2}coverage:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: )45/, "$130"), /coverage: timeout-minutes 30 is below 40/],
+  ["a job named coverage that does not run coverage", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "echo coverage skipped"), /the measure-only job does not run/],
+  ["a job header with a trailing comment escapes needs", "ci.yml", ci.replace(/\n {2}docs-build:\n/, "\n  extra-job: # a comment after the key\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo hi\n\n  docs-build:\n"), /does not need extra-job/],
+  ["the measure-only coverage job removed", "ci.yml", ci.replace(/\n {2}coverage:\n[\s\S]*?(?=\n {2}docs-build:)/, ""), /the measure-only job coverage no longer exists/],
   ["a checkout that keeps credentials", "ci.yml", ci.replace("persist-credentials: false", "persist-credentials: true"), /persists credentials/],
   ["pull_request_target", "ci.yml", ci.replace("  pull_request:\n", "  pull_request_target:\n"), /pull_request_target/],
   ["a job without a timeout", "ci.yml", ci.replace(/(\n {2}docs-build:\n {4}runs-on: ubuntu-latest\n) {4}timeout-minutes: \d+\n/, "$1"), /docs-build: no timeout-minutes/],

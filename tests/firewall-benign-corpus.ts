@@ -5,6 +5,7 @@
 // source. They are read-only or print-only; none reads a credential file or writes a
 // protected path. The corpus sends each row through every loaded tool_call handler and
 // asserts that each allows it. A failure names the exact command and why it is benign.
+// Add a row only with a reason explaining why its file operands are safe to read.
 //
 // The task names `third_party/protected-paths`; the eval harness maps its logical
 // `vendor/protected-paths` alias onto that directory, so this uses the alias.
@@ -29,6 +30,10 @@ export const BENIGN_COMMANDS: readonly BenignCommand[] = [
   { command: "ls packages/extensions/src/secret-guard", reason: "Lists a source directory; ls does not read file contents." },
   { command: "find packages/extensions/src -not -path \"*/node_modules/*\" -name \"*.ts\"", reason: "Read-only source discovery with node_modules excluded." },
   { command: "rg -n \"secret-guard\" packages/extensions/src", reason: "Searches source text for the extension name; no secret file is read." },
+  { command: "rg -n \"secret-guard\" packages/extensions/src | head -3", reason: "Searches ordinary source for the extension name and limits output; the pattern is not a path." },
+  { command: "grep \"secret-guard\" -r packages | head -3", reason: "Searches package source for a name and limits output; the pattern is not a path." },
+  { command: "grep -rn \"credentials\" docs | head -5", reason: "Searches documentation for a word and limits output; the pattern is not a path." },
+  { command: "rg \"secret\" packages/core | head -5", reason: "Searches core source for a word and limits output; the pattern is not a path." },
   { command: "git status", reason: "Read-only working-tree status." },
   { command: "git log --oneline -5", reason: "Read-only commit history." },
   { command: "git diff --stat", reason: "Read-only diff summary." },
@@ -128,7 +133,7 @@ export async function runFirewallBenignCorpus(): Promise<void> {
         );
       }
     }
-    assert.equal(BENIGN_COMMANDS.length, 40, "the corpus is exactly 40 commands");
+    assert.equal(BENIGN_COMMANDS.length, 44, "the corpus is exactly 44 commands");
     console.log(`[test:security firewall-benign-corpus] OK (${BENIGN_COMMANDS.length} commands, ${guards.length} handlers)`);
   } finally {
     for (const restore of restores.reverse()) restore();

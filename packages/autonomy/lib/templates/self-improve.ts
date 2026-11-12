@@ -34,6 +34,9 @@ import { type Template, type TemplateDescription, checkLines } from "./common.ts
 
 const PKG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pad = (n: number): string => String(n).padStart(2, "0");
+const PUBLISH_BLOCKED_RESUME = "Remove the identifier and resume";
+const PUBLISH_BLOCKED_STOP = "Stop the run";
+const PUBLISH_BLOCKED_STOP_REASON = "publish_blocked_stopped";
 
 export const SELF_IMPROVE_LIMITS = { softMinutes: 180, hardMinutes: 300, idleMinutes: 20, noCommitMinutes: 90, managerCallsPerCycle: 3, autoRestartsPerCycle: 3, redGatesInARow: 2, guardEscalations: 3, nothingFoundToStop: 3 };
 
@@ -478,15 +481,23 @@ async function runStep(ctx: StepContext): Promise<void> {
   const g = repo.git();
   // Two merged cycles the leak scan has refused: stop adding unpublished merges and wait for a person.
   if (!si.current && (si.publishBlockedCycles ?? 0) >= 2) {
-    // One cycle per operator answer: consume the answer to the publish-blocked question and run a
-    // single cycle. If the leak scan still refuses that cycle's publication, publishBlocker and
-    // publishBlockedCycles stay set, so the next runStep parks here again with a fresh question.
-    if (state.pendingAnswer?.id === "publish-blocked") {
+    // A stop answer ends through the same final gate as the other run stop reasons and keeps the
+    // unpublished history: the rollback below discards it, and the operator who stops may want to
+    // inspect that work. Any other answer permits one cycle after the rollback to the last published
+    // head. If publication is still refused, publishBlocker and publishBlockedCycles stay set, so
+    // the next runStep parks here again with a fresh question.
+    const answer = state.pendingAnswer?.id === "publish-blocked" ? state.pendingAnswer : null;
+    if (answer) {
+      if (answer.approved === false || answer.text.trim().toLowerCase() === PUBLISH_BLOCKED_STOP.toLowerCase()) {
+        ctx.save((s) => { s.pendingAnswer = null; });
+        await finalize(ctx, PUBLISH_BLOCKED_STOP_REASON);
+        return;
+      }
       resetToLastPublished(ctx);
       ctx.save((s) => { s.pendingAnswer = null; });
     } else {
       const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";
-      await engine.enterBlocked({ kind: "external", id: "publish-blocked", method: "publish", question: `Publication of ${si.publishBlockedCycles} merged cycle(s) is blocked by the pre-push leak scan at ${detail}; remove the identifier or stop the run.`, options: ["Remove the identifier and resume", "Stop the run"] });
+      await engine.enterBlocked({ kind: "external", id: "publish-blocked", method: "publish", question: `Publication of ${si.publishBlockedCycles} merged cycle(s) is blocked by the pre-push leak scan at ${detail}; remove the identifier or stop the run.`, options: [PUBLISH_BLOCKED_RESUME, PUBLISH_BLOCKED_STOP] });
       return;
     }
   }
@@ -513,7 +524,7 @@ async function runStep(ctx: StepContext): Promise<void> {
     if (upstream) log(`cycle ${pad(n)} upstream ${upstream.upstream}: ${upstream.outcome}${upstream.outcome === "merged" || upstream.outcome === "fast_forward" ? ` ${upstream.sha}` : "head" in upstream ? ` ${upstream.head}` : " (continuing without upstream)"}`);
     const head = gm.startCycleBranch(g, cfg);
     const last = si.history.at(-1);
-    const extra = last && !last.merged && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
+    const extra = last && !last.merged && !last.discarded && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
     if (upstream?.outcome === "conflict") extra.push("refs/upstream/trunk");
     await rt.setWorkerBranch(head, extra);
     publishNow(ctx);
@@ -714,7 +725,7 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   return { merge: review.verdict === "MERGE", reason, review: review.verdict, ...extra };
 }
 
-/** The end of a non-finite run: cycles done or nothing left to find. Evidence is a green acceptance run on the integration head. */
+/** The end of a non-finite run: cycles done, nothing left to find, or an operator stop after blocked publication. Evidence is a green acceptance run on the integration head. */
 async function finalize(ctx: StepContext, reason: string): Promise<void> {
   const { engine, rt, repo, contract, state, log } = ctx;
   const cfg = siConfig(ctx.cfg);

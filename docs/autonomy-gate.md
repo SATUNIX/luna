@@ -4,8 +4,8 @@
 simple: an agent in auto mode should do routine work without asking, and dangerous actions
 should still be stopped or brought to you. This page describes how that decision is made. It
 implements the deterministic core of
-`docs/proposals/PI_AUTONOMY_GATE_SPEC.md` (phases 1–3 and a light phase 5). The spec's
-ML models, separate daemon and sandboxing are deferred.
+the autonomy-gate specification (phases 1–3 and a light phase 5); the specification itself is not
+part of this repository. Its ML models, separate daemon and sandboxing are deferred.
 
 ## How a decision is made
 
@@ -240,8 +240,9 @@ Headless sessions and subagents send the same menu through the human console. A 
 without menu support still answers yes/no. The console holds input while a non-run card is open, so
 a second child request waits for the next poll and only one non-run card is shown at a time. A
 workflow run's approval card does not take that hold: the run broker allows two outstanding prompts
-per run, and non-run approval cards still wait behind them. An `ask_human` question holds input the same way,
-so a console card cannot open over it.
+per run, and non-run approval cards still wait behind them. An attended `ask_human` question also
+waits behind the run cards, sharing its timeout with the wait, then holds input while its own card
+is open (`tests/firewall-overlay-queue-smoke.ts`).
 
 **Console answers are authenticated.** The console's files live in the workspace
 (`.pi/human-console`), where the agent can write, so a file in `resolved/` is not evidence that a

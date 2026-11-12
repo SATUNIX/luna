@@ -112,6 +112,25 @@ const tests: Array<[name: string, fn: () => Promise<void>]> = [];
 // --- rendering ---------------------------------------------------------------------------------
 
 tests.push([
+  "the block-art wordmark spells LUNA: its first letter has a foot, not a second bowl",
+  async () => {
+    const launch = await loadLaunch();
+    const lines = launch.launchLines({
+      width: 80, frame: launch.REVEAL_FRAMES - 1, reducedMotion: true, ascii: false,
+      version: "1.2.3", hubKey: "alt+m", menuCmd: "/menu", theme: plain,
+    });
+    const art = lines.filter((line) => /[█╗╝║═╔╚]/.test(line)).map((line) => line.trim());
+    assert.equal(art.length, 6, "the wordmark is six rows of block art");
+    // An L is one stroke for four rows and then a full-width foot; a U is two strokes joined by a bowl.
+    assert.ok((art[0] ?? "").startsWith("██╗     ██╗   ██╗"), `the top row opens with a single stroke, then the U: ${JSON.stringify(art[0])}`);
+    assert.ok((art[4] ?? "").startsWith("███████╗╚██████╔╝"), `the fifth row is the L's foot, then the U's bowl: ${JSON.stringify(art[4])}`);
+    assert.ok(!(art[4] ?? "").startsWith("╚██████╔╝╚██████╔╝"), "the wordmark must not open with two U bowls (it read UUNA)");
+    const widths = new Set(lines.filter((line) => /[█╗╝║═╔╚]/.test(line)).map((line) => visibleWidth(line)));
+    assert.ok([...widths].every((w) => w <= 80), "the wordmark fits an 80-column terminal");
+  },
+]);
+
+tests.push([
   "every width fits, and narrow widths keep Luna and the menu command",
   async () => {
     const launch = await loadLaunch();

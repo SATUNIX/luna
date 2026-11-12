@@ -55,7 +55,7 @@ names within each profile.
 - `docs-nav-check.ts` — offline `mkdocs build --strict` stand-in; `check-mermaid.ts` — parses every Mermaid diagram
 - `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`); `--shard=<i>/<n>` and `--jobs=<n>` split and parallelise the run
 - `lib/effort.ts` — the effort policy loader shared by the toolchain and the autonomy runner
-- `eval/` — the offline behavioural fixture harness (`npm run eval`); `eval/baseline.ts` records a dated success-rate, per-category and token baseline under `eval/baselines/`, and its `--check` fails when the newest baseline is missing or older than 7 days, pinned by `smoke:eval-baseline`
+- `eval/` — the offline behavioural fixture harness (`npm run eval`); `eval/baseline.ts --write` records a dated success-rate, per-category and token baseline under `eval/baselines/` through guarded atomic writes, refusing future dates and linked output paths. Its `--check` fails when the newest baseline is missing, malformed, future-dated or older than 7 days. `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`) pins this behaviour.
 - `dream.ts` — offline dream-mode pass (allowlisted internal state only; it does not write `AGENTS.md`)
 - `new-extension.ts` / `extract-extension.ts` — scaffolding helpers
 - `lib/` — shared toolchain utilities

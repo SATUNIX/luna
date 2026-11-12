@@ -62,7 +62,7 @@ The installer parses these flags on `process.argv.slice(2)`:
 | `--all` | false | Every in-repo, vendor and external name; the package is not narrowed. |
 | `--scope <global\|project>` | `global` | Project settings live at `<cwd>/.pi/settings.json`. |
 | `--mode <local\|git\|npm>` | see below | `local` registers `WORKSPACE_ROOT`; `git` a source of Luna's repository; `npm` `npm:@satunix/pi-system[@channel]`. |
-| `--channel <latest\|next\|X.Y.Z>` | see below | Validated against that grammar (`X.Y.Z` may carry a prerelease suffix such as `0.2.4-beta.0`); exits 1 otherwise. |
+| `--channel <latest\|next\|trunk\|X.Y.Z>` | see below | Validated against that grammar (`X.Y.Z` may carry a prerelease suffix such as `0.2.4-beta.0`); exits 1 otherwise. |
 | `--git-ref <ref>` | null | Git only: register an arbitrary ref (`main` means the `next` channel). Implies `--mode git`. |
 | `--dry-run` | false | Print actions without writing. |
 | `--uninstall` | false | Delegates to `uninstall.ts` (removes Luna and the companions recorded in the marker) and exits with its status. |
@@ -81,7 +81,7 @@ Any other argument, or a value flag with no value or followed by another `--` fl
 
 **Channel and source.** Without `--channel`, a registered kit entry of the same delivery is kept as it is, with the channel recorded in the marker for that exact source (or, for git, inferred: no ref is `next`, a `v<semver>` tag is `latest`, any other ref is its own channel). With `--channel`, or when nothing is registered (default `latest`):
 
-- git: `next` is the unpinned repository (pi follows its default branch), `X.Y.Z` is `<source>@vX.Y.Z`, and `latest` is the newest release tag found with `git ls-remote --tags` (the newest stable one once a stable release exists, otherwise the newest prerelease). `latest` therefore needs a release tag: the installer exits 1 when the repository has none or cannot be reached, and `--channel next` follows `main` instead. `--git-ref` bypasses channel selection: `main` means `next`, and any other ref is registered as `<source>@<ref>`. The base source is `PI_SYSTEM_GIT_SOURCE` (ignored, with a warning, when it names a retired source), else the registered git entry (keeping the user's HTTPS or SSH form), else `git.source` in `distribution.json`, which is `git:github.com/SATUNIX/luna`.
+- git: `next` is the unpinned repository (pi follows its default branch), `trunk` is `<source>@<git.trunkBranch>` (the integration branch head, a canary that is never the default), `X.Y.Z` is `<source>@vX.Y.Z`, and `latest` is the newest release tag found with `git ls-remote --tags` (the newest stable one once a stable release exists, otherwise the newest prerelease). `latest` therefore needs a release tag: the installer exits 1 when the repository has none or cannot be reached, and `--channel next` follows `main` instead. `--git-ref` bypasses channel selection: `main` means `next`, and any other ref is registered as `<source>@<ref>`. The base source is `PI_SYSTEM_GIT_SOURCE` (ignored, with a warning, when it names a retired source), else the registered git entry (keeping the user's HTTPS or SSH form), else `git.source` in `distribution.json`, which is `git:github.com/SATUNIX/luna`.
 - npm: `latest` is the bare `npm:@satunix/pi-system`, anything else `npm:@satunix/pi-system@<channel>`; with nothing registered and no `--channel`, a running copy whose version is a `next` snapshot picks `next`.
 
 **Retired private sources.** `distribution.json` lists `git.legacySources`, retired private GitLab sources. A kit registered from one is never reused and never reconnected to. The installer registers the public source instead, on the channel the install was following: `next` stays `next`, a release or a pin becomes `latest` because a private tag does not exist publicly, and an explicit `--channel` wins. Before anything is replaced it captures the old entry's hand edits (extensions added or removed, skill and prompt exclusions) into `overrides.json`, unless overrides already exist. It then runs `pi remove` for the old registration (or, if that fails, drops its settings entry) and removes every other copy of Luna. A `PI_SYSTEM_GIT_SOURCE` that still names a retired source is ignored and reported.
@@ -90,13 +90,14 @@ Any other argument, or a value flag with no value or followed by another `--` fl
 flowchart TD
     M{"delivery mode"}
     L["local: the source is the checkout path, no channel"]
-    N["npm: keep the registered entry and its channel, else latest or next"]
+    N["npm: keep the registered entry and its channel, else latest or next (or trunk)"]
     G["git: gitKitSource"]
     REG{"a kit git entry is registered?"}
     LEG["retired private source: migrate to the public source, capture hand edits, pi remove the old entry"]
     KEEP["keep the entry and its recorded channel"]
     CH{"channel"}
     NEXT["next: the unpinned repository"]
+    TRUNK["trunk: the integration branch head (canary)"]
     PIN["X.Y.Z: the source at vX.Y.Z"]
     LATEST["latest: newest release tag from git ls-remote, exit 1 when there is none"]
 
@@ -109,6 +110,7 @@ flowchart TD
     REG -->|"none, or --channel given"| CH
     LEG -->|"next stays next, anything else becomes latest, unless --channel is given"| CH
     CH -->|next| NEXT
+    CH -->|trunk| TRUNK
     CH -->|"X.Y.Z"| PIN
     CH -->|latest| LATEST
 ```
@@ -247,7 +249,7 @@ Extensions are applied remove-then-append (`add`); skills and prompts use `exclu
 - `profile` is `"all"` for `--all`, `"custom"` for `--only`, and the canonical profile name otherwise.
 - `overrides` is `null` when empty.
 - `ref` is the git ref of the registered source (null for `next` and outside git mode).
-- `channel` is `latest`, `next`, a pinned version or (in git mode) a raw ref, and null for a local checkout.
+- `channel` is `latest`, `next`, `trunk` (the opt-in integration-branch canary), a pinned version or (in git mode) a raw ref, and null for a local checkout.
 - `companions` is the array of companion `source` strings this install is responsible for. Only the companions this run installs, or reinstalls at Luna's pin, are newly recorded, and companions already recorded by a previous install are carried over; a companion the operator registered at Luna's pin before the run is left out, so uninstall leaves it registered (`tests/install-marker-smoke.ts`). A recorded companion stays tracked until `pi remove` actually removes it. A later install that no longer selects it (including `--no-externals`) does not drop it. With no prior marker, `--no-externals` records `[]`. Each entry is exactly the string `uninstall.ts` passes to `pi remove`. A companion skipped for a missing prerequisite (only `pi-lean-ctx` without its CLI) is not newly recorded by that run, but one recorded by an earlier install is still carried over.
 
 The marker is the installer's last write, which is why `/profile` can use a fresh `installedAt` as evidence that the installer finished.

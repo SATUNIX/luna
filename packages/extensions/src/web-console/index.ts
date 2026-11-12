@@ -654,7 +654,7 @@ export default function (pi: ExtensionAPI) {
     handler: handleConsole,
   });
   pi.registerCommand("webui", {
-    description: "Alias for /console - start/stop the bundled Pi Console web UI.",
+    description: "Alias of /console - start/stop the bundled Pi Console web UI.",
     handler: handleConsole,
   });
 }

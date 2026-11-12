@@ -31,6 +31,7 @@ import type { RunAgentOptions } from "../packages/extensions/third_party/subagen
 import type { SingleResult } from "../packages/extensions/third_party/subagent/types.ts";
 import type * as CheckModule from "../packages/extensions/third_party/subagent/structured-output/check.ts";
 import type * as SchemaModule from "../packages/extensions/third_party/subagent/schema.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;
@@ -156,13 +157,14 @@ try {
     for (const pattern of slowCompile) assert.match(check.checkSchema(withPattern(pattern)).join("\n"), /more than 16 quantifiers and alternatives/, pattern);
     // Exactly 16 choice points pass, fixed counts are not choices, and the slowest shapes at the cap compile fast.
     const atCap: string[] = ["a?".repeat(16) + "a".repeat(200), "[ab]{0,3}".repeat(16) + "a".repeat(100), "(?:a|)".repeat(16) + "a".repeat(100), "x|".repeat(16) + "x", "\\d{4}".repeat(30)];
+    let freshSources = 0;
     for (const [n, pattern] of atCap.entries()) {
       assert.deepEqual(check.checkSchema(withPattern(pattern)), [], pattern);
-      // A fresh source each run: V8 caches compiled patterns by source.
-      const fresh = `${pattern}z${n}${Date.now()}`;
-      const compileStart = Date.now();
-      new RegExp(fresh).test("b");
-      assert.ok(Date.now() - compileStart < 500, `compiling ${pattern} at the cap stays fast`);
+      // A fresh source each attempt: V8 caches compiled patterns by source, so best-of-three must
+      // not pass on the cached repeat of a genuinely slow compile.
+      assertCpuWithin(`compiling ${pattern} at the cap stays fast`, 500, () => {
+        new RegExp(`${pattern}z${n}${freshSources++}`).test("b");
+      });
     }
     const date = withPattern("^\\d{4}-\\d{2}-\\d{2}$");
     assert.equal(check.readStructured(date, { output: { a: "2026-10-23" } }).ok, true, "a normal pattern still matches");
@@ -171,15 +173,19 @@ try {
     // A string over 64 KiB is refused without running the pattern.
     const { MAX_PATTERN_SUBJECT, PATTERN_TEST_MS, PATTERN_BUDGET_MS } = await loadModule<typeof SchemaModule>("vendor/subagent/schema.ts");
     assert.equal(MAX_PATTERN_SUBJECT, 64 * 1024);
-    let started = Date.now();
-    const long = check.readStructured(withPattern("^[a-z]+x"), { output: { a: "a".repeat(MAX_PATTERN_SUBJECT + 1) } });
+    let long!: ReturnType<typeof check.readStructured>;
+    assertCpuWithin("an over-long value is refused quickly", 50, () => {
+      long = check.readStructured(withPattern("^[a-z]+x"), { output: { a: "a".repeat(MAX_PATTERN_SUBJECT + 1) } });
+    });
     assert.ok(!long.ok && /\$\/output\/a: longer than 65536 characters, too long to test against pattern/.test(long.errors.join("\n")), JSON.stringify(long));
-    assert.ok(Date.now() - started < 50, "an over-long value is refused quickly");
     assert.equal(check.readStructured(withPattern("^a+$"), { output: { a: "a".repeat(MAX_PATTERN_SUBJECT) } }).ok, true, "a value at the cap is still tested");
     // Backstop: a pattern the syntactic check allows but that is polynomial (a*a*a*$) is cut off.
     const cubic = { type: "object", properties: { a: { type: "string", pattern: "a*a*a*$" } } };
     assert.deepEqual(check.checkSchema(cubic), []);
-    started = Date.now();
+    // The cut-off these two measure is a node:vm timeout (PATTERN_TEST_MS) plus a Date.now()
+    // deadline (PATTERN_BUDGET_MS), both wall clock: they prove the hang cut-off fires, not CPU work,
+    // so they stay wall clock instead of using the CPU-time helper.
+    let started = Date.now();
     const slow = validateSchema(cubic, { a: `${"a".repeat(4096)}!` });
     assert.deepEqual(slow, ["$/a: pattern a*a*a*$ took too long to test"]);
     assert.ok(Date.now() - started < PATTERN_TEST_MS * 5, "one slow test is cut off near PATTERN_TEST_MS");

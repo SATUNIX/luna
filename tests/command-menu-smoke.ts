@@ -5,8 +5,8 @@
  * Hermetic (temporary agent dir, no live pi). Layers:
  *   - classification: pinned kit commands stay, every other extension command hides, and pi's
  *     built-ins, prompt templates and skill commands are untouched unless hiddenCommands names them;
- *   - the reveal rule: a hidden command returns at four typed characters, and dispatch/completion
- *     are never touched;
+ *   - the reveal rule: a hidden command returns at four typed characters (or at its full name when
+ *     shorter), and dispatch/completion are never touched;
  *   - the location: a hidden suggestion's description says where the command moved;
  *   - settings: commandMenu / pinnedCommands / hiddenCommands from pi-kit/ui.json, invalid values
  *     warned about once and replaced by the defaults;
@@ -64,7 +64,9 @@ const values = (suggestions: AutocompleteSuggestions | null): string[] => (sugge
 // --- fixtures ----------------------------------------------------------------------------------
 
 const COMMANDS: CommandMenuModule.CommandMenuCommand[] = [
+  { name: "menu", source: "extension" },
   { name: "auto", source: "extension" },
+  { name: "kit", source: "extension" },
   { name: "effort", source: "extension" },
   { name: "todos", source: "extension" },
   { name: "totally-companion", source: "extension" },
@@ -167,6 +169,7 @@ tests.push([
     assert.ok(hidden.has("todos"), "another non-pinned kit command is hidden");
     assert.ok(hidden.has("totally-companion"), "a companion-package command is hidden");
     assert.ok(!hidden.has("effort"), "a pinned kit command stays");
+    assert.ok(!hidden.has("menu"), "the renamed menu command stays pinned");
 
     const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
     const result = await suggest(provider, ["/"], 1);
@@ -276,6 +279,23 @@ tests.push([
   },
 ]);
 
+tests.push([
+  "a hidden command shorter than four characters reappears at its full name",
+  async () => {
+    const menu = await loadMenu();
+    const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
+    assert.ok(hidden.has("kit"), "/kit is hidden like every other non-pinned kit command");
+    const kitItems: AutocompleteItem[] = [{ value: "kit", label: "kit", description: "Open the kit hub" }];
+    const provider = menu.commandMenuProvider(fakeBase(kitItems), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
+
+    const atTwo = await suggest(provider, ["/ki"], 3);
+    assert.deepEqual(values(atTwo), [], "three-character /kit stays hidden at two typed characters");
+
+    const atThree = await suggest(provider, ["/kit"], 4);
+    assert.deepEqual(values(atThree), ["kit"], "three-character /kit is revealed once typed in full");
+  },
+]);
+
 // --- the location ------------------------------------------------------------------------------
 
 tests.push([
@@ -283,20 +303,20 @@ tests.push([
   async () => {
     const menu = await loadMenu();
     const model = await modelFor(["auto", "todos", "orchestrate", "lens-health"]);
-    assert.equal(menu.hubLocationFor("auto", model), "moved → /kit ▸ Autonomy ▸ Approvals");
-    assert.equal(menu.hubLocationFor("todos", model), "moved → /kit ▸ Work ▸ Todos");
-    assert.equal(menu.hubLocationFor("orchestrate", model), "moved → /kit ▸ Work ▸ Delegation ▸ Orchestration");
-    assert.equal(menu.hubLocationFor("lens-health", model), "moved → /kit ▸ System ▸ Companions ▸ pi-lens health");
+    assert.equal(menu.hubLocationFor("auto", model), "moved → /menu ▸ Autonomy ▸ Approvals");
+    assert.equal(menu.hubLocationFor("todos", model), "moved → /menu ▸ Work ▸ Todos");
+    assert.equal(menu.hubLocationFor("orchestrate", model), "moved → /menu ▸ Work ▸ Delegation ▸ Orchestration");
+    assert.equal(menu.hubLocationFor("lens-health", model), "moved → /menu ▸ System ▸ Companions ▸ pi-lens health");
     assert.equal(menu.hubLocationFor("not-in-the-hub", model), menu.ALL_COMMANDS_LOCATION, "a command with no row points at All commands");
 
     const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden: new Set(["auto", "todos"]), locationOf: menu.locationFor(model) });
     const result = await suggest(provider, ["/auto"], 5);
     const auto = result?.items.find((item) => item.value === "auto");
-    assert.equal(auto?.description, "moved → /kit ▸ Autonomy ▸ Approvals — Autonomy / approvals", "the location prefixes the old description");
+    assert.equal(auto?.description, "moved → /menu ▸ Autonomy ▸ Approvals — Autonomy / approvals", "the location prefixes the old description");
 
     const all = await suggest(provider, ["/todo"], 5);
     const todos = all?.items.find((item) => item.value === "todos");
-    assert.equal(todos?.description, "moved → /kit ▸ Work ▸ Todos", "a row without a description shows only the location");
+    assert.equal(todos?.description, "moved → /menu ▸ Work ▸ Todos", "a row without a description shows only the location");
   },
 ]);
 

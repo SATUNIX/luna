@@ -4,7 +4,7 @@
 
 The public repository is now `github.com/SATUNIX/luna`. `git.previousSources` in
 `packages/core/distribution.json` retains the previous public location. An existing registration
-moves to the current source with `/update kit`, keeping its `latest`, `next` or pinned channel and
+moves to the current source with `/update kit`, keeping its `latest`, `next`, `trunk` or pinned channel and
 profile. Profile-only switches retain the existing registration; an explicit installer channel
 moves it to the current source. These paths are pinned by `tests/distribution-smoke.ts` and
 `tests/kit-update-smoke.ts`; `tests/distribution-contract-smoke.ts` checks the shipped metadata.

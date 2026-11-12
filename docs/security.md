@@ -149,8 +149,13 @@ are pinned by `tests/governance-smoke.ts`.
    that resumes a paused workflow run. The wait and the card share one timeout, so an overlay left
    open ends the request as an unanswered card would, and a card shown after a wait gets only the
    time left, which pi uses to dismiss it. A brokered child request is deferred and keeps its console
-   timeout, so it can expire behind the overlay and fail closed. Aborting a turn ends that turn's wait,
-   and a pentest action asks scope and RoE again after the wait and after your Yes. A reload or the
+   timeout, so it can expire behind the overlay and fail closed. The console itself holds input while
+   a non-run card is open, so two child requests that arrive in one poll are shown one at a time: the
+   sibling waits for the next poll. A workflow-run approval card does not take that hold, because the
+   run broker deliberately allows two outstanding prompts per run; non-run approval cards and child requests
+   still wait behind those open run cards. An `ask_human` question holds input the same way while its
+   card is open. Aborting a turn ends that turn's wait, and a pentest action asks
+   scope and RoE again after the wait and after your Yes. A reload or the
    end of a session drops the hold, because pi removes an overlay without settling it
    (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,
    `tests/governance-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`,
@@ -499,8 +504,10 @@ A project skill's `re:` trigger and a workflow step's output pattern come from t
 repository. Both are compiled only when `packages/core/shared/safe-regex.ts` accepts them (no
 quantified group that holds a quantifier or an alternation, no backreference, a length and choice
 cap); a refused gate pattern fails its gate (`tests/workflow-smoke.ts`). A skill trigger is also
-tested under a 50 ms time limit, and one that hits the limit is switched off for the session
-(`tests/skill-routing-smoke.ts`). ESLint rejects a `new RegExp` built
+tested under a 50 ms CPU-time budget, and one that exceeds it is switched off for the session
+(`tests/skill-routing-smoke.ts`). The wall-clock cap that interrupts a runaway match sits well
+above the budget (and a descheduled fast regex gets one retry), so a busy host does not switch off
+a trigger that used little CPU. ESLint rejects a `new RegExp` built
 from a non-literal pattern outside a reviewed allowlist. The syntactic check does not catch every
 slow pattern (adjacent overlapping runs are polynomial); the time limit is what stops those for
 skill triggers.

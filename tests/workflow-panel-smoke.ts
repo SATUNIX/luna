@@ -458,10 +458,24 @@ try {
     }
     assert.match(written.join(""), /No workflow run "missing"/);
 
-    // TUI: ctx.ui.custom gets an overlay; esc on the list closes it and stops the timer.
+    // TUI: ctx.ui.custom gets an overlay; esc on the list closes it and stops the timer. The
+    // panel draws a theme border and the transcript behind it is dimmed (overlay-frame.ts).
+    const borderTag = "\x1b[35m";
+    const dimTag = "\x1b[2m";
+    const base = ["base line"];
     let options: unknown;
     let rendered: string[] = [];
+    let dimmedWhileOpen: string[] = [];
     let requested = 0;
+    const tui = {
+      requestRender: () => requested++,
+      hasOverlay: () => true,
+      compositeOverlays: (lines: string[], _w: number, _h: number): string[] => lines,
+    };
+    const panelTheme = {
+      fg: (c: string, t: string): string => `${c === "border" ? borderTag : dimTag}${t}\x1b[39m\x1b[22m`,
+      bold: (t: string): string => t,
+    };
     const tuiCtx: TestCtx = {
       mode: "tui",
       hasUI: true,
@@ -471,10 +485,12 @@ try {
         custom: (factory, opts) =>
           new Promise<undefined>((resolve) => {
             options = opts;
-            const component = factory({ requestRender: () => requested++ }, { fg: (_c: string, t: string) => t, bold: (t: string) => t }, keys, resolve);
+            const component = factory(tui, panelTheme, keys, resolve);
             rendered = component.render(100);
             registry.start("20261023-170000-new", "yaml", "new").finish("passed");
+            dimmedWhileOpen = tui.compositeOverlays(base, 40, 20);
             component.handleInput(KEYS["tui.select.cancel"]);
+            component.dispose();
           }),
       },
     };
@@ -482,6 +498,10 @@ try {
     // An overlay only on pi 1.3.0 or newer: the compat lanes run this file on older pi too.
     assert.deepEqual(options, P.supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined);
     assert.ok(rendered.some((l) => l.includes("Workflows (1 run, 1 active)")));
+    assert.ok((rendered[0] ?? "").includes("╭") && (rendered[0] ?? "").includes("╮"), "the panel opens inside a top border");
+    assert.ok((rendered[rendered.length - 1] ?? "").includes("╰") && (rendered[rendered.length - 1] ?? "").includes("╯"), "the panel closes with a bottom border");
+    assert.ok(dimmedWhileOpen.some((l) => l.includes(dimTag)), "the transcript is dimmed while the panel is open");
+    assert.deepEqual(tui.compositeOverlays(base, 40, 20), base, "done and dispose restore the transcript");
     assert.ok(requested > 0, "registry events ask the overlay to render");
     const after = requested;
     registry.start("20261023-180000-later", "yaml", "later").finish("passed");

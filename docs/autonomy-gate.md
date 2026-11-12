@@ -237,7 +237,11 @@ The choices are:
 - *Deny and tell the agent why*.
 
 Headless sessions and subagents send the same menu through the human console. A console
-without menu support still answers yes/no.
+without menu support still answers yes/no. The console holds input while a non-run card is open, so
+a second child request waits for the next poll and only one non-run card is shown at a time. A
+workflow run's approval card does not take that hold: the run broker allows two outstanding prompts
+per run, and non-run approval cards still wait behind them. An `ask_human` question holds input the same way,
+so a console card cannot open over it.
 
 **Console answers are authenticated.** The console's files live in the workspace
 (`.pi/human-console`), where the agent can write, so a file in `resolved/` is not evidence that a

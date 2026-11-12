@@ -21,10 +21,11 @@ import {
   type ExtensionContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { Container, SettingsList, type SettingItem, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
+import { withOverlayFrame } from "./overlay-frame.ts";
 import type { HubValues } from "./values.ts";
 
 /** A command as `pi.getCommands()` reports it, plus the built-ins the hub adds itself. */
@@ -180,7 +181,7 @@ function securityRows(deps: HubDeps, page: string): HubRow[] {
 
 function helpRows(page: string, hubKey = "alt+m"): HubRow[] {
   return informationalPage(page, "Help & keys", [
-    { label: "Open", value: `/kit, /helpers, or the ${hubKey} key` },
+    { label: "Open", value: `/menu, /kit, /helpers, or the ${hubKey} key` },
     { label: "Navigate", value: "Enter opens or cycles, Esc goes back, type to search" },
     { label: "Typed", value: "every row shows its typed command; every old command still works" },
     { label: "Weakening", value: "a change that lowers oversight needs a confirmation the terminal alone can answer" },
@@ -279,7 +280,9 @@ function selectRenderer(deps: HubDeps): Renderer {
         } catch {
           return undefined;
         }
-        if (value === undefined) return "back";
+        // A cancelled or timed-out value dialog counts as cancel: close the hub, do not
+        // reopen the page the operator came from (docs/control-center.md, "Renderers by mode").
+        if (value === undefined) return undefined;
         return { id: row.id, value };
       }
       return { id: row.id };
@@ -305,47 +308,66 @@ function tuiRenderer(deps: HubDeps): Renderer {
     async show(input: PageInput): Promise<PageChoice> {
       const overlay = supportsOverlay();
       const result = await deps.ctx.ui.custom<PageChoice>(
-        (_tui, theme, _keybindings, done) => {
-          const items: SettingItem[] = input.rows.map((row) => {
-            const description = row.available ? row.description : row.unavailableReason;
+        (tui, theme, _keybindings, done) =>
+          withOverlayFrame(tui, theme, (finish) => {
+            const items: SettingItem[] = input.rows.map((row) => {
+              const description = row.available ? row.description : row.unavailableReason;
+              return {
+                id: row.id,
+                label: row.available ? row.label : `${row.label} (unavailable)`,
+                ...(description ? { description } : {}),
+                currentValue: row.value ?? "",
+                // Every row carries `values` so Enter/Space activates it: a multi-value row cycles, an
+                // action row re-selects its one value and fires onChange.
+                values: row.values && row.values.length > 0 ? row.values : [row.value ?? ""],
+              };
+            });
+            const container = new Container();
+            container.addChild({
+              render: () => [theme.fg("accent", theme.bold(input.title)), ""],
+              invalidate: () => {},
+            });
+            const list = new SettingsList(
+              items,
+              15,
+              getSettingsListTheme(),
+              (id, newValue) => {
+                const row = input.rows.find((r) => r.id === id);
+                if (!row) return;
+                finish({ id, value: row.values && row.values.length > 0 ? newValue : undefined });
+              },
+              () => finish(input.parent ? "back" : undefined),
+              { enableSearch: true },
+            );
+            if (input.focus) list.selectItem(input.focus);
+            container.addChild(list);
+            // The host centers an overlay on the terminal and clips it, so a list taller than the
+            // screen loses its top border, title and search line. Read the live row count per
+            // render; a host that exposes no terminal (the smoke fake) keeps the 15-row default.
             return {
-              id: row.id,
-              label: row.available ? row.label : `${row.label} (unavailable)`,
-              ...(description ? { description } : {}),
-              currentValue: row.value ?? "",
-              // Every row carries `values` so Enter/Space activates it: a multi-value row cycles, an
-              // action row re-selects its one value and fires onChange.
-              values: row.values && row.values.length > 0 ? row.values : [row.value ?? ""],
+              render: (width: number) => {
+                // The trusted in-process SettingsList: `maxVisible` is private and has no setter.
+                const runtime = list as unknown as { maxVisible: number };
+                // Reset first, so a terminal that grew again recovers the full 15 rows.
+                runtime.maxVisible = 15;
+                const rows = tui.terminal?.rows;
+                if (typeof rows !== "number" || !Number.isFinite(rows)) return container.render(width);
+                const budget = Math.max(1, rows - 2); // the frame's top and bottom border lines
+                let lines = container.render(width);
+                while (lines.length > budget && runtime.maxVisible > 1) {
+                  runtime.maxVisible -= 1;
+                  lines = container.render(width);
+                }
+                return lines;
+              },
+              invalidate: () => container.invalidate(),
+              handleInput: (data: string) => {
+                list.handleInput?.(data);
+                tui.requestRender();
+              },
+              handleMouse: (event: TuiMouseEvent): TuiMouseEventResult | undefined => container.handleMouse(event),
             };
-          });
-          const container = new Container();
-          container.addChild({
-            render: () => [theme.fg("accent", theme.bold(input.title)), ""],
-            invalidate: () => {},
-          });
-          const list = new SettingsList(
-            items,
-            15,
-            getSettingsListTheme(),
-            (id, newValue) => {
-              const row = input.rows.find((r) => r.id === id);
-              if (!row) return;
-              done({ id, value: row.values && row.values.length > 0 ? newValue : undefined });
-            },
-            () => done(input.parent ? "back" : undefined),
-            { enableSearch: true },
-          );
-          if (input.focus) list.selectItem(input.focus);
-          container.addChild(list);
-          return {
-            render: (width: number) => container.render(width),
-            invalidate: () => container.invalidate(),
-            handleInput: (data: string) => {
-              list.handleInput?.(data);
-              _tui.requestRender();
-            },
-          };
-        },
+          }, done),
         overlay ? { overlay: true } : undefined,
       );
       return result;
@@ -364,23 +386,29 @@ export async function openHub(deps: HubDeps, startPage = "main"): Promise<void> 
   const renderer = deps.ctx.mode === "tui" ? tuiRenderer(deps) : selectRenderer(deps);
   let page = startPage;
   let focus: string | undefined;
+  // Pages reached by navigation, most recent last. Back pops here first, so a page opened through
+  // another page returns there even when PAGES declares a different static parent.
+  const stack: string[] = [];
   const loop = async (): Promise<void> => {
     for (;;) {
       const rows = rowsForPage(page, deps);
-      const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: parentPage(deps.model, page), focus });
+      // The effective back target: where navigation came from, else the page's declared parent.
+      const back = stack.at(-1) ?? parentPage(deps.model, page);
+      const result = await renderer.show({ model: deps.model, page, rows, title: pageTitle(deps.model, page, deps.values), parent: back, focus });
       focus = undefined;
       if (result === undefined) return;
       if (result === "back") {
-        const parent = parentPage(deps.model, page);
-        if (!parent) return;
-        // Back on the parent, the cursor returns to the row that opened this page.
-        focus = deps.model.rows.find((r) => r.page === parent && r.targetPage === page)?.id;
-        page = parent;
+        const target = stack.pop() ?? parentPage(deps.model, page);
+        if (!target) return;
+        // Back on the returned-to page, the cursor returns to the row that opened this page.
+        focus = deps.model.rows.find((r) => r.page === target && r.targetPage === page)?.id;
+        page = target;
         continue;
       }
       const row = findRow(deps.model, result.id) ?? rows.find((r) => r.id === result.id);
       if (!row) continue;
       if (row.kind === "page" && row.targetPage) {
+        stack.push(page);
         page = row.targetPage;
         continue;
       }

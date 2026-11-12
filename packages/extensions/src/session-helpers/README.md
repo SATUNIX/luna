@@ -15,7 +15,7 @@ This extension fills those gaps. It changes nothing on its own except publishing
 | Command | What it does |
 | --- | --- |
 | `/clear` | **Guidance only — does not clear anything.** Explains `/compact` (shrink context, keep thread), `/new` (fresh session), and `/fork` (branch). |
-| `/kit`, `/helpers` | The cheatsheet of pi built-ins plus Luna helpers. |
+| `/menu`, `/kit`, `/helpers` | The cheatsheet of pi built-ins plus Luna helpers. |
 | `/profile` | Switch the profile, all-or-nothing (below). `/profile` picker, `/profile <name>`, `/profile list`, `/profile status`. |
 | `/compaction` | `status` (default without a UI) shows whether pi auto-compaction is really on, at what token count it triggers, the kit trigger, and why it is degraded. `on` / `off` write pi's global `compaction.enabled` and reload; `trigger on\|off` toggles the kit's fixed-budget trigger. |
 

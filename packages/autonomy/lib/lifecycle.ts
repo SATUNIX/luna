@@ -200,6 +200,7 @@ export interface SetupState {
 /** The operator's answer to the question a blocked run waited on, kept for the next session's briefing (lib/engine.ts). */
 export interface PendingAnswer {
   text: string;
+  id?: string;
   question?: string;
   kind?: BlockerRecord["kind"];
   approved?: boolean;
@@ -217,6 +218,8 @@ export interface SelfImproveState {
   lastPushed: string | null;
   publishError?: string | null;
   publishBlocker?: string | null;
+  /** Merged cycles whose close-out publication the leak scan refused, incremented once per such cycle and left unchanged by a non-merged cycle; cleared only by a successful publish. */
+  publishBlockedCycles?: number;
   lastSyncError?: string | null;
 }
 

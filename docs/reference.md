@@ -32,16 +32,17 @@ describes. Commands are for the operator: the model cannot call them.
 | `/effort` | `effort` | Choose how deep and broad the agent works and how much it delegates: `/effort` (picker), `/effort <minimal\|focused\|standard\|thorough\|exhaustive \| E1..E5>`, `/effort status`, `/effort reset`, `/effort memento [status\|on\|off] [provider/model]` (per-model Memento opt-in, off by default), `/effort ultracode [--size N] [--budget N\|none] \| off` (alias uc, or e5 --standing: E5 plus standing workflow mode). Independent of thinking level, profile and permissions. | [effort](effort.md) |
 | `/engagement` | `conductor` | Manage engagement lifecycle: /engagement start \| status \| phase <name> | [control-center](control-center.md) |
 | `/firewall` | `tool-firewall` | Tool firewall: /firewall [status \| list \| revoke <id>\|session\|workspace\|all\|host:<name> \| reload]. Lists remembered approvals with their scope and revokes them. | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:reload` | `tool-firewall` | Reload the tool-firewall policy from disk (alias of /firewall reload) | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:status` | `tool-firewall` | Show tool-firewall status: policy, mode, judge, learning, approvals (alias of /firewall status) | [autonomy-gate](autonomy-gate.md) |
+| `/firewall:reload` | `tool-firewall` | Alias of /firewall reload - reload the tool-firewall policy from disk | [autonomy-gate](autonomy-gate.md) |
+| `/firewall:status` | `tool-firewall` | Alias of /firewall status - show policy, mode, judge, learning and remembered approvals | [autonomy-gate](autonomy-gate.md) |
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
-| `/helpers` | `control-center` | Alias of /kit - open the control centre | [control-center](control-center.md) |
+| `/helpers` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/improve` | `self-improvement` | Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md. | [control-center](control-center.md) |
-| `/kit` | `control-center` | Open the control centre: profile, effort, thinking, security and every page (also …) | [control-center](control-center.md) |
+| `/kit` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/loop` | `autonomous-loop` | Enable autonomous loop: /loop <goal> starts the loop; /loop stop ends it. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/memory` | `memory-vault` | Memory vault: /memory [status\|recent\|search <q>\|forget <id>\|migrate] | [memory](memory.md) |
+| `/menu` | `control-center` | Open the control centre: profile, effort, thinking, security and every page (also …) | [control-center](control-center.md) |
 | `/orchestrate` | `orchestrator` | Control autonomous delegation: /orchestrate [on\|off\|auto\|status] | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-implement-review` | `orchestrator` | Delegate the full plan → implement → review loop: /orchestrate-implement-review <task> | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-plan` | `orchestrator` | Delegate planning only, no changes: /orchestrate-plan <task> | [agent-orchestration](agent-orchestration.md) |
@@ -60,10 +61,10 @@ describes. Commands are for the operator: the model cannot call them.
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
-| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
-| `/webui` | `web-console` | Alias for /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
+| `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
 | `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
 | `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
@@ -442,7 +443,7 @@ absolute or relative to the working directory.
 | `PI_CONSOLE_TOKEN` | `web-console` | — | [web-console](web-console.md) |
 | `PI_CONSOLE_TOKEN_FILE` | `web-console` | — | [web-console](web-console.md) |
 | `PI_KIT_AGENTS_DIR` | `subagent` | — | — |
-| `PI_KIT_ASCII` | `custom-footer` | — | — |
+| `PI_KIT_ASCII` | `control-center`, `custom-footer` | — | [control-center](control-center.md) |
 | `PI_KIT_AUTO_MODE` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_AUTO_MODE_MODEL` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_AUTO_MODE_STATE_DIR` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
@@ -494,12 +495,13 @@ absolute or relative to the working directory.
 | `PI_KIT_GUARD_OSC` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_REPEAT` | `progress-guard` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_GUARD_STALL` | `progress-guard` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_GUIDELINES_PATH` | `guidelines` | — | — |
+| `PI_KIT_GUIDELINES_PATH` | `guidelines` | Path to guidelines file (default `GUIDELINES.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_HANDOFF_AUTO` | `handoff` | — | — |
 | `PI_KIT_HANDOFF_FILE` | `handoff` | — | — |
 | `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [script-workflows](script-workflows.md) |
 | `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `pentest-governance-domain`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_INTERNAL_CHILD` | `control-center`, `trigger-compact` | — | [control-center](control-center.md) |
+| `PI_KIT_LEAN_CTX` | `session-helpers` | Set to `0` to disable the lean-ctx preflight warning | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_LOOP_MAX` | `autonomous-loop` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_MAX_BRANCHES` | `branch-lab` | — | — |
 | `PI_KIT_MEMORY_AUTOPROMOTE` | `memory-vault` | — | [memory](memory.md) |
@@ -521,6 +523,7 @@ absolute or relative to the working directory.
 | `PI_KIT_RECAP_MODEL` | `memory-vault` | — | [memory](memory.md) |
 | `PI_KIT_RECOVERY_MAX_ATTEMPTS` | `recovery-orchestrator` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_RECOVERY_SCOUTS` | `recovery-orchestrator` | — | — |
+| `PI_KIT_REDUCED_MOTION` | `control-center` | — | [control-center](control-center.md) |
 | `PI_KIT_ROOT` | `kit-update`, `session-helpers` | — | [security](security.md) |
 | `PI_KIT_ROUTING_POLICY` | `provider-router` | — | — |
 | `PI_KIT_SAVE_DIR` | `save` | — | — |
@@ -563,6 +566,7 @@ absolute or relative to the working directory.
 | `PI_KIT_VAULT` | `memory-vault` | — | [memory](memory.md) |
 | `PI_KIT_VERIFY_CMD` | `verify-gate` | Check command for `/verify`; overrides `scripts.verify` (default unset) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_ON_TURN` | `verify-gate` | Set to `1` to run the check command after successful write/edit tools when the assistant finishes its tool sequence; projects without a verify script are skipped (default `0`) | [INSTALL](INSTALL.md#environment-variables) |
+| `PI_KIT_VERIFY_PENDING_TTL_MS` | `verify-gate` | How long a "verification pending" marker stays valid, in ms; an older marker is treated as absent (default `1800000`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW` | `verify-gate` | `0` turns off the independent completion reviewer in `/verify` and `verify_completion` (default on) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_MODEL` | `verify-gate` | Reviewer model as `provider/id` (default current model) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_VERIFY_REVIEW_TIMEOUT_MS` | `verify-gate` | Reviewer timeout (default `900000`) | [INSTALL](INSTALL.md#environment-variables) |

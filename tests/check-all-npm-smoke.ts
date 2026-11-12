@@ -145,6 +145,27 @@ assert.deepEqual(splitCoverageArgs(["--report"]), { report: null, coverageOut: n
 const coverageReport = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "coverage.ts"), "--report"], { encoding: "utf8" });
 assert.equal(coverageReport.status, 2, "coverage --report without a directory exits 2");
 assert.match(coverageReport.stderr, /coverage: --report needs a directory/);
+// --coverage-out must never point at the checkout or an ancestor: the directory is cleared first.
+const coverageCli = path.join(ROOT, "packages", "core", "coverage.ts");
+const dangerous = spawnSync(process.execPath, [coverageCli, "--coverage-out=.", "--list"], { cwd: ROOT, encoding: "utf8" });
+assert.equal(dangerous.status, 2, `coverage --coverage-out=. exits 2 (stderr: ${dangerous.stderr.trim()})`);
+assert.match(dangerous.stderr, /coverage: refusing --coverage-out=\./);
+assert.ok(fs.existsSync(path.join(ROOT, "package.json")), "the guard leaves the checkout intact");
+
+// A kept directory is cleared of stale coverage files only, and the new raw V8 data stays for a
+// later --report merge.
+const coverageOut = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-out-"));
+try {
+  fs.writeFileSync(path.join(coverageOut, "coverage-stale.json"), "");
+  fs.writeFileSync(path.join(coverageOut, "keep.txt"), "not coverage data");
+  const kept = spawnSync(process.execPath, [coverageCli, `--coverage-out=${coverageOut}`, "--list", "--shard=1/4"], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+  assert.equal(kept.status, 0, `coverage --coverage-out --list exits 0 (stderr: ${kept.stderr.trim()})`);
+  assert.ok(!fs.existsSync(path.join(coverageOut, "coverage-stale.json")), "a rerun clears stale coverage files");
+  assert.ok(fs.existsSync(path.join(coverageOut, "keep.txt")), "a rerun leaves non-coverage files alone");
+  assert.ok(fs.readdirSync(coverageOut).some((name) => /^coverage-.*\.json$/.test(name)), "a kept directory retains the new raw V8 data");
+} finally {
+  fs.rmSync(coverageOut, { recursive: true, force: true });
+}
 
 // --jobs runs the same checks with the same status and summary as --jobs=1, including failures,
 // and a serial check runs alone. Each fake check logs when it starts and ends.

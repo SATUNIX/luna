@@ -92,6 +92,8 @@ jobs:
           name: coverage-cache-${{ matrix.shard }}
           path: node_modules/.cache/pi-kit-eval
           if-no-files-found: error
+          # node_modules/.cache is a hidden directory; without this the cache artifact is empty.
+          include-hidden-files: true
 
   # Merges the four shards' raw V8 coverage and prints one summary. It needs every coverage shard
   # (including a failed one, whose raw data was still uploaded) and is measure-only too: a failed

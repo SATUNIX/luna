@@ -81,6 +81,7 @@ This is not covered: `release.yml` calls the whole of `ci.yml` as its `gate`, an
 that call, so a failed or cancelled `coverage` or `coverage-merge` job still stops a release. Only
 the required check on pull requests ignores them. Making them ignorable there too would need
 `continue-on-error`, which the fail-closed rule above forbids.
+
 ## Property-based fuzzing
 
 Three smoke tests generate their inputs instead of listing them, with the small harness in
@@ -211,8 +212,8 @@ A scanner or check that cannot do its job fails; it never reports a pass over no
   matrix lane, which is `false` on every lane), `|| true`, `|| :`, `|| exit 0`, `|| echo` or
   `set +e` (`tests/workflow-policy-smoke.ts`, from the shared list in `tests/ci-fail-open.ts`).
 - `ci-complete` treats any result but `success` of a job it needs, including `skipped` and
-  `cancelled`, as a failure. It does not need the measure-only `coverage` job ([Test
-  coverage](#test-coverage)).
+  `cancelled`, as a failure. It does not need the measure-only `coverage` or `coverage-merge`
+  jobs ([Test coverage](#test-coverage)).
 
 ## Manifest coverage
 

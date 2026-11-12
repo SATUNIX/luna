@@ -109,6 +109,7 @@ export function coverageProblems(jobs: ReadonlyMap<string, string>): string[] {
     const shards = body.match(/^ {8}shard:\s*\[([^\]]*)\]\s*$/m)?.[1]?.split(",").map((s) => Number(s.trim()));
     if (shards === undefined) out.push("ci.yml coverage: no matrix.shard list");
     else if (shards.length !== 4 || shards.some((n, i) => n !== i + 1)) out.push(`ci.yml coverage: matrix.shard must be 1..4, not [${shards.join(", ")}]`);
+    if (!/^ {4}strategy:\n {6}fail-fast: false\s*$/m.test(body)) out.push("ci.yml coverage: strategy.fail-fast must be false, or one failing shard cancels the rest and their raw data is lost");
     const command = code(body).map((l) => l.match(/^ {6}- run: (npm run -s coverage\b.*)$/)?.[1]).find((c) => c !== undefined);
     if (command === undefined) out.push("ci.yml coverage: does not run npm run -s coverage");
     else {
@@ -130,6 +131,7 @@ export function coverageProblems(jobs: ReadonlyMap<string, string>): string[] {
     else {
       if (!/path:\s*node_modules\/\.cache\/pi-kit-eval\s*$/m.test(cacheUpload)) out.push("ci.yml coverage: the cache artifact does not upload node_modules/.cache/pi-kit-eval");
       if (!/if:\s*always\(\)\s*$/m.test(cacheUpload)) out.push("ci.yml coverage: the cache artifact must upload with if: always()");
+      if (!/include-hidden-files:\s*true\s*$/m.test(cacheUpload)) out.push("ci.yml coverage: the cache artifact must set include-hidden-files: true, or the .cache path uploads nothing");
     }
   }
   const merge = jobs.get("coverage-merge");
@@ -300,10 +302,13 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["ci-complete gating on the measure-only coverage job again", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]"), /needs the measure-only job coverage/],
   ["the coverage timeout lowered back to 30", "ci.yml", ci.replace(/(\n {2}coverage:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: )45/, "$130"), /coverage: timeout-minutes 30 is below 40/],
   ["a coverage matrix that is not four shards", "ci.yml", ci.replace(/(\n {2}coverage:\n[\s\S]*? {8}shard: )\[1, 2, 3, 4\]/, "$1[1, 2, 3]"), /coverage: matrix.shard must be 1\.\.4/],
+  ["coverage shards that cancel each other", "ci.yml", ci.replace(/(\n {2}coverage:\n[\s\S]*? {6}fail-fast: )false/, "$1true"), /coverage: strategy.fail-fast must be false/],
   ["a coverage shard count that disagrees with the matrix", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw", "--shard=${{ matrix.shard }}/3 --coverage-out=coverage-raw"), /coverage: --shard=\.\.\.\/3 does not match the 4/],
   ["coverage without --coverage-out", "ci.yml", ci.replace(" --coverage-out=coverage-raw", ""), /coverage: coverage is not given --coverage-out/],
   ["a coverage raw artifact that uploads the wrong directory", "ci.yml", ci.replace("name: coverage-raw-${{ matrix.shard }}\n          path: coverage-raw", "name: coverage-raw-${{ matrix.shard }}\n          path: raw-elsewhere"), /raw coverage artifact does not upload the coverage-raw directory/],
+  ["a raw coverage upload that is skipped when a check fails", "ci.yml", ci.replace("if: always()\n        with:\n          name: coverage-raw-${{ matrix.shard }}", "with:\n          name: coverage-raw-${{ matrix.shard }}"), /raw coverage artifact must upload with if: always\(\)/],
   ["a coverage cache artifact that uploads the wrong directory", "ci.yml", ci.replace("name: coverage-cache-${{ matrix.shard }}\n          path: node_modules/.cache/pi-kit-eval", "name: coverage-cache-${{ matrix.shard }}\n          path: cache-elsewhere"), /cache artifact does not upload node_modules\/\.cache\/pi-kit-eval/],
+  ["a cache upload that drops hidden files", "ci.yml", ci.replace("          include-hidden-files: true\n", ""), /cache artifact must set include-hidden-files: true/],
   ["a job named coverage that does not run coverage", "ci.yml", ci.replace("npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw --check-timeout=600", "echo coverage skipped"), /the measure-only job does not run/],
   ["coverage-merge removed", "ci.yml", ci.replace(/\n {2}coverage-merge:\n[\s\S]*?(?=\n {2}docs-build:)/, ""), /no coverage-merge job/],
   ["coverage-merge that does not need coverage", "ci.yml", ci.replace("    needs: coverage\n    if: always()\n    steps:", "    needs: docs-build\n    if: always()\n    steps:"), /coverage-merge: does not need coverage/],

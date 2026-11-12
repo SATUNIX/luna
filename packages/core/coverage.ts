@@ -34,8 +34,8 @@
  * `--coverage-out=<dir>` uses that directory as NODE_V8_COVERAGE instead of a temporary one, and
  * leaves the raw `coverage-*.json` files in place after reporting, so shards run on different
  * machines can be merged by copying them into one directory and running `--report` on it. The
- * directory is emptied first, so a rerun cannot accumulate raw files and be double-counted. Without
- * it the temporary directory is still removed in `finally`.
+ * double-counted. The existing coverage-*.json files are removed first, so a rerun cannot accumulate
+ * them; without it the temporary directory is still removed in `finally`.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -338,10 +338,23 @@ function main(argv: readonly string[]): number {
   // --coverage-out is owned by the caller (a CI shard uploads it after the run); only the default
   // temporary directory is removed when the run ends.
   const temporary = args.coverageOut === null;
-  const dir = temporary ? fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-")) : path.resolve(ROOT, args.coverageOut ?? "");
+  let dir = temporary ? fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-")) : path.resolve(ROOT, args.coverageOut ?? "");
   if (!temporary) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      if (fs.existsSync(dir)) dir = fs.realpathSync(dir);
+    } catch (error) {
+      console.error(`coverage: cannot resolve --coverage-out: ${error instanceof Error ? error.message : String(error)}`);
+      return 2;
+    }
+    const filesystemRoot = path.parse(dir).root;
+    if (dir === filesystemRoot || dir === ROOT || ROOT.startsWith(`${dir}${path.sep}`)) {
+      console.error(`coverage: refusing --coverage-out=${args.coverageOut ?? ""}: it is the checkout, an ancestor of the checkout, or a filesystem root`);
+      return 2;
+    }
     fs.mkdirSync(dir, { recursive: true });
+    for (const name of fs.readdirSync(dir)) {
+      if (/^coverage-.*\.json$/.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+    }
   }
   try {
     const run = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), ...args.checkAllArgs], {

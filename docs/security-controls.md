@@ -16,7 +16,7 @@ How to read the columns:
 - **CI job** is `<workflow>:<job>` under `.github/workflows/`.
 - **Required check** is the status-check context the `main` ruleset in
   `.github/expected-settings.json` requires. `ci-complete` succeeds only when every job of
-  `ci.yml` except the measure-only `coverage` job succeeded. "No" means the job runs but no required check depends on it. Whether GitHub
+  `ci.yml` except the measure-only `coverage` and `coverage-merge` jobs succeeded. "No" means the job runs but no required check depends on it. Whether GitHub
   enforces what that file declares is a repository setting, not something a test can see
   ([CI security](ci-security.md#repository-settings)).
 

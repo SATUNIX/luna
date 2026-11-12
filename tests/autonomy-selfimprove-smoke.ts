@@ -745,6 +745,55 @@ await check("PG-55: answering the publish-blocked question with a leak-free cycl
   assert.doesNotMatch(pushed, /internal\/private-note\.txt/, "the pushed integration branch carries no leaked path");
 });
 
+for (const answer of [
+  { name: "the exact stop option", input: { text: "Stop the run" }, stop: true },
+  { name: "the stop option with surrounding space and mixed case", input: { text: "  sToP ThE RuN  " }, stop: true },
+  { name: "a denial without answer text", input: { deny: true }, stop: true },
+  { name: "an unrelated non-empty answer", input: { text: "I will inspect the identifier" }, stop: false },
+  { name: "an approval without answer text", input: { approve: true }, stop: false },
+]) {
+  await check(`PG-55: ${answer.name} on the publish-blocked question`, async () => {
+    const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+    const prompts: string[] = [];
+    const slot: { engine?: MadeEngine } = {};
+    let answered = false;
+    let stopped = false;
+    const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+      cfgOverride: { integrationRemote: bare, gitRemote: bare }, manager: manager([]),
+      hooks: { onSleep: () => {
+        if (!slot.engine) return;
+        const s = h.state();
+        if (s.status !== "blocked" || s.blocker?.id !== "publish-blocked") return;
+        if (!answered) { answered = true; h.store.enqueue("answer", answer.input); return; }
+        if (!stopped) { stopped = true; slot.engine.engine.signalled = true; }
+      } },
+      script: async (t) => {
+        prompts.push(t.message);
+        t.write("AUDIT_OK", "1");
+        t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`);
+        report(t, "successful");
+        t.commit(`cycle ${t.step}`);
+      },
+    });
+    slot.engine = h.engine();
+    await slot.engine.engine.run();
+    const state = h.state();
+    assert.equal(answered, true, "the operator answered the question");
+    assert.equal(prompts.length, answer.stop ? 2 : 3, "the answer starts the expected number of cycles");
+    assert.equal(state.selfImprove?.publishBlockedCycles, answer.stop ? 2 : 3, "the refused-publication count remains intact");
+    assert.equal(state.pendingAnswer ?? null, null, "the answer was consumed");
+    if (answer.stop) {
+      assert.deepEqual([state.status, state.outcome?.status, state.outcome?.reason], ["succeeded", "succeeded", "publish_blocked_stopped"], "the final gate ends the run with the stop reason");
+      assert.equal(state.blocker, null, "the terminal run has no pending question");
+      assert.equal(state.selfImprove?.history.some((e) => e.discarded === true), false, "a stop keeps the unpublished history instead of rolling it back");
+      assert.doesNotMatch(state.selfImprove?.history.map((e) => e.mergeReason).join("\n") ?? "", /discarded by the publish-blocked reset/, "no cycle is recorded as discarded by a stop");
+    } else {
+      assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+      assert.equal(state.blocker?.id, "publish-blocked", "one refused cycle parks the run again");
+    }
+  });
+}
+
 await check("PG-55: a non-merged cycle between refused merges does not reset the blocked-cycle count", async () => {
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const prompts: string[] = [];

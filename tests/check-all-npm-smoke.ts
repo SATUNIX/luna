@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { SERIAL, coveredAggregates, resolveNpmCommand, shardRuns, unknownSkips } from "../packages/core/check-all.ts";
+import { splitCoverageArgs } from "../packages/core/coverage.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -133,6 +134,17 @@ for (const [name, reason] of SERIAL) {
 const coverageJobs = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "coverage.ts"), "--jobs=2"], { encoding: "utf8" });
 assert.equal(coverageJobs.status, 2, `coverage --jobs=2 exits 2 (stderr: ${coverageJobs.stderr.trim()})`);
 assert.match(coverageJobs.stderr, /coverage: --jobs=2 is not supported/);
+
+// Coverage's own options are split out before check-all sees the arguments, so --coverage-out can
+// preserve a CI shard's raw V8 data and --report can merge it without running checks again.
+assert.deepEqual(splitCoverageArgs([]), { report: null, coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--report", "coverage-raw"]), { report: "coverage-raw", coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--report=coverage-raw"]), { report: "coverage-raw", coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--shard=1/4", "--coverage-out=coverage-raw", "--check-timeout=600"]), { report: null, coverageOut: "coverage-raw", checkAllArgs: ["--shard=1/4", "--check-timeout=600"] });
+assert.deepEqual(splitCoverageArgs(["--report"]), { report: null, coverageOut: null, checkAllArgs: [] }, "a bare --report has no directory and is rejected by the CLI");
+const coverageReport = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "coverage.ts"), "--report"], { encoding: "utf8" });
+assert.equal(coverageReport.status, 2, "coverage --report without a directory exits 2");
+assert.match(coverageReport.stderr, /coverage: --report needs a directory/);
 
 // --jobs runs the same checks with the same status and summary as --jobs=1, including failures,
 // and a serial check runs alone. Each fake check logs when it starts and ends.

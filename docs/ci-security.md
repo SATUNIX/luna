@@ -10,7 +10,7 @@ operator actions ([Releasing](releasing.md)).
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix, four `check:all` shards at each of the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job except the measure-only `coverage` job did (`tests/workflow-policy-smoke.ts` checks it needs all the others) |
+| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix, four `check:all` shards at each of the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and four sharded `check:all` runs plus a raw-report merge under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job except the measure-only `coverage` and `coverage-merge` jobs did (`tests/workflow-policy-smoke.ts` checks it needs all the others) |
 | `security.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
 | `scorecard.yml` | push to `main`, weekly | OpenSSF Scorecard supply-chain rating, published; it fails nothing |
 | `scorecard-thresholds.yml` | weekly, manual | Runs Scorecard again without publishing and fails when a gating check scores below its floor in `.github/scorecard-thresholds.json` |
@@ -34,11 +34,12 @@ after s seconds, with every process its script started (on POSIX the check runs 
 group, which gets SIGTERM and then SIGKILL), and fails it as `timed out` with the output it printed
 so far, so a hung check is named in the log. The `verify` and `pi-compat` jobs in `ci.yml` run four shards each with
 `--jobs=2 --check-timeout=600` (`pi-compat` at each of its two pi versions), so the union of a
-matrix's shards is the same suite; `ci-complete` waits for every lane
-(`tests/workflow-policy-smoke.ts` checks each shard matrix, the command and the `integration/**`
-pull request filters). `npm run coverage` refuses `--jobs` above 1: the
-concurrent checks transpile into per-run caches that `check:all` removes, so coverage could not
-attribute those modules.
+matrix's shards is the same suite; the `coverage` job uses the same four-way shard split, one
+check at a time, and `coverage-merge` merges its raw data. `ci-complete` waits for every gating
+lane (`tests/workflow-policy-smoke.ts` checks each shard matrix, the coverage artifacts and report,
+the command and the `integration/**` pull request filters). `npm run coverage` refuses `--jobs`
+above 1: the concurrent checks transpile into per-run caches that `check:all` removes, so coverage
+could not attribute those modules.
 
 `check:all --for-changed=<a,b>` maps the named changed paths to the checks they imply, through the
 data table in `packages/core/lib/check-map.ts` plus the checks whose `package.json` script directly
@@ -53,29 +54,33 @@ runs is either run or explicitly skipped, rather than surfacing only after a red
 
 ## Test coverage
 
-The `coverage` job in `ci.yml` runs `npm run coverage`: `check:all` once more with
-`NODE_V8_COVERAGE` set, so every Node process the suite starts records V8's precise block
-coverage, summarised by `packages/core/coverage.ts` (no coverage dependency). It reports line,
-branch and function coverage of the code under `packages/` that the suite loads, with the
-least-covered files, in the job log and the run summary, and writes `coverage/summary.md` and
-`coverage/summary.json` locally. A module the eval harness transpiles is measured as transpiled
-and attributed to its source. Test infrastructure (`packages/core/eval/`, every `tests/` folder)
-and the compiled browser code are not counted. Files no check loads are not in the main totals; a
-separate row counts them as uncovered. The job measures and does not gate on a threshold; it fails
-only when `check:all` fails.
+The `coverage` job in `ci.yml` runs four `npm run coverage` shards, each running `check:all` with
+`NODE_V8_COVERAGE` set, so every Node process the suite starts records V8's precise block coverage.
+Each shard passes `--coverage-out=coverage-raw`, which keeps the raw files instead of deleting the
+temporary directory, and uploads that directory plus the eval transpile cache as artifacts. The
+`coverage-merge` job downloads every shard's artifacts and runs `packages/core/coverage.ts --report
+coverage-raw` once, so the report is the union of the shards and is the same suite `verify` runs.
+It reports line, branch and function coverage of the code under `packages/` that the suite loads,
+with the least-covered files, in the job log and the run summary, and writes `coverage/summary.md`
+and `coverage/summary.json` locally. A module the eval harness transpiles is measured as transpiled
+and attributed to its source; the uploaded cache is what lets the fresh merge runner do that. Test
+infrastructure (`packages/core/eval/`, every `tests/` folder) and the compiled browser code are not
+counted. Files no check loads are not in the main totals; a separate row counts them as uncovered.
+The job measures and does not gate on a threshold; a shard fails only when one of its checks fails,
+and the merge fails only when the artifacts cannot be read or reported.
 
-`ci-complete` does not wait for this job: it is a measure-only job, named in `MEASURE_ONLY_JOBS` in
-`tests/workflow-policy-smoke.ts`, which refuses to let `ci-complete` need it again or its
-`timeout-minutes` fall below 40. It runs `check:all` one check at a time, so it is the slowest lane
-(18 to 27 minutes against the 30 it once had, and it was cancelled at the limit on a slow runner),
-and a measurement must not block a promotion. A failed or cancelled coverage job still shows on the
-pull request. The same suite gates through the `verify` and `pi-compat` shards.
+`ci-complete` does not wait for `coverage` or `coverage-merge`: both are measure-only jobs, named in
+`MEASURE_ONLY_JOBS` in `tests/workflow-policy-smoke.ts`, which refuses to let `ci-complete` need
+them again, requires each to run the command it claims, and refuses to let the coverage
+`timeout-minutes` fall below 40. The four shards cut the lane from the 18 to 27 minutes a single
+sequential run took; the merge job only reads the uploaded JSON, and a measurement must not block a
+promotion. A failed or cancelled coverage shard still shows on the pull request. The same suite
+gates through the `verify` and `pi-compat` shards.
 
 This is not covered: `release.yml` calls the whole of `ci.yml` as its `gate`, and `plan` waits for
-that call, so a failed or cancelled `coverage` job still stops a release. Only the required check
-on pull requests ignores it. Making it ignorable there too would need `continue-on-error`, which the
-fail-closed rule above forbids.
-
+that call, so a failed or cancelled `coverage` or `coverage-merge` job still stops a release. Only
+the required check on pull requests ignores them. Making them ignorable there too would need
+`continue-on-error`, which the fail-closed rule above forbids.
 ## Property-based fuzzing
 
 Three smoke tests generate their inputs instead of listing them, with the small harness in

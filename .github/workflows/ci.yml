@@ -51,15 +51,21 @@ jobs:
       - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2 --check-timeout=600
 
   # Test coverage of the same suite: check:all again with NODE_V8_COVERAGE set, summarised by
-  # packages/core/coverage.ts (no coverage dependency). The line, branch and function figures are
-  # in this job's log and its run summary. It measures; it does not gate on a threshold, and
-  # ci-complete does not wait for it (it is a measure-only job in tests/workflow-policy-smoke.ts), so a
-  # slow runner cannot block a promotion. It runs check:all one check at a time, so it is the slowest
-  # lane: it took 18 to 27 minutes against the old 30 and was cancelled at the limit on a slow
-  # runner. 45 keeps room, and the policy test refuses to let it drop back below 40.
+  # packages/core/coverage.ts (no coverage dependency). It runs four deterministic shards of
+  # check:all, one check at a time within each shard, and uploads each shard's raw V8 data. The
+  # union of the shards is the same suite the verify job runs. The line, branch and function
+  # figures are in the merge job's log and its run summary. It measures; it does not gate on a
+  # threshold, and ci-complete does not wait for either job (they are measure-only jobs in
+  # tests/workflow-policy-smoke.ts), so a slow runner cannot block a promotion. Sharding cuts the
+  # lane from the 18 to 27 minutes a single sequential run took; 45 still keeps room, and the
+  # policy test refuses to let it drop back below 40.
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,7 +75,52 @@ jobs:
           node-version: "26"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run -s coverage -- --check-timeout=600
+      - run: npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw --check-timeout=600
+      # Raw coverage and the eval transpile cache are uploaded even when this shard's checks fail,
+      # so the merge job can still report what ran instead of the whole measurement disappearing
+      # with the failure. The cache is what lets the merge runner attribute transpiled modules to
+      # their sources; a fresh checkout does not have it.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage-raw-${{ matrix.shard }}
+          path: coverage-raw
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage-cache-${{ matrix.shard }}
+          path: node_modules/.cache/pi-kit-eval
+          if-no-files-found: error
+
+  # Merges the four shards' raw V8 coverage and prints one summary. It needs every coverage shard
+  # (including a failed one, whose raw data was still uploaded) and is measure-only too: a failed
+  # measurement must not gate a pull request. Only `--report` runs here; no check runs a second time.
+  coverage-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: coverage
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-raw-*
+          path: coverage-raw
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-cache-*
+          path: node_modules/.cache/pi-kit-eval
+          merge-multiple: true
+      - run: npm run -s coverage -- --report coverage-raw
 
   docs-build:
     runs-on: ubuntu-latest
@@ -187,7 +238,7 @@ jobs:
   # The one required check for this workflow: it succeeds only when every job above except the
   # measure-only coverage job succeeded, so a new job or matrix lane is gated by adding it to `needs` here rather than by
   # editing the repository ruleset. tests/workflow-policy-smoke.ts checks that `needs` names every
-  # other job except the measure-only ones it lists (today: coverage).
+  # other job except the measure-only ones it lists (today: coverage and coverage-merge).
   ci-complete:
     if: always()
     needs: [verify, docs-build, profile-regression, pi-compat, android]

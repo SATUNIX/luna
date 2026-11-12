@@ -15,14 +15,17 @@
  *     measure-only jobs named in MEASURE_ONLY_JOBS (which it must not need, and which must really run
  *     what the list says, so a job cannot borrow the exemption by name), and fails unless each needed
  *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
- *     COVERAGE_MIN_TIMEOUT_MINUTES;
+ *     COVERAGE_MIN_TIMEOUT_MINUTES, and `coverage` and `coverage-merge` are both measure-only; 
  *   - every required check in the expected settings names a job that exists;
  *   - every ci.yml job that directly runs `check:all` does so as a shard matrix whose shard count
  *     matches the `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check),
- *     with `--jobs` and a `--check-timeout` (the measure-only `coverage` job runs check:all through
- *     `npm run coverage` and is deliberately unsharded); every check:all run in ci.yml (including
- *     `coverage`) passes `--check-timeout`, so a hung check fails named instead of as a silent job
- *     timeout; and ci.yml and security.yml gate pull requests to `main` and `integration/**`;
+ *     with `--jobs` and a `--check-timeout`; the measure-only `coverage` job also runs a four-way
+ *     shard matrix of `npm run coverage`, passing `--coverage-out`, and `coverage-merge` downloads
+ *     the raw and eval-cache artifacts before running a report-only `coverage --report`; every
+ *     check:all run in ci.yml (including `coverage`) passes `--check-timeout`, except a report-only
+ *     coverage command containing `--report` (it runs no checks), so a hung check fails named
+ *     instead of as a silent job timeout; and ci.yml and security.yml gate pull requests to `main`
+ *     and `integration/**`;
  *   - each line-pinned zizmor ignore still points at a `uses: ./` call.
  * Each rule is also run against a mutated copy, so the checker is shown to fail.
  *
@@ -93,6 +96,66 @@ export function verifyShardProblems(body: string): string[] {
   return shardProblems("verify", body);
 }
 
+/**
+ * The measure-only coverage matrix and its merge job keep the contract that makes the shards
+ * mergeable: four numbered shards whose command matches the count, `--coverage-out` for the raw V8
+ * data, and a merge job that needs them, downloads both raw and eval-cache artifacts, and reports.
+ */
+export function coverageProblems(jobs: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  const body = jobs.get("coverage");
+  if (body === undefined) out.push("ci.yml: no coverage job");
+  else {
+    const shards = body.match(/^ {8}shard:\s*\[([^\]]*)\]\s*$/m)?.[1]?.split(",").map((s) => Number(s.trim()));
+    if (shards === undefined) out.push("ci.yml coverage: no matrix.shard list");
+    else if (shards.length !== 4 || shards.some((n, i) => n !== i + 1)) out.push(`ci.yml coverage: matrix.shard must be 1..4, not [${shards.join(", ")}]`);
+    const command = code(body).map((l) => l.match(/^ {6}- run: (npm run -s coverage\b.*)$/)?.[1]).find((c) => c !== undefined);
+    if (command === undefined) out.push("ci.yml coverage: does not run npm run -s coverage");
+    else {
+      const count = command.match(/ --shard=\$\{\{ matrix\.shard \}\}\/(\d+)(?:\s|$)/)?.[1];
+      if (count === undefined) out.push("ci.yml coverage: coverage is not given --shard=${{ matrix.shard }}/<n>, so every shard runs the whole suite");
+      else if (Number(count) !== 4) out.push(`ci.yml coverage: --shard=.../${count} does not match the 4 coverage shards, so some checks run in no shard`);
+      if (!/ --coverage-out=\S+/.test(command)) out.push("ci.yml coverage: coverage is not given --coverage-out, so its raw V8 data cannot be merged");
+    }
+    const uploads = [...body.matchAll(/uses: actions\/upload-artifact@[0-9a-f]{40}[^\n]*\n((?: {8,}.*\n?)*)/g)].map((m) => m[1] ?? "");
+    const upload = (pattern: RegExp): string | undefined => uploads.find((u) => pattern.test(u));
+    const rawUpload = upload(/name:\s*coverage-raw-\$\{\{ matrix\.shard \}\}/);
+    if (rawUpload === undefined) out.push("ci.yml coverage: does not upload the coverage-raw-* artifact");
+    else {
+      if (!/path:\s*coverage-raw\s*$/m.test(rawUpload)) out.push("ci.yml coverage: the raw coverage artifact does not upload the coverage-raw directory");
+      if (!/if:\s*always\(\)\s*$/m.test(rawUpload)) out.push("ci.yml coverage: the raw coverage artifact must upload with if: always()");
+    }
+    const cacheUpload = upload(/name:\s*coverage-cache-\$\{\{ matrix\.shard \}\}/);
+    if (cacheUpload === undefined) out.push("ci.yml coverage: does not upload the coverage-cache-* artifact");
+    else {
+      if (!/path:\s*node_modules\/\.cache\/pi-kit-eval\s*$/m.test(cacheUpload)) out.push("ci.yml coverage: the cache artifact does not upload node_modules/.cache/pi-kit-eval");
+      if (!/if:\s*always\(\)\s*$/m.test(cacheUpload)) out.push("ci.yml coverage: the cache artifact must upload with if: always()");
+    }
+  }
+  const merge = jobs.get("coverage-merge");
+  if (merge === undefined) out.push("ci.yml: no coverage-merge job");
+  else {
+    if (!needsOf(merge).includes("coverage")) out.push("ci.yml coverage-merge: does not need coverage");
+    if (!/^ {4}if:\s*always\(\)\s*$/m.test(merge)) out.push("ci.yml coverage-merge: must run with if: always(), or a failed shard skips the merge");
+    const downloads = [...merge.matchAll(/uses: actions\/download-artifact@[0-9a-f]{40}[^\n]*\n((?: {8,}.*\n?)*)/g)].map((m) => m[1] ?? "");
+    const download = (pattern: RegExp): string | undefined => downloads.find((d) => pattern.test(d));
+    const rawDownload = download(/pattern:\s*coverage-raw-\*/);
+    if (rawDownload === undefined) out.push("ci.yml coverage-merge: does not download the coverage-raw-* artifacts");
+    else {
+      if (!/path:\s*coverage-raw\s*$/m.test(rawDownload)) out.push("ci.yml coverage-merge: does not download the raw artifacts into coverage-raw");
+      if (!/merge-multiple:\s*true\s*$/m.test(rawDownload)) out.push("ci.yml coverage-merge: the raw artifacts are not merged with merge-multiple: true");
+    }
+    const cacheDownload = download(/pattern:\s*coverage-cache-\*/);
+    if (cacheDownload === undefined) out.push("ci.yml coverage-merge: does not download the coverage-cache-* artifacts");
+    else {
+      if (!/path:\s*node_modules\/\.cache\/pi-kit-eval\s*$/m.test(cacheDownload)) out.push("ci.yml coverage-merge: does not download the cache artifacts into node_modules/.cache/pi-kit-eval");
+      if (!/merge-multiple:\s*true\s*$/m.test(cacheDownload)) out.push("ci.yml coverage-merge: the cache artifacts are not merged with merge-multiple: true");
+    }
+    if (!code(merge).some((l) => /^ {6}- run: npm run -s coverage -- --report\b/.test(l))) out.push("ci.yml coverage-merge: does not run npm run -s coverage -- --report");
+  }
+  return out;
+}
+
 /** A job body runs check:all, so it must be sharded. */
 function runsCheckAll(body: string): boolean {
   return code(body).some((line) => /^ {6}- run: npm run -s check:all\b/.test(line));
@@ -109,7 +172,10 @@ export function checkTimeoutProblems(text: string): string[] {
   for (const [job, body] of jobsOf(text)) {
     for (const line of code(body)) {
       const command = line.match(/\b(npm run(?: -s)? (?:check:all|coverage)\b.*)$/)?.[1];
-      if (command !== undefined && !/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: "${command}" has no --check-timeout, so a hung check is never named`);
+      // A report-only coverage command merges existing raw data; it runs no check, so it needs no
+      // check timeout. A coverage run that executes checks still must pass one.
+      const reportOnly = command !== undefined && /\bnpm run(?: -s)? coverage\b/.test(command) && / --report(?:=|\s)/.test(command);
+      if (command !== undefined && !reportOnly && !/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: "${command}" has no --check-timeout, so a hung check is never named`);
     }
   }
   return out;
@@ -126,12 +192,15 @@ export function pullRequestBranchProblems(file: string, text: string): string[] 
 /**
  * Jobs that report a measurement and never gate: `ci-complete` deliberately does not need them. A job
  * joins this list only by an edit here, a reviewed change to what the required check stands for.
- * `coverage` measures the suite and "does not gate on a threshold" (ci.yml). It runs check:all one
- * check at a time, so it is the slowest lane, and a runner-speed timeout must not block a promotion.
- * Each entry maps the job to the command it must run, so the exemption cannot be borrowed by a job that
- * merely has the same name.
+ * `coverage` measures the suite and "does not gate on a threshold" (ci.yml), and `coverage-merge`
+ * only reports the shards' merged measurement. Both measure and never gate, so a runner-speed
+ * timeout must not block a promotion. Each entry maps the job to the command it must run, so the
+ * exemption cannot be borrowed by a job that merely has the same name.
  */
-export const MEASURE_ONLY_JOBS: Readonly<Record<string, RegExp>> = { coverage: /\bnpm run(?: -s)? coverage\b/ };
+export const MEASURE_ONLY_JOBS: Readonly<Record<string, RegExp>> = {
+  coverage: /\bnpm run(?: -s)? coverage\b/,
+  "coverage-merge": /\bnpm run(?: -s)? coverage\b[^\n]* --report(?:=|\s)/,
+};
 
 /** The coverage lane took 18 to 27 minutes against a 30 limit and was cancelled once; it must keep headroom. */
 export const COVERAGE_MIN_TIMEOUT_MINUTES = 40;
@@ -178,6 +247,7 @@ export function fileProblems(file: string, text: string): string[] {
     for (const [job, body] of jobs) {
       if (job === "verify" || runsCheckAll(body)) out.push(...shardProblems(job, body));
     }
+    out.push(...coverageProblems(jobs));
     out.push(...checkTimeoutProblems(text));
   }
   if (file === "ci.yml" || file === "security.yml") out.push(...pullRequestBranchProblems(file, text));
@@ -229,7 +299,20 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
   ["ci-complete gating on the measure-only coverage job again", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]"), /needs the measure-only job coverage/],
   ["the coverage timeout lowered back to 30", "ci.yml", ci.replace(/(\n {2}coverage:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: )45/, "$130"), /coverage: timeout-minutes 30 is below 40/],
-  ["a job named coverage that does not run coverage", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "echo coverage skipped"), /the measure-only job does not run/],
+  ["a coverage matrix that is not four shards", "ci.yml", ci.replace(/(\n {2}coverage:\n[\s\S]*? {8}shard: )\[1, 2, 3, 4\]/, "$1[1, 2, 3]"), /coverage: matrix.shard must be 1\.\.4/],
+  ["a coverage shard count that disagrees with the matrix", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw", "--shard=${{ matrix.shard }}/3 --coverage-out=coverage-raw"), /coverage: --shard=\.\.\.\/3 does not match the 4/],
+  ["coverage without --coverage-out", "ci.yml", ci.replace(" --coverage-out=coverage-raw", ""), /coverage: coverage is not given --coverage-out/],
+  ["a coverage raw artifact that uploads the wrong directory", "ci.yml", ci.replace("name: coverage-raw-${{ matrix.shard }}\n          path: coverage-raw", "name: coverage-raw-${{ matrix.shard }}\n          path: raw-elsewhere"), /raw coverage artifact does not upload the coverage-raw directory/],
+  ["a coverage cache artifact that uploads the wrong directory", "ci.yml", ci.replace("name: coverage-cache-${{ matrix.shard }}\n          path: node_modules/.cache/pi-kit-eval", "name: coverage-cache-${{ matrix.shard }}\n          path: cache-elsewhere"), /cache artifact does not upload node_modules\/\.cache\/pi-kit-eval/],
+  ["a job named coverage that does not run coverage", "ci.yml", ci.replace("npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw --check-timeout=600", "echo coverage skipped"), /the measure-only job does not run/],
+  ["coverage-merge removed", "ci.yml", ci.replace(/\n {2}coverage-merge:\n[\s\S]*?(?=\n {2}docs-build:)/, ""), /no coverage-merge job/],
+  ["coverage-merge that does not need coverage", "ci.yml", ci.replace("    needs: coverage\n    if: always()\n    steps:", "    needs: docs-build\n    if: always()\n    steps:"), /coverage-merge: does not need coverage/],
+  ["coverage-merge without if: always()", "ci.yml", ci.replace("    needs: coverage\n    if: always()\n    steps:", "    needs: coverage\n    steps:"), /coverage-merge: must run with if: always\(\)/],
+  ["coverage-merge not downloading the raw artifacts", "ci.yml", ci.replace("pattern: coverage-raw-*", "pattern: coverage-other-*"), /coverage-merge: does not download the coverage-raw-\* artifacts/],
+  ["coverage-merge not merging the raw artifacts", "ci.yml", ci.replace("pattern: coverage-raw-*\n          path: coverage-raw\n          merge-multiple: true", "pattern: coverage-raw-*\n          path: coverage-raw"), /raw artifacts are not merged with merge-multiple: true/],
+  ["coverage-merge not downloading the cache artifacts", "ci.yml", ci.replace("pattern: coverage-cache-*", "pattern: coverage-other-*"), /coverage-merge: does not download the coverage-cache-\* artifacts/],
+  ["coverage-merge not running --report", "ci.yml", ci.replace("npm run -s coverage -- --report coverage-raw", "npm run -s coverage -- --check-timeout=600"), /coverage-merge: does not run npm run -s coverage -- --report/],
+  ["ci-complete gating on the measure-only coverage-merge job again", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage-merge, docs-build, profile-regression, pi-compat, android]"), /needs the measure-only job coverage-merge/],
   ["a job header with a trailing comment escapes needs", "ci.yml", ci.replace(/\n {2}docs-build:\n/, "\n  extra-job: # a comment after the key\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo hi\n\n  docs-build:\n"), /does not need extra-job/],
   ["the measure-only coverage job removed", "ci.yml", ci.replace(/\n {2}coverage:\n[\s\S]*?(?=\n {2}docs-build:)/, ""), /the measure-only job coverage no longer exists/],
   ["a checkout that keeps credentials", "ci.yml", ci.replace("persist-credentials: false", "persist-credentials: true"), /persists credentials/],
@@ -245,7 +328,8 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["pi-compat without --shard", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package", "--jobs=2 --skip=smoke:package"), /pi-compat: check:all is not given --shard/],
   ["pi-compat shard count disagrees", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3]'), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
   ["pi-compat without a shard axis", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]'), /pi-compat: no matrix\.shard list/],
-  ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "npm run -s coverage"), /ci.yml coverage: .* has no --check-timeout/],
+  ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw --check-timeout=600", "npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw"), /ci.yml coverage: .* has no --check-timeout/],
+  ["a bare --report is not treated as report-only", "ci.yml", ci.replace("npm run -s coverage -- --report coverage-raw", "npm run -s coverage -- --report"), /coverage-merge: .* has no --check-timeout/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],
   ["security.yml PRs without integration/**", "security.yml", security.replace('branches: [main, "integration/**"]', "branches: [main]"), /security.yml: pull_request does not run on integration\/\*\*/],

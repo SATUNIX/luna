@@ -10,6 +10,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The coverage lane is sharded and its raw reports are merged, cutting PR wall time.** The single
+  `coverage` job ran `check:all` sequentially under `NODE_V8_COVERAGE` and took 18 to 27 minutes, the
+  slowest remaining pull-request lane. It is now a four-shard matrix using the same deterministic
+  split as `verify`; each shard runs one check at a time, keeps its raw V8 data with
+  `--coverage-out`, and uploads that data plus the eval transpile cache. A new measure-only
+  `coverage-merge` job downloads every shard's artifacts and runs `coverage --report` once, so the
+  report is the union of the shards, not a fraction of it. Coverage still has no threshold and
+  neither job gates `ci-complete`; the same suite continues to gate through `verify` and
+  `pi-compat`. Pinned by `tests/workflow-policy-smoke.ts` and `tests/check-all-npm-smoke.ts`, and
+  documented in `docs/ci-security.md`.
+
 - **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
   `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
   was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes

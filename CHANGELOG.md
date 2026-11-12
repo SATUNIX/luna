@@ -10,6 +10,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The curated `/` menu honours `PI_KIT_ASCII`.** Hidden suggestions still say where a command
+  moved (`moved → /menu ▸ Autonomy ▸ Approvals`), but with `PI_KIT_ASCII=1` the launch screen and
+  footer already used printable ASCII while the `/` hint kept its Unicode arrow, separator and em
+  dash. The hint is now `moved -> /menu > Autonomy > Approvals`, with ` - ` before the old
+  description, so a terminal that asked for ASCII stays printable. Default output is unchanged.
+  Pinned by `tests/command-menu-smoke.ts`; `docs/control-center.md` records it.
 - **The launch screen follows the footer's automatic ASCII theme choice.** On the `iso`, `ansi`,
   `tty` and `ascii` theme names the launch screen now draws printable ASCII instead of block art
   and the middle-dot separator, matching the vendored footer. `PI_KIT_ASCII=1` still forces it.

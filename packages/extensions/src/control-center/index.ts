@@ -140,8 +140,9 @@ function registerCommandMenu(pi: ExtensionAPI, hubKey: KeyId): void {
       pinnedCommands: settings.pinnedCommands,
       hiddenCommands: settings.hiddenCommands,
     });
+    const ascii = process.env.PI_KIT_ASCII === "1";
     const model = buildModel({ values: { securityMissing: true }, commands: commands.map((command) => command.name), controls: getOrCreateControls().list() });
-    ctx.ui.addAutocompleteProvider((current) => commandMenuProvider(current, { hidden, locationOf: locationFor(model) }));
+    ctx.ui.addAutocompleteProvider((current) => commandMenuProvider(current, { hidden, locationOf: locationFor(model, ascii), ascii }));
   });
 }
 

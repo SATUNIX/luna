@@ -150,7 +150,9 @@ The curated menu and the launch screen are installed for every session, so they 
 
 Hidden suggestions say where the command lives, for example
 `moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
-no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`).
+no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`). With
+`PI_KIT_ASCII=1` the same hint is printable ASCII: `moved -> /menu > Autonomy > Approvals` (or
+`moved -> /menu > All commands`), and the description separator is ` - ` instead of ` — `.
 
 The pinned commands are `/menu`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
 `/update` and `/security`. A profile adds the commands that define it: `/autonomy` in autonomous,

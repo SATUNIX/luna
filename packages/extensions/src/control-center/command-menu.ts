@@ -25,6 +25,9 @@ export const HIDDEN_VISIBLE_PREFIX_LENGTH = 4;
 /** The location shown when no hub row runs the command. */
 export const ALL_COMMANDS_LOCATION = "moved → /menu ▸ All commands";
 
+/** The same location in printable ASCII, for `PI_KIT_ASCII=1`. */
+export const ALL_COMMANDS_LOCATION_ASCII = "moved -> /menu > All commands";
+
 /** The kit commands that stay in the `/` menu in every profile. */
 export const PINNED_KIT_COMMANDS: readonly string[] = [
   "menu",
@@ -189,8 +192,10 @@ export function pageTrail(model: HubModel, page: string): string[] {
   return trail;
 }
 
-function locationOfRow(model: HubModel, page: string, label: string): string {
-  return `moved → ${["/menu", ...pageTrail(model, page), label].join(" ▸ ")}`;
+function locationOfRow(model: HubModel, page: string, label: string, ascii = false): string {
+  const separator = ascii ? " > " : " ▸ ";
+  const prefix = ascii ? "moved -> " : "moved → ";
+  return `${prefix}${["/menu", ...pageTrail(model, page), label].join(separator)}`;
 }
 
 /** The row whose legacy command is exactly `/<name>`, with no arguments. */
@@ -200,13 +205,14 @@ function exactLegacyRow(model: HubModel, name: string): HubRow | undefined {
 }
 
 /** Where a command lives in the hub, for a hidden suggestion's description. */
-export function hubLocationFor(name: string, model: HubModel): string {
+export function hubLocationFor(name: string, model: HubModel, ascii = false): string {
   const row = exactLegacyRow(model, name) ?? model.rows.find((candidate) => legacyCommandName(candidate.legacy ?? "") === name);
-  return row ? locationOfRow(model, row.page, row.label) : ALL_COMMANDS_LOCATION;
+  if (!row) return ascii ? ALL_COMMANDS_LOCATION_ASCII : ALL_COMMANDS_LOCATION;
+  return locationOfRow(model, row.page, row.label, ascii);
 }
 
 /** A lookup from command name to its hub location, built once from the model. */
-export function locationFor(model: HubModel): (name: string) => string {
+export function locationFor(model: HubModel, ascii = false): (name: string) => string {
   const locations = new Map<string, string>();
   for (const row of model.rows) {
     if (row.legacy === undefined) continue;
@@ -214,15 +220,17 @@ export function locationFor(model: HubModel): (name: string) => string {
     if (name === "") continue;
     // An exact `/<name>` row beats an earlier row that only shares the command name (bare
     // `/boost` vs `/boost status`), so the hint names the page the bare command runs.
-    if (row.legacy.trim() === `/${name}`) locations.set(name, locationOfRow(model, row.page, row.label));
-    else if (!locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label));
+    if (row.legacy.trim() === `/${name}`) locations.set(name, locationOfRow(model, row.page, row.label, ascii));
+    else if (!locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label, ascii));
   }
-  return (name) => locations.get(name) ?? ALL_COMMANDS_LOCATION;
+  return (name) => locations.get(name) ?? (ascii ? ALL_COMMANDS_LOCATION_ASCII : ALL_COMMANDS_LOCATION);
 }
 
 export interface CurationOptions {
   hidden: ReadonlySet<string>;
   locationOf: (name: string) => string;
+  /** Use printable ASCII in the hint (`PI_KIT_ASCII=1`). */
+  ascii?: boolean;
 }
 
 /**
@@ -242,7 +250,8 @@ export function curateSuggestions(items: readonly AutocompleteItem[], prefix: st
     }
     if (typed.length < Math.min(HIDDEN_VISIBLE_PREFIX_LENGTH, name.length)) continue;
     const location = options.locationOf(name);
-    kept.push(item.description ? { ...item, description: `${location} — ${item.description}` } : { ...item, description: location });
+    const separator = options.ascii === true ? " - " : " — ";
+    kept.push(item.description ? { ...item, description: `${location}${separator}${item.description}` } : { ...item, description: location });
   }
   return kept;
 }

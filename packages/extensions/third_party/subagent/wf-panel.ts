@@ -38,7 +38,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { VERSION, type ExtensionAPI, type ExtensionContext, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { controlRun, runControls, skipRunAgent, type ControlResult } from "./control.ts";
 import { runRegistry, type AgentRecord, type AgentStatus, type PhaseRecord, type PhaseStatus, type RunRegistry, type RunSnapshot, type RunStatus, type WorkflowEvent } from "./run-model.ts";
 import type { ToolContext } from "./types.ts";
@@ -247,6 +247,16 @@ export interface RunViewOptions {
   maxLines?: number | undefined;
 }
 
+/**
+ * `text` as exactly `width` terminal columns: cut with an ellipsis when it is wider, padded when it
+ * is narrower. Measured in display columns, so a wide glyph (CJK, emoji) takes the two it draws and
+ * a column stays aligned; `String.prototype.padEnd` counts code points instead and would shift it.
+ */
+function cell(text: string, width: number): string {
+  const cut = visibleWidth(text) > width ? truncateToWidth(text, width, "…") : text;
+  return `${cut}${" ".repeat(Math.max(0, width - visibleWidth(cut)))}`;
+}
+
 function visibleWindow<T>(items: T[], selected: number | undefined, rows: number): { start: number; items: T[] } {
   if (items.length <= rows || selected === undefined) return { start: 0, items: items.slice(0, selected === undefined ? items.length : rows) };
   const start = Math.min(Math.max(0, selected - Math.floor(rows / 2)), items.length - rows);
@@ -306,11 +316,11 @@ export function renderRunLines(run: RunSnapshot, o: RunViewOptions): string[] {
   const header = [...headerLines(run, paint)];
   if (run.error) header.push(paint.tone("bad", `error: ${oneLine(run.error)}`));
   const tree = phaseTree(run.phases);
-  const phaseWidth = Math.min(24, Math.max(4, ...tree.map((t) => t.phase.title.length + 2 * t.depth)));
+  const phaseWidth = Math.min(24, Math.max(4, ...tree.map((t) => visibleWidth(t.phase.title) + 2 * t.depth)));
   // Agents of a nested workflow() are indented under a `▸ <workflow>` line.
   const idCell = (a: AgentRecord): string => `${a.group !== undefined ? "  " : ""}${a.id}`;
-  const labelWidth = Math.min(24, Math.max(5, ...run.agents.map((a) => idCell(a).length)));
-  const modelWidth = Math.min(28, Math.max(5, ...run.agents.map((a) => (a.model ?? "-").length)));
+  const labelWidth = Math.min(24, Math.max(5, ...run.agents.map((a) => visibleWidth(idCell(a)))));
+  const modelWidth = Math.min(28, Math.max(5, ...run.agents.map((a) => visibleWidth(a.model ?? "-"))));
 
   const phaseLines = (limit: number): string[] => {
     const out = ["", paint.accent(`Phases (${c.phasesDone}/${c.phases})`)];
@@ -318,7 +328,7 @@ export function renderRunLines(run: RunSnapshot, o: RunViewOptions): string[] {
       const p = t.phase;
       const done = t.agentIds.filter((id) => run.agents.find((a) => a.id === id)?.status !== "running").length;
       const indent = "  ".repeat(t.depth);
-      out.push(`  ${indent}${paint.tone(tone(p.status), DOT)} ${p.title.padEnd(phaseWidth - indent.length)}  ${p.status.padEnd(7)}  ${done}/${t.agentIds.length}`);
+      out.push(`  ${indent}${paint.tone(tone(p.status), DOT)} ${cell(p.title, phaseWidth - indent.length)}  ${p.status.padEnd(7)}  ${done}/${t.agentIds.length}`);
     }
     return out;
   };
@@ -336,7 +346,7 @@ export function renderRunLines(run: RunSnapshot, o: RunViewOptions): string[] {
       if (a.group !== undefined && a.group !== group) out.push(paint.dim(`    ▸ ${a.group}`));
       group = a.group;
       const mark = o.selected === undefined ? " " : shown.start + i === o.selected ? paint.accent("›") : " ";
-      const row = `${mark} ${paint.tone(tone(a.status), dotOf(a))} ${idCell(a).padEnd(labelWidth)}  ${(a.model ?? "-").padEnd(modelWidth)}  ${`${fmtTokens(agentTokens(a))} tok`.padStart(10)}  ${fmtElapsed(a.elapsedMs).padStart(7)}  ${a.status}`;
+      const row = `${mark} ${paint.tone(tone(a.status), dotOf(a))} ${cell(idCell(a), labelWidth)}  ${cell(a.model ?? "-", modelWidth)}  ${`${fmtTokens(agentTokens(a))} tok`.padStart(10)}  ${fmtElapsed(a.elapsedMs).padStart(7)}  ${a.status}`;
       out.push(row);
       // The text fallback lists every failure; the TUI shows the selected agent's detail below.
       if (o.selected === undefined && a.error) out.push(paint.tone("bad", `      ${oneLine(a.error)}`));
@@ -405,11 +415,11 @@ export function renderListLines(runs: RunSnapshot[], paint: Paint, selected?: nu
     if (maxLines === undefined || maxLines >= 2) out.push(paint.dim("No workflow runs in this session. Start one with /workflow run <name>."));
     return out;
   }
-  const nameWidth = Math.min(28, Math.max(4, ...runs.map((r) => r.name.length)));
+  const nameWidth = Math.min(28, Math.max(4, ...runs.map((r) => visibleWidth(r.name))));
   const row = (r: RunSnapshot, index: number): string => {
     const c = counts(r);
     const mark = selected === undefined ? " " : index === selected ? paint.accent("›") : " ";
-    return `${mark} ${paint.tone(tone(r.status), DOT)} ${r.name.padEnd(nameWidth)}  ${statusText(r).padEnd(11)}  ${`${c.agentsDone}/${c.agents} agents`.padEnd(12)}  ${fmtElapsed(r.elapsedMs).padStart(7)}  ${paint.dim(r.id)}`;
+    return `${mark} ${paint.tone(tone(r.status), DOT)} ${cell(r.name, nameWidth)}  ${statusText(r).padEnd(11)}  ${`${c.agentsDone}/${c.agents} agents`.padEnd(12)}  ${fmtElapsed(r.elapsedMs).padStart(7)}  ${paint.dim(r.id)}`;
   };
   if (maxLines === undefined) {
     const shown = visibleWindow(runs, selected, LIST_ROWS);

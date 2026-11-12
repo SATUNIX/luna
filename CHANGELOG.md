@@ -15,6 +15,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   and the middle-dot separator, matching the vendored footer. `PI_KIT_ASCII=1` still forces it.
   Pinned by `tests/launch-screen-smoke.ts`; `docs/status-bar-and-costs.md` records the shared
   choice.
+- **The `/workflows` panel sizes its columns in display width.** The phase title, agent id and
+  model, and run name columns were measured with `String.prototype.length`, so a long title, id or
+  model pushed done/total, tokens, elapsed and status off the row, and a wide glyph (`阶段 🚀`)
+  counted as fewer columns than it draws. They are now measured and cut with `visibleWidth` (one
+  `cell()` helper, ellipsis on cut) and the columns stay aligned; the whole-line clamp is unchanged.
+  Pinned by `tests/workflow-panel-smoke.ts` (long and wide text at 68, 80 and 100 columns);
+  `docs/workflows.md` records it.
 - **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
   `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
   the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy

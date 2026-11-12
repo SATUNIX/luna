@@ -55,6 +55,7 @@ import type * as SandboxModule from "../packages/extensions/third_party/subagent
 import type * as WorkflowToolsModule from "../packages/extensions/third_party/subagent/workflow-tools.ts";
 import { fakeSpawner as scriptSpawner, type FakeSpawn as ScriptSpawn } from "./workflow-fakes.ts";
 import type { ExecuteOptions, RunState, WorkflowDef } from "../packages/extensions/third_party/subagent/workflow.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 const __delegation = await installDelegation();
 process.on("exit", () => __delegation.cleanup());
@@ -249,6 +250,43 @@ try {
     assert.ok(themed.some((l) => l.includes("<error>●</error> one#1")));
     assert.ok(themed.some((l) => l.includes("<accent>●</accent> two#1")));
     ok("render snapshot: header, phases done/total, agents (label, model, tokens, elapsed, dot), narrator, footer");
+  }
+
+  // 2c. Column widths are display columns, not code points: a long or wide title, label, model or
+  // run name is cut to its column (with an ellipsis) instead of pushing the columns after it over.
+  {
+    const registry = new RM.RunRegistry(clock);
+    const long = "a-phase-title-longer-than-the-column-cap";
+    const wide = "阶段 🚀";
+    const run = registry.start("20261023-140000-wide", "yaml", "a-workflow-name-longer-than-the-column-cap", { description: "widths" });
+    run.phase(long);
+    run.phase(wide);
+    run.phase("short");
+    run.setPhaseStatus(long, "running");
+    const agent = run.agentStart({ label: "an-agent-label-longer-than-the-column-cap", phase: long, role: "scout", model: "test/a-very-long-model-name-cap" });
+    now += 5_000;
+    run.agentUpdate(agent, { usage: usage(2_000, 100), activity: "reading" });
+    registry.start("20261023-140001-wid2", "yaml", "short", {});
+    const snap = registry.get(run.id) ?? assert.fail("run");
+    const lines = P.renderRunLines(snap, { paint: P.plainPaint, narration: [] });
+    const phaseRows = lines.filter((l) => / {2}(running|passed|pending) {2}\d+\/\d+$/.test(l));
+    assert.equal(phaseRows.length, 3, "three phase rows");
+    assert.equal(new Set(phaseRows.map((l) => visibleWidth(l))).size, 1, "phase rows share one width, so done/total is one column");
+    const agentRows = lines.filter((l) => l.includes(" tok "));
+    assert.equal(agentRows.length, 1, "one agent row");
+    assert.ok(agentRows[0]?.includes("…"), "a too-long label is cut with an ellipsis");
+    assert.ok(agentRows[0]?.endsWith("running"), "the status stays the last column");
+    // The run list: a long name is cut to its cap and the id stays in the last column.
+    const list = P.renderListLines(registry.list(), P.plainPaint, 0).filter((l) => l.includes("20261023-14"));
+    assert.equal(list.length, 2, "two run rows");
+    assert.equal(new Set(list.map((l) => visibleWidth(l))).size, 1, "run rows share one width whatever the name");
+    assert.ok(list.some((l) => l.includes("…")), "the long run name is cut with an ellipsis");
+    // The framed panel keeps every line inside the terminal at a narrow and a wide width.
+    const panel = new P.WorkflowPanel({ registry, narrator: new P.Narrator(), cwd: ws, paint: P.plainPaint, close: () => {} }, run.id);
+    for (const w of [68, 80, 100]) {
+      assert.ok(panel.render(w).every((l) => visibleWidth(l) <= w), `every panel line fits ${w} columns`);
+    }
+    ok("column widths: long titles, labels, models and run names are cut to display width; wide glyphs keep the columns aligned");
   }
 
   // 2b. Height budget.

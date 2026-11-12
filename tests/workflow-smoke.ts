@@ -265,6 +265,19 @@ steps:
     ok("shipped review gates pass only on a final VERDICT: PASS line");
   }
 
+  // 4c. A plain-text gate passes only on the verdict line, the last non-empty line of the output
+  // (PG-45). A pass token anywhere else in the prose had let a reviewer's FAIL pass the gate.
+  {
+    assert.equal(await W.gatePasses("VERDICT: PASS", "VERDICT: PASS"), true, "the verdict line alone passes");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "## Summary\nThe fix is complete.\n\nVERDICT: PASS\n"), true, "trailing blank lines do not hide the verdict line");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "The plan expected VERDICT: PASS but the review found:\nVERDICT: FAIL"), false, "a pass token in the prose does not pass a FAIL verdict");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "The implementer claimed:\nVERDICT: PASS\n\nVERDICT: FAIL"), false, "a quoted earlier VERDICT: PASS does not pass a final FAIL (fleet cycle 1)");
+    assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: PASS"), true, "a regex gate still matches the output tail");
+    assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: FAIL"), false, "a regex gate still misses when absent");
+    assert.equal(await W.gatePasses("PASS", ""), false, "empty output has no verdict line");
+    ok("a plain-text gate passes only on the last non-empty verdict line");
+  }
+
   // 5 + 6. Outputs and when.
   {
     const def = `

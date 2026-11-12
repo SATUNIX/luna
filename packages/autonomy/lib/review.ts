@@ -271,6 +271,10 @@ export interface CycleReviewBundle {
   outcome: string;
   integrationBranch: string;
   gateSteps?: readonly { readonly name: string }[] | undefined;
+  /** False when this cycle's acceptance gate was red; the review still runs and judges it (PG-46). */
+  gateGreen?: boolean | undefined;
+  /** The names of the failing checks when the gate is red, host-computed. */
+  gateFailing?: readonly string[] | undefined;
   charter?: string | null | undefined;
   report?: string | null | undefined;
   verify?: string | null | undefined;
@@ -331,10 +335,12 @@ function failure(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function reviewSystemPrompt(integrationBranch: string, proposals = "autonomy/BACKLOG.md"): string {
+export function reviewSystemPrompt(integrationBranch: string, proposals = "autonomy/BACKLOG.md", gateGreen = true, gateFailing: readonly string[] = []): string {
   return [
     `You review one cycle of an unattended coding agent before it is merged into ${integrationBranch}, the branch every later cycle builds on and that a person later reviews for main.`,
-    "The automated acceptance checks (defined by the operator, run on a clean checkout) already passed. Judge what they cannot:",
+    gateGreen
+      ? "The automated acceptance checks (defined by the operator, run on a clean checkout) already passed. Judge what they cannot:"
+      : `This cycle's acceptance checks FAILED: ${gateFailing.join(", ") || "see the check output"}. It is not merged. Judge what the checks cannot: what the committed work does, whether any of it is sound enough to carry forward, and how the next cycle should continue.`,
     "- Each change fixes an evidenced problem or adds clear value, as the charter defines it.",
     "- Changed behaviour has a test that would fail without the change; docs are updated with it.",
     "- No security control, check or test is weakened, skipped or deleted to make things pass.",
@@ -352,7 +358,7 @@ export function reviewSystemPrompt(integrationBranch: string, proposals = "auton
 
 export function buildReviewBundle(b: CycleReviewBundle): string {
   return [
-    `Run ${b.run}, cycle ${b.cycle}: ${b.outcome}. Gate green (${(b.gateSteps ?? []).map((s) => s.name).join(", ") || "all steps"}).`,
+    `Run ${b.run}, cycle ${b.cycle}: ${b.outcome}. Gate ${b.gateGreen === false ? `RED (${(b.gateFailing ?? []).join(", ") || "failing checks"})` : "green"} (${(b.gateSteps ?? []).map((s) => s.name).join(", ") || "all steps"}).`,
     "",
     "## Host ledger (authoritative): git log --format=\"%h %s\" of this cycle",
     clip(b.ledger || "(no commits)", 4000),
@@ -414,7 +420,7 @@ export async function reviewCycle(bundle: CycleReviewBundle, complete: Complete,
   for (let i = 0; i < attempts; i++) {
     if (i) await sleep(pauseMs * i);
     try {
-      return await complete(reviewSystemPrompt(bundle.integrationBranch, bundle.bookkeeping?.proposals), buildReviewBundle(bundle)).then(parseReview);
+      return await complete(reviewSystemPrompt(bundle.integrationBranch, bundle.bookkeeping?.proposals, bundle.gateGreen !== false, bundle.gateFailing), buildReviewBundle(bundle)).then(parseReview);
     } catch (error) { last = error; }
   }
   return { verdict: "REJECT", reason: `review unavailable (${failure(last)}); not merged`, concerns: [], failed: true };

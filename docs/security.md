@@ -502,8 +502,9 @@ authorisation headers and bearer tokens, credentials in URLs, common provider to
 
 `tests/redaction-corpus-smoke.ts` runs the source, every copy and every consumer over the synthetic
 corpus in `tests/fixtures/secret-corpus.json` and fails on any value left in the output; it also
-checks that text without a secret is unchanged, that a second pass changes nothing, and that 1 MB
-adversarial inputs finish inside a linear-time budget. Every rule is bounded, and an unterminated
+checks that text without a secret is unchanged, that a second pass changes nothing, and that
+adversarial inputs at 4x the size grow sub-quadratically (so host load cannot turn the check red).
+Every rule is bounded, and an unterminated
 private key is redacted to the end of the text rather than re-scanned.
 
 Redaction is best-effort hygiene, not a detection boundary: a secret in a shape the table does not

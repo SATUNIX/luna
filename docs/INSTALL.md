@@ -55,9 +55,14 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--dry-run` | Print what would change; change nothing. |
 | `--no-externals` | Skip companion packages such as `pi-lens`. |
 | `--uninstall` | Remove Luna and the companions this installer registered. A companion you had already registered at Luna's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
+| `--help` / `-h` | Print the usage line to stdout and exit 0 before any install work (`tests/install-marker-smoke.ts`). |
 
 An unknown flag, or a value flag such as `--profile` with no value, stops the installer with exit
 code 1 and a usage line before anything changes (`tests/install-marker-smoke.ts`).
+
+A `--profile` name that does not match a shipped profile is an operator typo, not a crash: the
+installer prints `[install] Profile not found: <path>`, then the real profile names, and exits 2
+without a stack trace (`tests/profile-transaction-smoke.ts`).
 
 The installer keeps **exactly one** registered copy of Luna: registering a checkout replaces
 a release install and the other way round, because two copies would load every extension twice.

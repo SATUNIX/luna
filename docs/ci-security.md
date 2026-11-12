@@ -38,6 +38,17 @@ command and the `integration/**` pull request filters). `npm run coverage` refus
 concurrent checks transpile into per-run caches that `check:all` removes, so coverage could not
 attribute those modules.
 
+`check:all --for-changed=<a,b>` maps the named changed paths to the checks they imply, through the
+data table in `packages/core/lib/check-map.ts` plus the checks whose `package.json` script directly
+runs a changed file (`lib/wiring.ts` `scriptTargets`): a changed test file, or either side of a
+byte-copy pair such as the fence functions copied into
+`packages/extensions/third_party/subagent/`, plans the check that runs or asserts it. It prints the
+plan as `check-all: run: <name>` / `check-all: skipped: <name>` lines, listing exactly the checks
+the gate would run (a covered aggregate such as `test:security` is not one of them), running nothing
+and exiting 0. A cycle derives the paths from its own diff this way so every check the host gate
+runs is either run or explicitly skipped, rather than surfacing only after a red gate
+(`tests/autonomy-selfimprove-smoke.ts`, `tests/check-all-npm-smoke.ts`).
+
 ## Test coverage
 
 The `coverage` job in `ci.yml` runs `npm run coverage`: `check:all` once more with

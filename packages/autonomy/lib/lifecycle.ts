@@ -232,7 +232,7 @@ export interface RunState {
   boundaryDigest: string;
   authorisation: RunAuthorisation;
   status: RunStatus;
-  phase: "work" | "acceptance" | "review" | "promotion" | null;
+  phase: "work" | "acceptance" | "gate-wait" | "review" | "promotion" | null;
   blocker: RunBlocker | null;
   outcome: RunOutcome | null;
   step: number;

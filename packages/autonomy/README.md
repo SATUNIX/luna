@@ -5,6 +5,10 @@ explicit lifecycle, templates (`implement`, `deploy`, `self-improve`), a hardene
 an inference relay and an egress proxy. Private (not published on npm); it ships with the kit's git
 delivery and runs from a checkout or from pi's copy of the kit.
 
+Acceptance gates are bounded per host as well as per run: at most two supervisors run a gate at
+once (`PI_AUTONOMY_GATE_SLOTS`, `0` for unbounded), so several runs on one machine do not starve
+each other during the expensive part of a cycle. `tests/autonomy-lifecycle-smoke.ts` pins the bound.
+
 Operator documentation, including the boundary, the contract, the lifecycle and what has and has not
 been verified, is `docs/autonomy.md`. From inside pi, use `/autonomy` in the `autonomous` profile.
 

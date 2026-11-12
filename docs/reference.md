@@ -401,7 +401,7 @@ Extension `subagent`. Control a live workflow run in this session: pause (start 
 
 ### `workflow_run`
 
-Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
+Extension `subagent`. Run subagent steps with a shared directory, gates and resume. Pass exactly one of: name (a saved workflow; "list" shows them), steps (a plan as data) or resume (a run id). A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. outputs are files to write relative to the run directory. {previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. gate: {pass, retry, max_loops?} loops until the last non-empty line has pass; the host adds the review to the retry step itself. expand answers {"steps":[...]} or {"done":"text"}.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -433,6 +433,7 @@ absolute or relative to the working directory.
 | `MEM0_API_URL` | `memory-mem0` | mem0 REST service URL | [INSTALL](INSTALL.md#environment-variables) |
 | `MEM0_USER_ID` | `memory-mem0` | mem0 user/agent ID (default `pi-agent`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_AUTONOMY_CLI` | `autonomy-run` | — | — |
+| `PI_AUTONOMY_GATE_SLOTS` | `autonomy-run` | — | [autonomy](autonomy.md) |
 | `PI_AUTONOMY_HOME` | `autonomy-run` | — | [autonomy](autonomy.md) |
 | `PI_CODING_AGENT_DIR` | `control-center`, `finish-reason-retry`, `caveman`, `protected-paths`, `trigger-compact` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_CONSOLE_ALLOWED_HOSTS` | `web-console` | — | [web-console](web-console.md) |

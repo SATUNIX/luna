@@ -57,6 +57,7 @@ assert.equal(twins.size, 0, "two chains covering only each other would drop the 
 // In this repository the security chain is covered, so check-all lists each of its files once.
 const list = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), "--list"], { encoding: "utf8" });
 assert.match(list.stdout, /skipping test:security/, "test:security repeats checks that run on their own");
+assert.equal((list.stdout.match(/skipping test:security/g) ?? []).length, 1, "the covered-aggregate line prints exactly once per run");
 assert.doesNotMatch(list.stdout, /^test:security$/m, "test:security is not run twice");
 assert.match(list.stdout, /^smoke:tool-firewall$/m, "its one uncovered file has its own check");
 
@@ -85,6 +86,20 @@ assert.deepEqual(shardRuns(["only"], { index: 2, count: 4 }), [], "a shard with 
 
 // The real check list shards the same way: the four --list outputs are disjoint and cover all.
 const checkAll = path.join(ROOT, "packages", "core", "check-all.ts");
+
+// The plan lists exactly the gate's checks: a changed copy-pair source or test file plans the
+// check that asserts or runs it, and plan mode never prints the covered-aggregate skip line.
+const planFor = (p: string): string => {
+  const out = spawnSync(process.execPath, [checkAll, `--for-changed=${p}`], { encoding: "utf8" });
+  assert.equal(out.status, 0, `check-all --for-changed=${p} exits 0 (stderr: ${out.stderr.trim()})`);
+  return out.stdout;
+};
+const guardPlan = planFor("packages/extensions/src/secret-guard/index.ts");
+assert.match(guardPlan, /^check-all: run: smoke:workflow-notify$/m, "a copy-pair source plans smoke:workflow-notify");
+assert.doesNotMatch(guardPlan, /skipping test:security/, "plan mode prints no covered-aggregate skip line");
+const testPlan = planFor("tests/autonomy-selfimprove-smoke.ts");
+assert.match(testPlan, /^check-all: run: smoke:autonomy-selfimprove$/m, "a changed test file plans its own check");
+
 const listLabels = (args: string[]): string[] => {
   const out = spawnSync(process.execPath, [checkAll, "--list", ...args], { encoding: "utf8" });
   assert.equal(out.status, 0, `check-all --list ${args.join(" ")} exits 0 (stderr: ${out.stderr.trim()})`);

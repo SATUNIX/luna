@@ -701,6 +701,28 @@ tests["the real installer and the shipped profiles pass /profile's verification 
   } finally { for (const r of restores.reverse()) r(); rmWorkspace(dir); }
 };
 
+// A typo in --profile is an operator error, not a crash: the real installer must name the profile it
+// could not find and the profiles that do exist, and exit 2 without dumping a stack trace.
+tests["the real installer reports a bogus profile cleanly with exit 2 and no stack trace"] = async () => {
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const dir = tmp("pi-kit-txn-bogus-profile-");
+  const home = path.join(dir, "home");
+  const agent = path.join(dir, "agent");
+  for (const d of [home, agent]) fs.mkdirSync(d, { recursive: true });
+  const restores = [setEnv("HOME", home), setEnv("PI_CODING_AGENT_DIR", agent)];
+  try {
+    const r = await piLikeExec(process.execPath, [path.join(repo, "packages", "core", "install.ts"), "--profile", "bogus-profile", "--dry-run"], { cwd: repo });
+    const output = r.stdout + r.stderr;
+    assert.equal(r.code, 2, `a bogus profile must exit 2 (the clean operator-error contract):\n${output}`);
+    assert.match(output, /Profile not found/);
+    const named = ["balanced", "lite", "quick"].filter((name) => output.includes(name));
+    assert.ok(named.length >= 2, `the error must name the real profiles; saw ${JSON.stringify(named)} in:\n${output}`);
+    for (const line of output.split(/\r?\n/)) {
+      assert.doesNotMatch(line, /at loadProfile|node:internal/, `a user error must not print a stack trace: ${line}`);
+    }
+  } finally { for (const r of restores.reverse()) r(); rmWorkspace(dir); }
+};
+
 // TOO-1: a project /profile drives install.ts --scope project, which leaves the machine-global
 // firewall.json and security.json alone; the switch still verifies, and the difference is announced.
 tests["a project /profile with the real installer leaves the global firewall.json and security.json byte-identical"] = async () => {

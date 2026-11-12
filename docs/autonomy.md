@@ -246,6 +246,21 @@ it cannot touch permissions, network, credentials, promotion, the image or the a
 (those are the authorised boundary; changing them means a new run), it asks for confirmation, and it
 is logged in the run's state.
 
+**One host, many runs: the gate slot bound.** The single-owner lock is per run, so several runs of
+one user on one host could otherwise each start an acceptance gate at once and compete for CPU and
+IO. A host-wide bound caps that at **two** concurrent gates per user, held under
+`$PI_AUTONOMY_HOME/gate-slots` (default `~/.local/state/pi-autonomy/gate-slots`). A supervisor that
+cannot take a slot sets phase `gate-wait`, keeps heartbeating (so it is not read as stalled) and
+waits without accruing wall-clock minutes; it then runs the gate under phase `acceptance`.
+`PI_AUTONOMY_GATE_SLOTS` sets the count; `0` is unbounded. The gate container, its checks and the
+definition of a pass are unchanged — only *when* a gate may start is bounded.
+`tests/autonomy-lifecycle-smoke.ts` pins the parse, the two-at-once bound, the unbounded `0`, that
+a killed holder frees its slot and that a `flock` failure other than lock contention (a permission
+error or an unsupported filesystem) rejects instead of polling forever; `tests/autonomy-selfimprove-smoke.ts`
+pins the `gate-wait` phase, the active minutes charged before the wait, the frozen minutes while
+waiting, the return to `acceptance`, three supervisors never overlapping more than two gates, and a
+throwing gate restoring the previous phase.
+
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see
 [Effort](effort.md).
@@ -263,6 +278,26 @@ always available:
 Every promotion step is idempotent and recorded as started before and done after; a run resumed after
 a crash checks the destination's real ref before repeating anything, so a resume never publishes twice.
 Public deployment, production changes and anything outside the zone are never done by a worker.
+
+## Unpublished work
+
+`pi-autonomy top` lists every run under the state home whose merged integration branch is ahead
+of the remote ref the run already holds. It never fetches and never writes a ref: it compares
+`refs/heads/<integration>` with `refs/integration/remote` in the run's own `mirror.git`. `status
+--run <id>` shows the same line for one run:
+
+    unpublished: 3 commits since 2026-09-30T11:00:00Z — publish failed (will retry): ...
+
+`unpublished:` means the work is merged locally but not on the git remote. The cause is the last
+`publish failed` line in the supervisor log; the timestamp is that line's, else the oldest
+unpublished commit's. A run with no integration branch, no configured remote or no fetched remote
+ref is `unknown`; a run whose local branch ref is missing is `absent`. Neither is flagged.
+`pi-autonomy inbox` lists runs unpublished for 30 minutes or more (waiting on an
+operator), and `pi-autonomy doctor` exits non-zero while any run is ahead, naming each.
+
+Recovery: inspect the run (`status`, `export`), rewrite the unpublished commits, verify and run the
+leak scan, fast-forward push the integration branch to the remote, then recreate the run.
+`tests/autonomy-cli-smoke.ts` pins the surface (`smoke:autonomy-cli`).
 
 ## The `self-improve` template
 
@@ -336,6 +371,11 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   upstream conflict, and the previous cycle's outcome, gate and merge reason. A malformed answer,
   or none after three attempts, counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
   can salvage what is sound.
+  A completed cycle with a **red** gate is still reviewed: the reviewer is told which checks failed, a
+  `MERGE` verdict cannot waive the gate, and the reason plus the reviewer's concerns are carried into
+  the next cycle's prompt so it can bring over what is sound (`reviewSystemPrompt`, `gateGreen`). A
+  host-closed partial cycle that never went green is not reviewed; its close-out reason and failing
+  checks already reach the next cycle (`tests/autonomy-selfimprove-smoke.ts`).
 - **Review inputs are never worker-authored.** The worker can write wherever its write areas allow,
   so the host decides what the review sees and what no review may pass
   (`tests/autonomy-review-inputs-smoke.ts`):
@@ -604,12 +644,15 @@ Cycle integration itself is a fast-forward and performs no content merge. The tw
 merge paths and the fast-forward are covered by `tests/autonomy-smoke.ts`. Union merging does
 not validate changelog wording, ordering or duplicates; review the resulting text.
 
-`autonomy/JOURNAL.md` is the one shared journal: a line per cycle report, which the cycle prompt's
-Record step asks each cycle to add for its own report. `npm run smoke:docs` runs `checkJournal`
-(`packages/core/lib/journal.ts`) and fails a report with no line, a line with no report and a
-line whose board IDs differ from the report's, and so reddens the acceptance gate
-(`tests/docs-smoke.ts`; the cycle prompt wording is pinned by `tests/autonomy-selfimprove-smoke.ts`).
-Cycle reports and individual proposals keep their own separate paths.
+`autonomy/JOURNAL.md` is the one shared journal: a line per cycle report. The cycle prompt's
+Record step asks each cycle to run `node packages/core/journal.ts`, which derives the line from
+the report and appends it for any non-close-out report that lacks one. `npm run smoke:docs` runs
+`checkJournal` (`packages/core/lib/journal.ts`; also `node packages/core/journal.ts --check`) and
+fails a report with no line, a line with no report and a line whose board IDs differ from the
+report's, and so reddens the acceptance gate (`tests/docs-smoke.ts`; the cycle prompt wording is
+pinned by `tests/autonomy-selfimprove-smoke.ts`). A host close-out report, which the worker never
+finished, is reported as a warning instead. Cycle reports and individual proposals keep their own
+separate paths.
 
 ```mermaid
 flowchart LR

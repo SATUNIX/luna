@@ -57,3 +57,14 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-core-01/30 | Board: DE-96, DE-97 | successful | Re-verified the cycle-29 leak-scan and brand-smoke fixes on this base (smoke:prepush-scan 16/16, smoke:brand 23/23) with no code change, and closed HANDOFF #16: memory-vault's injected record is now keyed by rel with a sha256 body fingerprint so a note edited mid-session is offered again with its new body (new check 6b fails on the base); also fixed 4-character plurals never meeting their singular in the recall stemmer (logs/log; the base returned logs) with exact assertions and a round trip, docs scoped to once per session per unchanged content, independent per-item and final whole-diff reviews PASS
 
 - luna-core-01/31 | Board: none | successful | Fixed the memory-vault first-prompt flag being consumed before the recall work so a swallowed recall error no longer loses the earlier-session recap and pinned block for the whole session (new check 17 fails on the base), and fixed skill hints clipping mid-word with a stale ~30-token cost claim: a new pure `hintText` cuts descriptions at a word boundary and the two comments now match (~61 tokens), removing 25/34 mid-word cuts; smoke:memory-vault 18/18, smoke:skill-routing, smoke:docs, tsc, eslint and verify green, item 1 falsified on the base, independent reviews PASS, two proposals written (skill-trigger lifetime, memory-search exclude)
+- luna-ops-01/08 | Board: PG-20, PG-45, DE-93, PG-46 | successful | Cycle 08 completed the carried-over journal and gate work, and removed the wall-clock perf gates
+- luna-ops-01/09 | Board: PG-50, PG-53 | successful | Cycle 09 bounded concurrent acceptance gates per host and recorded the unattended decision
+- luna-ops-01/10 | Board: PG-50 | successful | Cycle 10 finished the gate-slot bound and made red cycles reviewable
+- luna-ops-01/12 | Board: PG-60, PG-20, PG-53, PG-61 | successful | Cycle 12 unblocked the publish and landed the installer fix
+- luna-core-01/07 | Board: PG-27, PG-51 | successful | Converted the CPU-bound smoke timing guards to CPU time (all budgets kept), fixed the skill-router re: trigger guard and a workflow-plan timer race the load-check exposed
+- luna-ops-01/17 | Board: PG-60, PG-63 | successful | Cycle 17 merged the upstream trunk and settled the post-sync review-budget item
+- luna-ops-01/15 | Board: PG-56, PG-52 | successful | Cycle 15 landed the upstream merge and corrected the carried PG-56 surface
+journal: every report has a journal entry
+- luna-ops-01/18 | Board: PG-60, PG-63 | successful | Cycle 18 restored the drifted cycles on the run branch and cut a clean re-land for `stream/ops`
+- luna-ops-01/19 | Board: PG-52 | successful | Cycle 19 — derive a cycle's verify list from the changed files
+- luna-ops-01/20 | Board: PG-52 | successful | Cycle 20 — consolidate the cycle-19 verify map and rebuild a clean re-land

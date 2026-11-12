@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkJournal, journalWarnings } from "../packages/core/lib/journal.ts";
+import { checkJournal, journalWarnings, syncJournal } from "../packages/core/lib/journal.ts";
 import { installPinFiles, installPinVersions, readmeBadgeAltVersion, readmeBadgeVersion, setInstallPins, setReadmeBadgeVersion } from "../packages/core/lib/version-badge.ts";
 import { skillsCatalogueContent } from "../packages/core/skills-catalogue.ts";
 
@@ -634,6 +634,22 @@ function removeJournalFixture(fixture: JournalFixture): void {
   }
 }
 
+// syncJournal also skips a host close-out report: no line is derived or written.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "Outcome: partial\n\nHost close-out: the worker exited before recording report.md.\n",
+    );
+    fixture.journal([]);
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal wrote a line for a host close-out report");
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a host close-out report");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
 // An entry whose cycle directory exists but has no report.md fails, naming the key.
 {
   const fixture = journalFixture();
@@ -645,6 +661,94 @@ function removeJournalFixture(fixture: JournalFixture): void {
       problems.some((problem) => problem.includes("journal entry has no report: run-01/01")),
       `journal checker missed an entry with no report: ${problems.join("; ")}`,
     );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// Identical duplicate entries (a `merge=union` artifact) are accepted; only a key repeated
+// with different content is a conflict.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did a thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.deepEqual(problems, [], `identical duplicate entries produced a failure: ${problems.join("; ")}`);
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// The same key twice with different content is a conflict, not a union-merge artifact.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did another thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("conflicting journal entries: run-01/01")),
+      `journal checker missed a conflicting duplicate: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// syncJournal derives the missing line, then checkJournal accepts it and a second sync is a no-op.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a derived line");
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal was not idempotent");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A report may name a decisions file that does not exist: the derived line must not link it, so
+// checkJournal still accepts the very line it derived (the missing-link regression).
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "# Report\n\nOutcome: successful\n\nThe decision is in autonomy/decisions/missing.md.\n",
+    );
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    const line = wrote[0] ?? "";
+    assert.ok(!line.includes("missing.md"), `derived line linked a missing decisions file: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected the line it derived");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A decisions file named by the report and present on disk is linked, and that link satisfies
+// checkJournal's rule that every decisions file carries a Board line and is referenced.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n\nSee autonomy/decisions/real.md.\n");
+    fixture.write("autonomy/decisions/real.md", "Board: PG-20\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    const line = wrote[0] ?? "";
+    assert.ok(line.includes("decisions: autonomy/decisions/real.md"), `derived line omitted the decisions link: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a linked decisions file");
   } finally {
     removeJournalFixture(fixture);
   }

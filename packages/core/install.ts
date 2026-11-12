@@ -39,7 +39,7 @@ import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
 import { mergePackageBlock, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
-import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
+import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, SOURCES_PATH, ENV_EXAMPLE, extensionRelPath } from "./lib/paths.ts";
@@ -65,8 +65,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function errorCode(error: unknown): unknown {
-  return isRecord(error) ? error.code : undefined;
+function errorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 /** The file's bytes, or undefined when it does not exist. */
@@ -90,9 +92,9 @@ const has = (flag: string): boolean => args.includes(flag);
 // Every argument must be a known flag, and a value flag needs a value that is not another flag:
 // a typo such as `--profle pentest` used to be ignored and run a default balanced install.
 const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "--git-ref", "--surface"];
-const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate"];
+const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
-  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate]";
+  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--help|-h]";
 for (let i = 0; i < args.length; i++) {
   const arg = args[i] ?? "";
   if (BOOLEAN_FLAGS.includes(arg)) continue;
@@ -104,6 +106,12 @@ for (let i = 0; i < args.length; i++) {
     process.exit(1);
   }
   i++;
+}
+
+// Help is recognized before any install work so it stays side-effect free and exits 0.
+if (has("--help") || args.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
 }
 
 // The split lite surface is now the lite profile of the single package.
@@ -118,7 +126,11 @@ const profile = canonicalProfileName(String(legacySurface ? "lite" : get("--prof
 const onlyNames = get("--only", null)?.split(",").map((n) => n.trim());
 const all = has("--all");
 const scopeArg = get("--scope", "global");
-if (scopeArg !== "global" && scopeArg !== "project") throw new Error(`[install] unknown --scope "${String(scopeArg)}" (expected global or project)`);
+if (scopeArg !== "global" && scopeArg !== "project") {
+  console.error(`[install] unknown --scope "${String(scopeArg)}" (expected global or project)`);
+  console.error(USAGE);
+  process.exit(1);
+}
 const scope = scopeArg;
 const dryRun = has("--dry-run");
 const uninstall = has("--uninstall");
@@ -519,7 +531,16 @@ if (all) {
   if (added.length) console.warn(`[install] WARN: --only did not name the required extension(s) ${added.join(", ")}; adding them (every install loads ${requiredExtensions.join(", ")}).`);
   selected = [...onlyNames, ...added];
 } else {
-  profileDef = loadProfile(profile);
+  try {
+    profileDef = loadProfile(profile);
+  } catch (error) {
+    // Not-found is the user's typo, not a crash: a clean message, the valid names, and exit 2.
+    // Any other failure (unreadable or invalid profile JSON) keeps its stack for a bug report.
+    if (!errorMessage(error).startsWith("[install] Profile not found:")) throw error;
+    console.error(errorMessage(error));
+    console.error(`[install] Valid profiles: ${listProfiles(PROFILES_DIR).join(", ")} (run with --help for details).`);
+    process.exit(2);
+  }
   // Safety-critical config is validated before anything is written: an unknown firewall policy or
   // mode (in the profile or in the existing firewall.json) or an unreadable firewall.json stops here.
   try {

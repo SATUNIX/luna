@@ -19,6 +19,8 @@ import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { FakeEngine, FakeRuntime, kill } from "../packages/autonomy/tests/fake-runtime.ts";
+import { resolveContract } from "../packages/autonomy/lib/contract.ts";
+import { createRun } from "../packages/autonomy/lib/rundir.ts";
 import { NODE_EXIT, ANSWER, type BacklogItem, type RunBlocker, type RunContract, type RunOutcome, type ReviewFn, type Script, type ScriptContext } from "./autonomy-harness.ts";
 
 /**
@@ -694,6 +696,129 @@ await check("a detached supervisor's log line is written exactly once", () => {
   const dispatch = spawnSync(process.execPath, [path.join(HERE, "autonomy-dispatch-smoke.ts")], { encoding: "utf8" });
   assert.equal(dispatch.status, 0, `the dispatch claim suite failed: ${dispatch.stdout}${dispatch.stderr}`);
 }
+
+/** A commit in a working repository; deterministic identity and dates (no global config is read). */
+function uGit(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv = {}): string {
+  const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
+  assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+/** One git command against a bare repository by --git-dir. */
+function uBare(mirror: string, args: readonly string[]): string {
+  const r = spawnSync("git", [`--git-dir=${mirror}`, ...args], { encoding: "utf8" });
+  assert.equal(r.status, 0, `git --git-dir ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+interface UnpubFixture { home: string; run: string; branch: string; mirror: string; log: string; clock: { now: number } }
+
+/** A run directory whose mirror holds an integration branch (3 commits) ahead of the remote ref (1 commit). */
+function unpubFixture(): UnpubFixture {
+  const home = scratch();
+  const src = scratch();
+  const work = scratch();
+  uGit(src, ["init", "--quiet", "-b", "main"]);
+  fs.writeFileSync(path.join(src, "README.md"), "base\n");
+  uGit(src, ["add", "."]);
+  uGit(src, ["commit", "--quiet", "-m", "base"]);
+  const raw = implementRaw({
+    template: "self-improve",
+    inputs: { repository: { path: src, ref: "main" } },
+    acceptance: { checks: [{ id: "unit", run: ["true"], timeoutMinutes: 1, required: true }], review: false },
+    templateOptions: { integration: { branch: "pi-autonomy/integration", review: false } },
+    promotion: { policy: "local-branch", destinations: [{ kind: "local-branch", repo: work, branch: "pi-autonomy/integration" }] },
+  });
+  const resolved = resolveContract(raw, { baseDir: home, effort: testEffort, checkFs: false });
+  assert.ok(resolved.ok, resolved.problems.map((p) => `${p.path}: ${p.message}`).join("\n"));
+  if (!resolved.ok) throw new Error("unreachable");
+  const clock = { now: Date.parse("2026-09-30T11:15:00Z") };
+  const store = createRun({ contract: resolved.contract, authorisation: { boundaryDigest: "0".repeat(64), by: "tester", at: new Date(clock.now).toISOString(), via: "test" }, home, now: () => new Date(clock.now), boundaryEffort: testEffort });
+  const at = (iso: string): NodeJS.ProcessEnv => ({ GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso });
+  const commit = (file: string, iso: string): void => { fs.writeFileSync(path.join(work, file), `${file}\n`); uGit(work, ["add", "."]); uGit(work, ["commit", "--quiet", "-m", file], at(iso)); };
+  uGit(work, ["init", "--quiet", "-b", "main"]);
+  commit("one.txt", "2026-09-30T10:00:00Z");
+  uGit(work, ["branch", "base"]);
+  commit("two.txt", "2026-09-30T11:00:00Z");
+  commit("three.txt", "2026-09-30T11:30:00Z");
+  const init = spawnSync("git", ["init", "--quiet", "--bare", store.p.mirror], { encoding: "utf8" });
+  assert.equal(init.status, 0, init.stderr);
+  uBare(store.p.mirror, ["fetch", "--quiet", "--no-tags", work, "refs/heads/main:refs/heads/pi-autonomy/integration", "refs/heads/base:refs/integration/remote"]);
+  return { home, run: store.run, branch: "pi-autonomy/integration", mirror: store.p.mirror, log: store.p.log, clock };
+}
+
+/** Run one CLI command in-process with captured output, a fixed clock and a temporary state home. */
+async function uCli(f: UnpubFixture, ...argv: string[]): Promise<{ code: number; out: string; err: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const deps: Partial<RealCliDeps> = { home: f.home, now: () => new Date(f.clock.now), stdout: { write: (s: string) => out.push(s) }, stderr: { write: (s: string) => err.push(s) } };
+  const code = await main(argv, deps);
+  return { code, out: out.join(""), err: err.join("") };
+}
+
+await check("PG-56: a run ahead of its mirrored remote is flagged by status and top", async () => {
+  const f = unpubFixture();
+  const status = await uCli(f, "status", "--run", f.run);
+  assert.equal(status.code, 0, status.err);
+  assert.match(status.out, /unpublished: 2 commits since 2026-09-30T11:00:00Z/);
+  const top = await uCli(f, "top");
+  assert.equal(top.code, 0, top.err);
+  assert.match(top.out, new RegExp(`${f.run}: unpublished: 2 commits since `));
+  const json = await uCli(f, "status", "--run", f.run, "--json");
+  const parsed: unknown = JSON.parse(json.out);
+  assert.ok(typeof parsed === "object" && parsed !== null && "unpublished" in parsed, "status --json has an unpublished field");
+});
+
+await check("PG-56: a run unpublished for 30 minutes or more is waiting on an operator", async () => {
+  const f = unpubFixture();
+  const before = await uCli(f, "inbox");
+  assert.equal(before.code, 0, before.err);
+  assert.doesNotMatch(before.out, /waiting on operator/, "a fresh failure is not yet waiting on the operator");
+  const old = new Date(f.clock.now - 45 * 60 * 1000).toISOString();
+  fs.appendFileSync(f.log, `${old} publish failed (will retry): push rejected (non-fast-forward)\n`);
+  const inbox = await uCli(f, "inbox");
+  assert.equal(inbox.code, 0, inbox.err);
+  assert.match(inbox.out, new RegExp(`run ${f.run}: unpublished 2 commits since ${old} \\(waiting on operator\\)`));
+});
+await check("PG-56: a publish recovery clears a stale failure reason", async () => {
+  const f = unpubFixture();
+  const old = new Date(f.clock.now - 45 * 60 * 1000).toISOString();
+  fs.appendFileSync(f.log, `${old} publish failed (will retry): push rejected (non-fast-forward)\n`);
+  const failed = await uCli(f, "status", "--run", f.run);
+  assert.equal(failed.code, 0, failed.err);
+  assert.match(failed.out, /publish failed/, "while failing, the reason is shown");
+  const recoveredAt = new Date(f.clock.now - 10 * 60 * 1000).toISOString();
+  fs.appendFileSync(f.log, `${recoveredAt} publish recovered\n`);
+  const recovered = await uCli(f, "status", "--run", f.run);
+  assert.equal(recovered.code, 0, recovered.err);
+  assert.doesNotMatch(recovered.out, /publish failed/, "a later recovery makes the old failure stale");
+  assert.match(recovered.out, /unpublished: 2 commits since 2026-09-30T11:00:00Z/, "the since falls back to the oldest unpublished commit");
+  const inbox = await uCli(f, "inbox");
+  assert.doesNotMatch(inbox.out, /waiting on operator/, "a recovered run is not waiting on the operator");
+});
+
+await check("PG-56: equal refs show no unpublished line in status or top", async () => {
+  const f = unpubFixture();
+  const head = uBare(f.mirror, ["rev-parse", `refs/heads/${f.branch}`]);
+  uBare(f.mirror, ["update-ref", "refs/integration/remote", head]);
+  const status = await uCli(f, "status", "--run", f.run);
+  assert.equal(status.code, 0, status.err);
+  assert.doesNotMatch(status.out, /unpublished:/);
+  const top = await uCli(f, "top");
+  assert.doesNotMatch(top.out, /unpublished:/);
+});
+
+await check("PG-56: doctor exits non-zero while ahead and zero when equal", async () => {
+  const f = unpubFixture();
+  const ahead = await uCli(f, "doctor");
+  assert.equal(ahead.code, 3);
+  assert.match(ahead.out, new RegExp(f.run));
+  const head = uBare(f.mirror, ["rev-parse", `refs/heads/${f.branch}`]);
+  uBare(f.mirror, ["update-ref", "refs/integration/remote", head]);
+  const equal = await uCli(f, "doctor");
+  assert.equal(equal.code, 0, equal.err);
+  assert.doesNotMatch(equal.out, /unpublished/);
+});
 
 for (const d of dirs) rm(d);
 done();

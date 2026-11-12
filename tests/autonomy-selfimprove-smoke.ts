@@ -13,9 +13,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { assert, makeChecker, testEffort, type RawContract } from "./autonomy-helpers.ts";
+import { fileURLToPath } from "node:url";
+import { assert, makeChecker, rm, tempDir, testEffort, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, fakeAlive, harness, runOnce, scratch, NODE_EXIT, type Harness, type HarnessRuntime, type MadeEngine, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
 import { main } from "../packages/autonomy/cli.ts";
+import { LockLost } from "../packages/autonomy/lib/engine.ts";
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
@@ -23,8 +25,11 @@ import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
 import { compilePlan } from "../packages/extensions/third_party/subagent/plan.ts";
 import { discoverAgents } from "../packages/extensions/third_party/subagent/agents.ts";
+import { ALWAYS_CHECKS, CHANGED_PATH_CHECKS, checksForChangedPaths, verifyPlan } from "../packages/core/lib/check-map.ts";
 
 const { check, done } = makeChecker("autonomy-selfimprove-smoke");
+/** The checkout root, for the root package.json and the cycle prompt template. */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** One host-side model call the scripted manager saw. */
 interface ManagerCall {
   system: string;
@@ -253,6 +258,101 @@ await check("heartbeat follows engine ticks independently of the lock timer; STO
   assert.equal(r.rt.calls.workers.length, 0);
 });
 
+await check("gate slots: a waiting engine heartbeats gate-wait, freezes wall-clock minutes and resumes into acceptance", async () => {
+  const h = harness(improveRaw(sourceRepo()));
+  let resolveGate: () => void = () => {};
+  const gate = new Promise<void>((r) => { resolveGate = r; });
+  const made = h.engine({
+    gateSlots: 2,
+    gateSlotAcquire: async ({ onWait }) => { onWait(); await gate; return { index: 0, release: () => {} }; },
+  });
+  made.engine.state = h.state();
+  made.engine.go("ready"); made.engine.go("running");
+  made.engine.state.phase = "acceptance";
+  made.engine.tick(); // set lastTickAt so the next interval is real active time
+  const minutesBefore = made.engine.state.usage.minutes;
+  h.clock.now += 30_000;
+  let ran = false;
+  const p = made.engine.withGateSlot(async () => { ran = true; return "ok"; });
+  await new Promise((r) => setTimeout(r, 20));
+  const beat = JSON.parse(fs.readFileSync(path.join(h.store.p.root, "heartbeat.json"), "utf8")) as { phase?: string };
+  assert.equal(beat.phase, "gate-wait");
+  assert.equal(ran, false, "the gate does not run while waiting");
+  assert.ok(Math.abs(made.engine.state.usage.minutes - (minutesBefore + 0.5)) < 1e-9, "the active 30s before the wait is charged");
+  h.clock.now += 60_000;
+  made.engine.tick();
+  assert.ok(Math.abs(made.engine.state.usage.minutes - (minutesBefore + 0.5)) < 1e-9, "waiting does not count against the wall-clock budget");
+  resolveGate();
+  assert.equal(await p, "ok");
+  assert.equal(ran, true);
+  assert.equal(made.engine.state.phase, "acceptance");
+  made.lock.release();
+});
+
+await check("gate slots: three supervisors with N=2 never overlap more than two gates; the third waits in gate-wait then runs", async () => {
+  const gateSlotsHome = tempDir("autonomy-slots-three-");
+  const runs: Array<{ made: ReturnType<Harness["engine"]>; h: Harness }> = [];
+  for (let i = 0; i < 3; i++) {
+    const h = harness(improveRaw(sourceRepo()));
+    const made = h.engine({ gateSlots: 2, gateSlotsHome });
+    made.engine.state = h.state();
+    made.engine.go("ready"); made.engine.go("running");
+    made.engine.state.phase = "acceptance";
+    runs.push({ made, h });
+  }
+  let live = 0;
+  let maxOverlap = 0;
+  const releases: Array<() => void> = [];
+  const gate = async (): Promise<string> => {
+    live += 1;
+    maxOverlap = Math.max(maxOverlap, live);
+    await new Promise<void>((resolve) => {
+      let done = false;
+      releases.push(() => { if (done) return; done = true; live -= 1; resolve(); });
+    });
+    return "ok";
+  };
+  const [first, second, waiting] = runs;
+  assert.ok(first && second && waiting, "three supervisors built");
+  const p1 = first.made.engine.withGateSlot(gate);
+  const p2 = second.made.engine.withGateSlot(gate);
+  for (let i = 0; i < 300 && live < 2; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(live, 2, "two gates run at once");
+  assert.equal(maxOverlap, 2, "no more than two gates overlap");
+  const p3 = waiting.made.engine.withGateSlot(gate);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(live, 2, "the third gate does not start while both slots are held");
+  assert.equal(waiting.made.engine.state.phase, "gate-wait", "the third engine waits in gate-wait");
+  const beat = JSON.parse(fs.readFileSync(path.join(waiting.h.store.p.root, "heartbeat.json"), "utf8")) as { phase?: string };
+  assert.equal(beat.phase, "gate-wait", "the third engine heartbeats gate-wait");
+  const releaseFirst = releases[0];
+  assert.ok(releaseFirst);
+  releaseFirst();
+  for (let i = 0; i < 300 && releases.length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(releases.length, 3, "the third gate starts once a slot is free");
+  assert.equal(maxOverlap, 2, "still no more than two gates overlap");
+  releases.forEach((release) => release());
+  assert.deepEqual(await Promise.all([p1, p2, p3]), ["ok", "ok", "ok"]);
+  runs.forEach(({ made }) => made.lock.release());
+  rm(gateSlotsHome);
+});
+
+await check("gate slots: a throwing gate restores the previous phase and clears clockPaused; a lost lock throws without pausing", async () => {
+  const h = harness(improveRaw(sourceRepo()));
+  const made = h.engine({ gateSlots: 2, gateSlotAcquire: async () => ({ index: 0, release: () => {} }) });
+  made.engine.state = h.state();
+  made.engine.go("ready"); made.engine.go("running");
+  made.engine.state.phase = "work";
+  await assert.rejects(() => made.engine.withGateSlot(async () => { throw new Error("gate blew up"); }), /gate blew up/);
+  assert.equal(made.engine.clockPaused, false, "a throwing gate leaves the clock running");
+  assert.equal(made.engine.state.phase, "work", "the previous phase is restored");
+  made.engine.lockLost = true;
+  await assert.rejects(() => made.engine.withGateSlot(async () => "never"), (error: unknown) => error instanceof LockLost);
+  assert.equal(made.engine.clockPaused, false, "a lost lock never leaves the clock paused");
+  assert.equal(made.engine.state.phase, "work", "a lost lock restores the previous phase");
+  made.lock.release();
+});
+
 await check("v0 behaviour through the engine: seeded from the contract, cycles merged after gate and review, nothing-found ends the run; the result is a LOCAL branch only", async () => {
   const src = sourceRepo();
   const baseSha = sh(src, "rev-parse", "HEAD");
@@ -289,7 +389,7 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
   assert.match(nth(prompts, 0), /cycle 1 of 8/);
   // Every report needs a journal line (checkJournal, run by the docs smoke in the gate); the Record step
   // names the line, with this run and cycle filled in, so a stream does not learn it by going red.
-  assert.match(nth(prompts, 0), /If the repository has `autonomy\/JOURNAL\.md`, add one line for this cycle to it[^`]*`- improve-test-1\/01 \| Board: <the IDs the report names, or none> \| <the Outcome, as written in the report> \| <one-line summary>`/);
+  assert.match(nth(prompts, 0), /If the repository has `autonomy\/JOURNAL\.md`, give this cycle its line there after writing `report\.md`: run `node packages\/core\/journal\.ts`[^|]*`- improve-test-1\/01 \| Board: <the IDs the report names, or none> \| <the Outcome, as written in the report> \| <one-line summary>`/);
   assert.match(nth(prompts, 1), /Cycle 01 ended completed \(report recorded\); acceptance green; merged into pi-autonomy\/integration/);
   assert.match(nth(prompts, 2), /found nothing to do/);
   // Promotion: a LOCAL branch in the source repository, and nothing else. No tags, no working branch, main untouched.
@@ -307,8 +407,9 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
 await check("a red cycle is not merged: it keeps its tag, and the next cycle is told where to find it; a cycle limit ends the run as cycles_done", async () => {
   const src = sourceRepo();
   const prompts: string[] = [];
+  const calls: ManagerCall[] = [];
   const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
-    manager: manager([]),
+    manager: manager(calls),
     script: async (t) => {
       prompts.push(t.message);
       if (prompts.length === 1) { t.write("attempt.txt", "no marker yet\n"); report(t, "successful"); }
@@ -319,10 +420,15 @@ await check("a red cycle is not merged: it keeps its tag, and the next cycle is 
   const { state, rt } = await runOnce(h);
   const [c1, c2] = state.selfImprove?.history ?? [];
   assert.ok(c1 && c2, "two cycles are recorded");
-  assert.deepEqual([c1.gate, c1.merged, c1.mergeReason], ["red", false, "acceptance checks failed"]);
+  assert.deepEqual([c1.gate, c1.merged], ["red", false]);
+  assert.match(c1.mergeReason, /^acceptance checks failed \(gate\); review MERGE: evidenced and tested/, c1.mergeReason);
+  assert.equal(c1.review, "MERGE", "the red cycle is still reviewed; the verdict cannot waive the gate");
   assert.deepEqual([c1.gateFailing], [["gate"]]);
+  const redReview = nth(calls.filter((c) => /You review one cycle/.test(c.system)), 0);
+  assert.match(redReview.system, /acceptance checks FAILED: gate/, "the reviewer is told the gate is red (PG-46)");
+  assert.match(redReview.user, /Gate RED \(gate\)/, "the review bundle names the failing check");
   assert.ok(mirrorGit(rt)(["rev-parse", "--verify", "refs/tags/pi/improve-test-1/cycle-01"]), "the unmerged cycle is kept under its tag");
-  assert.match(nth(prompts, 1), /not merged into pi-autonomy\/integration: acceptance checks failed\..*origin\/attempts\/improve-test-1\/cycle-01/s);
+  assert.match(nth(prompts, 1), /not merged into pi-autonomy\/integration: acceptance checks failed \(gate\); review MERGE: evidenced and tested\..*origin\/attempts\/improve-test-1\/cycle-01/s);
   const remoteBranches = spawnSync("git", ["--git-dir", rt.p.remote, "for-each-ref", "--format=%(refname)"], { encoding: "utf8" }).stdout;
   assert.match(remoteBranches, /refs\/heads\/attempts\/improve-test-1\/cycle-01/, "the worker's repository offers the attempt as a branch");
   assert.deepEqual([c2.gate, c2.merged], ["green", true]);
@@ -1275,6 +1381,8 @@ await check("the cycle prompt names the start sha, the review budget with its me
       assert.match(t.message, /Your stream: UX stream: TUI overlays and the launch screen; owns packages\/web-ui\.\. Work only inside this stream's area/);
       assert.match(t.message, /there is no board file to read/);
       assert.match(t.message, /this prompt wins: the merge review judges streams against the current stream charter/);
+      assert.ok(t.message.includes(`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"`), "the verify plan derives its checks from the diff");
+      assert.match(t.message, /one line per check saying whether it RAN or was SKIPPED/);
       assert.match(t.message, /\(a\) run the targeted smokes[\s\S]*\(d\) write `verify\.md`[\s\S]*Then go to step 5/);
       assert.match(t.message, /Item: <title> - <commit shas> - <test that proves it>/);
       assert.match(t.message, /under 5000 characters each/);
@@ -1456,6 +1564,61 @@ await check("an over-budget cycle is caught pre-report: the live worker is steer
   assert.match(steer1.message, /attempts\/improve-test-1\/cycle-01/);
   assert.match(steer2.message, new RegExp(`The diff this cycle would submit is ${String(n2)} characters, over the merge review's budget of 60000 characters`));
   assert.match(steer2.message, /attempts\/improve-test-1\/cycle-02/);
+});
+
+await check("check-map: a changed-path diff implies the host gate's checks, and verifyPlan splits them disjointly", () => {
+  const thirdParty = checksForChangedPaths([
+    "packages/extensions/third_party/subagent/SOURCE.md",
+    "packages/extensions/third_party/subagent/workflow-tools.ts",
+  ]);
+  for (const name of ["verify", "smoke:new-extension", "smoke:eval-footprint", "smoke:subagent-roles-isolation"]) {
+    assert.ok(thirdParty.includes(name), `${name} is planned for a third_party change`);
+  }
+
+  // Both source sides of the smoke:workflow-notify byte-copy assertion plan it, not just the
+  // third_party copy (tests/workflow-notify-smoke.ts).
+  const secretGuardSource = checksForChangedPaths(["packages/extensions/src/secret-guard/index.ts"]);
+  assert.ok(secretGuardSource.includes("smoke:workflow-notify"), "a changed copy-pair source plans smoke:workflow-notify");
+  assert.ok(secretGuardSource.includes("smoke:secret-guard"), "a changed secret-guard source plans smoke:secret-guard");
+  const commonSource = checksForChangedPaths(["packages/autonomy/lib/templates/common.ts"]);
+  assert.ok(commonSource.includes("smoke:workflow-notify"), "the other copy-pair source plans smoke:workflow-notify");
+
+  const docs = checksForChangedPaths(["docs/guide.md"]);
+  assert.ok(docs.includes("docs:check"), "docs changes need docs:check");
+  for (const name of ["smoke:eval-footprint", "smoke:subagent-roles-isolation", "smoke:new-extension", "smoke:workflow-notify"]) {
+    assert.ok(!docs.includes(name), `${name} is not planned for a docs-only change`);
+  }
+
+  // With a scripts record, a changed file a check runs directly plans that check: the table only
+  // matches source dirs, so a changed test file would otherwise go unplanned.
+  const fixtureScripts = { "smoke:foo": "node tests/foo-smoke.ts", "smoke:bar": "node tests/bar-smoke.ts" };
+  const foo = checksForChangedPaths(["tests/foo-smoke.ts"], fixtureScripts);
+  assert.ok(foo.includes("smoke:foo"), "a changed test file plans the check that runs it");
+  assert.ok(!foo.includes("smoke:bar"), "an unrelated check is not planned");
+  const fixturePlan = verifyPlan(["tests/foo-smoke.ts"], ["smoke:foo", "smoke:bar"], fixtureScripts);
+  assert.deepEqual(fixturePlan.run, ["smoke:foo"], "the check that runs the file is in run");
+  assert.deepEqual(fixturePlan.skipped, ["smoke:bar"], "the other check is disjointly in skipped");
+  assert.deepEqual([...fixturePlan.run, ...fixturePlan.skipped].sort(), ["smoke:bar", "smoke:foo"], "run and skipped cover the known checks");
+
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
+  const table: unknown = CHANGED_PATH_CHECKS;
+  assert.ok(Array.isArray(table), "the changed-path table is an array");
+  for (const rule of CHANGED_PATH_CHECKS) {
+    assert.equal(typeof rule.glob, "string", "every rule names a glob string");
+    const checks: unknown = rule.checks;
+    assert.ok(Array.isArray(checks), `checks of ${rule.glob} is an array`);
+    for (const name of rule.checks) assert.ok(Object.hasOwn(pkg.scripts, name), `${name} exists in package.json scripts`);
+  }
+  for (const name of ALWAYS_CHECKS) assert.ok(Object.hasOwn(pkg.scripts, name), `always check ${name} exists in package.json scripts`);
+
+  const known = [...new Set(CHANGED_PATH_CHECKS.flatMap((rule) => rule.checks))].sort();
+  const plan = verifyPlan(["docs/guide.md"], known);
+  assert.deepEqual([...plan.run, ...plan.skipped].sort(), known, "run and skipped cover every known check");
+  for (const name of plan.run) assert.ok(!plan.skipped.includes(name), `${name} is both run and skipped`);
+
+  const template = fs.readFileSync(path.join(REPO_ROOT, "packages", "autonomy", "prompts", "cycle.md"), "utf8");
+  assert.match(template, /--for-changed/, "cycle.md derives the plan from the diff");
+  assert.match(template, /RAN or SKIPPED/, "cycle.md records each check as RAN or SKIPPED");
 });
 
 cleanup();

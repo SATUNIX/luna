@@ -6,7 +6,7 @@ gets back, for audit, incident review and SIEM ingestion. It ships in every prof
 The firewall audit (`.pi/tool-firewall-audit.jsonl`) records *decisions*, and trace-ledger
 (`.pi/trace.jsonl`) records *facts* (tool, target, hashes). Both are redacted and short.
 trace-ledger redacts only the first 1 KiB of a target and stores 200 characters of it, so a
-200 KB command is logged in well under 200 ms and still reports its full length in
+200 KB command is logged in bounded, linear time and still reports its full length in
 `targetOriginalLength` (`tests/trace-ledger-bound-smoke.ts`).
 Capture records the *content*: the exact arguments and the exact result, including output
 the firewall blocked or the tool truncated.
@@ -96,8 +96,8 @@ review, and it makes the log itself sensitive:
 `redacted: true` on the record). In that mode, full-output attachments are skipped, because
 they cannot be scanned in place.
 
-The scan reads at most 4 MiB of string data per record, and every pattern runs in linear time:
-200 KB of adversarial text such as a repeated `x_token` scans in well under 200 ms
+The scan reads at most 4 MiB of string data per record, and every pattern is bounded, so
+200 KB of adversarial text such as a repeated `x_token` scans in bounded time
 (`tests/tool-capture-smoke.ts`). A `password_assignment` key may carry a prefix or suffix
 (`DB_PASSWORD=`, `MY_SECRET_KEY =`), and an unclosed quoted value is redacted to the end of
 the line (`tests/tool-capture-smoke.ts`). A record with string data past the 4 MiB budget

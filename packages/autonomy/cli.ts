@@ -41,6 +41,7 @@ import { type RunConfig, runtimeConfig } from "./lib/runcfg.ts";
 import { RunStore, listRuns } from "./lib/store.ts";
 import { describeTemplates, TEMPLATES } from "./lib/templates/index.ts";
 import { DockerRuntime } from "./lib/runtime.ts";
+import { type UnpublishedReport, unpublishedReport } from "./lib/unpublished.ts";
 import { array, boolean, isRecord, object, parseJson, parseJsonAs, string, unknownValue } from "../core/lib/guard.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -275,8 +276,30 @@ function rotationText(r: NonNullable<NonNullable<ReturnType<typeof generationsRe
   return `generation ${r.generation} ended at ${r.at}: ${box}; recovery ${r.action}; ${nb}${r.reset ? "; the next generation started from the accepted head" : ""}`;
 }
 
+/** The read-only unpublished-work report for one run (lib/unpublished.ts); never fetches. */
+function unpublishedFor(store: RunStore, cfg: RunConfig, state: RunState, deps: CliDeps): UnpublishedReport {
+  return unpublishedReport({ mirrorDir: store.p.mirror, branch: cfg.integrationBranch, remoteConfigured: cfg.integrationRemote !== null, logFile: store.p.log, publishError: state.selfImprove?.publishError ?? null, now: deps.now() });
+}
+
+/** The one shape of the `unpublished:` line, or null when there is nothing to flag. */
+const unpublishedText = (u: UnpublishedReport): string | null =>
+  u.state === "ahead" ? `unpublished: ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} — ${u.reason ?? "not published"}` : null;
+
+/** Every run under the state home with its unpublished-work report; a run whose state or contract cannot be read is skipped. */
+function unpublishedRuns(deps: CliDeps): Array<{ run: string; u: UnpublishedReport }> {
+  const rows: Array<{ run: string; u: UnpublishedReport }> = [];
+  for (const summary of listRuns(deps.home)) {
+    try {
+      const store = new RunStore(summary.run, { home: deps.home, now: deps.now });
+      const { state, cfg } = loadRun(store);
+      rows.push({ run: summary.run, u: unpublishedFor(store, cfg, state, deps) });
+    } catch { /* the view is read-only: a legacy or unreadable run is not reported here */ }
+  }
+  return rows;
+}
+
 function statusReport(store: RunStore, deps: CliDeps) {
-  const { state, contract } = loadRun(store);
+  const { state, contract, cfg } = loadRun(store);
   const lock = lockFor(store, deps).inspect();
   const latest = state.acceptance.latest;
   return {
@@ -291,6 +314,7 @@ function statusReport(store: RunStore, deps: CliDeps) {
     questions: state.pendingQuestions ?? [], ui: state.ui ?? null, reconfigurations: state.reconfigurations.length,
     generations: generationsReport(store, state, contract),
     selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null, publishBlocker: state.selfImprove.publishBlocker ?? null, unpublished: state.selfImprove.publishBlockedCycles ?? 0, history: state.selfImprove.history } : null,
+    unpublished: unpublishedFor(store, cfg, state, deps),
     history: state.history.slice(-8), boundaryDigest: state.boundaryDigest, authorisation: state.authorisation,
     paths: { root: store.p.root, log: store.p.log, results: store.p.results }, title: contract.objective.title,
   };
@@ -317,6 +341,8 @@ function statusText(s: StatusReport): string {
   }
   if (s.selfImprove) lines.push(`  cycles: ${s.selfImprove.cycles} done, ${s.selfImprove.merged} merged${s.selfImprove.current ? `, cycle ${s.selfImprove.current} in progress` : ""}`);
   if (s.selfImprove?.publishBlocker) lines.push(`  publication BLOCKED: ${s.selfImprove.publishBlocker} (${s.selfImprove.unpublished} merged cycle(s) not published; the leak scan refuses the commit above)`);
+  const unpublished = unpublishedText(s.unpublished);
+  if (unpublished) lines.push(`  ${unpublished}`);
   if (s.promotion.status !== "none") lines.push(`  promotion: ${s.promotion.status}${s.promotion.error ? ` (${s.promotion.error})` : ""}${s.promotion.status === "awaiting_approval" ? `; approve with: pi-autonomy promote --run ${s.run}` : ""}`);
   lines.push(`  logs: ${s.paths.log}`);
   return lines.join("\n");
@@ -544,6 +570,36 @@ const commands: Record<string, Command> = {
     }
     const report = statusReport(openStore(opts.run, deps), deps);
     return { data: report, text: statusText(report) };
+  },
+
+  /** Runs whose merged integration work has not reached its git remote (read-only; never fetches). */
+  async top(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run"], flags: ["json"] });
+    const rows = unpublishedRuns(deps).filter((row) => opts.run === undefined || row.run === opts.run);
+    const text = rows.length
+      ? rows.map(({ run, u }) => `${run}: ${unpublishedText(u) ?? "nothing unpublished"}`).join("\n")
+      : opts.run !== undefined ? `no run ${opts.run} under ${deps.home}` : `no runs under ${deps.home}`;
+    return { data: { runs: rows.map(({ run, u }) => ({ run, unpublished: u })) }, text };
+  },
+
+  /** Runs that have stayed unpublished for 30 minutes or more: they are waiting on an operator. */
+  async inbox(argv, deps) {
+    parseArgs(argv, { flags: ["json"] });
+    const now = deps.now().getTime();
+    const waiting = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead" && u.since !== null && now - Date.parse(u.since) >= 30 * 60 * 1000);
+    const text = waiting.length
+      ? waiting.map(({ run, u }) => `run ${run}: unpublished ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} (waiting on operator) — ${u.reason ?? "not published"}`).join("\n")
+      : "inbox empty: no run is waiting on you";
+    return { data: { waiting: waiting.map(({ run, u }) => ({ run, unpublished: u })) }, text };
+  },
+
+  /** Exit non-zero while any run has merged work that is not published. */
+  async doctor(argv, deps) {
+    parseArgs(argv, { flags: ["json"] });
+    const ahead = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead");
+    if (!ahead.length) return { data: { ok: true, ahead: [] }, text: "doctor: every run's merged work is published" };
+    const text = `doctor: ${ahead.length} run${ahead.length === 1 ? "" : "s"} with unpublished merged work:\n${ahead.map(({ run, u }) => `  run ${run}: ${unpublishedText(u) ?? "ahead"}`).join("\n")}\nPush the work (or recreate the run) before it is lost.`;
+    return { data: { ok: false, ahead: ahead.map(({ run, u }) => ({ run, unpublished: u })) }, text, exit: 3 };
   },
 
   async pause(argv, deps) {
@@ -774,6 +830,9 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
+  top [--run <id>]                       runs with merged work not yet published
+  inbox                                  runs waiting on you for over 30 minutes
+  doctor                                 exit non-zero when merged work is unpublished
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json
   board claim <id> --run <id> --by <agent>   atomically claim one board item

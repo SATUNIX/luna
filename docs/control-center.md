@@ -94,8 +94,10 @@ The header strip, page titles (including the text renderer's page titles) and th
 rows (Doctor, Security, Help) pass what they display through one display filter: pi-tui's terminal
 sequence strip first, then removal of every control and format code point (Unicode `Cc`, `Cf` and
 `Default_Ignorable_Code_Point`, which covers alternate-screen sequences, resets, C1 CSI and
-bidirectional overrides), then a trim, then a bound of 500 characters. The filter is local to the
-hub, so control-centre does not import another extension for it. Other rows are not sanitised
+bidirectional overrides), then a trim, then a bound of 500 characters. The Unicode class and the
+one-line helpers live once in `packages/core/shared/visible-text.ts`; control-centre uses its
+generated copy (`packages/extensions/src/control-center/shared/visible-text.ts`), so it does not
+import another extension for the filter. Other rows are not sanitised
 (`tests/control-center-smoke.ts`).
 
 ## Renderers by mode

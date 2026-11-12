@@ -281,3 +281,8 @@
     phase rows, then the agent window outside the selected agent, keeping the selected agent and its
     detail; the list view keeps a stable cursor and shrinks its window to the same budget, and
     `undefined` still renders every section (the text fallback). Commit `23725c2`.
+  - **Shared visible-text filter (2026-11-12):** `third_party/subagent/run-query.ts` uses the generated
+    `shared/visible-text.ts` copy of `packages/core/shared/visible-text.ts` (`oneVisibleLine`) in
+    `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
+    cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
+    (`tests/run-query-smoke.ts`).

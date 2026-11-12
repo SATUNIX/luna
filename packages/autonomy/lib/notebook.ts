@@ -17,7 +17,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord, parseJson } from "../../core/lib/guard.ts";
 import { redactSecrets as redactKitSecrets } from "../../core/shared/redact.ts";
+import { HIDDEN_CHARS, isHiddenChar, stripHiddenChars } from "../../core/shared/visible-text.ts";
 import { untrusted } from "./templates/common.ts";
+
+// The notebook's hidden-character filter is the kit's one shared filter
+// (packages/core/shared/visible-text.ts); the re-exports stay for existing importers and tests.
+export { HIDDEN_CHARS, isHiddenChar };
 
 export const NOTEBOOK_SCHEMA = 1;
 /** The default cap on one generation's worker-written notebook, in characters of its JSON form. */
@@ -116,18 +121,6 @@ const KNOWN_KEYS = new Set(["schema", "state", ...NOTEBOOK_LISTS]);
 
 const LIST_KEYS: ReadonlySet<string> = new Set(NOTEBOOK_LISTS);
 
-/**
- * Every Unicode control (Cc: C0, DEL, C1, which holds the single-byte CSI U+009B) and format (Cf:
- * zero-width, bidi embedding/override/isolate and marks, soft hyphen, BOM, U+180E, tag characters
- * U+E0000-U+E007F, ...) character, plus every Default_Ignorable_Code_Point (combining grapheme joiner,
- * variation selectors, Hangul fillers, ...), except tab and newline. Matched by Unicode property, not
- * by a list, so an invisible character cannot hide inside `<\u200b/untrusted>` or reorder text in a terminal.
- */
-export const HIDDEN_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
-/** True when `ch` (one code point) is a character stripControls removes. */
-export const isHiddenChar = (ch: string): boolean => ch !== "\n" && ch !== "\t" && /^[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]$/u.test(ch);
-const stripControls = (s: string): string => s.replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? ch : ""));
-
 /** A worker string cannot open or close the untrusted fence's tag: `<untrusted` becomes `(untrusted`. */
 const defuseFence = (s: string): string => s.replace(/<(\s*\/?\s*untrusted)/gi, "($1");
 
@@ -171,7 +164,7 @@ export function parseNotebook(input: unknown, { maxChars = NOTEBOOK_MAX_CHARS }:
     unknownKeys: [], unknownKeysMore: 0,
   };
   const scrub = (s: string, oneLine: boolean): string => {
-    const r = redactSecrets(defuseFence(stripControls(s)));
+    const r = redactSecrets(defuseFence(stripHiddenChars(s)));
     report.redactions += r.count;
     return (oneLine ? r.text.replace(/\s*\n\s*/g, " ") : r.text).trim();
   };

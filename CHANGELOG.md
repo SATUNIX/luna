@@ -10,6 +10,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
+  `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
+  the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy
+  notebook, so a fix to one had to be made in each. They now live once in
+  `packages/core/shared/visible-text.ts` (`HIDDEN_CHARS`, `isHiddenChar`, `stripHiddenChars`,
+  `oneVisibleLine`); the control centre, `autonomy-run` and subagent hold generated copies, and the
+  autonomy CLI, store and notebook import the source. Behaviour is unchanged: the notebook still
+  keeps tab and newline in `state`, the hub still strips pi-tui sequences first and caps at 500
+  code points, and the subagent query still caps at 400. Pinned by
+  `tests/control-center-smoke.ts` (bidi override, 600-code-point cap, one class literal) and
+  `tests/autonomy-notebook-smoke.ts`.
 - **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
   `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
   was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes

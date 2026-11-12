@@ -17,6 +17,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { initTheme, type Theme, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { fakePi, isolateKitEnv, loadExtension, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
@@ -33,8 +34,10 @@ import { PI_BUILTIN_SLASH_COMMANDS as CORE_BUILTINS } from "../packages/core/lib
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import { PROFILES_DIR } from "../packages/core/lib/paths.ts";
 import { PI_BUILTIN_SLASH_COMMANDS as HUB_BUILTINS } from "../packages/extensions/src/control-center/builtins.ts";
+import { HIDDEN_CHARS, isHiddenChar, oneVisibleLine, stripHiddenChars } from "../packages/core/shared/visible-text.ts";
 
 const restoreEnv = isolateKitEnv();
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 interface FakeCommand {
   description?: string;
@@ -472,6 +475,37 @@ tests.push([
     assert.ok(!pageText.includes("\u001b"), "the page title must not contain ESC");
     assert.ok(!pageText.includes("\u202e"), "the page title must not contain a bidi override");
     assert.ok(pageText.includes("(Parent)"), "the page parent keeps its visible text and loses control and bidi characters");
+  },
+]);
+
+tests.push([
+  "the one shared visible-text filter removes a bidi override and is written once",
+  async () => {
+    const bidi = "safe\u202eoverride";
+    assert.equal(stripHiddenChars(bidi), "safeoverride", "the shared filter removes a bidi override");
+    assert.ok(!oneVisibleLine(bidi).includes("\u202e"), "the one-line rule removes a bidi override");
+    assert.equal(oneVisibleLine("a\n\tb  c"), "a b c", "tab, newline and whitespace runs become one space");
+    assert.equal(oneVisibleLine("v".repeat(600)).length, 600, "the one-line rule itself does not cap");
+    assert.ok(isHiddenChar("\u202e") && !isHiddenChar("\n") && !isHiddenChar("\t") && !isHiddenChar("a"), "the predicate keeps tab, newline and ordinary text");
+
+    // One class literal in the repository: the source holds it once, the generated copies carry it,
+    // and no hand-written copy is left in the autonomy or extension trees.
+    const literal = "[\\p{Cf}\\p{Cc}\\p{Default_Ignorable_Code_Point}]";
+    const source = fs.readFileSync(path.join(ROOT, "packages/core/shared/visible-text.ts"), "utf8");
+    assert.equal(source.split(literal).length - 1, 1, "the source holds the class literal once");
+    assert.ok(HIDDEN_CHARS.test("\u202e"), "the exported class matches the bidi override");
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts")) files.push(full);
+      }
+    };
+    walk(path.join(ROOT, "packages/autonomy"));
+    walk(path.join(ROOT, "packages/extensions"));
+    const handwritten = files.filter((file) => !file.endsWith(path.join("shared", "visible-text.ts")) && fs.readFileSync(file, "utf8").includes(literal));
+    assert.deepEqual(handwritten, [], "no hand-written copy of the class remains outside the generated shared copies");
   },
 ]);
 

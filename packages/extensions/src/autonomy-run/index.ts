@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeRuntime } from "./shared/node-runtime.ts";
+import { oneVisibleLine } from "./shared/visible-text.ts";
 
 // Self-containment rule: only node:* builtins, the pi peer and the generated ./shared/ copy. The extension does not import the
 // autonomy package: it runs its operator CLI (packages/autonomy/cli.ts) as a child process and
@@ -189,7 +190,7 @@ export function generationStatusLine(report: unknown): string | undefined {
 }
 
 /** A worker string reaches the footer: collapse it to one visible line (no control or format characters). */
-const oneLine = (text: string): string => text.replace(/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
+const oneLine = oneVisibleLine;
 
 /**
  * The footer status line for the no-run `status --json` report: how many runs there are, how many

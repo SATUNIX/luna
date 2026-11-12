@@ -463,7 +463,7 @@ tests.push([
     assert.equal(rows[2]?.value?.length, 500, "a long value is capped at 500 characters");
     assert.equal(rows[2]?.value, "v".repeat(500), "the cap keeps the leading visible text");
 
-    const titled = { ...model, pages: model.pages.map((page, index) => index === 0 ? { ...page, title: "Bad\u001b[2J\u202ePage" } : page) };
+    const titled = { ...model, pages: model.pages.map((page, index) => index === 0 ? { ...page, title: "Bad\u001b[2J\u202ePage", parent: "P\u0007\u202earent" } : page) };
     assert.ok(titled.pages[0], "the fallback model defines a first page");
     const captured: string[] = [];
     await openHub(makeDeps({ model: titled, commands: [], ctx: makeCtx("print", process.cwd(), false), write: (text) => captured.push(text) }), titled.pages[0]?.id);
@@ -471,6 +471,7 @@ tests.push([
     assert.ok(pageText.includes("BadPage"), "the visible page title survives");
     assert.ok(!pageText.includes("\u001b"), "the page title must not contain ESC");
     assert.ok(!pageText.includes("\u202e"), "the page title must not contain a bidi override");
+    assert.ok(pageText.includes("(Parent)"), "the page parent keeps its visible text and loses control and bidi characters");
   },
 ]);
 

@@ -729,16 +729,17 @@ export interface TrunkAheadState {
 }
 
 /**
- * One line telling the owner the kit's trunk is ahead of the installed copy, or null when the
- * trunk is not ahead or no channel is known. The wording names the install's real channel so
- * `/update channel <name>` accepts it.
+ * One line telling the owner the kit's `main` branch is ahead of the installed copy, or null when
+ * it is not ahead or no channel is known. The line says `main`, not `trunk`: the opt-in `trunk`
+ * channel follows the integration branch, a different branch. The wording names the install's
+ * real channel so `/update channel <name>` accepts it.
  */
-/** The channel that follows the repository's branch (the trunk): `next` tracks `main` in git delivery. */
+/** The channel that follows `main` in git delivery (the name is historical; it is not the `trunk` channel). */
 export const TRUNK_CHANNEL = "next";
 
 export function trunkNotice(state: TrunkAheadState): string | null {
   if (!Number.isFinite(state.ahead) || state.ahead <= 0 || !state.channel) return null;
-  return `trunk is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
+  return `main is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
 }
 
 /** Anything the user can act on (pinned-only notices do not count). */

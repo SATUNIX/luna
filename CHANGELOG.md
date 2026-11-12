@@ -10,6 +10,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The update notice names the branch it counts against.** The line `trunk is N commits ahead — /update
+  channel next` counted commits on `main`, while the `trunk` channel follows `integration/luna`, so the
+  word meant two different branches. It now reads `main is N commits ahead — /update channel next`; the
+  suggested command is unchanged. Pinned by `tests/update-notice-smoke.ts` (`smoke:update-notice`).
+
 - **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
   `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
   behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to

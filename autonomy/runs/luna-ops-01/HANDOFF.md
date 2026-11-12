@@ -1,6 +1,31 @@
 # Run `luna-ops-01` — handoff
 
-## Cycle 07 close (current checkout)
+## Cycle 08 close (current checkout)
+
+State after cycle 08 on `pi/luna-ops-01`, base `e120c3fdb8b0`, verified head `bde95eeb`:
+
+- Cycle 08: **successful**, mode fix. DE-105 and DE-106 are already merged and were re-verified
+  without code change. Two evidenced ops defects were fixed. `b215c53d cf508ffa` add the missing
+  `check-all --for-changed` rows for `.github/zizmor.yml`, `.github/codeql/**`,
+  `.github/dependabot.yml` and `smoke:clean-install`, with test assertions and docs narrowed to
+  the files actually mapped (an earlier review of the first version returned FAIL for the
+  overclaim). `bde95eeb` makes `install.ts` reject an empty value for a value flag, so
+  `--channel ""` no longer builds `git:github.com/SATUNIX/luna@v` and `--git-ref ""` no longer
+  falls back to local mode.
+- Checks at head: `smoke:autonomy-selfimprove` 57/57, `smoke:check-all-npm`,
+  `smoke:workflow-policy` 5/48, `smoke:suppression-inventory` 2/9, `smoke:scan-coverage` 2/8,
+  `smoke:clean-install` 12/12, `smoke:install-marker`, `smoke:install-filter` 18/18,
+  `smoke:profile-transaction` 32/32, `smoke:docs`, `docs:check`, `test:typecheck`, `test:lint`,
+  and `verify` all pass. Never run `npm test` or `npm run check:all` here.
+- Diff excluding lockfiles and cycle/run records is 9650 characters, under the 30000 new-item
+  budget. No control path or `package.json` script changed; no new proposal needed.
+- Remaining: the DE-106 12-minute PR wall-time target is still unmeasured offline; host PR runs are
+  the measurement. The coverage-threshold policy question remains in
+  `autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md`. The independent reviewer's only
+  warning is that `smoke:install-filter` pins the delegated profile/settings helpers, not the entry
+  script itself; the mapping was kept because the plan names it and it is additive.
+
+## Cycle 07 close (historical)
 
 State after cycle 07 on `pi/luna-ops-01`, base `0b8b2c9bceb2`, head before records `69e6e586`:
 

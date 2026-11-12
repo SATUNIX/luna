@@ -190,18 +190,25 @@ export function pairPanel(offer: Json, width: number, termRows: number, style?: 
   ];
   const approve = (w: number) => wrap("You approve the phone here after it asks; the code alone links nothing.", w);
   const out: string[] = wrap(title, inner).map((line) => (style ? style.title(line) : line));
+  // Build each candidate body once and measure what it actually emits: the title is already in
+  // `out`, and the scan and approve sentences wrap to more than one line on narrower terminals.
+  const beside = inner >= qrWidth + GAP + DETAILS_MIN;
+  const besideW = Math.max(1, inner - qrWidth - GAP);
+  const besideBody = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", besideW), "", ...fields(besideW), "", ...approve(besideW)];
+  const besideHeight = Math.max(qr.length, besideBody.length);
+  const stackedBody = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", inner), "", ...qr, "", ...fields(inner), "", ...approve(inner)];
 
-  if (qr.length && inner >= qrWidth + GAP + DETAILS_MIN && qr.length + 1 <= room) {
-    const w = inner - qrWidth - GAP;
-    const details = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", w), "", ...fields(w), "", ...approve(w)];
+  if (qr.length && beside && out.length + besideHeight <= room) {
     const blank = " ".repeat(qrWidth);
-    for (let i = 0; i < Math.max(qr.length, details.length); i++) out.push(`${qr[i] ?? blank}${" ".repeat(GAP)}${details[i] ?? ""}`);
-  } else if (qr.length && inner >= qrWidth && qr.length + fields(inner).length + approve(inner).length + 4 <= room) {
-    out.push(...wrap("Scan this with the pi remote app, or add the host by hand in the app:", inner), "", ...qr, "", ...fields(inner), "", ...approve(inner));
+    for (let i = 0; i < besideHeight; i++) out.push(`${qr[i] ?? blank}${" ".repeat(GAP)}${besideBody[i] ?? ""}`);
+  } else if (qr.length && inner >= qrWidth && out.length + stackedBody.length <= room) {
+    out.push(...stackedBody);
   } else {
     // The rows it would take at this width: beside the details when they fit, otherwise above them.
-    const beside = inner >= qrWidth + GAP + DETAILS_MIN;
-    const rowsNeeded = RESERVED_ROWS + qr.length + (beside ? 1 : fields(Math.max(inner, qrWidth)).length + approve(Math.max(inner, qrWidth)).length + 4);
+    const bodyHeight = !qr.length
+      ? beside ? 1 : fields(Math.max(inner, qrWidth)).length + approve(Math.max(inner, qrWidth)).length + 4
+      : beside ? besideHeight : stackedBody.length;
+    const rowsNeeded = RESERVED_ROWS + out.length + bodyHeight;
     const note = `The QR code needs a terminal of at least ${qrWidth + 2} columns by ${rowsNeeded} rows (this one is ${width} by ${termRows || "?"}); enlarge it, or add the host by hand in the pi remote app:`;
     out.push(...wrap(note, inner).map((line) => (style ? style.dim(line) : line)), "", ...fields(inner), "", ...approve(inner));
   }

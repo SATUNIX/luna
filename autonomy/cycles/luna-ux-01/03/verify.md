@@ -1,58 +1,67 @@
 # Cycle 03 — Verify (run luna-ux-01, stream `ux`)
 
-- Base `876471a5bdbe`, HEAD `c231372`. Diff (lockfile and cycle/run records excluded): **31267
-  characters** — measured with
-  `git diff --no-renames 876471a5bdbe..HEAD -- . ":(exclude)package-lock.json" ":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c`.
-- Item 1 (V-01 re-land) is landed and reviewed; Item 2 (V-03) not taken (budget rule).
+- Base `dfb939dd9e0a`, HEAD `c12d02a`. Non-record diff (lockfile, cycle/run records excluded):
+  **16,272 characters**, measured with
+  `git diff --no-renames dfb939dd9e0a..HEAD -- . ":(exclude)package-lock.json" ":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c`.
+- Planned with `node packages/core/check-all.ts --for-changed="<8 changed paths>"`, which named the
+  ten checks below. Each planned check was run on the final tree.
 
 ## Checks run on the final tree
 
 | Check | Result |
 | --- | --- |
-| `npm run smoke:control-center` | PASS — `[control-center-smoke] all 28 checks passed`, including border/dim/restore and byte-identity cases |
-| `npm run smoke:workflow-panel` | PASS — `workflow-panel-smoke: 14 checks passed`, including the panel border and dim/restore |
-| `npm run test:typecheck` | PASS — exit 0 |
-| `npm run test:lint` | PASS — exit 0 |
-| `cmp src/control-center/overlay-frame.ts third_party/subagent/overlay-frame.ts` | PASS — `COPIES IDENTICAL` |
-| `npm run smoke:web-console` | PASS — `web-console smoke: OK` (single run; the recorded cycle-02 failure does not reproduce) |
-| `git diff 876471a5bdbe..HEAD --name-only` | PASS — no `packages/web-ui/`, `tool-firewall/`, `package.json` or lockfile path |
+| `npm run -s docs:check` | RAN, PASS — `[docs-nav-check] OK: nav entries exist and internal links resolve.` |
+| `npm run -s smoke:docs` | RAN, PASS — `[docs-smoke] OK: 14 documented commands validated, 62 relative links resolved; ... 97 shipped pages name no removed delegation surface.` |
+| `npm run -s smoke:eval-footprint` | RAN, PASS — `[eval-footprint-smoke] all 13 checks passed` |
+| `npm run -s smoke:new-extension` | RAN, PASS after the notices regeneration — `new-extension smoke: OK` (first run failed: `FAIL: THIRD_PARTY_NOTICES.md is stale — run 'node packages/core/gen-notices.ts'`, fixed in the same commit by running that generator) |
+| `npm run -s smoke:subagent-roles-isolation` | RAN, PASS — `[subagent-roles-isolation-smoke] all 7 checks passed` |
+| `npm run -s smoke:tui-layout` | RAN, PASS — `tui-layout-smoke: 5 checks passed`, including `remote pairing panel: a shown QR code fits the reserved rows and the note's minimum is honest` |
+| `npm run -s smoke:workflow-notify` | RAN, PASS — `workflow-notify-smoke: 10 checks passed` |
+| `npm run -s test:lint` | RAN, PASS — exit 0 |
+| `npm run -s test:typecheck` | RAN, PASS — exit 0 |
+| `npm run -s verify` | RAN, PASS after the notices regeneration — `[verify] All checks passed.` |
+| `npm run -s smoke:remote-control` | RAN, PASS — `remote-control extension smoke: OK (16 checks)` (the changed module's own smoke) |
+| `/opt/autonomy/gate.sh` | SKIPPED locally by design — it runs the full `check:all` suite, which the branch must not run; the host gate runs it on the accepted head |
+| `npm test`, `npm run check:all` | NOT RUN — host-only by cycle instruction |
 
-Never ran `npm test` or `npm run check:all` (host gate owns the full suite).
+## Failing-first evidence
+
+- **V-09 clause.** Before the `SOURCE.md` edit, the new docs-smoke case failed with
+  `AssertionError [ERR_ASSERTION]: SOURCE.md \`- Changes:\` needs a 2026-11-12 entry: files:
+  \`wf-panel.ts\` (commit 23725c2), describing the optional \`maxLines\` height budget`.
+  After the entry and the notices regeneration it prints the `[docs-smoke] OK: ...` line above. The
+  independent reviewer also inspected `HEAD~1:packages/extensions/third_party/subagent/SOURCE.md`
+  and confirmed it had no 2026-11-12 entry and no `23725c2`, so the case genuinely fails without the
+  change.
+- **`pairPanel` row budget.** The new grid case in `tests/tui-layout-smoke.ts` failed on the base
+  source with `AssertionError: pair panel 55: the note's 46 rows fit 38 lines` (run from a
+  `git archive dfb939dd9e0a` tree under `/tmp` with the new test overlaid, so the worktree was not
+  touched); with the fix it passes and the four existing tui-layout cases still pass.
 
 ## Independent review
 
-A `reviewer` subagent that did not write the change (workflow run
-`2026-11-11T06-01-37-764Z-plan-dedf`, `step-2`, `PASS`) reviewed `git diff 876471a5bdbe..HEAD`
-against the charter and `03/plan.md`. It confirmed the re-land matches the reviewed commits exactly
-(`git diff 72d1f4c ddf1c39 -- . ':!autonomy'` and `git diff 404b13a c231372 -- . ':!autonomy'` are
-empty), the two copies are byte-identical, both call sites restore on `done`/`dispose`, the diff
-touches no control path, and documented behaviour is updated. No must-fix and no warning.
+- `pairPanel` change: `reviewer` step of workflow run
+  `2026-11-12T13-05-42-793Z-plan-367e`, `step-1` → `VERDICT: PASS`. It confirmed beside/stacked/
+  details-only all count emitted rows, already-fitting beside output is byte-identical,
+  `rowsNeeded = RESERVED + out.length + bodyHeight` is honest, and `termRows = 0`, tiny widths and an
+  absent QR behave as before; it recorded two non-blocking warnings (the beside fallback is not
+  exercised by the grid's heights, and the note's row figure is measured at the current inner width).
+  Its only must-fix list is empty. Docs matched `RESERVED_ROWS = 10`.
+- V-09 clause: `reviewer` step of workflow run `2026-11-12T13-07-47-531Z-plan-aaf3`, `step-2` →
+  `VERDICT: PASS` after one gate retry. It verified the entry is factually correct against
+  `wf-panel.ts` and `23725c2`, the case isolates the dated entry rather than matching the whole file,
+  the pre-edit file would fail it, and the commit touches only `SOURCE.md`, `docs-smoke.ts` and the
+  generated notices.
 
-An earlier `scout` (run `2026-11-11T05-57-28-261Z-scout-56a3f9`) independently re-read the module
-and tests, ran the smokes on a worktree of the branch tip, and confirmed `git apply --check` for
-`72d1f4c`+`404b13a` onto the base is clean.
-
-## What the change proves
-
-- Both kit TUI overlays render inside a rounded box drawn in `theme.fg("border", …)`; the transcript
-  behind an open overlay comes back with the `dim` colour and reverts after `done` and `dispose`.
-- Widths 40 and 12 keep every visible line within the width; width 8 does not throw; the two
-  `overlay-frame.ts` copies are byte-identical.
-- The change is confined to the UX stream: `hub.ts`, `wf-panel.ts`, the two new `overlay-frame.ts`
-  files, the two smokes, `docs/control-center.md` and `CHANGELOG.md`.
-
-## Acceptance-failure attribution
-
-The cycle-02 red run (`check-all`, `check-all:smoke:web-console` exit 1) is not attributable to this
-change: the diff touches no `packages/web-ui/` code or `package.json` scripts, and the smoke passes
-standalone and from the branch worktree. Two concurrent `smoke:web-console` runs reproduce the same
-`PI_CONSOLE_TOKEN_FILE … ENOENT` failure on the shared repo-relative `packages/web-ui/.runtime`
-path, so the smoke is runner-order sensitive; proposed in
-`autonomy/proposals/luna-ux-01-03-web-console-smoke-shared-runtime.md`.
+No change in this cycle touches a control path, a `package.json` script, `package-lock.json`,
+`packages/web-ui/`, Android, `autonomy/CHARTER.md` or `autonomy/BACKLOG.md`:
+`git diff --name-only dfb939dd9e0a..HEAD` lists only the remote-control module, its doc, the two
+tests, `SOURCE.md`, `THIRD_PARTY_NOTICES.md` and cycle/proposal records.
 
 ## Left for next cycle
 
-- **V-03** (fold `/settings` into the `/` menu; rename `kit` → `menu`): fully planned in
-  `02/plan.md` and validated in `02/review.md`; not started because this cycle's diff already
-  passed the 30000-character stop threshold.
-- Latent ≤3-character hidden-command reveal gap (`command-menu.ts:184`); V-03 removes it.
+- `wf-panel.ts` footer/view divergence after `RunRegistry.prune()` — proposal
+  `autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md` (needs its own failing test
+  on the prune path).
+- The reviewer's two warnings on `pairPanel`: add a wide-but-short beside-fallback case, and word the
+  details-only note so its row figure is not read as sufficient at a different width.

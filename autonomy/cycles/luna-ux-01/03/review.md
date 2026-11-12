@@ -1,73 +1,76 @@
 # Cycle 03 — Review (run luna-ux-01, stream `ux`)
 
-- Branch `pi/luna-ux-01`, cycle base `876471a5bdbed66ce1497da2883bf24b7a08a21c` (head of `stream/ux`).
+- Branch `pi/luna-ux-01`, cycle base `dfb939dd9e0a` (head of `stream/ux`).
 - Stream area: TUI overlays, the `/` menu, launch screen, animation and polish (V-01, V-02, V-03,
-  V-05, V-09).
-- Assigned board items: **V-01** (overlay readability) and **V-03** (fold `/settings` into the
-  `/` menu, rename `kit` → `menu`). There is no board file; the items are as given in the cycle prompt.
-- Previous cycle 02 is not on this branch. Its commits, report and handoff live on
-  `origin/attempts/luna-ux-01/cycle-02`; cycle 02 was rejected only because the host acceptance run
-  went red (`check-all`, `check-all:smoke:web-console` exit 1).
+  V-05, V-09). Assigned board items this cycle: **DE-101** (P1) and **V-09** (P3).
+- Mode: **fix**. Both assigned items were checked against the code before anything was changed.
+- The steward's mid-cycle steer is authoritative for this cycle: DE-101 is on the board's `review`
+  column (do not redo it), and V-09's acceptance is narrowed to one clause — a dated vendored-docs
+  entry plus the test that pins it. That clause is what this cycle implemented.
 
 ## Precedence
 
-No red gate on this branch (it is the head of `stream/ux`) and no upstream conflict. Board item V-01
-is carried, reviewed and green on `origin/attempts/luna-ux-01/cycle-02`, so it lands first.
+No red gate and no upstream conflict at the base. Board items come first: DE-101 and the V-09 clause
+were checked against the tree, not against earlier cycle reports.
 
-## Method
+## DE-101 — already merged, on the board's `review` column (not redone)
 
-Direct reading of the overlaid change on the attempts branch, plus one `scout` (the E3 tier allows
-one; the second parallel scout was refused by the host). The scout re-read the module, both call
-sites and the tests, ran the targeted smokes on a worktree of the branch tip, and checked whether the
-carried change can cause the recorded acceptance failure. Docs and the attempts-branch report were
-treated as hypotheses and checked against the code.
+The six landing-review findings are in the base and pinned by tests (cycle 01 commits `c56acda`,
+`922e732`, `834963d`, `c638796` are ancestors of it):
 
-## Confirmed — V-01 carry-over is sound (P1, rank 5)
+1. `packages/extensions/src/control-center/hub.ts:173-190` — `HIDDEN_DISPLAY_CHARS`
+   (`\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}`, the same class as `HIDDEN_CHARS` in
+   `packages/autonomy/lib/notebook.ts:126`) applied after `stripTerminalSequences`, bounded by
+   `MAX_DISPLAY_LENGTH = 500`; cases in `tests/control-center-smoke.ts`.
+2. `packages/autonomy/lib/inbox.ts:56` — `isIsoTimestamp()` shared with `lib/board.ts`.
+3. `packages/autonomy/cli.ts:724` — `--answer` on a settled card is refused, naming the card.
+4. `packages/autonomy/cli.ts:721,733-737` — the listing collapses card text with `HIDDEN_CHARS`.
+5. `packages/autonomy/lib/inbox.ts:69-70` — `answer`/`outcome` refused in an uploaded file.
+6. `packages/extensions/src/remote-control/index.ts:133-168` — a wide grapheme moves to the next
+   line instead of dropping the rest of the word.
 
-Evidence (scout run `2026-11-11T05-57-28-261Z-scout-56a3f9`):
+`smoke:control-center` (45/45) and `smoke:autonomy-inbox` (7/7) pass at the base, so no repair was
+needed and none was attempted.
 
-- `72d1f4c` + `404b13a` apply cleanly onto base `876471a` (`git apply --check` exit 0).
-- The two `overlay-frame.ts` copies are byte-identical (sha256 `d41d3aa9…ec8e`). The frame pads every
-  line to exactly `width`; widths below 10 return the input unchanged; image lines bypass dim; the
-  `compositeOverlays` patch is `Symbol.for`-guarded, idempotent and restored on `done` and `dispose`.
-- `tests/control-center-smoke.ts:556-613` asserts border colour, widths 40/12/8, dim-while-open and
-  restore after `done` and `dispose`; `tests/workflow-panel-smoke.ts:460-505` asserts the panel's
-  border and dim/restore. `smoke:control-center` (28 checks) and `smoke:workflow-panel` (14 checks)
-  pass on the branch tip, as do `test:typecheck` and `test:lint`.
+## V-09 — the one assigned clause was missing, and is now done
 
-## The recorded acceptance failure is not attributable to V-01
+The steward narrowed V-09 to a single clause: a dated 2026-11-12 entry in
+`packages/extensions/third_party/subagent/SOURCE.md` naming `third_party/subagent/wf-panel.ts` and
+the `23725c2` change, plus a `tests/docs-smoke.ts` case that fails without it. The width work the
+older V-09 text described is already merged (`tests/tui-layout-smoke.ts`), so it was not
+re-implemented and no widget, animation or renderer was touched.
 
-`git diff --name-only 876471a..404b13a` touches no `packages/web-ui/`, no `package.json` `scripts`
-and no lockfile. `smoke:web-console` passes from the branch worktree. That smoke is already a
-`SERIAL` check (`packages/core/check-all.ts:70-76`) that exclusively creates the repo-relative
-`packages/web-ui/.runtime/console.token` and starts a detached server; a stale runtime dir or port in
-the gate environment explains a one-off exit 1. Independently reproduced: two concurrent
-`smoke:web-console` runs always fail with `PI_CONSOLE_TOKEN_FILE could not be read (ENOENT)` because
-they share that path, while a single run passes. Recorded as a proposal, not fixed here (outside the
-UX stream).
+What the review found: `SOURCE.md`'s `- Changes:` log stops at **2026-11-11**; `git log -S maxLines`
+places the panel's height budget in `23725c2` ("feat(ux): land the ux stream's accepted cycles 14 to
+34"), and neither that sha nor `wf-panel.ts`'s `maxLines` appears anywhere in `SOURCE.md`. Nothing in
+the test set required the entry, so the vendored file's provenance could silently drift.
 
-## Confirmed — V-03 (P1, rank 4), planned but not taken
+## Defect found in-stream (fixed, precedence 4)
 
-The cycle-02 review pinned V-03 against the code (`02/review.md`): `index.ts:171-189` registers
-`kit`/`helpers` and `alt+m` sends `/kit`; `command-menu.ts:26,29-30,192-193` carry the `kit` menu
-strings; `hub.ts:183` help row; `custom-footer/widgets.ts:74` tip; `settings` is a pi built-in and
-must be a `prefill` row, never a registered command. That review is unchanged code, so its line
-references still hold.
+`pairPanel` (`packages/extensions/src/remote-control/index.ts:177-207`) computes
+`room = termRows - RESERVED_ROWS` (10) but its fit checks undercount the height it emits: beside, it
+uses `qr.length + 1` and ignores the title lines already in `out` and the details column; stacked, it
+ignores `out` and assumes the scan/approve sentences take one line although `wrap()` splits them on
+narrower terminals. Measured with the 49-module `pirc://pair` QR the host actually generates:
+`(70,46) → 38 lines for 36 rows`, `(80,45) → 36 for 35`, `(60,46) → 38 for 36`; a sweep of widths
+20-200 × heights 10-100 found 71 over-budget QR-shown cases. pi clips the **top** of an over-tall
+widget, so the title and the start of the scan sentence scroll away, and the details-only note
+understated the rows it needs (says 46 where 48 are required).
 
 ## Checked and set aside
 
-- The ≤3-character hidden-command reveal gap (`command-menu.ts:184`): unreachable today; already
-  proposed on the attempts branch. V-03 removes the last instance.
-- Idle-cat blink (`cat.ts:36` never rendered, docs say it does not happen) and the human-console
-  multi-card focus theft: both need an operator intent decision and are already proposed. Not taken.
-- No other runtime-reachable defect was found in the stream area beyond the board items.
+- `wf-panel.ts` `footer()` keys off `this.view` while `render()` falls back to the list after
+  `RunRegistry.prune()` drops the open run: the list body is shown under the run-view legend and the
+  first `down` is swallowed. Real, but outside the assigned clause → proposal
+  `autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`, not fixed here.
+- `docs/remote-control.md` said the QR is "about 25 rows tall and 50 columns wide"; the real link
+  yields 49 modules (27 text rows, 53 columns). Corrected in the same docs commit as the row note.
+- Already merged and verified, not redone: overlay frame and transcript dim, hub focus clipping,
+  `hubKey` validation, workflow panel height budget, `/settings` folded into `/menu`, launch screen
+  `mode`/`hasUI` (cycle 02's claimed fix is in the base at `control-center/index.ts:103,129-132`).
 
-## Items chosen for this cycle
+## Records replaced
 
-1. **V-01** — re-land the reviewed overlay frame and transcript dim (board item 1).
-2. **V-03** — **not taken**: re-landing V-01 alone is 31267 characters (records excluded), over the
-   cycle's 30000-character "stop taking new items" threshold, so V-03 starts cycle 04 with the plan
-   in `02/plan.md`.
-
-This is fix mode: the cycle's work is re-landing carried, rejected work and confirming the
-acceptance story, not a new improvement.
+The `03/review.md`, `03/plan.md`, `03/report.md` and `03/verify.md` present at the cycle base
+described an earlier attempt (base `876471a5`, V-01/V-03). They are replaced by this cycle's records;
+the same replacement updates the `luna-ux-01/03` journal line to what this cycle actually did.

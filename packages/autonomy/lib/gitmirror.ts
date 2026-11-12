@@ -16,6 +16,7 @@
 //   refs/agent/head            the agent's branch as last fetched (may have diverged)
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ensureDirSafe, writeFileSafe } from "../../core/shared/safe-fs.ts";
 import { bookkeepingPaths } from "./bookkeeping.ts";
@@ -165,6 +166,68 @@ export function syncIntegration(g: HostGit, cfg: MirrorConfig): SyncResult {
   if (local === remote) return { state: "same", head: local };
   if (isAncestor(g, remote, local)) return { state: "ahead", head: local };
   return { state: "diverged", head: local, remote };
+}
+
+/**
+ * The outcome of reconciling a diverged integration branch: the local cycle commits rebased onto
+ * the fetched destination, or a conflict after the rebase was aborted (the integration ref is
+ * unchanged). `mapping` pairs first-parent old commits with their rewritten equivalents so
+ * recorded cycle heads and start shas can follow the rebase.
+ */
+export type ReconcileResult =
+  | { readonly state: "reconciled"; readonly head: string; readonly from: string; readonly remote: string; readonly commits: number; readonly mapping: Array<{ readonly from: string; readonly to: string }> }
+  | { readonly state: "conflict"; readonly head: string; readonly remote: string };
+
+/**
+ * Reconcile a diverged integration branch without a new network call: the sync already fetched
+ * the destination into refs/integration/remote. The local cycle commits are rebased onto the
+ * destination in a temporary host worktree (the run identity, no hooks, no signing); a successful
+ * rebase moves the integration ref. Tags are never moved: they keep naming the commits that were
+ * originally published, and publication stays fast-forward only. A conflict aborts the rebase and
+ * leaves the integration ref alone.
+ */
+export function reconcileIntegration(g: HostGit, cfg: MirrorConfig, divergence: { readonly head: string; readonly remote: string }): ReconcileResult {
+  const ref = `refs/heads/${cfg.integrationBranch}`;
+  const oldHead = divergence.head;
+  const remote = divergence.remote;
+  const mergeBase = g(["merge-base", oldHead, remote], { allowFail: true });
+  if (!mergeBase) return { state: "conflict", head: oldHead, remote };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-reconcile-"));
+  const wt = path.join(tmp, "wt");
+  try {
+    g(["worktree", "add", "--quiet", "--detach", wt, oldHead]);
+    const wg = (args: readonly string[], allowFail = false): string | null => {
+      const r = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...identity(cfg), "-C", wt, ...args], { encoding: "utf8" });
+      if (r.error || r.status !== 0) {
+        if (allowFail) return null;
+        throw new Error(`git ${args[0] ?? ""} (reconcile) failed: ${r.error?.message ?? r.stderr.trim().split("\n").slice(-3).join(" | ")}`);
+      }
+      return r.stdout.trim();
+    };
+    if (wg(["rebase", "--rebase-merges", "--onto", remote, mergeBase, oldHead], true) === null) {
+      wg(["rebase", "--abort"], true);
+      return { state: "conflict", head: oldHead, remote };
+    }
+    const newHead = wg(["rev-parse", "HEAD"]);
+    if (!newHead) return { state: "conflict", head: oldHead, remote };
+    g(["update-ref", ref, newHead, oldHead]);
+    const oldCommits = g(["rev-list", "--reverse", `${mergeBase}..${oldHead}`]).split("\n").filter(Boolean);
+    const oldChain = g(["rev-list", "--first-parent", "--reverse", `${mergeBase}..${oldHead}`]).split("\n").filter(Boolean);
+    const newChain = g(["rev-list", "--first-parent", "--reverse", `${remote}..${newHead}`]).split("\n").filter(Boolean);
+    // Recorded cycle heads and start shas sit on the first-parent chain; the full rev-list order
+    // interleaves worker commits and would pair them with the wrong rewritten commit. Only equal
+    // chains are paired position by position; the current head is always paired with the rebased
+    // head so the run can continue even when an earlier pairing is ambiguous.
+    const mapping: Array<{ from: string; to: string }> = oldChain.length === newChain.length
+      ? oldChain.flatMap((from, i) => { const to = newChain[i]; return to === undefined ? [] : [{ from, to }]; })
+      : [];
+    if (!mapping.some(({ from }) => from === oldHead)) mapping.push({ from: oldHead, to: newHead });
+    return { state: "reconciled", head: newHead, from: oldHead, remote, commits: oldCommits.length, mapping };
+  } finally {
+    g(["worktree", "remove", "--force", wt], { allowFail: true });
+    g(["worktree", "prune"], { allowFail: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /** Fill a seed template's {{NAME}} placeholders; unknown names stay as written. */

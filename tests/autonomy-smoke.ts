@@ -595,6 +595,109 @@ await check("git mirror: integration branch seeded and continued, fast-forward o
   }
 });
 
+await check("git mirror: reconcile a diverged integration branch by rebasing local cycle commits onto the destination", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-diverged-"));
+  try {
+    const sh = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    const origin = path.join(tmp, "origin.git");
+    const dev = path.join(tmp, "dev");
+    sh(tmp, "init", "--quiet", "--bare", origin);
+    sh(tmp, "init", "--quiet", dev);
+    fs.writeFileSync(path.join(dev, "README.md"), "hi\n");
+    sh(dev, "add", "."); sh(dev, "commit", "--quiet", "-m", "base");
+    sh(dev, "push", "--quiet", origin, "HEAD:refs/heads/main");
+    const c = resolveConfig({ run: "reconcile-test", gitRemote: origin });
+    const seedDir = path.join(tmp, "seed"); fs.mkdirSync(seedDir);
+    fs.writeFileSync(path.join(seedDir, "CHARTER.md"), "{{BRANCH}}\n");
+    const g = gm.initMirror(path.join(tmp, "mirror.git"));
+    gm.fetchBase(g, c);
+    const seed = gm.seedBranch(g, c, { seedDir, tmpDir: tmp, vars: { BRANCH: c.integrationBranch }, parent: undefined });
+    gm.startCycleBranch(g, c);
+    gm.publish(g, c, null);
+    // The run's own cycle commit lives only in the host mirror.
+    const local = path.join(tmp, "local");
+    sh(tmp, "clone", "--quiet", "--branch", c.integrationBranch, origin, local);
+    fs.writeFileSync(path.join(local, "LOCAL.md"), "local\n");
+    sh(local, "add", "."); sh(local, "commit", "--quiet", "-m", "local cycle work");
+    const localHead = sh(local, "rev-parse", "HEAD");
+    sh(local, "push", "--quiet", path.join(tmp, "mirror.git"), `HEAD:refs/heads/${c.integrationBranch}`);
+    assert.equal(gm.tag(g, c, "cycle-01", localHead), true);
+    // The destination moves from the seed, so neither side is an ancestor of the other.
+    sh(dev, "fetch", "--quiet", origin, c.integrationBranch);
+    sh(dev, "checkout", "--quiet", "-B", "dest", seed);
+    fs.writeFileSync(path.join(dev, "DEST.md"), "dest\n");
+    sh(dev, "add", "."); sh(dev, "commit", "--quiet", "-m", "destination moved");
+    const dest = sh(dev, "rev-parse", "HEAD");
+    sh(dev, "push", "--quiet", "--force", origin, `HEAD:refs/heads/${c.integrationBranch}`);
+    const sync = gm.syncIntegration(g, c);
+    assert.equal(sync.state, "diverged");
+    if (sync.state !== "diverged") assert.fail("the fixture must diverge");
+    const rec = gm.reconcileIntegration(g, c, sync);
+    assert.equal(rec.state, "reconciled");
+    if (rec.state !== "reconciled") assert.fail("the non-conflicting rebase reconciles");
+    assert.equal(rec.from, localHead);
+    assert.equal(rec.remote, dest);
+    assert.equal(g(["merge-base", "--is-ancestor", dest, rec.head], { allowFail: true }), "", "the destination is an ancestor of the reconciled head");
+    assert.equal(gm.fileAt(g, rec.head, "LOCAL.md"), "local", "the local cycle work is intact");
+    assert.equal(gm.fileAt(g, rec.head, "DEST.md"), "dest");
+    assert.equal(g(["rev-parse", `refs/heads/${c.integrationBranch}`]), rec.head, "the integration ref is the reconciled head");
+    assert.deepEqual(rec.mapping.find((m) => m.from === localHead), { from: localHead, to: rec.head }, "the old local head maps to the reconciled head");
+    assert.equal(g(["rev-parse", `refs/tags/${c.tagPrefix}cycle-01`]), localHead, "tags never move: the cycle tag still names the original local head");
+    assert.equal(gm.publish(g, c, null).pushed, true);
+    assert.equal(spawnSync("git", ["--git-dir", origin, "rev-parse", "refs/heads/" + c.integrationBranch], { encoding: "utf8" }).stdout.trim(), rec.head, "the destination receives the reconciled head");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+await check("git mirror: a conflicting reconciliation leaves the integration ref unchanged and cleans its worktree", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-diverged-"));
+  try {
+    const sh = (cwd: string, ...args: string[]): string => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    const origin = path.join(tmp, "origin.git");
+    const dev = path.join(tmp, "dev");
+    sh(tmp, "init", "--quiet", "--bare", origin);
+    sh(tmp, "init", "--quiet", dev);
+    fs.writeFileSync(path.join(dev, "README.md"), "hi\n");
+    sh(dev, "add", "."); sh(dev, "commit", "--quiet", "-m", "base");
+    sh(dev, "push", "--quiet", origin, "HEAD:refs/heads/main");
+    const c = resolveConfig({ run: "reconcile-conflict", gitRemote: origin });
+    const seedDir = path.join(tmp, "seed"); fs.mkdirSync(seedDir);
+    fs.writeFileSync(path.join(seedDir, "CHARTER.md"), "{{BRANCH}}\n");
+    const g = gm.initMirror(path.join(tmp, "mirror.git"));
+    gm.fetchBase(g, c);
+    const seed = gm.seedBranch(g, c, { seedDir, tmpDir: tmp, vars: { BRANCH: c.integrationBranch }, parent: undefined });
+    gm.startCycleBranch(g, c);
+    gm.publish(g, c, null);
+    const local = path.join(tmp, "local");
+    sh(tmp, "clone", "--quiet", "--branch", c.integrationBranch, origin, local);
+    fs.writeFileSync(path.join(local, "README.md"), "local\n");
+    sh(local, "commit", "--quiet", "-am", "local cycle work");
+    const localHead = sh(local, "rev-parse", "HEAD");
+    sh(local, "push", "--quiet", path.join(tmp, "mirror.git"), `HEAD:refs/heads/${c.integrationBranch}`);
+    sh(dev, "fetch", "--quiet", origin, c.integrationBranch);
+    sh(dev, "checkout", "--quiet", "-B", "dest", seed);
+    fs.writeFileSync(path.join(dev, "README.md"), "destination\n");
+    sh(dev, "commit", "--quiet", "-am", "destination moved");
+    const dest = sh(dev, "rev-parse", "HEAD");
+    sh(dev, "push", "--quiet", "--force", origin, `HEAD:refs/heads/${c.integrationBranch}`);
+    const sync = gm.syncIntegration(g, c);
+    assert.equal(sync.state, "diverged");
+    if (sync.state !== "diverged") assert.fail("the fixture must diverge");
+    const rec = gm.reconcileIntegration(g, c, sync);
+    assert.deepEqual(rec, { state: "conflict", head: localHead, remote: dest });
+    assert.equal(g(["rev-parse", `refs/heads/${c.integrationBranch}`]), localHead, "the integration ref is unchanged");
+    assert.equal(g(["worktree", "list"]).split("\n").filter(Boolean).length, 1, "the temporary worktree was removed");
+    assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("autonomy-reconcile-")), [], "the temporary directory was removed");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 await check("merge review: only MERGE or REJECT with a reason; retried, then failures reject", async () => {
   assert.deepEqual(parseReview('```json\n{"verdict":"MERGE","reason":"tested fix","concerns":["minor",3]}\n```'), { verdict: "MERGE", reason: "tested fix", concerns: ["minor"] });
   assert.throws(() => parseReview('{"verdict":"APPROVE","reason":"x"}'), /unknown verdict/);

@@ -1010,8 +1010,20 @@ C-34 in [Security controls](security-controls.md).
 - **An allowlisted egress host is an opaque channel.** The egress proxy checks the destination of a
   `CONNECT` tunnel, never what passes through it, so anything the worker can read can be sent to any
   host in `permissions.network.egress`.
-- **One run per integration branch at a time.** Two runs merging into the same branch would diverge;
-  a diverged branch stops the run as `integration_diverged`.
+- **One run per integration branch at a time.** Two runs merging into the same branch diverge.
+  When the published integration branch has moved under a run, the next cycle reconciles it
+  mechanically: the sync's fetched destination is the base, and the run's local cycle commits are
+  rebased with `git rebase --rebase-merges --onto <destination> <merge-base> <local>` in a
+  temporary host worktree. The recorded cycle heads and start shas are rewritten through the
+  first-parent mapping of the old commits to their rebased equivalents, and the same cycle continues
+  from the reconciled head. Tags are never moved: each run tag keeps naming the commit that was
+  originally published, even when its commit is rewritten locally. Publication stays fast-forward
+  only, so the reconciled head is a descendant of the destination and the untouched tags still
+  push. If the rebase conflicts, the run parks `blocked` on an `integration-diverged` question (with
+  the branch and both short shas) instead of failing; reconcile by hand, then answer to resume or
+  stop the run. Reconciliation makes no network call beyond the sync's fetch. Pinned by
+  `tests/autonomy-smoke.ts` (`git mirror: reconcile a diverged integration branch...`) and
+  `tests/autonomy-selfimprove-smoke.ts` (`PG-67: ...` reconciliation cases).
 - **Dependencies are prebaked** from the base ref's lockfile. A change to dependencies fails the
   offline install; propose dependency changes rather than making them in a run.
 - **Model specifications.** pi's catalogue may not know a new model id; the supervisor fetches limits

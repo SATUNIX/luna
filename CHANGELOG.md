@@ -109,6 +109,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **The container MCP servers no longer pin a vulnerable `@hono/node-server`.** The `governance` and
+  `memory-mcp` servers under `packages/container/mcp-servers/` locked `@hono/node-server` 2.1.5, a
+  transitive dependency with two medium advisories (GHSA-jpvv-r467-5p4w, GHSA-qv5m-9pm6-hqp3; fixed in
+  2.1.6). Both lockfiles now resolve 2.1.8 within the existing range; no direct dependency changed. The
+  `osv-scanner` CI job pins this.
+
 - **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
   the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave
   `render()` showing the list body while `footer()` still showed the run legend and the first `↓`

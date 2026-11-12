@@ -1,5 +1,25 @@
 # Run `luna-ops-01` — handoff
 
+## Cycle 05 close (current checkout)
+
+State after cycle 05 on `pi/luna-ops-01` at base `4da2716e9c9f`:
+
+- Cycle 05: **successful**, mode fix. (1) **DE-105** `39c2e6c` - `assertSubQuadratic` takes an
+  injected clock defaulting to `performance.now`; redaction check 5 uses a fake clock, so the guard
+  test is timing-independent. Proven by 20/20 `smoke:redaction-corpus` runs with four busy cores.
+  (2) **DE-106** `f7c7031 72c5af7` - `pi-compat` is a `pi` x `shard` matrix (8 non-advisory
+  lanes), with the skip list and `--check-timeout=600` unchanged; workflow policy now requires
+  every direct `check:all` job to be sharded, with three new mutations; docs updated. The 12-minute
+  PR median was **not measured** offline and is left to the host's PR runs; the coverage-threshold
+  half was already superseded by the reviewed measure-only policy.
+- Checks at head: `smoke:redaction-corpus` 20/20 under load, `smoke:workflow-policy` 5/5 (31
+  mutations), `test:typecheck`, `test:lint`, `smoke:docs`, `docs:check`, `verify`,
+  `smoke:pi-host-peers`, `smoke:release-workflow`, `journal --check` all pass. Never run `npm test`
+  or `npm run check:all` here.
+- Push state: `origin/pi/luna-ops-01` carries the cycle-05 commits and records. This checkout's
+  base is `4da2716e9c9f`; the cycle-08..20 text below belongs to a different lineage and its shas
+  are not ancestors of this head.
+
 State after cycle 20 (branch `pi/luna-ops-01`; the promotion branch is `pi/luna-ops-01-reland`
 at `b859d1e`):
 

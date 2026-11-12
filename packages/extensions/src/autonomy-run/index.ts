@@ -127,6 +127,7 @@ const USAGE = [
   "  steer <run> <message>                  send the worker one message",
   "  promote <run>                          carry out an approval-gated promotion",
   "  export <run> [dir]                     results, evidence, usage, decisions and the work",
+  "  inbox [run] [--file <path>] [--answer <card> --value <text>]   owner cards, or runs waiting to be published",
   "  boundary <run.json> | boundary --run <run>",
   "  reconfigure <run> [--effort E4 --budget-usd n ...]   the only way effort or budgets change for a run",
   "Nothing starts without you confirming the boundary. Runs need a container engine; see docs/autonomy.md.",
@@ -295,9 +296,9 @@ export default function autonomyRun(pi: ExtensionAPI) {
   }
 
   pi.registerCommand("autonomy", {
-    description: "Start and manage autonomous runs in a hardened container: /autonomy templates|init|plan|start|status|pause|resume|steer|cancel|promote|export|boundary|reconfigure. A run only starts after you confirm its boundary.",
+    description: "Start and manage autonomous runs in a hardened container: /autonomy templates|init|plan|start|status|pause|resume|steer|cancel|promote|export|inbox|boundary|reconfigure. A run only starts after you confirm its boundary.",
     getArgumentCompletions: (prefix: string) =>
-      ["templates", "init", "plan", "start", "status", "pause", "resume", "steer", "cancel", "promote", "export", "boundary", "reconfigure", "help"]
+      ["templates", "init", "plan", "start", "status", "pause", "resume", "steer", "cancel", "promote", "export", "inbox", "boundary", "reconfigure", "help"]
         .filter((v) => v.startsWith(prefix.trim().toLowerCase()))
         .map((v) => ({ value: v, label: v })),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -399,6 +400,22 @@ export default function autonomyRun(pi: ExtensionAPI) {
           const id = runId();
           if (!id) return;
           await run(ctx, ["export", "--run", id, ...(words[1] ? ["--out", resolveFile(ctx, words[1])] : [])]);
+          return;
+        }
+        case "inbox": {
+          if (!words[0]) { await run(ctx, ["inbox"]); return; }
+          const id = runId();
+          if (!id) return;
+          const rest: string[] = [];
+          for (let i = 1; i < words.length; i++) {
+            const w = words[i];
+            const value = words[i + 1];
+            if (w === "--file" && value !== undefined) rest.push(w, resolveFile(ctx, value));
+            else if ((w === "--answer" || w === "--value") && value !== undefined) rest.push(w, value);
+            else { say(ctx, "usage: /autonomy inbox [run] [--file <path>] [--answer <card> --value <text>]", "error"); return; }
+            i += 1;
+          }
+          await run(ctx, ["inbox", "--run", id, ...rest]);
           return;
         }
         case "reconfigure": {

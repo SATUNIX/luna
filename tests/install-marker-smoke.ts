@@ -150,6 +150,8 @@ function testProjectScopeMarkerAndUninstall() {
 // TOO-1: firewall.json and security.json live in the global agent dir and gate every session on
 // the machine, so a --scope project profile install (what a project /profile drives) must leave
 // both byte-identical, and must warn, naming the global file, when the profile wants another gate.
+// The same scope rule covers the global agent .env: install must neither create nor report it,
+// while the project settings and marker are still written.
 function testProjectScopeKeepsGlobalGate() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-gate-"));
   const projectDir = path.join(dir, "project");
@@ -168,6 +170,7 @@ function testProjectScopeKeepsGlobalGate() {
     fs.writeFileSync(securityPath, JSON.stringify({ schemaVersion: 1, level: "strict", source: "profile", revision: 3, changedAt: "2026-01-01T00:00:00.000Z" }, null, 2) + "\n");
     const firewallBefore = fs.readFileSync(firewallPath);
     const securityBefore = fs.readFileSync(securityPath);
+    const globalEnvPath = path.join(agentDir, ".env");
     const env = { ...baseEnv(agentDir, binDir, logPath), HOME: path.join(dir, "home"), PI_KIT_FIREWALL_CONFIG: "", PI_KIT_SECURITY_CONFIG: "" };
 
     const result = run(
@@ -178,12 +181,33 @@ function testProjectScopeKeepsGlobalGate() {
     );
     assert.deepEqual(fs.readFileSync(firewallPath), firewallBefore, "a project-scope install must leave the global firewall.json byte-identical");
     assert.deepEqual(fs.readFileSync(securityPath), securityBefore, "a project-scope install must leave the global security.json byte-identical");
-    assert.equal(readMarker(path.join(projectDir, ".pi", ".pi-kit.json")).profile, "autonomous", "the project install still records its profile");
+    const projectSettingsPath = path.join(projectDir, ".pi", "settings.json");
+    const projectMarkerPath = path.join(projectDir, ".pi", ".pi-kit.json");
+    assert.ok(fs.existsSync(projectSettingsPath), "the project install still writes the project settings");
+    const projectPackages = readSettings(projectSettingsPath).packages;
+    assert.ok(
+      projectPackages.some((entry) => entry === ROOT || (isRecord(entry) && entry.source === ROOT)),
+      "the project settings still register the kit",
+    );
+    assert.equal(readMarker(projectMarkerPath).profile, "autonomous", "the project install still records its profile");
+    assert.ok(!fs.existsSync(globalEnvPath), "a project-scope install must not create the global .env");
     const out = `${result.stdout}\n${result.stderr}`;
     assert.match(out, /WARN[^\n]*firewall[^\n]*auto[^\n]*firewall\.json/, "a differing firewall mode must be warned about, naming the global firewall.json");
     assert.match(out, /WARN[^\n]*securityLevel[^\n]*balanced[^\n]*security\.json/, "a differing securityLevel must be warned about, naming the global security.json");
     assert.match(out, /--scope global/, "the warning must say how to apply the gate globally");
-    console.log("  OK: a project-scope profile install leaves the global firewall.json and security.json byte-identical and warns about the difference");
+    assert.doesNotMatch(out, /(?:Scaffolded|would scaffold)[^\n]*\.env/, "a project-scope install must not print an .env scaffold message");
+
+    // The dry-run promise is the same: no global .env is created or reported.
+    const dryRun = run(
+      process.execPath,
+      [INSTALL, "--profile", "autonomous", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project", "--dry-run"],
+      env,
+      projectDir,
+    );
+    const dryOut = `${dryRun.stdout}\n${dryRun.stderr}`;
+    assert.doesNotMatch(dryOut, /(?:Scaffolded|would scaffold)[^\n]*\.env/, "a project-scope dry run must not print an .env scaffold message");
+    assert.ok(!fs.existsSync(globalEnvPath), "a project-scope dry run must not create the global .env");
+    console.log("  OK: a project-scope profile install leaves the global firewall.json and security.json byte-identical, writes only the project settings/marker, never scaffolds the global .env, and warns about the gate difference");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

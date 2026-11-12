@@ -755,26 +755,31 @@ if (!noExternals) {
   }
 }
 
-// 4. Scaffold .env if absent
-const envExample = ENV_EXAMPLE;
-const envTarget = path.join(globalAgentDir(), ".env");
-if (!dryRun) {
-  // No exists-then-write check: the template is read once (absent -> nothing to scaffold) and the
-  // target is created with O_EXCL ("wx"), so a .env that appears at any point before the create
-  // (another installer, the operator) is left untouched and is not an error.
-  const template = readIfPresent(envExample);
-  if (template !== undefined) {
-    fs.mkdirSync(path.dirname(envTarget), { recursive: true, mode: 0o700 });
-    try {
-      // .env holds API keys: create it 0600 (copyFileSync would keep the template's 0644).
-      fs.writeFileSync(envTarget, template, { mode: 0o600, flag: "wx" });
-      console.log(`\n[install] Scaffolded ${envTarget} from .env.example`);
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
+// 4. Scaffold .env if absent.
+// The .env belongs to the machine-global agent dir (it holds API keys), so only --scope global
+// may create it. A project-scope install writes just <cwd>/.pi/settings.json and
+// <cwd>/.pi/.pi-kit.json (docs/INSTALL.md) and must leave the global agent dir alone.
+if (scope === "global") {
+  const envExample = ENV_EXAMPLE;
+  const envTarget = path.join(globalAgentDir(), ".env");
+  if (!dryRun) {
+    // No exists-then-write check: the template is read once (absent -> nothing to scaffold) and the
+    // target is created with O_EXCL ("wx"), so a .env that appears at any point before the create
+    // (another installer, the operator) is left untouched and is not an error.
+    const template = readIfPresent(envExample);
+    if (template !== undefined) {
+      fs.mkdirSync(path.dirname(envTarget), { recursive: true, mode: 0o700 });
+      try {
+        // .env holds API keys: create it 0600 (copyFileSync would keep the template's 0644).
+        fs.writeFileSync(envTarget, template, { mode: 0o600, flag: "wx" });
+        console.log(`\n[install] Scaffolded ${envTarget} from .env.example`);
+      } catch (error) {
+        if (errorCode(error) !== "EEXIST") throw error;
+      }
     }
+  } else if (!fs.existsSync(envTarget) && fs.existsSync(envExample)) {
+    console.log(`\n[install] Dry run: would scaffold ${envTarget} from .env.example`);
   }
-} else if (!fs.existsSync(envTarget) && fs.existsSync(envExample)) {
-  console.log(`\n[install] Dry run: would scaffold ${envTarget} from .env.example`);
 }
 
 // 4b. Firewall policy and default mode from the profile (tool-firewall and protected-paths read it).

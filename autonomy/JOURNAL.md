@@ -23,7 +23,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-ux-01/03 | Board: V-09, DE-101 | successful | Cycle 03: vendored workflow-panel provenance recorded; pairing panel row budget fixed
 - luna-ux-01/06 | Board: V-09, V-93 | successful | Cycle 06: vendored provenance pinned, workflow panel prune fallback fixed
 - luna-ux-01/07 | Board: V-09, V-93 | successful | Fixed the launch screen so it follows the footer's theme-derived ASCII choice, and sized the /workflows panel columns in display width (long text and wide glyphs no longer push the trailing columns), with reviewer-found docs and ANSI-reset leaks fixed too
-- luna-ux-01/08 | Board: V-73, PG-12 | successful | Re-landed the reviewed V-73 alias wording and the alias-target-missing command-contract rule, fixed the withOverlayFrame dim leak when build throws, and re-verified the already-merged PG-12 trunk-ahead notice
+- luna-ux-01/08 | Board: V-09, V-93 | successful | Cycle 08 report: curated / menu ASCII under PI_KIT_ASCII
 - luna-ux-01/09 | Board: V-73 | successful | Made control-centre Back follow the visited-page stack (Settings to Display to Back returns to Settings) and re-verified the already-merged V-73 alias wording and the green luna-ux-01/03 journal gate
 - luna-ux-01/02 | Board: V-05 | successful | Consolidated the launch screen onto the menu's TUI predicate so older hosts without ctx.mode still get it; added the undefined-mode tests and re-verified the launch screen
 - luna-core-01/07 | Board: PG-27, PG-51 | successful | Converted the CPU-bound smoke timing guards to CPU time (all budgets kept), fixed the skill-router re: trigger guard and a workflow-plan timer race the load-check exposed

@@ -1,61 +1,59 @@
-# Cycle 07 plan — stream ux (luna-ux-01)
+# Cycle 07 — Plan (run luna-ux-01, stream `ux`)
 
-Mode: **fix**.
+Mode: **fix**. Board V-09 and V-93 are done on the trunk (review.md); this cycle fixes two
+user-visible defects in the same stream files and one documentation carry-over.
 
-## Items, in work-precedence order
+## Goal
 
-### 1. P0 upstream merge (priority 1) — done
+The launch screen's automatic ASCII choice and the workflow panel's column layout both break on the
+surfaces they exist for; after this cycle each is pinned by a test that fails on the base commit.
 
-Merge `refs/upstream/trunk` (5a888fe) into `stream/ux`, preserving both sides' intent, then
-re-run the targeted checks. Resolution: keep both `package.json` smoke scripts and keep
-upstream's trunk branch/tag/channel fields alongside this branch's `trunkAhead` gap count.
-Proof: conflict markers gone; `npm run test:typecheck`, `npm run test:lint`,
-`npm run smoke:update-notice`, `npm run smoke:kit-update-channel`,
-`npm run smoke:launch-screen`.
+## Item 1 — Launch screen honours the theme-derived ASCII mode (defect D1)
 
-### 2. PG-59 [P0] — pi-compat red gate
+- **Justification:** `custom-footer/render.ts:110-113` already treats themes named iso/ansi/tty/ascii
+  as ASCII. `launch-screen.ts:117-145` only honours `PI_KIT_ASCII=1`, so on `iso-dark`, `ansi-dark`
+  and `tty-dark` the header still emits `██╗` and `·` while the footer next to it emits `[x]` and
+  `|`. Same glyph-consistency problem the stream owns (V-09), but a distinct, previously unfixed
+  surface, not a re-open of the merged footer work.
+- **Change:** one small predicate in `launch-screen.ts` matching the footer's theme-name rule (with
+  a comment naming the footer as the source of truth); `launchHeader` computes
+  `ascii = opts.ascii || predicate(theme.name)` per render and passes it to `launchLines`.
+  Update `docs/status-bar-and-costs.md:211` and `docs/control-center.md:42` to say the launch screen
+  follows the same automatic choice, and add a `CHANGELOG.md` Unreleased entry.
+- **Checks:** `tests/launch-screen-smoke.ts` gains cases: (a) `launchHeader` rendered with
+  `theme.name = "iso-dark"` produces no block-art and no `·`, and its output equals the
+  `ascii: true` render; (b) a non-matching theme name (`gitops-dark`) keeps the block art. Then
+  `npm run -s smoke:launch-screen`, `npm run -s smoke:docs`, `npm run test:typecheck`,
+  `npm run test:lint`.
 
-Change `packages/extensions/src/kit-update/index.ts` so the trunk-gap notice takes precedence in
-session start. Extract a pure decision helper (notices + whether the status bar is set) used by
-the handler:
+## Item 2 — Workflow panel columns survive narrow and wide-glyph rows (defect D2)
 
-- gap report → exactly the trunk notice; the generic `summaryLine` notice is suppressed.
-- no gap but updates → the existing summary notice (unchanged).
-- nothing to do → no notice.
+- **Justification:** `wf-panel.ts:309-313,321,408,412` sizes and pads every column by `.length`, and
+  the only clamp is the whole-line `truncateToWidth` at `:837`. `docs/workflows.md:473-476` promises
+  each phase's status/done-total and each agent's model/tokens/elapsed/status, so a long title
+  silently deletes the column; a wide glyph (`阶段 🚀`, 7 columns, `.length` 5) shifts it left. The
+  panel is an assigned stream renderer and `tests/tui-layout-smoke.ts` only asserts "fits".
+- **Change:** measure each cell with pi-tui's `visibleWidth`, clip it with `truncateToWidth`, and pad
+  it to the column width by display width (a local helper reused by phase title, agent id, model
+  and list run name). Column widths stay bounded as today. Fold in the HANDOFF carry-over: one
+  sentence in `docs/workflows.md` saying an open save/stop confirm still owns the keys after the
+  prune fallback. Add a dated `2026-11-12` entry to `third_party/subagent/SOURCE.md` and run
+  `node packages/core/gen-notices.ts` if the notices change. `CHANGELOG.md` entry.
+- **Checks:** `tests/workflow-panel-smoke.ts` gains cases with a long phase title and a wide-glyph
+  agent id/model, asserting each documented column (`running`, `done/total`, model, tokens,
+  `elapsed`, `status`) is still present and every line fits the width; then
+  `npm run -s smoke:workflow-panel`, `npm run -s smoke:tui-layout`, `npm run -s smoke:docs`,
+  `npm run test:typecheck`, `npm run test:lint`, `node packages/core/gen-notices.ts` (then
+  `git status` shows no notices drift).
 
-Test `tests/update-notice-smoke.ts`:
+## Verification plan
 
-- Replace the exact-single-notification assertion with: the trunk notice is present exactly once
-  and no second kit notice is added. A pi built-in update notice
-  (`Updates available: pi X → Y. Run /update.`) is tolerated and does not count as the kit
-  notice; a simulated built-in entry proves the filter.
-- Add a case that builds the report with pi `0.99.2` against the `1.4.0` registry, so
-  `report.pi.available` is true, and asserts the session-start decision is still only the trunk
-  notice. This fails with the old fall-through.
-- Keep the missing-trunk-notice failure: the gap report must still yield the trunk line, so a
-  change that drops it fails the case.
-- Docs: note the precedence in `docs/updates.md` and
-  `packages/extensions/src/kit-update/README.md`.
+`node packages/core/check-all.ts --for-changed=<changed files>` for the final tree; run each named
+smoke, plus `verify` and `docs:check` if docs change the navigation or generated catalogues. One
+independent reviewer over `git diff 210390b86be2..HEAD` against `autonomy/CHARTER.md`. No `npm test`
+and no `npm run check:all`.
 
-Checks: `npm run smoke:update-notice`, `npm run smoke:kit-update-channel`,
-`npm run test:typecheck`, `npm run test:lint`. On a pi older than the pin the same test must
-produce only the trunk kit notice (pi's own built-in notice is ignored by the filter).
+## Stop conditions
 
-### 3. V-05 [P2] — already satisfied
-
-No change. Verified by `npm run smoke:launch-screen` (11/11) and the scout's acceptance matrix;
-recorded as done in `report.md`.
-
-## Not taken
-
-- HANDOFF carry-overs (duplicate `/mcp` and `/llama` rows; cancelled RPC value dialog returns
-  `"back"`) are confirmed real but are left for a later cycle: the mandatory merge already puts
-  the review diff far past the 30000-character stop line. They stay in
-  `autonomy/runs/luna-ux-01/HANDOFF.md`.
-- No new proposals unless the implementation uncovers a separate problem.
-
-## Verification
-
-Run only targeted scripts (`smoke:update-notice`, `smoke:kit-update-channel`,
-`smoke:launch-screen`, `smoke:command-menu`, `smoke:control-center`, `test:typecheck`,
-`test:lint`). Never `npm test` or `npm run check:all`; the host gate owns the full suite.
+Diff under 30000 characters (excluding records and the lockfile); stop taking new items past it.
+If an item cannot reach a green check, revert it and record it as left for the next cycle.

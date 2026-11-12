@@ -461,6 +461,8 @@ passed on the installed pi). It has two views:
   The selection stays on the highlighted run when a new run arrives while the list is open, and
   falls back to the row at the same position if that run is pruned from the session. If a run
   pruned from the session was open in the run view, the panel falls back to the list body and keys.
+  An open stop or save choice still owns the keys while it is shown, so the fallback takes effect
+  once that choice is answered.
 - **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds
@@ -475,6 +477,9 @@ passed on the installed pi). It has two views:
     group counts its own agents and those of its phases;
   - **Agents** with done/total: each agent's id (`<step id>#<n>`), model, tokens (input plus
     output; cache reads and writes are not counted), elapsed time and status with a coloured dot.
+    Every column is measured and cut in terminal display columns, not code points, so a long
+    title, id, model or run name is truncated with an ellipsis to its cap and a wide glyph (a CJK
+    character, an emoji) keeps the columns after it aligned, instead of pushing them over.
     An `agent()` call answered from a resumed run's journal (nothing launched) has a `◆` dot
     instead of `●`. Agents of a nested `workflow()` are indented under a `▸ <name>` line.
     ↑↓ select an agent; the selected agent's error, or else its last progress line, shows below

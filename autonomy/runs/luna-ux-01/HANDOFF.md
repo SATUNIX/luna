@@ -1,7 +1,7 @@
 # Run `luna-ux-01` — handoff
 
-State after cycle 06 (branch `pi/luna-ux-01`, cycle base `8416c502acc4`). Report:
-`autonomy/cycles/luna-ux-01/06/report.md`, evidence in `verify.md`.
+State after cycle 07 (branch `pi/luna-ux-01`, cycle base `210390b86be2`, code head `04a98bf2`). Report:
+`autonomy/cycles/luna-ux-01/07/report.md`, evidence in `verify.md`.
 
 ## Assignment state
 
@@ -17,7 +17,13 @@ State after cycle 06 (branch `pi/luna-ux-01`, cycle base `8416c502acc4`). Report
   `third_party/*/SOURCE.md` (commit `17e0d4ab`). Do not re-open the TUI width work.
 - The cycle-03 WorkflowPanel/prune proposal is implemented (commit `88bc809d`): one `inRun()` drives
   the body, footer and key dispatch, `view`/`confirm` are kept, and the new prune case in
-  `tests/workflow-panel-smoke.ts` pins the first `down` moving the cursor.
+  `tests/workflow-panel-smoke.ts` pins the first `down` moving the cursor. Cycle 07 added the
+  missing docs sentence (an open save/stop confirm still owns the keys after the fallback).
+- Cycle 07 fixed two more ux defects (commits `05e275d6`, `488b64f9`, `98127528`, `04a98bf2`):
+  the launch screen now follows the footer's theme-derived ASCII choice, and the `/workflows` panel
+  sizes/cuts its phase, agent and run-name columns in display width through one `cell()` helper
+  (ANSI resets stripped so `renderText` stays plain). Both changes have cases that fail on the
+  pre-fix source. Do not re-open V-09's TUI width work: this touched only column measurement.
 
 ## Next cycle should know
 
@@ -39,6 +45,11 @@ State after cycle 06 (branch `pi/luna-ux-01`, cycle base `8416c502acc4`). Report
 - Follow-ups not taken: `autonomy/lib/engine.ts:1011` still applies its own `HIDDEN_CHARS` transform
   via the notebook re-export (no class-literal duplicate, outside V-93's scope); cycle-05 V-73
   (canonical `Alias of /<target>` wording) remains on `origin/attempts/luna-ux-01/cycle-05`;
-  `docs/workflows.md` could spell out that an open confirm still owns the keys after the prune
-  fallback, and `wf-panel.ts` `footer()` looks up `current()` twice.
+  `wf-panel.ts` `footer()` still looks up `current()` twice (readability only).
+- Cycle 07 confirmed already-fixed carry-overs: the `/mcp`/`/llama` duplicate rows in
+  `allCommands()` and the `hub.ts` cancelled-dialog `"back"` mapping.
+- `check-all --for-changed` prints the plan only; run each named script yourself. A reviewer
+  subagent found two real defects in cycle 07's first commits (a mangled docs paragraph and
+  `truncateToWidth`'s ANSI resets leaking into the plain-text panel fallback), so always run the
+  independent reviewer before recording.
 - Cycle 02 remains rejected and unmerged; its records are superseded by `03/` and later.

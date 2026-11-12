@@ -18,7 +18,7 @@
  */
 import * as crypto from "node:crypto";
 import * as path from "node:path";
-import { appendFileSafe } from "./safe-fs.ts";
+import { appendFileSafe, rotateFileSafe } from "./safe-fs.ts";
 
 /** The fields written for one refusal. `matched` is a rule id or path token, never a secret. */
 export interface RefusalRecord {
@@ -71,8 +71,12 @@ function auditPath(): string {
   return path.join(process.cwd(), ".pi", "tool-firewall-audit.jsonl");
 }
 
+// Mirrors tool-firewall's rotation (index.ts AUDIT_ROTATE_BYTES): one old copy, replaced each time.
+const AUDIT_ROTATE_BYTES = 4 * 1024 * 1024;
+
 /**
- * Appends exactly one `tool_refused` line to the firewall audit log. Best effort: a missing or
+ * Appends exactly one `tool_refused` line to the firewall audit log, rotating it to `<file>.1` past
+ * 4 MiB exactly as the firewall does (so secret-guard alone also stays bounded). Best effort: a missing or
  * unsafe path, a permission error or a hostile symlink leaves the tool call unaffected.
  */
 export function appendRefusal(record: RefusalRecord): void {
@@ -81,6 +85,7 @@ export function appendRefusal(record: RefusalRecord): void {
     // An operator-set path is trusted; the default lives under a workspace a cloned repository
     // controls, so the write must not follow links planted there (see ./safe-fs.ts).
     const options = process.env.PI_KIT_FIREWALL_AUDIT_LOG ? { mode: 0o600 } : { root: process.cwd(), mode: 0o600 };
+    rotateFileSafe(file, AUDIT_ROTATE_BYTES, options);
     const digest = record.commandDigest ? { commandDigest: record.commandDigest } : {};
     const line = {
       timestamp: new Date().toISOString(),

@@ -88,5 +88,6 @@ A refusal is not only a UI notice: `blocked()` appends one `tool_refused` record
 audit log through the shared `shared/refusal-record.ts` helper (`tests/firewall-refusal-record-smoke.ts`).
 It names the guard, the cause (`secret-path`, `secret-read`, `protected-path`, `secret-content`,
 `secret-leak`, `secret-transfer`, or `invalid-input`), the matched rule source or path token, the
-tool, a SHA-256 digest of the command and the session id. It never writes the command text or a
+tool, a SHA-256 digest of the command when the call carries one, and the session id. It never writes
+the command text or a
 secret value, and a failed write never breaks the refusal.

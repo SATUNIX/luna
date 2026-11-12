@@ -70,7 +70,7 @@ export async function checkRefusalRecords(): Promise<number> {
       const record = onlyAfter(before);
       assert.equal(record.guard, "tool-firewall");
       assert.equal(record.cause, "hard_deny");
-      assert.equal(typeof record.matched, "string");
+      assert.equal(record.matched, "critical_path_delete");
       assert.equal(record.tool, "bash");
       assert.equal(record.commandDigest, sha256(command));
       assert.equal(record.sessionId, "S-refusal-firewall");
@@ -115,6 +115,21 @@ export async function checkRefusalRecords(): Promise<number> {
       assert.equal(record.sessionId, "S-refusal-transfer");
       assert.ok(!JSON.stringify(record).includes("id_rsa"), "the refusal record never contains the command text");
       ok("a secret-guard shell refusal records a command digest and no command text");
+    }
+    // 4. The shared helper rotates the log like the firewall: one old copy past 4 MiB.
+    {
+      const old = `${JSON.stringify({ event: "old" })}\n`;
+      const oldText = old.repeat(Math.ceil((4 * 1024 * 1024 + 1) / old.length));
+      fs.writeFileSync(auditLog, oldText);
+      const register = await loadExtension("extensions/secret-guard/index.ts");
+      const pi = fakePi();
+      register(pi.api);
+      const ctx = { cwd: ws, hasUI: false, sessionManager: { getSessionId: () => "S-refusal-rotate" }, ui: {} };
+      await pi.handlers.get("tool_call")({ toolName: "write", input: { path: ".env", content: "x" } }, ctx);
+      assert.equal(fs.readFileSync(`${auditLog}.1`, "utf8"), oldText, "the full log moves to .1 unchanged");
+      assert.ok(fs.statSync(auditLog).size < 64 * 1024, "the live log restarts small");
+      assert.equal(records().length, 1, "and holds the new refusal");
+      ok("a refusal rotates the audit log to .1 past 4 MiB");
     }
     return checks;
   } finally {

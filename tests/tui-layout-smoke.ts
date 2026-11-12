@@ -27,7 +27,8 @@ const RM = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts
 // A local view of the one pure export used here; a static type import of the module would pull
 // its host/bridge graph into the test typecheck, where pi's loader-only syntax is not allowed.
 type PairPanel = (offer: Record<string, unknown>, width: number, termRows: number, style?: { title(s: string): string; dim(s: string): string }) => string[];
-const remote = await loadModule<{ pairPanel: PairPanel }>("extensions/remote-control/index.ts");
+type Wrap = (text: string, width: number, hang?: number) => string[];
+const remote = await loadModule<{ pairPanel: PairPanel; wrap: Wrap }>("extensions/remote-control/index.ts");
 
 const W = widthMod.displayWidth;
 const WIDTHS = [20, 32, 40, 60, 80, 120];
@@ -238,6 +239,11 @@ try {
     const wide = remote.pairPanel(offer, 120, 60, style);
     assert.ok(wide.some((line) => line.includes("\x1b[30;107m")), "a wide terminal gets the QR code");
     fits(wide, 120, "pair panel wide");
+    // A wide grapheme that does not fit the continuation indent moves to the next line whole; the
+    // rest of the word is not dropped.
+    const carried = remote.wrap("abc🚀", 2, 1);
+    assert.equal(carried.map((line) => line.trim()).join(""), "abc🚀", "every grapheme of a wrapped word survives");
+    for (const line of carried) assert.ok(visibleWidth(line) <= 2, `carried line fits 2 columns: ${JSON.stringify(line)}`);
     ok("remote pairing panel: every line fits every width, with wide input and ANSI styling");
   }
 

@@ -741,8 +741,9 @@ board item (`blocked` becomes `ready`) so the next cycle sees it again; an unans
 deadline has not passed leaves its item `blocked`. A card that already has an outcome is never
 rewritten, so repeated reads are idempotent, and the inbox command records only: it never writes
 run state or queues a control message. `--file` only saves the cards; the next read settles them.
-Use an ISO-8601 deadline with `Z` or an explicit offset: validation accepts any string `Date.parse`
-understands, and an offset-less value is parsed in the host's local time. A settled card keeps its
+Use a strict ISO-8601 deadline with `Z` or an explicit numeric offset (`YYYY-MM-DDTHH:MM:SS[.sss](Z|+HH:MM)`).
+A bare date, an offset-less timestamp, or any other string `Date.parse` happens to accept is refused,
+because an offset-less value would be read in the host's local time. A settled card keeps its
 linked board item `ready` on every later inbox read; to block that item again, drop the settled card
 with `inbox --file` and then set the item back to `blocked` with `board --file`.
 
@@ -750,7 +751,7 @@ Card fields are `id`, `question`, `default`, `deadline`, optional `board`, optio
 optional `outcome`; outcome keys are `at`, `via` (`answer` or `deadline`) and `text`. Unknown keys,
 duplicate card ids, ids outside `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, board ids outside
 `^[A-Z]+-[0-9]{1,4}$`, unparseable deadlines, more than 50 cards, empty text, questions over 500
-characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written); input files are capped
+characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written). An uploaded file may not carry `answer` or `outcome`: only the owner's `--answer`, a passed deadline, or the existing host file records a decision. Answering a card that already has an outcome is refused with the card id instead of being silently ignored. The text listing collapses card text to one visible line, removing control, format and bidirectional characters. Input files are capped
 at 2 MiB. The file is written at mode 0600. `tests/autonomy-inbox-smoke.ts` pins the answered,
 past-due and still-open cases, idempotence, refusal of bad input, the record-only rule, and the
 self-improve-only rule.

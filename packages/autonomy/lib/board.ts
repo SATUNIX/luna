@@ -48,6 +48,10 @@ export const WORK_PRECEDENCE = "(0) red gate / broken branch, (1) upstream merge
 const ID = /^[A-Z]+-[0-9]{1,4}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+/** A strict ISO-8601 timestamp: date, time and `Z` or an explicit numeric offset. */
+export function isIsoTimestamp(value: unknown): boolean {
+  return typeof value === "string" && ISO_TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value));
+}
 const PRIORITY_ORDER: Readonly<Record<BoardItem["priority"], number>> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 // Fits all 50 maximum-sized items even when JSON escapes every text character.
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -60,7 +64,7 @@ function bounded(value: unknown, name: string, max: number): string {
   return value;
 }
 function timestamp(value: unknown, name: string): string {
-  if (typeof value !== "string" || !ISO_TIMESTAMP.test(value) || Number.isNaN(Date.parse(value))) throw new Error(`${name} must be an ISO timestamp`);
+  if (typeof value !== "string" || !isIsoTimestamp(value)) throw new Error(`${name} must be an ISO timestamp`);
   return value;
 }
 function rounds(value: unknown): number {

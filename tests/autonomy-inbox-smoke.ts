@@ -61,9 +61,10 @@ await check("an answered card and a past-due card settle and unblock their items
   ] });
   const source = path.join(scratch(), "cards.json");
   writeJson(source, { cards: [
-    { id: "D1", question: "Which default?", default: "A", deadline: "2026-10-02T00:00:00Z", board: "OWN-1", answer: "Use the recommended default" },
+    { id: "D1", question: "Which default?", default: "A", deadline: "2026-10-02T00:00:00Z", board: "OWN-1" },
     { id: "D2", question: "Which branch?", default: "Keep the local branch", deadline: "2026-09-29T00:00:00Z", board: "OWN-2" },
     { id: "D3", question: "Ship now?", default: "Hold", deadline: "2026-10-02T00:00:00Z", board: "OWN-3" },
+    { id: "D4", question: "Which\u001b[2Jdefault?\u202e", default: "Safe\u009btext", deadline: "2099-10-02T00:00:00Z" },
   ] });
   const saved = await call("inbox", "--run", run, "--file", source);
   assert.equal(saved.code, 0, saved.stderr);
@@ -72,8 +73,10 @@ await check("an answered card and a past-due card settle and unblock their items
   const listed = await call("inbox", "--run", run, "--json");
   assert.equal(listed.code, 0, listed.stderr);
   const data = listed.json();
-  assert.deepEqual(data.decided, ["D1", "D2"]);
-  assert.deepEqual(data.unblocked, ["OWN-1", "OWN-2"]);
+  assert.deepEqual(data.decided, ["D2"], "the listing settles the past-due card");
+  assert.deepEqual(data.unblocked, ["OWN-2"], "the listing unblocks the card it settles");
+  const answeredEarly = await call("inbox", "--run", run, "--answer", "D1", "--value", "Use the recommended default");
+  assert.equal(answeredEarly.code, 0, answeredEarly.stderr);
   assert.equal(card("D1").outcome?.via, "answer");
   assert.equal(card("D1").outcome?.text, "Use the recommended default");
   assert.equal(card("D2").outcome?.via, "deadline");
@@ -82,6 +85,9 @@ await check("an answered card and a past-due card settle and unblock their items
   assert.deepEqual(items().map((i) => [i.id, i.status]), [["OWN-1", "ready"], ["OWN-2", "ready"], ["OWN-3", "blocked"]]);
   const shown = await call("inbox", "--run", run);
   assert.match(shown.stdout, /board: OWN-1/);
+  // Card text is repository-controlled: the listing collapses escapes and bidi overrides.
+  assert.ok(!shown.stdout.includes("\u001b") && !shown.stdout.includes("\u202e") && !shown.stdout.includes("\u009b"), "the listing keeps no control or bidi character");
+  assert.match(shown.stdout, /Which.*default\?/, "the question keeps its visible text");
 });
 
 await check("settling is idempotent: a second read changes no outcome and decides nothing", async () => {
@@ -93,6 +99,13 @@ await check("settling is idempotent: a second read changes no outcome and decide
   assert.equal(items().find((i) => i.id === "OWN-3")?.status, "blocked");
 });
 
+await check("an answer on a card that already has an outcome is refused and names the card", async () => {
+  const refused = await call("inbox", "--run", run, "--answer", "D2", "--value", "Changed my mind");
+  assert.equal(refused.code, 3, refused.stderr);
+  assert.match(refused.stderr, /D2/, "the refusal names the card");
+  assert.equal(card("D2").outcome?.via, "deadline");
+});
+
 await check("an answer after the list records the owner's text and unblocks the item", async () => {
   const answered = await call("inbox", "--run", run, "--answer", "D3", "--value", "Ship it", "--json");
   assert.equal(answered.code, 0, answered.stderr);
@@ -101,7 +114,8 @@ await check("an answer after the list records the owner's text and unblocks the 
   assert.equal(card("D3").outcome?.text, "Ship it");
   assert.equal(items().find((i) => i.id === "OWN-3")?.status, "ready");
   const repeated = await call("inbox", "--run", run, "--answer", "D3", "--value", "Changed my mind");
-  assert.equal(repeated.code, 0, repeated.stderr);
+  assert.equal(repeated.code, 3, repeated.stderr);
+  assert.match(repeated.stderr, /D3/, "the refusal names the settled card");
   assert.equal(card("D3").outcome?.text, "Ship it", "a recorded outcome is never rewritten");
   assert.equal(fs.readFileSync(h.store.p.state, "utf8"), stateBefore, "the inbox only records; it never writes run state");
 });
@@ -113,6 +127,10 @@ await check("bad input is refused and leaves the previous inbox untouched", asyn
     ["unknown key", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00Z", extra: 1 }] }],
     ["duplicate ids", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00Z" }, { id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00Z" }] }],
     ["bad deadline", { cards: [{ id: "X1", question: "q", default: "d", deadline: "not-a-date" }] }],
+    ["offset-less deadline", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00" }] }],
+    ["date-only deadline", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02" }] }],
+    ["uploaded answer", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00Z", answer: "pre-answered" }] }],
+    ["uploaded outcome", { cards: [{ id: "X1", question: "q", default: "d", deadline: "2026-10-02T00:00:00Z", outcome: { at: "2026-10-01T00:00:00Z", via: "answer", text: "pre-settled" } }] }],
     ["missing default", { cards: [{ id: "X1", question: "q", deadline: "2026-10-02T00:00:00Z" }] }],
   ];
   for (const [name, value] of invalid) {

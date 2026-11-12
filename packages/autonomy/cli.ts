@@ -701,7 +701,7 @@ const commands: Record<string, Command> = {
     if (opts.value !== undefined && opts.value.trim().length > 2000) throw new CliError("usage", "--value must be at most 2000 characters");
     if (opts.file) {
       let inbox;
-      try { inbox = readInboxFile(path.resolve(opts.file)); }
+      try { inbox = readInboxFile(path.resolve(opts.file), true); }
       catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
       const cards = inbox;
       await withBoardLock(store, deps, () => { writeInbox(store.p.control, cards); });
@@ -719,16 +719,20 @@ const commands: Record<string, Command> = {
     if (opts.answer) {
       const card = inbox.cards.find((c) => c.id === opts.answer);
       if (!card) throw new CliError("refused", `unknown inbox card ${opts.answer}`);
-      if (!card.outcome) { card.answer = answer; answered = true; }
+      if (card.outcome) throw new CliError("refused", `inbox card ${card.id} already has an outcome (${card.outcome.via} at ${card.outcome.at})`);
+      card.answer = answer;
+      answered = true;
     }
     const settled = settleInbox(inbox, deps.now());
     const applied = applyOutcomes(board, settled.inbox);
     if (answered || settled.decided.length > 0) writeInbox(store.p.control, settled.inbox);
     if (applied.unblocked.length > 0) writeJsonAtomic(path.join(store.p.control, "board.json"), applied.board, { mode: 0o600 });
     const open = settled.inbox.cards.some((c) => !c.outcome);
+    // Card text is repository-controlled: collapse it to one visible line before the terminal sees it.
+    const oneLine = (text: string): string => text.replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
     const lines = settled.inbox.cards.map((c) => {
       const head = c.outcome ? `${c.id}  ${c.outcome.via === "answer" ? "answered" : "default used"} ${c.outcome.at}` : `${c.id}  open`;
-      return [head, `    question: ${c.question}`, `    default: ${c.default}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${c.outcome.text}`] : [])].join("\n");
+      return [head, `    question: ${oneLine(c.question)}`, `    default: ${oneLine(c.default)}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${oneLine(c.outcome.text)}`] : [])].join("\n");
     });
     const text = `${lines.join("\n")}\n${open ? `answer with: pi-autonomy inbox --run ${state.run} --answer <id> --value "..."` : "no cards are waiting"}`;
     return { data: { run: state.run, cards: settled.inbox.cards, decided: settled.decided.map((c) => c.id), unblocked: applied.unblocked }, text };

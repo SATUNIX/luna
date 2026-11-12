@@ -214,9 +214,6 @@ box drawing, symbols, or emoji. The working line's tool phrase follows the same 
 choice and is cut in terminal columns, so a wide glyph at the cut is dropped whole rather than
 split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
 footer making the same choice. Select a theme either way:
-screen use ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
-split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
-footer making the same choice. Select a theme either way:
 
 - In Pi, run `/settings` and pick a theme name from the table, or
 - Add it to `~/.pi/agent/settings.json`:

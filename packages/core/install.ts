@@ -95,6 +95,14 @@ const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "-
 const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
   "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--help|-h]";
+
+// Help is recognized before any argument validation or install work: `--help --profile` must
+// print usage and exit 0, not fail because the next flag's value is missing.
+if (has("--help") || args.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 for (let i = 0; i < args.length; i++) {
   const arg = args[i] ?? "";
   if (BOOLEAN_FLAGS.includes(arg)) continue;
@@ -106,12 +114,6 @@ for (let i = 0; i < args.length; i++) {
     process.exit(1);
   }
   i++;
-}
-
-// Help is recognized before any install work so it stays side-effect free and exits 0.
-if (has("--help") || args.includes("-h")) {
-  console.log(USAGE);
-  process.exit(0);
 }
 
 // The split lite surface is now the lite profile of the single package.

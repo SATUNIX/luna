@@ -691,15 +691,16 @@ function testHelpFlag() {
   try {
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
-    for (const flag of ["--help", "-h"]) {
-      const result = spawnSync(process.execPath, [INSTALL, flag], { cwd: ROOT, env: baseEnv(agentDir, binDir, logPath), encoding: "utf8" });
-      assert.equal(result.status, 0, `${flag} must exit 0 (stdout: ${result.stdout} stderr: ${result.stderr})`);
-      assert.match(result.stdout, /usage: install\.ts/, `${flag} must print usage to stdout`);
-      assert.doesNotMatch(result.stderr, /usage: install\.ts/, `${flag} must not print usage to stderr`);
+    for (const argv of [["--help"], ["-h"], ["--help", "--profile"], ["--help", "--bogus"]] as const) {
+      const label = argv.join(" ");
+      const result = spawnSync(process.execPath, [INSTALL, ...argv], { cwd: ROOT, env: baseEnv(agentDir, binDir, logPath), encoding: "utf8" });
+      assert.equal(result.status, 0, `${label} must exit 0 (stdout: ${result.stdout} stderr: ${result.stderr})`);
+      assert.match(result.stdout, /usage: install\.ts/, `${label} must print usage to stdout`);
+      assert.doesNotMatch(result.stderr, /usage: install\.ts/, `${label} must not print usage to stderr`);
     }
     assert.ok(!fs.existsSync(path.join(agentDir, ".pi-kit.json")), "--help must not write the install marker");
     assert.ok(!fs.existsSync(logPath), "--help must not run pi");
-    console.log("  OK: --help and -h print usage to stdout, exit 0 and install nothing");
+    console.log("  OK: --help and -h (also with a following bad argument) print usage to stdout, exit 0 and install nothing");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

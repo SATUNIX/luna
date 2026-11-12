@@ -69,6 +69,10 @@ const typo = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "c
 assert.equal(typo.status, 2, "a misspelt --skip name exits 2");
 assert.match(typo.stderr, /--skip names no check: evl, smoke:doc/);
 assert.doesNotMatch(typo.stdout, /would run/, "nothing is listed when a skip name is unknown");
+const planTypo = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), "--for-changed=README.md", "--skip=evl"], { encoding: "utf8" });
+assert.equal(planTypo.status, 2, "a misspelt --skip name exits 2 in plan mode too");
+assert.match(planTypo.stderr, /--skip names no check: evl/);
+assert.doesNotMatch(planTypo.stdout, /check-all: plan for/, "no plan is printed when a skip name is unknown");
 const skipped = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), "--list", "--skip=eval,test:security"], { encoding: "utf8" });
 assert.equal(skipped.status, 0, `real check names, including an aggregate check-all drops itself, are accepted (stderr: ${skipped.stderr.trim()})`);
 assert.doesNotMatch(skipped.stdout, /^eval$/m, "a skipped check is not listed");

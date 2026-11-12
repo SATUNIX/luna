@@ -25,6 +25,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Two pages no longer point at material this repository does not carry.** `docs/structured-output.md`
+  named the removed `packages/role-runner` as the home of the result validator and said a test pins the
+  vendored copy byte for byte against it; the validator is `packages/extensions/third_party/subagent/schema.ts`,
+  and the comparison runs only where the upstream source exists, which the page now says. `docs/autonomy-gate.md`
+  linked a specification file that is not in the tree. A mechanical scan of 97 pages found no other
+  `npm run` script, test file or linked page that does not exist.
+
 - **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
   cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
   scan reads the whole pushed range, so removing the identifier in a later commit still left the

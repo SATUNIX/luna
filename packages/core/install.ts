@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Scripted installer for pi-system.
+ * Scripted installer for Luna.
  * Wraps pi's CLI: pi install, pi config. Idempotent / reconciling.
  *
  * Usage:
  *   node packages/core/install.ts [--profile <quick|balanced|long-horizon|autonomous|self-improving|pentest|lite>]
  *                        [--only <names>] [--all] [--scope <global|project>] [--mode <local|git|npm>]
- *                        [--channel <latest|next|X.Y.Z>] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall]
+ *                        [--channel <latest|next|trunk|X.Y.Z>] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall]
  *                        [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate]
  *
  *   --mode local         Register this checkout in place (edits apply on /reload). The default
@@ -15,7 +15,8 @@
  *                        repository (release tags and main) or the npm package. The default is
  *                        `delivery` in packages/core/distribution.json (PI_KIT_DELIVERY overrides).
  *                        Run from a copy pi installed itself, the installer keeps that delivery.
- *   --channel            latest (the newest release, the default), next (every commit on main)
+ *   --channel            latest (the newest release, the default), next (every commit on main),
+ *                        trunk (the head of the kit's integration branch, canary/opt-in)
  *                        or a pinned X.Y.Z[-pre]. On its own it implies the configured delivery.
  *   --git-ref <ref>      Git delivery only: register an arbitrary branch, tag or commit.
  *
@@ -38,7 +39,7 @@ import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
 import { mergePackageBlock, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
-import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
+import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, SOURCES_PATH, ENV_EXAMPLE, extensionRelPath } from "./lib/paths.ts";
@@ -64,8 +65,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function errorCode(error: unknown): unknown {
-  return isRecord(error) ? error.code : undefined;
+function errorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 /** The file's bytes, or undefined when it does not exist. */
@@ -89,9 +92,9 @@ const has = (flag: string): boolean => args.includes(flag);
 // Every argument must be a known flag, and a value flag needs a value that is not another flag:
 // a typo such as `--profle pentest` used to be ignored and run a default balanced install.
 const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "--git-ref", "--surface"];
-const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate"];
+const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
-  "[--channel latest|next|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate]";
+  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--help|-h]";
 for (let i = 0; i < args.length; i++) {
   const arg = args[i] ?? "";
   if (BOOLEAN_FLAGS.includes(arg)) continue;
@@ -105,10 +108,16 @@ for (let i = 0; i < args.length; i++) {
   i++;
 }
 
+// Help is recognized before any install work so it stays side-effect free and exits 0.
+if (has("--help") || args.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 // The split lite surface is now the lite profile of the single package.
 const legacySurface = get("--surface", null);
 if (legacySurface && legacySurface !== "lite") {
-  console.error(`[install] --surface was removed: pi-system ships as one package. Use --profile <name> instead.`);
+  console.error(`[install] --surface was removed: Luna ships as one package. Use --profile <name> instead.`);
   process.exit(1);
 }
 if (legacySurface) console.warn("[install] --surface lite is deprecated; installing the lite profile (--profile lite).");
@@ -117,7 +126,11 @@ const profile = canonicalProfileName(String(legacySurface ? "lite" : get("--prof
 const onlyNames = get("--only", null)?.split(",").map((n) => n.trim());
 const all = has("--all");
 const scopeArg = get("--scope", "global");
-if (scopeArg !== "global" && scopeArg !== "project") throw new Error(`[install] unknown --scope "${String(scopeArg)}" (expected global or project)`);
+if (scopeArg !== "global" && scopeArg !== "project") {
+  console.error(`[install] unknown --scope "${String(scopeArg)}" (expected global or project)`);
+  console.error(USAGE);
+  process.exit(1);
+}
 const scope = scopeArg;
 const dryRun = has("--dry-run");
 const uninstall = has("--uninstall");
@@ -220,8 +233,15 @@ if (mode === "npm" && !npmDeliveryEnabled()) {
     "(or PI_KIT_DELIVERY=npm) is refused. Install from git instead (`--mode git`), or see docs/releasing.md.");
   process.exit(1);
 }
+// `trunk` follows the integration branch of the kit's repository: there is no npm dist-tag for it,
+// so npm delivery cannot record or follow it.
+if (mode === "npm" && explicitChannel === "trunk") {
+  console.error("[install] trunk is a git channel: it follows the kit's integration branch and has no npm dist-tag. " +
+    "Use `latest`, `next` or an exact version with npm delivery.");
+  process.exit(1);
+}
 if (explicitChannel && !isChannel(explicitChannel)) {
-  console.error(`[install] invalid --channel "${String(explicitChannel)}" (expected latest, next or an exact version such as 0.2.4-beta.0)`);
+  console.error(`[install] invalid --channel "${String(explicitChannel)}" (expected latest, next, trunk or an exact version such as 0.2.4-beta.0)`);
   process.exit(1);
 }
 
@@ -273,8 +293,9 @@ function npmKitSource(): KitChoice {
   return { source: channel === "latest" ? `npm:${pkg}` : `npm:${pkg}@${channel}`, channel };
 }
 
-// git delivery: `next` is the unpinned repository (pi follows its default branch), a release is
-// its `v<version>` tag, and `latest` resolves to the newest release tag with `git ls-remote`.
+// git delivery: `next` is the unpinned repository (pi follows its default branch), `trunk` is
+// the head of the integration branch, a release is its `v<version>` tag, and `latest` resolves
+// to the newest release tag with `git ls-remote`.
 // With no --channel, the registered source and its recorded channel are kept.
 //
 // A registration from a retired private source (distribution.json git.legacySources) is never
@@ -314,12 +335,12 @@ function gitKitSource(): KitChoice {
     return { source: gitSourceFor(effectiveBase, next ? null : legacyGitRef), channel: next ? "next" : legacyGitRef };
   }
   if (!explicitChannel && registered && !legacy) {
-    return { source: registered, channel: recordedChannel(registered) ?? channelOfGitSource(registered, distribution.git.tagPrefix) };
+    return { source: registered, channel: recordedChannel(registered) ?? channelOfGitSource(registered, distribution.git.tagPrefix, distribution.git.trunkBranch) };
   }
   let channel = explicitChannel ?? "latest";
   let migration: SourceMigration | undefined;
   if (legacy) {
-    const before = recordedChannel(legacy) ?? channelOfGitSource(legacy, distribution.git.tagPrefix);
+    const before = recordedChannel(legacy) ?? channelOfGitSource(legacy, distribution.git.tagPrefix, distribution.git.trunkBranch);
     if (!explicitChannel) channel = before === "next" ? "next" : "latest";
     migration = { from: legacy, channel, retired: true };
     console.warn(`[install] Migrating the kit from the retired private source ${legacy} to ${distribution.git.source} (channel ${channel}).`);
@@ -334,6 +355,8 @@ function gitKitSource(): KitChoice {
   }
   const choice = (source: string, chosen: string): KitChoice => (migration ? { source, channel: chosen, migration } : { source, channel: chosen });
   if (channel === "next") return choice(gitSourceFor(effectiveBase, null), channel);
+  // `trunk` is the moving head of the integration branch, not a release tag.
+  if (channel === "trunk") return choice(gitSourceFor(effectiveBase, distribution.git.trunkBranch), channel);
   if (channel !== "latest") return choice(gitSourceFor(effectiveBase, `${distribution.git.tagPrefix}${channel}`), channel);
   const parsedBase = parseGitSource(effectiveBase);
   // effectiveBase is either the validated base or a registered source isKitGitSource() parsed.
@@ -508,7 +531,16 @@ if (all) {
   if (added.length) console.warn(`[install] WARN: --only did not name the required extension(s) ${added.join(", ")}; adding them (every install loads ${requiredExtensions.join(", ")}).`);
   selected = [...onlyNames, ...added];
 } else {
-  profileDef = loadProfile(profile);
+  try {
+    profileDef = loadProfile(profile);
+  } catch (error) {
+    // Not-found is the user's typo, not a crash: a clean message, the valid names, and exit 2.
+    // Any other failure (unreadable or invalid profile JSON) keeps its stack for a bug report.
+    if (!errorMessage(error).startsWith("[install] Profile not found:")) throw error;
+    console.error(errorMessage(error));
+    console.error(`[install] Valid profiles: ${listProfiles(PROFILES_DIR).join(", ")} (run with --help for details).`);
+    process.exit(2);
+  }
   // Safety-critical config is validated before anything is written: an unknown firewall policy or
   // mode (in the profile or in the existing firewall.json) or an unreadable firewall.json stops here.
   try {
@@ -581,7 +613,7 @@ if (mode !== "npm") check("git");
 check("pi");
 const piBin = resolveCommand("pi") || "pi";
 
-console.log(`\n[install] pi-system`);
+console.log(`\n[install] Luna`);
 console.log(`  profile:      ${all ? "all" : onlyNames ? "--only" : profile}`);
 console.log(`  extensions:   ${selected.join(", ") || "(none)"}`);
 console.log(`  filter:       ${extensionPatterns ? `${extensionPatterns.length} in-package extension(s) enabled, rest disabled` : "(none - full package)"}`);

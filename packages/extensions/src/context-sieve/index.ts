@@ -15,6 +15,7 @@ interface Contribution {
 const DEFAULT_BUDGET_TOKENS = 4096;
 const DEFAULT_MESSAGE_BUDGET_TOKENS = 1200;
 const CHARS_PER_TOKEN = 4;
+const MESSAGE_FRAMING = "[Context for this request — injected automatically, not written by the user]\n\n";
 
 // Upper bound on a single contribution file. Files above this are skipped before parse so a
 // runaway/hostile producer cannot force a huge JSON parse on every before_agent_start.
@@ -64,7 +65,7 @@ export function compareContributions(a: Contribution, b: Contribution): number {
 //    (memory recall, delegation directives, loop/progress nudges). Appending a message keeps
 //    the cached prefix intact; rewriting the system prompt every turn (the previous behaviour
 //    for all contributions) threw the cache away on nearly every prompt.
-const DYNAMIC_IDS = new Set(["memory-local", "memory-vault", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop", "skill-router"]);
+const DYNAMIC_IDS = new Set(["memory-local", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop"]);
 
 function channelOf(c: Contribution): "system" | "message" {
   if (c.channel === "system" || c.channel === "message") return c.channel;
@@ -232,7 +233,10 @@ function assembleWithBudget(
   const truncatedIds: string[] = [];
 
   for (const contrib of sorted) {
-    const remaining = budgetChars - used;
+    // Charge the "\n\n" that joins the assembled blocks, so the joined text never exceeds
+    // budgetChars (an uncharged separator let totalTokens exceed the recorded budget).
+    const separator = assembled.length > 0 ? 2 : 0;
+    const remaining = budgetChars - used - separator;
     if (remaining <= 0) {
       dropped.push(contrib.id);
       continue;
@@ -248,7 +252,7 @@ function assembleWithBudget(
     assembled.push(text);
     included.push(contrib.id);
     if (truncated) truncatedIds.push(contrib.id);
-    used += text.length;
+    used += text.length + separator;
   }
 
   return { assembled, included, dropped, truncatedIds };
@@ -287,7 +291,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     const dir = contribDir;
     const contributions = readContributions(dir);
-    if (contributions.length === 0) return undefined;
+    if (contributions.length === 0) {
+      // Nothing is current, so forget what was injected: a contribution that comes back later
+      // (even byte-identical) must be injected again.
+      lastInjected.clear();
+      return undefined;
+    }
 
     // The budgets are absolute token counts, but a fixed 4096 + 1200 is a third of a 16k window and
     // most of an 8k one (the lite profile is for exactly those). Size them against the model's real
@@ -300,7 +309,10 @@ export default function (pi: ExtensionAPI) {
     const messageBudgetTokens = messageBudget.tokens;
     const windowClamped = sysBudget.clamped || messageBudget.clamped;
     const system = assembleWithBudget(contributions.filter((c) => channelOf(c) === "system"), budgetTokens * CHARS_PER_TOKEN);
-    const message = assembleWithBudget(contributions.filter((c) => channelOf(c) === "message"), messageBudgetTokens * CHARS_PER_TOKEN);
+    const messageBudgetChars = messageBudgetTokens * CHARS_PER_TOKEN;
+    // Reserve the hidden-message framing before assembling blocks. If even the framing
+    // cannot fit, every message contribution is dropped and no message is injected.
+    const message = assembleWithBudget(contributions.filter((c) => channelOf(c) === "message"), Math.max(0, messageBudgetChars - MESSAGE_FRAMING.length));
     const messageText = message.assembled.join("\n\n");
     const fresh: string[] = [];
     const injected: string[] = [];
@@ -320,24 +332,35 @@ export default function (pi: ExtensionAPI) {
     for (const id of [...lastInjected.keys()]) if (!current.has(id)) lastInjected.delete(id);
     const skippedUnchanged = messageText !== "" && injected.length === 0;
 
+    const result: { systemPrompt?: string; message?: { customType: string; content: string; display: boolean } } = {};
+    if (system.assembled.length > 0) result.systemPrompt = event.systemPrompt + "\n\n" + system.assembled.join("\n\n");
+    if (injected.length > 0) {
+      const freshText = fresh.join("\n\n");
+      let content = MESSAGE_FRAMING + freshText;
+      // Name only whole ids that fit after the fresh blocks; the note is optional.
+      const stillCurrentIds: string[] = [];
+      for (const id of unchanged) {
+        const ids = [...stillCurrentIds, id];
+        const note = `\n\n(Still current, injected earlier in this conversation: ${ids.join(", ")}.)`;
+        if (content.length + note.length > messageBudgetChars) break;
+        stillCurrentIds.push(id);
+      }
+      if (stillCurrentIds.length > 0) content += `\n\n(Still current, injected earlier in this conversation: ${stillCurrentIds.join(", ")}.)`;
+      for (const id of injected) lastInjected.set(id, current.get(id) ?? "");
+      result.message = { customType: "context-sieve", content, display: false };
+    }
+
     writeBudgetEvent(workspace, dir, {
       totalTokens: estimateTokens(system.assembled.join("\n\n")),
       budget: budgetTokens,
       dropped: [...system.dropped, ...message.dropped],
       included: [...system.included, ...message.included],
       truncated: [...system.truncatedIds, ...message.truncatedIds],
-      message: { tokens: estimateTokens(messageText), included: message.included, injected, skippedUnchanged },
+      message: { tokens: estimateTokens(result.message?.content ?? ""), included: message.included, injected, skippedUnchanged },
       contextWindow: window,
       windowClamped,
     });
 
-    const result: { systemPrompt?: string; message?: { customType: string; content: string; display: boolean } } = {};
-    if (system.assembled.length > 0) result.systemPrompt = event.systemPrompt + "\n\n" + system.assembled.join("\n\n");
-    if (injected.length > 0) {
-      for (const id of injected) lastInjected.set(id, current.get(id) ?? "");
-      const stillCurrent = unchanged.length > 0 ? `\n\n(Still current, injected earlier in this conversation: ${unchanged.join(", ")}.)` : "";
-      result.message = { customType: "context-sieve", content: `[Context for this request — injected automatically, not written by the user]\n\n${fresh.join("\n\n")}${stillCurrent}`, display: false };
-    }
     return result.systemPrompt || result.message ? result : undefined;
   });
 

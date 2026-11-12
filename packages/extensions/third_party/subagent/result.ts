@@ -70,6 +70,7 @@ function failureHint(result: SingleResult): string {
   if (result.stopReason === "stream-cap") return "Raise PI_KIT_SUBAGENT_STREAM_CAP_BYTES for exploration-heavy tasks.";
   if (result.stopReason === "stopped") return "Stopped by operator (workflow_control or /workflows stop).";
   if (result.stderr.includes("Unknown agent")) return "Built-in roles come from the kit; add your own in ~/.pi/agent/agents, or pass agentScope \"both\" to include this project's .pi/agents.";
+  if (result.exitCode !== 0 && !result.finalOutput && result.messages.length === 0) return `The child ended without a message: it exited before replying (for example a crash, or a first prompt that did not fit its context window). Read its run log with workflow_status {id: "${result.runId ?? "<run>"}"}.`;
   return "";
 }
 

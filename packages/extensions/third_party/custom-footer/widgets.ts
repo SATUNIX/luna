@@ -4,16 +4,19 @@
  */
 import path from "node:path";
 import { footerGlyphs } from "./render.ts";
+import { truncateDisplay } from "./width.ts";
 import type { Theme, TodoItem } from "./render.ts";
 
-export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii = false): string[] {
+export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii = false, width?: number): string[] {
   if (!items.length) return [];
+  const glyphs = footerGlyphs(theme, ascii);
+  // The caller knows the terminal width; without it the lines keep their full text and pi wraps them.
+  const fit = (lines: string[]): string[] => width === undefined ? lines : lines.map((line) => truncateDisplay(line, width, glyphs.ellipsis));
   const done = items.filter((i) => i.state === "done").length;
   const cells = 10;
   const filled = Math.round((done / items.length) * cells);
-  const glyphs = footerGlyphs(theme, ascii);
   const header = `${theme.bold(theme.fg("accent", "Todos"))} ${theme.fg(done === items.length ? "success" : "text", `${done}/${items.length}`)} ${theme.fg("success", glyphs.filled.repeat(filled))}${theme.fg("dim", glyphs.empty.repeat(cells - filled))}`;
-  if (done === items.length) return [`${header} ${theme.fg("success", "all done")}`];
+  if (done === items.length) return fit([`${header} ${theme.fg("success", "all done")}`]);
   // The hint rides on the header line, so it costs no row; hiding the list is otherwise easy to miss.
   const hint = theme.fg("dim", "  /footer todos off hides this");
   // Show active first, then open, then the most recent done items, capped.
@@ -26,7 +29,7 @@ export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii
     else lines.push(`  ${theme.fg("muted", glyphs.open)} ${theme.fg("text", `#${item.id} ${item.text}`)}`);
   }
   if (items.length > shown.length) lines.push(theme.fg("dim", `  ${glyphs.more} ${items.length - shown.length} more`));
-  return lines;
+  return fit(lines);
 }
 
 
@@ -40,10 +43,10 @@ export const PHRASES = [
 /** `String(value)` for a value of any type (tool arguments are not checked by pi). */
 const toText = (value: unknown): string => String(value);
 
-export function toolPhrase(toolName: string, args: unknown): string {
+export function toolPhrase(toolName: string, args: unknown, ascii = false): string {
   const clip = (s: unknown, n = 40) => {
     const v = toText(s ?? "").replace(/\s+/g, " ").trim();
-    return v.length > n ? `${v.slice(0, n - 1)}…` : v;
+    return truncateDisplay(v, n, ascii ? "..." : "…");
   };
   const base = (p: unknown) => (typeof p === "string" ? path.basename(p) : "");
   const input = args as { path?: unknown; command?: unknown } | null | undefined;
@@ -71,7 +74,7 @@ export const TIPS: Tip[] = [
   { text: "/verify runs an independent reviewer against the goal and todo list.", requires: "verify" },
   { text: "/verdicts shows what done means and what still blocks completion.", requires: "verdicts" },
   { text: "/goal <text> sets the mission goal that the verifier checks.", requires: "goal" },
-  { text: "/kit lists every kit command.", requires: "kit" },
+  { text: "/menu lists every command.", requires: "menu" },
   { text: "/handoff writes a resume note for the next session.", requires: "handoff" },
   { text: "/footer status shows every detail the bar drops when it is narrow. /footer light|default|heavy picks the density." },
   { text: "/effort picks how deep and broad the agent works and how much it delegates (E1 to E5)." },

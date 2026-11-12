@@ -7,12 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import { loadExtension, loadModule, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { literal, object, parseJson, record, string } from "../packages/core/lib/guard.ts";
+import { runFirewallBenignCorpus } from "./firewall-benign-corpus.ts";
 import type * as Approvals from "../packages/extensions/src/tool-firewall/approvals.ts";
 import type * as Classify from "../packages/extensions/src/tool-firewall/classify.ts";
 import type * as Feedback from "../packages/extensions/src/tool-firewall/feedback.ts";
 import type * as Judge from "../packages/extensions/src/tool-firewall/judge.ts";
 import type * as Profile from "../packages/extensions/src/tool-firewall/profile.ts";
 import type * as Trajectory from "../packages/extensions/src/tool-firewall/trajectory.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 // What the firewall's tool_call handler returns: undefined to allow, or a block decision.
 interface FirewallDecision {
@@ -484,9 +486,9 @@ async function run(): Promise<void> {
     const padded = ["<" + "\u200b".repeat(300) + "/goal>", "<" + " ".repeat(300) + "/goal>", "</g" + "\u200b".repeat(300) + "oal>", "<" + "\u0301".repeat(300) + "/goal>", "</pre" + "\u00a8".repeat(300) + "cedents>"];
     for (const v of padded) assert.ok(judge.neutralise(v).startsWith("‹"), `a block tag padded with ${v.length - 6} skipped characters is shown with ‹`);
     const manyOpeners = "<".repeat(20000) + "\u200b".repeat(20000) + "x";
-    const started = Date.now();
-    assert.equal(judge.neutralise(manyOpeners), manyOpeners, "many openers before a long skipped run are not block tags");
-    assert.ok(Date.now() - started < 2000, "neutralise stays linear for many openers before a long skipped run");
+    assertCpuWithin("neutralise stays linear for many openers before a long skipped run", 2000, () => {
+      assert.equal(judge.neutralise(manyOpeners), manyOpeners, "many openers before a long skipped run are not block tags");
+    });
     for (const v of ["a<b", "x &lt; y", "sort <in.txt", "＜div＞"]) assert.equal(judge.neutralise(v), v, `${JSON.stringify(v)} is not a block tag and stays unchanged`);
     assert.equal(judge.neutralise("sort <recent.log"), "sort ‹recent.log", "a redirection from a file named like a block is shown with ‹");
     // One step with a very long location must not empty the step list.
@@ -501,6 +503,9 @@ async function run(): Promise<void> {
     ] };
     const overPrompt = judge.judgePrompt({ request: "x", recent: [], assessment: over, workspace, untrusted: false, precedents: [] });
     assert.ok(/\n- ls \(local; low; \)/.test(overPrompt) && overPrompt.includes("- (+1 more steps)"), "a line over the budget is skipped and the lines after it are still listed");
+
+    // PG-23: the real guard handlers must allow every benign repository command.
+    await runFirewallBenignCorpus();
 
     console.log("[test:security tool-firewall] OK");
   } finally {

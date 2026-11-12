@@ -49,7 +49,7 @@ Run with no command/argument for an interactive menu.
 - They do not replace `npm run verify` / `npm run test:security` — run those
   yourself after any change to `kit/` or `extensions/`, per
   [`CLAUDE.md`](../../../CLAUDE.md)'s repo conventions.
-- They do not manage the `pi-system` container deployment —
+- They do not manage the Luna container deployment —
   that lives in the sibling repo; see its own docs.
 
 ## Uninstalling

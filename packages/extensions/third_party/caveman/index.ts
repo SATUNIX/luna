@@ -191,7 +191,8 @@ export default function (pi: ExtensionAPI) {
         if (typeof data?.detailMode === "boolean") detailMode = data.detailMode;
       }
     }
-    // Runs after context-sieve's session_start wipe (vendor/ loads after extensions/).
+    // context-sieve's reader admits any file written after its module-load epoch, so
+    // extension load order does not matter.
     apply();
     ctx.ui.setStatus(STATUS_KEY, detailMode ? "off (detail)" : level);
   });

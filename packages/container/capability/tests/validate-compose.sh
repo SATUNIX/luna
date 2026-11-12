@@ -22,9 +22,9 @@ echo "[validate-compose] Checking compose files..."
 for f in "$CANONICAL" "$COMPAT"; do
   name=$(grep -E "^name:" "$f" | head -1 | sed 's/name: //')
   if [ "$name" = "pi-system" ]; then
-    pass "$(basename "$f"): compose name is pi-system"
+    pass "$(basename "$f"): compose name is the expected project name"
   else
-    fail "$(basename "$f"): compose name is '$name' (expected pi-system)"
+    fail "$(basename "$f"): compose name is '$name' (expected the historical project name)"
   fi
 done
 

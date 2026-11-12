@@ -19,6 +19,7 @@ import {
   buildCommandContractInput,
   commandContractProblems,
   registeredCommandsInSource,
+  aliasDeclarationsInSource,
   type CommandContractInput,
 } from "../packages/core/lib/command-contract.ts";
 import {
@@ -35,7 +36,7 @@ const PI_DIR = path.join(ROOT, "node_modules", "@earendil-works", "pi-coding-age
 /** A minimal clean input: one extension, no collisions. */
 function input(overrides: Partial<CommandContractInput> = {}): CommandContractInput {
   return {
-    extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: ["effort"] }],
+    extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: ["effort"], aliasDescriptions: [] }],
     promptTemplates: ["code-plan"],
     builtinCommands: piBuiltinCommandNames(),
     ...overrides,
@@ -52,7 +53,7 @@ function testLeadingSlashIsNormalised() {
   assert.equal(bareCommandName("/effort"), "effort");
   assert.equal(bareCommandName("effort"), "effort");
   const problems = commandContractProblems(
-    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["/effort"], codeCommands: ["effort"] }] }),
+    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["/effort"], codeCommands: ["effort"], aliasDescriptions: [] }] }),
   );
   assert.deepEqual(problems, [], "a manifest '/' prefix must not read as drift");
 }
@@ -61,8 +62,8 @@ function testDuplicateCommandIsReported() {
   const problems = commandContractProblems(
     input({
       extensions: [
-        { label: "first-party/alpha", name: "alpha", manifestCommands: ["shared"], codeCommands: ["shared"] },
-        { label: "third-party/beta", name: "beta", manifestCommands: ["shared"], codeCommands: ["shared"] },
+        { label: "first-party/alpha", name: "alpha", manifestCommands: ["shared"], codeCommands: ["shared"], aliasDescriptions: [] },
+        { label: "third-party/beta", name: "beta", manifestCommands: ["shared"], codeCommands: ["shared"], aliasDescriptions: [] },
       ],
     }),
   );
@@ -74,7 +75,7 @@ function testDuplicateCommandIsReported() {
 
 function testPromptShadowIsReported() {
   const problems = commandContractProblems(
-    input({ promptTemplates: ["effort"], extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: ["effort"] }] }),
+    input({ promptTemplates: ["effort"], extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: ["effort"], aliasDescriptions: [] }] }),
   );
   assert.deepEqual(codes(problems), ["shadows-prompt"], "a command named like a prompt template must be reported");
 }
@@ -83,7 +84,7 @@ function testBuiltinShadowIsReported() {
   const problems = commandContractProblems(
     input({
       builtinCommands: ["compact"],
-      extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["compact"], codeCommands: ["compact"] }],
+      extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["compact"], codeCommands: ["compact"], aliasDescriptions: [] }],
     }),
   );
   assert.deepEqual(codes(problems), ["shadows-builtin"], "a command named like a pi built-in must be reported");
@@ -91,11 +92,11 @@ function testBuiltinShadowIsReported() {
 
 function testManifestDriftIsReported() {
   const missing = commandContractProblems(
-    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: [], codeCommands: ["effort"] }] }),
+    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: [], codeCommands: ["effort"], aliasDescriptions: [] }] }),
   );
   assert.deepEqual(codes(missing), ["manifest-drift"], "a command registered in code but absent from extension.json must be reported");
   const extra = commandContractProblems(
-    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: [] }] }),
+    input({ extensions: [{ label: "first-party/alpha", name: "alpha", manifestCommands: ["effort"], codeCommands: [], aliasDescriptions: [] }] }),
   );
   assert.deepEqual(codes(extra), ["manifest-drift"], "a command declared but not registered must be reported");
 }
@@ -108,6 +109,103 @@ function testRegisteredCommandsInSource() {
     pi.registerCommand(variableName, {});
   `;
   assert.deepEqual(registeredCommandsInSource(src), ["one", "two"], "only literal registerCommand names are collected");
+}
+
+function testAliasTargetIsReported() {
+  const valid = commandContractProblems(
+    input({
+      extensions: [
+        {
+          label: "first-party/alpha",
+          name: "alpha",
+          manifestCommands: ["effort"],
+          codeCommands: ["effort"],
+          aliasDescriptions: [{ command: "effort-alias", description: "Alias of /effort" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(valid, [], "an alias whose target is a registered command must not be reported");
+
+  const missing = commandContractProblems(
+    input({
+      extensions: [
+        {
+          label: "first-party/alpha",
+          name: "alpha",
+          manifestCommands: [],
+          codeCommands: [],
+          aliasDescriptions: [{ command: "ghost-alias", description: "Alias of /ghost" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(codes(missing), ["alias-target-missing"], "an alias to an unknown command must be reported");
+
+  const builtin = commandContractProblems(
+    input({
+      builtinCommands: ["compact"],
+      extensions: [
+        {
+          label: "first-party/alpha",
+          name: "alpha",
+          manifestCommands: [],
+          codeCommands: [],
+          aliasDescriptions: [{ command: "compact-alias", description: "Alias of /compact" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(builtin, [], "an alias whose target is a built-in must not be reported");
+
+  const prompt = commandContractProblems(
+    input({
+      extensions: [
+        {
+          label: "first-party/alpha",
+          name: "alpha",
+          manifestCommands: [],
+          codeCommands: [],
+          aliasDescriptions: [{ command: "plan-alias", description: "Alias of /code-plan" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(prompt, [], "an alias whose target is a prompt template must not be reported");
+}
+
+function testNonAliasDescriptionIsNotFlagged() {
+  const problems = commandContractProblems(
+    input({
+      extensions: [
+        {
+          label: "first-party/alpha",
+          name: "alpha",
+          manifestCommands: ["effort"],
+          codeCommands: ["effort"],
+          aliasDescriptions: [{ command: "effort", description: "Choose how deep the agent works" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(problems, [], "only descriptions starting exactly with 'Alias of /' are alias-checked");
+}
+
+function testAliasDeclarationsInSource() {
+  const src = [
+    '    pi.registerCommand("one", { description: "Alias of /workflows. x" });',
+    '    pi.registerCommand("no-description", { handler: async () => { doThing({ description: "Alias of /ghost" }); } });',
+    '    // pi.registerCommand("commented", { description: "Alias of /ghost" });',
+    '    pi.registerCommand("menu", {',
+    '      description: "Real menu",',
+    '      getArgumentCompletions: (p) => [{ description: "nested" }],',
+    '      handler: open,',
+    '    });',
+  ].join("\n");
+  const aliases = aliasDeclarationsInSource(src);
+  assert.deepEqual(aliases.map((a) => a.command), ["one", "menu"], "commented-out and description-less registrations are skipped");
+  assert.equal(aliases[0]?.description, "Alias of /workflows. x", "the command's own description is read");
+  assert.equal(aliases[1]?.description, "Real menu", "a nested description is not attributed to the command");
 }
 
 function testCheckoutHasNoContractProblems() {
@@ -206,6 +304,9 @@ const tests: Array<[name: string, fn: () => void]> = [
   ["a command named like a prompt template is reported", testPromptShadowIsReported],
   ["a command named like a pi built-in is reported", testBuiltinShadowIsReported],
   ["manifest/code drift is reported in both directions", testManifestDriftIsReported],
+  ["an alias target must be a registered command, prompt template or built-in", testAliasTargetIsReported],
+  ["a non-alias description is not alias-checked", testNonAliasDescriptionIsNotFlagged],
+  ["aliasDeclarationsInSource reads own descriptions only", testAliasDeclarationsInSource],
   ["registeredCommandsInSource collects literal names only", testRegisteredCommandsInSource],
   ["the checkout satisfies the command contract", testCheckoutHasNoContractProblems],
   ["the built-in copy matches the pinned pi dist and covers any other installed pi", testBuiltinListMatchesInstalledPi],

@@ -429,6 +429,59 @@ ${line}`);
     }
   },
 
+  async uiSettingsMergePreservesForeignKeys() {
+    // ui.json is shared with the hub, command menu and launch screen. Every valid /footer and /tips
+    // change must merge its own keys instead of rewriting the file with a six-field projection.
+    const agent = tmpWorkspace("pi-kit-footer-merge-");
+    const workspace = tmpWorkspace("pi-kit-footer-merge-ws-");
+    const restore = setEnv("PI_CODING_AGENT_DIR", agent);
+    try {
+      const file = path.join(agent, "pi-kit", "ui.json");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const foreign = {
+        hubKey: "alt+k",
+        commandMenu: "all",
+        pinnedCommands: ["/help"],
+        hiddenCommands: ["/model"],
+        launchScreen: "off",
+        reducedMotion: true,
+      };
+      fs.writeFileSync(file, JSON.stringify({ ...foreign, footer: true }, null, 2));
+      const pi = fakePi();
+      footer.default(pi.api);
+      const ctx = {
+        cwd: workspace, hasUI: true, model: { id: "m", provider: "p", contextWindow: 100 },
+        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
+        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
+        ui: { theme: plain, setFooter() {}, setWidget() {}, setWorkingMessage() {}, notify: () => {}, select: async () => "heavy" },
+      };
+      await pi.handlers.get("session_start")({}, ctx);
+      const h = pi.commands.get("footer").handler;
+      const t = pi.commands.get("tips").handler;
+      const assertForeign = (step: string): void => {
+        const saved = readSettings(file);
+        for (const [key, value] of Object.entries(foreign)) assert.deepEqual(saved[key], value, `${step}: ${key} is unchanged`);
+      };
+      await h("light", ctx);
+      assert.equal(readSettings(file).mode, "light");
+      assert.equal(readSettings(file).footer, true);
+      assertForeign("/footer light");
+      await h("ascii on", ctx);
+      assert.equal(readSettings(file).ascii, true);
+      assertForeign("/footer ascii on");
+      await h("ascii off", ctx);
+      assert.ok(!("ascii" in readSettings(file)), "ascii off removes the key");
+      assertForeign("/footer ascii off");
+      await t("off", ctx);
+      assert.equal(readSettings(file).tips, false);
+      assertForeign("/tips off");
+    } finally {
+      restore();
+      rmWorkspace(agent);
+      rmWorkspace(workspace);
+    }
+  },
+
   async asciiSettingReachesTodoWidget() {
     // F-2 wiring: /footer ascii on must change the todo checklist that is handed to pi, not only
     // the status bar. The unit test pins renderTodoWidget's ascii parameter; this pins the call site.
@@ -448,15 +501,24 @@ ${line}`);
         ui: { theme: plain, setFooter() {}, setWidget: (k: string, v: unknown) => (v === undefined ? widgets.delete(k) : widgets.set(k, v)), setWorkingMessage() {}, notify() {} },
       };
       await pi.handlers.get("session_start")({}, ctx);
-      const todoWidget = (): string => {
+      // pi mounts a component now, so render it at the width under test; an older string[] still works.
+      const todoWidgetLines = (width = 80): string[] => {
         const value = widgets.get("pi-kit-todos");
-        return Array.isArray(value) ? value.map((line) => strip(String(line))).join("\n") : "";
+        if (typeof value === "function") {
+          const mount = value as (tui: { terminal?: { rows?: number } }, theme: Theme) => { render(w: number): string[] };
+          return mount({ terminal: { rows: 40 } }, plain).render(width).map((line) => strip(line));
+        }
+        return Array.isArray(value) ? value.map((line) => strip(String(line))) : [];
       };
+      const todoWidget = (width = 80): string => todoWidgetLines(width).join("\n");
       assert.match(todoWidget(), /▸ #1 write the test/, "the checklist renders with Unicode glyphs by default");
       await pi.commands.get("footer").handler("ascii on", ctx);
       const ascii = todoWidget();
       assert.ok(/^\p{ASCII}*$/u.test(ascii), `the ASCII setting reaches the todo widget: ${ascii}`);
       assert.ok(!ascii.includes("▸"), "the Unicode marker is gone once ascii is on");
+      const narrow = todoWidgetLines(24);
+      assert.ok(narrow.length > 0, "the mounted checklist renders at a narrow width");
+      for (const line of narrow) assert.ok(W(line) <= 24, `a narrow todo line fits 24 columns: ${W(line)} ${line}`);
     } finally {
       restore.reverse().forEach((r) => r());
       rmWorkspace(agent);
@@ -464,6 +526,34 @@ ${line}`);
     }
   },
 
+  async autoAsciiThemeReachesToolPhrase() {
+    // An ISO/ANSI/TTY theme selects ASCII automatically; the working line's tool phrase must follow
+    // the same choice, not only the explicit /footer ascii setting.
+    const agent = tmpWorkspace("pi-kit-footer-autascii-");
+    const workspace = tmpWorkspace("pi-kit-footer-autascii-ws-");
+    const restore = setEnv("PI_CODING_AGENT_DIR", agent);
+    try {
+      const pi = fakePi();
+      footer.default(pi.api);
+      const ctx = {
+        cwd: workspace, hasUI: true, model: { id: "m", provider: "p" },
+        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
+        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
+        ui: { theme: ansiTheme, setFooter() {}, setWidget() {}, setWorkingMessage() {}, notify() {} },
+      };
+      await pi.handlers.get("session_start")({}, ctx);
+      await pi.handlers.get("agent_start")({}, ctx);
+      await pi.handlers.get("tool_execution_start")({ toolName: "bash", args: { command: "x".repeat(80) } }, ctx);
+      const working = strip(footerDebug(pi.api).workingText(Date.now()));
+      assert.ok(working.includes("..."), `automatic ASCII theme reaches the tool phrase: ${working}`);
+      assert.ok(!working.includes("…"), `automatic ASCII theme does not emit U+2026: ${working}`);
+      await pi.handlers.get("agent_end")({}, ctx);
+    } finally {
+      restore();
+      rmWorkspace(agent);
+      rmWorkspace(workspace);
+    }
+  },
   async nonInteractiveSessionsGetTextNotSilence() {
     const agent = tmpWorkspace("pi-kit-footer-headless-");
     const workspace = tmpWorkspace("pi-kit-footer-headless-ws-");

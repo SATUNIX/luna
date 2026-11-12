@@ -8,8 +8,11 @@
  *      secret from tests/fixtures/secret-corpus.json in its output, and keeps the key name or
  *      header the entry says must stay;
  *   3. text with no secret in it is left unchanged by the table, and a second pass changes nothing;
- *   4. adversarial 1 MB inputs (repeated rule prefixes with no closing part) finish well inside a
- *      linear-time budget, so stored text cannot stall a session.
+ *   4. adversarial inputs (repeated rule prefixes with no closing part) at 4x the size grow
+ *      sub-quadratically and stay inside a CPU-time budget, so stored text cannot stall a
+ *      session even on a busy host;
+ *   5. the sub-quadratic guard itself passes linear probes (including a 10x slower host) and
+ *      rejects a genuinely quadratic probe.
  * The corpus values are synthetic and stored as parts the test joins, so no committed line holds a
  * whole token shape. No network, no model.
  */
@@ -20,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { isolateKitEnv, loadModule } from "../packages/core/eval/harness.ts";
 import { checkSharedCopies, SHARED_COPIES } from "../packages/core/gen-shared.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
+import { assertSubQuadratic } from "./perf-budget.ts";
 import * as canonical from "../packages/core/shared/redact.ts";
 import * as mem0Copy from "../packages/extensions/src/memory-mem0/shared/redact.ts";
 import * as vaultCopy from "../packages/extensions/src/memory-vault/shared/redact.ts";
@@ -31,6 +35,7 @@ import { redact as saveRedact } from "../packages/extensions/src/save/index.ts";
 import { redact as feedbackRedact } from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { redactText as workflowRedact } from "../packages/extensions/third_party/subagent/redact.ts";
 import { redactSecrets as notebookRedact } from "../packages/autonomy/lib/notebook.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 const restoreEnv = isolateKitEnv();
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,34 +143,58 @@ check("3. text without a secret is unchanged, and redaction is idempotent", () =
   }
 });
 
-check("4. adversarial 1 MB inputs finish inside a linear-time budget", () => {
+check("4. adversarial inputs at 4x the size grow sub-quadratically and stay inside a CPU budget", () => {
   // Each input repeats a rule's opening with nothing that closes it. A backtracking rule takes
-  // seconds to minutes on these; the linear table takes tens of milliseconds.
-  const MB = 1024 * 1024;
-  const fill = (unit: string): string => unit.repeat(Math.ceil(MB / unit.length));
+  // seconds to minutes on these; the linear table takes tens of milliseconds. The check compares
+  // 256 KB (1x) with 1 MB (4x) so host load scales both timings instead of turning the check red.
+  const KB = 1024;
+  const fill = (unit: string, bytes: number): string => unit.repeat(Math.ceil(bytes / unit.length));
   const inputs: ReadonlyArray<readonly [string, string]> = [
-    ["private-key headers, no END line", fill("-----BEGIN PRIV" + "ATE KEY-----\n")],
-    ["curl -u without a password", fill("curl -u ")],
-    ["mysql -p prefixes", fill("mysql x -")],
-    ["url scheme and user, no @", fill("http://user:pass")],
-    ["key names, no value", fill("api_key_secret_")],
-    ["bearer words", fill("bearer ")],
-    ["camel-case names", fill("aaaaToken")],
+    ["private-key headers, no END line", "-----BEGIN PRIV" + "ATE KEY-----\n"],
+    ["curl -u without a password", "curl -u "],
+    ["mysql -p prefixes", "mysql x -"],
+    ["url scheme and user, no @", "http://user:pass"],
+    ["key names, no value", "api_key_secret_"],
+    ["bearer words", "bearer "],
+    ["camel-case names", "aaaaToken"],
   ];
-  // The private-key rule is the one that was quadratic, so it gets the tight budget the
-  // roadmap sets (200 ms per MB); the rest are bounded scans with a larger constant.
+  // Two complementary guards: sub-quadratic growth (host-speed independent) and an absolute
+  // CPU-time budget (load-tolerant, but still bounded so a super-linear rule cannot hide).
   const budgetFor = (name: string): number => (name.startsWith("private-key") ? 200 : 1000);
-  const slow: string[] = [];
-  for (const [name, text] of inputs) {
-    const BUDGET_MS = budgetFor(name);
-    for (const [label, fn] of [["table", canonical.redact], ["workflow redactText", (t: string) => workflowRedact(t).text]] as const) {
-      const started = performance.now();
-      fn(text);
-      const ms = performance.now() - started;
-      if (ms > BUDGET_MS) slow.push(`${label}, ${name}: ${ms.toFixed(0)} ms`);
-    }
+  for (const [name, unit] of inputs) {
+    const small = fill(unit, 256 * KB);
+    const large = fill(unit, 1024 * KB);
+    assertSubQuadratic(`table, ${name}`, canonical.redact, small, large);
+    assertSubQuadratic(`workflow redactText, ${name}`, (t: string) => workflowRedact(t).text, small, large);
+    const budget = budgetFor(name);
+    assertCpuWithin(`table, ${name}`, budget, () => canonical.redact(large));
+    assertCpuWithin(`workflow redactText, ${name}`, budget, () => workflowRedact(large).text);
   }
-  assert.deepEqual(slow, []);
+});
+
+check("5. the sub-quadratic guard passes linear probes and rejects a quadratic one", () => {
+  // The guard's own regression: a loaded host slows a linear probe uniformly, which must pass,
+  // while a genuinely quadratic probe must be caught by the growth ratio, not the clock.
+  const small = "a".repeat(200_000);
+  const large = "a".repeat(800_000);
+  const linear = (text: string): void => {
+    let acc = 0;
+    for (let i = 0; i < text.length; i++) acc += text.charCodeAt(i);
+    assert.ok(acc >= 0);
+  };
+  const tenTimesSlower = (text: string): void => {
+    for (let pass = 0; pass < 10; pass++) linear(text);
+  };
+  const quadratic = (text: string): void => {
+    let acc = 0;
+    for (let i = 0; i < text.length; i += 100) {
+      for (let j = 0; j < text.length; j += 100) acc += text.charCodeAt((i + j) % text.length);
+    }
+    assert.ok(acc >= 0);
+  };
+  assertSubQuadratic("linear probe", linear, small, large);
+  assertSubQuadratic("linear probe on a 10x slower machine", tenTimesSlower, small, large);
+  assert.throws(() => assertSubQuadratic("quadratic probe", quadratic, small, large), /quadratic/);
 });
 
 restoreEnv();

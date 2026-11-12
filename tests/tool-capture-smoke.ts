@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { evalCacheDir, loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
+import { assertCpuWithin } from "./timing.ts";
 import type * as Store from "../packages/extensions/src/tool-capture/store.ts";
 import type * as Classify from "../packages/extensions/src/tool-firewall/classify.ts";
 import type * as Capture from "../packages/extensions/src/tool-capture/index.ts";
@@ -400,10 +401,9 @@ try {
     for (const unit of ["x_token", "xtoken", "a-", "a.", "sk-", "xoxb-", 'token="', "token "]) {
       const text = "id=" + unit.repeat(Math.ceil((200 * 1024) / unit.length));
       for (const redactMode of [false, true]) {
-        const t0 = performance.now();
-        scanSecrets({ content: [{ type: "text", text }] }, redactMode);
-        const ms = performance.now() - t0;
-        assert.ok(ms < 200, `scanSecrets on 200 KB of ${JSON.stringify(unit)} (redact=${redactMode}) took ${Math.round(ms)} ms`);
+        assertCpuWithin(`scanSecrets on 200 KB of ${JSON.stringify(unit)} (redact=${String(redactMode)})`, 200, () => {
+          scanSecrets({ content: [{ type: "text", text }] }, redactMode);
+        });
       }
     }
     const cases: [string, string][] = [

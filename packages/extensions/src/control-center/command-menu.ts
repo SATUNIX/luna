@@ -2,10 +2,10 @@
  * The curated `/` menu: in the TUI, autocomplete hides the kit commands that moved into the hub.
  *
  * The filter never changes what runs. A hidden command appears again once at least four characters
- * are typed, and a fully typed hidden command still runs unchanged; only the suggestion list is
- * touched. pi's built-ins, prompt templates and skill commands are never hidden unless the operator
- * asks for it, and every other extension command - including companion-package commands - is
- * hidden unless it is pinned.
+ * are typed, or at its full name when the name is shorter than four characters, and a fully typed
+ * hidden command still runs unchanged; only the suggestion list is touched. pi's built-ins, prompt
+ * templates and skill commands are never hidden unless the operator asks for it, and every other
+ * extension command - including companion-package commands - is hidden unless it is pinned.
  *
  * Settings come from the same `<agent dir>/pi-kit/ui.json` the hub key uses: `commandMenu` is
  * "curated" (the default) or "all", and `pinnedCommands` / `hiddenCommands` add names to either
@@ -16,18 +16,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
-import { legacyCommandName, type HubModel } from "./model.ts";
+import { legacyCommandName, type HubModel, type HubRow } from "./model.ts";
 import { agentDir } from "./values.ts";
 
 /** A hidden command is offered again from this many typed characters after the slash. */
 export const HIDDEN_VISIBLE_PREFIX_LENGTH = 4;
 
 /** The location shown when no hub row runs the command. */
-export const ALL_COMMANDS_LOCATION = "moved → /kit ▸ All commands";
+export const ALL_COMMANDS_LOCATION = "moved → /menu ▸ All commands";
 
 /** The kit commands that stay in the `/` menu in every profile. */
 export const PINNED_KIT_COMMANDS: readonly string[] = [
-  "kit",
+  "menu",
   "goal",
   "verify",
   "save",
@@ -66,7 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const warned = new Set<string>();
 
 /** Write one line to stderr, once per key for the life of the process. */
-function warnOnce(key: string, message: string): void {
+export function warnOnce(key: string, message: string): void {
   if (warned.has(key)) return;
   warned.add(key);
   try {
@@ -190,12 +190,18 @@ export function pageTrail(model: HubModel, page: string): string[] {
 }
 
 function locationOfRow(model: HubModel, page: string, label: string): string {
-  return `moved → ${["/kit", ...pageTrail(model, page), label].join(" ▸ ")}`;
+  return `moved → ${["/menu", ...pageTrail(model, page), label].join(" ▸ ")}`;
+}
+
+/** The row whose legacy command is exactly `/<name>`, with no arguments. */
+function exactLegacyRow(model: HubModel, name: string): HubRow | undefined {
+  const token = `/${name}`;
+  return model.rows.find((candidate) => candidate.legacy?.trim() === token);
 }
 
 /** Where a command lives in the hub, for a hidden suggestion's description. */
 export function hubLocationFor(name: string, model: HubModel): string {
-  const row = model.rows.find((candidate) => legacyCommandName(candidate.legacy ?? "") === name);
+  const row = exactLegacyRow(model, name) ?? model.rows.find((candidate) => legacyCommandName(candidate.legacy ?? "") === name);
   return row ? locationOfRow(model, row.page, row.label) : ALL_COMMANDS_LOCATION;
 }
 
@@ -205,7 +211,11 @@ export function locationFor(model: HubModel): (name: string) => string {
   for (const row of model.rows) {
     if (row.legacy === undefined) continue;
     const name = legacyCommandName(row.legacy);
-    if (name !== "" && !locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label));
+    if (name === "") continue;
+    // An exact `/<name>` row beats an earlier row that only shares the command name (bare
+    // `/boost` vs `/boost status`), so the hint names the page the bare command runs.
+    if (row.legacy.trim() === `/${name}`) locations.set(name, locationOfRow(model, row.page, row.label));
+    else if (!locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label));
   }
   return (name) => locations.get(name) ?? ALL_COMMANDS_LOCATION;
 }
@@ -218,7 +228,8 @@ export interface CurationOptions {
 /**
  * Filter a command-token suggestion list. A hidden item is dropped below the reveal length and
  * otherwise kept with its hub location prefixed to the description. `prefix` is the editor's
- * command token including the leading slash.
+ * command token including the leading slash. A name shorter than the reveal length is revealed
+ * once its full name is typed, so a three-character alias such as `/kit` can still complete.
  */
 export function curateSuggestions(items: readonly AutocompleteItem[], prefix: string, options: CurationOptions): AutocompleteItem[] {
   const typed = prefix.startsWith("/") ? prefix.slice(1) : prefix;
@@ -229,7 +240,7 @@ export function curateSuggestions(items: readonly AutocompleteItem[], prefix: st
       kept.push(item);
       continue;
     }
-    if (typed.length < HIDDEN_VISIBLE_PREFIX_LENGTH) continue;
+    if (typed.length < Math.min(HIDDEN_VISIBLE_PREFIX_LENGTH, name.length)) continue;
     const location = options.locationOf(name);
     kept.push(item.description ? { ...item, description: `${location} — ${item.description}` } : { ...item, description: location });
   }

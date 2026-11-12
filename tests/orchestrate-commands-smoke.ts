@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { loadExtension, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv } from "../packages/core/eval/harness.ts";
+import { loadExtension, loadModule, fakePi, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as StrategyModule from "../packages/extensions/src/effort/strategy.ts";
 import type * as Orchestrator from "../packages/extensions/src/orchestrator/index.ts";
 
@@ -24,7 +24,7 @@ async function loadOrchestrator(): Promise<FakePi> {
 
 async function testOrchestratePlanCommand() {
   const ws = tmpWorkspace("pi-kit-orch-plan-");
-  const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+  const restore = isolateKitEnv();
   try {
     const pi = await loadOrchestrator();
     assert.ok(pi.commands.has("orchestrate-plan"), "/orchestrate-plan must be registered");
@@ -47,7 +47,7 @@ async function testOrchestratePlanCommand() {
 
 async function testOrchestrateImplementReviewCommand() {
   const ws = tmpWorkspace("pi-kit-orch-impl-");
-  const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+  const restore = isolateKitEnv();
   try {
     const pi = await loadOrchestrator();
     assert.ok(pi.commands.has("orchestrate-implement-review"), "/orchestrate-implement-review must be registered");
@@ -69,7 +69,7 @@ async function testOrchestrateImplementReviewCommand() {
 
 async function testMissingTaskArgumentRejected() {
   const ws = tmpWorkspace("pi-kit-orch-noargs-");
-  const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+  const restore = isolateKitEnv();
   try {
     const pi = await loadOrchestrator();
     const notes: Array<[message: string, level: string]> = [];
@@ -90,7 +90,7 @@ const LARGE_TASK = "Implement the billing pipeline across the whole service and 
 /** What the input handler leaves for the next prompt under this effort registry, or null. */
 async function directiveFor(report: ((signal: object) => unknown) | undefined): Promise<string | null> {
   const ws = tmpWorkspace("pi-kit-orch-directive-");
-  const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+  const restore = isolateKitEnv();
   try {
     if (report) Reflect.set(globalThis, EFFORT_KEY, { strategy: { report } });
     const pi = await loadOrchestrator();
@@ -147,7 +147,7 @@ function contribution(ws: string): string {
 async function testForcedOnOutlastsThePolicy() {
   const { decide, DEFAULT_STRATEGY } = await loadModule<typeof StrategyModule>("extensions/effort/strategy.ts");
   const ws = tmpWorkspace("pi-kit-orch-forced-");
-  const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+  const restore = isolateKitEnv();
   try {
     // E1 with effort loaded: the policy is there and says none.
     const report = (signal: object) => decide({ trigger: "delegate", ...signal }, { level: 1, standing: false, planTool: false, allowance: 0 }, DEFAULT_STRATEGY);
@@ -172,7 +172,7 @@ async function testPolicyOwnsTheThreshold() {
   const { decide, DEFAULT_STRATEGY } = await loadModule<typeof StrategyModule>("extensions/effort/strategy.ts");
   const run = async (delegateScore: number, text: string) => {
     const ws = tmpWorkspace("pi-kit-orch-threshold-");
-    const restore = setEnv("PI_KIT_ORCH_DISABLE", undefined);
+    const restore = isolateKitEnv();
     const notes: string[] = [];
     try {
       const strategy = { ...DEFAULT_STRATEGY, delegateScore };

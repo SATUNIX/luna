@@ -45,6 +45,7 @@ import type { ToolContext } from "./types.ts";
 import { META_NAME } from "./wf-meta.ts";
 import { bindWorkflowPanelOpener, rememberDigest } from "./workflow-tools.ts";
 import { withInputHold } from "./shared/input-owner.ts";
+import { withOverlayFrame } from "./overlay-frame.ts";
 
 // --- formatting -------------------------------------------------------------------------------
 
@@ -238,6 +239,12 @@ export interface RunViewOptions {
   narration: string[];
   /** Index of the highlighted agent; undefined in the text fallback. */
   selected?: number | undefined;
+  /**
+   * Total lines the run view may use, when the panel knows the terminal height. The panel trims
+   * narration first, then phase rows, then agent rows outside the selected window; undefined
+   * renders every section in full (the text fallback).
+   */
+  maxLines?: number | undefined;
 }
 
 function visibleWindow<T>(items: T[], selected: number | undefined, rows: number): { start: number; items: T[] } {
@@ -296,67 +303,137 @@ export function phaseTree(phases: PhaseRecord[]): Array<{ phase: PhaseRecord; de
 export function renderRunLines(run: RunSnapshot, o: RunViewOptions): string[] {
   const { paint } = o;
   const c = counts(run);
-  const out = [...headerLines(run, paint)];
-  if (run.error) out.push(paint.tone("bad", `error: ${oneLine(run.error)}`));
-  out.push("", paint.accent(`Phases (${c.phasesDone}/${c.phases})`));
+  const header = [...headerLines(run, paint)];
+  if (run.error) header.push(paint.tone("bad", `error: ${oneLine(run.error)}`));
   const tree = phaseTree(run.phases);
   const phaseWidth = Math.min(24, Math.max(4, ...tree.map((t) => t.phase.title.length + 2 * t.depth)));
-  for (const t of tree) {
-    const p = t.phase;
-    const done = t.agentIds.filter((id) => run.agents.find((a) => a.id === id)?.status !== "running").length;
-    const indent = "  ".repeat(t.depth);
-    out.push(`  ${indent}${paint.tone(tone(p.status), DOT)} ${p.title.padEnd(phaseWidth - indent.length)}  ${p.status.padEnd(7)}  ${done}/${t.agentIds.length}`);
-  }
-  out.push("", paint.accent(`Agents (${c.agentsDone}/${c.agents})`));
-  if (!run.agents.length) out.push(paint.dim("  no agents yet"));
   // Agents of a nested workflow() are indented under a `▸ <workflow>` line.
   const idCell = (a: AgentRecord): string => `${a.group !== undefined ? "  " : ""}${a.id}`;
   const labelWidth = Math.min(24, Math.max(5, ...run.agents.map((a) => idCell(a).length)));
   const modelWidth = Math.min(28, Math.max(5, ...run.agents.map((a) => (a.model ?? "-").length)));
-  const shown = visibleWindow(run.agents, o.selected, AGENT_ROWS);
-  if (shown.start > 0) out.push(paint.dim(`  … ${shown.start} above`));
-  let group: string | undefined;
-  shown.items.forEach((a, i) => {
-    if (a.group !== undefined && a.group !== group) out.push(paint.dim(`    ▸ ${a.group}`));
-    group = a.group;
-    const mark = o.selected === undefined ? " " : shown.start + i === o.selected ? paint.accent("›") : " ";
-    const row = `${mark} ${paint.tone(tone(a.status), dotOf(a))} ${idCell(a).padEnd(labelWidth)}  ${(a.model ?? "-").padEnd(modelWidth)}  ${`${fmtTokens(agentTokens(a))} tok`.padStart(10)}  ${fmtElapsed(a.elapsedMs).padStart(7)}  ${a.status}`;
-    out.push(row);
-    // The text fallback lists every failure; the TUI shows the selected agent's detail below.
-    if (o.selected === undefined && a.error) out.push(paint.tone("bad", `      ${oneLine(a.error)}`));
-  });
-  const below = run.agents.length - shown.start - shown.items.length;
-  if (below > 0) out.push(paint.dim(`  … ${below} more`));
-  if (o.selected !== undefined) {
-    const sel = run.agents[o.selected];
-    const detail = sel ? (sel.error ?? sel.activity) : undefined;
-    if (detail) out.push(paint.dim(`  ${sel?.id ?? ""}: ${oneLine(detail)}`));
+
+  const phaseLines = (limit: number): string[] => {
+    const out = ["", paint.accent(`Phases (${c.phasesDone}/${c.phases})`)];
+    for (const t of tree.slice(0, Math.max(0, limit))) {
+      const p = t.phase;
+      const done = t.agentIds.filter((id) => run.agents.find((a) => a.id === id)?.status !== "running").length;
+      const indent = "  ".repeat(t.depth);
+      out.push(`  ${indent}${paint.tone(tone(p.status), DOT)} ${p.title.padEnd(phaseWidth - indent.length)}  ${p.status.padEnd(7)}  ${done}/${t.agentIds.length}`);
+    }
+    return out;
+  };
+
+  const agentLines = (limit: number): string[] => {
+    const out = ["", paint.accent(`Agents (${c.agentsDone}/${c.agents})`)];
+    if (!run.agents.length) {
+      out.push(paint.dim("  no agents yet"));
+      return out;
+    }
+    const shown = visibleWindow(run.agents, o.selected, Math.max(0, limit));
+    if (shown.start > 0) out.push(paint.dim(`  … ${shown.start} above`));
+    let group: string | undefined;
+    shown.items.forEach((a, i) => {
+      if (a.group !== undefined && a.group !== group) out.push(paint.dim(`    ▸ ${a.group}`));
+      group = a.group;
+      const mark = o.selected === undefined ? " " : shown.start + i === o.selected ? paint.accent("›") : " ";
+      const row = `${mark} ${paint.tone(tone(a.status), dotOf(a))} ${idCell(a).padEnd(labelWidth)}  ${(a.model ?? "-").padEnd(modelWidth)}  ${`${fmtTokens(agentTokens(a))} tok`.padStart(10)}  ${fmtElapsed(a.elapsedMs).padStart(7)}  ${a.status}`;
+      out.push(row);
+      // The text fallback lists every failure; the TUI shows the selected agent's detail below.
+      if (o.selected === undefined && a.error) out.push(paint.tone("bad", `      ${oneLine(a.error)}`));
+    });
+    const below = run.agents.length - shown.start - shown.items.length;
+    if (below > 0) out.push(paint.dim(`  … ${below} more`));
+    if (o.selected !== undefined) {
+      const sel = run.agents[o.selected];
+      // Keep the selected agent visible with its detail; a trimmed window never drops it.
+      if (sel && shown.items.includes(sel)) {
+        const detail = sel.error ?? sel.activity;
+        if (detail) out.push(paint.dim(`  ${sel.id}: ${oneLine(detail)}`));
+      }
+    }
+    return out;
+  };
+
+  const narrationLines = (limit: number): string[] => {
+    const narration = limit > 0 ? o.narration.slice(-limit) : [];
+    if (!narration.length) return [];
+    return ["", paint.accent("Narrator"), ...narration.map((line) => paint.dim(`  ${line}`))];
+  };
+
+  const assemble = (phaseLimit: number, agentLimit: number, narrationLimit: number): string[] => [
+    ...header,
+    ...phaseLines(phaseLimit),
+    ...agentLines(agentLimit),
+    ...narrationLines(narrationLimit),
+  ];
+
+  const maxLines = o.maxLines;
+  if (maxLines === undefined) return assemble(tree.length, AGENT_ROWS, NARRATION_SHOWN);
+
+  let phaseLimit = tree.length;
+  let agentLimit = AGENT_ROWS;
+  let narrationLimit = NARRATION_SHOWN;
+  let out = assemble(phaseLimit, agentLimit, narrationLimit);
+  // Trim the middle in one fixed order: narration first, then phase rows, then the agent window.
+  while (narrationLimit > 0 && out.length > maxLines) {
+    narrationLimit--;
+    out = assemble(phaseLimit, agentLimit, narrationLimit);
   }
-  const narration = o.narration.slice(-NARRATION_SHOWN);
-  if (narration.length) {
-    out.push("", paint.accent("Narrator"));
-    for (const line of narration) out.push(paint.dim(`  ${line}`));
+  while (phaseLimit > 0 && out.length > maxLines) {
+    phaseLimit--;
+    out = assemble(phaseLimit, agentLimit, narrationLimit);
   }
-  return out;
+  // The selected agent is the last thing the middle gives up; below that the middle collapses.
+  const minAgents = run.agents.length ? 1 : 0;
+  while (agentLimit > minAgents && out.length > maxLines) {
+    agentLimit--;
+    out = assemble(phaseLimit, agentLimit, narrationLimit);
+  }
+  if (out.length <= maxLines) return out;
+  const more = paint.dim(`  … ${tree.length + run.agents.length + o.narration.length} more`);
+  // Keep the collapse inside the budget: no line when the fixed block already fills it, the
+  // header alone when there is no room for the indicator, otherwise the header plus the indicator.
+  if (header.length + 1 > maxLines) return header.slice(0, maxLines);
+  return [...header, more].slice(0, maxLines);
 }
 
-export function renderListLines(runs: RunSnapshot[], paint: Paint, selected?: number): string[] {
+export function renderListLines(runs: RunSnapshot[], paint: Paint, selected?: number, maxLines?: number): string[] {
+  if (maxLines !== undefined && maxLines <= 0) return [];
   const active = runs.filter((r) => r.status === "running").length;
   const out = [paint.bold(`Workflows (${runs.length} run${runs.length === 1 ? "" : "s"}, ${active} active)`)];
   if (!runs.length) {
-    out.push(paint.dim("No workflow runs in this session. Start one with /workflow run <name>."));
+    if (maxLines === undefined || maxLines >= 2) out.push(paint.dim("No workflow runs in this session. Start one with /workflow run <name>."));
     return out;
   }
   const nameWidth = Math.min(28, Math.max(4, ...runs.map((r) => r.name.length)));
-  const shown = visibleWindow(runs, selected, LIST_ROWS);
-  if (shown.start > 0) out.push(paint.dim(`  … ${shown.start} above`));
-  shown.items.forEach((r, i) => {
+  const row = (r: RunSnapshot, index: number): string => {
     const c = counts(r);
-    const mark = selected === undefined ? " " : shown.start + i === selected ? paint.accent("›") : " ";
-    out.push(`${mark} ${paint.tone(tone(r.status), DOT)} ${r.name.padEnd(nameWidth)}  ${statusText(r).padEnd(11)}  ${`${c.agentsDone}/${c.agents} agents`.padEnd(12)}  ${fmtElapsed(r.elapsedMs).padStart(7)}  ${paint.dim(r.id)}`);
-  });
-  const below = runs.length - shown.start - shown.items.length;
-  if (below > 0) out.push(paint.dim(`  … ${below} more`));
+    const mark = selected === undefined ? " " : index === selected ? paint.accent("›") : " ";
+    return `${mark} ${paint.tone(tone(r.status), DOT)} ${r.name.padEnd(nameWidth)}  ${statusText(r).padEnd(11)}  ${`${c.agentsDone}/${c.agents} agents`.padEnd(12)}  ${fmtElapsed(r.elapsedMs).padStart(7)}  ${paint.dim(r.id)}`;
+  };
+  if (maxLines === undefined) {
+    const shown = visibleWindow(runs, selected, LIST_ROWS);
+    if (shown.start > 0) out.push(paint.dim(`  … ${shown.start} above`));
+    shown.items.forEach((r, i) => out.push(row(r, shown.start + i)));
+    const below = runs.length - shown.start - shown.items.length;
+    if (below > 0) out.push(paint.dim(`  … ${below} more`));
+    return out;
+  }
+  // Shrink the window until it fits with its omission indicators, keeping the selection in view.
+  const limit = Math.max(0, maxLines - 1);
+  for (let size = Math.min(limit, runs.length); size >= 1; size--) {
+    // A budgeted window must be deterministic without a selection: window from the start.
+    const shown = visibleWindow(runs, selected ?? 0, size);
+    const below = runs.length - shown.start - shown.items.length;
+    const total = 1 + (shown.start > 0 ? 1 : 0) + shown.items.length + (below > 0 ? 1 : 0);
+    if (total > maxLines) continue;
+    if (shown.start > 0) out.push(paint.dim(`  … ${shown.start} above`));
+    shown.items.forEach((r, i) => out.push(row(r, shown.start + i)));
+    if (below > 0) out.push(paint.dim(`  … ${below} more`));
+    return out;
+  }
+  // No run row fits: the omission indicator is the useful row, and the header when not even that.
+  if (maxLines >= 2) out.push(paint.dim(`  … ${runs.length} more`));
   return out;
 }
 
@@ -530,11 +607,14 @@ export interface PanelDeps {
 export class WorkflowPanel {
   view: "list" | "run" = "list";
   runId: string | undefined;
+  /** Positional view of the selection; `listSelection` refreshes it from the tracked run id. */
   listIndex = 0;
   agentIndex = 0;
   confirm: Confirm | undefined;
   note: string | undefined;
   private readonly deps: PanelDeps;
+  /** The run the list cursor is on; keeps the selection on it when new runs arrive. */
+  private listRunId: string | undefined;
 
   constructor(deps: PanelDeps, runId?: string) {
     this.deps = deps;
@@ -602,14 +682,38 @@ export class WorkflowPanel {
     }
   }
 
+  /**
+   * The list cursor by run id, so a run started or pruned while the panel is open does not move
+   * the selection to a different run. Falls back to the assigned index until an id resolves.
+   */
+  private listSelection(runs: RunSnapshot[]): number {
+    if (this.listRunId !== undefined) {
+      const found = runs.findIndex((r) => r.id === this.listRunId);
+      if (found >= 0) {
+        this.listIndex = found;
+        return found;
+      }
+    }
+    const clamped = Math.min(this.listIndex, Math.max(0, runs.length - 1));
+    this.listIndex = clamped;
+    this.listRunId = runs[clamped]?.id;
+    return clamped;
+  }
+
+  private selectList(runs: RunSnapshot[], index: number): void {
+    const clamped = Math.min(Math.max(0, index), Math.max(0, runs.length - 1));
+    this.listIndex = clamped;
+    this.listRunId = runs[clamped]?.id;
+  }
+
   private pressList(key: PanelKey): void {
     const runs = this.deps.registry.list();
-    this.listIndex = Math.min(this.listIndex, Math.max(0, runs.length - 1));
-    if (key === "up") this.listIndex = Math.max(0, this.listIndex - 1);
-    else if (key === "down") this.listIndex = Math.min(Math.max(0, runs.length - 1), this.listIndex + 1);
+    const selected = this.listSelection(runs);
+    if (key === "up") this.selectList(runs, selected - 1);
+    else if (key === "down") this.selectList(runs, selected + 1);
     else if (key === "esc") this.deps.close();
     else if (key === "enter") {
-      const run = runs[this.listIndex];
+      const run = runs[selected];
       if (!run) return;
       this.view = "run";
       this.runId = run.id;
@@ -623,8 +727,9 @@ export class WorkflowPanel {
     if (!run || key === "esc") {
       this.view = "list";
       this.note = undefined;
-      const idx = this.deps.registry.list().findIndex((r) => r.id === this.runId);
-      if (idx >= 0) this.listIndex = idx;
+      const runs = this.deps.registry.list();
+      const idx = runs.findIndex((r) => r.id === this.runId);
+      if (idx >= 0) this.selectList(runs, idx);
       return;
     }
     const last = Math.max(0, run.agents.length - 1);
@@ -671,30 +776,60 @@ export class WorkflowPanel {
     return `↑↓ select · k skip · x stop · p ${run?.paused ? "resume" : "pause"} · s save · esc back`;
   }
 
-  /** The panel's lines, each cut to `width` columns. */
-  render(width: number): string[] {
+  /** The panel's lines, each cut to `width` columns. `rows` is the terminal height when known. */
+  render(width: number, rows?: number): string[] {
     const { paint } = this.deps;
     const w = Math.max(20, width);
     const rule = paint.dim("─".repeat(Math.min(w, 120)));
+    // The overlay host also draws a rounded frame (top and bottom border) around this panel.
+    // Reserve those two rows so the framed component, not just its body, fits the 90% overlay.
+    const maxLines = typeof rows === "number" && Number.isFinite(rows) ? Math.max(1, Math.floor(rows * 0.9) - 2) : undefined;
     const out: string[] = [rule];
     const run = this.view === "run" ? this.current() : undefined;
     if (run) {
       this.agentIndex = Math.min(this.agentIndex, Math.max(0, run.agents.length - 1));
-      out.push(...renderRunLines(run, { paint, narration: this.deps.narrator.lines(run.id), selected: run.agents.length ? this.agentIndex : undefined }).map((l) => ` ${l}`));
+      // The fixed parts never give way: the header, the note, the confirm/footer and both rules.
+      const fixed = 1 + 1 + (this.note ? 1 : 0) + (this.confirm ? this.confirm.choices.length + 2 : 1) + 1;
+      const runLines = maxLines === undefined ? undefined : Math.max(0, maxLines - fixed);
+      out.push(...renderRunLines(run, { paint, narration: this.deps.narrator.lines(run.id), selected: run.agents.length ? this.agentIndex : undefined, maxLines: runLines }).map((l) => ` ${l}`));
     } else {
       const runs = this.deps.registry.list();
-      this.listIndex = Math.min(this.listIndex, Math.max(0, runs.length - 1));
-      out.push(...renderListLines(runs, paint, runs.length ? this.listIndex : undefined).map((l) => ` ${l}`));
+      const selected = this.listSelection(runs);
+      // The list view's fixed parts: top rule, blank, the footer (and a note), bottom rule.
+      const fixed = 4 + (this.note ? 1 : 0);
+      const listLines = maxLines === undefined ? undefined : Math.max(0, maxLines - fixed);
+      out.push(...renderListLines(runs, paint, runs.length ? selected : undefined, listLines).map((l) => ` ${l}`));
     }
-    out.push("");
-    if (this.note) out.push(` ${paint.tone("warn", oneLine(this.note))}`);
-    if (this.confirm) {
-      out.push(` ${paint.bold(this.confirm.question)}`);
-      this.confirm.choices.forEach((choice, i) => out.push(i === this.confirm?.index ? ` ${paint.accent(`› ${choice}`)}` : `   ${choice}`));
-      out.push(` ${paint.dim("↑↓ choose · enter confirm · esc cancel")}`);
-    } else out.push(` ${paint.dim(this.footer())}`);
-    out.push(rule);
-    return out.map((l) => truncateToWidth(l, w, "…"));
+    const tail = (spacer: boolean, hint: boolean): string[] => {
+      const lines: string[] = [];
+      if (spacer) lines.push("");
+      if (this.note) lines.push(` ${paint.tone("warn", oneLine(this.note))}`);
+      if (this.confirm) {
+        lines.push(` ${paint.bold(this.confirm.question)}`);
+        this.confirm.choices.forEach((choice, i) => lines.push(i === this.confirm?.index ? ` ${paint.accent(`› ${choice}`)}` : `   ${choice}`));
+        if (hint) lines.push(` ${paint.dim("↑↓ choose · enter confirm · esc cancel")}`);
+      } else lines.push(` ${paint.dim(this.footer())}`);
+      lines.push(rule);
+      return lines;
+    };
+    let showHint = true;
+    let showSpacer = true;
+    let lines = [...out, ...tail(showSpacer, showHint)];
+    // A confirm block keeps its question, choices and the bottom rule; the optional hint and then
+    // the blank spacer give way first when the bounded middle still leaves it too tall.
+    while (run && this.confirm && maxLines !== undefined && lines.length > maxLines && showHint) {
+      showHint = false;
+      lines = [...out, ...tail(showSpacer, showHint)];
+    }
+    while (run && this.confirm && maxLines !== undefined && lines.length > maxLines && showSpacer) {
+      showSpacer = false;
+      lines = [...out, ...tail(showSpacer, showHint)];
+    }
+    // Last resort: below the fixed block's own height even the fallbacks above cannot fit it.
+    // Clamp tail-first so the bottom rule and the lines next to it (a confirm's choices, the
+    // list's footer) survive; above that height this is a no-op.
+    if (maxLines !== undefined && lines.length > maxLines) lines = lines.slice(lines.length - maxLines);
+    return lines.map((l) => truncateToWidth(l, w, "…"));
   }
 }
 
@@ -729,42 +864,45 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
   // on a reload, which never settles the overlay.
   await withInputHold("the workflow panel", () =>
     ctx.ui.custom<undefined>(
-      (tui, theme, keybindings, done) => {
-        let closed = false;
-        const offRegistry = registry.subscribe(() => tui.requestRender());
-        // Elapsed times tick while the panel is open.
-        const timer = setInterval(() => tui.requestRender(), 1000);
-        timer.unref?.();
-        const cleanup = () => {
-          if (closed) return;
-          closed = true;
-          clearInterval(timer);
-          offRegistry();
-        };
-        const panel = new WorkflowPanel(
-          {
-            registry,
-            narrator: narration,
-            cwd,
-            paint: themePaint(theme),
-            requestRender: () => tui.requestRender(),
-            close: () => {
-              cleanup();
-              done(undefined);
+      (tui, theme, keybindings, done) =>
+        withOverlayFrame(tui, theme, (finish) => {
+          let closed = false;
+          const offRegistry = registry.subscribe(() => tui.requestRender());
+          // Elapsed times tick while the panel is open.
+          const timer = setInterval(() => tui.requestRender(), 1000);
+          timer.unref?.();
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            clearInterval(timer);
+            offRegistry();
+          };
+          const panel = new WorkflowPanel(
+            {
+              registry,
+              narrator: narration,
+              cwd,
+              paint: themePaint(theme),
+              requestRender: () => tui.requestRender(),
+              close: () => {
+                cleanup();
+                finish(undefined);
+              },
             },
-          },
-          runId,
-        );
-        return {
-          render: (width: number) => panel.render(width),
-          invalidate: () => {},
-          handleInput: (data: string) => {
-            const key = keyOf(data, keybindings);
-            if (key) panel.press(key);
-          },
-          dispose: cleanup,
-        };
-      },
+            runId,
+          );
+          return {
+            // Read the live height per render: the host clips an overlay to the top when it is taller
+            // than the terminal, so the panel trims its middle to fit instead.
+            render: (width: number) => panel.render(width, tui.terminal?.rows),
+            invalidate: () => {},
+            handleInput: (data: string) => {
+              const key = keyOf(data, keybindings);
+              if (key) panel.press(key);
+            },
+            dispose: cleanup,
+          };
+        }, done),
       supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
     ),
   );

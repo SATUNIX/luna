@@ -10,6 +10,8 @@
 //   - arguments never reach a shell, and a malformed run id is rejected before any process starts;
 //   - `status <run>` of a run with generations (Memento mode) sets the footer status line to its
 //     generation n/N and last rotation reason, and clears it for a run without them;
+//   - `status` with no run sets a one-line fleet footer (counts by status, plus the first blocked
+//     run and its question) and clears it for an empty fleet; without a screen it is untouched;
 //   - against the REAL CLI, `templates` and `plan` work end to end (no container engine needed).
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -64,6 +66,7 @@ if (cmd === "status" && json && args.includes("--run")) {
   const generations = process.env.FAKE_GENERATIONS === "1" ? { current: 2, max: 4, iterationMinutes: 30, iterationUsd: null, lastRotation: { generation: 1, at: "2026-10-23T00:00:00.000Z", box: "minutes", action: "none", notebook: true, reset: false, problems: [] }, notebook: null, notebookError: null } : null;
   return out({ ok: true, command: "status", run, status: "running", generations });
 }
+if (cmd === "status" && json) return out({ ok: true, command: "status", runs: JSON.parse(process.env.FAKE_FLEET || "[]") });
 if (cmd === "promote") {
   if (!args.includes("--yes")) return out({ ok: false, command: "promote", error: "this promotion needs your approval: fast-forward branch pi/demo. Re-run with --yes, or from a terminal.", code: "refused" }, 3);
   return json ? out({ ok: true, command: "promote", status: "done" }) : text("promotion done");
@@ -292,7 +295,7 @@ try {
       assert.deepEqual(s.statuses, [["autonomy", "memento demo-run-1: gen 2/4, running; last rotation: time box"]]);
       assert.match(lastNote(s).message, /status ok/, "the CLI's own status text is still what is shown");
       await s.run("status");
-      assert.equal(s.statuses.length, 1, "the run list does not touch the status line");
+      assert.deepEqual(s.statuses, [["autonomy", "memento demo-run-1: gen 2/4, running; last rotation: time box"], ["autonomy", undefined]], "the run list replaces the run line with the fleet line (empty here)");
     } finally { restoreGen(); }
     const plain = session();
     await plain.run("status demo-run-1");
@@ -307,6 +310,40 @@ try {
     assert.equal(mod.generationStatusLine({ run: "demo-run-1", generations: null }), undefined);
     assert.equal(mod.generationStatusLine("not json"), undefined);
     ok("status <run> shows generation n/N and the last rotation reason in the status line; cleared without generations, untouched without a screen");
+  }
+
+  // 7c. The fleet footer: `status` with no run summarises the fleet and clears it when empty.
+  {
+    reset();
+    const fleet = [
+      { run: "demo-run-1", template: "implement", status: "running", outcome: null, step: 3, spentUsd: 1.5, budgetUsd: 10, blocker: null },
+      { run: "demo-blocked-1", template: "self-improve", status: "blocked", outcome: null, step: 2, spentUsd: 0.25, budgetUsd: 5, blocker: { kind: "question", question: "which database?" } },
+    ];
+    const restoreFleet = setEnv("FAKE_FLEET", JSON.stringify(fleet));
+    try {
+      const s = session();
+      await s.run("status");
+      assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (which database?)"]]);
+      assert.match(lastNote(s).message, /status ok/, "the CLI's own status text is still what is shown");
+      const empty = setEnv("FAKE_FLEET", "[]");
+      try {
+        const none = session();
+        await none.run("status");
+        assert.deepEqual(none.statuses, [["autonomy", undefined]], "an empty fleet clears the line");
+      } finally { empty(); }
+      const headless = session({ hasUI: false });
+      process.stderr.write = (chunk) => { errWrites.push(String(chunk)); return true; };
+      try { await headless.run("status"); } finally { process.stderr.write = realStderr; }
+      assert.equal(headless.statuses.length, 0, "no screen: no fleet line");
+    } finally { restoreFleet(); }
+    assert.equal(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "succeeded" }] }), "autonomy: 1 run \u2014 1 succeeded");
+    assert.equal(mod.fleetStatusLine({ runs: [] }), undefined, "no runs: nothing to show");
+    assert.equal(mod.fleetStatusLine({ runs: [{ run: "a-1" }] }), undefined, "a row without a usable status clears the line");
+    assert.equal(mod.fleetStatusLine("not json"), undefined);
+    const long = "x".repeat(100);
+    assert.match(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "question", question: long } }] }) ?? "", /x{80}\u2026\)$/, "the question is truncated");
+    assert.equal(mod.fleetStatusLine({ runs: [{ run: "a\u001b-1", status: "blocked", blocker: { kind: "question", question: "line1\nline2\u001b[2J" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (line1 line2[2J)", "worker text is collapsed to one visible line");
+    ok("status with no run sets a one-line fleet footer, clears it when empty, and is untouched without a screen");
   }
 
   // 8. A missing CLI is a message, not a crash.

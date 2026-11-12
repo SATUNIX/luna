@@ -92,6 +92,7 @@ const B = await loadModule<typeof Broker>("extensions/human-console/run-broker.t
 const C = await loadModule<typeof Control>("vendor/subagent/control.ts");
 const runE = C.runControls.open("wf-e");
 const runF = C.runControls.open("wf-f");
+const runH = C.runControls.open("wf-h");
 C.runControls.open("wf-g");
 
 interface Prompt { header: string; options: string[]; answer: (value: string | undefined) => void; done: boolean }
@@ -301,6 +302,43 @@ const pendingRequests = () => fs.readdirSync(pendingDir).filter((n) => n.endsWit
   other.answer(B.RUN_CHOICE_ALLOW_ONCE);
   await until("the wf-q2 answer", () => answerOf(second) !== null);
   ok("console: one of two pending runs answers alone; a queued follow-up watcher pass leaves the other card and files alone");
+}
+
+// 2g. The resume question waits behind the broker's second run card (V-02): answering the 11th
+//     distinct approval while the 12th card is still open must not push the question on top of it.
+{
+  const runId = "wf-h";
+  const ids: string[] = [];
+  for (let i = 1; i <= 10; i++) ids.push(file(runId, `${runId}-${i}`));
+  const answered = (): number => ids.filter((id) => answerOf(id)).length;
+  while (answered() < 10) {
+    await until("a wf-h prompt", () => openFor(runId).length > 0 || answered() === 10);
+    for (const p of openFor(runId)) p.answer(B.RUN_CHOICE_ALLOW_ONCE);
+    await wait(60);
+  }
+  const eleventh = file(runId, `${runId}-11`);
+  const twelfth = file(runId, `${runId}-12`);
+  await until("the 11th and 12th wf-h cards", () => openFor(runId).length === 2);
+  const eleventhCard = openFor(runId).find((p) => p.header.includes(`${runId}-11`));
+  assert.ok(eleventhCard, "the 11th distinct approval has a card");
+  eleventhCard.answer(B.RUN_CHOICE_ALLOW_ONCE);
+  await until("the 11th wf-h answer", () => answerOf(eleventh) !== null);
+  // Longer than one watcher poll: a question that ignored the open run card would be shown by now.
+  await wait(1300);
+  assert.equal(prompts.some((p) => !p.done && p.header.startsWith(`Workflow run ${runId} has had 11`)), false, "the resume question must not open while another run card is open");
+  assert.equal(openFor(runId).length, 1, "the broker's second run card stays open");
+  assert.equal(answerOf(twelfth), null, "the second run card is still unanswered");
+  const remaining = openFor(runId)[0];
+  assert.ok(remaining, "the second run card is still answerable while the question waits");
+  remaining.answer(B.RUN_CHOICE_ALLOW_ONCE);
+  await until("the 12th wf-h answer", () => answerOf(twelfth) !== null);
+  await until("the wf-h resume question after the second card closes", () => prompts.some((p) => !p.done && p.header.startsWith(`Workflow run ${runId} has had 11`)));
+  const question = prompts.find((p) => !p.done && p.header.startsWith(`Workflow run ${runId} has had 11`));
+  assert.ok(question, "the resume question is shown once the second run card closes");
+  assert.deepEqual(question.options, [B.PAUSE_CHOICE_NO, B.PAUSE_CHOICE_YES], "the resume question is No first");
+  question.answer(B.PAUSE_CHOICE_NO);
+  await until("the wf-h pause", () => runH.control.paused);
+  ok("console: the resume question waits behind an open second run card");
 }
 
 // ---- 3. tool-firewall in a workflow child tags its request; the console's denial sticks --------

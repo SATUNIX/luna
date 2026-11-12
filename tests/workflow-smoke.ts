@@ -265,6 +265,19 @@ steps:
     ok("shipped review gates pass only on a final VERDICT: PASS line");
   }
 
+  // 4c. A plain-text gate passes only on the verdict line, the last non-empty line of the output
+  // (PG-45). A pass token anywhere else in the prose had let a reviewer's FAIL pass the gate.
+  {
+    assert.equal(await W.gatePasses("VERDICT: PASS", "VERDICT: PASS"), true, "the verdict line alone passes");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "## Summary\nThe fix is complete.\n\nVERDICT: PASS\n"), true, "trailing blank lines do not hide the verdict line");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "The plan expected VERDICT: PASS but the review found:\nVERDICT: FAIL"), false, "a pass token in the prose does not pass a FAIL verdict");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "The implementer claimed:\nVERDICT: PASS\n\nVERDICT: FAIL"), false, "a quoted earlier VERDICT: PASS does not pass a final FAIL (fleet cycle 1)");
+    assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: PASS"), true, "a regex gate still matches the output tail");
+    assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: FAIL"), false, "a regex gate still misses when absent");
+    assert.equal(await W.gatePasses("PASS", ""), false, "empty output has no verdict line");
+    ok("a plain-text gate passes only on the last non-empty verdict line");
+  }
+
   // 5 + 6. Outputs and when.
   {
     const def = `
@@ -289,9 +302,14 @@ steps:
     assert.equal(good.final.status, "passed");
     assert.equal(good.final.steps.celebrate?.status, "skipped");
     assert.ok(good.calls.includes("read REPORT-BODY"), "a later step reads an artefact from the blackboard");
+    const goodReport = path.join(good.dir, "report.md");
+    assert.ok(good.calls.some((c) => c.includes(goodReport) && c.includes("exact file is absent")), `the write task names the absolute output path and its requirement: ${JSON.stringify(good.calls)}`);
     const bad = await run(def, {}, () => "ok");
     assert.equal(bad.final.status, "failed");
-    assert.match(bad.final.error ?? "", /declared output\(s\) not written in .*: report\.md/);
+    assert.ok((bad.final.error ?? "").includes(path.join(bad.dir, "report.md")), `the failure names the absolute output path: ${bad.final.error}`);
+    assert.match(bad.final.error ?? "", /declared output\(s\) not written in .*: .*report\.md$/);
+    assert.ok(bad.calls.some((c) => c.includes(path.join(bad.dir, "report.md")) && c.includes("exact file is absent")), `the failing task names the absolute output path: ${JSON.stringify(bad.calls)}`);
+    assert.equal(bad.calls.filter((c) => c.startsWith("write")).length, 1, "a missing output does not re-run an agent");
     ok("declared outputs are enforced; artefacts flow through {{file:}}; when skips");
   }
 

@@ -53,9 +53,9 @@ names within each profile.
   nav. **Every check has a worked failure example in `WRITING_EXTENSIONS.md`.**
 - `registry.ts` / `skills-catalogue.ts` / `capability-matrix.ts` — generate the catalogues
 - `docs-nav-check.ts` — offline `mkdocs build --strict` stand-in; `check-mermaid.ts` — parses every Mermaid diagram
-- `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`); `--shard=<i>/<n>` and `--jobs=<n>` split and parallelise the run
+- `check-all.ts` — runs every check the repository defines, and fails on a test file no script runs (`lib/wiring.ts`); `--shard=<i>/<n>` and `--jobs=<n>` split and parallelise the run; `--for-changed=<a,b>` prints the checks a diff implies (`lib/check-map.ts`; a changed test file or either side of a copy pair plans the script that runs it) without running any
 - `lib/effort.ts` — the effort policy loader shared by the toolchain and the autonomy runner
-- `eval/` — the offline behavioural fixture harness (`npm run eval`)
+- `eval/` — the offline behavioural fixture harness (`npm run eval`); `eval/baseline.ts --write` records a dated success-rate, per-category and token baseline under `eval/baselines/` through guarded atomic writes, refusing future dates and linked output paths. Its `--check` fails when the newest baseline is missing, malformed, future-dated or older than 7 days. `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`) pins this behaviour.
 - `dream.ts` — offline dream-mode pass (allowlisted internal state only; it does not write `AGENTS.md`)
 - `new-extension.ts` / `extract-extension.ts` — scaffolding helpers
 - `lib/` — shared toolchain utilities
@@ -64,3 +64,10 @@ Static checks (`verify`) + behavioural checks (`eval`, `test:security`) + docs c
 (`smoke:docs`, `docs:check`) together form the release gate. See `WRITING_EXTENSIONS.md` for the
 full check list and `docs/roadmap.md` for the current plan. [Concepts](concepts.md) defines the
 tiers, layers and design rules the extensions follow.
+
+A CPU-bound smoke bound (for example "redact 200 KB in under 200 ms") uses the CPU-time guards
+in `tests/timing.ts` (`cpuMs`, `bestCpuMs`, `assertCpuWithin`), which measure `process.cpuUsage()`
+rather than wall clock. A busy host therefore does not turn correct code red, while a quadratic or
+catastrophically backtracking rule still blows the same budget because its CPU *work* explodes;
+the budgets themselves are unchanged. `tests/timing-load-check.ts` runs every such smoke five
+times under full CPU load as the acceptance evidence and is intentionally not part of the gate.

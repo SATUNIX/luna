@@ -8,7 +8,7 @@
 //      PI_KIT_SUBAGENT_DETACH_SIGNAL=1 restores detach-on-cancel.
 //   4. Spawn failure is reported as "Subagent launch failed: ..." instead of a bare exit code,
 //      and is retried once (transient).
-//   5. A failed result carries an actionable hint (abort -> background: true).
+//   5. A failed result carries an actionable hint, including a silent child exit.
 //   6. A transient failure (non-zero exit, no output) is retried and can then succeed.
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -346,6 +346,17 @@ try {
 			module.getResultOutput(aborted),
 			/background: true/,
 		);
+		const silent: SingleResult = { ...aborted, stopReason: "error", errorMessage: undefined, runId: "silent-run" };
+		assert.equal(
+			module.getResultOutput(silent),
+			'(no output)\nThe child ended without a message: it exited before replying (for example a crash, or a first prompt that did not fit its context window). Read its run log with workflow_status {id: "silent-run"}.',
+		);
+		assert.doesNotMatch(module.getResultOutput(aborted), /ended without a message/, "an abort keeps its specific hint");
+		const partial: SingleResult = {
+			...silent,
+			messages: [{ role: "assistant", content: [{ type: "text", text: "partial answer" }] }],
+		};
+		assert.equal(module.getResultOutput(partial), "partial answer", "a child with partial output keeps its answer");
 	}
 
 	console.log(

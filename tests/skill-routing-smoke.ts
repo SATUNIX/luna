@@ -11,6 +11,7 @@ import { ROOT, loadModule } from "../packages/core/eval/harness.ts";
 import { excludedSkills, normalizeOverrides, loadProfileDef } from "../packages/core/lib/profiles.ts";
 import { array, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as Match from "../packages/extensions/src/skill-router/match.ts";
+import { cpuMs } from "./timing.ts";
 
 // One line of tests/skill-routing-fixtures.jsonl.
 const Fixture = object({ profile: string(), prompt: string(), expect: array(string()) });
@@ -81,14 +82,36 @@ assert.ok(chars / 4 < 700, `listed skills cost ~${Math.round(chars / 4)} tokens;
   assert.ok(first, "the catalogue has a skill to copy");
   const skill: Match.SkillEntry = { ...first, name: "slow-trigger-probe", triggers: [slow] };
   const prompt = "a".repeat(4000);
-  const started = performance.now();
+  // One real run: matchTriggers caches the switch-off on the trigger string, so a best-of-three
+  // repeat would measure two cached no-ops and make the 2000 ms bound vacuous. A single run is
+  // what the old wall-clock assertion measured, so the same work is bounded.
+  const before = cpuMs();
   assert.deepEqual(match.matchTriggers(prompt, [skill]), [], "a slow trigger does not match");
-  assert.ok(performance.now() - started < 2000, "the timed test stops a slow trigger");
+  const spent = cpuMs() - before;
+  assert.ok(spent < 2000, `the timed test stops a slow trigger in ${Math.round(spent)} ms of CPU (budget 2000 ms)`);
   assert.match(match.refusedTriggers.get(slow) ?? "", /switched off/);
   assert.equal(match.triggerRegex(slow), null, "the switched-off trigger stays off");
   const plain = "re:" + "\\bdeploy\\b";
   assert.ok(match.triggerRegex(plain), "an ordinary re: trigger still compiles");
   assert.equal(match.matchTriggers("please deploy it", [{ ...skill, name: "plain-probe", triggers: [plain] }]).length, 1);
+}
+
+// 6. Hint clipping: a fixed 160-char slice cut 25 of 34 descriptions mid-word and dropped the
+// "Use when …" decision clause. hintText backs up to a word boundary and appends one ellipsis.
+{
+  assert.equal(match.hintText("short text"), "short text", "a short description is unchanged");
+  // The space before "supercalifragilistic" is the boundary the cap must back up to: the 160th
+  // character lands inside that word, so the whole partial word is dropped.
+  const spaced = "x".repeat(155) + " supercalifragilistic tail";
+  assert.equal(match.hintText(spaced), "x".repeat(155) + "…", "a word split by the cap is dropped whole");
+  const long = all.find((s) => s.description.length > 160 && s.description.includes(" "));
+  assert.ok(long, "the catalogue has a long description to clip");
+  const hint = match.hintText(long.description);
+  assert.ok(hint.length <= 161, `a clipped hint stays <= 161 chars (got ${hint.length})`);
+  const body = hint.slice(0, -1);
+  const src = long.description.trim();
+  assert.ok(src.startsWith(body), `${long.name}: the hint body is a prefix of the description`);
+  assert.ok(!/[\p{L}\p{N}]/u.test(src.charAt(body.length)), `${long.name}: the hint does not end mid-word`);
 }
 
 console.log(`[skill-routing-smoke] routing exact on all fixtures; ${all.length} skills, ${listed.length} listed (~${Math.round(chars / 4)} tokens), ${all.length - listed.length} on demand`);

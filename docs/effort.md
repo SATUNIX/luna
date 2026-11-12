@@ -299,8 +299,9 @@ a child, or when the tier in force is not E5). A restore never brings back the p
 each `workflow` call is asked until you answer Yes to `/effort ultracode` again.
 
 - **Prompt.** While the `workflow` tool is in the active tool set, `policy/standing.md`, with the
-  size guideline and the budget filled in, is added inside the one effort block, and each turn
-  carries a hidden reminder message, which may also carry the workflow card (see
+  size guideline and the budget filled in, is added inside the one effort block, and the first
+  turn, plus any turn whose size or budget changed, carries a hidden reminder message, which may
+  also carry the workflow card (see
   [Decision policy](#decision-policy)). The effort extension injects these itself, as it does its
   tier text: the standing text, the plan sentence and the card are effort's one exception to
   context-sieve being the only injector of turn guidance.
@@ -323,8 +324,9 @@ each `workflow` call is asked until you answer Yes to `/effort ultracode` again.
 
 Tests: `tests/effort-standing-smoke.ts` (`npm run smoke:effort-standing`).
 
-Not covered: the hidden reminder is one more message in the session for every turn while standing
-mode is on, and the wake-chain cap applies only while standing mode is on.
+Not covered: the wake-chain cap applies only while standing mode is on. The hidden reminder is
+not repeated on every turn: it is sent on the first turn and whenever the size or the budget
+changes, since the standing text in the same turn's prompt already covers it.
 
 ## Decision policy
 

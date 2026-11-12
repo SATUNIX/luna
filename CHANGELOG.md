@@ -8,6 +8,224 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
+  `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
+  was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes
+  and passed on the previous pull request; recent runs took 18 to 27 minutes. `coverage` measures and
+  never gated on a threshold, and the same suite already gates through the `verify` shards, so
+  `ci-complete` no longer needs it and its `timeout-minutes` is 45. `tests/workflow-policy-smoke.ts`
+  names the one measure-only job, refuses to let `ci-complete` need it again or let its timeout fall
+  below 40, requires the exempt job to really run coverage, and still requires every other job in
+  `needs`; its job-header check now also sees a header with a trailing comment. The repository ruleset
+  is unchanged: it requires only `ci-complete`. Not covered: a release run calls the whole of `ci.yml`,
+  so a failed `coverage` job still stops a release (`docs/ci-security.md`).
+- **The update notice names the branch it counts against.** The line `trunk is N commits ahead — /update
+  channel next` counted commits on `main`, while the `trunk` channel follows `integration/luna`, so the
+  word meant two different branches. It now reads `main is N commits ahead — /update channel next`; the
+  suggested command is unchanged. Pinned by `tests/update-notice-smoke.ts` (`smoke:update-notice`).
+- **The brand smoke now walks the whole repository.** `tests/brand-smoke.ts` scans every text file
+  under `WORKSPACE_ROOT`, skipping only the generated, vendored and historical trees and files it
+  documents (`node_modules`, `.git`, `dist`, `site`, `.pi`, the top-level `autonomy/` records) and
+  its documented allowances, and `docs/branding.md` now records the internal temp-directory prefixes
+  in `packages/core/build-npm.ts` and `packages/core/pack-check.ts` and the skipped trees
+  (`npm run smoke:brand`).
+
+- **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
+  `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
+  behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
+  `packages/extensions/third_party/subagent/overlay-frame.ts`; `npm run smoke:control-center` and
+  `npm run smoke:workflow-panel`).
+- **The branding page lists every deliberate identity.** `docs/branding.md` records the npm names,
+  bin names, `PI_SYSTEM_*` variables, install paths, symbol and urn ids, compose/container names,
+  capability id, TLS organisation, legacy sources and CHANGELOG history that stay deliberately
+  unchanged, and `tests/brand-smoke.ts` removes those allowed identities per line and fails with
+  `file:line` for anything left (`npm run smoke:brand`; see `docs/branding.md`).
+- **The remaining user-facing prose says Luna.** The `/update` status and step labels, the
+  session-helper notices, the installer and uninstaller banners, and the remote-control and
+  web-console hints now display Luna, as do the remaining comments; every external identity
+  (npm and bin names, `PI_SYSTEM_*` variables, install paths, compose names, symbol and urn ids)
+  is unchanged (`npm run smoke:brand`; see `docs/branding.md`).
+
+### Added
+
+- **`pi-autonomy inbox` records owner decisions and settles expired cards into their default.**
+  `control/inbox.json` holds cards with a question, recommended default, deadline and optional
+  steward-board item. Every read settles past-due cards with `via: "deadline"` and the default text,
+  or records an answer with `via: "answer"`, then unblocks the linked board item from `blocked` to
+  `ready`; an unanswered card before its deadline leaves the item blocked, and a recorded outcome is
+  never rewritten. The command is self-improve only and record-only. Pinned by
+  `tests/autonomy-inbox-smoke.ts` (`smoke:autonomy-inbox`).
+
+- **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture
+  suite's success rate, per-category counts and a chars/4 token estimate as
+  `packages/core/eval/baselines/YYYY-MM-DD.json`, and `--check` fails when the newest baseline is
+  missing, malformed, or older than 7 days (age from the dated name, not mtime). Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
+
+### Fixed
+
+- `node packages/core/journal.ts` no longer checks for `autonomy/JOURNAL.md` and then writes it
+  with a plain write. It reads the file once and replaces it through the safe write helper, so a
+  committed symbolic link there is refused, and a cycle directory name that could forge a second
+  journal line is refused before anything is written (`tests/docs-smoke.ts`).
+- `/workflows` and `workflow_status` no longer print an autonomy worker's blocker question, options,
+  task titles or last error as written: control, format and bidirectional characters are removed,
+  the text is one line and it is capped (`tests/run-query-smoke.ts`). `pi-autonomy inbox --run`
+  takes the board lock for its writes, and the in-process autonomy CLI uses the gate slots of the
+  state home it was given.
+- **A second publish-blocked answer no longer wedges the run on a deleted cycle tag.** The reset that
+  an answer triggers deletes every run tag that is not an ancestor of the published head and marks
+  those cycles `discarded`, but the next cycle start still named `refs/tags/<prefix>cycle-NN` of the
+  last cycle whenever that cycle was unmerged. After an answer cycle that failed its gate and was
+  refused again, the second answer deleted that cycle's tag, `git bundle create` failed on the missing
+  ref (`git bundle failed: fatal: ambiguous argument`) and every later answer repeated the error. The
+  cycle start now names a tag only for a cycle that was not discarded, so the run starts the next
+  cycle. Pinned by `tests/autonomy-selfimprove-smoke.ts`.
+- **Two pages no longer point at material this repository does not carry.** `docs/structured-output.md`
+  named the removed `packages/role-runner` as the home of the result validator and said a test pins the
+  vendored copy byte for byte against it; the validator is `packages/extensions/third_party/subagent/schema.ts`,
+  and the comparison runs only where the upstream source exists, which the page now says. `docs/autonomy-gate.md`
+  linked a specification file that is not in the tree. A mechanical scan of 97 pages found no other
+  `npm run` script, test file or linked page that does not exist.
+
+- **The context sieve charges its hidden-message framing to the message budget.** The header, the block
+  separator and the optional "still current" line were outside the budget, so the injected message could
+  exceed it (about 40% on a 50-token budget) and `sieve-budget.json` under-reported it. The whole message is
+  now bounded: the still-current line names only the ids that fit, a budget smaller than the framing injects
+  nothing, and `message.tokens` records the injected content (`tests/context-budget-smoke.ts`).
+- **`/footer` and `/tips` no longer erase the other settings in `<agent dir>/pi-kit/ui.json`.**
+  Saving wrote a six-field projection of the status bar's settings over the whole file, dropping
+  `hubKey`, `commandMenu`, `pinnedCommands`, `hiddenCommands`, `launchScreen` and `reducedMotion`
+  that the hub and launch screen keep there. Their own keys are now merged over the existing object
+  (and `ascii` is removed when it is off) so the foreign keys survive; pinned by
+  `npm run smoke:status-bar`.
+
+- **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
+  cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
+  scan reads the whole pushed range, so removing the identifier in a later commit still left the
+  refused commit in range and the run parked again with the same question. Answering the question now
+  rolls the local integration branch back to the last published head (discarding the
+  merged-but-unpublished cycles; their `cycle-NN` tags are dropped) before the answer's cycle runs, and
+  `publishNow` clears the blocker and the unpublished count only on a real push. Pinned by
+  `tests/autonomy-selfimprove-smoke.ts`.
+- **An attended `ask_human` question waits behind workflow approval cards.** Run cards do not
+  take the shared input hold because the broker allows two open prompts per run; the question
+  previously opened over them and could take an unintended first-option answer. It now waits for
+  the last run card to close, sharing its timeout and abort signal with that wait, and still fails
+  closed if another card opens at the handoff (`tests/firewall-overlay-queue-smoke.ts`).
+- **Stopping after a blocked publication now ends the self-improve run.** The supervisor previously
+  consumed the answer to the pre-push leak scan question and started another cycle even when the
+  operator chose "Stop the run" or denied it. Those answers now take the final acceptance path with
+  reason `publish_blocked_stopped`; a resume answer still permits exactly one cycle before another
+  refusal parks the run. Pinned by `tests/autonomy-selfimprove-smoke.ts` and
+  `tests/autonomy-lifecycle-smoke.ts`.
+- **Dated eval baselines refuse future records and linked write targets.** `--check` now fails
+  closed when the newest record is dated after today UTC, and `--write --date` refuses a future
+  date before running the fixture suite. Baseline writes use the guarded atomic writer, so a
+  linked output directory or record cannot redirect a write outside its trusted root. Pinned by
+  `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
+
+- **A declared-outputs step now names the file it must write.** `runStep` built the subagent's
+  `task` from `step.task` and passed only a generic `BLACKBOARD_NOTE` as the appended system prompt,
+  so a step declaring `outputs: [report.md]` never learned the path it had to write. The subagent
+  finished, the executor found the file absent, and the step failed after its tokens were already
+  spent (`step <id> failed: declared output(s) not written in <runDir>: report.md`); a gated review
+  step then never ran and the parent redid the review by hand. The task now ends with a
+  `## Required output` block naming each declared file by its absolute path and stating the step
+  fails if that exact file is absent, and the failure message names the absolute paths too. Pinned
+  by `tests/workflow-smoke.ts` and `tests/workflow-plan-smoke.ts`.
+
+- **A publication the pre-push leak scan refuses no longer lets the run cycle on.** `publishNow` in
+  the self-improve template caught every error, stored `selfImprove.publishBlocker` and returned;
+  nothing read it, so a leak-scan refusal was logged once and the supervisor kept merging and
+  leaving cycles unpublished, with the run status showing no blocker. The blocker is now counted
+  (`selfImprove.publishBlockedCycles`, reset by a successful publish), shown by `pi-autonomy status`
+  (`selfImprove.publishBlocker`/`selfImprove.unpublished` in `--json`, a `publication BLOCKED` line
+  in the text), carried into the next cycle's prompt (the refused commit and location, locations
+  only, and the instruction to remove the identifier first), and after two merged-but-unpublished
+  cycles (an intervening non-merged cycle does not reset the count), the host stops the run in
+  `blocked` with an operator question. Pinned by
+  `tests/autonomy-selfimprove-smoke.ts`; the leak scan and its patterns are unchanged.
+- **A non-run human-console card holds input while it is open (V-02).** The console checked the
+  shared input-owner registry but never registered a hold, so two child requests written in one poll
+  opened two cards and the second took focus from the first. A non-run card now holds input and a
+  sibling waits for the next poll; an interactive `ask_human` card holds input the same way, so a
+  console card cannot open over it. A workflow run's approval card is the exception: the run broker
+  allows two outstanding prompts per run, so those cards keep their two slots and a non-run request
+  waits behind them. The notices name the open card rather than a process. Pinned by
+  `tests/firewall-overlay-queue-smoke.ts` and `tests/firewall-workflow-approvals-smoke.ts`.
+- **Framed overlays size their inner content and forward the mouse.** The hub's frame laid its
+  child out four cells wider than the drawn area and dropped pointer events, so content wrapped
+  or clipped and the list could not be clicked; a hidden command shorter than four characters
+  (`/kit`) never reappeared in the curated `/` menu. Both are fixed and pinned by
+  `npm run smoke:control-center` and `npm run smoke:command-menu`.
+
+- **CPU-bound smoke timing bounds fail on a busy host no longer.** The smoke guards measured
+  wall-clock time (`performance.now` / `Date.now`), which includes time the process spent
+  descheduled; under load wall time inflated ~4–9x and correct code failed its own linear-time
+  bound. They now measure CPU time (`process.cpuUsage()` user + system, best of three) through
+  `tests/timing.ts`, keeping every original budget. CPU time ignores host load, but a quadratic
+  or catastrophically backtracking rule still blows the budget because its work explodes; a
+  self-test in `tests/firewall-gate-smoke.ts` proves that with `/^(a+)+$/`.
+  `tests/timing-load-check.ts` runs every changed smoke five times under full CPU load. Converted:
+  `firewall-gate-smoke`, `redaction-corpus-smoke`, `workflow-redaction-smoke`, `save-smoke`,
+  `tool-firewall-smoke`, `workflow-plan-smoke`, `skill-routing-smoke` and `compress-smoke`.
+  Under the same load the load-check surfaced the same defect in the skill-router's `re:` trigger
+  guard: `node:vm`'s 50 ms timeout is wall clock, so a busy host switched off triggers that used
+  almost no CPU and made `skill-routing-smoke` fail. The guard in
+  `packages/extensions/src/skill-router/match.ts` now decides on the same 50 ms CPU-time budget
+  (with a wall-clock cap only to interrupt a runaway match, and one retry for a descheduled fast
+  regex), so host load is ignored while catastrophic backtracking is still stopped.
+
+- **Residual smoke timing guards still measured wall-clock time, or were too noisy under load.**
+  Two findings from the PG-51 load check. (1) Three more CPU-bound guards cycle 07 did not cover
+  measured wall-clock time: the V8 regex-compile cap and the over-long-value early refusal in
+  `tests/workflow-structured-smoke.ts`, `scanSecrets` on 200 KB in `tests/tool-capture-smoke.ts`,
+  and `targetOf` plus the in-process `tool_call`/`tool_result` hooks on 200 KB in
+  `tests/trace-ledger-bound-smoke.ts`. They now use `assertCpuWithin` / `cpuMs` from
+  `tests/timing.ts` with every budget unchanged (500, 50, 200, 200, 400 ms), and all three are
+  added to `tests/timing-load-check.ts` (11 smokes x 5 = 55 runs). The `scriptBody` guard in
+  `tests/workflow-sandbox-smoke.ts` is also converted (budget 1000 ms) but that smoke is left out
+  of the load run: it asserts on the sandbox's own wall-clock watchdogs (a `sliceMs` deadline
+  racing a 10 s `idleMs` host watchdog and a `Date.now() - t < 10_000` busy-loop hang guard), which
+  a saturated host genuinely cannot satisfy, and no CPU-time conversion can express a hang guard.
+  The two `validateSchema` cut-off bounds in `workflow-structured-smoke.ts` likewise stay wall
+  clock because they measure a `node:vm` timeout and a `Date.now()` deadline. (2)
+  `tests/workflow-redaction-smoke.ts` already measured CPU time, but its 4x-scaling ratio guard
+  still read as quadratic (~11x to ~20x) about one run in five under load. `process.cpuUsage()`
+  is process-wide, so it charged the V8 concurrent-marking/compilation helper threads — which a
+  saturated host keeps busy — to every measurement window. `cpuMs()` now uses
+  `process.threadCpuUsage()`, the calling thread only (available since Node 22.13, engines is
+  >=22.19); the guarded work runs on the main thread, so this is the honest measure. A residual
+  main-thread GC spike can still touch several samples in a row, so the helper takes best of nine
+  and warms both input sizes; the 10x bound is unchanged. The rule is stated in the `tests/timing.ts`
+  header.
+
+- Pentest governance refuses a human-console approval request when a committed workspace link
+  redirects its path, records the refusal and blocks the action. Its default data directories
+  also use the workspace safe-write helper, and a link below an operator-set `PENTEST_DATA_ROOT`
+  is refused as well (`tests/governance-smoke.ts`).
+- Piped `rg` and grep-family searches no longer treat a recognised search pattern as a secret
+  path. File operands, pattern files and ambiguous shell commands retain the full secret scan
+  (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`).
+- **The `/workflows` panel keeps its selection and fits short terminals.** The list cursor was a positional index while the registry lists newest first, so a run started or pruned while the panel was open shifted the highlight and Enter, `x`, `p` or `s` acted on a different run; the panel now tracks the selected run id and restores the cursor by id. On terminals shorter than its fixed rules and footer block the panel also rendered past the overlay's height cap: the list and confirm views are budgeted after the fixed rows, the confirm hint and spacer are dropped before the question, and a last-resort clamp keeps the bottom rule. Pinned by `npm run smoke:workflow-panel`; `docs/workflows.md` states the selection and short-terminal behaviour.
+
+- **The `/` menu Security page shows the effective level, not the combined main-row string.** The Effective row printed `guarded (requested balanced)`, duplicating the requested level and contradicting `docs/control-center.md`; it now reads the raw effective value (`guarded`) while the main Security row keeps the combined string. Pinned by `npm run smoke:control-center`.
+
+- **The todo checklist is re-cut at the width pi passes.** `updateTodoWidget` measured `process.stdout.columns` once at mount and mounted a `string[]`, so a terminal resize or an early mount left long items wrapped; it now mounts a component whose `render(width)` re-renders `renderTodoWidget`. Pinned by `npm run smoke:status-bar` and `npm run smoke:tui-layout`.
+
+- **The `/remote` pairing panel wraps by terminal columns.** `wrap()` compared `String#length` and sliced by code units, so a CJK fingerprint word rendered a 22-column line on a 20-column terminal; it now measures with pi-tui's `visibleWidth` and cuts with `sliceByColumn(..., true)`, keeping grapheme clusters and wide characters whole, and drops a wide grapheme that cannot fit its room instead of emitting an over-wide remainder. Pinned by `npm run smoke:tui-layout`; `npm run smoke:remote-control` also exercises the panel; `docs/remote-control.md` says lines are measured in columns.
+
+- **The footer's working line clips tool phrases as graphemes and follows the automatic ASCII theme.** `toolPhrase` sliced by code units, so an emoji at the 40-column boundary became a lone surrogate and an ASCII result could reach 42 columns; an ISO/ANSI/TTY theme also kept the Unicode ellipsis because the tool handler passed only `settings.ascii`. It now cuts with `truncateDisplay` and resolves the effective ASCII flag through `footerGlyphs(theme, settings.ascii)`. The same pass makes `shortCwd` take the glyph set's ellipsis, so ASCII mode shortens a deep cwd with `...`. Pinned by `npm run smoke:tui-layout` and `npm run smoke:status-bar`.
+
+- **The status bar and todo checklist cut their text in terminal columns.** The status bar's cut helpers passed the default U+2026 even when ASCII mode selected the glyph set's `...`, and the todo checklist was rendered without a width, so long items wrapped; both now cut with the footer's grapheme-aware, column-measured truncation and use the glyph set's ellipsis. Pinned by `npm run smoke:tui-layout`.
+
+- **Footer and todo width measurement matches pi-tui for VS16/keycap emoji and tabs.** `width.ts` counted a cluster containing `U+FE0F` or `U+20E3` as one column where pi-tui's `visibleWidth` counts two, and a tab as zero where pi-tui counts three, so a heart or keycap in a todo, cwd, session name or status chip overflowed the bar and let pi-tui wrap it. The measurement now promotes those clusters to two and counts a tab as three; `tests/tui-layout-smoke.ts` also checks every line with pi-tui's own `visibleWidth`. Pinned by `npm run smoke:tui-layout`.
+
+- **The pause and question cards wait for an open workflow approval card.** The resume question after a paused run and an `ask_human` question gated only on the shared input owner, which deliberately does not see workflow-run approval cards because the run broker allows two per run. While the second run card was still open, the newer card could stack on it and take the keyboard. Both now wait for the console's run-card counter within their own timeout, re-check before showing, and fail closed at the deadline (the run stays paused; the question times out); one notice names the card they are waiting behind. Run cards still take no shared hold, so two still open together. Pinned by `npm run smoke:firewall-workflow-approvals` and `npm run smoke:firewall-overlay-queue`; `docs/security.md` states the wait.
+
 ## [0.3.0-beta.2]
 
 ### Fixed

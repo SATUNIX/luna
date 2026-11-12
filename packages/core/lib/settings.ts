@@ -78,7 +78,7 @@ function errorMessage(error: unknown): string {
 
 // Pi resolves its config directory from PI_CODING_AGENT_DIR when set (falling back to
 // ~/.pi/agent) - see node_modules/@earendil-works/pi-coding-agent/docs/usage.md. Any
-// deployment that sets this env var (e.g. pi-system's container, which
+// deployment that sets this env var (e.g. Luna's container, which
 // points it at a durable data-root path distinct from $HOME) needs every kit script that
 // locates pi's global config dir to agree, or `pi install`'s registration and the kit's
 // own settings/marker reads+writes silently target different directories.
@@ -201,7 +201,7 @@ export function npmSourceName(source: unknown): string | null {
   return at === -1 ? spec : spec.slice(0, at);
 }
 
-/** True for a git source of a pi-system repository, on any ref. */
+/** True for a git source of a Luna repository, on any ref. */
 export function isKitGitSource(source: unknown): boolean {
   const git = parseGitSource(source);
   return Boolean(git && (isKitGitKey(git.key) || isPreviousGitSource(source, readDistribution().git.previousSources)));
@@ -285,7 +285,7 @@ export function mergePackageBlock(settingsPath: string, kitSource: string, resol
 }
 
 // Is `source` (as written in settings.json) a copy of this kit? npm: the package or a retired
-// split package; git: a clone of a pi-system repository; local: a checkout whose package.json
+// split package; git: a clone of a Luna repository; local: a checkout whose package.json
 // names the kit (current or pre-publish name) or a retired dist/pi-kit-* export.
 function isKitSource(source: string, baseDir: string): boolean {
   const npmName = npmSourceName(source);

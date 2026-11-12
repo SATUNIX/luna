@@ -20,13 +20,24 @@ The `kit-update` extension, loaded in every profile, checks all three parts.
   bar shows `updates: /update`.
 - **On demand**: `/update` checks now and lists what can be updated.
 
+When the kit is installed from git and its `main` branch has moved ahead of your checked-out
+commit, the check adds one line: `main is N commits ahead — /update channel next`. It appears at
+start-up (subject to the once-a-day background throttle), on `/update`, and under `/update status`.
+`next` is the channel that follows `main`, so the suggested command actually moves your copy to
+the newer commits; naming the installed release channel (`latest`, or an exact version) would not.
+The line shows even when the release channel you follow is otherwise current, and it is silent
+when your copy is in sync or ahead and when the remote could not be reached (offline, or no git
+credentials). When this gap exists, this line is the whole start-up kit notice: the
+generic `Updates available: ...` summary is not stacked on it. pi's own built-in update notice is
+separate and may still appear.
+
 | Command | What it does |
 |---|---|
 | `/update` | Check now, then pick: everything, Luna, pi, linked packages, or a channel switch |
 | `/update status` | Installed and available versions for every part |
 | `/update all` | Update Luna and linked packages, re-apply your profile, reload; then update pi, up to the tested version (below) |
 | `/update kit`, `/update pi`, `/update packages` | Update one part |
-| `/update channel latest` / `next` / `X.Y.Z` | Follow the other channel, or pin a release |
+| `/update channel latest` / `next` / `trunk` / `X.Y.Z` | Follow the other channel, or pin a release |
 
 Every update asks for confirmation first. A new pi version needs a restart of pi; everything
 else reloads in place.
@@ -96,6 +107,7 @@ changes nothing. `smoke:install-marker` checks partial failure, marker preservat
 |---|---|---|
 | `latest` | `git:github.com/SATUNIX/luna@v<newest release>` | The newest release tag. Betas count until the first stable release; after that, only stable releases |
 | `next` | `git:github.com/SATUNIX/luna` (no tag) | Every commit on `main` |
+| `trunk` | `git:github.com/SATUNIX/luna@integration/luna` | The head of the kit's integration branch (`git.trunkBranch` in `packages/core/distribution.json`). A canary, opt-in: use it to dogfood a merged cycle before it reaches `main`. Never selected by default |
 | pinned | `git:github.com/SATUNIX/luna@v<version>` | Exactly that release, never moved automatically |
 
 `latest` and a pin look the same in pi's settings (a tag). The installer records which one you
@@ -160,7 +172,7 @@ profile and project scope. An exact version remains an exact version. This list 
 `tests/distribution-contract-smoke.ts`).
 
 Luna also recognises itself under the package name `@satunix/luna` and the repository
-`github.com/SATUNIX/luna` (any ref, any URL form), as well as every pi-system form. A repository
+`github.com/SATUNIX/luna` (any ref, any URL form), as well as every `pi-system` form. A repository
 named `luna` under another owner or host is not Luna, so a fork of it is recognised only
 through an explicit `previousSources` entry. The unrelated npm package `luna` is never touched by
 duplicate-registration cleanup (`tests/install-profile-filter-smoke.ts`,

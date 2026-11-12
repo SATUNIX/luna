@@ -27,6 +27,8 @@ import { currentTarget, decideRecovery, newlyPassing } from "./recovery.ts";
 import { planReconfigure } from "./reconfigure.ts";
 import { type Measured, type TakenNotebook, HIDDEN_CHARS, WORKER_NOTEBOOK, appendGeneration, readNotebook, renderNotebook, takeWorkerNotebook } from "./notebook.ts";
 import { clip } from "./templates/common.ts";
+import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
+import { stateHome } from "./paths.ts";
 import { BoundaryError, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
 
@@ -201,6 +203,10 @@ export interface EngineOptions {
   lock?: RunLock | null;
   effortApi?: EffortApi | null | undefined;
   deps?: EngineDeps;
+  /** Host-wide gate slot count (PG-50); default from PI_AUTONOMY_GATE_SLOTS, 0 = unbounded. */
+  gateSlots?: number;
+  gateSlotsHome?: string;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -297,8 +303,12 @@ export class Engine {
   lastEvaluation: AcceptanceEvaluation | null = null;
   lastActivity: string[] = [];
   uiAnswered = 0;
+  gateSlotLimit: number;
+  gateSlotHome: string;
+  gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  clockPaused = false;
 
-  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, log }: EngineOptions) {
+  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, log }: EngineOptions) {
     this.contract = contract;
     this.cfg = cfg;
     this.store = store;
@@ -308,6 +318,9 @@ export class Engine {
     this.effortApi = effortApi;
     this.deps = deps;
     this.repo = rt.repo;
+    this.gateSlotLimit = gateSlots ?? resolveGateSlots();
+    this.gateSlotHome = gateSlotsHome ?? stateHome();
+    this.gateSlotAcquire = gateSlotAcquire ?? acquireGateSlot;
     this.log = log ?? defaultEngineLog(store, rt);
   }
 
@@ -341,7 +354,7 @@ export class Engine {
   tick(): void {
     if (this.lockLost) throw new LockLost();
     const now = this.rt.now();
-    if (this.lastTickAt !== null && this.active) this.state.usage.minutes += (now - this.lastTickAt) / 60_000;
+    if (this.lastTickAt !== null && this.active && !this.clockPaused) this.state.usage.minutes += (now - this.lastTickAt) / 60_000;
     this.lastTickAt = now;
     this.verifyContractIntact();
     this.writeHeartbeat();
@@ -349,6 +362,38 @@ export class Engine {
 
   writeHeartbeat(): void {
     writeJsonAtomic(path.join(this.store.p.root, "heartbeat.json"), { at: new Date(this.rt.now()).toISOString(), phase: this.state.phase ?? this.status, cycle: this.state.selfImprove?.current?.n ?? this.state.step, status: this.status });
+  }
+
+  /**
+   * Run `fn` holding one of the host-wide gate slots, so several supervisors on one host do not
+   * run their acceptance gates at once. While waiting this sets phase `gate-wait`, heartbeats it
+   * and does not accrue wall-clock minutes; the gate then runs under phase `acceptance`. With a
+   * limit of 0 this is a plain call (unbounded), leaving the caller's phase untouched.
+   */
+  async withGateSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.gateSlotLimit <= 0) return fn();
+    const prevPhase = this.state.phase;
+    // Charge the active interval since the previous tick before the clock pauses, so time spent
+    // working right before a gate wait is not silently dropped from the wall-clock budget.
+    this.tick();
+    this.clockPaused = true;
+    let slot: GateSlot | null = null;
+    try {
+      // Inside the try: a throwing tick must not leave clockPaused true or the phase stuck.
+      this.state.phase = "gate-wait";
+      this.tick();
+      slot = await this.gateSlotAcquire({ home: this.gateSlotHome, limit: this.gateSlotLimit, onWait: () => this.tick() });
+      // Drop the last poll gap while still paused, so the wait itself is never charged.
+      this.tick();
+      this.clockPaused = false;
+      this.state.phase = "acceptance";
+      this.tick();
+      return await fn();
+    } finally {
+      this.clockPaused = false;
+      this.state.phase = prevPhase;
+      slot?.release();
+    }
   }
 
   /** Spend only ever goes up: the higher of what state recorded and what the meters show now. */
@@ -569,7 +614,7 @@ export class Engine {
     const r = resumeAction(this.state, { answer: text, approve, deny });
     if (!r.ok) { this.log(`answer refused: ${r.message}`); return; }
     const q = this.state.blocker;
-    const pending: PendingAnswer = { text: (text ?? "").slice(0, 2000), ...(q ? { question: q.question, kind: q.kind } : {}), ...(approve ? { approved: true } : deny ? { approved: false } : {}), at: new Date(this.rt.now()).toISOString() };
+    const pending: PendingAnswer = { text: (text ?? "").slice(0, 2000), ...(q ? { id: q.id, question: q.question, kind: q.kind } : {}), ...(approve ? { approved: true } : deny ? { approved: false } : {}), at: new Date(this.rt.now()).toISOString() };
     this.state.pendingAnswer = pending;
     this.startReason = "answer";
     this.go("running", { reason: "answered", by: "operator" });
@@ -792,7 +837,7 @@ export class Engine {
     const latest = s.acceptance.latest;
     if (latest?.sha !== head) {
       if (contract.permissions.network.services.length) await this.rt.deploy({ sha: head });
-      const fresh = await (this.template.evaluate ?? runAcceptance)({ rt: this.rt, contract, sha: head, step: n, dir: path.join(this.stepDir(n), "checks"), runRoot: this.store.p.root, log: this.log });
+      const fresh = await this.withGateSlot(() => (this.template.evaluate ?? runAcceptance)({ rt: this.rt, contract, sha: head, step: n, dir: path.join(this.stepDir(n), "checks"), runRoot: this.store.p.root, log: this.log }));
       this.save((st) => {
         st.acceptance.latest = summariseEvaluation(fresh);
         st.acceptance.history = [...st.acceptance.history, { step: n, sha: head, allRequiredPass: fresh.allRequiredPass }].slice(-20);

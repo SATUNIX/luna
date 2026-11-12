@@ -103,6 +103,11 @@ async function freshRepo(): Promise<string> {
   const dir = path.join(ws, `case-${String(++repos)}`);
   fs.mkdirSync(dir);
   await gitIn(dir, "init", "-q", "-b", "main");
+  // `git commit` starts a detached `git maintenance run --auto` that holds objects/maintenance.lock for
+  // a while under load. The fingerprint case lists the object store before and after, so a lock that
+  // vanishes between the two reads as a change. Maintenance is off for these scratch repositories.
+  await gitIn(dir, "config", "gc.auto", "0");
+  await gitIn(dir, "config", "maintenance.auto", "false");
   fs.writeFileSync(path.join(dir, ".gitignore"), ".pi/\n");
   fs.writeFileSync(path.join(dir, "a.txt"), "a\n");
   await gitIn(dir, "add", "-A");
@@ -380,12 +385,18 @@ try {
   });
   await finding("a stopped run's writer leaves the checkout queue", async () => {
     const dir = await freshRepo();
-    const holder = launchRun(`return await agent("hold")`, () => ({ text: "held", delayMs: 1500 }), { cwd: dir });
+    // The holder keeps the checkout until the test stops it below, so the queue's order does not depend on
+    // a wall-clock delay that a slow runner could outlast.
+    const holder = launchRun(`return await agent("hold")`, () => ({ text: "held", delayMs: 60_000 }), { cwd: dir });
     await until(() => holder.fake.seen.length > 0);
     const queued = launchRun(`return await agent("queue")`, () => ({ text: "unexpected" }), { cwd: dir, drainMs: 200 });
+    // The stop must land after the script has made its call. Starting the script is a subprocess, and
+    // under load it took longer than a fixed sleep, so the stop arrived first and left nothing to omit.
+    await until(() => (queued.controls.get(queued.started.runId)?.running().length ?? 0) > 0);
     await sleep(300);
     assert.equal(controlMod.controlRun(queued.started.runId, "stop", queued.controls).ok, true);
     const outcome = await queued.started.done;
+    assert.equal(controlMod.controlRun(holder.started.runId, "stop", holder.controls).ok, true);
     await holder.started.done;
     assert.deepEqual(outcome.omissions?.map((s) => [s.execution, s.reason?.code]), [["cancelled", "stopped"]]);
   });

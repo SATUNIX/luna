@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { loadExtension, loadModule, fakePi, setEnv } from "../packages/core/eval/harness.ts";
 import type { CompressResult } from "../packages/extensions/src/compress/index.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 /**
  * The compress module as this test drives it. buildCompressedSummary takes pi's full
@@ -234,6 +235,27 @@ async function testBudgetKeepsFirstAndNewestTurns(): Promise<void> {
   } finally { restore(); }
 }
 
+async function testBudgetReservesOmissionMarker(): Promise<void> {
+  const restore = setEnv("PI_KIT_COMPRESS_MAX_CHARS", "4000");
+  try {
+    const messages: Message[] = [];
+    for (let i = 1; i <= 100; i++) {
+      messages.push({ role: "user", content: `ASK_${i} ab` });
+      messages.push({ role: "assistant", content: [{ type: "text", text: `REPLY_${i} ab` }] });
+    }
+    // The omission marker is written last but joined into the summary; with a tight budget and a
+    // previous summary the marker (+1 for the `## Conversation` newline) used to push the result
+    // past the budget (4047 > 4000).
+    const { summary, details } = buildCompressedSummary({
+      preparation: preparationFor(messages, { previousSummary: "PRIOR ".repeat(20), fileOps: undefined }),
+    });
+    assert.match(summary, /## Earlier summary\nPRIOR/, "earlier summary kept");
+    assert.match(summary, /\[… \d+ older turns omitted to fit the budget …\]/, "omission marker present");
+    assert.ok(details.omittedTurns > 0, "middle turns were omitted");
+    assert.ok(summary.length <= 4000, `marker is charged to the budget (${summary.length})`);
+  } finally { restore(); }
+}
+
 async function testRefusesWhenNothingToCompress(): Promise<void> {
   const pi = load();
   const ctx = fakeCtx(pi, preparationFor([]));
@@ -275,6 +297,18 @@ async function testSplitTurnPrefixIsIncluded(): Promise<void> {
   assert.match(summary, /### Turn 1 \(continues in the kept messages below\)\nUser: PREFIX_ASK/);
 }
 
+async function testEmptyTurnsStillSummarises(): Promise<void> {
+  // A history whose only message is an assistant message with plain string content renders no
+  // turns: groupTurns skips it, so turns is empty. buildCompressedSummary used to index turn 0
+  // anyway and throw "turn 0 is out of range", which the hook reported as a generic cancel.
+  const { summary, details } = buildCompressedSummary({
+    preparation: preparationFor([{ role: "assistant", content: "plain string" }]),
+  });
+  assert.match(summary, /^# Compressed context \(\/compress: deterministic, no model summary\)/, "keeps the header");
+  assert.equal(details.turns, 0, "reports zero turns");
+  assert.equal(details.omittedTurns, 0, "omits no turns");
+}
+
 async function testIsFast(): Promise<void> {
   const messages: Message[] = [];
   for (let i = 0; i < 5000; i++) {
@@ -282,20 +316,21 @@ async function testIsFast(): Promise<void> {
     messages.push({ role: "assistant", content: [{ type: "text", text: "reply" }, { type: "toolCall", id: `${i}`, name: "bash", arguments: { command: "ls" } }] });
     messages.push({ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: BIG_OUTPUT.slice(0, 20000) }] });
   }
-  const started = performance.now();
-  buildCompressedSummary({ preparation: preparationFor(messages) });
-  const ms = performance.now() - started;
-  assert.ok(ms < 2000, `15k messages compress in ${ms.toFixed(0)} ms`);
+  assertCpuWithin("15k messages compress", 2000, () => {
+    buildCompressedSummary({ preparation: preparationFor(messages) });
+  });
 }
 
 const tests: Array<() => Promise<void>> = [
   testIgnoresNativeCompaction,
   testCommandBuildsDeterministicSummary,
   testBudgetKeepsFirstAndNewestTurns,
+  testBudgetReservesOmissionMarker,
   testRefusesWhenNothingToCompress,
   testBuildFailureCancelsInsteadOfFallingBack,
   testCarriesFileListsAcrossCompressions,
   testSplitTurnPrefixIsIncluded,
+  testEmptyTurnsStillSummarises,
   testIsFast,
 ];
 let failed = 0;

@@ -498,7 +498,7 @@ absolute or relative to the working directory.
 | `PI_KIT_GUIDELINES_PATH` | `guidelines` | Path to guidelines file (default `GUIDELINES.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_HANDOFF_AUTO` | `handoff` | — | — |
 | `PI_KIT_HANDOFF_FILE` | `handoff` | — | — |
-| `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [script-workflows](script-workflows.md) |
+| `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [future-work](future-work.md) |
 | `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `pentest-governance-domain`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_INTERNAL_CHILD` | `control-center`, `trigger-compact` | — | [control-center](control-center.md) |
 | `PI_KIT_LEAN_CTX` | `session-helpers` | Set to `0` to disable the lean-ctx preflight warning | [INSTALL](INSTALL.md#environment-variables) |

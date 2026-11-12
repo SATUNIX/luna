@@ -1708,6 +1708,21 @@ await check("check-map: a changed-path diff implies the host gate's checks, and 
     assert.ok(!docs.includes(name), `${name} is not planned for a docs-only change`);
   }
 
+  // CI policy and the core entry scripts plan the checks that pin them, so a cycle editing one of
+  // these files cannot record its pinning check as skipped.
+  const ciWorkflow = checksForChangedPaths([".github/workflows/ci.yml"]);
+  for (const name of ["smoke:workflow-policy", "smoke:release-workflow"]) assert.ok(ciWorkflow.includes(name), `${name} is planned for a workflow change`);
+  assert.ok(!ciWorkflow.includes("smoke:install-marker"), "an unrelated check is not planned for a workflow change");
+  const settings = checksForChangedPaths([".github/expected-settings.json"]);
+  for (const name of ["smoke:workflow-policy", "smoke:github-settings-check"]) assert.ok(settings.includes(name), `${name} is planned for an expected-settings change`);
+  const owners = checksForChangedPaths([".github/CODEOWNERS"]);
+  assert.ok(owners.includes("smoke:codeowners-coverage"), "smoke:codeowners-coverage is planned for a CODEOWNERS change");
+  const installer = checksForChangedPaths(["packages/core/install.ts"]);
+  for (const name of ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction"]) assert.ok(installer.includes(name), `${name} is planned for an install.ts change`);
+  assert.ok(!installer.includes("smoke:codeowners-coverage"), "an unrelated check is not planned for an install.ts change");
+  const coverage = checksForChangedPaths(["packages/core/coverage.ts"]);
+  assert.ok(coverage.includes("smoke:check-all-npm"), "smoke:check-all-npm is planned for a coverage.ts change");
+
   // With a scripts record, a changed file a check runs directly plans that check: the table only
   // matches source dirs, so a changed test file would otherwise go unplanned.
   const fixtureScripts = { "smoke:foo": "node tests/foo-smoke.ts", "smoke:bar": "node tests/bar-smoke.ts" };

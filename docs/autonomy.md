@@ -659,8 +659,11 @@ the report and appends it for any non-close-out report that lacks one. `npm run 
 fails a report with no line, a line with no report and a line whose board IDs differ from the
 report's, and so reddens the acceptance gate (`tests/docs-smoke.ts`; the cycle prompt wording is
 pinned by `tests/autonomy-selfimprove-smoke.ts`). A host close-out report, which the worker never
-finished, is reported as a warning instead. Cycle reports and individual proposals keep their own
-separate paths.
+finished, is reported as a warning instead. The journal is replaced through the safe write helper,
+so a symbolic link at `autonomy/JOURNAL.md` is refused instead of followed, and a cycle directory
+whose name could not be one journal key (whitespace, a line break) stops the run of the script
+before anything is written (`tests/docs-smoke.ts`). Cycle reports and individual proposals keep
+their own separate paths.
 
 ```mermaid
 flowchart LR

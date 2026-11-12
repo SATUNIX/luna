@@ -3,6 +3,7 @@
 // cannot close without a line naming its board item, outcome and decisions.
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileSafe } from "../shared/safe-fs.ts";
 
 export interface JournalEntry {
   key: string;
@@ -31,6 +32,18 @@ const REPORT_HEADING = /^# (.+)$/m;
 const REPORT_DECISION = /autonomy\/decisions\/[\w.-]+\.md/g;
 const CLOSE_OUT = "Host close-out: the worker exited before recording report.md";
 const JOURNAL_HEADER = "# Team journal\n";
+/** A cycle key `syncJournal` will write: directory names are untrusted, and an entry is one line. */
+const SAFE_KEY = /^[\w.-]+(?:\/[\w.-]+)?$/;
+
+/** The file's text, or null when it does not exist: one read, with no separate existence check. */
+function readIfPresent(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
 
 /** Parse entry lines; the header and blanks are ignored, and a malformed `- ` line throws. */
 export function parseJournal(text: string): JournalEntry[] {
@@ -185,24 +198,30 @@ export function checkJournal(root: string): string[] {
  * Existing content is preserved (the file is created with the standard header when absent), a
  * host close-out report is skipped, and the keys written are returned in report order. Idempotent:
  * a second call finds every report already present and returns `[]`.
+ *
+ * The journal is read once and replaced through `writeFileSafe` under `root`, so a committed
+ * symbolic link at `autonomy/` or `autonomy/JOURNAL.md` is refused instead of followed. A cycle
+ * directory whose name could not be one journal key (whitespace, a line break, a `|`) throws
+ * before anything is written.
  */
 export function syncJournal(root: string): string[] {
   const journal = path.join(root, "autonomy", "JOURNAL.md");
-  const existing = fs.existsSync(journal) ? parseJournal(fs.readFileSync(journal, "utf8")) : [];
-  const known = new Set(existing.map((entry) => entry.key));
+  const current = readIfPresent(journal);
+  const known = new Set(parseJournal(current ?? "").map((entry) => entry.key));
   const written: string[] = [];
   for (const { key, report } of cycleReports(root)) {
     if (known.has(key)) continue;
     const text = fs.readFileSync(report, "utf8");
     if (text.includes(CLOSE_OUT)) continue;
+    if (!SAFE_KEY.test(key)) throw new Error(`cycle directory name cannot be a journal key: ${JSON.stringify(key)}`);
     known.add(key);
     written.push(journalLineFor(root, key, text));
   }
   if (written.length === 0) return [];
-  let content = fs.existsSync(journal) ? fs.readFileSync(journal, "utf8") : JOURNAL_HEADER;
+  let content = current ?? JOURNAL_HEADER;
   if (!content.endsWith("\n")) content += "\n";
   content += written.map((line) => `${line}\n`).join("");
-  fs.writeFileSync(journal, content);
+  writeFileSafe(journal, content, current === null ? { root, mode: 0o644 } : { root });
   return written;
 }
 

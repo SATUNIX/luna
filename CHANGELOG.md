@@ -66,6 +66,10 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `node packages/core/journal.ts` no longer checks for `autonomy/JOURNAL.md` and then writes it
+  with a plain write. It reads the file once and replaces it through the safe write helper, so a
+  committed symbolic link there is refused, and a cycle directory name that could forge a second
+  journal line is refused before anything is written (`tests/docs-smoke.ts`).
 - `/workflows` and `workflow_status` no longer print an autonomy worker's blocker question, options,
   task titles or last error as written: control, format and bidirectional characters are removed,
   the text is one line and it is capped (`tests/run-query-smoke.ts`). `pi-autonomy inbox --run`

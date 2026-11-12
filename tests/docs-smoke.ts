@@ -754,4 +754,41 @@ function removeJournalFixture(fixture: JournalFixture): void {
   }
 }
 
+// syncJournal never follows a link: a committed `autonomy/JOURNAL.md` symlink is refused and the
+// file it points at is left exactly as it was.
+if (process.platform !== "win32") {
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.write("outside.txt", "# Team journal\n");
+    fs.symlinkSync(path.join(fixture.root, "outside.txt"), path.join(fixture.root, "autonomy", "JOURNAL.md"));
+    assert.throws(() => syncJournal(fixture.root), /symbolic link/, "syncJournal wrote through a symlinked journal");
+    assert.equal(fs.readFileSync(path.join(fixture.root, "outside.txt"), "utf8"), "# Team journal\n", "the link target was modified");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A cycle directory name is untrusted: one that could forge a second journal line is refused
+// before anything is written, and a journal created by syncJournal is an ordinary readable file.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, "syncJournal did not create the journal");
+    const journal = path.join(fixture.root, "autonomy", "JOURNAL.md");
+    const created = fs.readFileSync(journal, "utf8");
+    assert.ok(created.startsWith("# Team journal\n"), "a created journal lacks the standard header");
+    if (process.platform !== "win32") assert.equal(fs.statSync(journal).mode & 0o044, 0o044, "a created journal is not group and world readable");
+    if (process.platform !== "win32") {
+      fixture.write("autonomy/cycles/run-01/02\n- forged | Board: none | successful | forged/report.md", "# Report\n\nOutcome: successful\n");
+      assert.throws(() => syncJournal(fixture.root), /cannot be a journal key/, "syncJournal accepted a forged cycle directory name");
+      assert.equal(fs.readFileSync(journal, "utf8"), created, "a refused sync still changed the journal");
+    }
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
 console.log(`[docs-smoke] OK: ${checked} documented commands validated, ${linksChecked} relative links resolved; balanced profile resolved; ${skipped.length} external lines skipped; skills catalogue visible ${skillsVisible}/${skillsTotal}; ${shippedPages.length} shipped pages name no removed delegation surface.`);

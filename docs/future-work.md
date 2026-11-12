@@ -26,9 +26,9 @@ it.
 ## Delegation and recovery
 
 - **A child that fills its context window** is now told why (compaction off, a failed recovery,
-  clamped output) and is not retried in a loop, but `subagent`'s failure hints do not yet mention
-  overflow or compaction outcomes, so the parent sees the child's own message rather than a
-  kit-authored hint.
+  clamped output) and is not retried in a loop. `subagent` adds a kit-authored hint only to a
+  child that ended with no message at all (`tests/subagent-nesting-smoke.ts`); one that fills its
+  window after replying still shows the child's own message, with no overflow or compaction hint.
 - **`trigger-compact`'s mid-run resume** sends a visible user message and has been tested only
   with fakes. It never runs inside child sessions.
 - **Recovery itself starts only on a progress-guard escalation or a bare `/boost`.** A repeat
@@ -160,10 +160,6 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   and would also let workers under a rootless engine run unattended, which the namespace rule
   currently refuses. The autonomy boundary probe does not yet report whether the worker is in the
   initial user namespace.
-- **The `pentest-governance-domain` extension's human-console approval request** is still written
-  with plain `fs` calls and remains on the ESLint allowlist as a known gap; moving it to the
-  safe-write helper is pending. The human console's own request, answer and audit files and the
-  tool firewall's request file use the helper.
 - **Inline interpreter code that builds a credential path at run time** (rather than naming it
   literally) is not recognised by the classifier.
 - **Approvals bind command text, not effect.** An approved `git push` follows a re-pointed remote,
@@ -171,6 +167,13 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   URL, the script's content hash) would close it, at the cost of more prompts.
 - **A script the agent wrote can set the unattended variables** where the classifier sees only
   `bash run.sh`. The provenance rule stops it from working; the classifier cannot see it.
+- **An operator-set human-console directory is trusted as given.** `PI_KIT_HUMAN_CONSOLE_DIR` is the
+  root of the request write in both the tool firewall and the pentest governance extension, and the
+  helper trusts a root itself. If the operator points it at a path inside a repository that ships a
+  link there, the `pending` and `resolved` directories and the request file are created through that
+  link. The default `.pi/human-console` path is the checked one. Refusing a linked root would also
+  refuse a link the operator made on purpose, so this needs a decision on what a console root may be.
+  Nothing pins the linked-root case.
 
 ## Profiles and compaction
 

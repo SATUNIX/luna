@@ -27,8 +27,10 @@ const ts = createRequire(import.meta.url)("typescript") as typeof TypeScript;
 
 const ROOT = WORKSPACE_ROOT;
 const DOC_PATH = path.join(DOCS_DIR, "reference.md");
-/** Generated pages are not where a command is documented. */
-const GENERATED = new Set(["reference.md", "EXTENSIONS.md", "capability-matrix.md", "skills-catalogue.md"]);
+/** Generated pages, and the branding inventory, are not where a command or env var is documented:
+ * they list names, so they must not hijack the "documented in" link from the page that explains the
+ * behaviour. */
+const GENERATED = new Set(["reference.md", "EXTENSIONS.md", "capability-matrix.md", "skills-catalogue.md", "branding.md"]);
 
 interface Extension { name: string; dir: string; commands: string[]; tools: string[]; env: string[] }
 interface Param { name: string; type: string; optional: boolean; description: string }

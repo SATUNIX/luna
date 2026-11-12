@@ -20,7 +20,30 @@ item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
 - `bash` commands that leak a secret (`git add` / `git commit` of a `.env`, `echo` of a
   `password=`-style assignment, `curl` / `wget` posting credentials; `SECRET_BASH_LEAK_PATTERNS`),
   or that read, copy, encode or transfer a secret or protected path (`cat`, `cp`, `mv`,
-  `base64`, `curl` uploads), including glob- and quote-obscured names.
+  `base64`, `curl` uploads), including glob-, bracket-class-, brace- and quote-obscured names
+  (`.e?v`, `.en[v]`, `[.]env`, `.e{n,x}v`). Brace groups and bracket classes of up to 32 characters
+  (`[v]`, `[c-c]`, `[[:lower:]]`) are expanded before the name scan (duplicates collapse, at most 1024 words and 1 MiB per token, 16
+  levels of nesting; a group past a bound widens to `*`, which can only block more). A
+  negated or larger bracket class is matched against representative secret filenames, and a glob
+  directory segment with at least three literal characters (`secre[t-u]`, `.ss[h-i]`) is matched
+  against `secret`, `secrets`, `credentials` and `.ssh`. Quoted text is expanded as well, because
+  `sh -c 'cat .en[v]'` hands it to a second shell. A quote inside a word is removed the way the
+  shell removes it before the scan (`.e'n'v`, `".e"nv`, `cred"entials"/db.txt`); a word quoted as a
+  whole keeps its quotes, because the quoting is what marks a search pattern as text. A `$'...'`
+  string is decoded first (`\x2e`, octal, `\u002e`, `\n`). Not covered:
+  a backslash-escaped bracket (`[v\]]`), and a name reached only through `?`,
+  `*`, a negated class or a class of more than 32 characters when it is not canonical (`foo.p?m`,
+  `foo.p[!x]m`). The `.env.example` and `.env.sample` exemption applies after expansion. All of
+  this is pinned by `tests/secret-guard-smoke.ts`.
+  For a plain leading `rg`, `grep`, `egrep` or `fgrep` command, a recognised search pattern is
+  excluded from the secret-path token scan. The first positional argument is the pattern unless
+  `-e` / `--regexp` or `-f` / `--file` supplies one; a pattern file is always scanned as a path.
+  File operands, including those after `--`, are still scanned. Unknown options, ambiguous shell
+  syntax, unbalanced quotes and shell substitutions receive the unchanged full scan, and so does
+  an unquoted pattern containing `*`, `?`, `[`, `]`, `{`, `}` or `~`, which the shell expands
+  before the tool runs (a quoted pattern is text). This
+  precision rule is pinned by `tests/secret-guard-smoke.ts`; the four piped searches through all
+  three guards are pinned by `tests/firewall-benign-corpus.ts` via `tests/tool-firewall-smoke.ts`.
 - any tool call whose `path` or `file` argument (or, for `bash`, `command`, `cmd` or `script`) is truthy
   but not a string; the reason names the field (`tests/untrusted-input-guards-smoke.ts`).
 

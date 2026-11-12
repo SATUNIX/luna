@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { syncJournal } from "../packages/core/journal.ts";
 import { checkJournal, journalWarnings } from "../packages/core/lib/journal.ts";
 import { installPinFiles, installPinVersions, readmeBadgeAltVersion, readmeBadgeVersion, setInstallPins, setReadmeBadgeVersion } from "../packages/core/lib/version-badge.ts";
 import { skillsCatalogueContent } from "../packages/core/skills-catalogue.ts";
@@ -23,6 +24,7 @@ interface PackageJson {
 
 interface ExtensionManifest {
   name?: string;
+  env?: string[];
 }
 
 interface ProfileJson {
@@ -71,10 +73,10 @@ for (const rel of DOCS) {
   for (const cmd of fencedCommands(md)) {
     const tokens = cmd.split(/\s+/);
     // Node resolves the installer path against the current working directory, so
-    // `node pi-system/...` only works from the clone's parent and breaks from inside the clone.
+    // `node luna/...` only works from the clone's parent and breaks from inside the clone.
     assert.ok(
-      !(tokens[0] === "node" && tokens[1]?.startsWith("pi-system/")),
-      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd pi-system' then 'node packages/core/install.ts ...')`,
+      !(tokens[0] === "node" && tokens[1]?.startsWith("luna/")),
+      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd luna' then 'node packages/core/install.ts ...')`,
     );
     const [bin, arg1] = tokens;
 
@@ -202,6 +204,14 @@ assert.ok(
   !capabilityMd.includes("includeInCompact}`); context-sieve assembles them under a token budget"),
   "docs/capability-research-workflow.md contains the orphaned duplicated injection-monopoly fragment",
 );
+assert.ok(
+  !capabilityMd.includes("wipes contributions on `session_start`"),
+  "docs/capability-research-workflow.md still claims context-sieve wipes contributions on session_start",
+);
+assert.ok(
+  capabilityMd.includes("module-load epoch"),
+  "docs/capability-research-workflow.md does not describe context-sieve's epoch admission",
+);
 const profilesMd = fs.readFileSync(path.join(ROOT, "docs", "architecture", "profiles-and-install.md"), "utf8");
 assert.ok(
   !profilesMd.includes("is not recorded, because this install never registered it"),
@@ -276,6 +286,32 @@ for (const name of new Set(recoveryMd.match(/PI_KIT_[A-Z0-9_]+/g) ?? [])) {
     `docs/recovery-orchestration-mode.md names ${name}, which no extension reads`);
 }
 assert.ok(!/\/unstuck\b/.test(recoveryMd), "docs/recovery-orchestration-mode.md offers /unstuck, which no extension registers");
+
+// INSTALL.md's environment table must name a real extension and a variable that extension's
+// manifest declares. It once listed PI_KIT_GUIDELINES_FILE for `guidelines`, while the manifest,
+// the code and the extension README all use PI_KIT_GUIDELINES_PATH, so anyone following the docs
+// set a no-op variable.
+const manifestsByName = new Map<string, ExtensionManifest>();
+for (const rootRel of ["packages/extensions/src", "packages/extensions/third_party"]) {
+  const rootAbs = path.join(ROOT, rootRel);
+  if (!fs.existsSync(rootAbs)) continue;
+  for (const entry of fs.readdirSync(rootAbs, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+    const manifestPath = path.join(rootAbs, entry.name, "extension.json");
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as ExtensionManifest;
+    if (manifest.name) manifestsByName.set(manifest.name, manifest);
+  }
+}
+for (const line of readRel("docs/INSTALL.md").split(/\r?\n/)) {
+  const m = /^\|\s*`([A-Z][A-Z0-9_]+)`\s*\|\s*([a-z0-9-]+)\s*\|/.exec(line);
+  if (!m) continue;
+  const [, variable, extension] = m;
+  assert.ok(variable !== undefined && extension !== undefined, "INSTALL.md env-table regex lost a capture group");
+  const manifest = manifestsByName.get(extension);
+  assert.ok(manifest, `docs/INSTALL.md lists ${variable} for extension "${extension}", which has no extension.json`);
+  assert.ok(manifest.env?.includes(variable), `docs/INSTALL.md lists ${variable} for "${extension}", but its manifest env[] does not declare it`);
+}
 
 // SEC-8: secret-guard ships in balanced and autonomous only, and blocks reads of credential files.
 const secretGuardSrc = readRel("packages/extensions/src/secret-guard/index.ts");
@@ -599,6 +635,22 @@ function removeJournalFixture(fixture: JournalFixture): void {
   }
 }
 
+// syncJournal also skips a host close-out report: no line is derived or written.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "Outcome: partial\n\nHost close-out: the worker exited before recording report.md.\n",
+    );
+    fixture.journal([]);
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal wrote a line for a host close-out report");
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a host close-out report");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
 // An entry whose cycle directory exists but has no report.md fails, naming the key.
 {
   const fixture = journalFixture();
@@ -610,6 +662,131 @@ function removeJournalFixture(fixture: JournalFixture): void {
       problems.some((problem) => problem.includes("journal entry has no report: run-01/01")),
       `journal checker missed an entry with no report: ${problems.join("; ")}`,
     );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// Identical duplicate entries (a `merge=union` artifact) are accepted; only a key repeated
+// with different content is a conflict.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did a thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.deepEqual(problems, [], `identical duplicate entries produced a failure: ${problems.join("; ")}`);
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// The same key twice with different content is a conflict, not a union-merge artifact.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did another thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("conflicting journal entries: run-01/01")),
+      `journal checker missed a conflicting duplicate: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// syncJournal derives the missing line, then checkJournal accepts it and a second sync is a no-op.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a derived line");
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal was not idempotent");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A report may name a decisions file that does not exist: the derived line must not link it, so
+// checkJournal still accepts the very line it derived (the missing-link regression).
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "# Report\n\nOutcome: successful\n\nThe decision is in autonomy/decisions/missing.md.\n",
+    );
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    const line = wrote[0] ?? "";
+    assert.ok(!line.includes("missing.md"), `derived line linked a missing decisions file: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected the line it derived");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A decisions file named by the report and present on disk is linked, and that link satisfies
+// checkJournal's rule that every decisions file carries a Board line and is referenced.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n\nSee autonomy/decisions/real.md.\n");
+    fixture.write("autonomy/decisions/real.md", "Board: PG-20\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    const line = wrote[0] ?? "";
+    assert.ok(line.includes("decisions: autonomy/decisions/real.md"), `derived line omitted the decisions link: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a linked decisions file");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// syncJournal never follows a link: a committed `autonomy/JOURNAL.md` symlink is refused and the
+// file it points at is left exactly as it was.
+if (process.platform !== "win32") {
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.write("outside.txt", "# Team journal\n");
+    fs.symlinkSync(path.join(fixture.root, "outside.txt"), path.join(fixture.root, "autonomy", "JOURNAL.md"));
+    assert.throws(() => syncJournal(fixture.root), /symbolic link/, "syncJournal wrote through a symlinked journal");
+    assert.equal(fs.readFileSync(path.join(fixture.root, "outside.txt"), "utf8"), "# Team journal\n", "the link target was modified");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A cycle directory name is untrusted: one that could forge a second journal line is refused
+// before anything is written, and a journal created by syncJournal is an ordinary readable file.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, "syncJournal did not create the journal");
+    const journal = path.join(fixture.root, "autonomy", "JOURNAL.md");
+    const created = fs.readFileSync(journal, "utf8");
+    assert.ok(created.startsWith("# Team journal\n"), "a created journal lacks the standard header");
+    if (process.platform !== "win32") assert.equal(fs.statSync(journal).mode & 0o044, 0o044, "a created journal is not group and world readable");
+    if (process.platform !== "win32") {
+      fixture.write("autonomy/cycles/run-01/02\n- forged | Board: none | successful | forged/report.md", "# Report\n\nOutcome: successful\n");
+      assert.throws(() => syncJournal(fixture.root), /cannot be a journal key/, "syncJournal accepted a forged cycle directory name");
+      assert.equal(fs.readFileSync(journal, "utf8"), created, "a refused sync still changed the journal");
+    }
   } finally {
     removeJournalFixture(fixture);
   }

@@ -5,8 +5,8 @@
 #                  --env-file capability/env/defaults.env \
 #                  up -d --build
 #
-# Set PI_KIT_PATH to the absolute path of your pi-system clone.
-# Example: PI_KIT_PATH=/home/user/dev/pi-system docker compose ... up -d
+# Set PI_KIT_PATH to the absolute path of your Luna clone.
+# Example: PI_KIT_PATH=/path/to/luna docker compose ... up -d
 
 name: pi-system
 

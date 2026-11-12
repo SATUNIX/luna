@@ -33,7 +33,7 @@
   "runtime": {
     "nodeBuiltins": ["node:child_process", "node:crypto", "node:fs", "node:net", "node:os", "node:path", "node:url"],
     "npm": [],
-    "piPeers": [],
+    "piPeers": ["@earendil-works/pi-tui"],
     "services": [],
     "models": []
   },

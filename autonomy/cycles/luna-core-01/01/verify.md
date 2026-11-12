@@ -1,51 +1,46 @@
-# Cycle verify — luna-core-01 / 01
+# Cycle verify — luna-core-01 / 01 (continuation)
 
-Base `dc71c739409e`; final `HEAD` after the record commit. Two code items, each with a targeted
-check. No `npm test` / `npm run check:all` was run.
+Base `d932d6f02e41`; items committed `486d3d2` and `a9b6f21`. Targeted checks only — no
+`npm test` / `npm run check:all` was run.
 
-## Item 1 — eval `--category` gate
+## Item 1 — guidelines env var name
 
-Commit: `d30b7f0`.
-
-| Command | Result |
-|---|---|
-| `node packages/core/eval/run.ts --category __no_such_category__; echo $?` | prints `unknown category "__no_such_category__"` + usage, **exit 2** (pre-change: exit 1 with a generic message) |
-| `node packages/core/eval/run.ts --category; echo $?` | usage, **exit 2** (pre-change: ran all 17 fixtures, **exit 0** — the false green) |
-| `node tests/eval-footprint-smoke.ts` | **PASS** — `all 11 checks passed`, including `the eval --category gate refuses an unknown or missing value` |
-
-Proving line: the new assertion `run(["--category"])` asserts a non-zero exit and fails against the
-pre-change `run.ts`, which exited 0. The reviewer independently reproduced this with a scratch copy
-of the old file.
-
-## Item 2 — context-sieve message-budget env var
-
-Commit: `8b3013f`.
+Commit: `486d3d2`.
 
 | Command | Result |
 |---|---|
-| `node tests/extension-manifest-hooks-smoke.ts` | **PASS** — `3 pinned extensions declare the exact env vars their code reads` |
-| `node packages/core/reference.ts --check` | **PASS** — `docs/reference.md is up to date` |
 | `npm run smoke:docs` | **PASS** — `14 documented commands validated, 62 relative links resolved` |
-| `npm run smoke:context-budget` | **PASS** — `all 12 checks passed` |
+| `node packages/core/reference.ts --check` | **PASS** — `docs/reference.md is up to date` |
+| pre-change reproduction (scratch worktree, row reverted to `PI_KIT_GUIDELINES_FILE`) | **FAIL as intended** — `node tests/docs-smoke.ts` exits 1: `docs/INSTALL.md lists PI_KIT_GUIDELINES_FILE for "guidelines", but its manifest env[] does not declare it` |
 
-Proving line: `docs/reference.md:470` now lists `PI_KIT_CTX_MESSAGE_BUDGET_TOKENS` for
-`context-sieve`; the `ENV_ALLOWLIST` `deepEqual` in `tests/extension-manifest-hooks-smoke.ts`
-fails if the manifest omits it. The reviewer confirmed the context-sieve code reads exactly those two
-`PI_KIT_*` vars and the manifest now declares exactly them.
+Proving line: the new assertion in `tests/docs-smoke.ts` fails on the old INSTALL row and passes on
+the new one; the generated `docs/reference.md` row for `PI_KIT_GUIDELINES_PATH` gains its Purpose
+and INSTALL link.
+
+## Item 2 — declared settings missing from the reference
+
+Commit: `a9b6f21`.
+
+| Command | Result |
+|---|---|
+| `npm run smoke:docs` | **PASS** — the same checker now resolves every INSTALL row against its manifest `env[]` |
+| `node packages/core/reference.ts --check` | **PASS** — `docs/reference.md is up to date` |
+| `node tests/extension-manifest-hooks-smoke.ts` | **PASS** — `3 pinned extensions declare the exact env vars their code reads` |
+
+Proving line: `docs/reference.md` now lists `PI_KIT_LEAN_CTX` under `session-helpers` and
+`PI_KIT_VERIFY_PENDING_TTL_MS` under `verify-gate` with a purpose and INSTALL link; removing either
+manifest `env[]` entry makes the `docs-smoke` INSTALL/manifest assertion fail.
 
 ## Independent review
 
-`reviewer` subagent, over `git diff dc71c739409e..HEAD` (records excluded), against `autonomy/CHARTER.md`:
-**VERDICT: PASS** for both items. Merge-guard criteria satisfied: no `autonomy/CHARTER.md`, no
-`.github/`, no `package.json` `scripts`, no operator control path, no `any`/casts/`eslint-disable`.
-
-Two warnings (non-blocking, recorded as leftovers):
-- the cycle `review.md` initially overstated the unknown-category case as a false green (it exited 1);
-  corrected in the record commit;
-- `run.ts` header usage example still lists only `security|verification|orchestration`, and the test
-  asserts `status !== 0` rather than `status === 2`.
+`reviewer` subagent over `git diff --no-renames d932d6f02e41..HEAD` (lockfile and cycle/run records
+excluded), against `autonomy/CHARTER.md`: **VERDICT: PASS**. The only non-record files are
+`docs/INSTALL.md`, `docs/reference.md`, `tests/docs-smoke.ts`,
+`packages/extensions/src/session-helpers/extension.json` and
+`packages/extensions/src/verify-gate/extension.json`; no `.github/`, `package.json` script,
+`autonomy/CHARTER.md` or operator control path; no test deleted or weakened.
 
 ## Diff budget
 
-`git diff --no-renames dc71c739409e..HEAD` excluding lockfile and run records: **7,371 chars**
-(limit 30,000).
+`git diff --no-renames d932d6f02e41..HEAD` excluding lockfile and cycle/run records: **12,082
+chars** (8,856 for code and docs; the rest is this cycle's proposal); limit 30,000.

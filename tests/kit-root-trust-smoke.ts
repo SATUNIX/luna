@@ -259,7 +259,7 @@ const tests: Record<string, () => Promise<void>> = {
     try {
       const warnings: string[] = [];
       assert.equal(findKitRoot(f.cwd, (m) => warnings.push(m)), REPO_ROOT);
-      assert.match(warnings.join("\n"), /not a pi-system kit/);
+      assert.match(warnings.join("\n"), /not a Luna kit/);
     } finally {
       restoreAgent();
       rmWorkspace(f.base);
@@ -311,7 +311,7 @@ const tests: Record<string, () => Promise<void>> = {
   "web UI fallbacks: a kitSource outside the workspace that is not a kit by package name is ignored": async () => {
     await assertWebUiRefused(
       (repo) => path.join(path.dirname(repo), "other"),
-      /not a pi-system kit/,
+      /not a Luna kit/,
       (f) => writeKit(path.join(f.base, "other"), "some-other-package"),
     );
   },

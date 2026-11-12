@@ -57,10 +57,8 @@ export function readTodos(filePath: string): { todos: Todo[]; nextId: number } {
   for (const line of content.split(/\r?\n/)) {
     const m = line.match(/^- \[([ xX~])\] #(\d+): (.+)$/);
     if (m) {
-      // Every group in the pattern is mandatory, so a match always fills all three.
-      const [, mark = "", digits = "", text = ""] = m;
-      const id = parseInt(digits, 10);
-      todos.push({ id, text, state: mark === "~" ? "active" : mark === " " ? "open" : "done" });
+      const id = parseInt(m[2] ?? "", 10);
+      todos.push({ id, text: m[3] ?? "", state: m[1] === "~" ? "active" : m[1] === " " ? "open" : "done" });
       if (id >= nextId) nextId = id + 1;
     }
   }

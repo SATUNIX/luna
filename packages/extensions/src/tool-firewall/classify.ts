@@ -2636,7 +2636,10 @@ function adapterCovered(tool: string, input: unknown): boolean {
     tool_search: { query: "string", limit: "number" },
   };
   const shape = own(shapes, tool);
-  if (!shape || Object.entries(fields).some(([k, v]) => !Object.hasOwn(shape, k) || !(shape[k] ?? "").split("|").includes(typeof v))) return false;
+  // A null/undefined-valued key that the shape does not know names no operation: adapters that
+  // add such a placeholder must not become incomplete. A known field with null is still a type
+  // mismatch, and a non-null unknown field still adds an unreviewed instruction.
+  if (!shape || Object.entries(fields).some(([k, v]) => (v === null || v === undefined) ? Object.hasOwn(shape, k) : !Object.hasOwn(shape, k) || !(shape[k] ?? "").split("|").includes(typeof v))) return false;
   if (["bash", "powershell"].includes(tool)) return typeof fields.command === "string" && fields.command.trim().length > 0;
   if (tool === "tool_search") return typeof fields.query === "string";
   if (["read", "write", "edit", "read_symbol"].includes(tool) && !(typeof fields.path === "string" && fields.path.trim())) return false;
@@ -2657,8 +2660,13 @@ function adapterCovered(tool: string, input: unknown): boolean {
 // operations can introduce another target. Unknown operation keys remain incomplete.
 function coveredEdit(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (Object.keys(value).every((k) => k === "oldText" || k === "newText") && typeof value.oldText === "string" && typeof value.newText === "string") return true;
-  if (Object.keys(value).length !== 1) return false;
+  // Null/undefined-valued keys name no operation; they are placeholders, not extra entries.
+  // At least one real entry must remain, so `{"replace": null}` and a body of only null keys
+  // stay incomplete, as do two real operations and an unknown real operation.
+  const keys = Object.keys(value).filter((k) => value[k] !== null && value[k] !== undefined);
+  if (!keys.length) return false;
+  if (keys.every((k) => k === "oldText" || k === "newText") && typeof value.oldText === "string" && typeof value.newText === "string") return true;
+  if (keys.length !== 1) return false;
   for (const [op, required, optional] of [
     ["set_line", ["anchor", "new_text"], []],
     ["replace_lines", ["start_anchor", "end_anchor", "new_text"], []],

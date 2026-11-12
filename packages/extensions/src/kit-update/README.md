@@ -8,6 +8,7 @@ It checks three things:
   the kit is delivered:
   - `latest`: the newest release (a stable release once one exists, otherwise the newest beta).
   - `next`: every commit on `main`.
+  - `trunk`: the head of the integration branch `integration/luna` (canary, opt-in).
   - an exact version such as `0.2.1-beta.0`: a pin, never moved on its own.
 
   With **git delivery** (the current setting, `packages/core/distribution.json`), a release is a
@@ -28,7 +29,7 @@ It checks three things:
 | `/update status` | Show installed and available versions |
 | `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
-| `/update channel latest\|next\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
+| `/update channel latest\|next\|trunk\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
 Updates go through pi's own package manager (`pi update`, `pi install`). A new release on
 `latest` re-points Luna's registration to the new tag; `next` is pulled. After Luna or a
@@ -43,6 +44,16 @@ is reported, not offered, because `pi update --self` always installs the newest 
 
 If a kit release changes its delivery (for example from git to npm), `/update kit` moves the
 install to the new delivery, keeping its channel and profile.
+
+When the kit is installed from git, the check also counts how far the repository's `main` branch
+is ahead of your checked-out commit. If it has moved ahead, the line `main is N commits ahead —
+/update channel next` appears at start-up (subject to the background throttle), on `/update`, and
+under `/update status`. It names `next`, the channel that follows `main`, so the suggested command
+really applies the newer commits; the installed release channel would not. The notice is silent
+when your copy is in sync or already ahead, and when git could not be reached (offline, or no
+credentials): a failed count is never reported as a gap. When the gap exists, this line is
+the whole start-up kit notice: the generic `Updates available: ...` summary is not stacked on it
+(pi's own built-in update notice is separate and may still appear).
 
 ## Background check
 

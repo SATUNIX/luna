@@ -50,6 +50,15 @@ export interface CycleRuntime {
    * report is fixed while the session is still alive.
    */
   reportGaps?(): Promise<readonly string[]>;
+  /**
+   * The size of the diff `mergeDecision` would judge for the current head, measured while the
+   * worker is still alive. `head` is the head the measurement was taken on; `characters` is the
+   * exact measured count when known and `null` when the read overflowed before its length could
+   * be counted; `overBudget` is true when the diff exceeds `budget`. The cycle steers an over-budget
+   * worker before it closes and refuses a head that is still over budget after that steer; the merge
+   * decision remains the fail-closed backstop.
+   */
+  diffBudget?(): Promise<{ head: string; characters: number | null; budget: number; overBudget: boolean; detail?: string }>;
   /** Host-only close-out from accepted commits; true only after a green gate. */
   salvageReport?(): Promise<boolean>;
   onAutoRestart?(used: number): void;
@@ -135,6 +144,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
   let pendingTrigger: string | null = null;
   let blocker: Blocker | null = null;
   let gapsChecked = false;
+  const budgetWarnedHeads = new Set<string>();
   let wrapUpAt: number | null = null;
 
   const onEvent = (ev: RpcFrame): void => {
@@ -187,6 +197,38 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     settled = false;
     return true;
   };
+  // A diff already over the merge review's budget is steered while the session is alive, once per
+  // measured head: the worker can split before the cycle closes. A head that is still over budget
+  // after that steer is refused by this cycle itself, which closes "partial" with the measured
+  // number; the merge decision remains the fail-closed backstop. Carried-over work stays on the
+  // attempts branch.
+  const budgetStale = async (): Promise<{ steered: boolean; refused?: string }> => {
+    if (!rt.diffBudget) return { steered: false };
+    const b = await rt.diffBudget();
+    if (!b.overBudget) return { steered: false };
+    const measured = b.characters === null
+      ? `more than the merge review's budget of ${String(b.budget)} characters`
+      : `${String(b.characters)} characters, over the merge review's budget of ${String(b.budget)} characters`;
+    if (budgetWarnedHeads.has(b.head)) return { steered: false, refused: `refused_budget: the diff this cycle would submit is ${measured}` };
+    budgetWarnedHeads.add(b.head);
+    rt.log(`cycle ${NN} pre-report diff budget: ${measured}${b.detail ? ` (${b.detail})` : ""}`);
+    say(`The diff this cycle would submit is ${measured}. Land only the current item's work in this cycle: move the rest of the carried-over work off this branch (it stays on attempts/${cfg.run}/cycle-${NN}), then commit and \`git push origin HEAD\`.`);
+    settled = false;
+    return { steered: true };
+  };
+  // The same measured wording as budgetStale, for a session that died after committing: a dead
+  // agent cannot act on a steer, so the report it left is refused against its own diff instead.
+  // It never steers, never remembers a warned head and never calls say(); the merge decision
+  // remains the fail-closed backstop.
+  const budgetRefusal = async (): Promise<string | undefined> => {
+    if (!rt.diffBudget) return undefined;
+    const b = await rt.diffBudget();
+    if (!b.overBudget) return undefined;
+    const measured = b.characters === null
+      ? `more than the merge review's budget of ${String(b.budget)} characters`
+      : `${String(b.characters)} characters, over the merge review's budget of ${String(b.budget)} characters`;
+    return `refused_budget: the diff this cycle would submit is ${measured}`;
+  };
 
   const close = async (outcome: CycleOutcome, reason: string): Promise<CycleResult> => {
     await agent?.stop();
@@ -212,12 +254,20 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     const { stop, triggers } = evaluate({ ...s, exited: null }, now, cfg);
     if (stop === "hard_limit" || stop === "cycle_budget_hard") return close("partial", stop);
     if (dead) {
-      if (await rt.reportExists()) return close("completed", "report recorded");
+      if (await rt.reportExists()) {
+        const refused = await budgetRefusal();
+        if (refused !== undefined) return close("partial", refused);
+        return close("completed", "report recorded");
+      }
       const salvaged = await rt.salvageReport?.();
       if (rt.stopRequested()) return close("aborted", "run stop during close-out");
       const afterGate = evaluate({ ...s, exited: null }, rt.now(), cfg).stop;
       if (afterGate === "hard_limit" || afterGate === "cycle_budget_hard") return close("partial", afterGate);
-      if (salvaged) return close("completed", "host close-out after session exit");
+      if (salvaged) {
+        const refused = await budgetRefusal();
+        if (refused !== undefined) return close("partial", refused);
+        return close("completed", "host close-out after session exit");
+      }
       if (autoRestarts >= (cfg.limits.autoRestartsPerCycle ?? 3)) return close("partial", "auto_restarts_exhausted");
       autoRestarts++;
       rt.onAutoRestart?.(autoRestarts);
@@ -229,6 +279,9 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
     if (settled && !dead && !pendingTrigger) {
       if (await rt.reportExists()) {
+        const budget = await budgetStale();
+        if (budget.refused !== undefined) return close("partial", budget.refused);
+        if (budget.steered) continue;
         if (await reportStale()) continue;
         return close("completed", "report recorded");
       }

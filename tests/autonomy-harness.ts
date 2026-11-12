@@ -12,6 +12,7 @@ import { Engine } from "../packages/autonomy/lib/engine.ts";
 import { TEMPLATES } from "../packages/autonomy/lib/templates/index.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
+import type { GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { FakeEngine, FakeRuntime } from "../packages/autonomy/tests/fake-runtime.ts";
 import type { RunStore } from "../packages/autonomy/lib/store.ts";
 
@@ -53,6 +54,9 @@ export interface EngineOptions {
   rt?: HarnessRuntime;
   pid?: number;
   lock?: RunLock;
+  gateSlots?: number;
+  gateSlotsHome?: string;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
 }
 
 /** An engine built around the harness's run, with the runtime and lock it uses. */
@@ -126,10 +130,10 @@ export function harness(raw: RawContract, { script, review, boundary, tickMs, ho
     lock: (pid, alive = () => true, heartbeatMs = 3_600_000) => {
       return createRunLock({ file: store.p.lock, pid, host: "test-host", now: () => clock.now, isAlive: alive, startTimeOf: (p: number) => `start-${p}`, staleMs: 120_000, heartbeatMs });
     },
-    engine: ({ rt = h.runtime(), pid = 1001, lock = h.lock(pid) } = {}) => {
+    engine: ({ rt = h.runtime(), pid = 1001, lock = h.lock(pid), gateSlots = 0, gateSlotsHome, gateSlotAcquire } = {}) => {
       const acquired = lock.acquire();
       if (!acquired.acquired) assert.fail(`the run lock was not acquired: ${acquired.reason}`);
-      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }) } }), rt, lock, acquired };
+      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, gateSlots, ...(gateSlotsHome === undefined ? {} : { gateSlotsHome }), ...(gateSlotAcquire === undefined ? {} : { gateSlotAcquire }), deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }) } }), rt, lock, acquired };
     },
     state: (): RunState => { const s = store.readState(); assert.ok(s, "the run has a state.json"); return s; },
   };

@@ -538,7 +538,7 @@ async function handleConsole(args: string, ctx: ExtensionCommandContext): Promis
       ctx,
       [
         "console: could not locate packages/web-ui.",
-        "Run this from the pi-system checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.",
+        "Run this from the Luna checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.",
         "Generated npm surfaces do not ship the web UI.",
       ].join(" "),
       "error",
@@ -654,7 +654,7 @@ export default function (pi: ExtensionAPI) {
     handler: handleConsole,
   });
   pi.registerCommand("webui", {
-    description: "Alias for /console - start/stop the bundled Pi Console web UI.",
+    description: "Alias of /console - start/stop the bundled Pi Console web UI.",
     handler: handleConsole,
   });
 }

@@ -65,7 +65,7 @@ const writeFirewall = (over) => {
   // As install step 4c does: the ownership record of the pi settings this profile now owns.
   write(path.join(agent, "pi-kit", "profile-settings.json"), JSON.stringify({ schemaVersion: 2, previous: { "compaction.reserveTokens": { present: false, wrote: profile.length * 1000 } } }));
 };
-if (mode !== "silent-kill") console.log("[install] pi-system");
+if (mode !== "silent-kill") console.log("[install] Luna");
 switch (mode) {
   case "exit1-after-settings": writeSettings(); console.error("[install] FAIL: boom"); process.exit(1);
   case "sigkill-after-settings": writeSettings(); process.kill(process.pid, "SIGKILL"); break;
@@ -698,6 +698,28 @@ tests["the real installer and the shipped profiles pass /profile's verification 
     const same = makeCtx({ project, agent });
     await handler("lite", same);
     assert.match(same.notes[0]?.message ?? "", /already on "lite"/);
+  } finally { for (const r of restores.reverse()) r(); rmWorkspace(dir); }
+};
+
+// A typo in --profile is an operator error, not a crash: the real installer must name the profile it
+// could not find and the profiles that do exist, and exit 2 without dumping a stack trace.
+tests["the real installer reports a bogus profile cleanly with exit 2 and no stack trace"] = async () => {
+  const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const dir = tmp("pi-kit-txn-bogus-profile-");
+  const home = path.join(dir, "home");
+  const agent = path.join(dir, "agent");
+  for (const d of [home, agent]) fs.mkdirSync(d, { recursive: true });
+  const restores = [setEnv("HOME", home), setEnv("PI_CODING_AGENT_DIR", agent)];
+  try {
+    const r = await piLikeExec(process.execPath, [path.join(repo, "packages", "core", "install.ts"), "--profile", "bogus-profile", "--dry-run"], { cwd: repo });
+    const output = r.stdout + r.stderr;
+    assert.equal(r.code, 2, `a bogus profile must exit 2 (the clean operator-error contract):\n${output}`);
+    assert.match(output, /Profile not found/);
+    const named = ["balanced", "lite", "quick"].filter((name) => output.includes(name));
+    assert.ok(named.length >= 2, `the error must name the real profiles; saw ${JSON.stringify(named)} in:\n${output}`);
+    for (const line of output.split(/\r?\n/)) {
+      assert.doesNotMatch(line, /at loadProfile|node:internal/, `a user error must not print a stack trace: ${line}`);
+    }
   } finally { for (const r of restores.reverse()) r(); rmWorkspace(dir); }
 };
 

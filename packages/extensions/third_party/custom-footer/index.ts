@@ -7,7 +7,7 @@ import { fmtDuration, fmtTokens, footerGlyphs, renderDetail, renderFooter } from
 import type { FooterMode, FooterState, StatusEntry, Theme, TodoItem } from "./render.ts";
 import { PHRASES, TIPS, pick, renderTodoWidget, toolPhrase } from "./widgets.ts";
 import type { Tip } from "./widgets.ts";
-import { ANIMATIONS, TRANSIENT, classifyToolError, finished, indicatorFor, renderCat, resolveCatState, transientHoldMs } from "./cat.ts";
+import { ANIMATIONS, PRIORITY, TRANSIENT, classifyToolError, finished, indicatorFor, renderCat, resolveCatState, transientHoldMs } from "./cat.ts";
 import type { CatState } from "./cat.ts";
 
 // Status bar (custom-footer). This is the ONE owner of the footer: no other extension installs one.
@@ -88,8 +88,27 @@ export function loadSettings(): UiSettings {
 
 function saveSettings(settings: UiSettings): string | null {
   try {
-    fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-    fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
+    const file = settingsFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // ui.json is shared with the hub, command menu and launch screen: keep their keys as they are.
+    let existing: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (isRecord(parsed)) existing = parsed;
+    } catch {
+      // Absent or malformed: this extension owns only its own keys, so start from nothing.
+    }
+    const merged: Record<string, unknown> = {
+      ...existing,
+      footer: settings.footer,
+      mode: settings.mode,
+      tips: settings.tips,
+      todos: settings.todos,
+      cat: settings.cat,
+    };
+    if (settings.ascii === true) merged.ascii = true;
+    else delete merged.ascii;
+    fs.writeFileSync(file, JSON.stringify(merged, null, 2));
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -272,7 +291,12 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setWidget(TODO_WIDGET, undefined);
       return;
     }
-    ctx.ui.setWidget(TODO_WIDGET, renderTodoWidget(cache.todos, theme, 8, settings.ascii));
+    // Mount a component so pi re-renders the checklist at the width it has each frame: a resize (or
+    // an early mount before the TUI knows its columns) then cannot leave a long item wrapped.
+    ctx.ui.setWidget(TODO_WIDGET, (_tui, th) => ({
+      render: (width) => renderTodoWidget(cache.todos, th ?? theme, 8, settings.ascii, width),
+      invalidate() {},
+    }));
   }
 
   function availableTips(): Tip[] {
@@ -290,6 +314,13 @@ export default function (pi: ExtensionAPI) {
     if (!run) return `${label}${glyphs.ellipsis}`;
     const out = run.output + run.estOutput;
     return `${label}${glyphs.ellipsis} ${fg("dim", "(")}${fg("text", fmtDuration(now - run.startedAt))}${fg("dim", glyphs.ascii ? " | " : " · ")}${fg("success", `${glyphs.input}${fmtTokens(run.input)}`)} ${fg("accent", `${glyphs.output}${run.estOutput > 0 ? "~" : ""}${fmtTokens(out)}`)}${fg("dim", ")")}`;
+  }
+
+  /** The glyph set's ASCII choice, which also follows an ISO/ANSI/TTY theme name or PI_KIT_ASCII. */
+  function effectiveAscii(): boolean {
+    const theme: Theme | undefined = ctxRef?.ui?.theme;
+    const fallback = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+    return footerGlyphs(theme ?? fallback, settings.ascii).ascii;
   }
 
   function tick(): void {
@@ -342,7 +373,15 @@ export default function (pi: ExtensionAPI) {
 
   function setResult(state: CatState): void {
     if (!settings.cat) return;
-    result = { state, at: Date.now() };
+    const now = Date.now();
+    // A result holds its face for a short window. A later, lower-priority result (a warning after a
+    // denial, or a success at agent end) must not hide it; a higher-priority one still replaces it.
+    const holds = result !== undefined && now - result.at < transientHoldMs(result.state);
+    const held = holds && result ? PRIORITY.indexOf(result.state) : -1;
+    const next = PRIORITY.indexOf(state);
+    if (!(held !== -1 && next !== -1 && held < next)) result = { state, at: now };
+    // A suppressed result still has to sync: the held face keeps playing, and the timer that
+    // clears it must be armed again (agent end stops the cat before a lower result arrives).
     syncCat();
   }
 
@@ -490,7 +529,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_start", async (event) => {
     toolsRunning++;
     syncCat();
-    activity = { label: toolPhrase(event?.toolName ?? "tool", event?.args), until: Number.MAX_SAFE_INTEGER };
+    activity = { label: toolPhrase(event?.toolName ?? "tool", event?.args, effectiveAscii()), until: Number.MAX_SAFE_INTEGER };
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {

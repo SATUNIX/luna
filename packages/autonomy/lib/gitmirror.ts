@@ -11,7 +11,8 @@
 //                              starts). Never published.
 //   refs/tags/exp/<run>/...    cycle and abandoned tags, created here, never by the agent
 //   refs/base/<baseRef>        the base the run was cut from
-//   refs/integration/remote    the integration branch as last fetched from gitRemote
+//   refs/integration/remote    the integration branch as last fetched from gitRemote, or the head
+//                              a successful publish just pushed there
 //   refs/agent/head            the agent's branch as last fetched (may have diverged)
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -344,6 +345,11 @@ export function publish(g: HostGit, cfg: MirrorConfig, lastPushed: string | null
   const specs = publishRefspecs(state, cfg);
   if (specs.length) scanPush(g, remoteUrl, specs, `refs/base/${cfg.baseRef}`);
   if (specs.length) g(["push", "--quiet", "--porcelain", remoteUrl, ...specs]);
+  // The integration branch we just pushed is now on the remote at that head; record it so the
+  // read-only unpublished view (lib/unpublished.ts) does not report it as ahead until the next
+  // fetch. Only when the integration branch exists and was part of what was pushed.
+  const published = g(["rev-parse", "--verify", "--quiet", `refs/heads/${cfg.integrationBranch}`], { allowFail: true });
+  if (specs.some((spec) => spec.startsWith(`refs/heads/${cfg.integrationBranch}:`)) && published) g(["update-ref", "refs/integration/remote", published]);
   return { pushed: true, state };
 }
 

@@ -48,7 +48,9 @@ A recognised adapter with missing required inputs, unknown fields or unsupported
 forms is **high**, needs the operator and cannot gain learned or model-similarity authority.
 An exact `allow` cannot remove that finding or lower critical effects. The adapter covers legacy
 single-file edits, pi 1.3's single-file batch replacements and the pinned readseek single-file
-hashline operations; extra nested target fields remain incomplete
+hashline operations; extra nested target fields remain incomplete. A null/undefined-valued
+*unknown* key names no operation and does not make an adapter incomplete, while a known shape
+field with `null` stays a type mismatch and a non-null unknown field stays incomplete
 (`tests/firewall-shell-smoke.ts`, `tests/firewall-gate-smoke.ts`). Unattended runs refuse incomplete
 inputs without asking or executing a marker (`tests/firewall-unattended-smoke.ts`).
 
@@ -147,8 +149,15 @@ are pinned by `tests/governance-smoke.ts`.
    that resumes a paused workflow run. The wait and the card share one timeout, so an overlay left
    open ends the request as an unanswered card would, and a card shown after a wait gets only the
    time left, which pi uses to dismiss it. A brokered child request is deferred and keeps its console
-   timeout, so it can expire behind the overlay and fail closed. Aborting a turn ends that turn's wait,
-   and a pentest action asks scope and RoE again after the wait and after your Yes. A reload or the
+   timeout, so it can expire behind the overlay and fail closed. The console itself holds input while
+   a non-run card is open, so two child requests that arrive in one poll are shown one at a time: the
+   sibling waits for the next poll. A workflow-run approval card does not take that hold, because the
+   run broker deliberately allows two outstanding prompts per run; non-run approval cards and child requests
+   still wait behind those open run cards. The resume question and an attended `ask_human` question
+   also wait for every open run card to close, within their own timeout: a run card still open at
+   the deadline leaves the run paused, or the question timed out, and an aborted turn ends the wait.
+   An `ask_human` question then holds input while its own card is open. Aborting a turn ends that turn's wait, and a pentest action asks
+   scope and RoE again after the wait and after your Yes. A reload or the
    end of a session drops the hold, because pi removes an overlay without settling it
    (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,
    `tests/governance-smoke.ts`, `tests/effort-standing-smoke.ts`, `tests/conductor-recursion-smoke.ts`,
@@ -184,8 +193,17 @@ are pinned by `tests/governance-smoke.ts`.
 10. **`secret-guard`, when enabled, blocks the obvious secret paths.** It blocks writing key
     material or tokens to any file, and `cat`, `cp`, `mv`, `base64`, `curl -F @file` and PowerShell
     style reads of `.env`, `*.pem`, `*.key`, `id_rsa` and protected engagement paths, including
-    glob-obscured and quote-fragmented references. The firewall separately classifies credential
-    files as credential reads whether or not `secret-guard` is loaded. For a tool the policy
+    glob-, bracket-class-, brace- and quote-obscured references (`.en[v]`, `[.]env`, `.e{n,x}v`;
+    pinned by `tests/secret-guard-smoke.ts`). In a plain leading `rg` or grep-family
+    command, it treats a recognised search pattern as text while still scanning pattern files
+    and file operands; ambiguous options, substitutions, malformed quoting and an unquoted
+    glob, brace or tilde pattern (which the shell expands) retain the full scan
+    (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`). Source files below a
+    directory whose name merely contains `secret` (such as
+    `packages/extensions/src/secret-guard/`) stay readable, while an exact `secret`, `secrets` or
+    `credentials` path segment still counts as a secret reference (`tests/secret-guard-smoke.ts`).
+    The firewall separately classifies credential files as credential reads whether or not
+    `secret-guard` is loaded. For a tool the policy
     allows, it checks every path the call names in a `path`, `file_path`, `filePath`, `file`,
     `files`, `paths`, `cwd`, `dir`, `directory`, `root`, `analysisRoot`, `newFilePath`,
     `scriptPath` or `trace_path` field (`tests/firewall-shell-smoke.ts`);
@@ -418,6 +436,14 @@ link to a directory, drives those writers through their real entry points, and c
 outside the workspace changed; it also checks the helper's refusals and modes directly. ESLint
 (`eslint.config.ts`) rejects a raw `writeFileSync`, `appendFileSync`, `createWriteStream` or
 write-mode `openSync` in an extension unless the file is on a reviewed allowlist with its reason.
+The pentest governance extension also files human-console approval requests through the helper;
+`tests/governance-smoke.ts` checks that a linked console directory cannot redirect a request and
+that a signed answer still approves a request filed inside the workspace. Its data directories and
+audit ledger are bounded by the data root: an operator-set `PENTEST_DATA_ROOT` is trusted as given
+(it may itself be a link the operator made), but a link below it is refused, as is one below the
+default `.pi/pentest` (`tests/governance-smoke.ts`). An operator-set `PI_KIT_HUMAN_CONSOLE_DIR` is
+trusted as given in the same way, and nothing pins what happens when it is itself a committed link
+(see [Future work](future-work.md)).
 
 Profile restores (`/profile` rollback and the installer's `--settings-only` rollback) write
 through an exclusive temporary file created 0600 before it is given the snapshot's mode, so a
@@ -436,10 +462,6 @@ Not covered:
 - On Windows `O_NOFOLLOW` and the owner check do not exist; the `lstat` checks still run.
 - A path the operator sets (for example `PI_KIT_FIREWALL_AUDIT_LOG` or
   `PI_KIT_BRANCH_LEASES_FILE`) is trusted: only its final name is checked.
-- The `pentest-governance-domain` extension's human-console approval request is still written
-  with plain `fs` calls, and that file is on the ESLint allowlist as a known gap. Answers are
-  signed, so a planted answer file cannot approve, but a committed link can still redirect where
-  a request is written.
 
 ## The Luna installer and install markers
 
@@ -481,8 +503,9 @@ authorisation headers and bearer tokens, credentials in URLs, common provider to
 
 `tests/redaction-corpus-smoke.ts` runs the source, every copy and every consumer over the synthetic
 corpus in `tests/fixtures/secret-corpus.json` and fails on any value left in the output; it also
-checks that text without a secret is unchanged, that a second pass changes nothing, and that 1 MB
-adversarial inputs finish inside a linear-time budget. Every rule is bounded, and an unterminated
+checks that text without a secret is unchanged, that a second pass changes nothing, and that
+adversarial inputs at 4x the size grow sub-quadratically (so host load cannot turn the check red).
+Every rule is bounded, and an unterminated
 private key is redacted to the end of the text rather than re-scanned.
 
 Redaction is best-effort hygiene, not a detection boundary: a secret in a shape the table does not
@@ -494,8 +517,10 @@ A project skill's `re:` trigger and a workflow step's output pattern come from t
 repository. Both are compiled only when `packages/core/shared/safe-regex.ts` accepts them (no
 quantified group that holds a quantifier or an alternation, no backreference, a length and choice
 cap); a refused gate pattern fails its gate (`tests/workflow-smoke.ts`). A skill trigger is also
-tested under a 50 ms time limit, and one that hits the limit is switched off for the session
-(`tests/skill-routing-smoke.ts`). ESLint rejects a `new RegExp` built
+tested under a 50 ms CPU-time budget, and one that exceeds it is switched off for the rest of the
+pi process (`tests/skill-routing-smoke.ts`). The wall-clock cap that interrupts a runaway match sits
+well above the budget (and a descheduled fast regex gets one retry), so a busy host does not switch
+off a trigger that used little CPU. ESLint rejects a `new RegExp` built
 from a non-literal pattern outside a reviewed allowlist. The syntactic check does not catch every
 slow pattern (adjacent overlapping runs are polynomial); the time limit is what stops those for
 skill triggers.

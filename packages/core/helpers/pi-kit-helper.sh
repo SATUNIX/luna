@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# General install/setup/config/update helper for pi-system.
+# General install/setup/config/update helper for Luna.
 # Usage: helpers/pi-kit-helper.sh [command]
 # Run with no command for an interactive menu. See helpers/README.md.
 set -uo pipefail
@@ -154,7 +154,7 @@ cmd_configure() {
 
 usage() {
   cat <<'EOF'
-pi-kit-helper.sh — install, setup, configure, and update pi-system
+pi-kit-helper.sh — install, setup, configure, and update Luna
 
 Usage:
   helpers/pi-kit-helper.sh [command]
@@ -172,7 +172,7 @@ EOF
 }
 
 menu() {
-  c_bold "pi-system helper"
+  c_bold "Luna helper"
   echo "1) status"
   echo "2) install"
   echo "3) configure"

@@ -5,6 +5,10 @@ explicit lifecycle, templates (`implement`, `deploy`, `self-improve`), a hardene
 an inference relay and an egress proxy. Private (not published on npm); it ships with the kit's git
 delivery and runs from a checkout or from pi's copy of the kit.
 
+Acceptance gates are bounded per host as well as per run: at most two supervisors run a gate at
+once (`PI_AUTONOMY_GATE_SLOTS`, `0` for unbounded), so several runs on one machine do not starve
+each other during the expensive part of a cycle. `tests/autonomy-lifecycle-smoke.ts` pins the bound.
+
 Operator documentation, including the boundary, the contract, the lifecycle and what has and has not
 been verified, is `docs/autonomy.md`. From inside pi, use `/autonomy` in the `autonomous` profile.
 
@@ -24,10 +28,12 @@ node packages/autonomy/cli.ts start --config run.json       # confirm the bounda
 | `lib/runtime.ts`, `lib/egress-proxy.ts`, `relay.ts` | The container runtime, the allowlist egress proxy, and the inference relay. |
 | `lib/acceptance.ts`, `lib/check-runner.ts`, `lib/review.ts` | Trusted acceptance evaluation in clean, network-less containers, and the independent review. |
 | `lib/recovery.ts`, `lib/reconfigure.ts`, `lib/promotion.ts`, `lib/export.ts` | Bounded recovery, the only way limits change, promotion, and evidence export. |
+| `lib/board.ts`, `lib/inbox.ts` | The host-owned steward board and the owner decision inbox whose past-due cards settle into their default. |
 | `lib/templates/` | `implement`, `deploy` and `self-improve`. |
 | `image/`, `build-image.sh` | The image and the script that builds it from local git objects. |
 | `examples/` | Working run contracts. |
 | `tests/` | The in-container boundary probe (`boundary-probe.ts`, manual and run before every start), and the fake runtime and upstream the offline suites use. |
 
 Suites: `npm run smoke:autonomy*` (offline), and `npm run smoke:autonomy-container` on a real engine
-(it prints `SKIPPED` and exits 0 when there is none).
+(it prints `SKIPPED` and exits 0 when there is none). `smoke:autonomy-inbox` covers the owner inbox
+and the board item it unblocks (`tests/autonomy-inbox-smoke.ts`).

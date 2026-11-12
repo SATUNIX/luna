@@ -70,6 +70,7 @@ The installer parses these flags on `process.argv.slice(2)`:
 | `--settings-only` | false | Fast path used by `/profile`; skips the verify gate, skips re-registration only when the kit source is already registered, and restores every file it touched if the run does not finish. |
 | `--capture-overrides` | false | Capture settings drift into `overrides.json`; alone, exits after capture. |
 | `--no-migrate` | false | Passed by `/profile`: exits 1 with nothing changed instead of moving Luna off a retired or previous source (`tests/distribution-smoke.ts`). |
+| `--help` / `-h` | false | Print the usage line to stdout and exit 0 before any install work (`tests/install-marker-smoke.ts`). |
 
 Any other argument, or a value flag with no value or followed by another `--` flag, exits 1 with the usage line before anything else runs (`tests/install-marker-smoke.ts`).
 

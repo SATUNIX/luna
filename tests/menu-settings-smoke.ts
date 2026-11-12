@@ -105,7 +105,9 @@ tests.push([
       assert.equal(first.title, "Settings");
       assert.equal(first.timeout, 60_000, "the dialog carries a timeout");
       for (const label of [
-        "pi settings",
+        // An action row carries its typed command as "  [command]" after the label
+        // (docs/control-center.md), so this row is asserted with the suffix.
+        "pi settings  [/settings]",
         "Command menu: curated",
         "Hub key: alt+k",
         "Pinned commands: goal, verify",

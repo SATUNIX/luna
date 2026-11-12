@@ -21,7 +21,14 @@ import {
   type ExtensionContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, SettingsList, type SettingItem, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import {
+  Container,
+  SettingsList,
+  stripTerminalSequences,
+  type SettingItem,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
@@ -138,7 +145,10 @@ interface TerminalDialogs {
 }
 
 function mirrorOf(ui: ExtensionUIContext): TerminalDialogs | undefined {
-  const original: unknown = Reflect.get(ui, MIRROR_KEY);
+  // SAFETY: the remote-control bridge publishes this symbol-keyed mirror at runtime; the peer
+  // type does not declare it, and the value is checked below before use.
+  const host = ui as unknown as Record<symbol, unknown>;
+  const original: unknown = host[MIRROR_KEY];
   if (original && typeof original === "object" && typeof (original as { select?: unknown }).select === "function") {
     return { select: (original as TerminalDialogs).select };
   }
@@ -161,9 +171,10 @@ function informationalPage(page: string, title: string, lines: Array<{ label: st
   return lines.map((line, index) => ({
     id: `${page}.${index}`,
     page,
-    label: line.label,
-    value: line.value,
-    description: line.command ? `more: ${line.command}` : undefined,
+    label: stripTerminalSequences(line.label),
+    value: stripTerminalSequences(line.value),
+    command: line.command ? stripTerminalSequences(line.command) : undefined,
+    description: line.command ? `more: ${stripTerminalSequences(line.command)}` : undefined,
     kind: "action",
     available: true,
   }));
@@ -173,7 +184,7 @@ function securityRows(deps: HubDeps, page: string): HubRow[] {
   const values = deps.values;
   const note = values.securityMissing ? "the tool-firewall extension is not loaded" : "the tool firewall (pi-kit.security)";
   return informationalPage(page, "Security", [
-    { label: "Effective", value: values.security ?? "unknown" },
+    { label: "Effective", value: values.securityEffective ?? "unknown" },
     { label: "Requested", value: values.securityRequested ?? "same as effective" },
     { label: "Source", value: note, command: "/security status" },
   ]);
@@ -223,12 +234,15 @@ export function headerLine(values: HubValues): string {
     values.security ? `sec ${values.security}` : undefined,
     values.approvals ? `approvals ${values.approvals}` : undefined,
   ];
-  return parts.filter((part): part is string => Boolean(part)).join(" · ");
+  return parts
+    .filter((part): part is string => Boolean(part))
+    .map((part) => stripTerminalSequences(part))
+    .join(" · ");
 }
 
 function pageTitle(model: HubModel, page: string, values: HubValues): string {
   const title = model.pages.find((p) => p.id === page)?.title ?? page;
-  return page === "main" ? `Control centre — ${headerLine(values)}` : title;
+  return stripTerminalSequences(page === "main" ? `Control centre — ${headerLine(values)}` : title);
 }
 
 // --- renderers ---------------------------------------------------------------------------------
@@ -238,10 +252,10 @@ function textPage(deps: HubDeps): string {
   for (const page of deps.model.pages) {
     const rows = rowsForPage(page.id, deps);
     if (rows.length === 0) continue;
-    lines.push("", `${page.title}${page.parent ? ` (${page.parent})` : ""}`);
+    lines.push("", `${stripTerminalSequences(page.title)}${page.parent ? ` (${page.parent})` : ""}`);
     for (const row of rows) {
       const value = row.value ? `: ${row.value}` : "";
-      const typed = row.legacy ? `  [${row.legacy}]` : row.prefill ? `  [${row.prefill.trim()}]` : "";
+      const typed = typedSuffix(row);
       const unavailable = row.available ? "" : `  (${row.unavailableReason ?? "unavailable"})`;
       lines.push(`  ${row.label}${value}${typed}${unavailable}`);
     }
@@ -290,10 +304,32 @@ function selectRenderer(deps: HubDeps): Renderer {
   };
 }
 
+/** The typed command a row runs or pre-fills; informational rows carry the command they name. */
+function typedCommand(row: HubRow): string | undefined {
+  const prefill = row.prefill?.trim();
+  const raw = row.legacy ?? (prefill ? prefill : undefined) ?? row.command;
+  if (!raw) return undefined;
+  // A registered control supplies its own legacy text; keep it from adding a newline or escape.
+  const cleaned = Array.from(stripTerminalSequences(raw))
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("")
+    .trim();
+  return cleaned || undefined;
+}
+
+/** `  [/command]`, or nothing when there is no typed command or the label already is it. */
+function typedSuffix(row: HubRow): string {
+  const typed = typedCommand(row);
+  return typed && typed !== row.label ? `  [${typed}]` : "";
+}
+
 function rowLabel(row: HubRow): string {
   const value = row.value ? `: ${row.value}` : "";
   const unavailable = row.available ? "" : ` — ${row.unavailableReason ?? "unavailable"}`;
-  return `${row.label}${value}${unavailable}`;
+  return `${row.label}${value}${typedSuffix(row)}${unavailable}`;
 }
 
 /** True when the running pi has the overlay `done()` fix (1.3.0 or newer). */
@@ -314,7 +350,7 @@ function tuiRenderer(deps: HubDeps): Renderer {
               const description = row.available ? row.description : row.unavailableReason;
               return {
                 id: row.id,
-                label: row.available ? row.label : `${row.label} (unavailable)`,
+                label: `${row.label}${typedSuffix(row)}${row.available ? "" : " (unavailable)"}`,
                 ...(description ? { description } : {}),
                 currentValue: row.value ?? "",
                 // Every row carries `values` so Enter/Space activates it: a multi-value row cycles, an
@@ -322,15 +358,13 @@ function tuiRenderer(deps: HubDeps): Renderer {
                 values: row.values && row.values.length > 0 ? row.values : [row.value ?? ""],
               };
             });
+            const titleLines = (): string[] => [theme.fg("accent", theme.bold(input.title)), ""];
+            const listTheme = getSettingsListTheme();
             const container = new Container();
-            container.addChild({
-              render: () => [theme.fg("accent", theme.bold(input.title)), ""],
-              invalidate: () => {},
-            });
             const list = new SettingsList(
               items,
               15,
-              getSettingsListTheme(),
+              listTheme,
               (id, newValue) => {
                 const row = input.rows.find((r) => r.id === id);
                 if (!row) return;
@@ -341,31 +375,56 @@ function tuiRenderer(deps: HubDeps): Renderer {
             );
             if (input.focus) list.selectItem(input.focus);
             container.addChild(list);
-            // The host centers an overlay on the terminal and clips it, so a list taller than the
+            // Whether the title (and its blank line) is painted above the list. A host with no
+            // reported terminal height still gets the title; the smoke fake is such a host.
+            const titleShown = (): boolean => {
+              const rows = tui.terminal?.rows;
+              return typeof rows !== "number" || !Number.isFinite(rows) || rows >= 14;
+            };
+            // The host centers an overlay on the terminal and clips it, so content taller than the
             // screen loses its top border, title and search line. Read the live row count per
             // render; a host that exposes no terminal (the smoke fake) keeps the 15-row default.
             return {
               render: (width: number) => {
-                // The trusted in-process SettingsList: `maxVisible` is private and has no setter.
+                // SAFETY: this is the trusted in-process SettingsList; `maxVisible` is private and
+                // has no setter, so the read is narrowed to the one field this renderer changes.
                 const runtime = list as unknown as { maxVisible: number };
                 // Reset first, so a terminal that grew again recovers the full 15 rows.
                 runtime.maxVisible = 15;
                 const rows = tui.terminal?.rows;
-                if (typeof rows !== "number" || !Number.isFinite(rows)) return container.render(width);
+                if (typeof rows !== "number" || !Number.isFinite(rows)) {
+                  return [...titleLines(), ...container.render(width)];
+                }
+                // The title and its blank line cost two rows; there is no room for them on a short
+                // terminal, so drop them before trimming the list's own hint/description lines.
+                const withTitle = titleShown();
+                const render = (): string[] => (withTitle ? [...titleLines(), ...container.render(width)] : container.render(width));
                 const budget = Math.max(1, rows - 2); // the frame's top and bottom border lines
-                let lines = container.render(width);
+                let lines = render();
                 while (lines.length > budget && runtime.maxVisible > 1) {
                   runtime.maxVisible -= 1;
-                  lines = container.render(width);
+                  lines = render();
                 }
-                return lines;
+                if (lines.length <= budget) return lines;
+                const focus = lines.findIndex((line) => line.includes(listTheme.cursor));
+                // If clipping would hide the focused row, the row outranks the blank line and the
+                // hint/description tail: keep the search line with it, or the row alone at budget 1.
+                if (focus < 0 || focus < budget) return lines.slice(0, budget);
+                const focused = lines[focus];
+                if (focused === undefined) return lines.slice(0, budget);
+                return budget >= 2 ? [lines[0] ?? "", focused] : [focused];
               },
               invalidate: () => container.invalidate(),
               handleInput: (data: string) => {
                 list.handleInput?.(data);
                 tui.requestRender();
               },
-              handleMouse: (event: TuiMouseEvent): TuiMouseEventResult | undefined => container.handleMouse(event),
+              handleMouse: (event: TuiMouseEvent): TuiMouseEventResult | undefined => {
+                // The title is rendered outside the container, so the list starts two rows below
+                // the component's origin when it is shown. Container measures from its own y=0.
+                const withTitle = titleShown();
+                return container.handleMouse(withTitle ? { ...event, y: event.y - 2 } : event);
+              },
             };
           }, done),
         overlay ? { overlay: true } : undefined,

@@ -40,7 +40,7 @@ lists it.
 | Compile a pattern from anything but a literal through `compileCheckedRegex` in `packages/core/shared/safe-regex.ts`, which refuses nested quantifiers, backreferences and over-long patterns | ESLint rejects a `new RegExp` or `RegExp()` with a non-literal pattern outside `DYNAMIC_REGEXP_ALLOWED`; `tests/skill-routing-smoke.ts`, `tests/workflow-smoke.ts` |
 | A pattern from repository content that runs on every turn also runs under a time limit and is switched off when it hits it | `tests/skill-routing-smoke.ts` |
 | An allowlisted dynamic pattern escapes its input or is built from constants, and the allowlist entry says which | Review of `eslint.config.ts` (owned in `.github/CODEOWNERS`) |
-| Every rule in a redaction or scanning table is linear: bounded repetition, no nested quantifier over overlapping text | `tests/redaction-corpus-smoke.ts` runs 1 MB adversarial inputs against a time budget |
+| Every rule in a redaction or scanning table is linear: bounded repetition, no nested quantifier over overlapping text | `tests/redaction-corpus-smoke.ts` runs adversarial inputs at 1x and 4x the size and fails when the 4x run exceeds a sub-quadratic growth bound |
 
 ## Redaction
 

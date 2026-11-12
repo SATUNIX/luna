@@ -16,14 +16,14 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow list` | Available workflows and their inputs (`*` = required) |
 | `/workflow run feature goal="add rate limiting to /api/orders"` | Start a run in the background. The footer shows progress, and the summary is posted into the session when it finishes. `/workflow run` with no name opens a picker. |
 | `/workflow status [run-id]` | Recent runs, or one run's steps |
-| `/workflows` | Every run of this workspace, of every format, live or finished |
+| `/workflows` | Every run the workspace and the autonomy state home know about — workflow YAML and script runs, background subagents and autonomous container runs — live or finished |
 | `/workflows panel [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
 | `/workflow pause <run-id>` | Pause a live run: it starts no new agents (see [Pausing, stopping and skipping](#pausing-stopping-and-skipping)) |
 | `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
 | `/workflow resume <run-id>` | Unpause a live paused run; otherwise continue an interrupted or failed run from its current step |
 | `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, `{resume: "<run-id>"}`, or an [inline plan](#inline-plans) as `{steps: [...]}` |
-| `workflow_status` tool | The agent inspects runs; a live run shows `(active)` or `(active, paused)` |
+| `workflow_status` tool | The agent inspects runs of every format, including autonomous container runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
 Esc cancels a `workflow_run` started by the agent. The current step's subagent is stopped,
@@ -64,7 +64,7 @@ back.
 twice:
 
 ```json
-{"steps":[{"id":"build","task":"Build the endpoint and run its tests."},{"id":"check","agent":"reviewer","task":"Review: {previous}. Say VERDICT: PASS or VERDICT: FAIL.","gate":{"pass":"VERDICT: PASS","retry":"build","max_loops":2}}]}
+{"steps":[{"id":"build","task":"Build the endpoint and run its tests."},{"id":"check","agent":"reviewer","task":"Review: {previous}. End with one line: VERDICT: PASS or VERDICT: FAIL.","gate":{"pass":"/(?:^|\\n)VERDICT: PASS\\s*$/","retry":"build","max_loops":2}}]}
 ```
 
 (d) Bounded recovery: the first attempt may fail without failing the run, and a `when` step
@@ -270,7 +270,7 @@ steps:
     agent: reviewer
     task: "Review against the plan: {{steps.plan.output}}"
     gate:
-      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"     # text, or /regex/ (case-insensitive)
+      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"     # text must be on the verdict line; or /regex/ (case-insensitive)
       retry: implement                            # an earlier top-level step to go back to
       max_loops: 2
 ---
@@ -291,7 +291,7 @@ steps:
 | `max_runtime` | Wall-clock limit for this step: `90s`, `20m`, `2h`. |
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
 | `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member (`tests/workflow-hooks-smoke.ts`). |
-| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. A `/regex/` is tested on the last 64 KiB of the output (a substring on all of it), off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
+| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. Plain text is matched case-insensitively against the verdict line (the last non-empty line); a `/regex/` is tested on the last 64 KiB of the output, off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflow run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 
@@ -444,7 +444,7 @@ Checked by `tests/workflow-telemetry-smoke.ts` (`npm run smoke:workflow-telemetr
 
 ## The /workflows panel
 
-Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`).
+Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`): workflow YAML and script runs, background subagents, and autonomous container runs under `PI_AUTONOMY_HOME` (else `$XDG_STATE_HOME/pi-autonomy`, else `~/.local/state/pi-autonomy`).
 `/workflows panel [run-id]` opens the panel, which shows the workflow runs of this pi session, read from the
 run model above (`wf-panel.ts`). Runs started in another pi process are not shown there; use
 `/workflows` or `workflow_status` for those, and `workflow_status {id}` and `workflow_control` for
@@ -458,6 +458,8 @@ passed on the installed pi). It has two views:
 
 - **Run list** (`/workflows panel`): one row per run, newest first, with a status dot, name, status,
   done/total agents, elapsed time and run id. ↑↓ select, Enter opens a run, Esc closes the panel.
+  The selection stays on the highlighted run when a new run arrives while the list is open, and
+  falls back to the row at the same position if that run is pruned from the session.
 - **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds
@@ -475,7 +477,8 @@ passed on the installed pi). It has two views:
     An `agent()` call answered from a resumed run's journal (nothing launched) has a `◆` dot
     instead of `●`. Agents of a nested `workflow()` are indented under a `▸ <name>` line.
     ↑↓ select an agent; the selected agent's error, or else its last progress line, shows below
-    the list. Ten agents show at a time and the list scrolls with the selection;
+    the list. Up to ten agents show at a time (fewer on a short terminal) and the list scrolls with
+    the selection;
   - **Narrator**: the last six lines of the run's narration, such as `+14s scan#1 passed, 12.3k tok`.
     Narration starts when the extension loads and records run start and end, phase status
     changes, agent starts and ends (with tokens and the error; a journal answer is narrated as
@@ -484,6 +487,19 @@ passed on the installed pi). It has two views:
     lines of each run are kept in memory; nothing is written to disk.
   - the footer keys `↑↓ select · k skip · x stop · p pause · s save · esc back`. Elapsed times
     tick once a second while the panel is open.
+
+In the list view, on a terminal too short for the panel, the run list trims to a window around
+the selected run, keeping the header, footer and both rules, and shows `… n above` / `… n more`
+indicators for the runs it omits. In the run view, narration and extra phase/agent rows are
+dropped; the header, confirm block and footer are kept, and the selected agent is the last middle
+row dropped. Once even that does not fit, the middle collapses to one `… n more` line. Below the
+run-view minimum the confirm hint `↑↓ choose · enter confirm · esc cancel` and the blank spacer
+before the confirm block give way first, so the question, choices and bottom rule stay. On a
+terminal shorter than that fixed block (roughly seven rows or fewer) the panel makes one last
+clamp: the body is cut to the row budget from the bottom up, so the bottom rule is always kept and,
+where the budget allows, the lines next to it (a confirm's choices or question, the list's footer);
+the framed panel then never grows past the host overlay's height cap. At those heights some of the
+middle content is not shown, and a one-line budget leaves only the bottom rule.
 
 | Key | Effect |
 | --- | --- |
@@ -505,8 +521,10 @@ no run is active. The subagent extension's `session_start` handler points it at 
 footer (sessions with a UI only), and `session_shutdown` clears it.
 
 Checked by `tests/workflow-panel-smoke.ts` (`npm run smoke:workflow-panel`): a render snapshot of
-the run view and list, the keys, the No-first stop and save choices, a YAML run feeding the
-panel, the text fallback and the overlay; for script runs, the `▸` groups, the `◆` dot and the
+the run view and list, the keys, the No-first stop and save choices, the list cursor staying on
+the selected run when a newer run arrives (including Esc back from the run view) and the row it
+falls back to when that run is pruned, a YAML run feeding the panel, the text fallback and the
+overlay; for script runs, the `▸` groups, the `◆` dot and the
 badges, `k` skip, the No-first script save (digest trusted, overwrite, an edited script refused),
 the status line, and real engine runs (fake children) feeding the groups, `◆` on resume, the
 sandbox badge, `p` pause, `k` and `s`. `tests/workflow-hooks-smoke.ts`

@@ -205,6 +205,20 @@ const tests = {
     } finally { await s.done(); }
   },
 
+  async deniedHoldsAgainstLaterResults() {
+    const s = await session();
+    try {
+      await s.fire("agent_start");
+      await s.fire("tool_execution_end", { toolName: "bash", isError: true, result: { content: [{ text: "Blocked by policy" }] } });
+      assert.equal(s.debug.catState(), "denied", "a refusal outranks the running thinking state");
+      await s.fire("session_compact_failed", {});
+      assert.equal(s.debug.catState(), "denied", "a later warning does not hide the denial");
+      await s.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+      assert.equal(s.debug.catState(), "denied", "a later success does not hide the denial");
+      assert.equal(s.debug.catTimerActive(), true, "the held denial still has a footer timer to clear it");
+    } finally { await s.done(); }
+  },
+
   async compactionReadsAsCrunching() {
     const s = await session();
     try {

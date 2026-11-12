@@ -36,10 +36,11 @@ In rough priority order:
    Decide whether `secret-guard` should load in the remaining profiles; teach the
    classifier the names of reviewed companion tools; tighten manual-mode reads if the prompt
    volume proves acceptable.
-6. **Autonomous runs.** The delegation and kernel work is delivered; what remains for autonomous
-   runs is to list them in `workflow_status` and to back the engine with a workflow-backed
-   `EngineTemplate`, so an autonomous item runs through the same run contract as a model-started
-   plan. Scripts inside the container stay out ([Autonomous runs](autonomy.md),
+6. **Autonomous runs.** The delegation and kernel work is delivered, and `workflow_status` and
+   `/workflows` list an autonomous run beside workflow and subagent runs. What remains is to back
+   the engine with a workflow-backed `EngineTemplate`, so an autonomous item runs through the same
+   run contract as a model-started plan. Scripts inside the container stay out
+   ([Autonomous runs](autonomy.md),
    [Future work](future-work.md#delegation-and-recovery)).
 7. **Standalone extensions.** Promote proven extensions into their own repositories only when
    ownership or release cadence requires it (`npm run extract`).

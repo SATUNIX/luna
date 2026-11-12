@@ -15,11 +15,19 @@ import type * as ContextSieve from "../packages/extensions/src/context-sieve/ind
 const sieveModule = await loadModule<typeof ContextSieve>("extensions/context-sieve/index.ts");
 
 /** sieve-budget.json, the telemetry context-sieve writes after each turn: the fields these checks read. */
+const SieveMessage = object({
+  tokens: number(),
+  included: array(string()),
+  injected: array(string()),
+  skippedUnchanged: boolean(),
+});
 const SieveBudget = object({
   budget: number(),
   totalTokens: number(),
+  dropped: array(string()),
   included: array(string()),
   truncated: array(string()),
+  message: SieveMessage,
   contextWindow: optional(nullable(number())),
   windowClamped: optional(boolean()),
 });
@@ -346,6 +354,85 @@ async function testSeparatorChargedInBudget() {
   }
 }
 
+// The hidden-message header and its separator must share the same character budget as
+// the contribution text, including when that contribution would fill the budget alone.
+async function testMessageFramingChargedInBudget() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-framing-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "50");
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "memory-local", 10, 1000, "m".repeat(200));
+    const result = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(result.message, "the contribution still produces a hidden message");
+    assert.ok(result.message.content.length <= 200, `whole hidden message exceeds 200 characters: ${result.message.content.length}`);
+    assert.ok(readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json")).truncated.includes("memory-local"));
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
+async function testMessageTelemetryCountsFinalContent() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-telemetry-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "50");
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "memory-local", 10, 1000, "m".repeat(200));
+    const result = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(result.message);
+    const read = () => readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.equal(read().message.tokens, Math.ceil(result.message.content.length / 4), "telemetry counts the injected framing and content");
+    assert.ok(read().message.tokens <= 50);
+    const unchanged = await pi.handlers.get("before_agent_start")({ systemPrompt: "base" });
+    assert.equal(unchanged, undefined);
+    assert.equal(read().message.tokens, 0, "a turn with no injection records zero injected message tokens");
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
+// A changed block can leave room for an unchanged block in the assembly budget,
+// but not enough for the optional line naming it in the final hidden message.
+async function testStillCurrentCannotOverfillMessage() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-still-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "60");
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "orchestrator", 10, 1000, "o".repeat(20));
+    writeContrib(ws, "memory-local", 5, 1000, "m".repeat(160));
+    await sieveTurn(pi, { systemPrompt: "base" });
+    writeContrib(ws, "memory-local", 5, 1000, "n".repeat(160));
+    const result = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(result.message);
+    assert.ok(result.message.content.length <= 240, `still-current note overfilled the message: ${result.message.content.length}`);
+    assert.doesNotMatch(result.message.content, /Still current/, "the optional note is omitted when it cannot fit");
+    const budget = readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.ok(budget.message.included.includes("orchestrator"), "the unchanged contribution remains current even without its note");
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
+async function testBudgetSmallerThanFramingDropsMessage() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-tiny-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "10");
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "memory-local", 10, 1000, "MEMORY");
+    const result = await pi.handlers.get("before_agent_start")({ systemPrompt: "base" });
+    assert.equal(result, undefined, "no hidden message is injected when its framing cannot fit");
+    const budget = readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.deepEqual(budget.dropped, ["memory-local"], "the omitted contribution is recorded as dropped");
+    assert.deepEqual(budget.message.included, []);
+    assert.equal(budget.message.tokens, 0);
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
 // When every contribution disappears, lastInjected must be forgotten, so a contribution that
 // comes back byte-identical is injected again (docs/architecture/memory-compaction-context.md).
 async function testAllContributionsGoneClearsLastInjected() {
@@ -366,6 +453,51 @@ async function testAllContributionsGoneClearsLastInjected() {
   }
 }
 
+// The hidden message's framing header is charged against the message budget: a message-channel
+// contribution exactly filling a 200-char budget previously produced a 278-char message
+// (76-char header + 2 + 200), and message.tokens under-reported the injected size.
+async function testMessageHeaderChargedAgainstBudget() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-header-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "50"); // 200 chars
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "memory-local", 60, 1000, "m".repeat(200));
+    const result = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(result.message, "a fresh message-channel contribution is injected");
+    assert.ok(result.message.content.length <= 200, `the injected message must fit the budget (got ${result.message.content.length})`);
+    const budget = readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.equal(budget.message.tokens, Math.ceil(result.message.content.length / 4), "message.tokens reports the injected content size, not just the assembled blocks");
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
+// When the still-current line would overflow the message budget it is dropped, while the fresh
+// content (which fits) is still injected.
+async function testStillCurrentDroppedWhenItWouldOverflow() {
+  const ws = tmpWorkspace("pi-kit-ctxbudget-still-");
+  const restore = setEnv("PI_KIT_CTX_MESSAGE_BUDGET_TOKENS", "60"); // 240 chars; 162 after the 78-char prefix
+  try {
+    const pi = await loadSieve(ws);
+    writeContrib(ws, "orchestrator", 80, 1000, "A".repeat(20));
+    writeContrib(ws, "progress-guard", 70, 1000, "B".repeat(20));
+    const r1 = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(r1.message && /A{20}/.test(r1.message.content) && /B{20}/.test(r1.message.content), "the first turn injects both message blocks");
+    writeContrib(ws, "orchestrator", 80, 1000, "A".repeat(140));
+    const r2 = await sieveTurn(pi, { systemPrompt: "base" });
+    assert.ok(r2.message, "the changed contribution is injected");
+    assert.match(r2.message.content, /A{140}/);
+    assert.doesNotMatch(r2.message.content, /Still current/, "the still-current line is dropped when it would overflow the message budget");
+    assert.ok(r2.message.content.length <= 240, `the injected message must fit the budget (got ${r2.message.content.length})`);
+    const budget = readBudget(path.join(ws, ".pi", "ctx-contributions", "sieve-budget.json"));
+    assert.equal(budget.message.tokens, Math.ceil(r2.message.content.length / 4));
+  } finally {
+    restore();
+    rmWorkspace(ws);
+  }
+}
+
 const tests: Array<[string, () => Promise<void>]> = [
   ["budgets scale with the model's real context window; unknown stays unknown", testBudgetsScaleWithContextWindow],
   ["budgetFor / knownContextWindow arithmetic", testBudgetForPureFunction],
@@ -379,8 +511,14 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["equal-priority contributions are ordered by id, not directory order", testEqualPriorityOrderedById],
   ["a non-finite priority is normalised to 0", testNonFinitePriorityNormalisedToZero],
   ["join separators are charged against the budget", testSeparatorChargedInBudget],
+  ["hidden-message framing is charged against the message budget", testMessageFramingChargedInBudget],
+  ["message telemetry counts the final injected content", testMessageTelemetryCountsFinalContent],
+  ["the still-current note cannot overfill a hidden message", testStillCurrentCannotOverfillMessage],
+  ["a budget smaller than the framing drops the hidden message", testBudgetSmallerThanFramingDropsMessage],
   ["all contributions gone clears lastInjected so a return is injected again", testAllContributionsGoneClearsLastInjected],
   ["an oversized contribution file is skipped before parse", testOversizedContributionFileSkippedBeforeParse],
+  ["the message header is charged against the message budget", testMessageHeaderChargedAgainstBudget],
+  ["the still-current line is dropped when it would overflow the message budget", testStillCurrentDroppedWhenItWouldOverflow],
 ];
 
 let failed = 0;

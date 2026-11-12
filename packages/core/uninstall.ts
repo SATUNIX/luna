@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Uninstall pi-system and its managed companion packages.
+ * Uninstall Luna and its managed companion packages.
  * Reads the install state marker: <cwd>/.pi/.pi-kit.json for a project install,
  * otherwise ~/.pi/agent/.pi-kit.json. Without an explicit --scope the project marker
  * in the current directory wins when it exists; otherwise the global marker is used.
@@ -91,7 +91,7 @@ function removeFromPi(source: string): void {
   if (!dryRun) runPi("pi", args);
 }
 
-console.log("\n[uninstall] pi-system");
+console.log("\n[uninstall] Luna");
 console.log(`  scope:    ${effectiveScope}`);
 console.log(`  dry-run:  ${dryRun}`);
 console.log("");

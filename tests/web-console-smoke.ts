@@ -73,10 +73,26 @@ async function waitHealthy(port: number): Promise<boolean> {
 
 async function run(): Promise<void> {
   const ws = tmpWorkspace("pi-kit-web-console-");
-  const webUiRoot = path.resolve("packages", "web-ui");
+  // The extension keeps its pid, token and log files in `<web UI root>/.runtime`, and the token
+  // file is created exclusively, so two runs sharing the checkout's directory race on it. Give
+  // this run a root of its own: a copy of the package's top-level files and a link to each of its
+  // directories (the server resolves its modules through the real path), so `.runtime` is private
+  // to this run and nothing is written into the checkout.
+  const realWebUiRoot = path.resolve("packages", "web-ui");
+  const webUiRoot = path.join(ws, "web-ui");
+  fs.mkdirSync(webUiRoot);
+  for (const entry of fs.readdirSync(realWebUiRoot, { withFileTypes: true })) {
+    if (entry.name === ".runtime") continue;
+    const from = path.join(realWebUiRoot, entry.name);
+    const to = path.join(webUiRoot, entry.name);
+    if (entry.isDirectory()) fs.symlinkSync(from, to, "junction");
+    else fs.copyFileSync(from, to);
+  }
   const port = 18000 + Math.floor(Math.random() * 2000);
   const restore = [
     setEnv("PI_KIT_WEBUI_ROOT", webUiRoot),
+    // The server's own scratch directory (temporary agent prompts) follows the same root.
+    setEnv("PI_CONSOLE_RUNTIME_DIR", path.join(webUiRoot, ".runtime")),
     setEnv("PI_CONSOLE_PORT", String(port)),
     setEnv("PI_CONSOLE_HOST", "127.0.0.1"),
     // No install marker, so findWebUiRoot cannot fall back to a real checkout.

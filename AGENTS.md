@@ -8,7 +8,7 @@ pins), so it never loads `CLAUDE.md` here. The
 rules a pi agent must follow when changing this repository are therefore repeated under
 "Maintaining this repository" below; read `CLAUDE.md` before changing code.
 
-The repository is a modular pi system packaged as an npm-workspaces monorepo:
+The repository is a modular pi package packaged as an npm-workspaces monorepo:
 `packages/core/` (installer and toolchain), `packages/extensions/` (first-party `src/` plus
 vendored `third_party/`), `packages/kit/` (skills, prompts, profiles, themes, agents, workflows),
 `packages/web-ui/`, `packages/autonomy/` and `packages/container/`.

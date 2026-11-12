@@ -9,6 +9,7 @@ import { isStoredContract, type RunContract } from "./contract.ts";
 import { isPlainObject } from "./fsutil.ts";
 import { type RunState, STATE_SCHEMA_VERSION, type TransitionInfo, isRunState, transition } from "./lifecycle.ts";
 import { type RunPaths, runPaths, stateHome } from "./paths.ts";
+import { HIDDEN_CHARS } from "./notebook.ts";
 
 export const CONTROL_KINDS = ["pause", "unpause", "cancel", "steer", "backlog", "answer", "reconfigure"] as const;
 export type ControlKind = (typeof CONTROL_KINDS)[number];
@@ -31,6 +32,10 @@ export interface RunSummary {
   status: unknown;
   updatedAt: unknown;
   outcome: unknown;
+  spentUsd: number | null;
+  budgetUsd: number | null;
+  step: number | null;
+  blocker: { kind: string; question: string } | null;
   legacy?: true;
 }
 
@@ -131,8 +136,20 @@ export function listRuns(home: string = stateHome()): RunSummary[] {
   try { names = fs.readdirSync(home); } catch { return []; }
   return names.flatMap((run): RunSummary[] => {
     const s = readJson(runPaths(run, home).state, null);
+    if (!isPlainObject(s)) return [];
     // A directory written by the previous (v0) supervisor has no schemaVersion; it is listed, but it cannot be driven.
-    return isPlainObject(s) ? [{ run, template: s.template ?? "self-improve", status: s.status, updatedAt: s.updatedAt ?? s.startedAt, outcome: s.outcome, ...(s.schemaVersion === undefined ? { legacy: true as const } : {}) }] : [];
+    // state.json is not validated field by field here, so each extra figure is narrowed locally and is null when it is unusable.
+    const finite = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
+    const usage = isPlainObject(s.usage) ? s.usage : undefined;
+    const limits = isPlainObject(s.limits) ? s.limits : undefined;
+    const budget = isPlainObject(limits?.budget) ? limits.budget : undefined;
+    const rawBlocker = s.blocker;
+    // A worker writes the question; collapse it to one visible line before it reaches a list or footer.
+    const oneLine = (text: string): string => text.replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
+    const blocker = isPlainObject(rawBlocker) && typeof rawBlocker.kind === "string" && typeof rawBlocker.question === "string"
+      ? { kind: oneLine(rawBlocker.kind), question: oneLine(rawBlocker.question) }
+      : null;
+    return [{ run, template: s.template ?? "self-improve", status: s.status, updatedAt: s.updatedAt ?? s.startedAt, outcome: s.outcome, spentUsd: finite(usage?.usd), budgetUsd: finite(budget?.totalUsd), step: finite(s.step), blocker, ...(s.schemaVersion === undefined ? { legacy: true as const } : {}) }];
   }).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 

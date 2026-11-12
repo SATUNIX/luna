@@ -8,8 +8,10 @@
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
 //   pi-autonomy promote --run <id>              carry out an approval-gated promotion
 //   pi-autonomy export --run <id> [--out dir]   results, evidence, usage, decisions and the work
+//   pi-autonomy board claim <id> --run <id> --by <agent>   atomically claim a board item
 //   pi-autonomy boundary --config run.json [--probe]   the boundary alone, or the live container probe
 //   pi-autonomy reconfigure --run <id> [flags]  the only way effort or budgets change for an existing run
+//   pi-autonomy inbox --run <id> [--file cards.json | --answer <card> --value <text>]   owner decision cards that settle into their default at the deadline
 //
 // Every command accepts --json and then prints exactly one JSON object ({ ok: true, ... } or
 // { ok: false, error, code }). Exit codes: 0 ok; 1 error; 2 usage or invalid contract; 3 refused
@@ -26,7 +28,9 @@ import { num, parseArgs } from "./lib/cli-args.ts";
 import { type Budget, formatProblems, resolveContract, type RunContract, type TemplateId } from "./lib/contract.ts";
 import { type EffortApi, effortApi } from "./lib/effort.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
-import { readBoard, readBoardFile } from "./lib/board.ts";
+import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
+import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
+import { resolveGateSlots } from "./lib/gate-slots.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
@@ -40,6 +44,7 @@ import { type RunConfig, runtimeConfig } from "./lib/runcfg.ts";
 import { RunStore, listRuns } from "./lib/store.ts";
 import { describeTemplates, TEMPLATES } from "./lib/templates/index.ts";
 import { DockerRuntime } from "./lib/runtime.ts";
+import { type UnpublishedReport, unpublishedReport } from "./lib/unpublished.ts";
 import { array, boolean, isRecord, object, parseJson, parseJsonAs, string, unknownValue } from "../core/lib/guard.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -59,7 +64,7 @@ const EXIT: Record<CliCode, number> = { usage: 2, invalid: 2, refused: 3, error:
 export type CliRuntime = Runtime;
 
 /** Where output goes: process.stdout / process.stderr, or a capture in tests. */
-export interface Writer { write(text: string): unknown }
+export interface Writer { write(text: string): void }
 
 export interface RuntimeFactoryOptions { contract: RunContract; cfg: RunConfig; store: RunStore; env: NodeJS.ProcessEnv }
 
@@ -105,8 +110,8 @@ interface CommandResult { data: Record<string, unknown>; text: string; exit?: nu
 type Command = (argv: string[], deps: CliDeps) => Promise<CommandResult>;
 
 /** A thrown value's `code` and `message`, whatever was thrown. */
-const codeOf = (e: unknown): unknown => (isRecord(e) ? e.code : undefined);
-const messageOf = (e: unknown): unknown => (isRecord(e) ? e.message : undefined);
+const codeOf = (e: unknown): string | undefined => (isRecord(e) && typeof e.code === "string" ? e.code : undefined);
+const messageOf = (e: unknown): string | undefined => (isRecord(e) && typeof e.message === "string" ? e.message : undefined);
 
 /** authorisationStatus's report, or the authorisation `plan --authorise` just recorded. */
 type AuthorisationView = ReturnType<typeof authorisationStatus>;
@@ -178,6 +183,26 @@ async function offline<T>(store: RunStore, deps: CliDeps, fn: () => Promise<T>):
   const lock = lockFor(store, deps);
   const got = lock.acquire();
   if (!got.acquired) throw new CliError("refused", got.reason);
+  try { return await fn(); } finally { lock.release(); }
+}
+
+/** The board lock is short-lived but contended: a claimant waits for the current writer instead of failing. */
+const BOARD_LOCK_ATTEMPTS = 200;
+const BOARD_LOCK_DELAY_MS = 25;
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Serialise board writes (a claim and a `board --file` replacement) on control/board.lock. The run's
+ * supervision lock is separate; this one only guards the host-owned board file.
+ */
+async function withBoardLock<T>(store: RunStore, deps: CliDeps, fn: () => T | Promise<T>): Promise<T> {
+  const lock = createRunLock({ file: path.join(store.p.control, "board.lock"), pid: deps.pid, ...deps.lockOptions });
+  let got = lock.acquire();
+  for (let attempt = 1; !got.acquired && attempt < BOARD_LOCK_ATTEMPTS; attempt++) {
+    await sleep(BOARD_LOCK_DELAY_MS);
+    got = lock.acquire();
+  }
+  if (!got.acquired) throw new CliError("refused", got.reason, { lock: "board" });
   try { return await fn(); } finally { lock.release(); }
 }
 
@@ -254,8 +279,30 @@ function rotationText(r: NonNullable<NonNullable<ReturnType<typeof generationsRe
   return `generation ${r.generation} ended at ${r.at}: ${box}; recovery ${r.action}; ${nb}${r.reset ? "; the next generation started from the accepted head" : ""}`;
 }
 
+/** The read-only unpublished-work report for one run (lib/unpublished.ts); never fetches. */
+function unpublishedFor(store: RunStore, cfg: RunConfig, state: RunState, deps: CliDeps): UnpublishedReport {
+  return unpublishedReport({ mirrorDir: store.p.mirror, branch: cfg.integrationBranch, remoteConfigured: cfg.integrationRemote !== null, logFile: store.p.log, publishError: state.selfImprove?.publishError ?? null, now: deps.now() });
+}
+
+/** The one shape of the `unpublished:` line, or null when there is nothing to flag. */
+const unpublishedText = (u: UnpublishedReport): string | null =>
+  u.state === "ahead" ? `unpublished: ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} — ${u.reason ?? "not published"}` : null;
+
+/** Every run under the state home with its unpublished-work report; a run whose state or contract cannot be read is skipped. */
+function unpublishedRuns(deps: CliDeps): Array<{ run: string; u: UnpublishedReport }> {
+  const rows: Array<{ run: string; u: UnpublishedReport }> = [];
+  for (const summary of listRuns(deps.home)) {
+    try {
+      const store = new RunStore(summary.run, { home: deps.home, now: deps.now });
+      const { state, cfg } = loadRun(store);
+      rows.push({ run: summary.run, u: unpublishedFor(store, cfg, state, deps) });
+    } catch { /* the view is read-only: a legacy or unreadable run is not reported here */ }
+  }
+  return rows;
+}
+
 function statusReport(store: RunStore, deps: CliDeps) {
-  const { state, contract } = loadRun(store);
+  const { state, contract, cfg } = loadRun(store);
   const lock = lockFor(store, deps).inspect();
   const latest = state.acceptance.latest;
   return {
@@ -270,6 +317,7 @@ function statusReport(store: RunStore, deps: CliDeps) {
     questions: state.pendingQuestions ?? [], ui: state.ui ?? null, reconfigurations: state.reconfigurations.length,
     generations: generationsReport(store, state, contract),
     selfImprove: state.selfImprove ? { cycles: state.selfImprove.history.length, merged: state.selfImprove.merged, current: state.selfImprove.current?.n ?? null, publishBlocker: state.selfImprove.publishBlocker ?? null, unpublished: state.selfImprove.publishBlockedCycles ?? 0, history: state.selfImprove.history } : null,
+    unpublished: unpublishedFor(store, cfg, state, deps),
     history: state.history.slice(-8), boundaryDigest: state.boundaryDigest, authorisation: state.authorisation,
     paths: { root: store.p.root, log: store.p.log, results: store.p.results }, title: contract.objective.title,
   };
@@ -296,6 +344,8 @@ function statusText(s: StatusReport): string {
   }
   if (s.selfImprove) lines.push(`  cycles: ${s.selfImprove.cycles} done, ${s.selfImprove.merged} merged${s.selfImprove.current ? `, cycle ${s.selfImprove.current} in progress` : ""}`);
   if (s.selfImprove?.publishBlocker) lines.push(`  publication BLOCKED: ${s.selfImprove.publishBlocker} (${s.selfImprove.unpublished} merged cycle(s) not published; the leak scan refuses the commit above)`);
+  const unpublished = unpublishedText(s.unpublished);
+  if (unpublished) lines.push(`  ${unpublished}`);
   if (s.promotion.status !== "none") lines.push(`  promotion: ${s.promotion.status}${s.promotion.error ? ` (${s.promotion.error})` : ""}${s.promotion.status === "awaiting_approval" ? `; approve with: pi-autonomy promote --run ${s.run}` : ""}`);
   lines.push(`  logs: ${s.paths.log}`);
   return lines.join("\n");
@@ -513,10 +563,35 @@ const commands: Record<string, Command> = {
     const { opts } = parseArgs(argv, { values: ["run"], flags: ["json"] });
     if (!opts.run) {
       const runs = listRuns(deps.home);
-      return { data: { runs, home: deps.home }, text: runs.length ? runs.map((r) => `${r.run.padEnd(28)} ${String(r.template).padEnd(12)} ${String(r.status)}${isRecord(r.outcome) && typeof r.outcome.reason === "string" && r.outcome.reason ? ` [${r.outcome.reason}]` : ""}${r.legacy ? " (written by the v0 supervisor; read-only)" : ""}`).join("\n") : `no runs under ${deps.home}` };
+      return { data: { runs, home: deps.home }, text: runs.length ? runs.map((r) => {
+        const step = typeof r.step === "number" ? ` step ${r.step}` : "";
+        const spend = r.spentUsd !== null && r.budgetUsd !== null ? ` spent ${usd(r.spentUsd)} of ${usd(r.budgetUsd)}` : "";
+        const question = r.blocker && r.blocker.question.length > 120 ? `${r.blocker.question.slice(0, 120)}\u2026` : r.blocker?.question;
+        const blocker = r.blocker ? `; BLOCKED (${r.blocker.kind}): ${question}` : "";
+        return `${r.run.padEnd(28)} ${String(r.template).padEnd(12)} ${String(r.status)}${step}${spend}${isRecord(r.outcome) && typeof r.outcome.reason === "string" && r.outcome.reason ? ` [${r.outcome.reason}]` : ""}${blocker}${r.legacy ? " (written by the v0 supervisor; read-only)" : ""}`;
+      }).join("\n") : `no runs under ${deps.home}` };
     }
     const report = statusReport(openStore(opts.run, deps), deps);
     return { data: report, text: statusText(report) };
+  },
+
+  /** Runs whose merged integration work has not reached its git remote (read-only; never fetches). */
+  async top(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run"], flags: ["json"] });
+    const rows = unpublishedRuns(deps).filter((row) => opts.run === undefined || row.run === opts.run);
+    const text = rows.length
+      ? rows.map(({ run, u }) => `${run}: ${unpublishedText(u) ?? "nothing unpublished"}`).join("\n")
+      : opts.run !== undefined ? `no run ${opts.run} under ${deps.home}` : `no runs under ${deps.home}`;
+    return { data: { runs: rows.map(({ run, u }) => ({ run, unpublished: u })) }, text };
+  },
+
+  /** Exit non-zero while any run has merged work that is not published. */
+  async doctor(argv, deps) {
+    parseArgs(argv, { flags: ["json"] });
+    const ahead = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead");
+    if (!ahead.length) return { data: { ok: true, ahead: [] }, text: "doctor: every run's merged work is published" };
+    const text = `doctor: ${ahead.length} run${ahead.length === 1 ? "" : "s"} with unpublished merged work:\n${ahead.map(({ run, u }) => `  run ${run}: ${unpublishedText(u) ?? "ahead"}`).join("\n")}\nPush the work (or recreate the run) before it is lost.`;
+    return { data: { ok: false, ahead: ahead.map(({ run, u }) => ({ run, unpublished: u })) }, text, exit: 3 };
   },
 
   async pause(argv, deps) {
@@ -551,16 +626,113 @@ const commands: Record<string, Command> = {
   },
 
   async board(argv, deps) {
-    const { opts } = parseArgs(argv, { values: ["run", "file"], flags: ["json"] });
+    const { opts, rest } = parseArgs(argv, { values: ["run", "file", "by"], flags: ["json"] });
+    const claim = rest[0] === "claim";
+    if (rest.length && !claim) throw new CliError("usage", `unknown board subcommand ${JSON.stringify(rest[0])}`);
+    if (claim && rest.length !== 2) throw new CliError("usage", "board claim needs exactly one item id");
     const store = openStore(opts.run, deps);
     const state = readState(store);
-    if (state.template !== "self-improve") throw new CliError("refused", "board is for self-improve cycles");
+    // `dispatch` is the second template that works a steward board (registered by the follow-up change).
+    const boardTemplates: readonly string[] = ["self-improve", "dispatch"];
+    if (!boardTemplates.includes(state.template)) throw new CliError("refused", "board is for self-improve and dispatch cycles");
+    if (claim) {
+      const id = rest[1] ?? "";
+      const by = opts.by?.trim();
+      if (!by) throw new CliError("usage", "--by <agent> is required");
+      if (opts.file) throw new CliError("usage", "board claim does not take --file");
+      return withBoardLock(store, deps, () => {
+        let board;
+        try { board = readBoard(store.p.control); }
+        catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+        let result: ClaimBoardResult;
+        try { result = claimBoardItem(board, id, by, deps.now().toISOString()); }
+        catch (e) { throw new CliError("refused", e instanceof Error ? e.message : String(e)); }
+        if (result.outcome === "loser") {
+          throw new CliError("refused", `board item ${id} is already claimed by ${result.item.assignee ?? "another agent"}`, {
+            id,
+            assignee: result.item.assignee ?? null,
+            claimedAt: result.item.claimedAt ?? null,
+          });
+        }
+        if (result.outcome === "winner") writeJsonAtomic(path.join(store.p.control, "board.json"), result.board, { mode: 0o600 });
+        return {
+          data: { run: state.run, board: result.board, item: result.item, already: result.outcome === "already" },
+          text: result.outcome === "winner"
+            ? `claimed ${id} for ${by}`
+            : `${id} is already claimed by ${by} (since ${result.item.claimedAt ?? "unknown"})`,
+        };
+      });
+    }
     if (!opts.file && !opts.json) throw new CliError("usage", "--file <path.json> or --json is required");
+    if (opts.file) {
+      let board;
+      try { board = readBoardFile(path.resolve(opts.file)); }
+      catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+      await withBoardLock(store, deps, () => writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 }));
+      return { data: { run: state.run, board }, text: "steward board saved for the next cycle prompt" };
+    }
     let board;
-    try { board = opts.file ? readBoardFile(path.resolve(opts.file)) : readBoard(store.p.control); }
+    try { board = readBoard(store.p.control); }
     catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
-    if (opts.file) writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 });
-    return { data: { run: state.run, board }, text: opts.file ? "steward board saved for the next cycle prompt" : JSON.stringify(board, null, 2) };
+    return { data: { run: state.run, board }, text: JSON.stringify(board, null, 2) };
+  },
+
+  /**
+   * Without --run: the runs that have stayed unpublished for 30 minutes or more, which are waiting
+   * on an operator. With --run: that run's owner decision cards.
+   */
+  async inbox(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run", "file", "answer", "value"], flags: ["json"] });
+    if (opts.run === undefined) {
+      if (opts.file !== undefined || opts.answer !== undefined || opts.value !== undefined) throw new CliError("usage", "--file, --answer and --value need --run <id>");
+      const now = deps.now().getTime();
+      const waiting = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead" && u.since !== null && now - Date.parse(u.since) >= 30 * 60 * 1000);
+      const text = waiting.length
+        ? waiting.map(({ run, u }) => `run ${run}: unpublished ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} (waiting on operator) — ${u.reason ?? "not published"}`).join("\n")
+        : "inbox empty: no run is waiting on you";
+      return { data: { waiting: waiting.map(({ run, u }) => ({ run, unpublished: u })) }, text };
+    }
+    const store = openStore(opts.run, deps);
+    const state = readState(store);
+    if (state.template !== "self-improve") throw new CliError("refused", "inbox is for self-improve cycles");
+    if (opts.file && opts.answer) throw new CliError("usage", "--file and --answer cannot be combined");
+    if (opts.value !== undefined && !opts.answer) throw new CliError("usage", "--value is only valid with --answer");
+    if (opts.answer !== undefined && !opts.value?.trim()) throw new CliError("usage", "--answer <card-id> requires a non-empty --value <text>");
+    if (opts.value !== undefined && opts.value.trim().length > 2000) throw new CliError("usage", "--value must be at most 2000 characters");
+    if (opts.file) {
+      let inbox;
+      try { inbox = readInboxFile(path.resolve(opts.file)); }
+      catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+      const cards = inbox;
+      await withBoardLock(store, deps, () => { writeInbox(store.p.control, cards); });
+      return { data: { run: state.run, cards: inbox.cards }, text: "owner inbox saved; the next inbox read settles cards whose deadline has passed" };
+    }
+    // Settling a card can unblock a board item, so the read, the settle and both writes happen under
+    // the board lock that `board claim` and `board --file` take.
+    return withBoardLock(store, deps, () => {
+    let inbox;
+    let board;
+    try { inbox = readInbox(store.p.control); board = readBoard(store.p.control); }
+    catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+    const answer = opts.value?.trim() ?? "";
+    let answered = false;
+    if (opts.answer) {
+      const card = inbox.cards.find((c) => c.id === opts.answer);
+      if (!card) throw new CliError("refused", `unknown inbox card ${opts.answer}`);
+      if (!card.outcome) { card.answer = answer; answered = true; }
+    }
+    const settled = settleInbox(inbox, deps.now());
+    const applied = applyOutcomes(board, settled.inbox);
+    if (answered || settled.decided.length > 0) writeInbox(store.p.control, settled.inbox);
+    if (applied.unblocked.length > 0) writeJsonAtomic(path.join(store.p.control, "board.json"), applied.board, { mode: 0o600 });
+    const open = settled.inbox.cards.some((c) => !c.outcome);
+    const lines = settled.inbox.cards.map((c) => {
+      const head = c.outcome ? `${c.id}  ${c.outcome.via === "answer" ? "answered" : "default used"} ${c.outcome.at}` : `${c.id}  open`;
+      return [head, `    question: ${c.question}`, `    default: ${c.default}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${c.outcome.text}`] : [])].join("\n");
+    });
+    const text = `${lines.join("\n")}\n${open ? `answer with: pi-autonomy inbox --run ${state.run} --answer <id> --value "..."` : "no cards are waiting"}`;
+    return { data: { run: state.run, cards: settled.inbox.cards, decided: settled.decided.map((c) => c.id), unblocked: applied.unblocked }, text };
+    });
   },
 
   async backlog(argv, deps) {
@@ -670,7 +842,7 @@ export async function supervise(store: RunStore, deps: CliDeps, { runtime }: { r
   if (!got.acquired) throw new CliError("refused", got.reason);
   if (isTerminal(state.status) && !(state.status === "succeeded" && ["pending", "awaiting_approval"].includes(state.promotion.status))) { lock.release(); throw new CliError("refused", resumeAction(state).message); }
   const rt = runtime ?? deps.runtimeFactory({ contract, cfg, store, env: deps.env });
-  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
+  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, gateSlotsHome: deps.home, gateSlots: resolveGateSlots(deps.env), effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
   const onSignal = () => { engine.signalled = true; };
   if (deps.signals) { process.on("SIGINT", onSignal); process.on("SIGTERM", onSignal); }
   try {
@@ -708,8 +880,13 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
+  top [--run <id>]                       every run, and whether it has merged work not yet published
+  inbox                                  runs waiting on you for over 30 minutes
+  doctor                                 exit non-zero when merged work is unpublished
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json
+  board claim <id> --run <id> --by <agent>   atomically claim one board item
+  inbox --run <id> [--file <cards.json> | --json | --answer <card-id> --value <text>]
   resume --run <id> [--answer <text> | --approve | --deny]
   promote --run <id> [--yes]             carry out an approval-gated promotion
   export --run <id> [--out <dir>]        results, evidence, usage, decisions, the work
@@ -725,7 +902,7 @@ export async function main(argv: readonly string[], overrides: Partial<CliDeps> 
   const deps: CliDeps = { ...defaultDeps(), ...overrides };
   const [cmd, ...rest] = argv;
   const json = rest.includes("--json");
-  const emit = (obj: Record<string, unknown>): unknown => deps.stdout.write(`${JSON.stringify(obj, null, 2)}\n`);
+  const emit = (obj: Record<string, unknown>): void => { deps.stdout.write(`${JSON.stringify(obj, null, 2)}\n`); };
   if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") { deps.stdout.write(`${USAGE}\n`); return cmd ? 0 : 2; }
   const command = Object.hasOwn(commands, cmd) ? commands[cmd] : undefined;
   if (!command) { const msg = `unknown command ${cmd}`; if (json) emit({ ok: false, error: msg, code: "usage" }); else deps.stderr.write(`${msg}\n${USAGE}\n`); return EXIT.usage; }

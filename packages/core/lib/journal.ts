@@ -27,7 +27,12 @@ export interface CycleReport {
 const ENTRY = /^- (\S+) \| Board: (.+?) \| (.+?) \| (.+?)(?: \| decisions: (.+))?$/;
 const REPORT_BOARD = /^Board: (.+?) (done|progress|blocked) - /gm;
 const REPORT_OUTCOME = /^Outcome: (.+)$/m;
+const REPORT_HEADING = /^# (.+)$/m;
+const REPORT_DECISION = /autonomy\/decisions\/[\w.-]+\.md/g;
 const CLOSE_OUT = "Host close-out: the worker exited before recording report.md";
+export const JOURNAL_HEADER = "# Team journal\n";
+/** A cycle key that may be written: directory names are untrusted, and an entry is one line. */
+const SAFE_KEY = /^[\w.-]+(?:\/[\w.-]+)?$/;
 
 /** Parse entry lines; the header and blanks are ignored, and a malformed `- ` line throws. */
 export function parseJournal(text: string): JournalEntry[] {
@@ -90,6 +95,38 @@ function formatBoard(board: string[] | null): string {
   return board === null || board.length === 0 ? "none" : board.join(", ");
 }
 
+/** Every `autonomy/decisions/<file>.md` path the report text names and the repo actually has. */
+function reportDecisions(root: string, text: string): string[] {
+  const named = [...new Set([...text.matchAll(REPORT_DECISION)].map((match) => match[0]))];
+  return named.filter((file) => fs.existsSync(path.join(root, file))).sort();
+}
+
+/** The report's first `# ` heading with `|` removed and whitespace collapsed, else the outcome. */
+function reportSummary(text: string, outcome: string): string {
+  const heading = REPORT_HEADING.exec(text)?.[1]?.replace(/\|/g, " ").replace(/\s+/g, " ").trim();
+  return heading === undefined || heading === "" ? outcome : heading;
+}
+
+/** The canonical journal line for a report: the same derivation `missingJournalLines` returns and `checkJournal` hints. */
+export function journalLineFor(root: string, key: string, text: string): string {
+  const boards = reportBoards(text);
+  const outcome = REPORT_OUTCOME.exec(text)?.[1]?.trim() || "successful";
+  const decisions = reportDecisions(root, text);
+  const line = `- ${key} | Board: ${formatBoard(boards)} | ${outcome} | ${reportSummary(text, outcome)}`;
+  return decisions.length === 0 ? line : `${line} | decisions: ${decisions.join(", ")}`;
+}
+
+/** Two parsed entries are the same when every field agrees; board and decisions compare as sets. */
+function sameEntry(a: JournalEntry, b: JournalEntry): boolean {
+  return (
+    (a.board === null) === (b.board === null) &&
+    sameSet(a.board ?? [], b.board ?? []) &&
+    a.outcome === b.outcome &&
+    a.summary === b.summary &&
+    sameSet(a.decisions, b.decisions)
+  );
+}
+
 /** Failures only: a host close-out report is reported through `journalWarnings` instead. */
 export function checkJournal(root: string): string[] {
   const problems: string[] = [];
@@ -97,12 +134,15 @@ export function checkJournal(root: string): string[] {
   const entries = fs.existsSync(journal) ? parseJournal(fs.readFileSync(journal, "utf8")) : [];
   const byKey = new Map<string, JournalEntry>();
   for (const entry of entries) {
-    if (byKey.has(entry.key)) problems.push(`duplicate journal entry: ${entry.key}`);
-    else byKey.set(entry.key, entry);
+    const existing = byKey.get(entry.key);
+    // A union merge (`autonomy/JOURNAL.md merge=union`) can duplicate a line byte-for-byte;
+    // only a repeat whose content disagrees is a real conflict.
+    if (existing === undefined) byKey.set(entry.key, entry);
+    else if (!sameEntry(existing, entry)) problems.push(`conflicting journal entries: ${entry.key}`);
   }
 
   const cycles = path.join(root, "autonomy", "cycles");
-  for (const entry of entries) {
+  for (const entry of byKey.values()) {
     const dir = path.join(cycles, ...entry.key.split("/"));
     if (!fs.existsSync(dir)) problems.push(`journal entry has no cycle directory: ${entry.key}`);
     else if (!fs.existsSync(path.join(dir, "report.md"))) problems.push(`journal entry has no report: ${entry.key}`);
@@ -118,11 +158,7 @@ export function checkJournal(root: string): string[] {
     if (text.includes(CLOSE_OUT)) continue;
     const entry = byKey.get(key);
     if (entry === undefined) {
-      const boards = reportBoards(text);
-      const outcome = REPORT_OUTCOME.exec(text)?.[1]?.trim() ?? "successful";
-      problems.push(
-        `report with no journal entry: ${key}; add: - ${key} | Board: ${formatBoard(boards)} | ${outcome} | <summary>`,
-      );
+      problems.push(`report with no journal entry: ${key}; add: ${journalLineFor(root, key, text)}`);
       continue;
     }
     const reported = reportBoards(text);
@@ -135,7 +171,7 @@ export function checkJournal(root: string): string[] {
 
   const decisionsDir = path.join(root, "autonomy", "decisions");
   if (fs.existsSync(decisionsDir)) {
-    const linked = new Set(entries.flatMap((entry) => entry.decisions));
+    const linked = new Set([...byKey.values()].flatMap((entry) => entry.decisions));
     for (const file of fs.readdirSync(decisionsDir).filter((name) => name.endsWith(".md")).sort()) {
       const relative = path.posix.join("autonomy", "decisions", file);
       const text = fs.readFileSync(path.join(decisionsDir, file), "utf8");
@@ -144,6 +180,29 @@ export function checkJournal(root: string): string[] {
     }
   }
   return problems;
+}
+
+/**
+ * The journal lines missing from `current` (the journal's text, or null when the file is absent):
+ * one for every cycle report that has none, derived with `journalLineFor`, in report order. A
+ * host close-out report is skipped. A cycle directory whose name could not be one journal key
+ * (whitespace, a line break, a `|`) throws, because an entry is one line and the name is untrusted.
+ *
+ * This module only reads: it ships in the npm package, which does not carry the safe write
+ * helper. `syncJournal` in `packages/core/journal.ts` writes the lines.
+ */
+export function missingJournalLines(root: string, current: string | null): string[] {
+  const known = new Set(parseJournal(current ?? "").map((entry) => entry.key));
+  const missing: string[] = [];
+  for (const { key, report } of cycleReports(root)) {
+    if (known.has(key)) continue;
+    const text = fs.readFileSync(report, "utf8");
+    if (text.includes(CLOSE_OUT)) continue;
+    if (!SAFE_KEY.test(key)) throw new Error(`cycle directory name cannot be a journal key: ${JSON.stringify(key)}`);
+    known.add(key);
+    missing.push(journalLineFor(root, key, text));
+  }
+  return missing;
 }
 
 /** Warnings only: host close-out reports need no journal entry, but each is named here. */

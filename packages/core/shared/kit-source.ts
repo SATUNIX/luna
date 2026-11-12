@@ -76,6 +76,6 @@ export function trustedMarkerKitRoot(kitSource: string, cwd: string, hasCode: (d
   const real = realDir(kitSource);
   if (!hasCode(real)) return null;
   if (isWithin(real, workspaceRoot(cwd))) return { ignored: `the install marker's kitSource "${kitSource}" is inside the workspace` };
-  if (!isKitLocalPackageName(packageName(real))) return { ignored: `the install marker's kitSource "${kitSource}" is not a pi-system kit` };
+  if (!isKitLocalPackageName(packageName(real))) return { ignored: `the install marker's kitSource "${kitSource}" is not a Luna kit` };
   return { root: real };
 }

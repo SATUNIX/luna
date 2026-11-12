@@ -615,7 +615,7 @@ function testDryRunWithoutRequiredTools() {
     const output = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 0, `--dry-run without pi/git must exit 0 (stdout: ${result.stdout} stderr: ${result.stderr})`);
     assert.ok(!/FAIL: pi is required/.test(output), `--dry-run must not fail on a missing pi (got: ${output})`);
-    assert.match(output, /\[install\] pi-system/, `a --dry-run preview must proceed without pi/git (got: ${output})`);
+    assert.match(output, /\[install\] Luna/, `a --dry-run preview must proceed without pi/git (got: ${output})`);
 
     console.log("  OK: --dry-run does not require pi/git on PATH");
   } finally {
@@ -649,8 +649,33 @@ function testInvalidScopeRejected() {
       /unknown --scope "bogus"/,
       "an invalid --scope must print a clear error",
     );
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /node:internal|install\.ts:\d+/, "an invalid --scope must not dump a stack trace");
+    assert.match(`${result.stdout}\n${result.stderr}`, /usage: install\.ts/, "an invalid --scope must print the usage line");
 
     console.log("  OK: an invalid --scope is rejected with exit 1");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Defect B: --help and -h must print usage to stdout, exit 0 and do no install work at all.
+function testHelpFlag() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-help-"));
+  const agentDir = path.join(dir, "agent");
+  const binDir = path.join(dir, "bin");
+  const logPath = path.join(dir, "pi-calls.log");
+  try {
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    for (const flag of ["--help", "-h"]) {
+      const result = spawnSync(process.execPath, [INSTALL, flag], { cwd: ROOT, env: baseEnv(agentDir, binDir, logPath), encoding: "utf8" });
+      assert.equal(result.status, 0, `${flag} must exit 0 (stdout: ${result.stdout} stderr: ${result.stderr})`);
+      assert.match(result.stdout, /usage: install\.ts/, `${flag} must print usage to stdout`);
+      assert.doesNotMatch(result.stderr, /usage: install\.ts/, `${flag} must not print usage to stderr`);
+    }
+    assert.ok(!fs.existsSync(path.join(agentDir, ".pi-kit.json")), "--help must not write the install marker");
+    assert.ok(!fs.existsSync(logPath), "--help must not run pi");
+    console.log("  OK: --help and -h print usage to stdout, exit 0 and install nothing");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1021,6 +1046,7 @@ try {
   testDryRunSkipsVerifyGate();
   testDryRunWithoutRequiredTools();
   testInvalidScopeRejected();
+  testHelpFlag();
   testUnknownFlagsRejected();
   testUninstallRejectsBadArguments();
   testOnlyKeepsRequiredBase();

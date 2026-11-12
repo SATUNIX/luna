@@ -2,7 +2,7 @@
 set -eu
 
 cat <<'EOF'
-pi-system is running.
+Luna is running.
 
 Start the governed Pi agent profile with:
   pi-agent

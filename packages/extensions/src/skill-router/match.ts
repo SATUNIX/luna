@@ -5,7 +5,8 @@
  *  - Triggers (automatic hints): each skill declares explicit phrases (or `re:` regexes) in its
  *    frontmatter. A hint fires only on an exact phrase/regex hit — no fuzzy scoring — so what
  *    gets hinted is predictable and pinned by tests/skill-routing-fixtures.jsonl. A hint is one
- *    line (name + path), never the skill body, so even a wrong hint costs ~30 tokens.
+ *    line (name + a clipped description + path), never the skill body, so even a wrong hint
+ *    costs about 60 tokens (up to ~70).
  *  - Search (skill_search tool): BM25 over name, description, triggers and the "When to use"
  *    section, for when the model decides it needs a runbook. Fuzzy is fine here: the model
  *    reads the results and chooses.
@@ -37,7 +38,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * so it is untrusted. It is compiled only when the shared safe-regex check accepts it
  * (./shared/safe-regex.ts: no nested quantifiers, no backreferences, a length and choice cap), and
  * each test runs under a CPU-time budget; a trigger that exceeds the budget is switched off for
- * the session. tests/skill-routing-smoke.ts pins both.
+ * the rest of the pi process (the compiled-trigger map is module level and never cleared, so the
+ * switch survives `/new`). tests/skill-routing-smoke.ts pins both.
  */
 export const TRIGGER_TEST_MS = 50;
 // The budget above is CPU time, which a busy host does not inflate. `vm`'s timeout is wall clock,
@@ -114,7 +116,7 @@ export function matchTriggers(prompt: string, skills: SkillEntry[], exclude: Set
         const hit = timedTest(re, text);
         if (hit === "slow") {
           compiled.set(t, null);
-          refusedTriggers.set(t, `used more than ${TRIGGER_TEST_MS} ms of CPU on a prompt; switched off for this session`);
+          refusedTriggers.set(t, `used more than ${TRIGGER_TEST_MS} ms of CPU on a prompt; switched off for the rest of the pi process`);
           continue;
         }
         if (!hit) continue;
@@ -136,6 +138,21 @@ export function tokens(text: string): string[] {
     .flatMap((t) => (t.includes("-") ? [t, ...t.split("-")] : [t]))
     .filter((t) => t.length > 1 && !STOP.has(t))
     .map((t) => (t.length > 4 ? t.replace(/(ing|ed|es|s)$/, "") : t));
+}
+
+/**
+ * A one-line hint for a skill, built from its description. Trims; leaves text at or under `max`
+ * unchanged; otherwise cuts at the last whitespace at or before `max - 1` so no word is split,
+ * drops trailing whitespace and punctuation, and appends a single `…`. Pure, so the routing eval
+ * can assert the shape directly.
+ */
+export function hintText(description: string, max = 160): string {
+  const s = description.trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const at = cut.search(/\s\S*$/); // index of the last whitespace in the prefix, or -1
+  const body = at > 0 ? cut.slice(0, at) : cut.slice(0, max - 1);
+  return body.replace(/[\s\p{P}]+$/u, "") + "…";
 }
 
 export function searchSkills(query: string, skills: SkillEntry[], limit = 5): Array<{ skill: SkillEntry; score: number }> {

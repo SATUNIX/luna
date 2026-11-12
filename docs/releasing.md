@@ -107,7 +107,8 @@ pull request.
 `dry-run` defaults to **ticked**. The two jobs with side effects are guarded by an explicit
 `inputs.dry-run == false` comparison, so any other event type, or an empty input, also means "no
 side effects". `plan` waits for both `gate` and `security`, so the release gate is every check
-CI runs for the commit, the security scans included. `tests/release-workflow-smoke.ts` checks
+CI runs for the commit, the security scans included, and the `coverage` job, which gates a release
+even though it no longer gates a pull request ([Test coverage](ci-security.md#test-coverage)). `tests/release-workflow-smoke.ts` checks
 this structure and is run by `check:all`, and it fails against a workflow that publishes on a dry
 run or plans without the security gate.
 
@@ -143,7 +144,8 @@ them with every other operator-only step. In short:
 - `main` needs a pull request with one approving review, code-owner review for the paths in
   `.github/CODEOWNERS`, approval of the last push, and every required check; force pushes and
   deletion are blocked, and the owner bypasses only through a pull request. When a matrix job is
-  renamed, `ci-complete` still stands for every `ci.yml` job, so the ruleset need not change.
+  renamed, `ci-complete` still stands for every gating `ci.yml` job (all but the measure-only
+  `coverage` job), so the ruleset need not change.
 - Only the owner creates, updates or deletes `v*` tags.
 - Agents push and open pull requests as a non-admin bot identity or GitHub App with contents and
   pull-request write access only, never as the owner, and are not bypass actors. With one required

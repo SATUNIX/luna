@@ -9,18 +9,19 @@
  * A test suite is wired when a package.json script names it. A shared helper (a file that is not
  * itself a suite, such as a harness) is wired when a wired file mentions its name. A suite is never
  * wired by being mentioned: comments and docs name other suites all the time, and that must not
- * excuse a suite nobody runs. Files that genuinely cannot run in CI
- * (they need a container engine) are listed in MANUAL_ONLY with the reason, so the exception is
- * visible and reviewed rather than an accident.
+ * excuse a suite nobody runs. Files that cannot be a direct script target (they need a container
+ * engine, or a wired suite executes them as a subprocess) are listed in MANUAL_ONLY with the reason,
+ * so the exception is visible and reviewed rather than an accident.
  */
 import fs from "node:fs";
 import path from "node:path";
 
-/** Files that are deliberately not part of check:all, with why. Keys are repo-relative, posix. */
+/** Files not run as a direct script target, with how they are run instead. Keys are repo-relative, posix. */
 export const MANUAL_ONLY: Readonly<Record<string, string>> = {
   "packages/autonomy/tests/boundary-probe.ts": "needs a container engine (Docker or Podman); run by the operator as the container-boundary check",
   "packages/container/capability/tests/smoke.sh": "needs a container engine and the capability image; run by the operator",
   "packages/container/capability/tests/validate-compose.sh": "needs a container engine (docker compose config); run by the operator",
+  "tests/autonomy-dispatch-smoke.ts": "real child-process race suite; tests/autonomy-cli-smoke.ts runs it as a subprocess in the gate",
 };
 
 const TEST_DIR = /(^|\/)(tests?|__tests__)\//;

@@ -55,10 +55,10 @@ export function readTodos(filePath: string): { todos: Todo[]; nextId: number } {
   const todos: Todo[] = [];
   let nextId = 1;
   for (const line of content.split(/\r?\n/)) {
-    const [, mark, digits, text] = line.match(/^- \[([ xX~])\] #(\d+): (.+)$/) ?? [];
-    if (mark !== undefined && digits !== undefined && text !== undefined) {
-      const id = parseInt(digits, 10);
-      todos.push({ id, text, state: mark === "~" ? "active" : mark === " " ? "open" : "done" });
+    const m = line.match(/^- \[([ xX~])\] #(\d+): (.+)$/);
+    if (m) {
+      const id = parseInt(m[2] ?? "", 10);
+      todos.push({ id, text: m[3] ?? "", state: m[1] === "~" ? "active" : m[1] === " " ? "open" : "done" });
       if (id >= nextId) nextId = id + 1;
     }
   }

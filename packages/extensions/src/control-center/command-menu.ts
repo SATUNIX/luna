@@ -192,10 +192,20 @@ export function pageTrail(model: HubModel, page: string): string[] {
   return trail;
 }
 
+/** Hub page and row titles in printable ASCII, for `PI_KIT_ASCII=1`. */
+function asciiLabel(text: string): string {
+  return text
+    .replace(/→/g, "->")
+    .replace(/[▸›]/g, ">")
+    .replace(/[—–]/g, "-")
+    .replace(/[·•]/g, "-")
+    .replace(/…/g, "...");
+}
+
 function locationOfRow(model: HubModel, page: string, label: string, ascii = false): string {
-  const separator = ascii ? " > " : " ▸ ";
-  const prefix = ascii ? "moved -> " : "moved → ";
-  return `${prefix}${["/menu", ...pageTrail(model, page), label].join(separator)}`;
+  const parts = ["/menu", ...pageTrail(model, page), label];
+  if (!ascii) return `moved → ${parts.join(" ▸ ")}`;
+  return `moved -> ${parts.map(asciiLabel).join(" > ")}`;
 }
 
 /** The row whose legacy command is exactly `/<name>`, with no arguments. */

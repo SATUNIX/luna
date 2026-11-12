@@ -456,6 +456,15 @@ tests.push([
       "the default stays Unicode",
     );
 
+    const arrows = await modelFor(["orchestrate-implement-review", "todos"]);
+    assert.equal(
+      menu.hubLocationFor("orchestrate-implement-review", arrows, true),
+      "moved -> /menu > Work > Delegation > Plan -> implement -> review",
+      "a hub label's arrow is folded in ascii mode",
+    );
+    const todosHint = menu.locationFor(arrows, true)("todos");
+    assert.match(todosHint, /^[\x20-\x7e]*$/, "a no-description hint is printable ASCII");
+
     const fixture = agentDirFixture("pi-kit-menu-ascii-");
     const restoreAscii = setEnv("PI_KIT_ASCII", "1");
     try {

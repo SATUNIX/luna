@@ -22,12 +22,9 @@
 /** Every control, format and default-ignorable code point, tab and newline included. */
 export const HIDDEN_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
 
-// The anchored form of the same class, from the one literal above, so the class is written once.
-const ONE_HIDDEN_CHAR = new RegExp(`^${HIDDEN_CHARS.source}$`, "u");
-
-/** True when `ch` (one code point) is a character the filter removes; tab and newline are not. */
+/** True when `ch` is exactly one code point the filter removes; tab and newline are not. */
 export function isHiddenChar(ch: string): boolean {
-  return ch !== "\n" && ch !== "\t" && ONE_HIDDEN_CHAR.test(ch);
+  return ch !== "\n" && ch !== "\t" && Array.from(ch).length === 1 && ch.replace(HIDDEN_CHARS, "") === "";
 }
 
 /** `text` with every hidden character removed; tab and newline are kept as written. */

@@ -1,7 +1,7 @@
 # Control centre
 
 Luna registers many commands, and their settings live in subcommands that are easy to forget.
-The control centre is one hub — `/kit` — that shows every level and page, with each row's current
+The control centre is one hub — `/menu` — that shows every level and page, with each row's current
 value and the typed command that still does the same work. Nothing is renamed or unregistered:
 every command keeps working, and the hub is an additional way in. In the TUI the `/` menu hides the
 Luna commands that moved into the hub, while typing them still runs them (see The curated `/` menu
@@ -11,45 +11,67 @@ below).
 
 | How | What happens |
 | --- | --- |
-| `/kit` | Opens the hub on the main page. |
-| `/helpers` | Alias of `/kit`. |
+| `/menu` | Opens the hub on the main page. |
+| `/kit` | Alias of `/menu`. |
+| `/helpers` | Alias of `/menu`. |
 | `alt+m` | Opens the hub from anywhere. |
-| `/kit <page>` | Opens a named page directly (argument completion lists the page ids). |
+| `/menu <page>` | Opens a named page directly (argument completion lists the page ids). |
 
 `alt+m` is the default key. Put `"hubKey": "alt+k"` (or another free key) in
-`<agent dir>/pi-kit/ui.json` to change it. The Help page and the `/kit` description name the
-configured key. The hub reads only that key and never rewrites the
-other settings in the file, so the status bar's own settings there are untouched.
+`<agent dir>/pi-kit/ui.json` to change it. Surrounding whitespace is trimmed. A `hubKey` that is
+not then a single key pi can parse (for example one containing spaces, control characters or
+several keys) is ignored with one warning and `alt+m` is used. The Help page and the `/menu`
+description name the configured key. The hub key takes effect on reload, and after a reload the
+launch-screen header, `/menu`, the Settings/Help text and the shortcut all name the bound key.
+The hub reads only that key and never rewrites the other settings in the file, so the status bar's
+own settings there are untouched.
 
 The hub is not registered in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the same rule
 `/workflow` follows, so a subagent never advertises a terminal hub.
 
+## Launch screen
+
+At the top of a new terminal session Luna shows a launch screen: its wordmark, the running pi
+version and five first actions — `/menu` or `/kit`, the configured hub key (`alt+m` by default),
+`/profile`, `/model` and `/resume`. The menu action follows the command that is registered:
+`/menu` when it exists, otherwise `/kit`.
+
+The content is revealed over at most twelve frames, about 90 ms apart. Reduced motion shows the
+final content at once and starts no timer. It is on when `PI_KIT_REDUCED_MOTION=1`, when
+`reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`, when `TERM=dumb`, or when `CI` is set.
+A terminal narrower than 60 columns drops the art for one compact line, and `PI_KIT_ASCII=1` uses
+printable ASCII only. Put `"launchScreen": "off"` in `<agent dir>/pi-kit/ui.json` to turn the
+launch screen off (`tests/launch-screen-smoke.ts`).
+
 ## Pages
 
-The main page is the levels strip plus five pages (`tests/docs-smoke.ts` checks the count against
+The main page is the levels strip plus six pages (`tests/docs-smoke.ts` checks the count against
 `control-center/model.ts`). Every row shows its typed equivalent, and the old command can be typed
 at any time.
 
 | Page | Holds | Typed equivalents |
 | --- | --- | --- |
-| Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect and System | `/profile`, `/effort`, `/thinking`, `/security` |
+| Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect, System and Settings | `/profile`, `/effort`, `/thinking`, `/security` |
 | Autonomy | Approvals, remembered approvals, loop, auto-boost, container runs | `/auto`, `/firewall`, `/loop`, `/boost`, `/autonomy` |
 | Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
 | Session | Save, handoff, compact, compress, auto-compaction, new/fork/clone/tree/resume/name, clear | `/save`, `/handoff`, `/compact`, `/compress`, `/compaction`, `/clear` |
 | Connect | Remote control, web console | `/remote`, `/console` |
 | System | Display, updates and health, diagnostics, companions, all commands, help | `/footer`, `/tips`, `/caveman`, `/update`, `/trace`, `/capture`, `/skills`, `/firewall reload` |
-| All commands | Every command from `pi.getCommands()` plus pi's built-ins, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
+| Settings | pi settings, command menu, hub key, pinned commands, hidden commands, display | `/settings` |
+| All commands | Every command once, pi's built-ins first and then `pi.getCommands()` entries not already listed, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
 | Doctor | Read-only health checks (see below) | the command on each line |
 
 ```mermaid
 flowchart TD
-  K["/kit or alt+m"] --> M["Main: profile, effort, thinking, security"]
+  K["/menu or alt+m"] --> M["Main: profile, effort, thinking, security"]
   M --> A[Autonomy]
   M --> W[Work]
   M --> S[Session]
   M --> C[Connect]
   M --> Y[System]
-  Y --> D[Doctor]
+  M --> G[Settings]
+  Y --> U[Updates & health]
+  U --> D[Doctor]
   Y --> L[All commands]
 ```
 
@@ -68,6 +90,10 @@ imports another extension to get it:
 | Unattended | `pi-kit.unattended` |
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
+The header strip, page titles and the informational rows (Doctor, Security, Help) strip colour and
+cursor escape sequences and OSC and APC strings from what they display
+(`tests/control-center-smoke.ts`). Other escape sequences, C1 controls and bidirectional overrides
+are not removed, and other rows are not sanitised.
 
 ## Renderers by mode
 
@@ -76,17 +102,34 @@ The header strip combines the profile, effort, thinking level, security level an
   filters the list. It opens as an overlay on pi 1.3.0 or newer, where the overlay `done()` bug is
   fixed; on older pi it opens without an overlay. `tests/control-center-smoke.ts` checks the
   version rule (1.3.0 and newer only) and that the hub asks for an overlay exactly when the
-  installed pi passes it.
+  installed pi passes it. Both this hub and the `/workflows` panel draw a theme-coloured rounded
+  border and dim the transcript behind the overlay (`overlay-frame.ts`), pinned by
+  `tests/control-center-smoke.ts` and `tests/workflow-panel-smoke.ts`. The frame lays out its inner
+  content four cells narrower than the framed width (two border and two padding cells) and forwards
+  mouse clicks and wheel events inside the content area, so the hub's rows and search respond to the
+  pointer; below ten cells no frame is drawn and the content keeps the full width. The overlay
+  reduces its visible rows to fit a short terminal, dropping its title below fourteen rows and its
+  trailing hint/description lines before it gives up the focused row; at three or four rows the
+  search line gives way to the focused row instead of scrolling the cursor out of the box
+  (`tests/control-center-smoke.ts`).
 - **rpc** (a UI is present but not the TUI, as in a session the web console runs): a chain of
   `ctx.ui.select` dialogs. Every dialog carries a 60-second timeout, and a timeout counts as
   cancel, so a dialog nobody answers closes the hub instead of holding the session.
 - **print and json** (no UI): a text page with every row, its value and its typed command, written
   to stderr.
 
+Every renderer shows a row's typed command as `[command]` after its label: a legacy command, an
+editor pre-fill, or the command an informational row names (the Doctor lines and the Security
+page's Source row). The row name comes first, so a narrow terminal truncates the `[command]` suffix
+before the name. The All commands page is already labelled with the command it runs and does not
+repeat it. Choosing an informational row only shows information and keeps the hub open.
+
 A row that runs a typed command, or pre-fills the editor, closes the hub, so the command's own
-dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/kit`. Changing the
+dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/menu`. Changing the
 thinking level, or choosing a row that only shows information, keeps the hub open: it reopens on
-the same row with every value read again. Back returns the cursor to the row that opened the page.
+the same row with every value read again. Back follows the path the operator took: it returns to the
+page the current one was opened from and puts the cursor back on the row that opened it. Only a page
+opened directly, rather than reached from another page, falls back to the page's declared parent.
 
 ## The curated `/` menu
 
@@ -94,13 +137,16 @@ In the TUI, typing `/` offers only the pinned commands plus pi's own built-ins, 
 and the skill commands. Every other Luna extension command, and every companion-package command, is
 hidden from the list. Nothing is unregistered: a hidden command runs exactly as before when it is
 typed in full, and it appears again once at least four characters of its name have been typed, so
-muscle memory still completes (`tests/command-menu-smoke.ts`).
+muscle memory still completes. A name shorter than four characters appears once its full name is
+typed, so the hidden `/kit` alias completes at `/kit` (`tests/command-menu-smoke.ts`).
+The curated menu and the launch screen are installed for every session, so they still work after
+`/new`, `/resume`, `/fork` or a `/tree` switch replaces the session (`tests/command-menu-smoke.ts`).
 
 Hidden suggestions say where the command lives, for example
-`moved → /kit ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
-no row points at `moved → /kit ▸ All commands` (`tests/command-menu-smoke.ts`).
+`moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
+no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`).
 
-The pinned commands are `/kit`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
+The pinned commands are `/menu`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
 `/update` and `/security`. A profile adds the commands that define it: `/autonomy` in autonomous,
 `/engagement` in pentest and self-improving, and `/improve` and `/review` in self-improving
 (`tests/command-menu-smoke.ts`).
@@ -128,9 +174,10 @@ json mode it never runs - and, like the hub, it is not registered in an internal
 The **Security** row shows the effective [security level](security-level.md), which the tool
 firewall publishes on `globalThis[Symbol.for("pi-kit.security")]`. When a floor raises the level
 above the one requested, the row shows both, for example `guarded (requested balanced)`. Opening
-the row shows the effective and requested levels. The hub reads the registry without importing the
-firewall. When the firewall is not loaded there is no registry, and the row says
-`not enforced (tool-firewall not loaded)`.
+the row shows the effective and requested levels: the **Effective** row shows the effective level
+alone, and the requested level appears on its own **Requested** row. The hub reads the registry
+without importing the firewall. When the firewall is not loaded there is no registry, the main row
+says `not enforced (tool-firewall not loaded)`, and the opened page's Effective row says `unknown`.
 
 The **Security level** row runs `/security`, which opens the level picker. The picker applies a
 stronger level at once and asks for a confirmation at the terminal before a weaker one. When
@@ -181,8 +228,9 @@ A line that reports drift starts with `! ` (for example `! Protections: 0 record
 
 ## What is not covered
 
-- No command is renamed, removed or unregistered. The curated `/` menu only removes autocomplete
-  suggestions; every name still runs, and no alias is pruned yet (pruning is a later phase).
+- No command is removed or unregistered. `/kit` and `/helpers` forward to `/menu`, and the curated
+  `/` menu only removes autocomplete suggestions; every name still runs, and no alias is pruned yet
+  (pruning is a later phase).
 - The Security level row runs the typed `/security` picker. The level is not yet a registered
   control that the hub can cycle in place.
 - In a terminal session the hub is drawn with `ctx.ui.custom()`. Remote control mirrors only

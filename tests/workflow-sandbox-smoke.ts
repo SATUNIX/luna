@@ -35,6 +35,7 @@ import {
   type SandboxResult,
   type WorkflowHooks,
 } from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 const ws = tmpWorkspace("pi-kit-wf-sandbox-");
 const restores = [isolateKitEnv(), setEnv("HOME", path.join(ws, "home")), setEnv("PI_CODING_AGENT_DIR", path.join(ws, "agent"))];
@@ -364,11 +365,10 @@ try {
   ];
   for (const [input, expected] of metaCases) assert.equal(scriptBody(input), expected, JSON.stringify(input));
   const adversarial = `/*${"*//*".repeat(50_000)}*/!`;
-  const started = performance.now();
-  assert.equal(scriptBody(adversarial), adversarial);
-  assert.equal(scriptBody(`${adversarial.slice(0, -1)}export const meta = 1`), `${adversarial.slice(0, -1)}const meta = 1`);
-  const elapsed = performance.now() - started;
-  assert.ok(elapsed < 1000, `scriptBody on '/*' + 50000 '*//*' repeats took ${elapsed.toFixed(0)} ms`);
+  assertCpuWithin("scriptBody on '/*' + 50000 '*//*' repeats", 1000, () => {
+    assert.equal(scriptBody(adversarial), adversarial);
+    assert.equal(scriptBody(`${adversarial.slice(0, -1)}export const meta = 1`), `${adversarial.slice(0, -1)}const meta = 1`);
+  });
   ok("scriptBody drops only a leading `export` before `const meta`, and '/*' + many '*//*' repeats take linear time");
 } finally {
   for (const restore of restores.reverse()) restore();

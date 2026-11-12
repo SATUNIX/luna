@@ -1,10 +1,10 @@
 /**
- * Canonical path resolution for the pi-system monorepo.
+ * Canonical path resolution for the Luna monorepo.
  *
  * Every core script derives package locations from this single module so the
  * layout can change in one place. All paths are absolute.
  *
- *   pi-system/
+ *   luna/
  *     packages/core/          runtime + CLI + schemas + policies   (this package)
  *     packages/extensions/    first-party (src/) + vendored (third_party/)
  *     packages/kit/           skills, prompts, profiles, themes, agents, workflows

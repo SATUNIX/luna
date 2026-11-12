@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { SessionBridge, terminalUi, type BridgeState } from "./bridge.ts";
 import { ControlLink, ensureHost, HostError, hostStatus, adminRequest, isJson, resetIdentity, show, stopHost, stateDir, type Json } from "./host.ts";
 
@@ -135,7 +136,7 @@ function wrap(text: string, width: number, hang = 0): string[] {
   const lines: string[] = [];
   let line = "";
   for (const word of text.split(" ")) {
-    if (line && line.length + 1 + word.length <= width) {
+    if (line && visibleWidth(line) + 1 + visibleWidth(word) <= width) {
       line += ` ${word}`;
       continue;
     }
@@ -143,10 +144,15 @@ function wrap(text: string, width: number, hang = 0): string[] {
     if (line) lines.push(line);
     let lead = lines.length ? pad : "";
     let rest = word;
-    while (lead.length + rest.length > width) {
-      const room = Math.max(1, width - lead.length);
-      lines.push(lead + rest.slice(0, room));
-      rest = rest.slice(room);
+    while (visibleWidth(lead) + visibleWidth(rest) > width) {
+      const room = Math.max(1, width - visibleWidth(lead));
+      // Cut on a cell boundary, never inside a wide character or an emoji cluster.
+      const chunk = sliceByColumn(rest, 0, room, true);
+      // A single wide grapheme with less than its own width of room cannot be cut; drop it so
+      // the line still fits rather than falling through with an over-wide remainder.
+      if (!chunk) { rest = ""; break; }
+      lines.push(lead + chunk);
+      rest = rest.slice(chunk.length);
       lead = pad;
     }
     line = lead + rest;

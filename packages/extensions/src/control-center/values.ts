@@ -253,6 +253,8 @@ export interface HubValues {
   effort?: string | undefined;
   thinking?: string | undefined;
   security?: string | undefined;
+  /** The effective security level alone, for the Security page; unset when no firewall is loaded. */
+  securityEffective?: string | undefined;
   /** True when the tool firewall's security registry is not published. */
   securityMissing: boolean;
   securityRequested?: string | undefined;
@@ -263,12 +265,31 @@ export interface HubValues {
   protections?: string | undefined;
   delegation?: string | undefined;
   unattended?: string | undefined;
+  /** The curated-menu mode from `pi-kit/ui.json` ("curated" or "all"). */
+  commandMenu?: string | undefined;
+  /** The hub shortcut key. */
+  hubKey?: string | undefined;
+  /** The pinned command names, joined for display. */
+  pinnedCommands?: string | undefined;
+  /** The hidden command names, joined for display. */
+  hiddenCommands?: string | undefined;
+}
+
+/** A read-only view of the curated-menu settings, without importing `command-menu.ts`. */
+export interface MenuSettingsView {
+  commandMenu: string;
+  pinnedCommands: string[];
+  hiddenCommands: string[];
 }
 
 export interface ValueInput {
   cwd: string;
   /** `pi.getThinkingLevel()`, when the hub has the API. */
   thinkingLevel?: string | undefined;
+  /** The curated-menu settings, read by the caller. */
+  commandMenu?: MenuSettingsView | undefined;
+  /** The hub shortcut key, read by the caller. */
+  hubKey?: string | undefined;
 }
 
 /** Read every published value once, when the hub opens. */
@@ -282,6 +303,7 @@ export function readValues(input: ValueInput): HubValues {
     effort: readEffort(),
     thinking: input.thinkingLevel,
     security: security.requested ? `${security.effective} (requested ${security.requested})` : security.effective,
+    securityEffective: security.missing ? undefined : security.effective,
     securityMissing: security.missing,
     securityRequested: security.requested,
     approvals: firewall.mode ? `${firewall.mode}${firewall.policy ? `/${firewall.policy}` : ""}` : undefined,
@@ -291,6 +313,10 @@ export function readValues(input: ValueInput): HubValues {
     protections: protections.length ? protections.join(", ") : undefined,
     delegation: readDelegation(),
     unattended: readUnattended(),
+    commandMenu: input.commandMenu?.commandMenu,
+    hubKey: input.hubKey,
+    pinnedCommands: input.commandMenu?.pinnedCommands.length ? input.commandMenu.pinnedCommands.join(", ") : undefined,
+    hiddenCommands: input.commandMenu?.hiddenCommands.length ? input.commandMenu.hiddenCommands.join(", ") : undefined,
   };
 }
 

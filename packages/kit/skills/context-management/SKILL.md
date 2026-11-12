@@ -26,7 +26,8 @@ Rules:
 - **On resume, read the checkpoint first**, before any raw files.
 
 (The memory vault also writes a recap after every turn, and the first prompt of a new
-session gets "where we left off". The checkpoint is the in-session, step-level record.)
+session gets background history from earlier sessions, not a resume instruction. The
+checkpoint is the in-session, step-level record.)
 
 ## Compressing
 Keep: objective, constraints, files, decisions, failures, verification, next action.

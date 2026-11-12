@@ -200,6 +200,7 @@ export interface SetupState {
 /** The operator's answer to the question a blocked run waited on, kept for the next session's briefing (lib/engine.ts). */
 export interface PendingAnswer {
   text: string;
+  id?: string;
   question?: string;
   kind?: BlockerRecord["kind"];
   approved?: boolean;
@@ -217,6 +218,8 @@ export interface SelfImproveState {
   lastPushed: string | null;
   publishError?: string | null;
   publishBlocker?: string | null;
+  /** Merged cycles whose close-out publication the leak scan refused, incremented once per such cycle and left unchanged by a non-merged cycle; cleared only by a successful publish. */
+  publishBlockedCycles?: number;
   lastSyncError?: string | null;
 }
 
@@ -229,7 +232,7 @@ export interface RunState {
   boundaryDigest: string;
   authorisation: RunAuthorisation;
   status: RunStatus;
-  phase: "work" | "acceptance" | "review" | "promotion" | null;
+  phase: "work" | "acceptance" | "gate-wait" | "review" | "promotion" | null;
   blocker: RunBlocker | null;
   outcome: RunOutcome | null;
   step: number;
@@ -399,6 +402,7 @@ export function resumeAction(state: Pick<RunState, "status" | "blocker" | "outco
         if (approve || deny) return { ok: true, action: "answer", to: "running", message: approve ? "approval given" : "approval denied" };
         return { ok: false, message: "the run is waiting for an approval: resume with --approve or --deny (and optionally --answer <note>)" };
       }
+      if (kind === "external" && state.blocker?.id === "publish-blocked" && (approve || deny)) return { ok: true, action: "answer", to: "running", message: deny ? "publication stop recorded" : "publication resume recorded" };
       if (typeof answer === "string" && answer.trim()) return { ok: true, action: "answer", to: "running", message: "answer recorded; the worker continues with it" };
       return { ok: false, message: `the run is blocked (${kind ?? "blocker"}): ${state.blocker?.question ?? state.reason ?? "see status"}. Resume with --answer "<your answer>"` };
     }

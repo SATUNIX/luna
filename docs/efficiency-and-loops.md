@@ -89,6 +89,33 @@ them. The reasoning:
 Re-tune by exporting the env vars above; they have not been fitted to a corpus of real
 sessions.
 
+## Measuring the footprint
+
+A small model pays for every character of tool description and parameter schema before it reads
+the task, so the kit's floor is a measured number. `packages/core/eval/footprint.ts` loads a
+profile against a fake pi in a temp HOME, fires its `session_start` handler and totals the text of
+every tool it registers; external companions are left out because their text is not the kit's to
+review. The derived token figure is `ceil(chars / 4)`.
+
+```bash
+node packages/core/eval/footprint.ts --profile lite --json
+node packages/core/eval/footprint.ts --profile balanced --write-baseline
+```
+
+Without `--write-baseline` the command prints the profile, its characters, the derived tokens and
+every tool, then compares the result with `packages/core/eval/footprint-baseline.json`. A tool
+text, tool list or delegation total that differs from the reviewed record fails with the delta
+and a reminder to update the baseline only when the change is deliberate; a profile with no
+baseline row fails until `--write-baseline` records it. `--json` prints the same measurement as
+one deterministic object, so two runs of unchanged code are byte-identical. `--write-baseline`
+keeps the reviewed ceilings and rewrites the file only when the measured numbers changed, so an
+up-to-date baseline stays byte-for-byte the same. A malformed or foreign baseline is a clean
+error (exit 2) and is left untouched, so remove the file to regenerate it.
+
+`smoke:eval-footprint` pins the balanced and lite text against that baseline, the prompt prefix
+that survives a turn, and the CLI's JSON, argument errors and byte-identical rewrite
+(`tests/eval-footprint-smoke.ts`).
+
 ## Measuring Memento mode
 
 Memento mode ([Generations](autonomy.md#generations)) is opt-in per model because it helps some
@@ -146,3 +173,4 @@ been measured.
 | Enter deep recovery now | `/boost` |
 | Tune sensitivity | `PI_KIT_GUARD_REPEAT`, `PI_KIT_GUARD_STALL`, `PI_KIT_GUARD_OSC` |
 | Auto-boost on autonomous runs | arm `/loop <goal>` (automatic) or `PI_KIT_GUARD_MODE=auto` |
+| Measure a profile's tool text and tokens | `node packages/core/eval/footprint.ts --profile <name> --json` |

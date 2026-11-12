@@ -31,7 +31,8 @@ dependency, `quickjs-wasi` (pinned), so this step fetches it from the npm regist
 
 To follow `main` instead of a release, leave the tag off:
 `pi install git:github.com/SATUNIX/luna`. Switching channels later is
-`/update channel latest|next|X.Y.Z`.
+`/update channel latest|next|trunk|X.Y.Z` (`trunk` is the opt-in canary that follows the
+integration branch).
 
 ### Choosing the profile up front
 
@@ -60,7 +61,7 @@ the project's `.pi/` settings and extensions load). If pi warns `No models avail
 
 Then:
 
-- `/kit` prints the command cheatsheet.
+- `/menu` prints the command cheatsheet.
 - `/footer status` confirms the status bar is active and shows every detail it drops when narrow.
 - `/effort` shows how hard the agent is set to work ([Effort](effort.md)). The default is
   E3 Standard.

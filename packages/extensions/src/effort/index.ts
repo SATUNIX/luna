@@ -357,6 +357,8 @@ export default function (pi: ExtensionAPI) {
   // The card's epoch: one showing per session and per compaction, and a showing that waits for the prompt.
   let cardSeen = false;
   let cardDue = false;
+  // The standing reminder already sent: the same text is not repeated on every turn.
+  let lastReminder: string | null = null;
   // Workflow runs opened by this process, each pinned to the workflow ledger it was opened in.
   const runFiles = new Map<string, string>();
   // Run scopes opened with a plan (model-started YAML and data plans); an approved script opens none.
@@ -712,6 +714,7 @@ export default function (pi: ExtensionAPI) {
     if (!isChildProcess()) pruneLedgers();
     openScope();
     cardSeen = cardDue = false;
+    lastReminder = null;
     const reason = event?.reason;
     restoreStanding(ctx, reason);
     const warnings = [...config.warnings, ...(active?.warnings ?? [])];
@@ -722,6 +725,7 @@ export default function (pi: ExtensionAPI) {
   // A compaction may drop the card from the conversation, so the next epoch shows it again.
   pi.on("session_compact", async () => {
     cardSeen = false;
+    lastReminder = null;
   });
 
   pi.on("session_shutdown", async () => {
@@ -767,12 +771,16 @@ export default function (pi: ExtensionAPI) {
     }
     const planned = userTurn ? reportSignal({ trigger: "plan" })?.steer : null;
     if (planned) body = `${body}\n\n${planned}`;
-    // One hidden message a turn: the card and the standing reminder share it.
+    // One hidden message a turn: the card and the standing reminder share it. The reminder is
+    // sent only on the first turn and whenever the size or the budget changes; otherwise the
+    // standing text in this turn's prompt already covers it.
     const card = takeCard();
     const reminder = standingShown ? `Reminder: ultracode standing mode is on (size guideline ${String(standing.size)} agents, budget ${standing.budget === null ? "none" : `${String(standing.budget)} output tokens`}); run substantial work as a workflow script, and do small tasks directly.` : null;
-    const hidden = [reminder, card].filter((text) => text !== null).join("\n\n");
+    const emitReminder = reminder !== null && reminder !== lastReminder ? reminder : null;
+    lastReminder = standingShown ? reminder : null;
+    const hidden = [emitReminder, card].filter((text) => text !== null).join("\n\n");
     if (!hidden) return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body) };
-    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: reminder ? STANDING_REMINDER_TYPE : WORKFLOW_CARD_TYPE, content: hidden, display: false } };
+    return { systemPrompt: withEffortBlock(event.systemPrompt ?? "", body), message: { customType: emitReminder ? STANDING_REMINDER_TYPE : WORKFLOW_CARD_TYPE, content: hidden, display: false } };
   });
 
   /**
@@ -835,7 +843,7 @@ export default function (pi: ExtensionAPI) {
 
   function statusText(): string {
     const s = snapshot();
-    const lines = [`Effort: ${s.code} ${s.label} (${s.source === "default" ? "default" : s.source === "user" ? "saved default" : s.source === "env" ? "pinned by PI_KIT_EFFORT" : "capped by the parent"})${s.pinned && s.source !== "env" ? "" : ""}`];
+    const lines = [`Effort: ${s.code} ${s.label} (${s.source === "default" ? "default" : s.source === "user" ? "saved default" : s.source === "env" ? "pinned by PI_KIT_EFFORT" : "capped by the parent"})`];
     if (s.pendingTier) lines.push(`  next message: ${label(s.pendingTier)}`);
     lines.push(`  limits: ${s.limits.maxConcurrent} concurrent, ${s.limits.maxTotal} total, ${s.limits.maxScouts} scout${s.limits.maxScouts === 1 ? "" : "s"} (children per request, counted at every depth)`);
     if (s.ledger) lines.push(`  this request: ${s.usage.live} running, ${s.usage.total}/${s.limits.maxTotal} used, ${s.usage.scouts}/${s.limits.maxScouts} scouts`);

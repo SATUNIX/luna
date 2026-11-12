@@ -109,7 +109,8 @@ node packages/autonomy/cli.ts init --template implement --out run.json \
     --spec "A small HTTP API for todos" --check unit="node --test tests/"
 node packages/autonomy/cli.ts plan --config run.json          # the boundary, its digest, problems
 node packages/autonomy/cli.ts start --config run.json         # confirm the boundary; then it runs
-node packages/autonomy/cli.ts status --run <run>              # or `status` for every run
+node packages/autonomy/cli.ts status --run <run>              # one run, or `status` for the fleet
+# `status` lists every run with its step, spend against budget, and the question a blocked run waits on.
 node packages/autonomy/cli.ts export --run <run>              # results, evidence, usage, the work
 ```
 
@@ -137,6 +138,18 @@ authorisation for exactly that digest and starts the run in the background. With
 refuses unless the contract already carries a matching authorisation, made earlier at a terminal
 with `plan --authorise`. `cancel`, `promote`, `reconfigure` and `resume --approve` ask first. See
 `packages/extensions/src/autonomy-run/README.md`.
+
+### Seeing a run in pi
+
+`workflow_status` and `/workflows` list an autonomous run beside workflow and subagent runs,
+labelled `autonomy`. The list shows its contract title (else its template), status, spend and,
+when blocked, the question it waits on; `workflow_status {id}` shows the phase and step, dollars
+spent against the budget, in-progress and done tasks, the blocker and its options, the last error,
+the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
+`$XDG_STATE_HOME/pi-autonomy/<run>`, else `~/.local/state/pi-autonomy/<run>`), so set
+`PI_AUTONOMY_HOME` in pi's environment to see a non-default state home. This is a read-only view:
+starting, answering, resuming and cancelling a run stay with `/autonomy`
+(`tests/run-query-smoke.ts`).
 
 ## The run contract
 
@@ -233,6 +246,21 @@ it cannot touch permissions, network, credentials, promotion, the image or the a
 (those are the authorised boundary; changing them means a new run), it asks for confirmation, and it
 is logged in the run's state.
 
+**One host, many runs: the gate slot bound.** The single-owner lock is per run, so several runs of
+one user on one host could otherwise each start an acceptance gate at once and compete for CPU and
+IO. A host-wide bound caps that at **two** concurrent gates per user, held under
+`$PI_AUTONOMY_HOME/gate-slots` (default `~/.local/state/pi-autonomy/gate-slots`). A supervisor that
+cannot take a slot sets phase `gate-wait`, keeps heartbeating (so it is not read as stalled) and
+waits without accruing wall-clock minutes; it then runs the gate under phase `acceptance`.
+`PI_AUTONOMY_GATE_SLOTS` sets the count; `0` is unbounded. The gate container, its checks and the
+definition of a pass are unchanged — only *when* a gate may start is bounded.
+`tests/autonomy-lifecycle-smoke.ts` pins the parse, the two-at-once bound, the unbounded `0`, that
+a killed holder frees its slot and that a `flock` failure other than lock contention (a permission
+error or an unsupported filesystem) rejects instead of polling forever; `tests/autonomy-selfimprove-smoke.ts`
+pins the `gate-wait` phase, the active minutes charged before the wait, the frozen minutes while
+waiting, the return to `acceptance`, three supervisors never overlapping more than two gates, and a
+throwing gate restoring the previous phase.
+
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see
 [Effort](effort.md).
@@ -250,6 +278,29 @@ always available:
 Every promotion step is idempotent and recorded as started before and done after; a run resumed after
 a crash checks the destination's real ref before repeating anything, so a resume never publishes twice.
 Public deployment, production changes and anything outside the zone are never done by a worker.
+
+## Unpublished work
+
+`pi-autonomy top` lists every run under the state home and says, for each, whether its merged
+integration branch is ahead of the remote ref the run already holds (`nothing unpublished`
+otherwise). It never fetches and never writes a ref: it compares
+`refs/heads/<integration>` with `refs/integration/remote` in the run's own `mirror.git`. `status
+--run <id>` shows the same line for one run:
+
+    unpublished: 3 commits since 2026-09-30T11:00:00Z — publish failed (will retry): ...
+
+`unpublished:` means the work is merged locally but not on the git remote. The cause is the last
+`publish failed` line in the supervisor log; the timestamp is that line's, else the oldest
+unpublished commit's. A run with no integration branch, no configured remote or no fetched remote
+ref is `unknown`, and so is a run whose branch has diverged from that ref; a run whose local branch
+ref is missing is `absent`. Neither is flagged, so `doctor` can pass while such a run holds work
+that has not been published.
+`pi-autonomy inbox` lists runs unpublished for 30 minutes or more (waiting on an
+operator), and `pi-autonomy doctor` exits non-zero while any run is ahead, naming each.
+
+Recovery: inspect the run (`status`, `export`), rewrite the unpublished commits, verify and run the
+leak scan, fast-forward push the integration branch to the remote, then recreate the run.
+`tests/autonomy-cli-smoke.ts` pins the surface (`smoke:autonomy-cli`).
 
 ## The `self-improve` template
 
@@ -323,6 +374,11 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   upstream conflict, and the previous cycle's outcome, gate and merge reason. A malformed answer,
   or none after three attempts, counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
   can salvage what is sound.
+  A completed cycle with a **red** gate is still reviewed: the reviewer is told which checks failed, a
+  `MERGE` verdict cannot waive the gate, and the reason plus the reviewer's concerns are carried into
+  the next cycle's prompt so it can bring over what is sound (`reviewSystemPrompt`, `gateGreen`). A
+  host-closed partial cycle that never went green is not reviewed; its close-out reason and failing
+  checks already reach the next cycle (`tests/autonomy-selfimprove-smoke.ts`).
 - **Review inputs are never worker-authored.** The worker can write wherever its write areas allow,
   so the host decides what the review sees and what no review may pass
   (`tests/autonomy-review-inputs-smoke.ts`):
@@ -365,7 +421,9 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   gate, upstream conflict and board work. A run whose reviews find nothing three times in a row (`nothingFoundToStop`)
   stops rather than inventing work: the acceptance checks run once more on the integration branch,
   and if they pass the run **succeeds** with the reason `backlog_exhausted`; if they are red it fails
-  as `final_gate_red`. The same final check ends a run that reaches its cycle limit.
+  as `final_gate_red`. The same final check ends a run that reaches its cycle limit or when the
+  operator chooses to stop after blocked publication; a green check records that stop as
+  `succeeded` with reason `publish_blocked_stopped` (`tests/autonomy-selfimprove-smoke.ts`).
 
 The charter, backlog and handoff a repository is seeded with are in `packages/autonomy/seed/`.
 
@@ -407,6 +465,11 @@ pi-autonomy steer --run <run> --message "Focus the current work on recovery"
 pi-autonomy backlog --run <run> --message "Check compaction recovery with evidence"
 pi-autonomy board --run <run> --file board.json
 pi-autonomy board --run <run> --json
+pi-autonomy board claim V-01 --run <run> --by <agent> --json
+pi-autonomy inbox --run <run>
+pi-autonomy inbox --run <run> --file cards.json
+pi-autonomy inbox --run <run> --json
+pi-autonomy inbox --run <run> --answer <card-id> --value "Use the local branch"
 pi-autonomy reconfigure --run <run> --budget-usd 100
 pi-autonomy pause --run <run>
 pi-autonomy cancel --run <run> --reason "End the experiment"
@@ -421,8 +484,21 @@ and is available only for self-improve (`tests/autonomy-cli-smoke.ts`,
 `tests/autonomy-selfimprove-smoke.ts`). Backlog text is operator authority: keep the run directory
 host-owned and out of worker mounts.
 
-`board --file` validates and atomically replaces `control/board.json`, exclusively for self-improve
-runs. `board --json` returns the current board (an empty items list for older runs). The format is:
+`board --file` validates and atomically replaces `control/board.json`; `board claim` is the only
+way a worker takes one item. Both writes are serialised on `control/board.lock`, a real run lock
+separate from the supervisor's `supervisor.lock`, and the claimant retries with a bounded wait
+while another writer holds it. `inbox --run` takes the same lock for its writes, because settling
+a card can unblock a board item (nothing pins that the inbox takes the lock). `board --json` returns the current board (an empty items list for
+older runs) without taking the lock. The commands are available to self-improve runs and are guarded
+for the `dispatch` template when it is registered.
+
+`board claim <id> --run <run> --by <agent> --json` claims one ready, unowned item: it sets
+`assignee`, `claimedAt` (the current ISO timestamp) and `status: "in_progress"` in one locked write.
+Two agents claiming the same item under the lock produce exactly one winner; the loser exits 3
+with `code: "refused"` and, in `--json`, the winner's `assignee` and `claimedAt`. Re-claiming by
+the same agent is idempotent: `--json` reports `already: true` and does not rewrite `claimedAt`.
+A missing or `blocked` item is refused, and omitting `--by` is a usage error (exit 2). The board
+format is:
 
 ```json
 {
@@ -438,11 +514,19 @@ runs. `board --json` returns the current board (an empty items list for older ru
 ```
 
 `stream`, item `detail`, `acceptance` and `status` are optional. Priorities are `P0`–`P3`;
-statuses are `ready`, `in_progress` or `blocked`. Unknown keys, duplicate ids, ids outside
-`^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and detail/acceptance over
-2000 characters are rejected. Stream names are limited to 200 characters, ids to 64 characters,
-and input files to 2 MiB. Each new cycle reads the host-owned board afresh and shows the top
-two nonblocked items by priority, preserving file order for ties. The cycle keeps that snapshot
+statuses are `ready`, `in_progress` or `blocked`. A claimed item may also carry the host-owned
+review metadata `assignee`, `claimedAt`, `submittedAt`, `sha`, `rounds`, `verdict`, `verdictBy`
+and `findings`: `assignee` and `verdictBy` are non-empty strings of at most 200 characters,
+`claimedAt`/`submittedAt` are ISO timestamps, `sha` is 40 lowercase hex characters, `rounds` an
+integer from 0 to 1000, `verdict` one of `pending`, `approved` or `rejected`, and `findings` at
+most 10 non-empty strings of at most 1000 characters each. These fields are validated when
+present and are never defaulted, so an older board round-trips unchanged. Unknown keys, duplicate
+ids, ids outside `^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and
+detail/acceptance over 2000 characters are rejected. Stream names are limited to 200 characters,
+ids to 64 characters, and input files to 2 MiB. Each new cycle reads the host-owned board afresh
+and shows the top two nonblocked items by priority, preserving file order for ties. The next-item
+selector prepared for the `dispatch` template skips blocked, in-progress, owned and
+verdict-approved items and takes the first ready item in that same priority order. The cycle keeps that snapshot
 until it closes: a cycle resumed after a pause or a blocking question shows and is judged against
 the board it started with, whatever the steward has written since; the new board applies from the
 next cycle. The worker cannot write this file. When the board has items, the prompt asks for one
@@ -450,6 +534,19 @@ line per item worked on, and its exact `Board: <ID> done|progress|blocked - <one
 `selfImprove.history[].board` in `status --json`, without changing board statuses. The steward
 verifies completion and updates the board; the host ignores malformed report lines and bounds
 notes to 500 characters (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+The claim itself, its one-winner behaviour, the loser's owner report, idempotent re-claim, strict
+metadata validation and the shared `board --file` lock are pinned by
+`tests/autonomy-dispatch-smoke.ts`.
+
+The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `review.md` and
+`verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
+`node packages/core/paperwork-budget.ts <cycle-dir>` (add `--journal=autonomy/JOURNAL.md
+--run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
+exits non-zero on an overrun or a missing or duplicate journal line. It is a manual check run by
+the steward, not a gate that blocks a merge, and `--max-lines` only overrides the cap for an
+experiment. `smoke:paperwork-budget` pins the 120-line failure and the 40-line pass
+(`tests/paperwork-budget-smoke.ts`). The cap counts the cycle's record, not its work: commit
+messages, code and tests are not counted.
 
 The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
 items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (6) tests/docs,
@@ -469,7 +566,13 @@ improve mode, chosen by the worker when the review finds nothing to fix. Green p
 cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
 for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
 A merge refused for an over-budget diff tells the next cycle to carry over only a reviewable
-subset and list the rest in its handoff, not to bring the whole attempt over again.
+subset and list the rest in its handoff, not to bring the whole attempt over again. The cycle's
+own pre-report check measures the diff while the worker is still alive and steers it once per
+measured head; if that same head is still over budget after the split steer, the cycle itself
+refuses with a `refused_budget:` reason naming the measured number when it is known, and closes
+`partial`, so the refusal does not wait for the merge review. The same check covers a session
+that exits after recording its report: a dead worker cannot act on a steer, so the cycle refuses
+that report the same way instead of closing it `completed`.
 
 A `steer` reaches the running cycle session at once (as a steer while it works, as a prompt once
 it has settled). One recorded while no session was alive waits for the next cycle prompt; if it
@@ -540,15 +643,27 @@ worker-influenced sections, plus the current report clipped to 6,000 characters 
 drives control-path checks. Real code over budget and unreadable diffs still refuse merge,
 including with review disabled (`tests/autonomy-review-inputs-smoke.ts`).
 
-The repository's `.gitattributes` uses `CHANGELOG.md merge=union`, retaining both sides of
-overlapping changelog additions. Host upstream and base merges use
+The repository's `.gitattributes` uses `merge=union` for `CHANGELOG.md` and `autonomy/JOURNAL.md`,
+retaining both sides of overlapping additions. Host upstream and base merges use
 `git -c attr.tree=<integration-head> merge-tree --write-tree`, so a bare mirror reads committed
 attributes without a worktree or index. The attributes must already be committed on the
 integration side, and host Git must support `attr.tree`; older Git can still report a conflict.
 Cycle integration itself is a fast-forward and performs no content merge. The two host content
 merge paths and the fast-forward are covered by `tests/autonomy-smoke.ts`. Union merging does
-not validate changelog wording, ordering or duplicates; review the resulting text. There is no
-additional shared journal: cycle reports and individual proposals already have separate paths.
+not validate changelog wording, ordering or duplicates; review the resulting text.
+
+`autonomy/JOURNAL.md` is the one shared journal: a line per cycle report. The cycle prompt's
+Record step asks each cycle to run `node packages/core/journal.ts`, which derives the line from
+the report and appends it for any non-close-out report that lacks one. `npm run smoke:docs` runs
+`checkJournal` (`packages/core/lib/journal.ts`; also `node packages/core/journal.ts --check`) and
+fails a report with no line, a line with no report and a line whose board IDs differ from the
+report's, and so reddens the acceptance gate (`tests/docs-smoke.ts`; the cycle prompt wording is
+pinned by `tests/autonomy-selfimprove-smoke.ts`). A host close-out report, which the worker never
+finished, is reported as a warning instead. The journal is replaced through the safe write helper,
+so a symbolic link at `autonomy/JOURNAL.md` is refused instead of followed, and a cycle directory
+whose name could not be one journal key (whitespace, a line break) stops the run of the script
+before anything is written (`tests/docs-smoke.ts`). Cycle reports and individual proposals keep
+their own separate paths.
 
 ```mermaid
 flowchart LR
@@ -575,13 +690,70 @@ commits the destination does not already hold, including all tags about to be pu
 fresh destination refs, excludes known published main/master history, and reads exceptions from the
 supervisor-held source base, never worker changes. Findings (locations only), mixed exception/content
 changes, or scan errors refuse the push; automatic cycles continue locally with
-`state.selfImprove.publishBlocker`/`publishError`, and explicit promotion records `promotion.error`.
-The worker has no push credentials and never performs host promotion; host pushes stay fast-forward
+`state.selfImprove.publishBlocker`/`publishError` and `state.selfImprove.publishBlockedCycles`, and
+explicit promotion records `promotion.error`. The refusal is now surfaced instead of only logged:
+`pi-autonomy status` reports `selfImprove.publishBlocker` and `selfImprove.unpublished` (a
+`publication BLOCKED` line in the text view), the next cycle's prompt names the refused commit and
+location and makes removing the identifier its first job, and after **two** merged
+cycles stay unpublished (an intervening non-merged cycle does not reset the count), the host stops
+the run in `blocked` with an operator question (remove the identifier and resume, or stop the run).
+Answering it to resume (any answer except the stop option or a denial) first rolls the local integration branch back to the last published head,
+discarding the merged-but-unpublished cycles and every one of the run's tags whose commit is not
+an ancestor of the published head (their `cycle-NN` and `abandoned-NN` tags are dropped so the
+leak scan is not shown the discarded commits again). Their history entries are marked `discarded`
+(while `merged` stays the historical fact), so the next cycle's prompt tells the worker to redo
+the work instead of looking for a report that is no longer on the branch. Then exactly one cycle
+runs — the answer is consumed as that one resume permission. The stop option ("Stop the run", ignoring surrounding space and case) or a denial does neither: it leaves that unpublished history and its tags untouched and ends through the final acceptance check without starting another cycle (reason `publish_blocked_stopped`; `tests/autonomy-selfimprove-smoke.ts`). The rollback is required because
+publication is fast-forward only and the leak scan reads the whole pushed range, so merely
+removing the identifier in a later commit leaves the refused commit publishable; the answer's
+cycle redoes the discarded work. The run parks again if that cycle's publication is still refused. A successful
+publish clears the blocker and the count (`tests/autonomy-selfimprove-smoke.ts`). The worker has no
+push credentials and never performs host promotion; host pushes stay fast-forward
 only (`tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-smoke.ts`; scanner rules:
 `tests/prepush-scan-smoke.ts`). Approval-gated publication remains held for `promote`. Disabling tag
 publication avoids publishing rejected attempts, but the integration branch is still public as soon
 as it is pushed (`tests/autonomy-selfimprove-smoke.ts`). Exports and run logs are local operator
 evidence and are not made safe for public posting by the commit scan.
+
+### Owner inbox
+
+`inbox --file` validates and atomically replaces the host-owned `control/inbox.json`, exclusively
+for self-improve runs. A card records a question for the owner, the recommended default, a
+deadline, and optionally the steward-board item it blocks. The format is:
+
+```json
+{
+  "cards": [{
+    "id": "OWN-1",
+    "question": "Promote to the shared branch or keep the local one?",
+    "default": "Keep the local branch",
+    "deadline": "2026-11-12T00:00:00Z",
+    "board": "PG-09"
+  }]
+}
+```
+
+Every listing (`inbox --run <run>`, or the same with `--json`) or answer (`--answer <card-id> --value <text>`) settles cards whose deadline
+has passed: the card records an outcome `{at, via, text}` with `via: "deadline"` and the default as
+its text. The `--answer` call records the outcome immediately with `via: "answer"` and the owner's
+text, even before the deadline. Settling unblocks the linked
+board item (`blocked` becomes `ready`) so the next cycle sees it again; an unanswered card whose
+deadline has not passed leaves its item `blocked`. A card that already has an outcome is never
+rewritten, so repeated reads are idempotent, and the inbox command records only: it never writes
+run state or queues a control message. `--file` only saves the cards; the next read settles them.
+Use an ISO-8601 deadline with `Z` or an explicit offset: validation accepts any string `Date.parse`
+understands, and an offset-less value is parsed in the host's local time. A settled card keeps its
+linked board item `ready` on every later inbox read; to block that item again, drop the settled card
+with `inbox --file` and then set the item back to `blocked` with `board --file`.
+
+Card fields are `id`, `question`, `default`, `deadline`, optional `board`, optional `answer`, and
+optional `outcome`; outcome keys are `at`, `via` (`answer` or `deadline`) and `text`. Unknown keys,
+duplicate card ids, ids outside `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, board ids outside
+`^[A-Z]+-[0-9]{1,4}$`, unparseable deadlines, more than 50 cards, empty text, questions over 500
+characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written); input files are capped
+at 2 MiB. The file is written at mode 0600. `tests/autonomy-inbox-smoke.ts` pins the answered,
+past-due and still-open cases, idempotence, refusal of bad input, the record-only rule, and the
+self-improve-only rule.
 
 ## Setting up
 
@@ -703,8 +875,11 @@ without generations, and the text then has no generations lines (`tests/autonomy
 In pi, `/autonomy status <run>` shows that text and, for a run with generations, sets the footer
 status line to `memento <run>: gen n/N, <status>; last rotation: time box` (or `dollar box`, with
 `, no notebook` when none was appended). The line is cleared by `/autonomy status` of a run without
-generations, and is not changed by `/autonomy status` with no run or without a screen. It is updated
-only when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
+generations. `/autonomy status` with no run sets a one-line fleet summary instead: how many runs
+there are, how many are in each status, and the first blocked run with the question it waits on;
+the line is cleared when there are no runs or a run's status is unusable. It is not changed without
+a screen. It is updated only
+when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
 
 **Not covered:** a question the worker asks during the grace period is not answered: the worker is
 stopped as soon as it asks. The box is checked once per supervisor tick, so a generation can overrun
@@ -768,7 +943,7 @@ is written to `~/.pi`.
 | Path | Contents |
 |---|---|
 | `contract.json`, `state.json` | The authorised contract, and the one authoritative record of the run (status, usage, tasks, acceptance evidence, recovery counters, history). |
-| `supervisor.log`, `supervisor.lock`, `control/` | The event log, the single-owner lock, and queued control commands. |
+| `supervisor.log`, `supervisor.lock`, `control/` | The event log, the single-owner lock, and the host-owned control files (`board.json`, `inbox.json`) and queued control commands. |
 | `checks.json`, `overlay/` | The check definitions and the held-out files: supervisor-held, never mounted for the worker. |
 | `public/` | The sanitised contract, mounted read-only at `/run`. |
 | `mirror.git`, `steps/`, `results/` | The host's copy of the work, each step's evidence, and exports. |

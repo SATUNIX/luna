@@ -2,8 +2,9 @@
  * Workflows — tool and command registration (`workflow_run`, `workflow_status`, `workflow_control`,
  * `/workflows` and its alias `/workflow`). Pause, resume, stop and skip of a live run all go
  * through control.ts; the status list and the stop path read run-query.ts, so a background
- * subagent, a finished script run and a finished YAML run appear together. A plan as data
- * (`workflow_run {steps}`) compiles through plan.ts and runs like a saved workflow.
+ * subagent, a finished script run, a finished YAML run and an autonomous container run appear
+ * together. A plan as data (`workflow_run {steps}`) compiles through plan.ts and runs like a saved
+ * workflow.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -670,9 +671,9 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     name: "workflow_status",
     label: "Workflow status",
     description:
-      "List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. " +
-      "With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.",
-    promptSnippet: "Inspect workflow and subagent runs",
+      "List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. " +
+      "With id: YAML steps, script counters, a subagent's log tail, or an autonomous run's template, spend, blocker and liveness.",
+    promptSnippet: "Inspect workflow, subagent and autonomy runs",
     parameters: Type.Object({
       id: Type.Optional(Type.String({ description: "One run's id; without it, the newest runs of every format" })),
       limit: Type.Optional(Type.Number({ description: "How many runs to list (default 20, max 100)" })),
@@ -853,7 +854,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
   };
 
   pi.registerCommand("workflows", {
-    description: `Every workflow and subagent run, live or finished: list them, show one, stop one or all. ${COMMAND_USAGE}`,
+    description: `Every workflow, subagent and autonomous run, live or finished: list them, show one, stop one or all. ${COMMAND_USAGE}`,
     getArgumentCompletions: completions,
     handler: runCommand,
   });

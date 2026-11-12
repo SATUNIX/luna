@@ -20,7 +20,10 @@ layouts.
 /tips on|off              the usage tip under the working line
 ```
 
-The layout is stored in `<agent dir>/pi-kit/ui.json` and survives reloads and new sessions.
+The layout is stored in `<agent dir>/pi-kit/ui.json` and survives reloads and new sessions. That
+file is shared with the hub, menu and launch-screen settings (`hubKey`, `commandMenu`,
+`pinnedCommands`, `hiddenCommands`, `launchScreen`, `reducedMotion`); `/footer` and `/tips` change
+only their own keys and leave the others intact (`tests/status-bar-smoke.ts`).
 `/footer` on its own toggles the bar on and off. Any other argument is rejected with the usage
 line and changes nothing.
 
@@ -84,15 +87,16 @@ terminal. While a request runs the cat replaces pi's spinner in front of the wor
 requests it sits in the status bar.
 
 ```text
-=^o.^=  Thinking… (12s · ↑3.1k ↓~220)        a request is running
-=^>>^=  Running `npm test`… (31s · ↑3.1k)
-=^?^=   Waiting for input                    an approval or question is open
-=^.^=   Complete                             in the bar after a request ends
+=^o.o^=  Thinking… (12s · ↑3.1k ↓~220)        a request is running
+=^>o>^=  Running `npm test`… (31s · ↑3.1k)
+=^o?o^=  Waiting for input                    an approval or question is open
+=^>w<^=  Complete                             in the bar after a request ends
 ```
 
 The face is chosen from the states that are active at once, by a fixed priority rather than by
-whichever event came last: error, alert, denied, waiting for user, warning, tool, crunching,
-thinking, working, streaming, then idle. What drives each state:
+whichever event came last: error, alert, denied, waiting for user, checking, warning, retrying,
+tool, crunching, thinking, working, streaming, waiting, cancelled, success, idle, then sleeping.
+What drives each state:
 
 | State | When |
 |---|---|
@@ -102,7 +106,7 @@ thinking, working, streaming, then idle. What drives each state:
 | tool | a tool is executing |
 | waiting for user | a blocking prompt (an approval, a question) is open |
 | crunching | the session is being compacted |
-| success, cancelled, error | a request ended normally, was aborted, or stopped on an error |
+| success, warning, denied, error, cancelled | a request ended normally, raised a warning, was refused, stopped on an error, or was aborted |
 | denied, warning | a tool returned an error; the text is read, and a refusal by a guard is *denied* |
 
 A result plays once in the bar and then goes back to the resting face. The resting face does not
@@ -117,10 +121,11 @@ starts is a short one that clears itself when a result has finished playing.
 `packages/extensions/third_party/custom-footer/cat.ts`; a new state is a new row and a place in the
 priority list, with no change to the rendering.
 
-Not covered: the two-line "head" cat, a blinking or wandering idle cat, a sleeping state and
-a retrying state (the faces exist, but nothing in pi reports them to the extension), and a spinner
-glyph after the text (pi's indicator sits before it). Tool errors are classified by their text
-because no structured denial signal exists, so an unusual refusal message is shown as a warning.
+Not covered: the two-line "head" cat, a blinking or wandering idle cat, a sleeping state, a
+retrying state and an alert state (the faces exist, but nothing in pi reports them to the
+extension), and a spinner glyph after the text (pi's indicator sits before it). Tool errors are
+classified by their text because no structured denial signal exists, so an unusual refusal message
+is shown as a warning.
 `tests/cat-status-smoke.ts` (`npm run smoke:cat-status`) pins the animation table, the priority,
 the wiring to pi's events and the command.
 
@@ -128,7 +133,13 @@ the wiring to pi's events and the command.
 
 A one-line usage tip appears under the working line during a run. It rotates and lists only
 commands that are loaded. The checklist above the editor is read from `TODO.md` (kept by the
-`todo` tool) and shows progress and each item's state.
+`todo` tool) and shows progress and each item's state. Long items are cut to the terminal's
+columns instead of wrapping onto extra rows. The checklist is mounted as a component and re-cut
+on every render at the width pi passes, so a terminal resize is handled rather than frozen at the
+width seen at mount. An ASCII theme ends the cut with `...`.
+`tests/tui-layout-smoke.ts` (`npm run smoke:tui-layout`) pins the cut at widths 20 to 120,
+including wide and emoji input; `tests/status-bar-smoke.ts` pins the component mount and a
+narrower render.
 
 ## Pricing Files
 
@@ -197,9 +208,11 @@ but only applies it after you select it in `/settings` or configure `theme` in
 | `ansi-dark` | Strict 16-colour ANSI palette and keyboard-only footer glyphs. |
 | `tty-dark` | Green-phosphor TTY palette and keyboard-only footer glyphs. |
 
-For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer and todo widget use
+For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer, todo widget and working line use
 ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
-box drawing, symbols, or emoji. Select a theme either way:
+box drawing, symbols, or emoji. The working line's tool phrase follows the same automatic
+choice and is cut in terminal columns, so a wide glyph at the cut is dropped whole rather than
+split. Select a theme either way:
 
 - In Pi, run `/settings` and pick a theme name from the table, or
 - Add it to `~/.pi/agent/settings.json`:

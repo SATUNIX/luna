@@ -652,6 +652,25 @@ console.log(`  OK: ${rows.length - 1} commands classified as expected (manual/au
     assert.ok(C.needsOperator(a));
   }
   for (const input of [null, [], "path", undefined]) assert.equal(C.classifyToolCall("write", input, env, { decision: "allow" }, "ask").tier, "high");
+  // Null/undefined placeholder keys name no operation (F-12). One real edit operation beside a
+  // null-valued sibling stays routine; two real operations, an unknown operation, a body of only
+  // null keys and an explicit null operation value remain incomplete.
+  const editEntry = (entry: Record<string, unknown>) => C.classifyToolCall("edit", { path: "src/a.ts", edits: [entry] }, env, { decision: "allow" }, "ask");
+  const nullExtra = editEntry({ replace: { old_text: "a", new_text: "b" }, replace_2: null });
+  assert.equal(nullExtra.tier, "low", "a real edit operation plus a null-valued extra key is covered");
+  assert.equal(C.needsOperator(nullExtra), false, "a null-valued extra edit key does not need the operator");
+  assert.equal(t("read", { path: "src/a.ts", extra: null }, { decision: "allow" }), "low", "a top-level null-valued unknown key is covered");
+  for (const [label, entry] of [
+    ["two real operations", { replace: { old_text: "a", new_text: "b" }, replace_2: { old_text: "c", new_text: "d" } }],
+    ["an unknown operation", { replace_agent: { old_text: "a", new_text: "b" } }],
+    ["only null-valued keys", { replace_2: null }],
+    ["an explicit null operation value", { replace: null }],
+  ] satisfies Array<[string, Record<string, unknown>]>) {
+    const a = editEntry(entry);
+    assert.equal(a.tier, "high", `${label}: an edit entry is incomplete`);
+    assert.ok(C.needsOperator(a), `${label}: incomplete edit needs the operator`);
+  }
+  assert.equal(t("edit", { path: "src/a.ts", edits: null }, { decision: "allow" }), "high", "a known shape field with null stays a type mismatch");
   assert.equal(t("apply_patch", { input: "*** Add File: /dev/sda\n+x" }, { decision: "allow" }), "critical", "partial patch coverage still retains critical path effects");
   assert.equal(t("codemode", { code: "text('hello')" }, { decision: "allow" }), "high", "opaque script cannot be inferred harmless");
   console.log("  OK: non-shell tools: exact identity policy, universal deny/ask precedence and content escalation");

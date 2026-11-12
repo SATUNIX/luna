@@ -21,6 +21,7 @@ import type { AgentConfig } from "../packages/extensions/third_party/subagent/ag
 import type * as RedactModule from "../packages/extensions/third_party/subagent/redact.ts";
 import type * as WorkflowModule from "../packages/extensions/third_party/subagent/workflow.ts";
 import type { ExecuteOptions, RunState, WorkflowDef } from "../packages/extensions/third_party/subagent/workflow.ts";
+import { bestCpuMs } from "./timing.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = path.join(ROOT, "packages", "extensions");
@@ -127,19 +128,14 @@ try {
       " ".repeat(n),
       "a-".repeat(n / 2),
     ];
-    // Best of three, so a GC pause or a busy CI runner does not read as quadratic growth.
-    const time = (s: string): number => {
-      let best = Infinity;
-      for (let k = 0; k < 3; k++) {
-        const t = performance.now();
-        R.redact(s);
-        best = Math.min(best, performance.now() - t);
-      }
-      return best;
-    };
+    // Best of nine in CPU time, so a GC pause, a busy CI runner or a one-off scheduler blip does
+    // not read as growth. CPU time (not wall clock) is what makes a busy host harmless; a quadratic
+    // rule still grows its CPU work with the input.
+    const time = (s: string): number => bestCpuMs(9, () => R.redact(s));
     const small = adversarial(64_000);
     const large = adversarial(256_000);
-    small.forEach(time); // warm up
+    small.forEach(time); // warm up both sizes so the first timed large run is not the one that
+    large.forEach(time); // pays for JIT-compiling the pattern and growing the heap
     small.forEach((s, i) => {
       const a = Math.max(time(s), 5); // a quadratic rule takes seconds at 256 KB, far past 10x this floor
       const big = large[i] ?? "";

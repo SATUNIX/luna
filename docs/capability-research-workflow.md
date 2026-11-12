@@ -42,10 +42,11 @@ surface) rather than tools the operator must remember to invoke.
   `packages/extensions/src/verifier-board/todo-read.ts`). context-sieve assembles these contributions under a
   token budget, and `packages/core/verify.ts` lint 5b enforces this injection monopoly. See
   `packages/extensions/src/guidelines/index.ts` and `packages/extensions/third_party/caveman/index.ts` for the pattern.
-- **Load order.** context-sieve wipes contributions on `session_start` and reads them in
-  `before_agent_start`. `packages/extensions/third_party/*` loads after `packages/extensions/src/*`, so vendored producers write in
-  `session_start` (survives the wipe) and adjust per-turn in `input` (which precedes
-  `before_agent_start`).
+- **Load order.** context-sieve does not delete contributions on `session_start`; it reads them
+  in `before_agent_start` and skips any file meaningfully older than its module-load epoch
+  (a prior-session leftover). A producer that writes during `session_start` is admitted
+  regardless of load order. `packages/extensions/third_party/*` loads after `packages/extensions/src/*`; vendored producers write in
+  `session_start` and adjust per-turn in `input` (which precedes `before_agent_start`).
 - **Self-containment.** Vendored extensions may not import outside their own directory or from
   `packages/core/lib`. External npm packages live in `node_modules/` and are exempt from this lint.
 - **Minimal visible surface.** Prefer behavior-only extensions (event hooks, no registered tools).

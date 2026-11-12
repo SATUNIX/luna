@@ -22,6 +22,7 @@ flowchart TD
 |---|---|
 | Code, issues, pull requests, releases | GitHub `SATUNIX/luna` |
 | `next` channel | every commit on `main` |
+| `trunk` channel (opt-in canary) | the head of `git.trunkBranch` (`integration/luna`) |
 | `latest` and pinned channels | the `vX.Y.Z` tags ([Releasing](releasing.md)) |
 | Private planning notes, review evidence and engagement examples | outside this public repository |
 

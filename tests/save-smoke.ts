@@ -12,6 +12,7 @@ import { loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace } from "../packag
 import type * as SaveModule from "../packages/extensions/src/save/index.ts";
 import type { SaveDeps } from "../packages/extensions/src/save/index.ts";
 import type * as ToolCaptureModule from "../packages/extensions/src/tool-capture/index.ts";
+import { assertCpuWithin } from "./timing.ts";
 
 /** The save module as the test drives it: registerSave is called with the fake pi API. */
 type SaveUnderTest = Omit<typeof SaveModule, "registerSave"> & { registerSave: (api: unknown, deps: SaveDeps) => void };
@@ -222,9 +223,7 @@ const testRedactsToolCaptureShapes = async () => {
   assert.match(mod.redact("postgres://admin:hunter2hunter2@db.example.invalid/app"), /db\.example\.invalid\/app$/, "host survives");
   // The URL-credential shape is the same linear one tool-capture uses: a long run of scheme
   // characters is not re-scanned from every word boundary.
-  const started = performance.now();
-  mod.redact("a.".repeat(40_000));
-  assert.ok(performance.now() - started < 200, "redact stays linear on a long run of scheme characters");
+  assertCpuWithin("redact stays linear on a long run of scheme characters", 200, () => mod.redact("a.".repeat(40_000)));
 };
 
 const testCopiesCompactionSummaries = withVault(async (ws, vault) => {

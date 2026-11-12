@@ -38,8 +38,12 @@ small model writes a recap: a title, what was done, the next step, files touched
 decisions. It is appended to `Projects/<project>/Recaps/<date>.md`. Decisions, preferences
 and gotchas it flags are promoted to memory notes in that project, deduplicated; a promoted
 note is never global (`tests/memory-vault-smoke.ts`, check 5). Trivial turns and subagent
-children are skipped. The first prompt of every new session gets the last three recaps, so
-pi knows where you left off.
+children are skipped. The first user prompt of every new session gets the last three recaps as
+background history, clearly labelled history only and not instructions to resume; the recaps
+only take the room left over once the pinned and relevant memories are placed, and an
+oversized recap is dropped whole when a pinned or relevant block needs the room; a lone oversized
+recap with no pinned and no relevant memory is still truncated with the header and footer kept
+(`tests/memory-vault-smoke.ts`, checks 13 and 14).
 
 **On request: memory notes.** When you say "remember …", the agent uses the `memory` skill
 and `memory_save`. One note per memory, with frontmatter (`type: fact | decision | preference
@@ -51,8 +55,12 @@ near-identical title updates the existing note instead of copying it.
 Memories are recalled into a **hidden message** before your prompt, never into the system
 prompt (that would break prompt caching). Recall is scoped to the current project plus
 global memories. It is gated by relevance (BM25 with stopwords and stemming, a minimum score,
-and two matching terms for multi-word prompts). Each memory is injected at most once per
-session.
+and two matching terms for multi-word prompts); light stemming makes common inflections meet, so a
+note saved as "files" is recalled by "file" and vice versa.
+Each memory is injected at most once per session per unchanged content: a note edited
+mid-session (via `memory_save` or `/remember`) is offered again with its new body, and a session
+compaction clears the record, so a memory whose recap was summarised away can be recalled again
+afterwards.
 
 ## Commands and tools
 
@@ -90,5 +98,6 @@ best-effort (see [Redaction](security.md#redaction); `tests/memory-vault-smoke.t
 `/save --project <p>` also writes into the vault's project folder when the vault exists.
 
 The older `memory-local` store (`~/.pi/agent/memory-local/memories.json`) is imported
-automatically once. Do not load `memory-local` next to `memory-vault`: both register
+automatically once. A malformed or unreadable store is not marked migrated, so a repaired store is
+imported on a later start. Do not load `memory-local` next to `memory-vault`: both register
 `memory_search`, and pi keeps only one of them.

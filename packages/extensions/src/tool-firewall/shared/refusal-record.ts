@@ -9,7 +9,7 @@
  * `tool_refused` line to the same audit log for every refusal, whichever guard made it.
  *
  * A record names the guard, the cause, the non-secret rule identifier or token that matched, the
- * tool, a SHA-256 digest of the command (never the command text) and the session id. It must never
+ * tool, a SHA-256 digest of the command when there is one (never the command text) and the session id. It must never
  * carry a secret value or a full command, and it must never break the tool call: every failure is
  * swallowed.
  *

@@ -9,7 +9,7 @@ control-path change refused before review).
 (`node tests/firewall-refusal-record.ts` passes on its own). `tests/firewall-outcomes-smoke.ts`
 imports `checkRefusalRecords()` and awaits it, so the check runs inside `npm run smoke:firewall-outcomes`
 (and `npm run test:security`) without touching `package.json`. The file deliberately does not use
-the `-smoke` suffix: `tests/wiring.ts` treats every `*-smoke.ts` as a suite that a manifest script
+the `-smoke` suffix: `packages/core/lib/wiring.ts` treats every `*-smoke.ts` as a suite that a manifest script
 must name, and the manifest is a control path this cycle may not change.
 
 ## Suggested change

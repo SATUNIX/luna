@@ -1,46 +1,31 @@
-# Cycle verify — luna-core-01 / 01 (continuation)
+# Cycle verify — luna-core-01 / 01
 
-Base `d932d6f02e41`; items committed `486d3d2` and `a9b6f21`. Targeted checks only — no
-`npm test` / `npm run check:all` was run.
+Base `5a511f35e7d5`; code commit `ce412c3` (PG-67). Targeted checks only — no `npm test` and no
+`npm run check:all` was run.
 
-## Item 1 — guidelines env var name
+Checks were derived with
+`node packages/core/check-all.ts --for-changed="docs/autonomy.md,packages/autonomy/lib/gitmirror.ts,packages/autonomy/lib/lifecycle.ts,packages/autonomy/lib/templates/self-improve.ts,tests/autonomy-selfimprove-smoke.ts,tests/autonomy-smoke.ts,"`
+which planned: `docs:check`, `smoke:autonomy`, `smoke:autonomy-run`, `smoke:autonomy-selfimprove`,
+`smoke:docs`, `test:lint`, `test:typecheck`, `verify`.
 
-Commit: `486d3d2`.
+| Check | Result | Proving line |
+|---|---|---|
+| `npm run docs:check` | RAN, PASS | `[docs-nav-check] OK: nav entries exist and internal links resolve.` |
+| `npm run smoke:autonomy` | RAN, PASS | `[autonomy-smoke] all 34 checks passed` (includes the reconcile and conflict unit checks) |
+| `npm run smoke:autonomy-run` | RAN, PASS | `[autonomy-run-smoke] all 15 checks passed` |
+| `npm run smoke:autonomy-selfimprove` | RAN, PASS | `[autonomy-selfimprove-smoke] all 57 checks passed` (two new PG-67 checks; all PG-55 checks) |
+| `npm run smoke:docs` | RAN, PASS | `[docs-smoke] OK: 14 documented commands validated, 62 relative links resolved; ...` |
+| `npm run verify` | RAN, PASS | `[verify] All checks passed.` |
+| `npm run test:lint` | RAN, PASS | exit 0, no findings |
+| `npm run test:typecheck` | RAN, PASS | exit 0, all eight tsc projects |
+| Base reproduction | RAN, FAIL as intended | worktree at `5a511f3` with this cycle's `tests/autonomy-selfimprove-smoke.ts`: `AssertionError ... {"status":"failed","reason":"integration_diverged", ...}` at the non-conflicting PG-67 check (`+ 'failed' - 'succeeded'`) |
 
-| Command | Result |
-|---|---|
-| `npm run smoke:docs` | **PASS** — `14 documented commands validated, 62 relative links resolved` |
-| `node packages/core/reference.ts --check` | **PASS** — `docs/reference.md is up to date` |
-| pre-change reproduction (scratch worktree, row reverted to `PI_KIT_GUIDELINES_FILE`) | **FAIL as intended** — `node tests/docs-smoke.ts` exits 1: `docs/INSTALL.md lists PI_KIT_GUIDELINES_FILE for "guidelines", but its manifest env[] does not declare it` |
+No check was SKIPPED. The base reproduction proves the new end-to-end check fails without the fix.
 
-Proving line: the new assertion in `tests/docs-smoke.ts` fails on the old INSTALL row and passes on
-the new one; the generated `docs/reference.md` row for `PI_KIT_GUIDELINES_PATH` gains its Purpose
-and INSTALL link.
-
-## Item 2 — declared settings missing from the reference
-
-Commit: `a9b6f21`.
-
-| Command | Result |
-|---|---|
-| `npm run smoke:docs` | **PASS** — the same checker now resolves every INSTALL row against its manifest `env[]` |
-| `node packages/core/reference.ts --check` | **PASS** — `docs/reference.md is up to date` |
-| `node tests/extension-manifest-hooks-smoke.ts` | **PASS** — `3 pinned extensions declare the exact env vars their code reads` |
-
-Proving line: `docs/reference.md` now lists `PI_KIT_LEAN_CTX` under `session-helpers` and
-`PI_KIT_VERIFY_PENDING_TTL_MS` under `verify-gate` with a purpose and INSTALL link; removing either
-manifest `env[]` entry makes the `docs-smoke` INSTALL/manifest assertion fail.
+Diff budget: `git diff --no-renames 5a511f35e7d5..HEAD` excluding lockfile and cycle/run records:
+**26,562 chars** before the record files; limit 30,000 for new items, 60,000 reviewable.
 
 ## Independent review
 
-`reviewer` subagent over `git diff --no-renames d932d6f02e41..HEAD` (lockfile and cycle/run records
-excluded), against `autonomy/CHARTER.md`: **VERDICT: PASS**. The only non-record files are
-`docs/INSTALL.md`, `docs/reference.md`, `tests/docs-smoke.ts`,
-`packages/extensions/src/session-helpers/extension.json` and
-`packages/extensions/src/verify-gate/extension.json`; no `.github/`, `package.json` script,
-`autonomy/CHARTER.md` or operator control path; no test deleted or weakened.
-
-## Diff budget
-
-`git diff --no-renames d932d6f02e41..HEAD` excluding lockfile and cycle/run records: **12,082
-chars** (8,856 for code and docs; the rest is this cycle's proposal); limit 30,000.
+Pending at the time this file was first written; the verdict is appended below after the review of
+`git diff 5a511f35e7d5..HEAD` against `autonomy/CHARTER.md` and the PG-55/PG-67 acceptance criteria.

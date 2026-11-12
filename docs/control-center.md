@@ -40,8 +40,9 @@ The content is revealed over at most twelve frames, about 90 ms apart. Reduced m
 final content at once and starts no timer. It is on when `PI_KIT_REDUCED_MOTION=1`, when
 `reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`, when `TERM=dumb`, or when `CI` is set.
 A terminal narrower than 60 columns drops the art for one compact line, and `PI_KIT_ASCII=1` uses
-printable ASCII only. Put `"launchScreen": "off"` in `<agent dir>/pi-kit/ui.json` to turn the
-launch screen off (`tests/launch-screen-smoke.ts`).
+printable ASCII only. The launch screen also follows the automatic ASCII choice for the `iso`,
+`ansi`, `tty` and `ascii` theme names, like the footer. Put `"launchScreen": "off"` in
+`<agent dir>/pi-kit/ui.json` to turn the launch screen off (`tests/launch-screen-smoke.ts`).
 
 ## Pages
 

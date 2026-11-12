@@ -291,3 +291,9 @@
     `footer()` and `render()`. A run pruned while open now shows the list body and list keys, and
     the first `↓` moves the list cursor; `view` and an open confirm are kept
     (`tests/workflow-panel-smoke.ts`).
+  - **Workflow panel column widths (2026-11-12):** `wf-panel.ts` sizes and clips the phase title,
+    agent id and model, and run name columns with `visibleWidth` instead of
+    `String.prototype.length`, padding each to its cap through one `cell()` helper (ellipsis when
+    cut), so long text no longer pushes done/total, tokens, elapsed or status off the row and a wide
+    glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
+    stays. `tests/workflow-panel-smoke.ts` pins the alignment.

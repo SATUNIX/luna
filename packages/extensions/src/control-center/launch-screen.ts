@@ -59,6 +59,15 @@ const ASCII_ART = [
   " |____|\\__,_|_| |_|\\__,_|",
 ];
 
+/**
+ * Theme names that ask for ASCII glyphs. The rule is the one in
+ * `packages/extensions/third_party/custom-footer/render.ts` (`footerGlyphs`), which is the source of
+ * truth; keep the two in step so the footer and the launch screen agree.
+ */
+export function asciiThemeName(name?: string): boolean {
+  return /(?:^|[-_])(iso|ansi|tty|ascii)(?:[-_]|$)/i.test(name ?? "");
+}
+
 /** Reduced motion from the environment or the parsed `pi-kit/ui.json` record. */
 export function isReducedMotion(ui?: Record<string, unknown>): boolean {
   if (process.env.PI_KIT_REDUCED_MOTION === "1") return true;
@@ -134,7 +143,7 @@ export function launchHeader(opts: LaunchHeaderOptions): (tui: TUI, theme: Theme
           width,
           frame,
           reducedMotion: opts.reducedMotion,
-          ascii: opts.ascii,
+          ascii: opts.ascii || asciiThemeName(theme.name),
           version: opts.version,
           hubKey: opts.hubKey,
           menuCmd: opts.menuCmd,

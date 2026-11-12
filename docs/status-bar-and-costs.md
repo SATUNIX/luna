@@ -208,11 +208,10 @@ but only applies it after you select it in `/settings` or configure `theme` in
 | `ansi-dark` | Strict 16-colour ANSI palette and keyboard-only footer glyphs. |
 | `tty-dark` | Green-phosphor TTY palette and keyboard-only footer glyphs. |
 
-For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer, todo widget and working line use
-ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
-box drawing, symbols, or emoji. The working line's tool phrase follows the same automatic
-choice and is cut in terminal columns, so a wide glyph at the cut is dropped whole rather than
-split. Select a theme either way:
+For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer, todo widget, working line and launch
+screen use ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
+split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
+footer making the same choice. Select a theme either way:
 
 - In Pi, run `/settings` and pick a theme name from the table, or
 - Add it to `~/.pi/agent/settings.json`:

@@ -10,6 +10,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The launch screen follows the footer's automatic ASCII theme choice.** On the `iso`, `ansi`,
+  `tty` and `ascii` theme names the launch screen now draws printable ASCII instead of block art
+  and the middle-dot separator, matching the vendored footer. `PI_KIT_ASCII=1` still forces it.
+  Pinned by `tests/launch-screen-smoke.ts`; `docs/status-bar-and-costs.md` records the shared
+  choice.
 - **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
   `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
   the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy

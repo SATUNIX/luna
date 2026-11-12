@@ -1,7 +1,7 @@
 # Cycle 03 — Verify (run luna-ux-01, stream `ux`)
 
 - Base `dfb939dd9e0a`, HEAD `c12d02a`. Non-record diff (lockfile, cycle/run records excluded):
-  **14,564 characters**, measured with
+  **16,272 characters**, measured with
   `git diff --no-renames dfb939dd9e0a..HEAD -- . ":(exclude)package-lock.json" ":(exclude)autonomy/cycles/luna-ux-01/" ":(exclude)autonomy/runs/luna-ux-01/" | wc -c`.
 - Planned with `node packages/core/check-all.ts --for-changed="<8 changed paths>"`, which named the
   ten checks below. Each planned check was run on the final tree.

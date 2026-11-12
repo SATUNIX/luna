@@ -55,7 +55,7 @@ passed: `docs:check`, `smoke:docs`, `smoke:eval-footprint`, `smoke:new-extension
 `smoke:subagent-roles-isolation`, `smoke:tui-layout`, `smoke:workflow-notify`, `test:lint`,
 `test:typecheck`, `verify`, plus `smoke:remote-control`. `npm test`, `npm run check:all` and
 `/opt/autonomy/gate.sh` were not run locally (host-gate only). Detail and proving lines are in
-`verify.md`; the non-record diff is 14,564 characters.
+`verify.md`; the non-record diff is 16,272 characters.
 
 ## Review
 

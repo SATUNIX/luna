@@ -108,7 +108,7 @@ for (let i = 0; i < args.length; i++) {
   if (BOOLEAN_FLAGS.includes(arg)) continue;
   const problem = !VALUE_FLAGS.includes(arg)
     ? `unknown argument "${arg}"`
-    : args[i + 1] === undefined || String(args[i + 1]).startsWith("--") ? `${arg} needs a value` : null;
+    : args[i + 1] === undefined || args[i + 1] === "" || String(args[i + 1]).startsWith("--") ? `${arg} needs a value` : null;
   if (problem) {
     console.error(`[install] ${problem}\n${USAGE}`);
     process.exit(1);

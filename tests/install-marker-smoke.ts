@@ -720,6 +720,8 @@ function testUnknownFlagsRejected() {
       [["--profle", "pentest"], /unknown argument "--profle"/],
       [["--profile"], /--profile needs a value/],
       [["--profile", "--mode", "local"], /--profile needs a value/],
+      [["--channel", ""], /--channel needs a value/],
+      [["--git-ref", ""], /--git-ref needs a value/],
       [["stray"], /unknown argument "stray"/],
     ] as const) {
       const result = spawnSync(process.execPath, [INSTALL, "--dry-run", "--settings-only", ...argv], { cwd: ROOT, env: baseEnv(agentDir, binDir, logPath), encoding: "utf8" });

@@ -1,73 +1,89 @@
 # Cycle 03 — Review (run luna-ux-01, stream `ux`)
 
-- Branch `pi/luna-ux-01`, cycle base `876471a5bdbed66ce1497da2883bf24b7a08a21c` (head of `stream/ux`).
+- Branch `pi/luna-ux-01`, cycle base `dfb939dd9e0a` (head of `stream/ux`).
 - Stream area: TUI overlays, the `/` menu, launch screen, animation and polish (V-01, V-02, V-03,
-  V-05, V-09).
-- Assigned board items: **V-01** (overlay readability) and **V-03** (fold `/settings` into the
-  `/` menu, rename `kit` → `menu`). There is no board file; the items are as given in the cycle prompt.
-- Previous cycle 02 is not on this branch. Its commits, report and handoff live on
-  `origin/attempts/luna-ux-01/cycle-02`; cycle 02 was rejected only because the host acceptance run
-  went red (`check-all`, `check-all:smoke:web-console` exit 1).
+  V-05, V-09). Assigned board items: **DE-101** (P1) and **V-09** (P3); there is no board file.
+- Mode chosen: **fix**. Both assigned items are already merged at the base, so the cycle verifies
+  them and fixes the first real defect the review finds (work precedence 4).
 
 ## Precedence
 
-No red gate on this branch (it is the head of `stream/ux`) and no upstream conflict. Board item V-01
-is carried, reviewed and green on `origin/attempts/luna-ux-01/cycle-02`, so it lands first.
+No red gate and no upstream conflict at the base. Board items come first: DE-101 and V-09 were
+checked against the code, not against the cycle reports.
 
-## Method
+## DE-101 — already complete at the base (verified)
 
-Direct reading of the overlaid change on the attempts branch, plus one `scout` (the E3 tier allows
-one; the second parallel scout was refused by the host). The scout re-read the module, both call
-sites and the tests, ran the targeted smokes on a worktree of the branch tip, and checked whether the
-carried change can cause the recorded acceptance failure. Docs and the attempts-branch report were
-treated as hypotheses and checked against the code.
+The six landing-review findings are implemented, documented and pinned by tests that fail on the
+earlier source (cycle 01 commits `c56acda`, `922e732`, `834963d`, `c638796` are ancestors of the
+base):
 
-## Confirmed — V-01 carry-over is sound (P1, rank 5)
+1. `packages/extensions/src/control-center/hub.ts:173-190` — `HIDDEN_DISPLAY_CHARS` is the same
+   `\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}` class as `HIDDEN_CHARS` in
+   `packages/autonomy/lib/notebook.ts:126`, applied after `stripTerminalSequences`, with the
+   `MAX_DISPLAY_LENGTH = 500` bound. Cases for alternate screen, reset, C1 CSI, bidi and the cap are
+   in `tests/control-center-smoke.ts`; `docs/control-center.md` describes the filter.
+2. `packages/autonomy/lib/inbox.ts:56` uses `isIsoTimestamp()` imported from `./board.ts` (the same
+   strict ISO-with-offset check the board uses).
+3. `packages/autonomy/cli.ts:724` throws `CliError("refused", ...)` naming the card and its outcome
+   when `--answer` targets a settled card (exit 3 per `EXIT` at `:61`).
+4. `packages/autonomy/cli.ts:721,733-737` collapses card text and the recorded timestamp with
+   `HIDDEN_CHARS` to one visible line, as `lib/store.ts` does.
+5. `packages/autonomy/lib/inbox.ts:69-70` refuses `answer`/`outcome` in an uploaded file.
+6. `packages/extensions/src/remote-control/index.ts:133-168` retries a wide grapheme on the next
+   line after dropping the indent instead of dropping the rest of the word.
 
-Evidence (scout run `2026-11-11T05-57-28-261Z-scout-56a3f9`):
+Ran `npm run -s smoke:control-center` (45/45) and `npm run -s smoke:autonomy-inbox` (7/7): both
+pass at the base. No repair was needed.
 
-- `72d1f4c` + `404b13a` apply cleanly onto base `876471a` (`git apply --check` exit 0).
-- The two `overlay-frame.ts` copies are byte-identical (sha256 `d41d3aa9…ec8e`). The frame pads every
-  line to exactly `width`; widths below 10 return the input unchanged; image lines bypass dim; the
-  `compositeOverlays` patch is `Symbol.for`-guarded, idempotent and restored on `done` and `dispose`.
-- `tests/control-center-smoke.ts:556-613` asserts border colour, widths 40/12/8, dim-while-open and
-  restore after `done` and `dispose`; `tests/workflow-panel-smoke.ts:460-505` asserts the panel's
-  border and dim/restore. `smoke:control-center` (28 checks) and `smoke:workflow-panel` (14 checks)
-  pass on the branch tip, as do `test:typecheck` and `test:lint`.
+## V-09 — both sub-items already merged (verified)
 
-## The recorded acceptance failure is not attributable to V-01
+- Status bar, todo checklist and remote pairing panel cut by display columns; ASCII glyph set and
+  ellipsis. `packages/extensions/third_party/custom-footer/render.ts`, `widgets.ts:10`
+  (`renderTodoWidget(items, theme, max, ascii, width)`), `index.ts:296-299` (mounts a component so
+  the checklist gets the live width), `width.ts`, and `remote-control/index.ts` `pairPanel`.
+- The working line's tool phrase is cut by columns and whole graphemes (no lone surrogate, ASCII
+  ellipsis in ASCII mode), `widgets.ts:53-66`.
+- `tests/tui-layout-smoke.ts` asserts every line at widths 20/32/40/60/80/120 for all three footer
+  modes, the todo widget, the workflow panel (run and list) and `pairPanel`, with wide and emoji
+  input and the ASCII-mode no-non-ASCII check. `smoke:tui-layout` exits 0 at the base (4 checks).
+- Wiring and vendored notices are already in place (`smoke:tui-layout` in `package.json`, dated
+  entries in both `SOURCE.md`).
 
-`git diff --name-only 876471a..404b13a` touches no `packages/web-ui/`, no `package.json` `scripts`
-and no lockfile. `smoke:web-console` passes from the branch worktree. That smoke is already a
-`SERIAL` check (`packages/core/check-all.ts:70-76`) that exclusively creates the repo-relative
-`packages/web-ui/.runtime/console.token` and starts a detached server; a stale runtime dir or port in
-the gate environment explains a one-off exit 1. Independently reproduced: two concurrent
-`smoke:web-console` runs always fail with `PI_CONSOLE_TOKEN_FILE could not be read (ENOENT)` because
-they share that path, while a single run passes. Recorded as a proposal, not fixed here (outside the
-UX stream).
+So no new V-09 work was invented; the acceptance checks were re-run instead.
 
-## Confirmed — V-03 (P1, rank 4), planned but not taken
+## Cycle 02 carry-over
 
-The cycle-02 review pinned V-03 against the code (`02/review.md`): `index.ts:171-189` registers
-`kit`/`helpers` and `alt+m` sends `/kit`; `command-menu.ts:26,29-30,192-193` carry the `kit` menu
-strings; `hub.ts:183` help row; `custom-footer/widgets.ts:74` tip; `settings` is a pi built-in and
-must be a `prefill` row, never a registered command. That review is unchanged code, so its line
-references still hold.
+Cycle 02's claimed launch-screen change (`ctx.mode`/`hasUI` predicate passed into
+`installLaunchHeader`) is **already in the base**: `packages/extensions/src/control-center/index.ts:103,129-132`
+does exactly that and `tests/launch-screen-smoke.ts:352-362` pins the `mode: undefined` pair.
+That branch's only commit was records; nothing sound remained to cherry-pick. Its report's V-05
+claim is not repeated here — V-05 is not assigned to this cycle.
+
+## Scout findings (read-only, code checked against the hypotheses)
+
+One `scout` reviewed the TUI renderers and reported two real defects; both are in-stream, not
+covered by the completed board items.
+
+**Defect 1 (fixed this cycle).** `pairPanel` (`remote-control/index.ts:185-207`) computes
+`room = termRows - 10` but its fit checks undercount the emitted height: beside, it uses
+`qr.length + 1` and ignores the title lines already in `out` and the details column; stacked, it
+ignores `out` and assumes the scan/approve sentences take one line although `wrap()` splits them on
+narrower terminals. Measured with the 49-module QR the host actually generates: `pairPanel(offer,
+70, 46)` returns 38 lines for 36 rows, `(80, 45)` 36 for 35, `(60, 46)` 38 for 36. pi clips the top
+of an over-tall widget, so the title and the start of the scan sentence scroll away, and the
+details-only note understates the rows it needs (says 46 where 48 are required). Evidence sweep:
+widths 20-200 x heights 10-100 produced 71 over-budget QR-shown cases, worst 2 lines.
+
+**Defect 2 (proposed, not fixed).** `wf-panel.ts` `footer()` (`:773-776`) follows `this.view`, while
+`render()` (`:788`) falls back to the list when `RunRegistry.prune()` has dropped the open run. An
+open run pruned after 20 newer finished runs leaves the list body with the run-view footer; the
+first key press is swallowed. Written up as
+`autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`.
 
 ## Checked and set aside
 
-- The ≤3-character hidden-command reveal gap (`command-menu.ts:184`): unreachable today; already
-  proposed on the attempts branch. V-03 removes the last instance.
-- Idle-cat blink (`cat.ts:36` never rendered, docs say it does not happen) and the human-console
-  multi-card focus theft: both need an operator intent decision and are already proposed. Not taken.
-- No other runtime-reachable defect was found in the stream area beyond the board items.
-
-## Items chosen for this cycle
-
-1. **V-01** — re-land the reviewed overlay frame and transcript dim (board item 1).
-2. **V-03** — **not taken**: re-landing V-01 alone is 31267 characters (records excluded), over the
-   cycle's 30000-character "stop taking new items" threshold, so V-03 starts cycle 04 with the plan
-   in `02/plan.md`.
-
-This is fix mode: the cycle's work is re-landing carried, rejected work and confirming the
-acceptance story, not a new improvement.
+- `overlay-frame.ts` framing/dim/mouse math, hub focus clipping, `hubKey` validation, workflow
+  panel height budget, `/settings` folded into `/menu`, and the idle cat (documented as static in
+  `docs/status-bar-and-costs.md`) are already implemented.
+- `smoke:control-center` 45/45, `smoke:workflow-panel` 20/20, `smoke:launch-screen` 13/13,
+  `smoke:command-menu` 14/14, `smoke:menu-settings` 4/4 pass at the base.

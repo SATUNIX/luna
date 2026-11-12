@@ -495,8 +495,8 @@ try {
     assert.ok(audit().some((l) => l.outcome === "hard_deny"), "and holds the new record");
     ok("the audit log rotates to .1 past 4 MiB");
 
-  // 9. PG-24: every refusal from either guard appends one structured tool_refused record.
-  checks += await checkRefusalRecords();
+    // 9. PG-24: every refusal from either guard appends one structured tool_refused record.
+    checks += await checkRefusalRecords();
   }
 
   console.log(`[firewall-outcomes-smoke] all ${checks} checks passed`);

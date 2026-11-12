@@ -48,6 +48,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   linked a specification file that is not in the tree. A mechanical scan of 97 pages found no other
   `npm run` script, test file or linked page that does not exist.
 
+- **The context sieve charges its hidden-message framing to the message budget.** The header, the block
+  separator and the optional "still current" line were outside the budget, so the injected message could
+  exceed it (about 40% on a 50-token budget) and `sieve-budget.json` under-reported it. The whole message is
+  now bounded: the still-current line names only the ids that fit, a budget smaller than the framing injects
+  nothing, and `message.tokens` records the injected content (`tests/context-budget-smoke.ts`).
 - **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
   cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
   scan reads the whole pushed range, so removing the identifier in a later commit still left the

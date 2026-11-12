@@ -1,75 +1,90 @@
 # Cycle 01 — Plan (run luna-ux-01, stream `ux`)
 
-- Mode: **improve** (assigned board item V-05; steward P0 checked and recorded, no code change
-  justified).
-- Base: `a43f32bae871`. Branch: `pi/luna-ux-01`.
-- Budget: ~$5 model spend, ~3 h. One item, finished and verified.
+- Mode: **fix** — the assigned DE-101 items are confirmed defects and a security gap.
+- Base: `5fda5d526514`, branch `pi/luna-ux-01`.
+- Budget: ~$5 model spend, ~3 h. Two bounded items, each finished and verified.
 
 ## Goal
 
-Give a Luna terminal session a custom launch screen: a "Luna" wordmark with the pi version and up
-to five useful first actions, a short reveal animation that respects reduced motion, a narrow-
-terminal fallback, and an ASCII mode — wired through the one existing `session_start` handler in
-control-center, tested, and documented.
+Harden the surfaces the landing review named: the control-centre hub removes every control,
+format and default-ignorable character from what it displays under a length bound, and the owner
+inbox validates strict ISO deadlines, refuses an answer/outcome that would rewrite or smuggle a
+decision, sanitises its text listing, and the remote-control wrapper keeps the rest of a word it
+cannot fit on one line.
 
-## Item V-05 — launch screen
+## Item DE-98 — CHANGELOG and QR fixture
 
-Justification (charter 1, 2, 3): pi 1.4 offers `ctx.ui.setHeader` and Luna does not use it
-(`grep -rn "setHeader" packages tests` → no `ctx.ui.setHeader`), so the first screen of the
-product is pi's stock header with no Luna identity or first actions. The API and examples exist in
-the installed host (`types.d.ts:114-117`, `examples/extensions/custom-header.ts`); the need is
-the `ux` stream's assigned V-05.
+No work: already satisfied at the base (see `review.md`). The report records it as `done` with the
+evidence, and the acceptance gate re-checks `smoke:docs` and the five entries.
+
+## Item DE-101a — control-centre display filter
+
+Justification (charter 1, 5): `docs/control-center.md:92-96` admits that the hub removes only
+colour/cursor CSI, OSC and APC; an alternate-screen sequence, a reset, a C1 CSI (`U+009B`) or a
+bidi override in a page title, Doctor/Security/Help row or header still reaches the terminal, and
+the strip runs on an unbounded repository-controlled string.
 
 ### Change
 
-1. New `packages/extensions/src/control-center/launch-screen.ts`:
-   - `launchLines(opts: { width, frame, reducedMotion, ascii, version, hubKey, menuCmd, theme })`
-     — pure. Returns the rendered lines for the given reveal `frame` (0-based); final frame when
-     `reducedMotion`. Every line through `truncateToWidth` and `visibleWidth`-checked at `width`.
-     Below 60 columns: no art, one compact action line. ASCII mode: printable ASCII only.
-     Content: "Luna" wordmark + `v<version>` (pi VERSION) and up to 5 actions: `<menuCmd>`,
-     `<hubKey>` for the control centre, `/profile`, `/model`, `/resume`.
-   - `launchHeader(deps)` — the `ctx.ui.setHeader` factory: keeps a frame counter, starts at most
-     12 frames on `setInterval(..., 80..120).unref()`, calls `tui.requestRender()` per frame,
-     clears the timer when the reveal finishes and in `dispose()`. Reduced motion (env
-     `PI_KIT_REDUCED_MOTION=1`, `ui.json` `reducedMotion: true`, `TERM=dumb`, or `CI` set) → final
-     frame, no timer.
-   - Pure helpers exported for tests; no new dependencies, only node builtins and pi-tui peers.
-2. Wire into the existing `session_start` handler in `control-center/index.ts` **after**
-   `curated = true` and **before** the `commandMenu === "all"` early return. Run only when the
-   session is TUI, `PI_KIT_INTERNAL_CHILD !== "1"`, `typeof ctx.ui.setHeader === "function"`, and
-   `readUiFile()?.launchScreen !== "off"`. `menuCmd` is `/menu` when `pi.getCommands()` lists it,
-   else `/kit` (works after V-03).
-3. `packages/extensions/src/control-center/extension.json`: add `PI_KIT_REDUCED_MOTION` to `env`.
-4. `package.json`: add `"smoke:launch-screen": "node tests/launch-screen-smoke.ts"` (the only
-   scripts change; no existing script is modified).
-5. `docs/control-center.md`: new `## Launch screen` section (behaviour, actions, reduced motion,
-   narrow and ASCII modes, `launchScreen: "off"`). Run `npm run catalog` so `docs/reference.md`
-   lists the new env var.
+1. In `packages/extensions/src/control-center/hub.ts` add a local whole-class filter with the same
+   classes as `HIDDEN_CHARS` in `packages/autonomy/lib/notebook.ts`
+   (`\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}`), applied after the existing pi-tui strip where
+   the header, page titles and informational rows are produced. Keep tab/newline semantics out of
+   display text (display rows are one line). Cap the filtered text at a fixed maximum (500
+   characters) so a repository-controlled title cannot be unbounded.
+2. Use the one filter for `informationalPage`, `headerLine`, `pageTitle` and `typedCommand`, so
+   there is no second ad-hoc character class.
+3. `docs/control-center.md`: replace the admitted limitation with the whole-class filter and the
+   bound, and name the test.
 
-### Proof — `tests/launch-screen-smoke.ts`
+### Proof — `tests/control-center-smoke.ts`
 
-Uses `harness` `loadModule`/`fakePi`/`isolateKitEnv`/`setEnv`/`tmpWorkspace`, and asserts:
+Extend the existing "header and informational rows strip terminal control sequences" case (or add
+one beside it) with a header/title/row value containing an alternate-screen sequence
+(`\u001b[?1049h`), a reset (`\u001b[0m`), a C1 CSI (`\u009b2J`) and a bidi override (`\u202e`),
+plus a >500-character value. Assert none of those characters survive, the visible text remains, and
+the result is bounded. Run `npm run -s smoke:control-center`.
 
-- the TUI `session_start` calls `setHeader` exactly once;
-- no header over rpc/print mode, in a child session, or with `launchScreen: "off"`;
-- at widths 20, 40, 60, 80 and 120 every line has `visibleWidth(line) <= width`, and the output
-  contains "Luna" and the menu command; width 20 does not throw;
-- reduced motion via env and via `ui.json`: no timer starts and successive frames are identical;
-- animated mode clears its timer by itself after the reveal and on `dispose()`;
-- ASCII mode output is printable ASCII only;
-- the menu command falls back to `/kit` when `getCommands()` lacks `menu`.
+## Item DE-101b — owner inbox and remote wrap
 
-### Checks to run
+Justification (charter 1, 4, 5): six confirmed gaps named in `review.md` (deadline parsing,
+settled-card answer, listing text, uploaded settled cards, word continuation).
 
-- `npm run smoke:launch-screen` (new), `npm run smoke:command-menu`, `npm run smoke:control-center`,
-  `npm run smoke:docs`, `npm run test:typecheck`, `npm run test:lint`.
-- `npm run catalog` then `git status` (generated reference committed with the change).
-- Independent `reviewer` subagent on the cycle diff against `autonomy/CHARTER.md`.
-- Never `npm test` or `npm run check:all` (host gate runs the full suite on a clean checkout).
+### Change
 
-## Out of scope
+1. `packages/autonomy/lib/board.ts`: export the strict `ISO_TIMESTAMP` validator (or a small
+   `isIsoTimestamp`) and use it from `inbox.ts` so a deadline requires a date, time and `Z` or
+   explicit offset, and must also parse.
+2. `packages/autonomy/lib/inbox.ts`: use the shared validator for `deadline`; refuse `answer` and
+   `outcome` in an uploaded inbox (`readInboxFile` / `validateInbox` with an upload flag), so a
+   file cannot pre-settle a card.
+3. `packages/autonomy/cli.ts`: `--answer` on a card that already has an outcome throws
+   `CliError("refused", ...)` naming the card; the text listing collapses card fields through the
+   same `HIDDEN_CHARS` one-line treatment `lib/store.ts` uses.
+4. `packages/extensions/src/remote-control/index.ts` `wrap()`: when a wide grapheme cannot fit the
+   current room, carry the whole remaining word to the next line instead of dropping it; a word
+   that cannot fit any line is still split at the last possible cell.
+5. `docs/autonomy.md` and `docs/remote-control.md`: deadline format, refusal of uploaded answers,
+   settled-card refusal, sanitised listing, and the wrap remainder.
 
-- Steward P0 compat lane: not reproducible offline; see `review.md`. Recorded, not edited.
-- Proposals (idle-cat blink, human-console focus theft, web-console shared runtime, trunk channel
-  alias): remain proposals, not this cycle.
+### Proof
+
+- `tests/autonomy-inbox-smoke.ts`: cases for an offset-less/`Date.parse`-only deadline refused,
+  `--answer` on a settled card refused with the card id and exit 3, an uploaded card with
+  `answer`/`outcome` refused, and a listing whose `question`/`default` contains control and bidi
+  characters showing them collapsed.
+- `tests/tui-layout-smoke.ts` (or the remote-control smoke): an offer whose fingerprint has a wide
+  grapheme at the wrap boundary keeps every remaining grapheme; no line exceeds the width.
+- Run `smoke:autonomy-inbox`, `smoke:tui-layout`, `smoke:remote-control`.
+
+## Checks
+
+Derive with `node packages/core/check-all.ts --for-changed=...` after the edits and run the named
+scripts. Expected: `smoke:control-center`, `smoke:autonomy-inbox`, `smoke:tui-layout`,
+`smoke:remote-control`, `smoke:docs`, `test:typecheck`, `test:lint`. Never run `npm test` or
+`npm run check:all`.
+
+## Order
+
+DE-101a, then DE-101b (one `workflow_run` with an implementer and a gated reviewer per item).
+DE-98 is recorded, not implemented.

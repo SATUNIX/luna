@@ -1,39 +1,41 @@
 # Run `luna-ux-01` — handoff
 
-State after cycle 34 (branch `pi/luna-ux-01`, cycle base `93481e6b8904`, code head `be41afb` plus
-the records commit). Report: `autonomy/cycles/luna-ux-01/34/report.md`, evidence in `verify.md`.
+State after cycle 01 (branch `pi/luna-ux-01`, cycle base `5fda5d526514`, code head `c638796` plus
+the records commit). Report: `autonomy/cycles/luna-ux-01/01/report.md`, evidence in `verify.md`.
+The run number restarts at 01 on this base; the earlier cycle 34 record and its `ui.json` merge fix
+remain in the tree and in `JOURNAL.md`.
 
-## What cycle 34 landed
+## What cycle 01 landed
 
-- `be41afb` fixes the carry-over `ui.json` settings clobber: `saveSettings()` in
-  `packages/extensions/third_party/custom-footer/index.ts` now parses the shared file (absent or
-  non-object → `{}`), merges the status bar's owned fields (`footer`, `mode`, `tips`, `todos`,
-  `cat`, `ascii` only when on) over it, and writes the merged object. `/footer light`,
-  `/footer ascii off` and `/tips off` no longer drop `hubKey`, `commandMenu`, `pinnedCommands`,
-  `hiddenCommands`, `launchScreen` or `reducedMotion`; a read or write failure returns the message
-  and never throws.
-- New case `uiSettingsMergePreservesForeignKeys` in `tests/status-bar-smoke.ts` seeds all six
-  foreign keys and runs `/footer light`, `/footer ascii on`, `/footer ascii off` and `/tips off`.
-  It fails 1/27 with only the base source restored and passes 27/27 at HEAD. `smoke:docs`,
-  `test:typecheck` and `test:lint` pass; the non-record diff is 6303 characters.
-- `docs/status-bar-and-costs.md` and `CHANGELOG.md` (Unreleased/Fixed) describe the merge.
-- Proposal `luna-ux-01-33-ui-json-settings-clobber.md` is implemented and marked closed.
-- Independent verdict came from a deliberately read-only `reviewer` subagent (`VERDICT: PASS`)
-  after two earlier reviewer runs were killed/hung mid-turn; the second left the base source staged
-  and the parent restored it from `HEAD` before the verdict.
+- DE-98 needed no repair: `CHANGELOG.md` already had all five merged ux entries and
+  `tests/tui-layout-smoke.ts` already used a 25-row QR fixture.
+- `c56acda` adds the control-centre `displayText()` filter: pi-tui strip, then every `Cc`, `Cf` and
+  `Default_Ignorable_Code_Point` character, trim, 500-code-point cap; used by header, page titles
+  and parents, informational rows and typed commands. `smoke:control-center` is 45/45 and the new
+  cases fail on the base source.
+- `922e732` hardens the owner inbox: strict `isIsoTimestamp()` deadlines shared with `lib/board.ts`,
+  refusal of uploaded `answer`/`outcome`, refusal (exit 3, card named) of `--answer` on a settled
+  card, one-line sanitised listing including `outcome.at`, and a `wrap()` that carries a wide
+  grapheme to the next line instead of dropping the rest of the word. `smoke:autonomy-inbox` 7/7,
+  `smoke:tui-layout` 4/4, `smoke:remote-control` 16/16.
+- `4e2938e`, `834963d` and `c638796` are the documentation and review follow-ups: CHANGELOG entries
+  for both hardening changes, corrected `/remote` entry, wrap remainder in
+  `docs/remote-control.md`, both offset signs in `docs/autonomy.md`, and a page-parent filter test.
+- Non-record diff is 35,617 characters. Independent read-only `reviewer`: first FAIL on stale docs
+  and unfiltered `outcome.at`/`page.parent`, then PASS after the follow-ups.
 
 ## Next cycle should know
 
 - Never run `npm test` / `npm run check:all`; the host gate owns the full suite.
 - Any new `autonomy/cycles/<run>/<NN>/report.md` needs its `autonomy/JOURNAL.md` line in the same
-  push or `smoke:docs` fails.
-- A reviewer subagent that runs the base-vs-head check may leave the reverted source staged. Always
-  check `git status` and restore the file before recording a verdict; `cmp` against a saved
-  snapshot plus a green `smoke:status-bar` is the safe confirmation.
-- Gated `workflow_run` plans here have reported `passed` even when the reviewer's final line was
-  `VERDICT: FAIL`; read the reviewer output and act on it.
-- Open, low-priority follow-ups from cycle 34's review: an array-shaped top-level `ui.json` is
-  spread into numeric keys (`isRecord` accepts arrays); `saveSettings()` writes in place (a crash
-  can truncate the shared file); no case covers a malformed existing file on the merge path.
-- Still deferred: idle-cat blink needs an intent decision; older pre-range ux changes and non-TUI
-  user-visible changes still lack Unreleased entries.
+  push or `smoke:docs` fails. `journal.ts` does not rewrite an existing line for the same cycle id;
+  replace it by hand when a cycle is re-recorded.
+- Gated `workflow_run` plans here have reported `passed` with no implementation; always inspect
+  `git status`/`git log` after a step rather than trusting the status. A reviewer that temporarily
+  restores base source can leave it staged; check and restore before committing.
+- The control-centre filter is display-only; `stripTerminalSequences` is still what removes CSI from
+  values before the filter. Keep both.
+- Follow-ups not taken: the hub's `MAX_DISPLAY_LENGTH` cap counts code points, not terminal
+  columns; an uploaded file still cannot correct an existing host card's question/default after the
+  first save (only the host file path can); the wrap test proves behaviour through a newly exported
+  `wrap`, so it does not exercise `pairPanel` at a width where the old drop branch is reachable.

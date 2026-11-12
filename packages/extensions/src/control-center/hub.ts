@@ -165,19 +165,46 @@ export function terminalConfirm(ui: ExtensionUIContext): (title: string, detail:
   return async (title, detail) => (await select(`${title}: ${detail}`, ["No, keep things as they are", "Yes, go ahead"])) === "Yes, go ahead";
 }
 
+// --- display text ------------------------------------------------------------------------------
+
+/**
+ * Every invisible or control code point: format characters (bidi overrides, zero-width joiners),
+ * control characters (ESC, C0 and C1, so a C1 CSI byte cannot act as one) and default-ignorable
+ * code points (variation selectors, Hangul fillers, ...). Same Unicode classes as HIDDEN_CHARS in
+ * packages/autonomy/lib/notebook.ts, repeated here because the hub imports only pi peers and
+ * sibling modules. Display text is one line, so tabs and newlines go too.
+ */
+const HIDDEN_DISPLAY_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
+
+/** A repository-controlled string cannot flood a page or the header strip. */
+const MAX_DISPLAY_LENGTH = 500;
+
+/**
+ * The one filter for every repository-controlled display string: pi-tui's sequence strip first, then
+ * every remaining control/format code point (alternate-screen sequences, resets, C1 CSI, bidi
+ * overrides), then trim, then the length bound. Capping by code point keeps a surrogate pair whole.
+ */
+function displayText(text: string): string {
+  const filtered = stripTerminalSequences(text).replace(HIDDEN_DISPLAY_CHARS, "").trim();
+  return Array.from(filtered).slice(0, MAX_DISPLAY_LENGTH).join("");
+}
+
 // --- page content ------------------------------------------------------------------------------
 
 function informationalPage(page: string, title: string, lines: Array<{ label: string; value: string; command?: string }>): HubRow[] {
-  return lines.map((line, index) => ({
-    id: `${page}.${index}`,
-    page,
-    label: stripTerminalSequences(line.label),
-    value: stripTerminalSequences(line.value),
-    command: line.command ? stripTerminalSequences(line.command) : undefined,
-    description: line.command ? `more: ${stripTerminalSequences(line.command)}` : undefined,
-    kind: "action",
-    available: true,
-  }));
+  return lines.map((line, index) => {
+    const command = line.command ? displayText(line.command) : undefined;
+    return {
+      id: `${page}.${index}`,
+      page,
+      label: displayText(line.label),
+      value: displayText(line.value),
+      command,
+      description: command ? displayText(`more: ${command}`) : undefined,
+      kind: "action",
+      available: true,
+    };
+  });
 }
 
 function securityRows(deps: HubDeps, page: string): HubRow[] {
@@ -236,13 +263,13 @@ export function headerLine(values: HubValues): string {
   ];
   return parts
     .filter((part): part is string => Boolean(part))
-    .map((part) => stripTerminalSequences(part))
+    .map((part) => displayText(part))
     .join(" · ");
 }
 
 function pageTitle(model: HubModel, page: string, values: HubValues): string {
   const title = model.pages.find((p) => p.id === page)?.title ?? page;
-  return stripTerminalSequences(page === "main" ? `Control centre — ${headerLine(values)}` : title);
+  return displayText(page === "main" ? `Control centre — ${headerLine(values)}` : title);
 }
 
 // --- renderers ---------------------------------------------------------------------------------
@@ -252,7 +279,7 @@ function textPage(deps: HubDeps): string {
   for (const page of deps.model.pages) {
     const rows = rowsForPage(page.id, deps);
     if (rows.length === 0) continue;
-    lines.push("", `${stripTerminalSequences(page.title)}${page.parent ? ` (${page.parent})` : ""}`);
+    lines.push("", `${displayText(page.title)}${page.parent ? ` (${displayText(page.parent)})` : ""}`);
     for (const row of rows) {
       const value = row.value ? `: ${row.value}` : "";
       const typed = typedSuffix(row);
@@ -310,14 +337,7 @@ function typedCommand(row: HubRow): string | undefined {
   const raw = row.legacy ?? (prefill ? prefill : undefined) ?? row.command;
   if (!raw) return undefined;
   // A registered control supplies its own legacy text; keep it from adding a newline or escape.
-  const cleaned = Array.from(stripTerminalSequences(raw))
-    .filter((char) => {
-      const code = char.codePointAt(0) ?? 0;
-      return code >= 0x20 && code !== 0x7f;
-    })
-    .join("")
-    .trim();
-  return cleaned || undefined;
+  return displayText(raw) || undefined;
 }
 
 /** `  [/command]`, or nothing when there is no typed command or the label already is it. */

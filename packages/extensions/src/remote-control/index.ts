@@ -130,7 +130,7 @@ const GAP = 3;
  * Word-wrap `text` to `width`, indenting continuation lines by `hang` (dropped when it would leave too little
  * room); a word longer than the room is split. No line is ever longer than `width`.
  */
-function wrap(text: string, width: number, hang = 0): string[] {
+export function wrap(text: string, width: number, hang = 0): string[] {
   width = Math.max(1, width);
   const pad = " ".repeat(hang <= width / 2 ? hang : 0);
   const lines: string[] = [];
@@ -148,9 +148,15 @@ function wrap(text: string, width: number, hang = 0): string[] {
       const room = Math.max(1, width - visibleWidth(lead));
       // Cut on a cell boundary, never inside a wide character or an emoji cluster.
       const chunk = sliceByColumn(rest, 0, room, true);
-      // A single wide grapheme with less than its own width of room cannot be cut; drop it so
-      // the line still fits rather than falling through with an over-wide remainder.
-      if (!chunk) { rest = ""; break; }
+      // A single wide grapheme with less than its own width of room cannot be cut. Drop the
+      // continuation indent and retry on the next line before giving up a grapheme wider than
+      // the whole line, so the rest of the word is not lost.
+      if (!chunk) {
+        if (lead) { lead = ""; continue; }
+        const first = Array.from(rest)[0] ?? "";
+        rest = rest.slice(first.length);
+        continue;
+      }
       lines.push(lead + chunk);
       rest = rest.slice(chunk.length);
       lead = pad;

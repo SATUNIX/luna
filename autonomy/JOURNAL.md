@@ -16,7 +16,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-core-01/05 | Board: PG-10, PG-27 | successful | Added an opt-in trunk channel for the integration branch and repaired the luna-core-01/02 journal gate
 - luna-core-01/06 | Board: PG-10, PG-27 | successful | Added a dated offline eval baseline with a 7-day freshness check and consolidated the trunk channel docs and npm guard
 - luna-ops-01/03 | Board: A-01, A-91 | successful | Added the missing luna-core-01/01 entry that reddened smoke:docs and made the journal check flag an entry with no report | decisions: autonomy/decisions/luna-ops-01-03-team-journal.md
-- luna-ux-01/01 | Board: V-05 | successful | Added the Luna launch screen with a self-stopping reveal, reduced motion, narrow and ASCII fallbacks, tests and docs
+- luna-ux-01/01 | Board: DE-98, DE-101 | successful | Verified DE-98 already satisfied at base, then landed the control-centre whole-class display filter and the owner-inbox hardening (strict deadlines, refused settled/uploaded decisions, sanitised listing) plus the remote wrap remainder, with failing-at-base tests, docs, CHANGELOG entries and an independent reviewer PASS
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
 - luna-fleet-01/05 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs into workflow_status and /workflows and repaired the red gate checks
 - luna-fleet-01/06 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs onto a clean base, repaired red smoke:docs gate, and recorded the cycle

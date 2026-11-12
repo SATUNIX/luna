@@ -434,25 +434,44 @@ tests.push([
 tests.push([
   "the hub header and informational rows strip terminal control sequences",
   async () => {
+    const hidden = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
     const header = headerLine({ profile: "x\u001b[2Jowned", securityMissing: true });
     assert.ok(!header.includes("\u001b"), "the header must not contain ESC");
     assert.equal(header, "profile xowned", "the header keeps the visible text");
 
+    // A reset is stripped by pi-tui; an alternate-screen sequence is not `m/G/K/H/J` CSI, so its
+    // ESC is left behind, and the whole-class filter removes it.
+    const screened = headerLine({ profile: "x\u001b[0mown\u001b[?1049hend", securityMissing: true });
+    assert.ok(!screened.includes("\u001b"), "the header must not contain ESC from an alternate screen or reset");
+    assert.ok(!hidden.test(screened), "the header keeps no control or format code point");
+    assert.ok(screened.includes("own"), "the header keeps its visible text");
+
     const model = await modelFor([]);
     const deps = makeDeps({ model, commands: [] });
-    deps.doctor = () => [{ ok: true, label: "Bad\u001b[2JLabel", value: "val\u001b[2Jue", command: "/x\u001b[2Jy" }];
+    deps.doctor = () => [
+      { ok: true, label: "Bad\u001b[2JLabel", value: "val\u001b[2Jue", command: "/x\u001b[2Jy" },
+      { ok: true, label: "C1", value: "val\u009b2Jue", command: "" },
+      { ok: true, label: "Long", value: "v".repeat(600), command: "" },
+    ];
     const rows = rowsForPage("doctor", deps);
     assert.equal(rows[0]?.label, "BadLabel", "the label loses its control sequence");
     assert.equal(rows[0]?.value, "value", "the value loses its control sequence");
     assert.equal(rows[0]?.description, "more: /xy", "the command loses its control sequence");
+    assert.ok(!rows[1]?.value?.includes("\u009b"), "the value loses its C1 CSI");
+    assert.ok(!hidden.test(rows[1]?.value ?? ""), "the value keeps no control or format code point");
+    assert.ok(rows[1]?.value?.includes("val"), "the value keeps its visible text");
+    assert.equal(rows[2]?.value?.length, 500, "a long value is capped at 500 characters");
+    assert.equal(rows[2]?.value, "v".repeat(500), "the cap keeps the leading visible text");
 
-    const titled = { ...model, pages: model.pages.map((page, index) => index === 0 ? { ...page, title: "Bad\u001b[2JPage" } : page) };
+    const titled = { ...model, pages: model.pages.map((page, index) => index === 0 ? { ...page, title: "Bad\u001b[2J\u202ePage", parent: "P\u0007\u202earent" } : page) };
     assert.ok(titled.pages[0], "the fallback model defines a first page");
     const captured: string[] = [];
     await openHub(makeDeps({ model: titled, commands: [], ctx: makeCtx("print", process.cwd(), false), write: (text) => captured.push(text) }), titled.pages[0]?.id);
     const pageText = captured.join("");
     assert.ok(pageText.includes("BadPage"), "the visible page title survives");
     assert.ok(!pageText.includes("\u001b"), "the page title must not contain ESC");
+    assert.ok(!pageText.includes("\u202e"), "the page title must not contain a bidi override");
+    assert.ok(pageText.includes("(Parent)"), "the page parent keeps its visible text and loses control and bidi characters");
   },
 ]);
 

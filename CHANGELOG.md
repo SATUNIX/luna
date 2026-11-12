@@ -21,6 +21,10 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `needs`; its job-header check now also sees a header with a trailing comment. The repository ruleset
   is unchanged: it requires only `ci-complete`. Not covered: a release run calls the whole of `ci.yml`,
   so a failed `coverage` job still stops a release (`docs/ci-security.md`).
+- **The update notice names the branch it counts against.** The line `trunk is N commits ahead — /update
+  channel next` counted commits on `main`, while the `trunk` channel follows `integration/luna`, so the
+  word meant two different branches. It now reads `main is N commits ahead — /update channel next`; the
+  suggested command is unchanged. Pinned by `tests/update-notice-smoke.ts` (`smoke:update-notice`).
 
 - **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
   `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat

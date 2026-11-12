@@ -8,6 +8,7 @@
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
 //   pi-autonomy promote --run <id>              carry out an approval-gated promotion
 //   pi-autonomy export --run <id> [--out dir]   results, evidence, usage, decisions and the work
+//   pi-autonomy board claim <id> --run <id> --by <agent>   atomically claim a board item
 //   pi-autonomy boundary --config run.json [--probe]   the boundary alone, or the live container probe
 //   pi-autonomy reconfigure --run <id> [flags]  the only way effort or budgets change for an existing run
 //
@@ -26,7 +27,7 @@ import { num, parseArgs } from "./lib/cli-args.ts";
 import { type Budget, formatProblems, resolveContract, type RunContract, type TemplateId } from "./lib/contract.ts";
 import { type EffortApi, effortApi } from "./lib/effort.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
-import { readBoard, readBoardFile } from "./lib/board.ts";
+import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
@@ -178,6 +179,26 @@ async function offline<T>(store: RunStore, deps: CliDeps, fn: () => Promise<T>):
   const lock = lockFor(store, deps);
   const got = lock.acquire();
   if (!got.acquired) throw new CliError("refused", got.reason);
+  try { return await fn(); } finally { lock.release(); }
+}
+
+/** The board lock is short-lived but contended: a claimant waits for the current writer instead of failing. */
+const BOARD_LOCK_ATTEMPTS = 200;
+const BOARD_LOCK_DELAY_MS = 25;
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Serialise board writes (a claim and a `board --file` replacement) on control/board.lock. The run's
+ * supervision lock is separate; this one only guards the host-owned board file.
+ */
+async function withBoardLock<T>(store: RunStore, deps: CliDeps, fn: () => T | Promise<T>): Promise<T> {
+  const lock = createRunLock({ file: path.join(store.p.control, "board.lock"), pid: deps.pid, ...deps.lockOptions });
+  let got = lock.acquire();
+  for (let attempt = 1; !got.acquired && attempt < BOARD_LOCK_ATTEMPTS; attempt++) {
+    await sleep(BOARD_LOCK_DELAY_MS);
+    got = lock.acquire();
+  }
+  if (!got.acquired) throw new CliError("refused", got.reason, { lock: "board" });
   try { return await fn(); } finally { lock.release(); }
 }
 
@@ -513,7 +534,13 @@ const commands: Record<string, Command> = {
     const { opts } = parseArgs(argv, { values: ["run"], flags: ["json"] });
     if (!opts.run) {
       const runs = listRuns(deps.home);
-      return { data: { runs, home: deps.home }, text: runs.length ? runs.map((r) => `${r.run.padEnd(28)} ${String(r.template).padEnd(12)} ${String(r.status)}${isRecord(r.outcome) && typeof r.outcome.reason === "string" && r.outcome.reason ? ` [${r.outcome.reason}]` : ""}${r.legacy ? " (written by the v0 supervisor; read-only)" : ""}`).join("\n") : `no runs under ${deps.home}` };
+      return { data: { runs, home: deps.home }, text: runs.length ? runs.map((r) => {
+        const step = typeof r.step === "number" ? ` step ${r.step}` : "";
+        const spend = r.spentUsd !== null && r.budgetUsd !== null ? ` spent ${usd(r.spentUsd)} of ${usd(r.budgetUsd)}` : "";
+        const question = r.blocker && r.blocker.question.length > 120 ? `${r.blocker.question.slice(0, 120)}\u2026` : r.blocker?.question;
+        const blocker = r.blocker ? `; BLOCKED (${r.blocker.kind}): ${question}` : "";
+        return `${r.run.padEnd(28)} ${String(r.template).padEnd(12)} ${String(r.status)}${step}${spend}${isRecord(r.outcome) && typeof r.outcome.reason === "string" && r.outcome.reason ? ` [${r.outcome.reason}]` : ""}${blocker}${r.legacy ? " (written by the v0 supervisor; read-only)" : ""}`;
+      }).join("\n") : `no runs under ${deps.home}` };
     }
     const report = statusReport(openStore(opts.run, deps), deps);
     return { data: report, text: statusText(report) };
@@ -551,16 +578,55 @@ const commands: Record<string, Command> = {
   },
 
   async board(argv, deps) {
-    const { opts } = parseArgs(argv, { values: ["run", "file"], flags: ["json"] });
+    const { opts, rest } = parseArgs(argv, { values: ["run", "file", "by"], flags: ["json"] });
+    const claim = rest[0] === "claim";
+    if (rest.length && !claim) throw new CliError("usage", `unknown board subcommand ${JSON.stringify(rest[0])}`);
+    if (claim && rest.length !== 2) throw new CliError("usage", "board claim needs exactly one item id");
     const store = openStore(opts.run, deps);
     const state = readState(store);
-    if (state.template !== "self-improve") throw new CliError("refused", "board is for self-improve cycles");
+    // `dispatch` is the second template that works a steward board (registered by the follow-up change).
+    const boardTemplates: readonly string[] = ["self-improve", "dispatch"];
+    if (!boardTemplates.includes(state.template)) throw new CliError("refused", "board is for self-improve and dispatch cycles");
+    if (claim) {
+      const id = rest[1] ?? "";
+      const by = opts.by?.trim();
+      if (!by) throw new CliError("usage", "--by <agent> is required");
+      if (opts.file) throw new CliError("usage", "board claim does not take --file");
+      return withBoardLock(store, deps, () => {
+        let board;
+        try { board = readBoard(store.p.control); }
+        catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+        let result: ClaimBoardResult;
+        try { result = claimBoardItem(board, id, by, deps.now().toISOString()); }
+        catch (e) { throw new CliError("refused", e instanceof Error ? e.message : String(e)); }
+        if (result.outcome === "loser") {
+          throw new CliError("refused", `board item ${id} is already claimed by ${result.item.assignee ?? "another agent"}`, {
+            id,
+            assignee: result.item.assignee ?? null,
+            claimedAt: result.item.claimedAt ?? null,
+          });
+        }
+        if (result.outcome === "winner") writeJsonAtomic(path.join(store.p.control, "board.json"), result.board, { mode: 0o600 });
+        return {
+          data: { run: state.run, board: result.board, item: result.item, already: result.outcome === "already" },
+          text: result.outcome === "winner"
+            ? `claimed ${id} for ${by}`
+            : `${id} is already claimed by ${by} (since ${result.item.claimedAt ?? "unknown"})`,
+        };
+      });
+    }
     if (!opts.file && !opts.json) throw new CliError("usage", "--file <path.json> or --json is required");
+    if (opts.file) {
+      let board;
+      try { board = readBoardFile(path.resolve(opts.file)); }
+      catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+      await withBoardLock(store, deps, () => writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 }));
+      return { data: { run: state.run, board }, text: "steward board saved for the next cycle prompt" };
+    }
     let board;
-    try { board = opts.file ? readBoardFile(path.resolve(opts.file)) : readBoard(store.p.control); }
+    try { board = readBoard(store.p.control); }
     catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
-    if (opts.file) writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 });
-    return { data: { run: state.run, board }, text: opts.file ? "steward board saved for the next cycle prompt" : JSON.stringify(board, null, 2) };
+    return { data: { run: state.run, board }, text: JSON.stringify(board, null, 2) };
   },
 
   async backlog(argv, deps) {
@@ -710,6 +776,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   status [--run <id>]                    one run, or all runs
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json
+  board claim <id> --run <id> --by <agent>   atomically claim one board item
   resume --run <id> [--answer <text> | --approve | --deny]
   promote --run <id> [--yes]             carry out an approval-gated promotion
   export --run <id> [--out <dir>]        results, evidence, usage, decisions, the work

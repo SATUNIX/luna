@@ -1,14 +1,18 @@
 /**
  * One query over every run this workspace knows about, whoever wrote it.
  *
- * Four stores hold runs, and each format once had its own surface:
+ * Several stores hold runs, and each format once had its own surface:
  *   - `run.json` in `.pi/workflows/runs/<id>/`: a script run (the sandboxed workflow engine);
  *   - `state.json` in the same run directory: a YAML run (the step executor);
  *   - `runs.jsonl` in `.pi/subagent/`: one background subagent's start/end rows, for a run that
  *     has no run directory of its own. A row belongs to a workflow run when that run recorded its
  *     id as a child, and is then not a run of its own;
  *   - this process's live registry (`run-model.ts`): runs that are live now, or finished in this
- *     session, including one whose state.json has not been written yet.
+ *     session, including one whose state.json has not been written yet;
+ *   - an autonomous container run under `$PI_AUTONOMY_HOME` (else
+ *     `$XDG_STATE_HOME/pi-autonomy`, else `~/.local/state/pi-autonomy`): its `state.json`,
+ *     `contract.json` and `supervisor.lock`. It is read here, not imported from
+ *     `packages/autonomy`, because this extension must stay self-contained.
  *
  * This module is a read-only view over those unchanged stores, so a run started by another
  * process is just as visible as one started here. Nothing here writes; nothing holds a prompt or
@@ -18,6 +22,7 @@
  * stop paths always describe the same set of runs.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isRecord } from "./config.ts";
 import { subagentStateDir } from "./logging.ts";
@@ -28,7 +33,7 @@ import { readJournal } from "./wf-engine.ts";
 import { loadState, MAX_SCRIPT_BYTES, readRunFile, runsRoot, summarizeRun } from "./workflow.ts";
 
 /** A run's storage format, as the list labels it. */
-export type RunFormat = RunKind | "subagent";
+export type RunFormat = RunKind | "subagent" | "autonomy";
 
 /** One run of any format. A script or YAML run that is live in this process has `live: true`. */
 export interface QueriedRun {
@@ -43,6 +48,11 @@ export interface QueriedRun {
   agents: number;
   outputTokens: number;
   error?: string | undefined;
+  /** Autonomy runs: the question a blocked run waits on, shown in the list line. */
+  blockerQuestion?: string | undefined;
+  /** Autonomy runs: dollars spent and the run's dollar budget, shown in the list line. */
+  spendUsd?: number | undefined;
+  budgetUsd?: number | undefined;
   /** Workflow runs: the run directory. */
   dir?: string | undefined;
   /** Background subagent runs: its log file and recorded pid. */
@@ -153,6 +163,164 @@ function yamlRow(root: string, id: string, state: NonNullable<ReturnType<typeof 
   };
 }
 
+const AUTONOMY_STALE_MS = 120_000;
+// Terminal states only. budget_exhausted is not terminal: it can be reconfigured and resumed
+// (`packages/autonomy/lib/lifecycle.ts`), so its run keeps no endedAt.
+const AUTONOMY_ENDED: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled"]);
+
+interface AutonomyTask {
+  title: string;
+  status: string;
+}
+
+interface AutonomyBlocker {
+  kind: string;
+  question: string;
+  options: string[];
+}
+
+interface AutonomyStateInfo {
+  template: string;
+  status: string;
+  phase: string;
+  step: number;
+  startedAt: string;
+  updatedAt: string;
+  usage: { usd: number; minutes: number; steps: number };
+  budget: { totalUsd: number; maxSteps: number; maxMinutes: number };
+  blocker: AutonomyBlocker | null;
+  tasks: AutonomyTask[];
+  lastError: string;
+}
+
+/** The state home, the same three choices `packages/autonomy/lib/paths.ts` makes. */
+function autonomyHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.PI_AUTONOMY_HOME || path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "pi-autonomy");
+}
+
+/** A run file parsed as JSON, bounded and link-rejecting like every other run read here. */
+function readJsonFile(dir: string, name: string): unknown {
+  try {
+    return JSON.parse(readRunFile(dir, name, MAX_SCRIPT_BYTES));
+  } catch {
+    return null;
+  }
+}
+
+const stringList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+
+/** A validated autonomy state.json, or null when the file is missing or not a run state. */
+function autonomyStateOf(raw: unknown): AutonomyStateInfo | null {
+  if (!isRecord(raw) || typeof raw.template !== "string" || typeof raw.status !== "string") return null;
+  const usage = isRecord(raw.usage) ? raw.usage : {};
+  const limits = isRecord(raw.limits) ? raw.limits : {};
+  const budget = isRecord(limits.budget) ? limits.budget : {};
+  const blocker = isRecord(raw.blocker) && typeof raw.blocker.question === "string"
+    ? { kind: stringOf(raw.blocker.kind), question: raw.blocker.question, options: stringList(raw.blocker.options) }
+    : null;
+  const tasks = Array.isArray(raw.tasks)
+    ? raw.tasks.flatMap((task): AutonomyTask[] => (isRecord(task) && typeof task.title === "string" ? [{ title: task.title, status: stringOf(task.status) }] : []))
+    : [];
+  const history = Array.isArray(raw.history) ? raw.history : [];
+  const firstHistory = history.find((entry): entry is Record<string, unknown> => isRecord(entry) && typeof entry.at === "string");
+  const createdAt = stringOf(raw.createdAt);
+  return {
+    template: raw.template,
+    status: raw.status,
+    phase: stringOf(raw.phase),
+    step: countOf(raw.step),
+    startedAt: createdAt || stringOf(firstHistory?.at),
+    updatedAt: stringOf(raw.updatedAt),
+    usage: { usd: countOf(usage.usd), minutes: countOf(usage.minutes), steps: countOf(usage.steps) },
+    budget: { totalUsd: countOf(budget.totalUsd), maxSteps: countOf(budget.maxSteps), maxMinutes: countOf(budget.maxMinutes) },
+    blocker,
+    tasks,
+    lastError: stringOf(raw.lastError),
+  };
+}
+
+function autonomyName(dir: string, state: AutonomyStateInfo): string {
+  const contract = readJsonFile(dir, "contract.json");
+  if (isRecord(contract) && isRecord(contract.objective) && typeof contract.objective.title === "string") return contract.objective.title;
+  return state.template;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * A process's start time on Linux, or null when it cannot be read. Off Linux the pid-reuse check is
+ * skipped and liveness falls back to pid and heartbeat, which `packages/autonomy/lib/runlock.ts`
+ * also does when it cannot read a start time.
+ */
+function processStartTime(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return `proc:${rest[19] ?? "undefined"}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a run's supervisor is live, and why (or why not), from its lock file alone. */
+function autonomyLock(dir: string): { live: boolean; why: string } {
+  const raw = readJsonFile(dir, "supervisor.lock");
+  if (!isRecord(raw)) return { live: false, why: "no readable supervisor.lock" };
+  const pid = raw.pid;
+  const host = raw.host;
+  const heartbeatAt = raw.heartbeatAt;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return { live: false, why: "supervisor.lock has no valid pid" };
+  if (typeof host !== "string" || typeof heartbeatAt !== "string") return { live: false, why: "supervisor.lock is incomplete" };
+  const beat = Date.parse(heartbeatAt);
+  if (!Number.isFinite(beat)) return { live: false, why: "supervisor.lock has no valid heartbeat" };
+  const age = Date.now() - beat;
+  // Mirror `assessLock` in packages/autonomy/lib/runlock.ts: an owner on another host is judged by
+  // heartbeat age alone (its pid is not ours to signal); a same-host owner also needs a live pid
+  // and, when both sides have one, the same process start time.
+  if (host !== os.hostname()) {
+    return age > AUTONOMY_STALE_MS
+      ? { live: false, why: `held from ${host}; heartbeat is ${Math.round(age / 1000)}s old` }
+      : { live: true, why: `held from ${host}; heartbeat is ${Math.round(age / 1000)}s old` };
+  }
+  if (!pidAlive(pid)) return { live: false, why: `process ${pid} no longer exists` };
+  // A recorded start time catches a pid reused by another process; only trust it when both sides agree.
+  const recordedStart = raw.startTime;
+  if (typeof recordedStart === "string" && recordedStart) {
+    const currentStart = processStartTime(pid);
+    if (currentStart !== null && currentStart !== recordedStart) return { live: false, why: `pid ${pid} was reused by another process` };
+  }
+  if (age > AUTONOMY_STALE_MS) return { live: false, why: `process ${pid} is alive but has not written a heartbeat for ${Math.round(age / 1000)}s` };
+  return { live: true, why: `process ${pid} is running` };
+}
+
+function autonomyRow(dir: string, id: string, state: AutonomyStateInfo): QueriedRun {
+  const lock = autonomyLock(dir);
+  return {
+    id,
+    format: "autonomy",
+    name: autonomyName(dir, state),
+    status: state.status,
+    startedAt: state.startedAt,
+    endedAt: AUTONOMY_ENDED.has(state.status) ? state.updatedAt : "",
+    live: lock.live,
+    paused: state.status === "paused",
+    agents: 0,
+    outputTokens: 0,
+    ...(state.lastError ? { error: state.lastError } : {}),
+    ...(state.blocker ? { blockerQuestion: state.blocker.question } : {}),
+    spendUsd: state.usage.usd,
+    budgetUsd: state.budget.totalUsd,
+    dir,
+  };
+}
+
 function subagentRow(row: RunRow): QueriedRun {
   return {
     id: row.id,
@@ -246,11 +414,18 @@ export function queryRuns(cwd: string, opts: QueryOptions = {}): QueriedRun[] {
     if (runIds.has(row.id) || childIds.has(row.id)) continue;
     byId.set(row.id, subagentRow(row));
   }
+  // A workflow or script row of the same id wins; an autonomous run fills only an unused id.
+  for (const id of runDirectoryIds(autonomyHome())) {
+    if (byId.has(id)) continue;
+    const dir = path.join(autonomyHome(), id);
+    const state = autonomyStateOf(readJsonFile(dir, "state.json"));
+    if (state) byId.set(id, autonomyRow(dir, id, state));
+  }
   // A workflow run this session controls is live even when it feeds its own registry (a caller
   // may hand `executeWorkflow` a private one): its pause state comes from the control, as before.
   for (const row of byId.values()) {
     const control = runControls.get(row.id);
-    if (!control || row.format === "subagent") continue;
+    if (!control || row.format === "subagent" || row.format === "autonomy") continue;
     row.live = true;
     row.paused = control.paused;
   }
@@ -270,7 +445,13 @@ export function formatRunLine(run: QueriedRun): string {
   const duration = elapsed(run.startedAt, run.endedAt);
   if (duration) parts.push(duration);
   const error = run.error ? ` — ${run.error.slice(0, 120)}` : "";
-  return `${parts.join(" · ")}${error}`;
+  // A blocked autonomy run says what it waits on, so the owner can answer it from the list.
+  const blocker = run.format === "autonomy" && run.blockerQuestion ? ` — blocked: ${run.blockerQuestion.slice(0, 160)}` : "";
+  // Autonomy runs are budgeted in dollars; their spend belongs on their line only.
+  const spend = run.format === "autonomy" && run.spendUsd !== undefined && run.budgetUsd !== undefined
+    ? ` · $${run.spendUsd.toFixed(2)} of $${run.budgetUsd.toFixed(2)}`
+    : "";
+  return `${parts.join(" · ")}${spend}${error}${blocker}`;
 }
 
 /** The most runs `workflow_status` lists in one call. */
@@ -302,6 +483,31 @@ function describeSubagent(cwd: string, run: QueriedRun, tail: number): string {
   }
 }
 
+function describeAutonomy(run: QueriedRun, id: string): string {
+  const dir = run.dir ?? "";
+  const state = autonomyStateOf(readJsonFile(dir, "state.json"));
+  if (!state) return `Format: autonomy · run ${id}\n${formatRunLine(run)}\nRun directory: ${dir || "?"}`;
+  const lock = autonomyLock(dir);
+  const phase = state.phase ? ` · phase ${state.phase}` : "";
+  const lines = [
+    `Format: autonomy · run ${id}`,
+    `autonomy ${state.template} · ${run.name}`,
+    `Status: ${state.status}${phase} · step ${state.step} · supervisor: ${lock.live ? "live" : "not live"} (${lock.why})`,
+    `Spent $${state.usage.usd.toFixed(2)} of $${state.budget.totalUsd.toFixed(2)}, ${state.usage.steps}/${state.budget.maxSteps} steps, ${Math.round(state.usage.minutes)}/${state.budget.maxMinutes} min`,
+  ];
+  if (state.blocker) {
+    lines.push(`Blocker (${state.blocker.kind || "blocked"}): ${state.blocker.question}`);
+    if (state.blocker.options.length > 0) lines.push(`Options: ${state.blocker.options.join(" | ")}`);
+  }
+  const inProgress = state.tasks.filter((task) => task.status === "in_progress").map((task) => task.title);
+  const done = state.tasks.filter((task) => task.status === "done").map((task) => task.title);
+  if (inProgress.length > 0) lines.push(`In progress: ${inProgress.join("; ")}`);
+  if (done.length > 0) lines.push(`Done: ${done.join("; ")}`);
+  if (state.lastError) lines.push(`Last error: ${state.lastError}`);
+  lines.push(`Run directory: ${dir || "?"}`, `Supervisor log: ${dir ? path.join(dir, "supervisor.log") : "?"}`);
+  return lines.join("\n");
+}
+
 function describeScript(run: QueriedRun): string {
   const meta = run.dir ? scriptMetaOf(readScriptFile(run.dir)) : null;
   const launched = meta ? `${meta.launched} agents launched${meta.cached ? ` (${meta.cached} cached)` : ""}` : `${run.agents} agents launched`;
@@ -331,6 +537,7 @@ export function describeRun(cwd: string, id: string, opts: QueryOptions & { tail
   }
   if (run.format === "subagent") return describeSubagent(cwd, run, opts.tail ?? TAIL_LINES);
   if (run.format === "script") return describeScript(run);
+  if (run.format === "autonomy") return describeAutonomy(run, id);
   const state = loadState(cwd, id);
   if (!state) return `Format: yaml · run ${id}\n${formatRunLine(run)}\nRun directory: ${run.dir ?? "?"}`;
   return `Format: yaml · run ${id}\n${summarizeRun(state)}\n\nRun directory: ${run.dir ?? "?"}`;

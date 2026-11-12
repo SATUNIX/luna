@@ -17,7 +17,7 @@ import { assert, implementRaw, makeChecker, tempDir, rm, testEffort, type RawCon
 import { main, type CliDeps as RealCliDeps, type RuntimeFactoryOptions } from "../packages/autonomy/cli.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
-import { RunStore } from "../packages/autonomy/lib/store.ts";
+import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { FakeEngine, FakeRuntime, kill } from "../packages/autonomy/tests/fake-runtime.ts";
 import { NODE_EXIT, ANSWER, type BacklogItem, type RunBlocker, type RunContract, type RunOutcome, type ReviewFn, type Script, type ScriptContext } from "./autonomy-harness.ts";
 
@@ -516,6 +516,26 @@ await check("blocked: the question is recorded and shown; resume needs --answer;
   assert.deepEqual([st.blocker.kind, st.blocker.method], ["question", "input"]);
   assert.match(st.blocker.question, /41 or 42/);
   assert.match((await w.run("status", "--run", "todo-api-1")).stdout, /BLOCKED \(question\): .*41 or 42[\s\S]*pi-autonomy resume --run todo-api-1 --answer/);
+  // The fleet list carries what the owner needs to answer what it is doing and what it spent.
+  const fleet = (await w.run("status", "--json")).json();
+  const row = fleet.runs.find((r) => r.run === "todo-api-1");
+  assert.ok(row, "the blocked run is in the fleet list");
+  assert.deepEqual([typeof row.step, typeof row.spentUsd, typeof row.budgetUsd], ["number", "number", "number"]);
+  assert.deepEqual(row.blocker, { kind: "question", question: st.blocker.question });
+  const fleetText = (await w.run("status")).stdout;
+  assert.match(fleetText, /step \d+/);
+  assert.match(fleetText, /spent \$\d+\.\d\d of \$\d+\.\d\d/);
+  assert.match(fleetText, /BLOCKED \(question\): .*41 or 42/);
+  // A corrupt/v0 row cannot leak a non-number into the list: every extra field narrows to null.
+  const badHome = scratch();
+  fs.mkdirSync(path.join(badHome, "bad-run-1"), { recursive: true });
+  fs.writeFileSync(path.join(badHome, "bad-run-1", "state.json"), JSON.stringify({ run: "bad-run-1", template: "implement", status: "blocked", updatedAt: "x", usage: { usd: "a lot" }, limits: { budget: { totalUsd: -1 } }, step: "3", blocker: { kind: 1, question: null } }));
+  const [badRow] = listRuns(badHome);
+  assert.ok(badRow, "a readable state directory is listed");
+  assert.deepEqual([badRow.spentUsd, badRow.budgetUsd, badRow.step, badRow.blocker], [null, null, null, null]);
+  fs.mkdirSync(path.join(badHome, "mixed-run-1"), { recursive: true });
+  fs.writeFileSync(path.join(badHome, "mixed-run-1", "state.json"), JSON.stringify({ run: "mixed-run-1", status: "blocked", updatedAt: "y", blocker: { kind: "question", question: "why?\nnow\u001b[2J" } }));
+  assert.deepEqual(listRuns(badHome).find((r) => r.run === "mixed-run-1")?.blocker, { kind: "question", question: "why? now[2J" }, "a worker-written question is collapsed to one line");
   const noAnswer = await w.run("resume", "--run", "todo-api-1", "--json");
   assert.equal(noAnswer.code, 3);
   assert.match(noAnswer.json().error, /--answer/);
@@ -666,6 +686,14 @@ await check("a detached supervisor's log line is written exactly once", () => {
   const lines = fs.readFileSync(logPath, "utf8").split("\n").filter((line) => line !== "");
   assert.deepEqual(lines, ["state running"], "the detached log holds the line once");
 });
+
+// The board-claim race suite starts real child processes. It is listed as an indirect wire in
+// MANUAL_ONLY so the gate runs it here instead of requiring a package.json script (which a cycle
+// may not change); this assertion is what keeps that exemption honest.
+{
+  const dispatch = spawnSync(process.execPath, [path.join(HERE, "autonomy-dispatch-smoke.ts")], { encoding: "utf8" });
+  assert.equal(dispatch.status, 0, `the dispatch claim suite failed: ${dispatch.stdout}${dispatch.stderr}`);
+}
 
 for (const d of dirs) rm(d);
 done();

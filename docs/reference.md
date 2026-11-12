@@ -66,7 +66,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
 | `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
 | `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
-| `/workflows` | `subagent` | Every workflow and subagent run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
+| `/workflows` | `subagent` | Every workflow, subagent and autonomous run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
 ## Tools
 
@@ -412,7 +412,7 @@ Extension `subagent`. Run subagent steps with a shared directory, gates and resu
 
 ### `workflow_status`
 
-Extension `subagent`. List runs of every format — workflow YAML runs, workflow script runs and background subagents — live or finished, started here or by another process. With id, show one run: a YAML run's steps, a script run's counters, or a background subagent's log tail.
+Extension `subagent`. List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. With id: YAML steps, script counters, a subagent's log tail, or an autonomous run's template, spend, blocker and liveness.
 
 | Parameter | Type | Description |
 |---|---|---|

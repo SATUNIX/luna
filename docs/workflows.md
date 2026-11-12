@@ -16,14 +16,14 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `/workflow list` | Available workflows and their inputs (`*` = required) |
 | `/workflow run feature goal="add rate limiting to /api/orders"` | Start a run in the background. The footer shows progress, and the summary is posted into the session when it finishes. `/workflow run` with no name opens a picker. |
 | `/workflow status [run-id]` | Recent runs, or one run's steps |
-| `/workflows` | Every run of this workspace, of every format, live or finished |
+| `/workflows` | Every run the workspace and the autonomy state home know about — workflow YAML and script runs, background subagents and autonomous container runs — live or finished |
 | `/workflows panel [run-id]` | The workflow panel: this session's runs with their phases, agents and narration (see [The /workflows panel](#the-workflows-panel)) |
 | `/workflow pause <run-id>` | Pause a live run: it starts no new agents (see [Pausing, stopping and skipping](#pausing-stopping-and-skipping)) |
 | `/workflow skip <run-id>` | Stop the agents running now and record their steps as `skipped` |
 | `/workflow stop <run-id>` | Stop an active run (it can be resumed) |
 | `/workflow resume <run-id>` | Unpause a live paused run; otherwise continue an interrupted or failed run from its current step |
 | `workflow_run` tool | The agent runs a workflow itself: `{name, inputs}`, `{name: "list"}`, `{resume: "<run-id>"}`, or an [inline plan](#inline-plans) as `{steps: [...]}` |
-| `workflow_status` tool | The agent inspects runs; a live run shows `(active)` or `(active, paused)` |
+| `workflow_status` tool | The agent inspects runs of every format, including autonomous container runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
 Esc cancels a `workflow_run` started by the agent. The current step's subagent is stopped,
@@ -444,7 +444,7 @@ Checked by `tests/workflow-telemetry-smoke.ts` (`npm run smoke:workflow-telemetr
 
 ## The /workflows panel
 
-Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`).
+Bare `/workflows` lists the runs of every format as text (`tests/run-query-smoke.ts`): workflow YAML and script runs, background subagents, and autonomous container runs under `PI_AUTONOMY_HOME` (else `$XDG_STATE_HOME/pi-autonomy`, else `~/.local/state/pi-autonomy`).
 `/workflows panel [run-id]` opens the panel, which shows the workflow runs of this pi session, read from the
 run model above (`wf-panel.ts`). Runs started in another pi process are not shown there; use
 `/workflows` or `workflow_status` for those, and `workflow_status {id}` and `workflow_control` for

@@ -269,3 +269,10 @@
     that returns sends `done` instead, so its calls are cancelled with the script and never start,
     however the pipe splits the runner's lines (`tests/workflow-sandbox-smoke.ts`,
     `tests/workflow-hooks-smoke.ts` r23).
+  - **Autonomous runs in the run list (2026-11-11):** `run-query.ts` adds an `autonomy` row from
+    `$PI_AUTONOMY_HOME/<run>/state.json` and `contract.json`, with dollars spent against the budget,
+    the blocker question and a liveness verdict from `supervisor.lock` (a same-host owner needs a
+    live pid, a fresh heartbeat and a matching start time; a foreign host is judged by heartbeat
+    age). It reads with node builtins rather than importing
+    `packages/autonomy`; a workflow or script row of the same id wins
+    (`tests/run-query-smoke.ts`).

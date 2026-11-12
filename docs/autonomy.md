@@ -109,7 +109,8 @@ node packages/autonomy/cli.ts init --template implement --out run.json \
     --spec "A small HTTP API for todos" --check unit="node --test tests/"
 node packages/autonomy/cli.ts plan --config run.json          # the boundary, its digest, problems
 node packages/autonomy/cli.ts start --config run.json         # confirm the boundary; then it runs
-node packages/autonomy/cli.ts status --run <run>              # or `status` for every run
+node packages/autonomy/cli.ts status --run <run>              # one run, or `status` for the fleet
+# `status` lists every run with its step, spend against budget, and the question a blocked run waits on.
 node packages/autonomy/cli.ts export --run <run>              # results, evidence, usage, the work
 ```
 
@@ -137,6 +138,18 @@ authorisation for exactly that digest and starts the run in the background. With
 refuses unless the contract already carries a matching authorisation, made earlier at a terminal
 with `plan --authorise`. `cancel`, `promote`, `reconfigure` and `resume --approve` ask first. See
 `packages/extensions/src/autonomy-run/README.md`.
+
+### Seeing a run in pi
+
+`workflow_status` and `/workflows` list an autonomous run beside workflow and subagent runs,
+labelled `autonomy`. The list shows its contract title (else its template), status, spend and,
+when blocked, the question it waits on; `workflow_status {id}` shows the phase and step, dollars
+spent against the budget, in-progress and done tasks, the blocker and its options, the last error,
+the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
+`$XDG_STATE_HOME/pi-autonomy/<run>`, else `~/.local/state/pi-autonomy/<run>`), so set
+`PI_AUTONOMY_HOME` in pi's environment to see a non-default state home. This is a read-only view:
+starting, answering, resuming and cancelling a run stay with `/autonomy`
+(`tests/run-query-smoke.ts`).
 
 ## The run contract
 
@@ -409,6 +422,7 @@ pi-autonomy steer --run <run> --message "Focus the current work on recovery"
 pi-autonomy backlog --run <run> --message "Check compaction recovery with evidence"
 pi-autonomy board --run <run> --file board.json
 pi-autonomy board --run <run> --json
+pi-autonomy board claim V-01 --run <run> --by <agent> --json
 pi-autonomy reconfigure --run <run> --budget-usd 100
 pi-autonomy pause --run <run>
 pi-autonomy cancel --run <run> --reason "End the experiment"
@@ -423,8 +437,20 @@ and is available only for self-improve (`tests/autonomy-cli-smoke.ts`,
 `tests/autonomy-selfimprove-smoke.ts`). Backlog text is operator authority: keep the run directory
 host-owned and out of worker mounts.
 
-`board --file` validates and atomically replaces `control/board.json`, exclusively for self-improve
-runs. `board --json` returns the current board (an empty items list for older runs). The format is:
+`board --file` validates and atomically replaces `control/board.json`; `board claim` is the only
+way a worker takes one item. Both writes are serialised on `control/board.lock`, a real run lock
+separate from the supervisor's `supervisor.lock`, and the claimant retries with a bounded wait
+while another writer holds it. `board --json` returns the current board (an empty items list for
+older runs) without taking the lock. The commands are available to self-improve runs and are guarded
+for the `dispatch` template when it is registered.
+
+`board claim <id> --run <run> --by <agent> --json` claims one ready, unowned item: it sets
+`assignee`, `claimedAt` (the current ISO timestamp) and `status: "in_progress"` in one locked write.
+Two agents claiming the same item under the lock produce exactly one winner; the loser exits 3
+with `code: "refused"` and, in `--json`, the winner's `assignee` and `claimedAt`. Re-claiming by
+the same agent is idempotent: `--json` reports `already: true` and does not rewrite `claimedAt`.
+A missing or `blocked` item is refused, and omitting `--by` is a usage error (exit 2). The board
+format is:
 
 ```json
 {
@@ -440,11 +466,19 @@ runs. `board --json` returns the current board (an empty items list for older ru
 ```
 
 `stream`, item `detail`, `acceptance` and `status` are optional. Priorities are `P0`–`P3`;
-statuses are `ready`, `in_progress` or `blocked`. Unknown keys, duplicate ids, ids outside
-`^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and detail/acceptance over
-2000 characters are rejected. Stream names are limited to 200 characters, ids to 64 characters,
-and input files to 2 MiB. Each new cycle reads the host-owned board afresh and shows the top
-two nonblocked items by priority, preserving file order for ties. The cycle keeps that snapshot
+statuses are `ready`, `in_progress` or `blocked`. A claimed item may also carry the host-owned
+review metadata `assignee`, `claimedAt`, `submittedAt`, `sha`, `rounds`, `verdict`, `verdictBy`
+and `findings`: `assignee` and `verdictBy` are non-empty strings of at most 200 characters,
+`claimedAt`/`submittedAt` are ISO timestamps, `sha` is 40 lowercase hex characters, `rounds` an
+integer from 0 to 1000, `verdict` one of `pending`, `approved` or `rejected`, and `findings` at
+most 10 non-empty strings of at most 1000 characters each. These fields are validated when
+present and are never defaulted, so an older board round-trips unchanged. Unknown keys, duplicate
+ids, ids outside `^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 characters and
+detail/acceptance over 2000 characters are rejected. Stream names are limited to 200 characters,
+ids to 64 characters, and input files to 2 MiB. Each new cycle reads the host-owned board afresh
+and shows the top two nonblocked items by priority, preserving file order for ties. The next-item
+selector prepared for the `dispatch` template skips blocked, in-progress, owned and
+verdict-approved items and takes the first ready item in that same priority order. The cycle keeps that snapshot
 until it closes: a cycle resumed after a pause or a blocking question shows and is judged against
 the board it started with, whatever the steward has written since; the new board applies from the
 next cycle. The worker cannot write this file. When the board has items, the prompt asks for one
@@ -452,6 +486,9 @@ line per item worked on, and its exact `Board: <ID> done|progress|blocked - <one
 `selfImprove.history[].board` in `status --json`, without changing board statuses. The steward
 verifies completion and updates the board; the host ignores malformed report lines and bounds
 notes to 500 characters (`tests/autonomy-cli-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+The claim itself, its one-winner behaviour, the loser's owner report, idempotent re-claim, strict
+metadata validation and the shared `board --file` lock are pinned by
+`tests/autonomy-dispatch-smoke.ts`.
 
 The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `review.md` and
 `verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
@@ -738,8 +775,11 @@ without generations, and the text then has no generations lines (`tests/autonomy
 In pi, `/autonomy status <run>` shows that text and, for a run with generations, sets the footer
 status line to `memento <run>: gen n/N, <status>; last rotation: time box` (or `dollar box`, with
 `, no notebook` when none was appended). The line is cleared by `/autonomy status` of a run without
-generations, and is not changed by `/autonomy status` with no run or without a screen. It is updated
-only when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
+generations. `/autonomy status` with no run sets a one-line fleet summary instead: how many runs
+there are, how many are in each status, and the first blocked run with the question it waits on;
+the line is cleared when there are no runs or a run's status is unusable. It is not changed without
+a screen. It is updated only
+when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
 
 **Not covered:** a question the worker asks during the grace period is not answered: the worker is
 stopped as soon as it asks. The box is checked once per supervisor tick, so a generation can overrun

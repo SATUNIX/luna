@@ -22,11 +22,25 @@ const STOPWORDS = new Set(
 // Light suffix stripping so "commits"/"commit", "prefers"/"preferred"/"preference" and
 // "crashing"/"crash" meet. Deliberately conservative: a wrong merge costs recall precision.
 export function stem(t: string): string {
-  if (t.length <= 4 || /[._+-]/.test(t)) return t;
+  // Words shorter than the shortest suffix rule (the -s rule's own minimum is 4) pass through
+  // unchanged; a 4-character word may still be a plural of a 3-letter singular ("logs" -> "log").
+  if (t.length < 4 || /[._+-]/.test(t)) return t;
   for (const [suffix, min] of [["ations", 7], ["ation", 6], ["ences", 7], ["ence", 6], ["ings", 7], ["ing", 6], ["ies", 5], ["ied", 5], ["ed", 5], ["es", 5], ["s", 4]] as const) {
     if (t.length >= min && t.endsWith(suffix) && !t.endsWith("ss")) {
       const base = t.slice(0, -suffix.length);
-      return suffix === "ies" || suffix === "ied" ? `${base}y` : base.replace(/(.)\1$/, "$1");
+      if (suffix === "ies" || suffix === "ied") return `${base}y`;
+      // A plural in -es keeps its sibilant base ("classes" -> "class") or restores the silent e
+      // of a short singular ("files" -> "file"); a long singular strips its own e in the final
+      // rule below ("response"/"responses" -> "respons"), so the base is where they meet.
+      if (suffix === "es") {
+        if (/(ss|x|z|ch|sh)$/.test(base)) return base;
+        const singular = `${base}e`;
+        return singular.length > 5 ? base : singular;
+      }
+      // The doubled-consonant collapse is for -ed/-ing ("preferred" -> "prefer"); a plain
+      // plural keeps its base whole ("files" -> "file", "cliffs" -> "cliff").
+      if (suffix === "s") return base;
+      return base.replace(/(.)\1$/, "$1");
     }
   }
   // "configure" and "configured" -> "configur"

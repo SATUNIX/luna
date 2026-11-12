@@ -741,21 +741,22 @@ export function migrateMemoryLocal(root: string, project: string): number {
   const marker = path.join(indexDir(root), "migrated-memory-local");
   if (fs.existsSync(marker) || !fs.existsSync(src)) return 0;
   const entries = readJson(src);
+  // A malformed or unreadable store must not be tombstoned: leave the marker unwritten so a
+  // repaired memories.json is imported on a later call. A valid array (even empty) still marks.
+  if (!Array.isArray(entries)) return 0;
   let count = 0;
-  if (Array.isArray(entries)) {
-    for (const e of entries) {
-      if (!isRecord(e) || typeof e.text !== "string" || !e.text.trim()) continue;
-      const text = e.text.trim();
-      saveMemory(root, {
-        title: (text.split(/[.\n]/)[0] ?? "").slice(0, 80),
-        body: text,
-        tags: Array.isArray(e.tags) ? e.tags.map(String) : [],
-        scope: "global", // memory-local had no scope; global keeps them reachable everywhere
-        project,
-        source: "memory-local",
-      });
-      count++;
-    }
+  for (const e of entries) {
+    if (!isRecord(e) || typeof e.text !== "string" || !e.text.trim()) continue;
+    const text = e.text.trim();
+    saveMemory(root, {
+      title: (text.split(/[.\n]/)[0] ?? "").slice(0, 80),
+      body: text,
+      tags: Array.isArray(e.tags) ? e.tags.map(String) : [],
+      scope: "global", // memory-local had no scope; global keeps them reachable everywhere
+      project,
+      source: "memory-local",
+    });
+    count++;
   }
   writeAtomic(marker, `${new Date().toISOString()} migrated ${count} from ${src}\n`);
   return count;

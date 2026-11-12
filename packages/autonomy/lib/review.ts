@@ -69,7 +69,10 @@ const PATHSPEC_MAX_CHARS = 256 * 1024;
 
 export type ReviewDiffRead =
   | { ok: true; text: string; recordStat: string }
-  | { ok: false; reason: "over-budget" | "unreadable"; detail: string };
+  // `characters` is set on an over-budget result when the exact measured length is known (the
+  // number the detail already cites), so a pre-report probe can name it; absent for a diff whose
+  // read overflowed before its length could be counted.
+  | { ok: false; reason: "over-budget" | "unreadable"; detail: string; characters?: number };
 
 /**
  * The patch the merge review judges and the stat of the records left out of it.
@@ -86,7 +89,7 @@ export function readReviewDiff(from: string, to: string, budget: number, read: (
   const code = files.filter((f) => !recordSet.has(f) && f !== "package-lock.json");
   // Every diffed path prints at least `diff --git a/<path> b/<path>`: a list that long is over budget unread.
   const floor = code.reduce((n, f) => n + 2 * f.length + 14, 0);
-  if (floor > budget) return { ok: false, reason: "over-budget", detail: `${code.length} changed paths need at least ${floor} characters` };
+  if (floor > budget) return { ok: false, reason: "over-budget", detail: `${code.length} changed paths need at least ${floor} characters`, characters: floor };
   if (records.reduce((n, f) => n + f.length + 16, 0) > PATHSPEC_MAX_CHARS) return { ok: false, reason: "unreadable", detail: "too many excluded record paths to read" };
   const base = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"];
   let text = "";
@@ -94,7 +97,7 @@ export function readReviewDiff(from: string, to: string, budget: number, read: (
     const pathspec = restrict ? code.map((f) => `:(top,literal)${f}`) : [".", ":(exclude)package-lock.json", ...records.map((f) => `:(top,exclude,literal)${f}`)];
     const diff = read([...base, from, to, "--", ...pathspec], budget * 4 + 4096);
     if (!diff.ok) return { ok: false, reason: diff.overflow ? "over-budget" : "unreadable", detail: diff.detail };
-    if (diff.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${diff.stdout.length} characters` };
+    if (diff.stdout.length > budget) return { ok: false, reason: "over-budget", detail: `${diff.stdout.length} characters`, characters: diff.stdout.length };
     text = diff.stdout;
   }
   let recordStat = "";

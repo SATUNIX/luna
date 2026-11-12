@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Scripted installer for pi-system.
+ * Scripted installer for Luna.
  * Wraps pi's CLI: pi install, pi config. Idempotent / reconciling.
  *
  * Usage:
@@ -109,7 +109,7 @@ for (let i = 0; i < args.length; i++) {
 // The split lite surface is now the lite profile of the single package.
 const legacySurface = get("--surface", null);
 if (legacySurface && legacySurface !== "lite") {
-  console.error(`[install] --surface was removed: pi-system ships as one package. Use --profile <name> instead.`);
+  console.error(`[install] --surface was removed: Luna ships as one package. Use --profile <name> instead.`);
   process.exit(1);
 }
 if (legacySurface) console.warn("[install] --surface lite is deprecated; installing the lite profile (--profile lite).");
@@ -592,7 +592,7 @@ if (mode !== "npm") check("git");
 check("pi");
 const piBin = resolveCommand("pi") || "pi";
 
-console.log(`\n[install] pi-system`);
+console.log(`\n[install] Luna`);
 console.log(`  profile:      ${all ? "all" : onlyNames ? "--only" : profile}`);
 console.log(`  extensions:   ${selected.join(", ") || "(none)"}`);
 console.log(`  filter:       ${extensionPatterns ? `${extensionPatterns.length} in-package extension(s) enabled, rest disabled` : "(none - full package)"}`);

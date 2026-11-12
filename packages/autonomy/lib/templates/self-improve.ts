@@ -428,6 +428,33 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
       const also = upstream?.outcome === "conflict" ? [upstream.head] : [];
       return uncoveredCommits(repo.fileAt(branchRef, `${dir}/report.md`), ledgerCommits(g, startSha, branchRef, also), `${dir}/report.md`);
     },
+    // The same start..head diff mergeDecision will judge, measured while the worker is still alive:
+    // same exclusions (records and package-lock.json) and the same upstream-conflict scope. An
+    // over-budget result carries the exact measured length (ReviewDiffRead.characters) so the
+    // cycle can steer the worker before the session ends; mergeDecision stays the fail-closed
+    // backstop. Never throws: an unreadable probe reports not-over-budget rather than breaking a cycle.
+    diffBudget: async () => {
+      const head = repo.head();
+      const upstream = si.current?.upstream;
+      const resolves = upstream?.outcome === "conflict" ? upstream.head : null;
+      try {
+        let files = repo.changedPaths(startSha, head);
+        let from = startSha;
+        let restrict = false;
+        if (resolves) {
+          const base = g(["merge-base", startSha, resolves], { allowFail: true });
+          if (!base) return { head, characters: null, budget: REVIEW_DIFF_BUDGET, overBudget: false, detail: "no merge base between the integration branch and the upstream head" };
+          files = upstreamMergeScope({ startToHead: files, upstreamToHead: repo.changedPaths(resolves, head), baseToUpstream: repo.changedPaths(base, resolves), startToUpstream: repo.changedPaths(startSha, resolves) }).own;
+          from = resolves;
+          restrict = true;
+        }
+        const read = repo.reviewDiff(from, head, REVIEW_DIFF_BUDGET, cfg, { files, restrict });
+        if (read.ok) return { head, characters: read.text.length, budget: REVIEW_DIFF_BUDGET, overBudget: false };
+        return { head, characters: read.characters ?? null, budget: REVIEW_DIFF_BUDGET, overBudget: read.reason === "over-budget", ...(read.detail ? { detail: read.detail } : {}) };
+      } catch (e) {
+        return { head, characters: null, budget: REVIEW_DIFF_BUDGET, overBudget: false, detail: e instanceof Error ? e.message : String(e) };
+      }
+    },
     meterUsd: async () => { await engine.refreshUsage(); return state.usage.usd; },
     totalUsd: async () => { await engine.refreshUsage(); return state.usage.usd; },
     stopRequested: () => engine.stopRequested || !engine.active || pendingControl() || engine.limitReached() !== null,

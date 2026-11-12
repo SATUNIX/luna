@@ -518,7 +518,13 @@ improve mode, chosen by the worker when the review finds nothing to fix. Green p
 cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
 for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
 A merge refused for an over-budget diff tells the next cycle to carry over only a reviewable
-subset and list the rest in its handoff, not to bring the whole attempt over again.
+subset and list the rest in its handoff, not to bring the whole attempt over again. The cycle's
+own pre-report check measures the diff while the worker is still alive and steers it once per
+measured head; if that same head is still over budget after the split steer, the cycle itself
+refuses with a `refused_budget:` reason naming the measured number when it is known, and closes
+`partial`, so the refusal does not wait for the merge review. The same check covers a session
+that exits after recording its report: a dead worker cannot act on a steer, so the cycle refuses
+that report the same way instead of closing it `completed`.
 
 A `steer` reaches the running cycle session at once (as a steer while it works, as a prompt once
 it has settled). One recorded while no session was alive waits for the next cycle prompt; if it

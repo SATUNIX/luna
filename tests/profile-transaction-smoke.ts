@@ -65,7 +65,7 @@ const writeFirewall = (over) => {
   // As install step 4c does: the ownership record of the pi settings this profile now owns.
   write(path.join(agent, "pi-kit", "profile-settings.json"), JSON.stringify({ schemaVersion: 2, previous: { "compaction.reserveTokens": { present: false, wrote: profile.length * 1000 } } }));
 };
-if (mode !== "silent-kill") console.log("[install] pi-system");
+if (mode !== "silent-kill") console.log("[install] Luna");
 switch (mode) {
   case "exit1-after-settings": writeSettings(); console.error("[install] FAIL: boom"); process.exit(1);
   case "sigkill-after-settings": writeSettings(); process.kill(process.pid, "SIGKILL"); break;

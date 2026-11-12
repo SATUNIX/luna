@@ -72,10 +72,10 @@ for (const rel of DOCS) {
   for (const cmd of fencedCommands(md)) {
     const tokens = cmd.split(/\s+/);
     // Node resolves the installer path against the current working directory, so
-    // `node pi-system/...` only works from the clone's parent and breaks from inside the clone.
+    // `node luna/...` only works from the clone's parent and breaks from inside the clone.
     assert.ok(
-      !(tokens[0] === "node" && tokens[1]?.startsWith("pi-system/")),
-      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd pi-system' then 'node packages/core/install.ts ...')`,
+      !(tokens[0] === "node" && tokens[1]?.startsWith("luna/")),
+      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd luna' then 'node packages/core/install.ts ...')`,
     );
     const [bin, arg1] = tokens;
 

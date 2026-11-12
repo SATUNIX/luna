@@ -25,12 +25,29 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   channel next` counted commits on `main`, while the `trunk` channel follows `integration/luna`, so the
   word meant two different branches. It now reads `main is N commits ahead — /update channel next`; the
   suggested command is unchanged. Pinned by `tests/update-notice-smoke.ts` (`smoke:update-notice`).
+- **The brand smoke now walks the whole repository.** `tests/brand-smoke.ts` scans every text file
+  under `WORKSPACE_ROOT`, skipping only the generated, vendored and historical trees and files it
+  documents (`node_modules`, `.git`, `dist`, `site`, `.pi`, the top-level `autonomy/` records) and
+  its documented allowances, and `docs/branding.md` now records the internal temp-directory prefixes
+  in `packages/core/build-npm.ts` and `packages/core/pack-check.ts` and the skipped trees
+  (`npm run smoke:brand`).
 
 - **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
   `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
   behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to
   `packages/extensions/third_party/subagent/overlay-frame.ts`; `npm run smoke:control-center` and
   `npm run smoke:workflow-panel`).
+- **The branding page lists every deliberate identity.** `docs/branding.md` records the npm names,
+  bin names, `PI_SYSTEM_*` variables, install paths, symbol and urn ids, compose/container names,
+  capability id, TLS organisation, legacy sources and CHANGELOG history that stay deliberately
+  unchanged, and `tests/brand-smoke.ts` removes those allowed identities per line and fails with
+  `file:line` for anything left (`npm run smoke:brand`; see `docs/branding.md`).
+- **The remaining user-facing prose says Luna.** The `/update` status and step labels, the
+  session-helper notices, the installer and uninstaller banners, and the remote-control and
+  web-console hints now display Luna, as do the remaining comments; every external identity
+  (npm and bin names, `PI_SYSTEM_*` variables, install paths, compose names, symbol and urn ids)
+  is unchanged (`npm run smoke:brand`; see `docs/branding.md`).
+
 ### Added
 
 - **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture

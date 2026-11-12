@@ -615,7 +615,7 @@ function testDryRunWithoutRequiredTools() {
     const output = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 0, `--dry-run without pi/git must exit 0 (stdout: ${result.stdout} stderr: ${result.stderr})`);
     assert.ok(!/FAIL: pi is required/.test(output), `--dry-run must not fail on a missing pi (got: ${output})`);
-    assert.match(output, /\[install\] pi-system/, `a --dry-run preview must proceed without pi/git (got: ${output})`);
+    assert.match(output, /\[install\] Luna/, `a --dry-run preview must proceed without pi/git (got: ${output})`);
 
     console.log("  OK: --dry-run does not require pi/git on PATH");
   } finally {

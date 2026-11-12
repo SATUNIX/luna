@@ -501,6 +501,21 @@ await check("committed green work after session death gets a host report and ind
   }
 });
 
+await check("a session that records an over-budget report and then dies is refused by its own pre-report check, never merged", async () => {
+  const calls: ManagerCall[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, templateOptions: { limits: { autoRestartsPerCycle: 0 } } }), {
+    manager: manager(calls),
+    script: async (t) => { t.write("AUDIT_OK", "1"); t.write("bulk.txt", "x".repeat(70_000)); report(t, "successful"); t.commit("cycle 1: 70k bulk then die"); t.crash(); },
+  });
+  const { state } = await runOnce(h);
+  const entry = state.selfImprove?.history[0];
+  assert.ok(entry, "one cycle is recorded");
+  assert.equal(entry.outcome, "partial", "the dead session's over-budget report is not completed");
+  assert.match(entry.reason, /^refused_budget: the diff this cycle would submit is \d+ characters, over the merge review's budget of 60000 characters$/);
+  assert.equal(entry.merged, false, "the over-budget cycle is not merged");
+  assert.equal(calls.filter((c) => /You review one cycle/.test(c.system)).length, 0, "the merge-review model was never called");
+});
+
 await check("STOP parks an active cycle, keeps committed work and exits cleanly; heartbeat tracks ticks, phase and cycle", async () => {
   const h = harness(improveRaw(sourceRepo()), {
     script: async (t) => {
@@ -1375,6 +1390,72 @@ await check("an over-budget refusal tells the next cycle to carry a reviewable s
   const { state } = await runOnce(h);
   assert.match(state.selfImprove?.history[0]?.mergeReason ?? "", /^the diff without lockfiles/);
   assert.equal(state.selfImprove?.history[1]?.merged, true);
+});
+
+await check("an over-budget cycle is caught pre-report: the live worker is steered with the measured number, then splits and the next cycle merges", async () => {
+  const calls: ManagerCall[] = [];
+  const messages: Array<{ step: number; kind: string; message: string }> = [];
+  const probe = "The diff this cycle would submit is";
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
+    manager: manager(calls),
+    script: async (t) => {
+      messages.push({ step: t.step, kind: t.kind, message: t.message });
+      if (t.step === 1) {
+        if (t.message.startsWith(probe)) return; // the probe's continuation turn: leave the head as it is
+        t.write("AUDIT_OK", "1"); t.write("bulk.txt", "x".repeat(70_000)); report(t, "successful"); t.commit("cycle 1: 70k bulk");
+        return;
+      }
+      if (t.step === 2) {
+        if (t.message.startsWith(probe)) return; // the probe's continuation turn: leave the head as it is
+        t.write("AUDIT_OK", "1"); t.write("bulk.txt", "x".repeat(70_000)); t.write("extra.txt", "y".repeat(10_000)); report(t, "successful"); t.commit("cycle 2: re-lands the bulk plus 10k");
+        return;
+      }
+      t.write("AUDIT_OK", "1"); t.write("extra.txt", "y".repeat(10_000)); report(t, "successful"); t.commit("cycle 3: 10k only");
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  const [c1, c2, c3] = state.selfImprove?.history ?? [];
+  assert.ok(c1 && c2 && c3, "three cycles are recorded");
+  // (a) both over-budget cycles start from the seed/integration head; the rejected work never accumulates on the branch.
+  const seed = state.selfImprove?.seedSha;
+  assert.equal(c2.start, c1.start, "cycle 2 starts from the same integration head as cycle 1");
+  assert.equal(c3.start, c1.start, "cycle 3 also starts from that head");
+  assert.equal(c1.start, seed, "the over-budget cycle starts from the seed head");
+  // (b) both refusals cite the measured character count.
+  const shape = /^the diff without lockfiles and this run's record files \((\d+) characters\) exceeds the merge review's budget of 60000 characters/;
+  const m1 = shape.exec(c1.mergeReason); const m2 = shape.exec(c2.mergeReason);
+  assert.ok(m1, `cycle 1 refusal cites the measured number: ${c1.mergeReason}`);
+  assert.ok(m2, `cycle 2 refusal cites the measured number: ${c2.mergeReason}`);
+  const n1 = Number(m1[1]); const n2 = Number(m2[1]);
+  assert.ok(n1 > 60_000, `cycle 1 was over budget (${String(n1)})`);
+  assert.ok(n2 > 60_000, `cycle 2 was over budget (${String(n2)})`);
+  assert.ok(n2 > n1 + 9_000, `cycle 2 accumulated cycle 1's work plus the new 10k (${String(n1)} -> ${String(n2)})`);
+  assert.equal(c1.merged, false, "cycle 1 was refused");
+  assert.equal(c2.merged, false, "cycle 2 was refused");
+  // The cycle's own pre-report check refuses the still-over-budget head after the split steer.
+  assert.equal(c1.outcome, "partial", "cycle 1 closed partial after its own pre-report refusal");
+  assert.match(c1.reason, new RegExp(`^refused_budget: the diff this cycle would submit is ${String(n1)} characters, over the merge review's budget of 60000 characters$`), `cycle 1 reason: ${c1.reason}`);
+  assert.equal(c2.outcome, "partial", "cycle 2 closed partial after its own pre-report refusal");
+  assert.match(c2.reason, new RegExp(`^refused_budget: the diff this cycle would submit is ${String(n2)} characters, over the merge review's budget of 60000 characters$`), `cycle 2 reason: ${c2.reason}`);
+  // (c) rejected work is preserved as a tag and offered to the next cycle as an attempts branch.
+  const mg = mirrorGit(rt);
+  assert.ok(mg(["rev-parse", "--verify", "refs/tags/pi/improve-test-1/cycle-01"]), "cycle 1's tag exists in the mirror");
+  assert.ok(mg(["rev-parse", "--verify", "refs/tags/pi/improve-test-1/cycle-02"]), "cycle 2's tag exists in the mirror");
+  const remoteBranches = spawnSync("git", ["--git-dir", rt.p.remote, "for-each-ref", "--format=%(refname)"], { encoding: "utf8" }).stdout;
+  assert.match(remoteBranches, /refs\/heads\/attempts\/improve-test-1\/cycle-01/, "the worker remote offers cycle 1's attempt");
+  assert.match(remoteBranches, /refs\/heads\/attempts\/improve-test-1\/cycle-02/, "the worker remote offers cycle 2's attempt");
+  // (d) only the under-budget cycle reached the merge review; it merged.
+  assert.equal(c3.merged, true, c3.mergeReason);
+  assert.equal(calls.filter((c) => /You review one cycle/.test(c.system)).length, 1, "the merge-review model was called exactly once");
+  // (e) the live worker was told the measured number and the budget while each over-budget cycle was still alive.
+  const steer1 = messages.find((m) => m.step === 1 && m.message.startsWith(probe));
+  const steer2 = messages.find((m) => m.step === 2 && m.message.startsWith(probe));
+  assert.ok(steer1, "cycle 1 got a pre-report budget steer");
+  assert.ok(steer2, "cycle 2 got a pre-report budget steer");
+  assert.match(steer1.message, new RegExp(`The diff this cycle would submit is ${String(n1)} characters, over the merge review's budget of 60000 characters`));
+  assert.match(steer1.message, /attempts\/improve-test-1\/cycle-01/);
+  assert.match(steer2.message, new RegExp(`The diff this cycle would submit is ${String(n2)} characters, over the merge review's budget of 60000 characters`));
+  assert.match(steer2.message, /attempts\/improve-test-1\/cycle-02/);
 });
 
 cleanup();

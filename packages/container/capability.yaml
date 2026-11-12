@@ -1,8 +1,8 @@
 id: pi-system
 type: workload
-name: Pi System
+name: Luna
 description: Deployable pi coding agent with governed pentest profile via pi-kit.
 lifecycle: alpha
 source:
-  repo: pi-system
+  repo: luna
   path: .

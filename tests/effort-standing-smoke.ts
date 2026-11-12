@@ -199,6 +199,14 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(reminder?.display, false);
     assert.match(String(reminder?.content), /size guideline 30 agents, budget 100000 output tokens/);
 
+    const unchanged = await s.turn();
+    assert.equal(messageOf(unchanged), null, "an unchanged standing turn repeats no reminder");
+    await s.command("uc --size 50");
+    const changed = await s.turn();
+    const changedReminder = messageOf(changed);
+    assert.equal(changedReminder?.customType, "luna-effort-standing-reminder");
+    assert.match(String(changedReminder?.content), /size guideline 50 agents, budget 100000 output tokens/);
+
     fresh();
     const noTool = await boot({ answer: yes, tools: ["read", "bash", "subagent"] });
     await noTool.command("ultracode");

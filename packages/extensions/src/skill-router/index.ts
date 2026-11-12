@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
-import { matchTriggers, parseSkillFile, searchSkills, type SkillEntry } from "./match.ts";
+import { hintText, matchTriggers, parseSkillFile, searchSkills, type SkillEntry } from "./match.ts";
 
 // skill-router: progressive disclosure for skills.
 //
@@ -12,8 +12,9 @@ import { matchTriggers, parseSkillFile, searchSkills, type SkillEntry } from "./
 //   - skill_search: the model searches every loaded skill (name/description/triggers) and
 //     reads the SKILL.md it picks — the "search for relevant skills and run them" path.
 //   - automatic hints: when a prompt contains one of a hidden skill's declared triggers, a
-//     one-line hint (name + path, never the body) is injected for that request. At most two
-//     per prompt, never repeated in a session, never for a skill the model already read.
+//     one-line hint (name + a clipped description + path, never the body) is injected for that
+//     request. At most two per prompt, never repeated in a session, never for a skill the model
+//     already read.
 //
 // Before this, all ~40 skill descriptions (~4k tokens) were in every prompt of every session.
 
@@ -75,7 +76,7 @@ export default function (pi: ExtensionAPI) {
     const lines = hits.map((h) => {
       const s = byName.get(h.name);
       if (!s) throw new Error(`skill-router: matched skill missing from the catalogue: ${h.name}`);
-      return `- ${s.name}: ${s.description.slice(0, 160)} → read ${s.path}`;
+      return `- ${s.name}: ${hintText(s.description)} → read ${s.path}`;
     });
     return {
       message: {

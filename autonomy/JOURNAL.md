@@ -88,3 +88,4 @@ journal: every report has a journal entry
 - luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
 - luna-ops-01/05 | Board: DE-105, DE-106 | successful | Cycle 05 — Report (run luna-ops-01, stream `ops`)
 - luna-ops-01/06 | Board: DE-105, DE-106 | successful | Cycle 06 — Report (run luna-ops-01, stream `ops`)
+- luna-ops-01/07 | Board: DE-105, DE-106 | successful | Cycle 07 — Report (run luna-ops-01, stream `ops`)

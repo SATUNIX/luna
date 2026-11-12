@@ -1,6 +1,25 @@
 # Run `luna-ops-01` — handoff
 
-## Cycle 06 close (current checkout)
+## Cycle 07 close (current checkout)
+
+State after cycle 07 on `pi/luna-ops-01`, base `0b8b2c9bceb2`, head before records `69e6e586`:
+
+- Cycle 07: **successful**, mode fix. The merged DE-105/DE-106 work was re-verified; three
+  evidenced ops defects were fixed. `5853db1a` gates the installer's global `.env` scaffold to
+  `--scope global`, so a project install no longer creates or reports the global `.env` (real and
+  dry runs tested). `69e6e586` handles `install.ts --help` before argument validation and validates
+  unknown `--skip` names before `check-all --for-changed` plan mode. `docs/INSTALL.md` states the
+  global-only `.env` rule.
+- Checks at head: `smoke:redaction-corpus` 6/6, `smoke:workflow-policy` 5 checks/48 mutations,
+  `smoke:install-marker`, `smoke:check-all-npm`, `test:typecheck`, `test:lint`, `smoke:docs`,
+  `docs:check`, `verify` all pass. Never run `npm test` or `npm run check:all` here.
+- Diff excluding lockfiles and cycle/run records is 13981 characters, under the 30000 new-item
+  budget. No control path or `package.json` script changed; no new proposal needed.
+- Remaining: the DE-106 12-minute PR wall-time target is still unmeasured offline; host PR runs are
+  the measurement. The coverage-threshold policy question remains in
+  `autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md`.
+
+## Cycle 06 close (historical)
 
 State after cycle 06 on `pi/luna-ops-01`, base `70650a313022`, head `7da244a8`:
 

@@ -10,8 +10,9 @@ On `session_start`, scans the project's working directory for a guidelines file 
 
 1. `PI_KIT_GUIDELINES_PATH` env var (absolute path to any file)
 2. `GUIDELINES.md` in the project root
-3. `AGENTS.md` in the project root
-4. `.pi/GUIDELINES.md` in the project root
+3. `.pi/GUIDELINES.md` in the project root
+
+`AGENTS.md` is deliberately not read: pi loads it already, so including it here would inject the same text twice.
 
 ## Configuration
 
@@ -21,4 +22,4 @@ On `session_start`, scans the project's working directory for a guidelines file 
 
 ## Profiles
 
-Included in: `balanced`, `long-horizon`, `autonomous`, `self-improving`
+Included in: `balanced`, `long-horizon`, `autonomous`, `self-improving`, `pentest`

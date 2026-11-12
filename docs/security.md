@@ -499,10 +499,10 @@ A project skill's `re:` trigger and a workflow step's output pattern come from t
 repository. Both are compiled only when `packages/core/shared/safe-regex.ts` accepts them (no
 quantified group that holds a quantifier or an alternation, no backreference, a length and choice
 cap); a refused gate pattern fails its gate (`tests/workflow-smoke.ts`). A skill trigger is also
-tested under a 50 ms CPU-time budget, and one that exceeds it is switched off for the session
-(`tests/skill-routing-smoke.ts`). The wall-clock cap that interrupts a runaway match sits well
-above the budget (and a descheduled fast regex gets one retry), so a busy host does not switch off
-a trigger that used little CPU. ESLint rejects a `new RegExp` built
+tested under a 50 ms CPU-time budget, and one that exceeds it is switched off for the rest of the
+pi process (`tests/skill-routing-smoke.ts`). The wall-clock cap that interrupts a runaway match sits
+well above the budget (and a descheduled fast regex gets one retry), so a busy host does not switch
+off a trigger that used little CPU. ESLint rejects a `new RegExp` built
 from a non-literal pattern outside a reviewed allowlist. The syntactic check does not catch every
 slow pattern (adjacent overlapping runs are polynomial); the time limit is what stops those for
 skill triggers.

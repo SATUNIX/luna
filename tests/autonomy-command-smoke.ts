@@ -311,6 +311,14 @@ try {
     assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value=--force it"], "a value starting with -- is passed in the equals form");
     ok("inbox passes a free-text value that starts with -- in the equals form");
     reset();
+    await s.run("inbox demo-run-1 --file cards.json");
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--file", path.join(work, "cards.json")], "--file is resolved against the working directory");
+    reset();
+    await s.run("inbox demo-run-1 --bogus x");
+    assert.equal(calls().length, 0, "an unknown flag starts no process");
+    assert.equal(lastNote(s).level, "error");
+    assert.match(lastNote(s).message, /usage: \/autonomy inbox/);
+    reset();
     await s.run("inbox ../../etc/passwd");
     await s.run("inbox BAD_ID!");
     assert.equal(calls().length, 0, "a malformed run id starts no process");

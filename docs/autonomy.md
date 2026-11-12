@@ -133,7 +133,7 @@ The `autonomy-run` extension, in the `autonomous` profile, adds `/autonomy`:
 
 `/autonomy inbox` lists a run's owner cards (or the fleet's runs waiting to be published) and
 `--answer <card> --value <text>` answers one; listing settles past-due cards, so it is not a pure
-read (`tests/autonomy-command-smoke.ts`).
+read (settlement: `tests/autonomy-inbox-smoke.ts`; the forwarding: `tests/autonomy-command-smoke.ts`).
 
 It is a **command, not a tool**: the model has no tool that starts, authorises, steers, promotes or
 reconfigures a run. (A model with a shell tool can run the CLI itself; see "Limits" below for what

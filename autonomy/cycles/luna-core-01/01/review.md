@@ -59,9 +59,11 @@ exactly the loss reported for `luna-ux-01` (cycle 10 merged green) and `luna-gua
 agent-efficacy defect: a run that dies loses work.
 
 Fix direction (item 1 in `plan.md`): on divergence, mechanically rebase `mergeBase..local` onto the
-fetched destination head in a temporary host worktree, move the local integration ref and the cycle
-tags in the rebased range, record the reconciliation in state and log, then continue the same cycle.
-Only a conflicting rebase parks the run (blocked with an operator question), never `failed`.
+fetched destination head in a temporary host worktree, move only the local integration ref (tags
+stay at the published commits, because publication is fast-forward only), record the reconciliation
+and rewrite the recorded cycle heads through a first-parent mapping, then continue the same cycle.
+Only a conflicting rebase parks the run (blocked with an operator question), never `failed`. The new
+end-to-end check ends `failed` with `integration_diverged` on the base, confirming the defect.
 
 ### Lower-priority observations (not this cycle)
 

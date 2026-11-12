@@ -11,7 +11,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-improve-01/08 | Board: none | successful | Parsed a bare git:// source as git rather than a git:-prefixed path
 - luna-improve-01/09 | Board: none | successful | Rejected bad uninstall arguments and removed the dead getExternalByProfile export
 - luna-ops-01/02 | Board: A-91, A-01 | successful | Fixed the fail-closed harness check and added the team journal | decisions: autonomy/decisions/luna-ops-01-02-team-journal.md
-- luna-core-01/01 | Board: none | successful | Refused a value-less or unknown --category in the eval harness and declared the context-sieve message-budget env var
+- luna-core-01/01 | Board: PG-67, PG-55 | successful | Reconciled a diverged integration branch by rebasing local cycle commits onto the destination (first-parent mapping, tags never moved, conflict parks blocked) instead of failing the run with integration_diverged; PG-55 re-verified unchanged
 - luna-core-01/02 | Board: V-11, V-101 | successful | Framed first-prompt memory recall as background history and finished the Luna rename with a brand guard
 - luna-core-01/05 | Board: PG-10, PG-27 | successful | Added an opt-in trunk channel for the integration branch and repaired the luna-core-01/02 journal gate
 - luna-core-01/06 | Board: PG-10, PG-27 | successful | Added a dated offline eval baseline with a 7-day freshness check and consolidated the trunk channel docs and npm guard

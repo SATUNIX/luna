@@ -1,5 +1,20 @@
 # Handoff — run `luna-core-01`, stream `core`
 
+## Current cycle (luna-core-01/01, this session)
+
+- Base `5a511f35e7d5`, code commit `ce412c3`. **PG-67 done**: a destination that moved under a
+  run no longer kills it with `integration_diverged`. The cycle start rebases the local cycle
+  commits onto the fetched destination in a temporary host worktree, moves only the integration
+  ref, records the reconciliation in `selfImprove.reconciliations`, rewrites recorded cycle
+  heads/start shas through a first-parent mapping, never moves tags (publication is fast-forward
+  only), and continues the same cycle. A conflicting rebase parks the run `blocked` on an
+  `integration-diverged` question instead of failing. `smoke:autonomy` 34/34,
+  `smoke:autonomy-selfimprove` 57/57 (base reproduction fails with integration_diverged),
+  `smoke:autonomy-run` 15/15, `smoke:docs`, `docs:check`, `verify`, `test:lint`, `test:typecheck`
+  green; diff 26,562 chars. **PG-55 re-verified done** on the base with no code change.
+- The sections below describe the previous run instance's cycles (up to 31) and its carry-overs;
+  they still apply where not marked done.
+
 ## Where the work stands
 
 - **Cycle 31 (this cycle)**: base `4e0b562fee2c`, commits `d00f106` (memory-vault first-recall

@@ -1,5 +1,94 @@
 # Run `luna-ops-01` — handoff
 
+## Cycle 08 close (current checkout)
+
+State after cycle 08 on `pi/luna-ops-01`, base `e120c3fdb8b0`, verified head `bde95eeb`:
+
+- Cycle 08: **successful**, mode fix. DE-105 and DE-106 are already merged and were re-verified
+  without code change. Two evidenced ops defects were fixed. `b215c53d cf508ffa` add the missing
+  `check-all --for-changed` rows for `.github/zizmor.yml`, `.github/codeql/**`,
+  `.github/dependabot.yml` and `smoke:clean-install`, with test assertions and docs narrowed to
+  the files actually mapped (an earlier review of the first version returned FAIL for the
+  overclaim). `bde95eeb` makes `install.ts` reject an empty value for a value flag, so
+  `--channel ""` no longer builds `git:github.com/SATUNIX/luna@v` and `--git-ref ""` no longer
+  falls back to local mode.
+- Checks at head: `smoke:autonomy-selfimprove` 57/57, `smoke:check-all-npm`,
+  `smoke:workflow-policy` 5/48, `smoke:suppression-inventory` 2/9, `smoke:scan-coverage` 2/8,
+  `smoke:clean-install` 12/12, `smoke:install-marker`, `smoke:install-filter` 18/18,
+  `smoke:profile-transaction` 32/32, `smoke:docs`, `docs:check`, `test:typecheck`, `test:lint`,
+  and `verify` all pass. Never run `npm test` or `npm run check:all` here.
+- Diff excluding lockfiles and cycle/run records is 9650 characters, under the 30000 new-item
+  budget. No control path or `package.json` script changed; no new proposal needed.
+- Remaining: the DE-106 12-minute PR wall-time target is still unmeasured offline; host PR runs are
+  the measurement. The coverage-threshold policy question remains in
+  `autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md`. The independent reviewer's only
+  warning is that `smoke:install-filter` pins the delegated profile/settings helpers, not the entry
+  script itself; the mapping was kept because the plan names it and it is additive.
+
+## Cycle 07 close (historical)
+
+State after cycle 07 on `pi/luna-ops-01`, base `0b8b2c9bceb2`, head before records `69e6e586`:
+
+- Cycle 07: **successful**, mode fix. The merged DE-105/DE-106 work was re-verified; three
+  evidenced ops defects were fixed. `5853db1a` gates the installer's global `.env` scaffold to
+  `--scope global`, so a project install no longer creates or reports the global `.env` (real and
+  dry runs tested). `69e6e586` handles `install.ts --help` before argument validation and validates
+  unknown `--skip` names before `check-all --for-changed` plan mode. `docs/INSTALL.md` states the
+  global-only `.env` rule.
+- Checks at head: `smoke:redaction-corpus` 6/6, `smoke:workflow-policy` 5 checks/48 mutations,
+  `smoke:install-marker`, `smoke:check-all-npm`, `test:typecheck`, `test:lint`, `smoke:docs`,
+  `docs:check`, `verify` all pass. Never run `npm test` or `npm run check:all` here.
+- Diff excluding lockfiles and cycle/run records is 13981 characters, under the 30000 new-item
+  budget. No control path or `package.json` script changed; no new proposal needed.
+- Remaining: the DE-106 12-minute PR wall-time target is still unmeasured offline; host PR runs are
+  the measurement. The coverage-threshold policy question remains in
+  `autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md`.
+
+## Cycle 06 close (historical)
+
+State after cycle 06 on `pi/luna-ops-01`, base `70650a313022`, head `7da244a8`:
+
+- Cycle 06: **successful**, mode fix. (1) **DE-105** verified without code change: check 5 of
+  `smoke:redaction-corpus` uses the injected fake clock and passes deterministically; under two busy
+  cores 20/20 runs passed. Under four busy cores real-timing check 4 still failed in 5/20 runs;
+  check 5 never failed, so the residual is the intentionally real-time check, not the guard.
+  (2) **DE-106** `3da123a9` - `coverage` is a 4-shard matrix with `--coverage-out`, raw V8 and eval
+  cache uploads that run even on failure, and a measure-only `coverage-merge` that downloads all
+  shards with `merge-multiple` and runs `coverage --report`; both stay outside `ci-complete.needs`.
+  `coverage.ts` adds the tested splitter and `--coverage-out`/`--report`. The 12-minute PR median
+  was **not measured** offline; GitHub-hosted PR runs remain the measurement. No threshold was
+  added (none exists after `25f9c40e`); the proposal records the policy question.
+  (3) Review fixes `83992142 7da244a8` - `--coverage-out` refuses the checkout, ancestors and
+  filesystem roots and clears only `coverage-*.json` (no recursive delete); hidden cache uploads,
+  docs and policy tests updated. Independent reviewer returned `VERDICT: PASS` after running
+  `smoke:workflow-policy` (48 mutations) and `smoke:check-all-npm` itself.
+- Checks at head: `smoke:redaction-corpus` 6/6, `smoke:workflow-policy`, `smoke:check-all-npm`,
+  `test:typecheck`, `test:lint`, `smoke:docs`, `docs:check`, `verify`, `smoke:release-workflow`
+  all pass. Never run `npm test` or `npm run check:all` here.
+- Push state: `origin/pi/luna-ops-01` carries `70650a31..7da244a8` plus the cycle records. Diff
+  excluding lockfiles and cycle/run records is 50123 chars, over the 30000 new-item budget, so no
+  post-board item was started. Cycle-07+ items remain unstarted.
+
+## Cycle 05 close (historical)
+
+State after cycle 05 on `pi/luna-ops-01` at base `4da2716e9c9f`:
+
+- Cycle 05: **successful**, mode fix. (1) **DE-105** `39c2e6c` - `assertSubQuadratic` takes an
+  injected clock defaulting to `performance.now`; redaction check 5 uses a fake clock, so the guard
+  test is timing-independent. Proven by 20/20 `smoke:redaction-corpus` runs with four busy cores.
+  (2) **DE-106** `f7c7031 72c5af7` - `pi-compat` is a `pi` x `shard` matrix (8 non-advisory
+  lanes), with the skip list and `--check-timeout=600` unchanged; workflow policy now requires
+  every direct `check:all` job to be sharded, with three new mutations; docs updated. The 12-minute
+  PR median was **not measured** offline and is left to the host's PR runs; the coverage-threshold
+  half was already superseded by the reviewed measure-only policy.
+- Checks at head: `smoke:redaction-corpus` 20/20 under load, `smoke:workflow-policy` 5/5 (31
+  mutations), `test:typecheck`, `test:lint`, `smoke:docs`, `docs:check`, `verify`,
+  `smoke:pi-host-peers`, `smoke:release-workflow`, `journal --check` all pass. Never run `npm test`
+  or `npm run check:all` here.
+- Push state: `origin/pi/luna-ops-01` carries the cycle-05 commits and records. This checkout's
+  base is `4da2716e9c9f`; the cycle-08..20 text below belongs to a different lineage and its shas
+  are not ancestors of this head.
+
 State after cycle 20 (branch `pi/luna-ops-01`; the promotion branch is `pi/luna-ops-01-reland`
 at `b859d1e`):
 

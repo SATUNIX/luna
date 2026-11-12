@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { SERIAL, coveredAggregates, resolveNpmCommand, shardRuns, unknownSkips } from "../packages/core/check-all.ts";
+import { splitCoverageArgs } from "../packages/core/coverage.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -68,6 +69,10 @@ const typo = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "c
 assert.equal(typo.status, 2, "a misspelt --skip name exits 2");
 assert.match(typo.stderr, /--skip names no check: evl, smoke:doc/);
 assert.doesNotMatch(typo.stdout, /would run/, "nothing is listed when a skip name is unknown");
+const planTypo = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), "--for-changed=README.md", "--skip=evl"], { encoding: "utf8" });
+assert.equal(planTypo.status, 2, "a misspelt --skip name exits 2 in plan mode too");
+assert.match(planTypo.stderr, /--skip names no check: evl/);
+assert.doesNotMatch(planTypo.stdout, /check-all: plan for/, "no plan is printed when a skip name is unknown");
 const skipped = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), "--list", "--skip=eval,test:security"], { encoding: "utf8" });
 assert.equal(skipped.status, 0, `real check names, including an aggregate check-all drops itself, are accepted (stderr: ${skipped.stderr.trim()})`);
 assert.doesNotMatch(skipped.stdout, /^eval$/m, "a skipped check is not listed");
@@ -133,6 +138,40 @@ for (const [name, reason] of SERIAL) {
 const coverageJobs = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "coverage.ts"), "--jobs=2"], { encoding: "utf8" });
 assert.equal(coverageJobs.status, 2, `coverage --jobs=2 exits 2 (stderr: ${coverageJobs.stderr.trim()})`);
 assert.match(coverageJobs.stderr, /coverage: --jobs=2 is not supported/);
+
+// Coverage's own options are split out before check-all sees the arguments, so --coverage-out can
+// preserve a CI shard's raw V8 data and --report can merge it without running checks again.
+assert.deepEqual(splitCoverageArgs([]), { report: null, coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--report", "coverage-raw"]), { report: "coverage-raw", coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--report=coverage-raw"]), { report: "coverage-raw", coverageOut: null, checkAllArgs: [] });
+assert.deepEqual(splitCoverageArgs(["--shard=1/4", "--coverage-out=coverage-raw", "--check-timeout=600"]), { report: null, coverageOut: "coverage-raw", checkAllArgs: ["--shard=1/4", "--check-timeout=600"] });
+assert.deepEqual(splitCoverageArgs(["--report"]), { report: null, coverageOut: null, checkAllArgs: [] }, "a bare --report has no directory and is rejected by the CLI");
+const coverageReport = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "coverage.ts"), "--report"], { encoding: "utf8" });
+assert.equal(coverageReport.status, 2, "coverage --report without a directory exits 2");
+assert.match(coverageReport.stderr, /coverage: --report needs a directory/);
+// --coverage-out must never point at the checkout or an ancestor: the directory is cleared first.
+const coverageCli = path.join(ROOT, "packages", "core", "coverage.ts");
+for (const target of [".", "..", path.parse(ROOT).root]) {
+  const dangerous = spawnSync(process.execPath, [coverageCli, `--coverage-out=${target}`, "--list"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(dangerous.status, 2, `coverage --coverage-out=${target} exits 2 (stderr: ${dangerous.stderr.trim()})`);
+  assert.match(dangerous.stderr, /coverage: refusing --coverage-out=/, `coverage --coverage-out=${target} is refused`);
+  assert.ok(fs.existsSync(path.join(ROOT, "package.json")), "the guard leaves the checkout intact");
+}
+
+// A kept directory is cleared of stale coverage files only, and the new raw V8 data stays for a
+// later --report merge.
+const coverageOut = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-out-"));
+try {
+  fs.writeFileSync(path.join(coverageOut, "coverage-stale.json"), "");
+  fs.writeFileSync(path.join(coverageOut, "keep.txt"), "not coverage data");
+  const kept = spawnSync(process.execPath, [coverageCli, `--coverage-out=${coverageOut}`, "--list", "--shard=1/4"], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+  assert.equal(kept.status, 0, `coverage --coverage-out --list exits 0 (stderr: ${kept.stderr.trim()})`);
+  assert.ok(!fs.existsSync(path.join(coverageOut, "coverage-stale.json")), "a rerun clears stale coverage files");
+  assert.ok(fs.existsSync(path.join(coverageOut, "keep.txt")), "a rerun leaves non-coverage files alone");
+  assert.ok(fs.readdirSync(coverageOut).some((name) => /^coverage-.*\.json$/.test(name)), "a kept directory retains the new raw V8 data");
+} finally {
+  fs.rmSync(coverageOut, { recursive: true, force: true });
+}
 
 // --jobs runs the same checks with the same status and summary as --jobs=1, including failures,
 // and a serial check runs alone. Each fake check logs when it starts and ends.

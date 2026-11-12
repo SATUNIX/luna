@@ -494,6 +494,14 @@ export async function runAll(options: CheckAllOptions, root: string = ROOT): Pro
     return 2;
   }
 
+  // A misspelt --skip is an argument error in every mode, including plan mode, which otherwise
+  // returns before this check.
+  const unknown = unknownSkips(options.skip, known);
+  if (unknown.length > 0) {
+    console.error(`check-all: --skip names no check: ${unknown.join(", ")} (see --list for the check names)`);
+    return 2;
+  }
+
   // A plan request never runs anything: it maps the changed paths to checks and prints the split,
   // so a cycle can list every check as RAN or SKIPPED before it commits.
   if (Array.isArray(options.forChanged)) {
@@ -504,12 +512,6 @@ export async function runAll(options: CheckAllOptions, root: string = ROOT): Pro
     for (const name of plan.run) console.log(`check-all: run: ${name}`);
     for (const name of plan.skipped) console.log(`check-all: skipped: ${name}`);
     return 0;
-  }
-
-  const unknown = unknownSkips(options.skip, known);
-  if (unknown.length > 0) {
-    console.error(`check-all: --skip names no check: ${unknown.join(", ")} (see --list for the check names)`);
-    return 2;
   }
 
   const runs = buildRuns(options, root);

@@ -67,7 +67,8 @@ without a stack trace (`tests/profile-transaction-smoke.ts`).
 The installer keeps **exactly one** registered copy of Luna: registering a checkout replaces
 a release install and the other way round, because two copies would load every extension twice.
 
-`--scope project` writes only the project's `.pi/settings.json` and `.pi/.pi-kit.json`. The firewall
+`--scope project` writes only the project's `.pi/settings.json` and `.pi/.pi-kit.json`; it does not
+create the global agent dir's `.env` (that scaffold is global-scope only). The firewall
 gate files, `<agent dir>/pi-kit/firewall.json` and `<agent dir>/pi-kit/security.json`, are
 machine-global, so a project-scope install (and a `/profile` switch in a project install) leaves
 them byte-identical. When the profile asks for a different firewall mode, policy or securityLevel

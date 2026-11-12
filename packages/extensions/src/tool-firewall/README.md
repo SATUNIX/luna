@@ -192,7 +192,10 @@ runs. The limits it leaves open:
 ## Audit
 
 Each tool call appends one JSONL record to `PI_KIT_FIREWALL_AUDIT_LOG`, or to
-`.pi/tool-firewall-audit.jsonl` when the variable is unset. Decisions that wait on a judge or
+`.pi/tool-firewall-audit.jsonl` when the variable is unset. Every refusal also appends one
+`tool_refused` record from the shared `shared/refusal-record.ts` helper (guard, cause, matched rule
+or path token, tool, command digest, session id; never the command text or a secret value);
+`secret-guard` writes the same record (`tests/firewall-refusal-record-smoke.ts`). Decisions that wait on a judge or
 human add a closing `tool_approved` or `tool_blocked` record. Before an append, a log over 4 MiB
 is renamed to `<file>.1`, replacing the previous copy (`tests/firewall-outcomes-smoke.ts`).
 

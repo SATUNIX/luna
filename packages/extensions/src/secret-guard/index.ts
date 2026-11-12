@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
+import { appendRefusal, commandDigest, sessionIdOf } from "./shared/refusal-record.ts";
 import fs from "node:fs";
 
 // secret-guard is a pattern-based secrets/protected-path backstop, loaded by the balanced and
@@ -552,24 +553,33 @@ function stripEnvTemplateTokens(text: string): string {
   return text.replace(/\.env\.(?:example|sample)\b/gi, " ");
 }
 
-function isSecretPath(filePath: string): boolean {
-  if (isEnvTemplatePath(filePath)) return false;
+function isSecretPath(filePath: string): string | null {
+  if (isEnvTemplatePath(filePath)) return null;
   const normalized = normalizePath(filePath);
   const base = path.posix.basename(normalized);
-  return SECRET_PATH_PATTERNS.some(p => p.test(base) || p.test(normalized));
+  for (const pattern of SECRET_PATH_PATTERNS) {
+    if (pattern.test(base) || pattern.test(normalized)) return pattern.source;
+  }
+  return null;
 }
 
-function isSecretReadPath(filePath: string): boolean {
-  if (isEnvTemplatePath(filePath)) return false;
+function isSecretReadPath(filePath: string): string | null {
+  if (isEnvTemplatePath(filePath)) return null;
   const normalized = normalizePath(filePath);
   const base = path.posix.basename(normalized);
-  return SECRET_READ_BASENAME_PATTERNS.some(p => p.test(base)) || SECRET_READ_PATH_PATTERNS.some(p => p.test(normalized));
+  for (const pattern of SECRET_READ_BASENAME_PATTERNS) {
+    if (pattern.test(base)) return pattern.source;
+  }
+  for (const pattern of SECRET_READ_PATH_PATTERNS) {
+    if (pattern.test(normalized)) return pattern.source;
+  }
+  return null;
 }
 
-function isProtectedPath(filePath: string): boolean {
-  if (isEnvTemplatePath(filePath)) return false;
+function isProtectedPath(filePath: string): string | null {
+  if (isEnvTemplatePath(filePath)) return null;
   const normalized = normalizePath(filePath);
-  return PROTECTED_PATTERNS.some(pattern => normalized === pattern || normalized.includes(pattern));
+  return PROTECTED_PATTERNS.find(pattern => normalized === pattern || normalized.includes(pattern)) ?? null;
 }
 
 // Env-configured control paths, kept outside PROTECTED_PATTERNS so verify.ts's literal
@@ -817,32 +827,37 @@ export default function (pi: ExtensionAPI) {
     const pathField = textField(input, ["path", "file"]);
     const commandField = toolName === "bash" ? textField(input, ["command", "cmd", "script"]) : null;
     for (const field of [pathField, commandField]) {
-      if (field && !field.ok) return blocked(ctx, `secret-guard: blocked ${toolName}: ${field.key} is not a string`);
+      if (field && !field.ok) return blocked(ctx, `secret-guard: blocked ${toolName}: ${field.key} is not a string`, { cause: "invalid-input", matched: field.key, tool: toolName });
     }
     const rawPath = pathField.ok ? pathField.value : undefined;
     const cwd = ctx.cwd || process.cwd();
     const target = rawPath ? targetPaths(rawPath, cwd) : undefined;
     // 0. Direct reads/searches of credential files (defense in depth, not OS isolation;
     // a directory-wide grep can still reach file contents the path does not name).
-    if (target && ["read", "grep", "find", "ls", "glob"].includes(toolName) && isSecretReadPath(target.scoped)) {
-      return blocked(ctx, `secret-guard: blocked ${toolName} of sensitive path`);
+    const readMatch = target ? isSecretReadPath(target.scoped) : null;
+    if (target && readMatch && ["read", "grep", "find", "ls", "glob"].includes(toolName)) {
+      return blocked(ctx, `secret-guard: blocked ${toolName} of sensitive path`, { cause: "secret-read", matched: readMatch, tool: toolName });
     }
 
     // 1 + 2. Writes/edits: block secret/protected paths and secret content anywhere.
     if (toolName === "write" || toolName === "edit") {
-      if (target && isSecretPath(target.scoped)) {
-        return blocked(ctx, `secret-guard: blocked ${toolName} to secret file: ${rawPath}`);
+      const secretMatch = target ? isSecretPath(target.scoped) : null;
+      if (secretMatch) {
+        return blocked(ctx, `secret-guard: blocked ${toolName} to secret file: ${rawPath}`, { cause: "secret-path", matched: secretMatch, tool: toolName });
       }
       // tool-firewall rotates its audit log to `<path>.1` past 4 MiB, so the rotated copy is protected too.
       const auditLog = process.env.PI_KIT_FIREWALL_AUDIT_LOG;
       const configuredAdminPaths = [process.env.PI_KIT_FIREWALL_POLICY, auditLog, auditLog ? `${auditLog}.1` : undefined, process.env.PI_KIT_FIREWALL_APPROVALS, process.env.PI_KIT_UNATTENDED_CONTRACT].filter((p): p is string => !!p).map(p => normalizePath(resolvedPath(p, cwd)));
       const absoluteProtected = PROTECTED_PATTERNS.filter(pattern => pattern.startsWith("/"));
-      if (target && (isProtectedPath(target.scoped) || absoluteProtected.some(pattern => target.absolute.includes(pattern)) || configuredAdminPaths.includes(target.absolute) || withinAny(target.absolute, configuredHumanConsolePaths(cwd)))) {
-        return blocked(ctx, `secret-guard: blocked ${toolName} to protected path: ${rawPath}`);
+      const protectedMatch = target ? isProtectedPath(target.scoped) : null;
+      const absoluteMatch = target ? absoluteProtected.find(pattern => target.absolute.includes(pattern)) : undefined;
+      const adminOrConsole = target ? configuredAdminPaths.includes(target.absolute) || withinAny(target.absolute, configuredHumanConsolePaths(cwd)) : false;
+      if (target && (protectedMatch || absoluteMatch || adminOrConsole)) {
+        return blocked(ctx, `secret-guard: blocked ${toolName} to protected path: ${rawPath}`, { cause: "protected-path", matched: protectedMatch ?? absoluteMatch ?? "configured-admin-path", tool: toolName });
       }
       const contentHit = detectSecretContent(contentOf(input));
       if (contentHit) {
-        return blocked(ctx, `secret-guard: blocked ${toolName} — content looks like a secret (${contentHit})`);
+        return blocked(ctx, `secret-guard: blocked ${toolName} — content looks like a secret (${contentHit})`, { cause: "secret-content", matched: contentHit, tool: toolName });
       }
     }
 
@@ -860,11 +875,11 @@ export default function (pi: ExtensionAPI) {
         for (const candidate of candidates) {
           for (const pattern of SECRET_BASH_LEAK_PATTERNS) {
             if (pattern.test(candidate)) {
-              return blocked(ctx, `secret-guard: blocked bash command matching secret-leak pattern: ${command.slice(0, 100)}`);
+              return blocked(ctx, `secret-guard: blocked bash command matching secret-leak pattern: ${command.slice(0, 100)}`, { cause: "secret-leak", matched: pattern.source, tool: toolName, command });
             }
           }
           if (TRANSFER_VERB.test(candidate) && (commandReferencesSecret(candidate) || commandReferencesProtected(candidate, cwd))) {
-            return blocked(ctx, `secret-guard: blocked bash command reading/copying/exfiltrating a secret or protected path: ${command.slice(0, 100)}`);
+            return blocked(ctx, `secret-guard: blocked bash command reading/copying/exfiltrating a secret or protected path: ${command.slice(0, 100)}`, { cause: "secret-transfer", matched: "secret-reference-transfer", tool: toolName, command });
           }
         }
       }
@@ -876,7 +891,17 @@ export default function (pi: ExtensionAPI) {
   registerProtection("secret-guard");
 }
 
-function blocked(ctx: Pick<ExtensionContext, "hasUI" | "ui">, msg: string): { block: true; reason: string } {
+interface RefusalDetail {
+  cause: string;
+  matched: string;
+  tool: string;
+  command?: string;
+}
+
+function blocked(ctx: ExtensionContext, msg: string, detail: RefusalDetail): { block: true; reason: string } {
   if (ctx.hasUI) ctx.ui.notify(msg, "warning");
+  // The log names the guard, cause, matched rule token, tool, a command digest and the session id;
+  // it never carries the command text or a secret value. Best effort: it cannot break the refusal.
+  appendRefusal({ guard: "secret-guard", cause: detail.cause, matched: detail.matched, tool: detail.tool, commandDigest: commandDigest(detail.command), sessionId: sessionIdOf(ctx) });
   return { block: true, reason: msg };
 }

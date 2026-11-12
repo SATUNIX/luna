@@ -81,3 +81,12 @@ refuses or asks about many of the same actions; this extension is the stricter, 
 layer. Its manifest sets `childGovernance`, so when it is loaded, child sessions started by
 delegation load it too (`tests/delegation-guard-smoke.ts` pins that rule for `childGovernance`
 extensions).
+
+## Refusal records
+
+A refusal is not only a UI notice: `blocked()` appends one `tool_refused` record to the firewall
+audit log through the shared `shared/refusal-record.ts` helper (`tests/firewall-refusal-record-smoke.ts`).
+It names the guard, the cause (`secret-path`, `secret-read`, `protected-path`, `secret-content`,
+`secret-leak`, `secret-transfer`, or `invalid-input`), the matched rule source or path token, the
+tool, a SHA-256 digest of the command and the session id. It never writes the command text or a
+secret value, and a failed write never breaks the refusal.

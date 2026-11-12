@@ -48,7 +48,9 @@ A recognised adapter with missing required inputs, unknown fields or unsupported
 forms is **high**, needs the operator and cannot gain learned or model-similarity authority.
 An exact `allow` cannot remove that finding or lower critical effects. The adapter covers legacy
 single-file edits, pi 1.3's single-file batch replacements and the pinned readseek single-file
-hashline operations; extra nested target fields remain incomplete
+hashline operations; extra nested target fields remain incomplete. A null/undefined-valued
+*unknown* key names no operation and does not make an adapter incomplete, while a known shape
+field with `null` stays a type mismatch and a non-null unknown field stays incomplete
 (`tests/firewall-shell-smoke.ts`, `tests/firewall-gate-smoke.ts`). Unattended runs refuse incomplete
 inputs without asking or executing a marker (`tests/firewall-unattended-smoke.ts`).
 
@@ -190,6 +192,9 @@ are pinned by `tests/governance-smoke.ts`.
     material or tokens to any file, and `cat`, `cp`, `mv`, `base64`, `curl -F @file` and PowerShell
     style reads of `.env`, `*.pem`, `*.key`, `id_rsa` and protected engagement paths, including
     glob-obscured and quote-fragmented references. The firewall separately classifies credential
+    Source files below a directory whose name merely contains `secret` (such as
+    `packages/extensions/src/secret-guard/`) stay readable, while an exact `secret`, `secrets` or
+    `credentials` path segment still counts as a secret reference (`tests/secret-guard-smoke.ts`).
     files as credential reads whether or not `secret-guard` is loaded. For a tool the policy
     allows, it checks every path the call names in a `path`, `file_path`, `filePath`, `file`,
     `files`, `paths`, `cwd`, `dir`, `directory`, `root`, `analysisRoot`, `newFilePath`,

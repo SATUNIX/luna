@@ -17,7 +17,7 @@
  *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
  *     COVERAGE_MIN_TIMEOUT_MINUTES;
  *   - every required check in the expected settings names a job that exists;
- *   - ci.yml's `verify` job runs `check:all` as a shard matrix whose shard count matches the
+ *   - every ci.yml job that runs `check:all` does so as a shard matrix whose shard count matches the
  *     `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check), with `--jobs`
  *     and a `--check-timeout`; every check:all run in ci.yml (including `coverage`, which runs
  *     check:all) passes `--check-timeout`, so a hung check fails named instead of as a silent job
@@ -67,23 +67,34 @@ function needsOf(body: string): string[] {
 }
 
 /**
- * The verify job's shard matrix and its check:all command agree: shards are 1..n with no gap and
- * the command passes `--shard=${{ matrix.shard }}/n`, so the shards together run every check.
+ * One job's shard matrix and its check:all command agree: shards are 1..n with no gap and the
+ * command passes `--shard=${{ matrix.shard }}/n`, so the shards together run every check. Used for
+ * every ci.yml job that runs check:all, so `verify` and `pi-compat` cannot drift apart.
  */
-export function verifyShardProblems(body: string): string[] {
-  if (body === "") return ["ci.yml: no verify job"];
+export function shardProblems(job: string, body: string): string[] {
+  if (body === "") return [`ci.yml: no ${job} job`];
   const out: string[] = [];
   const shards = body.match(/^ {8}shard:\s*\[([^\]]*)\]\s*$/m)?.[1]?.split(",").map((s) => Number(s.trim()));
-  if (shards === undefined) return ["ci.yml verify: no matrix.shard list"];
-  if (shards.length < 2 || shards.some((n, i) => n !== i + 1)) out.push(`ci.yml verify: matrix.shard must be 1..n, not [${shards.join(", ")}]`);
+  if (shards === undefined) return [`ci.yml ${job}: no matrix.shard list`];
+  if (shards.length < 2 || shards.some((n, i) => n !== i + 1)) out.push(`ci.yml ${job}: matrix.shard must be 1..n, not [${shards.join(", ")}]`);
   const command = code(body).map((l) => l.match(/^ {6}- run: (npm run -s check:all\b.*)$/)?.[1]).find((c) => c !== undefined);
-  if (command === undefined) return [...out, "ci.yml verify: does not run npm run -s check:all"];
+  if (command === undefined) return [...out, `ci.yml ${job}: does not run npm run -s check:all`];
   const count = command.match(/ --shard=\$\{\{ matrix\.shard \}\}\/(\d+)(?:\s|$)/)?.[1];
-  if (count === undefined) out.push("ci.yml verify: check:all is not given --shard=${{ matrix.shard }}/<n>, so every shard runs the whole suite");
-  else if (Number(count) !== shards.length) out.push(`ci.yml verify: --shard=.../${count} does not match the ${shards.length} matrix shards, so some checks run in no shard`);
-  if (!/ --jobs=\d+(?:\s|$)/.test(command)) out.push("ci.yml verify: check:all has no --jobs");
-  if (!/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push("ci.yml verify: check:all has no --check-timeout, so a hung check is never named");
+  if (count === undefined) out.push(`ci.yml ${job}: check:all is not given --shard=\${{ matrix.shard }}/<n>, so every shard runs the whole suite`);
+  else if (Number(count) !== shards.length) out.push(`ci.yml ${job}: --shard=.../${count} does not match the ${shards.length} matrix shards, so some checks run in no shard`);
+  if (!/ --jobs=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: check:all has no --jobs`);
+  if (!/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: check:all has no --check-timeout, so a hung check is never named`);
   return out;
+}
+
+/** The verify job's shard matrix, kept as a named entry point. */
+export function verifyShardProblems(body: string): string[] {
+  return shardProblems("verify", body);
+}
+
+/** A job body runs check:all, so it must be sharded. */
+function runsCheckAll(body: string): boolean {
+  return code(body).some((line) => /^ {6}- run: npm run -s check:all\b/.test(line));
 }
 
 /**
@@ -162,7 +173,10 @@ export function fileProblems(file: string, text: string): string[] {
       if (!/join\(needs\.\*\.result/.test(complete) || !/!= "success"/.test(complete)) out.push("ci.yml ci-complete: must fail unless every needed job succeeded");
     }
     if (/advisory: true/.test(jobs.get("pi-compat") ?? "")) out.push("ci.yml pi-compat: an advisory lane is not gated; record it before enabling one");
-    out.push(...verifyShardProblems(jobs.get("verify") ?? ""));
+    if (!jobs.has("verify")) out.push(...verifyShardProblems(""));
+    for (const [job, body] of jobs) {
+      if (job === "verify" || runsCheckAll(body)) out.push(...shardProblems(job, body));
+    }
     out.push(...checkTimeoutProblems(text));
   }
   if (file === "ci.yml" || file === "security.yml") out.push(...pullRequestBranchProblems(file, text));
@@ -227,6 +241,8 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["verify without --jobs", "ci.yml", ci.replace(" --jobs=2", ""), /verify: check:all has no --jobs/],
   ["verify without --check-timeout", "ci.yml", ci.replace(/ --check-timeout=\d+/, ""), /verify: check:all has no --check-timeout/],
   ["pi-compat without --check-timeout", "ci.yml", ci.replace("--skip=smoke:package,test:typecheck,test:lint --check-timeout=600", "--skip=smoke:package,test:typecheck,test:lint"), /ci.yml pi-compat: .* has no --check-timeout/],
+  ["pi-compat without --shard", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package", "--jobs=2 --skip=smoke:package"), /pi-compat: check:all is not given --shard/],
+  ["pi-compat shard count disagrees", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3]'), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
   ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "npm run -s coverage"), /ci.yml coverage: .* has no --check-timeout/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],

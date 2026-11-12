@@ -111,12 +111,12 @@ jobs:
           PROFILE: ${{ matrix.profile }}
 
   # Version pin discipline. devDependencies pin the tested version (the `verify` job runs against
-  # it); this matrix runs the whole check suite at the supported FLOOR and at the last pi 0.x
-  # release (both must pass: pi 1.x dropped its shrinkwrap and changed extension events, so the
-  # pre-1.0 line is checked explicitly). These lanes run on Node 22, the engines floor, while
-  # `verify` and `profile-regression` run on the newest Node line. An advisory lane returns when a
-  # pi release newer than the pin is under review; its failure is the signal to review before the
-  # pin moves.
+  # it); this matrix runs the whole check suite, in four shards per version, at the supported FLOOR
+  # and at the last pi 0.x release (both must pass: pi 1.x dropped its shrinkwrap and changed
+  # extension events, so the pre-1.0 line is checked explicitly). These lanes run on Node 22, the
+  # engines floor, while `verify` and `profile-regression` run on the newest Node line. An advisory
+  # lane returns when a pi release newer than the pin is under review; its failure is the signal to
+  # review before the pin moves.
   pi-compat:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -124,6 +124,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        pi: ["0.85.1", "0.99.2"]
+        shard: [1, 2, 3, 4]
         include:
           - pi: "0.85.1"
             advisory: false
@@ -152,7 +154,7 @@ jobs:
       # The tarball check does not depend on the pi version. Type checking and lint read pi's type
       # declarations, whose exported names change between releases; the verify job runs them against
       # the pinned version. Extensions load as erased TypeScript, so everything else runs here.
-      - run: npm run -s check:all -- --skip=smoke:package,test:typecheck,test:lint --check-timeout=600
+      - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package,test:typecheck,test:lint --check-timeout=600
 
   # The Android companion app (apps/android). The Gradle wrapper jar must be the one Gradle
   # publishes for the wrapper's version (the checksum is fetched from services.gradle.org, the

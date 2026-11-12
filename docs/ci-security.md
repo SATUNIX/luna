@@ -10,7 +10,7 @@ operator actions ([Releasing](releasing.md)).
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job except the measure-only `coverage` job did (`tests/workflow-policy-smoke.ts` checks it needs all the others) |
+| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix, four `check:all` shards at each of the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job except the measure-only `coverage` job did (`tests/workflow-policy-smoke.ts` checks it needs all the others) |
 | `security.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
 | `scorecard.yml` | push to `main`, weekly | OpenSSF Scorecard supply-chain rating, published; it fails nothing |
 | `scorecard-thresholds.yml` | weekly, manual | Runs Scorecard again without publishing and fails when a gating check scores below its floor in `.github/scorecard-thresholds.json` |
@@ -32,9 +32,11 @@ parallel batch (`tests/check-all-npm-smoke.ts`). Under `--jobs` each check print
 `... <label> started` line when it starts, and `--check-timeout=<s>` stops a check still running
 after s seconds, with every process its script started (on POSIX the check runs in its own process
 group, which gets SIGTERM and then SIGKILL), and fails it as `timed out` with the output it printed
-so far, so a hung check is named in the log. The `verify` job in `ci.yml` runs four shards with `--jobs=2 --check-timeout=600`;
-`ci-complete` waits for all of them (`tests/workflow-policy-smoke.ts` checks the shard matrix, the
-command and the `integration/**` pull request filters). `npm run coverage` refuses `--jobs` above 1: the
+so far, so a hung check is named in the log. The `verify` and `pi-compat` jobs in `ci.yml` run four shards each with
+`--jobs=2 --check-timeout=600` (`pi-compat` at each of its two pi versions), so the union of a
+matrix's shards is the same suite; `ci-complete` waits for every lane
+(`tests/workflow-policy-smoke.ts` checks each shard matrix, the command and the `integration/**`
+pull request filters). `npm run coverage` refuses `--jobs` above 1: the
 concurrent checks transpile into per-run caches that `check:all` removes, so coverage could not
 attribute those modules.
 
@@ -67,7 +69,7 @@ only when `check:all` fails.
 `timeout-minutes` fall below 40. It runs `check:all` one check at a time, so it is the slowest lane
 (18 to 27 minutes against the 30 it once had, and it was cancelled at the limit on a slow runner),
 and a measurement must not block a promotion. A failed or cancelled coverage job still shows on the
-pull request. The same suite gates through the `verify` shards.
+pull request. The same suite gates through the `verify` and `pi-compat` shards.
 
 This is not covered: `release.yml` calls the whole of `ci.yml` as its `gate`, and `plan` waits for
 that call, so a failed or cancelled `coverage` job still stops a release. Only the required check

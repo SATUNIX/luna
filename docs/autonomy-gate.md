@@ -4,8 +4,8 @@
 simple: an agent in auto mode should do routine work without asking, and dangerous actions
 should still be stopped or brought to you. This page describes how that decision is made. It
 implements the deterministic core of
-`docs/proposals/PI_AUTONOMY_GATE_SPEC.md` (phases 1–3 and a light phase 5). The spec's
-ML models, separate daemon and sandboxing are deferred.
+the autonomy-gate specification (phases 1–3 and a light phase 5); the specification itself is not
+part of this repository. Its ML models, separate daemon and sandboxing are deferred.
 
 ## How a decision is made
 

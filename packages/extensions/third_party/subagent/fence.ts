@@ -43,9 +43,15 @@ function isEnvTemplatePath(filePath: string): boolean {
 }
 
 /** Whether secret-guard refuses reading this path. */
-export function isSecretReadPath(filePath: string): boolean {
-  if (isEnvTemplatePath(filePath)) return false;
+export function isSecretReadPath(filePath: string): string | null {
+  if (isEnvTemplatePath(filePath)) return null;
   const normalized = normalizePath(filePath);
   const base = path.posix.basename(normalized);
-  return SECRET_READ_BASENAME_PATTERNS.some(p => p.test(base)) || SECRET_READ_PATH_PATTERNS.some(p => p.test(normalized));
+  for (const pattern of SECRET_READ_BASENAME_PATTERNS) {
+    if (pattern.test(base)) return pattern.source;
+  }
+  for (const pattern of SECRET_READ_PATH_PATTERNS) {
+    if (pattern.test(normalized)) return pattern.source;
+  }
+  return null;
 }

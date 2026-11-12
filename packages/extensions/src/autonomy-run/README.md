@@ -15,6 +15,7 @@ the `packages/autonomy` CLI (`pi-autonomy`): it runs that CLI as a child process
 /autonomy steer <run> <message>
 /autonomy promote <run>                          approval-gated promotion of the result
 /autonomy export <run> [dir]                     results, evidence, usage, decisions, the work
+/autonomy inbox [run] [--file <path>] [--answer <card> --value <text>]   owner cards, or waiting runs
 /autonomy reconfigure <run> --effort E4 ...      the only way effort or budgets change for a run
 ```
 

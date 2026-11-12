@@ -12,6 +12,8 @@
 //     generation n/N and last rotation reason, and clears it for a run without them;
 //   - `status` with no run sets a one-line fleet footer (counts by status, plus the first blocked
 //     run and its question) and clears it for an empty fleet; without a screen it is untouched;
+//   - `inbox` lists cards (or waiting runs) and answers with a literal --value (any text, even one
+//     starting with `--`); bad ids spawn nothing;
 //   - against the REAL CLI, `templates` and `plan` work end to end (no container engine needed).
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -70,6 +72,11 @@ if (cmd === "status" && json) return out({ ok: true, command: "status", runs: JS
 if (cmd === "promote") {
   if (!args.includes("--yes")) return out({ ok: false, command: "promote", error: "this promotion needs your approval: fast-forward branch pi/demo. Re-run with --yes, or from a terminal.", code: "refused" }, 3);
   return json ? out({ ok: true, command: "promote", status: "done" }) : text("promotion done");
+}
+if (cmd === "inbox") {
+  if (process.env.FAKE_INBOX_REFUSED === "1") return out({ ok: false, command: "inbox", error: "unknown inbox card D9", code: "refused" }, 3);
+  if (!args.includes("--run")) return text("run demo-run-1: unpublished 2 commits (waiting on operator)");
+  return text("D3  open\\n    question: ship it?\\nanswer with: pi-autonomy inbox --run demo-run-1 --answer <id> --value <text>");
 }
 if (cmd === "reconfigure") {
   if (!args.includes("--yes")) return out({ ok: false, command: "reconfigure", error: "reconfigure changes the run's effort or budgets, so it needs your confirmation: re-run with --yes", code: "refused" }, 3);
@@ -283,6 +290,48 @@ try {
     assert.equal(steer[steer.indexOf("--message") + 1], "$(touch /tmp/pwned-by-autonomy) hello", "the message is one literal argument");
     assert.equal(fs.existsSync("/tmp/pwned-by-autonomy"), false, "nothing is interpreted by a shell");
     ok("quoting is honoured, malformed run ids are rejected before any process, arguments are never shell-interpreted");
+  }
+
+  // 7a. Owner inbox: list waiting runs or a run's cards, and answer with a literal value.
+  {
+    reset();
+    const s = session();
+    await s.run("inbox");
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox"], "no argument lists waiting runs");
+    reset();
+    await s.run("inbox demo-run-1");
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1"]);
+    reset();
+    const value = "Ship it; $(rm -rf /)";
+    await s.run(`inbox demo-run-1 --answer D3 --value "${value}"`);
+    const answer = findCall((c) => c[0] === "inbox");
+    assert.deepEqual(answer, ["inbox", "--run", "demo-run-1", "--answer", "D3", `--value=${value}`]);
+    reset();
+    await s.run(`inbox demo-run-1 --answer D3 --value "--force it"`);
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value=--force it"], "a value starting with -- is passed in the equals form");
+    ok("inbox passes a free-text value that starts with -- in the equals form");
+    reset();
+    await s.run("inbox demo-run-1 --file cards.json");
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--file", path.join(work, "cards.json")], "--file is resolved against the working directory");
+    reset();
+    await s.run("inbox demo-run-1 --bogus x");
+    assert.equal(calls().length, 0, "an unknown flag starts no process");
+    assert.equal(lastNote(s).level, "error");
+    assert.match(lastNote(s).message, /usage: \/autonomy inbox/);
+    reset();
+    await s.run("inbox ../../etc/passwd");
+    await s.run("inbox BAD_ID!");
+    assert.equal(calls().length, 0, "a malformed run id starts no process");
+    reset();
+    const restoreRefused = setEnv("FAKE_INBOX_REFUSED", "1");
+    try {
+      await s.run("inbox demo-run-1 --answer D9 --value x");
+      assert.equal(lastNote(s).level, "error");
+      assert.match(lastNote(s).message, /unknown inbox card D9/);
+    } finally { restoreRefused(); }
+    await s.run("help");
+    assert.match(lastNote(s).message, /inbox/);
+    ok("inbox lists cards or waiting runs, answers literally, rejects bad ids, surfaces refusals");
   }
 
   // 7b. Generations (Memento mode): `status <run>` sets the footer status line, or clears it.

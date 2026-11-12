@@ -28,7 +28,14 @@
  * Usage:
  *   npm run coverage                       # run every check under coverage
  *   npm run coverage -- --skip=eval        # check-all arguments pass through
+ *   npm run coverage -- --coverage-out=raw # keep the raw coverage-*.json files in raw/
  *   node packages/core/coverage.ts --report <dir>   # summarise an existing NODE_V8_COVERAGE dir
+ *
+ * `--coverage-out=<dir>` uses that directory as NODE_V8_COVERAGE instead of a temporary one, and
+ * leaves the raw `coverage-*.json` files in place after reporting, so shards run on different
+ * machines can be merged by copying them into one directory and running `--report` on it. The
+ * existing coverage-*.json files are removed first, so a rerun cannot accumulate them and be
+ * double-counted. Without it the temporary directory is still removed in `finally`.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -185,6 +192,39 @@ const tally = (m: ReadonlyMap<string | number, boolean>): Totals => {
 const add = (a: Totals, b: Totals): Totals => ({ covered: a.covered + b.covered, total: a.total + b.total });
 export const percent = (t: Totals): string => (t.total === 0 ? "n/a" : `${((100 * t.covered) / t.total).toFixed(1)}%`);
 
+/** The coverage CLI's own options, separated from the arguments check-all receives. */
+export interface CoverageArgs {
+  /** `--report <dir>` (or `--report=<dir>`): summarise an existing directory and run nothing. */
+  report: string | null;
+  /** `--coverage-out=<dir>`: keep raw V8 coverage there instead of a temporary directory. */
+  coverageOut: string | null;
+  /** Everything else, passed through to check-all (for example `--shard=1/4`). */
+  checkAllArgs: string[];
+}
+
+/** Splits coverage arguments without touching the filesystem, so tests can pin the CLI shape. */
+export function splitCoverageArgs(argv: readonly string[]): CoverageArgs {
+  const out: CoverageArgs = { report: null, coverageOut: null, checkAllArgs: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    if (arg === "--report") {
+      const dir = argv[i + 1];
+      if (dir !== undefined && !dir.startsWith("--")) {
+        out.report = dir;
+        i++;
+      }
+    } else if (arg.startsWith("--report=")) {
+      out.report = arg.slice("--report=".length);
+    } else if (arg.startsWith("--coverage-out=")) {
+      out.coverageOut = arg.slice("--coverage-out=".length);
+    } else {
+      out.checkAllArgs.push(arg);
+    }
+  }
+  return out;
+}
+
 /** Summarises every coverage-*.json in `dir`. */
 export function summarise(dir: string): CoverageSummary {
   const cacheNames = sourcesByCacheName();
@@ -274,30 +314,55 @@ function report(dir: string): void {
 }
 
 function main(argv: readonly string[]): number {
-  if (argv[0] === "--report") {
-    const dir = argv[1];
-    if (dir === undefined) {
+  const args = splitCoverageArgs(argv);
+  if (args.report !== null || argv.includes("--report")) {
+    if (args.report === null || args.report === "") {
       console.error("coverage: --report needs a directory");
       return 2;
     }
-    report(dir);
+    report(args.report);
     return 0;
+  }
+  if (argv.includes("--coverage-out") || args.coverageOut === "") {
+    console.error("coverage: --coverage-out needs a directory (use --coverage-out=<dir>)");
+    return 2;
   }
   // check-all --jobs gives each concurrent check its own transpile cache and deletes it when the run
   // ends, so the transpiled modules this report attributes by their cache path would be gone and
   // uncounted. Coverage measures the sequential run only.
-  const jobs = argv.find((arg) => arg.startsWith("--jobs="));
+  const jobs = args.checkAllArgs.find((arg) => arg.startsWith("--jobs="));
   if (jobs !== undefined && jobs !== "--jobs=1") {
     console.error(`coverage: ${jobs} is not supported; coverage runs check-all one check at a time`);
     return 2;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-"));
+  // --coverage-out is owned by the caller (a CI shard uploads it after the run); only the default
+  // temporary directory is removed when the run ends.
+  const temporary = args.coverageOut === null;
+  let dir = temporary ? fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-coverage-")) : path.resolve(ROOT, args.coverageOut ?? "");
+  if (!temporary) {
+    try {
+      if (fs.existsSync(dir)) dir = fs.realpathSync(dir);
+    } catch (error) {
+      console.error(`coverage: cannot resolve --coverage-out: ${error instanceof Error ? error.message : String(error)}`);
+      return 2;
+    }
+    const filesystemRoot = path.parse(dir).root;
+    if (dir === filesystemRoot || dir === ROOT || ROOT.startsWith(`${dir}${path.sep}`)) {
+      console.error(`coverage: refusing --coverage-out=${args.coverageOut ?? ""}: it is the checkout, an ancestor of the checkout, or a filesystem root`);
+      return 2;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of fs.readdirSync(dir)) {
+      if (/^coverage-.*\.json$/.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+    }
+  }
   try {
-    const run = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), ...argv], {
+    const run = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "check-all.ts"), ...args.checkAllArgs], {
       cwd: ROOT,
       stdio: "inherit",
       env: { ...process.env, NODE_V8_COVERAGE: dir },
     });
+    // Report even when the run failed: the checks that did run still measured something.
     report(dir);
     if (run.error) {
       console.error(`coverage: could not run check-all: ${run.error.message}`);
@@ -305,7 +370,7 @@ function main(argv: readonly string[]): number {
     }
     return run.status ?? 1;
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    if (temporary) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 

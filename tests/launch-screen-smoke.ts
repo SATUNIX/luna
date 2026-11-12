@@ -22,6 +22,11 @@ const restoreCi = setEnv("CI", undefined);
 const restoreTerm = setEnv("TERM", "xterm-256color");
 const plain: LaunchModule.LaunchTheme = { fg: (_color, text) => text, bold: (text) => text };
 
+/** A plain Theme fake whose name drives the automatic ASCII choice. */
+function themeNamed(name: string): Theme {
+  return { name, fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
+}
+
 async function loadLaunch(): Promise<typeof LaunchModule> {
   return loadModule<typeof LaunchModule>("extensions/control-center/launch-screen.ts");
 }
@@ -190,6 +195,70 @@ tests.push([
   },
 ]);
 
+tests.push([
+  "an iso/ansi/tty theme name switches the launch screen to ASCII like the footer",
+  async () => {
+    const launch = await loadLaunch();
+    const opts = { version: "1.2.3", hubKey: "alt+m", menuCmd: "/menu", ascii: false, reducedMotion: true };
+    const { tui } = makeTui();
+    const themed = launch.launchHeader(opts)(tui, themeNamed("iso-dark"));
+    const lines = themed.render(80);
+    const joined = lines.join("\n");
+    for (const glyph of ["█", "╗", "·"]) {
+      assert.ok(!joined.includes(glyph), `iso-dark must not emit ${JSON.stringify(glyph)}: ${JSON.stringify(joined)}`);
+    }
+    const asciiLaunch = launch.launchLines({
+      width: 80, frame: launch.REVEAL_FRAMES - 1, reducedMotion: true, ascii: true,
+      version: "1.2.3", hubKey: "alt+m", menuCmd: "/menu", theme: plain,
+    });
+    assert.deepEqual(lines, asciiLaunch, "iso-dark renders the explicit ASCII launch at the same width and frame");
+    const forced = launch.launchHeader({ ...opts, ascii: true })(tui, plain as unknown as Theme);
+    assert.deepEqual(lines, forced.render(80), "iso-dark renders the same as an ascii: true header");
+    themed.dispose?.();
+    forced.dispose?.();
+  },
+]);
+
+tests.push([
+  "a non-matching theme name keeps the block art, so the ASCII choice is theme-name driven",
+  async () => {
+    const launch = await loadLaunch();
+    const opts = { version: "1.2.3", hubKey: "alt+m", menuCmd: "/menu", ascii: false, reducedMotion: true };
+    const { tui } = makeTui();
+    const themed = launch.launchHeader(opts)(tui, themeNamed("gitops-dark"));
+    const lines = themed.render(80);
+    const joined = lines.join("\n");
+    for (const glyph of ["█", "╗", "·"]) {
+      assert.ok(joined.includes(glyph), `gitops-dark keeps ${JSON.stringify(glyph)}: ${JSON.stringify(joined)}`);
+    }
+    const blockLaunch = launch.launchLines({
+      width: 80, frame: launch.REVEAL_FRAMES - 1, reducedMotion: true, ascii: false,
+      version: "1.2.3", hubKey: "alt+m", menuCmd: "/menu", theme: plain,
+    });
+    assert.deepEqual(lines, blockLaunch, "gitops-dark renders the non-ASCII launch at the same width and frame");
+    assert.equal(launch.asciiThemeName("gitops-dark"), false, "the predicate does not match an unrelated theme name");
+    themed.dispose?.();
+  },
+]);
+
+// D1: the launch screen and the vendored footer must make the same automatic ASCII choice for a
+// theme name; two copies of the rule drift apart if a theme is added to one and not the other.
+tests.push([
+  "the ASCII theme-name rule agrees with the vendored footer's",
+  async () => {
+    const launch = await loadLaunch();
+    const footerRender = await loadModule<{ footerGlyphs: (theme: Theme, forceAscii?: boolean) => { ascii: boolean } }>(
+      "vendor/custom-footer/render.ts",
+    );
+    for (const name of ["iso-dark", "ansi-dark", "tty-dark", "ascii", "gitops-dark", "high-contrast-dark", "", "marathon"]) {
+      assert.equal(
+        launch.asciiThemeName(name),
+        footerRender.footerGlyphs(themeNamed(name)).ascii,
+        `launch screen and footer disagree on theme name ${JSON.stringify(name)}`,
+      );
+    }
+  },
+]);
 tests.push([
   "the reveal is progressive and reduced motion is the final frame",
   async () => {

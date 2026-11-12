@@ -177,12 +177,23 @@ check("5. the sub-quadratic guard passes linear probes and rejects a quadratic o
   // while a genuinely quadratic probe must be caught by the growth ratio, not the clock.
   const small = "a".repeat(200_000);
   const large = "a".repeat(800_000);
+  // A fake clock advancing by each probe's work keeps this regression independent of host load.
+  let elapsed = 0;
+  const clock = {
+    now: (): number => elapsed,
+    advance: (ms: number): void => {
+      elapsed += ms;
+    },
+  };
   const linear = (text: string): void => {
     let acc = 0;
     for (let i = 0; i < text.length; i++) acc += text.charCodeAt(i);
     assert.ok(acc >= 0);
+    // One clock unit per loop iteration: keep in sync if this loop changes.
+    clock.advance(text.length);
   };
   const tenTimesSlower = (text: string): void => {
+    // Ten calls to linear advance 10 * text.length clock units.
     for (let pass = 0; pass < 10; pass++) linear(text);
   };
   const quadratic = (text: string): void => {
@@ -191,10 +202,18 @@ check("5. the sub-quadratic guard passes linear probes and rejects a quadratic o
       for (let j = 0; j < text.length; j += 100) acc += text.charCodeAt((i + j) % text.length);
     }
     assert.ok(acc >= 0);
+    // steps^2 nested-loop iterations: keep in sync if either loop's stride or bounds change.
+    const steps = Math.ceil(text.length / 100);
+    clock.advance(steps * steps);
   };
-  assertSubQuadratic("linear probe", linear, small, large);
-  assertSubQuadratic("linear probe on a 10x slower machine", tenTimesSlower, small, large);
-  assert.throws(() => assertSubQuadratic("quadratic probe", quadratic, small, large), /quadratic/);
+  assertSubQuadratic("linear probe", linear, small, large, { clock: clock.now });
+  assertSubQuadratic("linear probe on a 10x slower machine", tenTimesSlower, small, large, {
+    clock: clock.now,
+  });
+  assert.throws(
+    () => assertSubQuadratic("quadratic probe", quadratic, small, large, { clock: clock.now }),
+    /quadratic/,
+  );
 });
 
 restoreEnv();

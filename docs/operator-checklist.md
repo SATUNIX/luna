@@ -18,8 +18,8 @@ round.
   `bypass_actors`).
 - [ ] **Required checks** on `main`: exactly the `required_status_checks` list, bound to the
   GitHub Actions app (and the CodeQL check to code scanning), with the strict
-  up-to-date policy. `ci-complete` stands for every job in `ci.yml` except the measure-only `coverage` job, so a new CI
-  job needs no ruleset change.
+  up-to-date policy. `ci-complete` stands for every job in `ci.yml` except the measure-only `coverage`
+  and `coverage-merge` jobs, so a new CI job needs no ruleset change.
 - [ ] **Code-scanning merge protection**: the `code_scanning` rule with the thresholds listed for
   CodeQL, Semgrep OSS, OSV-Scanner and zizmor.
 - [ ] **Release tags**: only the owner creates, updates or deletes `v*` tags (`rulesets[release-tags]`).

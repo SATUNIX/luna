@@ -1,28 +1,44 @@
-# Cycle 07 — Report (run luna-ux-01, stream `ux`)
+# Cycle 07 report: launch-screen ASCII parity, workflow-panel column widths
 
 Outcome: successful
 Mode: fix
 
-Test-change justification: PG-59 requires `smoke:update-notice` to pass on a pi older than the
-pin. The old case deep-equalled the whole notification list to one trunk line. The replacement
-still requires the trunk line exactly once and fails on any second kit notice; it only tolerates
-a pi built-in notice, filtered by object identity so a kit summary with the same wording still
-fails. A new case pins pi 0.99.2 against registry 1.4.0. No assertion was weakened otherwise.
+Test-change justification: no existing assertion was weakened. `tests/launch-screen-smoke.ts`
+gained new cases (ISO theme names render ASCII and equal an explicit ASCII render; `gitops-dark`
+keeps block art; a footer-parity loop over eight theme names), and `tests/workflow-panel-smoke.ts`
+gained a new section 2c rather than changing the existing snapshot and key cases. The snapshot
+cases still pass unchanged because the `cell()` helper pads plain ASCII exactly like `padEnd`.
 
-Board: PG-59 done - trunk-gap notice now owns the session-start kit notice (`sessionStartNotice`), with a pi-0.99.2 case and a built-in-notice-tolerant integration test.
-Board: V-05 done - already shipped by cycles 01-02; every acceptance point re-verified, no code change needed this cycle.
+Board: V-09 done - already merged and verified at the cycle base (dated `SOURCE.md` entries,
+`docs-smoke` provenance scan); re-checked by the reviewer, not reopened this cycle.
+Board: V-93 done - already merged and verified at the cycle base (single `visible-text.ts` source,
+generated copies, hand-written count 4 to 1); re-checked, no code change.
 
-Item: P0 upstream merge conflict - 03bc064 - `grep` shows no conflict markers; both sides kept in `package.json` and `kit-update/index.ts`; `smoke:update-notice` 8/8 and `smoke:kit-update-channel` 7/7.
-Item: PG-59 smoke:update-notice pi-compat - ec30653, 3b913d5 - `npm run smoke:update-notice` 8/8, including the update-available pi case.
-Item: V-05 launch screen - no new commit (shipped earlier; re-verified) - `npm run smoke:launch-screen` 11/11.
+Item: Launch screen follows the footer's automatic ASCII theme choice (defect D1) - 05e275d6, 04a98bf2 - `npm run smoke:launch-screen` 16/16; footer-parity case ties `asciiThemeName` to `footerGlyphs`.
+Item: Workflow panel columns measured and cut in display width (defect D2) - 488b64f9, 98127528 - `npm run smoke:workflow-panel` 22/22; 2c case fails on the base source, `renderText` ESC case fails on 488b64f9 without the strip fix.
+
+## What changed
+
+- `launch-screen.ts` now derives the ASCII choice from the theme name the same way the vendored
+  footer does (`iso`/`ansi`/`tty`/`ascii`), so header and footer agree; `PI_KIT_ASCII=1` still
+  forces it. Pinned by `tests/launch-screen-smoke.ts`; docs and CHANGELOG updated.
+- `wf-panel.ts` sizes the phase title, agent id, model and run name columns with `visibleWidth` and
+  clips/pads them through one `cell()` helper (ellipsis on cut), instead of `String.prototype.length`
+  and `padEnd`. Long text no longer pushes done/total, tokens, elapsed or status off the row, and a
+  wide glyph (`阶段 🚀`) keeps the following columns aligned. `cell()` strips the ANSI resets that
+  `truncateToWidth` appends, so the non-TUI `renderText` fallback stays plain. The whole-line clamp
+  is unchanged. Dated `SOURCE.md` entry, regenerated notices, CHANGELOG, and `docs/workflows.md`
+  (including the carry-over sentence that an open stop/save confirm still owns the keys after the
+  prune fallback).
+- Verification: `check-all --for-changed` named 11 checks, all RUN and PASS (table in `verify.md`),
+  plus `smoke:tui-layout` 5/5. Two independent reviewers; the first FAILed on a mangled docs
+  paragraph and the ANSI leak, both fixed and re-reviewed to PASS. Diff 23316 bytes (< 30000).
 
 ## Left and next
 
-- HANDOFF carry-overs remain open and confirmed: duplicate `/mcp`/`/llama` rows in
-  `allCommands()` (`control-center/index.ts:106-111`) and the cancelled RPC value dialog returning
-  `"back"` (`hub.ts:283`). Not taken: the mandatory merge alone puts the review diff far past the
-  30000-character stop line. Evidence and test sketches stay in `autonomy/runs/luna-ux-01/HANDOFF.md`.
-- The merge diff is dominated by upstream files; cycle-owned code/docs/tests are ~7.7k characters.
-- `TRUNK_CHANNEL = "next"` (gap is `HEAD..main`) overlaps upstream's `trunk` channel
-  (`integration/luna`); existing proposal `autonomy/proposals/luna-ux-01-07-trunk-channel-alias.md`
-  covers the naming, not changed here.
+- Not taken (diff budget, and out of this cycle's two items): `wf-panel.ts` `footer()` still looks up
+  `current()` twice (readability only); `autonomy/lib/engine.ts:1011` continues to apply the
+  notebook-reexported hidden-char transform (no class duplicate, outside V-93).
+- The unauthenticated `/mcp`/`/llama` dedupe and `hub.ts` cancel mapping carry-overs were confirmed
+  already fixed by the scout pass; nothing left there.
+- No new proposals were needed this cycle.

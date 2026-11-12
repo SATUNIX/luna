@@ -95,23 +95,25 @@ const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "-
 const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
   "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--help|-h]";
+
+// Help is recognized before any argument validation or install work: `--help --profile` must
+// print usage and exit 0, not fail because the next flag's value is missing.
+if (has("--help") || args.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
 for (let i = 0; i < args.length; i++) {
   const arg = args[i] ?? "";
   if (BOOLEAN_FLAGS.includes(arg)) continue;
   const problem = !VALUE_FLAGS.includes(arg)
     ? `unknown argument "${arg}"`
-    : args[i + 1] === undefined || String(args[i + 1]).startsWith("--") ? `${arg} needs a value` : null;
+    : args[i + 1] === undefined || args[i + 1] === "" || String(args[i + 1]).startsWith("--") ? `${arg} needs a value` : null;
   if (problem) {
     console.error(`[install] ${problem}\n${USAGE}`);
     process.exit(1);
   }
   i++;
-}
-
-// Help is recognized before any install work so it stays side-effect free and exits 0.
-if (has("--help") || args.includes("-h")) {
-  console.log(USAGE);
-  process.exit(0);
 }
 
 // The split lite surface is now the lite profile of the single package.
@@ -755,26 +757,31 @@ if (!noExternals) {
   }
 }
 
-// 4. Scaffold .env if absent
-const envExample = ENV_EXAMPLE;
-const envTarget = path.join(globalAgentDir(), ".env");
-if (!dryRun) {
-  // No exists-then-write check: the template is read once (absent -> nothing to scaffold) and the
-  // target is created with O_EXCL ("wx"), so a .env that appears at any point before the create
-  // (another installer, the operator) is left untouched and is not an error.
-  const template = readIfPresent(envExample);
-  if (template !== undefined) {
-    fs.mkdirSync(path.dirname(envTarget), { recursive: true, mode: 0o700 });
-    try {
-      // .env holds API keys: create it 0600 (copyFileSync would keep the template's 0644).
-      fs.writeFileSync(envTarget, template, { mode: 0o600, flag: "wx" });
-      console.log(`\n[install] Scaffolded ${envTarget} from .env.example`);
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
+// 4. Scaffold .env if absent.
+// The .env belongs to the machine-global agent dir (it holds API keys), so only --scope global
+// may create it. A project-scope install writes just <cwd>/.pi/settings.json and
+// <cwd>/.pi/.pi-kit.json (docs/INSTALL.md) and must leave the global agent dir alone.
+if (scope === "global") {
+  const envExample = ENV_EXAMPLE;
+  const envTarget = path.join(globalAgentDir(), ".env");
+  if (!dryRun) {
+    // No exists-then-write check: the template is read once (absent -> nothing to scaffold) and the
+    // target is created with O_EXCL ("wx"), so a .env that appears at any point before the create
+    // (another installer, the operator) is left untouched and is not an error.
+    const template = readIfPresent(envExample);
+    if (template !== undefined) {
+      fs.mkdirSync(path.dirname(envTarget), { recursive: true, mode: 0o700 });
+      try {
+        // .env holds API keys: create it 0600 (copyFileSync would keep the template's 0644).
+        fs.writeFileSync(envTarget, template, { mode: 0o600, flag: "wx" });
+        console.log(`\n[install] Scaffolded ${envTarget} from .env.example`);
+      } catch (error) {
+        if (errorCode(error) !== "EEXIST") throw error;
+      }
     }
+  } else if (!fs.existsSync(envTarget) && fs.existsSync(envExample)) {
+    console.log(`\n[install] Dry run: would scaffold ${envTarget} from .env.example`);
   }
-} else if (!fs.existsSync(envTarget) && fs.existsSync(envExample)) {
-  console.log(`\n[install] Dry run: would scaffold ${envTarget} from .env.example`);
 }
 
 // 4b. Firewall policy and default mode from the profile (tool-firewall and protected-paths read it).

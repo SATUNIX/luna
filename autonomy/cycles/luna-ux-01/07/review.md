@@ -1,74 +1,72 @@
-# Cycle 07 review — stream ux (luna-ux-01)
+# Cycle 07 — Review (run luna-ux-01, stream `ux`)
 
-Base: `b91bc34ec41d` (head of `stream/ux`). Cycle mode: **fix**.
+Base `210390b86be2` (head of `stream/ux`), branch `pi/luna-ux-01`. Review is read-only; checks were
+run by hand, `npm test` / `npm run check:all` were not run.
 
-## Inputs read
+## Charter and previous cycle
 
-- `autonomy/CHARTER.md` (acceptance standard).
-- `autonomy/runs/luna-ux-01/HANDOFF.md` (current state after cycle 06).
-- Previous cycle records under `autonomy/cycles/luna-ux-01/06/` and the branch log
-  `git log --oneline b91bc34..HEAD` (empty at cycle start).
-- Open proposals under `autonomy/proposals/luna-ux-01-*.md`, including
-  `luna-ux-01-06-duplicate-builtin-commands.md` (the handoff names it, but only the handoff
-  copy exists on this branch).
-
-## P0 — upstream merge conflict (priority 1)
-
-`git merge refs/upstream/trunk` conflicted in exactly two files:
-
-- `package.json`: each side added one smoke script. Resolution keeps both
-  `smoke:update-notice` (stream) and `smoke:kit-update-channel` (upstream).
-- `packages/extensions/src/kit-update/index.ts`: upstream added the `trunk` branch/tag fields
-  and the `trunk` channel planner; the stream added `trunkAhead` (the commit-gap count that
-  feeds the trunk notice). Resolution keeps both: `branchHead(remote, dist.trunkBranch)` and
-  `tags.trunk`, plus the `HEAD..main` count that sets `trunkAhead`.
-
-Evidence: merge commit `03bc064`; `grep '^<<<<<<<\|^=======\|^>>>>>>>'` on both files returns
-nothing. After the merge `npm run test:typecheck`, `npm run test:lint`,
-`npm run smoke:update-notice`, `npm run smoke:kit-update-channel` and
-`npm run smoke:launch-screen` all pass.
+Read `autonomy/CHARTER.md`, `autonomy/runs/luna-ux-01/HANDOFF.md`, the previous report
+(`autonomy/cycles/luna-ux-01/06/report.md`) and `git log --oneline 210390b86be2..HEAD` (no commits
+on top of the cycle base). Proposals under `autonomy/proposals/luna-ux-01-*.md` were read; none is
+in this cycle's board.
 
 ## Board items
 
-### PG-59 [P0] smoke:update-notice reddens pi-compat lanes
+The assigned board names two items, and both are already done on the trunk:
 
-Confirmed against the code, not just the advisory:
+- **V-09** — acceptance is one pinned clause (a dated 2026-11-12 entry in
+  `packages/extensions/third_party/subagent/SOURCE.md` naming `wf-panel.ts` and `23725c2`, plus a
+  generic `tests/docs-smoke.ts` scan). Present: `SOURCE.md:279-283` has
+  `- **Workflow panel height budget (2026-11-12):**` naming `wf-panel.ts` and `23725c2`, and
+  `tests/docs-smoke.ts:477-512` isolates that entry and then scans every `third_party/*/SOURCE.md`
+  for a bolded dated entry. `npm run -s smoke:docs` is green. Nothing to re-open; the TUI width work
+  must not be reopened.
+- **V-93** — the hidden-character class appears once by hand at
+  `packages/core/shared/visible-text.ts:21`, with three byte-identical generated copies from
+  `SHARED_COPIES` (`packages/core/gen-shared.ts:105-108`). `autonomy/lib/engine.ts:1011` only uses
+  `HIDDEN_CHARS` through `notebook.ts`, a re-export, not a fourth literal. Count is 1. Done.
 
-- `tests/update-notice-smoke.ts:260-266` asserts the whole `notes` array deep-equals exactly one
-  trunk notice.
-- The session-start handler (`packages/extensions/src/kit-update/index.ts:1254-1257`) notifies the
-  trunk notice and then falls through to `hasUpdates(report)` → `ctx.ui.notify(summaryLine(...))`.
-  On a pi older than the test pin (`PI_TAGS` latest `1.4.0`), `report.pi.available` is true, so a
-  second kit notice `Updates available: pi X → 1.4.0. Run /update.` follows. On the pinned
-  pi 1.4.0 there is no pi update, which is why the test only fails in pi-compat.
-- Root cause: no precedence rule between the trunk-gap notice and the generic summary notice.
+Work therefore moves to work item (4), defects found in this stream, and the HANDOFF follow-ups.
 
-### V-05 [P2] Luna launch screen
+## HANDOFF carry-overs checked against the code
 
-Already shipped on this branch by cycles 01–02. A scout checked every acceptance point against
-`launch-screen.ts`, `control-center/index.ts`, `tests/launch-screen-smoke.ts`,
-`docs/control-center.md` and `extension.json`: all PASS (single `setHeader` from the existing
-`session_start`, TUI-only, child-safe, `launchScreen: "off"`, widths 20/40/60/80/120 within
-`visibleWidth`, reduced motion starts no timer, animated timer self-stops and `dispose` stops it,
-ASCII printable, env declared, docs section present). `npm run smoke:launch-screen` reports
-`all 11 checks passed`. No V-05 code change is needed this cycle.
+| Follow-up | State |
+|---|---|
+| `control-center/index.ts` duplicate `/mcp`/`/llama` rows in `allCommands()` | **DONE** — `index.ts:170-181` dedupes with `seen`, and the comment at `:165` names both commands. |
+| `hub.ts` RPC value dialog cancel returns `"back"` | **DONE** — `hub.ts:316-318` maps `undefined` (timeout/cancel) to `undefined` (close), and `"back"` comes only from an explicit `‹ Back` (`:304`). |
+| `wf-panel.ts` `footer()` looks up `current()` twice | **STALE** — `wf-panel.ts:779` reads `inRun()` then `current()` once. |
+| `docs/workflows.md` confirm-owns-keys after prune fallback | **OPEN** — `docs/workflows.md:462-463` documents the prune fallback but not that an open confirm still owns the keys; the code checks `this.confirm` before `inRun()` (`wf-panel.ts:647-651`). |
+| `engine.ts:1011` own `HIDDEN_CHARS` transform | **DONE** — re-export from `notebook.ts:20,25`, outside this stream anyway. |
 
-## Carry-overs and defects (not taken)
+## New defects (evidence)
 
-HANDOFF carry-overs remain real; a scout confirmed both against the code:
+Sent two scouts over the pure TUI renderers in this stream. Findings, ranked:
 
-1. `/mcp` and `/llama` are listed twice on All commands: `allCommands()`
-   (`packages/extensions/src/control-center/index.ts:106-111`) pushes
-   `builtinCommandNames()` (which includes `mcp`/`llama`) and then every `pi.getCommands()`
-   entry, which also reports those extension commands. No test covers duplicate rows.
-2. A cancelled/timeout value dialog returns `"back"` (`hub.ts:283`), so on a subpage it reopens
-   the parent instead of closing, contradicting `docs/control-center.md` ("a timeout counts as
-   cancel ... closes the hub"). The existing RPC test never reaches the second dialog.
+### D1. Launch screen ignores the theme-derived ASCII mode the footer honours (medium)
 
-They are not taken this cycle because the mandatory upstream merge alone puts the review diff far
-past the 30000-character stop line; the handoff records them for a later cycle.
+`custom-footer/render.ts:110-113` switches to ASCII automatically for themes named iso/ansi/tty/ascii.
+`launch-screen.ts:117-145` passes only `opts.ascii`, which `control-center/index.ts:114` sets only
+from `PI_KIT_ASCII === "1"`; the live theme name is never consulted. On `iso-dark`, `ansi-dark` or
+`tty-dark` the footer draws `[x] | ...` while the launch screen still emits `██╗` and `·`, i.e.
+mojibake on exactly the terminals those themes exist for. `docs/status-bar-and-costs.md:211`
+promises the automatic choice for "footer, todo widget and working line" and `docs/control-center.md:42`
+defers to `PI_KIT_ASCII` only, so the two surfaces disagree. Pinned by a new themed render case in
+`tests/launch-screen-smoke.ts`.
 
-## Diff budget
+### D2. Workflow panel columns are measured in code units and never clipped (medium)
 
-`git diff --no-renames b91bc34..HEAD` excluding lockfile and record paths is 263,044 characters
-after the merge, dominated by upstream files. Cycle-owned changes are kept to PG-59 only.
+`wf-panel.ts:309-313` computes `phaseWidth`/`labelWidth`/`modelWidth` from `.length`, `:321` and
+`:412` `padEnd` raw text, and `:408` pads run names the same way; only the finished line is cut
+(`:837`). With a long phase title the cell overruns and pushes the phase's `done/total` off the row;
+a long agent id/model pushes `tokens`, `elapsed` and the agent's `status` off the row. `阶段 🚀`
+measures 7 columns but `.length` 5, so wide glyphs shift the status column left even when the line
+fits. `docs/workflows.md:473-476` promises those columns, and `tests/tui-layout-smoke.ts` only
+asserts "fits", not that the columns survive. Fix: measure with `visibleWidth`, clip each cell with
+`truncateToWidth`, pad by visible width. This is a new defect in the panel renderer, not the merged
+custom-footer ASCII/width work V-09 pinned.
+
+## Chosen work
+
+Fix mode: D1 and D2, plus the one-line `docs/workflows.md` carry-over folded into D2 (same file,
+same behaviour). Both are user-visible defects in assigned stream files, both have a failing pin
+that can be written before the fix.

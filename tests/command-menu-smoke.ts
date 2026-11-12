@@ -431,6 +431,60 @@ tests.push([
 ]);
 
 tests.push([
+  "PI_KIT_ASCII=1 keeps the curated menu's location hints printable ASCII",
+  async () => {
+    const menu = await loadMenu();
+    const model = await modelFor(["auto", "totally-companion"]);
+    assert.equal(
+      menu.hubLocationFor("auto", model, true),
+      "moved -> /menu > Autonomy > Approvals",
+      "ascii mode uses the printable separator and arrow",
+    );
+    assert.equal(
+      menu.locationFor(model, true)("auto"),
+      "moved -> /menu > Autonomy > Approvals",
+      "the ascii location map agrees with hubLocationFor",
+    );
+    assert.equal(
+      menu.locationFor(model, true)("not-in-the-hub"),
+      menu.ALL_COMMANDS_LOCATION_ASCII,
+      "a command with no row points at the ascii All commands hint",
+    );
+    assert.equal(
+      menu.hubLocationFor("auto", model),
+      "moved → /menu ▸ Autonomy ▸ Approvals",
+      "the default stays Unicode",
+    );
+
+    const arrows = await modelFor(["orchestrate-implement-review", "todos"]);
+    assert.equal(
+      menu.hubLocationFor("orchestrate-implement-review", arrows, true),
+      "moved -> /menu > Work > Delegation > Plan -> implement -> review",
+      "a hub label's arrow is folded in ascii mode",
+    );
+    const todosHint = menu.locationFor(arrows, true)("todos");
+    assert.match(todosHint, /^[\x20-\x7e]*$/, "a no-description hint is printable ASCII");
+
+    const fixture = agentDirFixture("pi-kit-menu-ascii-");
+    const restoreAscii = setEnv("PI_KIT_ASCII", "1");
+    try {
+      const fake = await startWith("tui", true, fixture.dir, COMMANDS);
+      assert.equal(fake.providers.length, 1, "the TUI gets exactly one provider");
+      const provider = fake.providers[0];
+      assert.ok(provider);
+      const wrapped = provider(fakeBase(ITEMS));
+      const revealed = await suggest(wrapped, ["/tota"], 5);
+      const description = String(revealed?.items.find((item) => item.value === "totally-companion")?.description);
+      assert.match(description, /^[\x20-\x7e]*$/, "the hint is printable ASCII only");
+      assert.ok(description.startsWith("moved -> "), `the hint uses the ascii prefix: ${description}`);
+    } finally {
+      restoreAscii();
+      fixture.done();
+    }
+  },
+]);
+
+tests.push([
   "commandMenu: all registers no provider, so the whole menu is shown",
   async () => {
     const fixture = agentDirFixture("pi-kit-menu-all-", { commandMenu: "all" });

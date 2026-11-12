@@ -22,8 +22,8 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-fleet-01/06 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs onto a clean base, repaired red smoke:docs gate, and recorded the cycle
 - luna-ux-01/03 | Board: V-09, DE-101 | successful | Cycle 03: vendored workflow-panel provenance recorded; pairing panel row budget fixed
 - luna-ux-01/06 | Board: V-09, V-93 | successful | Cycle 06: vendored provenance pinned, workflow panel prune fallback fixed
-- luna-ux-01/07 | Board: PG-59, V-05 | successful | Merged upstream trunk preserving both sides, made the trunk-gap notice own the session-start kit notice so pi-compat lanes pass, and re-verified the already-shipped launch screen
-- luna-ux-01/08 | Board: V-73, PG-12 | successful | Re-landed the reviewed V-73 alias wording and the alias-target-missing command-contract rule, fixed the withOverlayFrame dim leak when build throws, and re-verified the already-merged PG-12 trunk-ahead notice
+- luna-ux-01/07 | Board: V-09, V-93 | successful | Fixed the launch screen so it follows the footer's theme-derived ASCII choice, and sized the /workflows panel columns in display width (long text and wide glyphs no longer push the trailing columns), with reviewer-found docs and ANSI-reset leaks fixed too
+- luna-ux-01/08 | Board: V-09, V-93 | successful | Cycle 08 report: curated / menu ASCII under PI_KIT_ASCII
 - luna-ux-01/09 | Board: V-73 | successful | Made control-centre Back follow the visited-page stack (Settings to Display to Back returns to Settings) and re-verified the already-merged V-73 alias wording and the green luna-ux-01/03 journal gate
 - luna-ux-01/02 | Board: V-05 | successful | Consolidated the launch screen onto the menu's TUI predicate so older hosts without ctx.mode still get it; added the undefined-mode tests and re-verified the launch screen
 - luna-core-01/07 | Board: PG-27, PG-51 | successful | Converted the CPU-bound smoke timing guards to CPU time (all budgets kept), fixed the skill-router re: trigger guard and a workflow-plan timer race the load-check exposed
@@ -70,7 +70,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-core-01/30 | Board: DE-96, DE-97 | successful | Re-verified the cycle-29 leak-scan and brand-smoke fixes on this base (smoke:prepush-scan 16/16, smoke:brand 23/23) with no code change, and closed HANDOFF #16: memory-vault's injected record is now keyed by rel with a sha256 body fingerprint so a note edited mid-session is offered again with its new body (new check 6b fails on the base); also fixed 4-character plurals never meeting their singular in the recall stemmer (logs/log; the base returned logs) with exact assertions and a round trip, docs scoped to once per session per unchanged content, independent per-item and final whole-diff reviews PASS
 
 - luna-core-01/31 | Board: none | successful | Fixed the memory-vault first-prompt flag being consumed before the recall work so a swallowed recall error no longer loses the earlier-session recap and pinned block for the whole session (new check 17 fails on the base), and fixed skill hints clipping mid-word with a stale ~30-token cost claim: a new pure `hintText` cuts descriptions at a word boundary and the two comments now match (~61 tokens), removing 25/34 mid-word cuts; smoke:memory-vault 18/18, smoke:skill-routing, smoke:docs, tsc, eslint and verify green, item 1 falsified on the base, independent reviews PASS, two proposals written (skill-trigger lifetime, memory-search exclude)
-- luna-ops-01/08 | Board: PG-20, PG-45, DE-93, PG-46 | successful | Cycle 08 completed the carried-over journal and gate work, and removed the wall-clock perf gates
+- luna-ops-01/08 | Board: DE-105, DE-106 | successful | Cycle 08 mapped the CI-policy checks and rejected empty installer values
 - luna-ops-01/09 | Board: PG-50, PG-53 | successful | Cycle 09 bounded concurrent acceptance gates per host and recorded the unattended decision
 - luna-ops-01/10 | Board: PG-50 | successful | Cycle 10 finished the gate-slot bound and made red cycles reviewable
 - luna-ops-01/12 | Board: PG-60, PG-20, PG-53, PG-61 | successful | Cycle 12 unblocked the publish and landed the installer fix
@@ -88,3 +88,6 @@ journal: every report has a journal entry
 - luna-ux-01/04 | Board: V-93, V-09 | successful | Cycle 04: hidden-character filter consolidated (V-93)
 - luna-guard-01/03 | Board: PG-24 | successful | Repaired the red manifest gate (`node:crypto` for secret-guard) and pinned the secret-content refusal record as the pattern label only, closing cycle-02 PG-24 review gaps; targeted smokes, typecheck, lint, verify and independent reviewer PASS
 - luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
+- luna-ops-01/05 | Board: DE-105, DE-106 | successful | Cycle 05 — Report (run luna-ops-01, stream `ops`)
+- luna-ops-01/06 | Board: DE-105, DE-106 | successful | Cycle 06 — Report (run luna-ops-01, stream `ops`)
+- luna-ops-01/07 | Board: DE-105, DE-106 | successful | Cycle 07 — Report (run luna-ops-01, stream `ops`)

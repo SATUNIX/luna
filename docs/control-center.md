@@ -40,8 +40,9 @@ The content is revealed over at most twelve frames, about 90 ms apart. Reduced m
 final content at once and starts no timer. It is on when `PI_KIT_REDUCED_MOTION=1`, when
 `reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`, when `TERM=dumb`, or when `CI` is set.
 A terminal narrower than 60 columns drops the art for one compact line, and `PI_KIT_ASCII=1` uses
-printable ASCII only. Put `"launchScreen": "off"` in `<agent dir>/pi-kit/ui.json` to turn the
-launch screen off (`tests/launch-screen-smoke.ts`).
+printable ASCII only. The launch screen also follows the automatic ASCII choice for the `iso`,
+`ansi`, `tty` and `ascii` theme names, like the footer. Put `"launchScreen": "off"` in
+`<agent dir>/pi-kit/ui.json` to turn the launch screen off (`tests/launch-screen-smoke.ts`).
 
 ## Pages
 
@@ -149,7 +150,11 @@ The curated menu and the launch screen are installed for every session, so they 
 
 Hidden suggestions say where the command lives, for example
 `moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
-no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`).
+no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`). With
+`PI_KIT_ASCII=1` the hint's own glyphs are printable ASCII: `moved -> /menu > Autonomy >
+Approvals` (or `moved -> /menu > All commands`), a page or row label's arrow is folded (`Plan ->
+implement -> review`), and the description separator is ` - ` instead of ` — `. A command's own
+description after the hint is shown unchanged.
 
 The pinned commands are `/menu`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
 `/update` and `/security`. A profile adds the commands that define it: `/autonomy` in autonomous,

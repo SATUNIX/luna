@@ -1,70 +1,95 @@
-# Cycle 08 — review (run luna-ops-01, stream ops)
+# Cycle 08 — Review (run luna-ops-01, stream `ops`)
 
-Base `83a3ad872d47` (head of `stream/ops`). Charter read in full. Read the cycle-07 attempt
-(`origin/attempts/luna-ops-01/cycle-07`), its report/handoff, this run's proposals and the handoff.
+Base: `e120c3fdb8b0`, head of `stream/ops`. Mode this cycle: **fix**.
 
-## Cycle 07 carry-over is sound, but PG-45 breaks two footprint checks
+## Assigned board items checked against the current code
 
-Cycle 07's rejection list names `check-all:smoke:eval-footprint` and
-`check-all:smoke:subagent-roles-isolation`. Cherry-picking its four code commits onto this base
-reproduces both, and neither fails on the base:
+### DE-105 — sub-quadratic guard regression test must not depend on the clock
 
-```
-$ npm run -s smoke:eval-footprint
-  FAIL: balanced: ... matching the baseline
-    balanced: workflow_run tool text matches the baseline
-[eval-footprint-smoke] 3/11 FAILED
-$ npm run -s smoke:subagent-roles-isolation
-AssertionError: the delegation tool text is 4908 chars, over the 4,900 budget
-```
+Already implemented and merged before this cycle. `tests/perf-budget.ts:16-48` takes
+`opts.clock` (default `performance.now`) and `tests/redaction-corpus-smoke.ts:209-217` drives
+check 5 with a deterministic fake clock: the linear and 10x-slower probes pass and the quadratic
+probe is rejected. `npm run -s smoke:redaction-corpus` passes 6/6 in ~13 s. The real-timing
+checks (check 4, `tests/firewall-gate-smoke.ts`) are unchanged. Re-verified this cycle; no code
+change needed.
 
-Root cause: PG-45 rewrote `PLAN_DESCRIPTION` (`packages/extensions/third_party/subagent/plan.ts:31`)
-from "loops until the output has pass" to "loops until the verdict line (last non-empty line) has
-pass" (+28 chars). `workflow_run`'s measured text is therefore 1113 chars against the baseline's
-1085, `delegation.toolText` 4758 against 4730, and the 4,900-char delegation ceiling is exceeded by
-8 chars. The rule is real; the wording can be 12 chars shorter ("last non-empty line has pass"),
-and `packages/core/eval/footprint-baseline.json` must record the deliberate new size. The other
-three named failures (`run-query`, `workflow-redaction`, `workflow-resume`) pass on this tree:
-`smoke:run-query` exit 0, `smoke:workflow-redaction` exit 0; no reproduction was found.
+### DE-106 — cut PR CI wall time; shard coverage and pi-compat
 
-PG-20 and PG-45's code themselves are sound: `smoke:docs` 0, `smoke:workflow` 14/14,
-`smoke:workflow-plan` 91/91. They are carried over, with the footprint repair, as the first item.
+The sharding work is merged: `.github/workflows/ci.yml:62-95` runs `coverage` as a 4-shard
+matrix, `:173-210` runs `pi-compat` as a `pi` x `shard` matrix, and `:101-125` merges the raw
+reports in `coverage-merge`. `tests/workflow-policy-smoke.ts:202-207` pins both coverage jobs as
+measure-only, so `ci-complete` deliberately does not need them.
 
-## PG-20 — generator exists after the carry-over; finish record use
+The literal acceptance wording "a coverage-merge job enforces the existing threshold; ci-complete
+needs all of them" cannot be honoured without a threshold, and the repository has none: the
+reviewed change `25f9c40e` removed coverage from `ci-complete` as a measure-only job after a slow
+runner cancelled it; `packages/core/coverage.ts` compares against no minimum; and
+`autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md` records that the threshold value
+is an operator decision. Reversing that reviewed policy in this cycle would be a control change,
+not a fix. The 12-minute median is a GitHub-hosted PR measurement; this checkout is offline and
+cannot produce it. `npm run -s smoke:workflow-policy` passes 5 checks / 48 mutations.
 
-`node packages/core/journal.ts` and `journalLineFor`/`syncJournal` are present after the
-cherry-pick (`packages/core/lib/journal.ts:100` area); `smoke:docs` now has the identical-duplicate
-and conflicting-duplicate fixtures and the pinned missing-entry fixture is unchanged. Remaining
-work: use the generator for this cycle's own report and confirm `--check` is clean.
+## New, evidenced defects found this cycle
 
-## DE-93 — absolute wall-clock budgets are the measured gate-red cause
+1. **`check-all --for-changed` under-plans CI policy and core entry-script changes.**
+   `packages/core/lib/check-map.ts:40-54` has no rule for `.github/**`, `packages/core/install.ts`
+   or `packages/core/coverage.ts`. Evidence:
 
-Evidence (steward): `tests/redaction-corpus-smoke.ts:157` uses a 1000 ms budget and `:168` fails
-`['table, curl -u without a password: 1362 ms']`; `tests/firewall-gate-smoke.ts:592` asserts
-`ms < 200` and saw 275 ms on 200 KB. Both inputs are linear in the implementation; a loaded host
-scales the number and the test goes red, costing whole cycles (three finished cycles, 273 min,
-$0.405). `tests/workflow-redaction-smoke.ts:147` already uses the correct shape: 1x vs 4x timings
-and a 10x ratio bound. Separate the budget from host speed, keep a fixture that makes a genuinely
-quadratic function fail, and prove linear work still passes under a 10x-linear-overhead "slow host".
+   ```text
+   $ node packages/core/check-all.ts --for-changed=.github/workflows/ci.yml
+   check-all: run: test:lint
+   check-all: run: test:typecheck
+   check-all: run: verify
+   check-all: skipped: smoke:release-workflow
+   check-all: skipped: smoke:workflow-policy
+   ```
 
-## PG-46 — a red gate skips the merge review, so its findings never reach the next cycle
+   ```text
+   $ node packages/core/check-all.ts --for-changed=packages/core/install.ts
+   check-all: skipped: smoke:install-filter
+   check-all: skipped: smoke:install-marker
+   check-all: skipped: smoke:profile-transaction
+   ```
 
-`mergeDecision` returns at `packages/autonomy/lib/templates/self-improve.ts:533`
-(`if (!gate.green) return { merge: false, reason: "acceptance checks failed" }`) before
-`reviewCycle` at `:596`. A red cycle's review therefore never runs: the next cycle is told only
-"acceptance checks failed", and the same item gets re-picked (cycle 05 re-did cycle 04's V-41 for
-158 min/$0.20). The review is cheap relative to the repeat and its concerns are the carry-over
-evidence. Fix: still review a red cycle, keep `merge:false`, and put the verdict and concerns into
-`mergeReason` (already surfaced in the next cycle's prompt). Record the existing contract in
-`tests/autonomy-selfimprove-smoke.ts`.
+   A cycle that edits the CI workflow, the installer or the coverage runner can therefore record
+   the check that pins that file as SKIPPED, and only the host gate catches it. This is the exact
+   failure mode `--for-changed` exists to prevent (`packages/core/lib/check-map.ts:1-11`).
+   `smoke:check-all-npm` is likewise skipped for `packages/core/coverage.ts`, although it tests the
+   coverage CLI directly.
 
-## Other findings (not taken)
+2. **`install.ts` accepts an empty value for value flags and builds a broken source.**
+   `packages/core/install.ts:106-111` rejects `undefined` and values starting with `--` but not
+   `""`, and the later `get()` checks treat `""` as absent. Evidence:
 
-- The installer CLI raw stack trace for a bad `--profile` remains the restored proposal
-  `autonomy/proposals/luna-ops-01-06-installer-cli-error-handling.md`; not assigned this cycle.
-- V-04 doc sweep remains open from cycle 04; not assigned.
+   ```text
+   $ node packages/core/install.ts --dry-run --mode git --profile balanced --channel ""
+   [install] Luna
+     ...
+     source:       git:github.com/SATUNIX/luna@v
+   ```
 
-## Mode
+   ```text
+   $ node packages/core/install.ts --dry-run --profile balanced --git-ref ""
+   ... mode: local
+   ```
 
-**Fix mode**: a red footprint check from the carried-over PG-45, the measured DE-93 gate waste, and
-PG-46's missing red-cycle review. PG-20 is carried over with its generator.
+   A script with an unset variable (`--channel "$CHANNEL"`) either registers the malformed tag `v`
+   or silently ignores the flag. This is the same user-error class as the bad `--profile` path
+   fixed in cycle 07.
+
+## Checked and rejected
+
+- `--profile bogus` stack trace (proposal `luna-ops-01-10`): already fixed; exits 2 with the valid
+  profile list and no stack.
+- `workflow-resume` checkout-queue flake (proposal `luna-ops-01-08`): already fixed by `348c1b5e`;
+  the test now waits for the queued agent to register instead of sleeping 300 ms.
+- Coverage threshold: see DE-106 above; operator decision, already proposed.
+- `/workflow` vs `/workflows` docs sweep: real but a broad docs-only change, not this cycle's
+  minimal item.
+- `coverage.ts --report <missing-dir>` raw stack: real but low impact (measure-only CI job); left
+  as a candidate for a later cycle to keep this diff small.
+
+## Conclusion
+
+Board items are complete; the cycle takes the two demonstrated defects above under work
+precedence 4 (defects), leaving the reviewed coverage policy untouched.

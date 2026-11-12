@@ -8,8 +8,40 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.3.0-beta.3]
+
 ### Changed
 
+- **The curated `/` menu honours `PI_KIT_ASCII`.** Hidden suggestions still say where a command
+  moved (`moved → /menu ▸ Autonomy ▸ Approvals`), but with `PI_KIT_ASCII=1` the launch screen and
+  footer already used printable ASCII while the `/` hint kept its Unicode arrow, separator and em
+  dash. The hint is now `moved -> /menu > Autonomy > Approvals` (a hub label's arrow is folded
+  too, `Plan -> implement -> review`), with ` - ` before the old description, so the hint's own
+  glyphs stay printable. A command's own description is unchanged, and default output is
+  byte-identical. Pinned by `tests/command-menu-smoke.ts`; `docs/control-center.md` records it.
+- **The coverage lane is sharded and its raw reports are merged, cutting PR wall time.** The single
+  `coverage` job ran `check:all` sequentially under `NODE_V8_COVERAGE` and took 18 to 27 minutes, the
+  slowest remaining pull-request lane. It is now a four-shard matrix using the same deterministic
+  split as `verify`; each shard runs one check at a time, keeps its raw V8 data with
+  `--coverage-out`, and uploads that data plus the eval transpile cache. A new measure-only
+  `coverage-merge` job downloads every shard's artifacts and runs `coverage --report` once, so the
+  report is the union of the shards, not a fraction of it. Coverage still has no threshold and
+  neither job gates `ci-complete`; the same suite continues to gate through `verify` and
+  `pi-compat`. Pinned by `tests/workflow-policy-smoke.ts` and `tests/check-all-npm-smoke.ts`, and
+  documented in `docs/ci-security.md`.
+
+- **The launch screen follows the footer's automatic ASCII theme choice.** On the `iso`, `ansi`,
+  `tty` and `ascii` theme names the launch screen now draws printable ASCII instead of block art
+  and the middle-dot separator, matching the vendored footer. `PI_KIT_ASCII=1` still forces it.
+  Pinned by `tests/launch-screen-smoke.ts`; `docs/status-bar-and-costs.md` records the shared
+  choice.
+- **The `/workflows` panel sizes its columns in display width.** The phase title, agent id and
+  model, and run name columns were measured with `String.prototype.length`, so a long title, id or
+  model pushed done/total, tokens, elapsed and status off the row, and a wide glyph (`阶段 🚀`)
+  counted as fewer columns than it draws. They are now measured and cut with `visibleWidth` (one
+  `cell()` helper, ellipsis on cut) and the columns stay aligned; the whole-line clamp is unchanged.
+  Pinned by `tests/workflow-panel-smoke.ts` (long and wide text at 68, 80 and 100 columns);
+  `docs/workflows.md` records it.
 - **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
   `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
   the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy
@@ -76,6 +108,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
 
 ### Fixed
+
+- **The container MCP servers no longer lock vulnerable `hono` packages.** The `governance` and
+  `memory-mcp` servers under `packages/container/mcp-servers/` locked `@hono/node-server` 2.1.5
+  (GHSA-jpvv-r467-5p4w, GHSA-qv5m-9pm6-hqp3; fixed in 2.1.6) and `hono` 4.13.13 (GHSA-3gg2-335m-rxc6,
+  GHSA-h7mg-cq63-vhpq, GHSA-4m76-xfj5-7975; fixed in 4.13.16), both transitive. Both lockfiles now
+  resolve `@hono/node-server` 2.1.8 and `hono` 4.13.18 within the existing ranges; no direct dependency
+  changed. The `osv-scanner` CI job pins this.
 
 - **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
   the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave

@@ -1,53 +1,62 @@
-# Cycle 08 — plan
+# Cycle 08 — Plan (run luna-ops-01, stream `ops`)
 
-Goal: carry over the sound cycle-07 work with the footprint repair its rejection exposed (PG-20 and
-the PG-45 verdict-line gate), then remove the two measured harness wastes: wall-clock gate budgets
-(DE-93) and the red-gate cycle that skips its review (PG-46).
+Mode: **fix**. Base `e120c3fdb8b0`.
 
-Mode: fix. All three board items are P0; board order is PG-20, DE-93, PG-46, and the 30,000-char
-"stop taking new items" line is checked after each item.
+## Board status first
 
-## Item 1 — PG-20 carry-over + the PG-45 footprint repair
+- **DE-105**: done and merged before this cycle; re-verified (`smoke:redaction-corpus` 6/6). No
+  change.
+- **DE-106**: merged as sharded `coverage` and `pi-compat` matrices plus a measure-only
+  `coverage-merge`; policy pinned by `smoke:workflow-policy`. No threshold exists to enforce, and
+  adding one is an operator decision already recorded in
+  `autonomy/proposals/luna-ops-01-06-coverage-threshold-policy.md`; the 12-minute median is a
+  host PR measurement. No change this cycle.
 
-- Charter: evidence (red acceptance checks on the attempt; a documented workflow without tooling),
-  tests (smoke:docs footprint fixtures), docs (docs/autonomy.md, cycle.md).
-- Change already implemented by cherry-pick `3c7c8ae` (PG-20) and `a482425`/`c3a1ecb`/`f1da979`
-  (PG-45). Repair the regression the rejection names: shorten `PLAN_DESCRIPTION` to
-  "loops until the last non-empty line has pass", refresh the generated `docs/reference.md`, and
-  record the deliberate `workflow_run` size in `packages/core/eval/footprint-baseline.json`
-  (`balanced` and `lite`).
-- Checks: `npm run -s smoke:docs`, `smoke:eval-footprint`, `smoke:subagent-roles-isolation`,
-  `smoke:workflow`, `smoke:workflow-plan`, `node packages/core/journal.ts --check`.
+## Item 1 — plan the checks that pin CI policy and core entry scripts
 
-## Item 2 — DE-93, make the redaction time assertions load-independent
+**Justification:** charter priority 4 (defect). `check-all --for-changed` exists so a cycle's
+verify list matches the host gate; the table has no rule for `.github/**`,
+`packages/core/install.ts` or `packages/core/coverage.ts`, so the checks that pin those files are
+printed as SKIPPED (evidence in `review.md`).
 
-- Charter: evidence (the steward's 272 ms/1069 ms/1362 ms observations; three cycles lost to false
-  reds), tests (a fixture that fails on a quadratic function and passes on 10x-linear work).
-- Change: add `tests/perf-budget.ts` with `assertSubQuadratic`: best-of-three timings for the same
-  input shape at 1x and 4x, assert `large <= max(small, floor) * 10`. Replace the absolute budgets
-  in `tests/redaction-corpus-smoke.ts:141-169` (256 KB vs 1 MB, all redactors) and
-  `tests/firewall-gate-smoke.ts:585-594` (50 KB vs 200 KB). Add a fixture in
-  `tests/redaction-corpus-smoke.ts` that a synthetic quadratic function is rejected and a
-  10x-slowed linear function accepted, so the guard itself is tested.
-- Checks: `npm run -s smoke:redaction-corpus`, `smoke:firewall-gate`, `test:typecheck`,
-  `test:lint`, `smoke:check-all-npm` (wiring of the helper).
+**Change:**
+- `packages/core/lib/check-map.ts`: add rows
+  - `.github/workflows/**` → `smoke:workflow-policy`, `smoke:release-workflow`
+  - `.github/expected-settings.json` → `smoke:workflow-policy`, `smoke:github-settings-check`
+  - `.github/CODEOWNERS` → `smoke:codeowners-coverage`
+  - `packages/core/install.ts` → `smoke:install-marker`, `smoke:install-filter`,
+    `smoke:profile-transaction`
+  - `packages/core/coverage.ts` → `smoke:check-all-npm`
+- `tests/autonomy-selfimprove-smoke.ts`: assert each changed path plans the named checks (and
+  still not unrelated ones).
+- `docs/ci-security.md` / `docs/ARCHITECTURE.md`: one sentence naming CI policy and core entry
+  scripts as covered.
 
-## Item 3 — PG-46, review a red-gate cycle and carry its findings forward
+**Checks:** `npm run -s smoke:autonomy-selfimprove`, `npm run -s smoke:check-all-npm`,
+`npm run -s smoke:docs`, `docs:check`, `test:typecheck`, `test:lint`, `verify`, plus the plan
+printed by `--for-changed` for the changed paths.
 
-- Charter: evidence (cycle 05 re-did V-41 in 158 min/$0.20 because the red cycle's review never
-  ran), tests (the red-cycle smoke asserts the reviewer ran and the concerns reach the next prompt).
-- Change: in `packages/autonomy/lib/templates/self-improve.ts` stop returning before
-  `reviewCycle` when `gate.green` is false; run the review with `gateGreen: false`, keep
-  `merge:false`, and prefix `mergeReason` with `acceptance checks failed. review <verdict>: …` so
-  the existing previous-cycle briefing carries the concerns. `packages/autonomy/lib/review.ts`
-  gains the `gateGreen` flag so the reviewer prompt and bundle say the checks failed and the review
-  is carry-over evidence, not a merge decision.
-- Checks: `npm run -s smoke:autonomy-selfimprove`, `smoke:autonomy`, `test:typecheck`, `test:lint`.
+## Item 2 — reject empty values in `install.ts`
 
-## Order and budget
+**Justification:** charter priority 4 (defect). `--channel ""` produces the malformed source
+`git:github.com/SATUNIX/luna@v` and `--git-ref ""` is silently ignored; both are user-error
+presentation/validation gaps in the installer, like the fixed bad `--profile` path.
 
-1. Item 1 is already applied; repair and verify it (small commit).
-2. Item 2 (DE-93) through one `workflow_run` plan.
-3. Re-measure the review diff; take PG-46 only while it is under 30,000 characters.
-4. Record: this report, the journal line via `node packages/core/journal.ts`, the handoff, then an
-   independent whole-diff reviewer.
+**Change:** in `packages/core/install.ts`, treat `args[i + 1] === ""` as a missing value so the
+existing `<flag> needs a value` path runs (exit 1, usage, no install work). Extend
+`testUnknownFlagsRejected` in `tests/install-marker-smoke.ts` with `--channel ""` and
+`--git-ref ""` cases asserting exit 1, the message, the usage line, and no source/default install.
+No docs change: `docs/INSTALL.md` already describes these flags as taking a value.
+
+**Checks:** `npm run -s smoke:install-marker`, `test:typecheck`, `test:lint`, `verify`.
+
+## Out of scope
+
+- Any change to `ci.yml`, coverage policy or `package.json` scripts.
+- The stale `workflow-resume` proposal (already fixed) and the `/workflows` docs sweep.
+- `coverage.ts --report` missing-directory error handling (recorded in `review.md`; a later cycle).
+
+## Budget
+
+Two small items; expected diff well under the 30000-character new-item stop line. Each item is
+implemented and then reviewed by an agent that did not write it.

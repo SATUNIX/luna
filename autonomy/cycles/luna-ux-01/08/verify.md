@@ -1,64 +1,30 @@
-# Cycle 08 — Verify (run luna-ux-01, stream `ux`)
+# Cycle 08 verify — Luna ux stream
 
-Base `e22aac206685` (head of `stream/ux` after cycle 07), branch `pi/luna-ux-01`, head `f546953`
-before the record commit. `npm test` and `npm run check:all` were not run, per the cycle rules.
+Base `a597e3bf1063`, branch `pi/luna-ux-01`. `npm test` and `npm run check:all` were not run, per
+the cycle rules. Checks below were derived with
+`node packages/core/check-all.ts --for-changed="$(git diff --name-only a597e3bf1063..HEAD | tr '\n' ',')"`
+(plan: docs:check, smoke:command-menu, smoke:docs, smoke:new-extension, test:lint,
+test:typecheck, verify — all RAN).
 
-## Targeted checks
-
-| Command | Result | Proof line |
+| Check | Status | Proof |
 | --- | --- | --- |
-| `npm run smoke:command-contract` | PASS | `[command-contract-smoke] all 12 checks passed` |
-| `npm run smoke:control-center` | PASS | `[control-center-smoke] all 30 checks passed` |
-| `npm run smoke:workflow-panel` | PASS | `workflow-panel-smoke: 14 checks passed` |
-| `npm run smoke:firewall-approvals` | PASS | `[firewall-approvals-smoke] all 13 checks passed` |
-| `npm run smoke:firewall-gate` | PASS | `[firewall-gate-smoke] all 19 checks passed` |
-| `npm run smoke:redaction-corpus` | PASS | `[redaction-corpus-smoke] all 5 checks passed` |
-| `npm run smoke:update-notice` | PASS (PG-12 check) | `[update-notice-smoke] all 7 checks passed` |
-| `npm run test:typecheck` | PASS | all `tsc -p …` projects complete, exit 0 |
-| `npm run test:lint` | PASS | `eslint --max-warnings 0 .` exits 0 |
-| `node packages/core/reference.ts --check` | PASS | `[reference] OK: docs/reference.md is up to date.` |
-| `npm run verify` | PASS | `[verify] All checks passed.` |
+| `node tests/command-menu-smoke.ts` | RAN PASS | `[command-menu-smoke] all 15 checks passed` (exit 0). The new case fails on the base source: `PREFIX_EXIT:1`, `FAIL: PI_KIT_ASCII=1 keeps the curated menu's location hints printable ASCII`, `1/15 FAILED`; it also fails on the label-unaware `4ff581a5` at `Plan → implement → review`. |
+| `npm run -s smoke:docs` | RAN PASS | `[docs-smoke] OK: 14 documented commands validated, 62 relative links resolved; … 97 shipped pages name no removed delegation surface.` |
+| `npm run -s docs:check` | RAN PASS | `[docs-nav-check] OK: nav entries exist and internal links resolve.` |
+| `node tests/new-extension-smoke.ts` | RAN PASS | `new-extension smoke: OK` (exit 0). |
+| `npm run -s verify` | RAN PASS | `[verify] All checks passed.` (exit 0). |
+| `npm run -s test:typecheck` | RAN PASS | exit 0. |
+| `npm run -s test:lint` | RAN PASS | exit 0. |
+| `npx eslint` on the three touched TS files | RAN PASS | exit 0. |
+| Independent reviewer (subagent) | RAN PASS | final verdict `PASS`; it reproduced the pre-fix failure, confirmed default output byte-identical, docs exact and scope clean. |
 
-Item-specific proof:
+Not run, by rule: `npm test`, `npm run check:all` (host gate owns the full suite).
 
-- V-73: `git grep -n 'Alias for' packages/extensions/src` prints nothing (exit 1). The changed
-  descriptions start `Alias of /<target>`: `tool-firewall/index.ts:1400`/`:1403`,
-  `web-console/index.ts:657`. `npm run catalog` exits 0 and leaves no diff beyond the committed
-  `docs/reference.md`. The `alias-target-missing` fixture pair (a registered-command / built-in /
-  prompt-template target passes, `/ghost` is reported) and the parser fixtures are in
-  `tests/command-contract-smoke.ts`; `aliasDeclarationsInSource` is a separate helper and
-  `registeredCommandsInSource` is unchanged.
-- Overlay dim leak: new `tests/control-center-smoke.ts` case (f) asserts a throwing `build`
-  propagates and `compositeOverlays` returns the undimmed base. Without the try/catch the patch
-  stays installed, so that second assertion fails; with it the smoke passes.
-- The two `overlay-frame.ts` copies are still byte-identical (`diff` empty; smoke asserts it).
+V-09 / V-93 re-check (board items already done on the base): the bolded
+`Workflow panel height budget (2026-11-12)` entry in the subagent `SOURCE.md` names `wf-panel.ts`
+and `23725c2`, and `smoke:docs` exercises the `tests/docs-smoke.ts` provenance scan; the only
+hand-written hidden-character filter is `packages/core/shared/visible-text.ts`, with the generated
+copies and consumers importing it (confirmed by `smoke:docs`, `verify` and the reviewer).
 
-## Independent review
-
-One `reviewer` subagent, which wrote nothing in this cycle, reviewed
-`git diff e22aac206685..HEAD` against the plan and `autonomy/CHARTER.md` and returned
-**VERDICT: PASS**, with no must-fix issue. It confirmed both changes are real and tested, the base
-lacks each fix (so the new assertions fail without them), no test was weakened or deleted, no
-`package.json` scripts / command names / `HARNESS_COMMANDS` changed, both overlay copies remain
-byte-identical, the branch is pushed (`git ls-remote origin refs/heads/pi/luna-ux-01` ==
-`git rev-parse HEAD`), `git status` is clean, and the diff excluding the lockfile and records is
-23,155 characters (< 30,000). Its one warning — the pre-implementation plan/review prose still
-called the dim fix "not taken" — is corrected in the updated `plan.md`/`review.md`.
-
-## Process note
-
-The first `workflow_run` implementer staged the V-73 cherry-pick but did not commit; its reviewer
-returned FAIL on exactly that, and the host gate mis-matched the verdict. The second workflow's
-implementer returned no output, so the change was finished directly: removed the stray cycle-05
-record files, added the reviewer's prompt-template fixture and the slice-boundary comment, then
-committed and pushed. A second independent reviewer passed the final head.
-
-## Gate / budget
-
-Full diff `e22aac206685..HEAD` is **23,155** characters excluding the lockfile and records (under
-the 30,000 stop-taking threshold and the 60,000 review threshold). Changed non-record files:
-`packages/core/lib/command-contract.ts`, `packages/extensions/src/tool-firewall/index.ts`,
-`packages/extensions/src/web-console/index.ts`,
-`packages/extensions/src/control-center/overlay-frame.ts`,
-`packages/extensions/third_party/subagent/overlay-frame.ts`, `tests/command-contract-smoke.ts`,
-`tests/control-center-smoke.ts`, `docs/reference.md`. No `package.json` change; no control path.
+Diff size: `git diff --no-renames a597e3bf1063..HEAD` excluding records/lockfile = 9338 bytes
+before the record commit (< 30000 stop point, < 60000 review cap).

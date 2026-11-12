@@ -50,7 +50,9 @@ flowchart LR
    when the terminal is wide, above them when it is only tall, and otherwise the details alone,
    with the size the QR code needs. The details are enough to link a phone by hand. The panel
    follows the terminal as it is resized. Lines are measured in terminal columns, so a wide
-   character or an emoji is never split or allowed past the edge. `tests/remote-control-extension-smoke.ts`
+   character or an emoji is never split or allowed past the edge; when a wide character does not fit
+   the continuation indent it moves whole to the next line, keeping the rest of the word, and only a
+   grapheme wider than the whole line is dropped. `tests/remote-control-extension-smoke.ts`
    pins the three layouts and that no line is wider than the terminal;
    `tests/tui-layout-smoke.ts` pins the same at 20 to 120 columns with wide input.
 3. In the app, tap **Link a computer** and scan the QR code. The camera app works too: the code is

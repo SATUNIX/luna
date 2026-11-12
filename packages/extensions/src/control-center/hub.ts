@@ -279,7 +279,7 @@ function textPage(deps: HubDeps): string {
   for (const page of deps.model.pages) {
     const rows = rowsForPage(page.id, deps);
     if (rows.length === 0) continue;
-    lines.push("", `${displayText(page.title)}${page.parent ? ` (${page.parent})` : ""}`);
+    lines.push("", `${displayText(page.title)}${page.parent ? ` (${displayText(page.parent)})` : ""}`);
     for (const row of rows) {
       const value = row.value ? `: ${row.value}` : "";
       const typed = typedSuffix(row);

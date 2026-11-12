@@ -524,7 +524,7 @@ async function runStep(ctx: StepContext): Promise<void> {
     if (upstream) log(`cycle ${pad(n)} upstream ${upstream.upstream}: ${upstream.outcome}${upstream.outcome === "merged" || upstream.outcome === "fast_forward" ? ` ${upstream.sha}` : "head" in upstream ? ` ${upstream.head}` : " (continuing without upstream)"}`);
     const head = gm.startCycleBranch(g, cfg);
     const last = si.history.at(-1);
-    const extra = last && !last.merged && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
+    const extra = last && !last.merged && !last.discarded && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
     if (upstream?.outcome === "conflict") extra.push("refs/upstream/trunk");
     await rt.setWorkerBranch(head, extra);
     publishNow(ctx);

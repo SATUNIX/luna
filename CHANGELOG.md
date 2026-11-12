@@ -41,6 +41,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A second publish-blocked answer no longer wedges the run on a deleted cycle tag.** The reset that
+  an answer triggers deletes every run tag that is not an ancestor of the published head and marks
+  those cycles `discarded`, but the next cycle start still named `refs/tags/<prefix>cycle-NN` of the
+  last cycle whenever that cycle was unmerged. After an answer cycle that failed its gate and was
+  refused again, the second answer deleted that cycle's tag, `git bundle create` failed on the missing
+  ref (`git bundle failed: fatal: ambiguous argument`) and every later answer repeated the error. The
+  cycle start now names a tag only for a cycle that was not discarded, so the run starts the next
+  cycle. Pinned by `tests/autonomy-selfimprove-smoke.ts`.
 - **Two pages no longer point at material this repository does not carry.** `docs/structured-output.md`
   named the removed `packages/role-runner` as the home of the result validator and said a test pins the
   vendored copy byte for byte against it; the validator is `packages/extensions/third_party/subagent/schema.ts`,

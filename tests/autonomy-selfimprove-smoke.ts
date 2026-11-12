@@ -748,6 +748,46 @@ await check("PG-55: answering the publish-blocked question with a leak-free cycl
   assert.doesNotMatch(pushed, /internal\/private-note\.txt/, "the pushed integration branch carries no leaked path");
 });
 
+await check("PG-55: a second publish-blocked answer does not name the tag of an unmerged cycle the first reset discarded", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let answered = 0;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 5, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      if (!slot.engine) return;
+      const s = h.state();
+      if (s.status !== "blocked" || s.blocker?.id !== "publish-blocked") return;
+      if (answered < 2) { answered += 1; h.store.enqueue("answer", { text: "Remove the identifier and resume" }); return; }
+      slot.engine.engine.signalled = true;
+    } },
+    script: async (t) => {
+      prompts.push(t.message);
+      // Cycles 1 and 2 merge with a leak and park the run. Cycle 3 (the first answer's cycle) fails the gate, so
+      // it is not merged, but it re-adds the leak and its pushed tag is refused: the run parks again. The second
+      // answer's reset then deletes that unmerged cycle's tag, and cycle 4 must not name the deleted tag.
+      if (t.step <= 2) { t.write("AUDIT_OK", "1"); t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}\n`); report(t, "successful"); t.commit(`leak cycle ${t.step}`); return; }
+      if (t.step === 3) { t.remove("AUDIT_OK"); t.write("internal/private-note.txt", "synthetic private-path fixture 3\n"); report(t, "successful"); t.commit("red gate cycle that re-adds the identifier"); return; }
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  let crashed = "";
+  try { await slot.engine.engine.run(); } catch (e) { crashed = e instanceof Error ? e.message : String(e); }
+  assert.equal(crashed, "", `the cycle start after the second answer must not throw: it named the tag of a discarded unmerged cycle that the reset had deleted (${crashed})`);
+  const state = h.state();
+  assert.notEqual(state.status, "failed", `the second answer must not wedge the run on a deleted cycle tag: ${JSON.stringify(state.outcome)}`);
+  assert.equal(answered, 2, "the operator answered the publish-blocked question twice");
+  assert.ok(prompts.length >= 4, "the cycle after the second answer started instead of dying at cycle start");
+  assert.equal(state.selfImprove?.history[2]?.merged, false, "the first answer's cycle failed its gate");
+  assert.equal(state.selfImprove?.history[2]?.discarded, true, "the second reset marks the unmerged cycle as discarded");
+  assert.match(prompts[3] ?? "", /discarded when the publish-blocked answer rolled/, "the cycle after the second answer is told the work was discarded, not pointed at a deleted tag");
+  assert.doesNotMatch(sh(bare, "tag", "--list"), /cycle-0[123]/, "no discarded cycle tag is published");
+});
+
 for (const answer of [
   { name: "the exact stop option", input: { text: "Stop the run" }, stop: true },
   { name: "the stop option with surrounding space and mixed case", input: { text: "  sToP ThE RuN  " }, stop: true },

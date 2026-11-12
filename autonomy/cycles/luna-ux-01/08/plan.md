@@ -1,53 +1,39 @@
-# Cycle 08 — Plan (run luna-ux-01, stream `ux`)
+# Cycle 08 plan — Luna ux stream
 
-Goal: re-land the reviewed V-73 alias-wording fix so every pure alias starts
-`Alias of /<target>` and the command contract rejects an alias whose target does not exist.
+Mode: fix. Board items V-09 and V-93 are already done and pinned on the base (see `review.md`);
+they are re-checked, not reopened. One defect is taken.
 
-## Items
+## Item 1 — curated `/` menu honours `PI_KIT_ASCII`
 
-### 1. V-73 — one wording for pure aliases, enforced (board, P2 ranked 6)
+Justification: charter §1 (documented behaviour the code does not have). `docs/reference.md:447`
+and `docs/control-center.md:42-43` say `PI_KIT_ASCII` belongs to control-center and asks for
+printable ASCII; the launch screen and footer comply, the `/` menu descriptions do not.
 
-Why: the board item is the one assigned item not already done on the base. It is UI polish
-(consistent `/` menu descriptions) plus a contract rule that would have caught the drift. Evidence
-in `review.md`.
+Change, smallest:
+- `packages/extensions/src/control-center/command-menu.ts`: add an `ascii` option (default false)
+  to `locationOfRow`/`hubLocationFor`/`locationFor`/`CurationOptions`, plus
+  `ALL_COMMANDS_LOCATION_ASCII`. ASCII output uses `moved -> /menu > Page > Row` and `" - "`
+  instead of `—`. Default output is byte-identical.
+- `packages/extensions/src/control-center/index.ts`: pass
+  `ascii: process.env.PI_KIT_ASCII === "1"` to `locationFor` and the provider.
+- Docs: `docs/control-center.md` curated-menu section states the env flag switches the location
+  hint to ASCII; CHANGELOG entry.
 
-Change: cherry-pick the reviewed cycle-05 commits `384dcf4` and `00ff7c8`, which:
-
-- change `packages/extensions/src/tool-firewall/index.ts` `firewall:reload`/`firewall:status` and
-  `packages/extensions/src/web-console/index.ts` `webui` to start `Alias of /<target>`;
-- add `AliasDeclaration`, `aliasDeclarationsInSource`, `firstDescriptionInSlice` and the
-  `alias-target-missing` rule to `packages/core/lib/command-contract.ts`, captured from the source
-  by a separate helper (not by widening `registeredCommandsInSource`);
-- add fixture cases in `tests/command-contract-smoke.ts` (good target, built-in target, missing
-  target, parser cases) and regenerate `docs/reference.md`.
-
-Proof: `git grep -n 'Alias for' packages/extensions/src` empty; `npm run smoke:command-contract`
-covers `alias-target-missing` with a passing and a failing fixture; `npm run catalog` leaves no
-diff; `npm run smoke:firewall-approvals`, `smoke:firewall-gate`, `smoke:redaction-corpus`,
-`test:typecheck`, `test:lint`, `npm run verify` pass.
-
-## Checks budget
-
-Only targeted smokes; never `npm test` or `npm run check:all`. V-73's code diff is 19,329
-characters (measured `git diff --no-renames 384dcf4^..00ff7c8 -- . ":(exclude)package-lock.json"
-":(exclude)autonomy/"`), well under the 30,000 stop-taking threshold, so one small second item
-remains possible; it will only be taken if V-73 is complete, verified and pushed and budget
-remains.
-
-### 2. `withOverlayFrame` dim leak (HANDOFF carry-over, defect)
-
-Why: `overlay-frame.ts:124` called `const inner = build(finish)` unguarded; a throwing `build`
-left the transcript dim patch installed with no overlay open. A real, evidenced defensive bug in
-the stream's overlay area. Taken after V-73 was complete, verified and pushed, since it fits the
-remaining diff budget.
-
-Change: wrap `build(finish)` in try/catch in both byte-identical copies; restore once and rethrow.
-Add control-center-smoke case (f).
-
-Proof: `npm run smoke:control-center`, `smoke:workflow-panel`, `test:typecheck`, `test:lint`,
-`npm run verify`; the new case fails without the try/catch (the patch stays installed).
+Checks (targeted, never `npm test`/`check:all`):
+- `node tests/command-menu-smoke.ts` (new case: with `PI_KIT_ASCII=1` the registered provider's
+  hidden-suggestion description matches `/^[\x20-\x7e]*$/` and names the hub in ASCII; direct
+  `hubLocationFor(..., true)` / `locationFor(model, true)` assertions). Existing Unicode
+  assertions stay unchanged.
+- `npm run smoke:docs` (documentation commands/links), `npm run test:typecheck`, `npm run test:lint`
+  on the touched files.
 
 ## Not taken
 
-Back navigation, overlay mouse forwarding, idle-cat blink and the `smoke:web-console` runtime —
-see `review.md` "Carried over".
+- Footer single-critical-chip drop: proposal `luna-ux-01-08-footer-critical-chip-narrow.md`
+  (off-limits footer fitting logic).
+- `asciiThemeName` env-clause drift: noted in the same proposal; latent only.
+
+## Sequencing and budget
+
+One implementer + gated reviewer plan. Diff is far below 30000 bytes; no new dependency, timer or
+network. Record `verify.md`, `report.md`, journal line and the proposal, push.

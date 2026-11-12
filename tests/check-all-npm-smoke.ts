@@ -147,10 +147,12 @@ assert.equal(coverageReport.status, 2, "coverage --report without a directory ex
 assert.match(coverageReport.stderr, /coverage: --report needs a directory/);
 // --coverage-out must never point at the checkout or an ancestor: the directory is cleared first.
 const coverageCli = path.join(ROOT, "packages", "core", "coverage.ts");
-const dangerous = spawnSync(process.execPath, [coverageCli, "--coverage-out=.", "--list"], { cwd: ROOT, encoding: "utf8" });
-assert.equal(dangerous.status, 2, `coverage --coverage-out=. exits 2 (stderr: ${dangerous.stderr.trim()})`);
-assert.match(dangerous.stderr, /coverage: refusing --coverage-out=\./);
-assert.ok(fs.existsSync(path.join(ROOT, "package.json")), "the guard leaves the checkout intact");
+for (const target of [".", "..", path.parse(ROOT).root]) {
+  const dangerous = spawnSync(process.execPath, [coverageCli, `--coverage-out=${target}`, "--list"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(dangerous.status, 2, `coverage --coverage-out=${target} exits 2 (stderr: ${dangerous.stderr.trim()})`);
+  assert.match(dangerous.stderr, /coverage: refusing --coverage-out=/, `coverage --coverage-out=${target} is refused`);
+  assert.ok(fs.existsSync(path.join(ROOT, "package.json")), "the guard leaves the checkout intact");
+}
 
 // A kept directory is cleared of stale coverage files only, and the new raw V8 data stays for a
 // later --report merge.

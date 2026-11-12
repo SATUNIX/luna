@@ -15,7 +15,7 @@
  *     measure-only jobs named in MEASURE_ONLY_JOBS (which it must not need, and which must really run
  *     what the list says, so a job cannot borrow the exemption by name), and fails unless each needed
  *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
- *     COVERAGE_MIN_TIMEOUT_MINUTES, and `coverage` and `coverage-merge` are both measure-only; 
+ *     COVERAGE_MIN_TIMEOUT_MINUTES, and `coverage` and `coverage-merge` are both measure-only;
  *   - every required check in the expected settings names a job that exists;
  *   - every ci.yml job that directly runs `check:all` does so as a shard matrix whose shard count
  *     matches the `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check),

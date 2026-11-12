@@ -34,8 +34,8 @@
  * `--coverage-out=<dir>` uses that directory as NODE_V8_COVERAGE instead of a temporary one, and
  * leaves the raw `coverage-*.json` files in place after reporting, so shards run on different
  * machines can be merged by copying them into one directory and running `--report` on it. The
- * double-counted. The existing coverage-*.json files are removed first, so a rerun cannot accumulate
- * them; without it the temporary directory is still removed in `finally`.
+ * existing coverage-*.json files are removed first, so a rerun cannot accumulate them and be
+ * double-counted. Without it the temporary directory is still removed in `finally`.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

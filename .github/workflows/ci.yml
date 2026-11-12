@@ -238,7 +238,8 @@ jobs:
           ./gradlew --no-daemon --no-build-cache --console=plain assembleDebug lintDebug
 
   # The one required check for this workflow: it succeeds only when every job above except the
-  # measure-only coverage job succeeded, so a new job or matrix lane is gated by adding it to `needs` here rather than by
+  # measure-only coverage and coverage-merge jobs succeeded, so a new job or matrix lane is gated
+  # by adding it to `needs` here rather than by
   # editing the repository ruleset. tests/workflow-policy-smoke.ts checks that `needs` names every
   # other job except the measure-only ones it lists (today: coverage and coverage-merge).
   ci-complete:

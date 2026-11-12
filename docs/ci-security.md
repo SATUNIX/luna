@@ -66,8 +66,9 @@ and `coverage/summary.json` locally. A module the eval harness transpiles is mea
 and attributed to its source; the uploaded cache is what lets the fresh merge runner do that. Test
 infrastructure (`packages/core/eval/`, every `tests/` folder) and the compiled browser code are not
 counted. Files no check loads are not in the main totals; a separate row counts them as uncovered.
-The job measures and does not gate on a threshold; a shard fails only when one of its checks fails,
-and the merge fails only when the artifacts cannot be read or reported.
+The job measures and does not gate on a threshold; a shard fails when one of its checks fails, an
+artifact upload finds no files, or the job reaches its timeout, and the merge fails only when the
+artifacts cannot be read or reported.
 
 `ci-complete` does not wait for `coverage` or `coverage-merge`: both are measure-only jobs, named in
 `MEASURE_ONLY_JOBS` in `tests/workflow-policy-smoke.ts`, which refuses to let `ci-complete` need

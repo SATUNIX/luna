@@ -1,117 +1,80 @@
 # Cycle 06 — Review (run luna-ux-01, stream `ux`)
 
-Base: `49e17ff550ba` (head of `stream/ux`). Branch `pi/luna-ux-01`. Area: TUI overlays, the `/`
-menu, launch screen, animation and polish (V-01, V-02, V-03, V-05, V-09).
+Base `8416c502acc4` (head of `stream/ux`). Area: TUI overlays, the `/` menu, launch screen,
+animation and polish (V-01, V-02, V-03, V-05, V-09). Mode: **fix**.
 
 ## State at the start
 
-- `git log --oneline 49e17ff550ba..HEAD` is empty: this cycle starts on the `stream/ux` head.
-- Cycle 05 (both V-03 and V-73) ended completed but was **not merged**: acceptance red. Its work
-  and report live on `origin/attempts/luna-ux-01/cycle-05` (`5cf8344`, `ba3ab0e`, `3d6fdc1`,
-  `384dcf4`, `00ff7c8`). Cycle 04's V-03 pair is `origin/attempts/luna-ux-01/cycle-04`
-  (`27b22de`, `a48d910`).
-- The branch is **already red on `smoke:docs`** before any change: `autonomy/cycles/luna-ux-01/03/report.md`
-  has no `autonomy/JOURNAL.md` line (P0 in the steward backlog and the operator steering).
+- `git log --oneline 8416c502..HEAD` is empty; the branch starts on the stream head.
+- The tree already contains records and accepted work from an earlier lineage (cycles 06-34 were
+  squashed into `stream/ux` by `23725c2` and merged here). The live board for this cycle is the
+  prompt's Assigned work: V-09 (one remaining clause), V-93, and the cycle-05 gate repair.
+- Cycle 05 (V-09 generic provenance scan, wf-panel prune fallback, V-73) is on
+  `origin/attempts/luna-ux-01/cycle-05`; its host gate was red (`check-all`,
+  `smoke:redaction-corpus`), so it was not merged. Its review named the gate, a loose subagent pin,
+  and the missing confirm-after-prune test as must-fix items.
 
-## P0 — the red gate (reproduced)
+## Gate (priority 0)
 
-```
-$ npm run smoke:docs
-AssertionError [ERR_ASSERTION]: autonomy/JOURNAL.md disagrees with the cycle reports
-+ [ 'report with no journal entry: luna-ux-01/03; add: - luna-ux-01/03 | Board: V-01, V-03 | partial | <summary>' ]
-```
+The two checks the previous cycle's gate failed are green here:
 
-`tests/docs-smoke.ts:491` calls `checkJournal(ROOT)` (`packages/core/lib/journal.ts`), which pairs
-every `autonomy/cycles/<run>/<NN>/report.md` with a journal line and compares the `Board:` sets.
-`autonomy/cycles/luna-ux-01/03/report.md` has `Board: V-01 done` + `Board: V-03 blocked`, so the
-line must name `V-01, V-03` with outcome `partial`. Cycle 05 fixed this in `3d6fdc1`; that commit
-was never merged. Fix: add exactly that line (operator wording), plus the new `luna-ux-01/06`
-line, in the report commit.
+```text
+$ npm run -s smoke:redaction-corpus
+[redaction-corpus-smoke] all 6 checks passed          (exit 0)
 
-The other cycle-05 gate failures — `smoke:env-isolation`, `smoke:redaction-corpus`,
-`smoke:workflow-resume`, `smoke:firewall-gate` — are **not reproducible** on this base:
-`smoke:env-isolation` and `smoke:workflow-resume` both pass here (below). The operator steering
-attributes `firewall-gate`/`redaction-corpus` to wall-clock budgets under host load and assigns
-them to DE-93. No test change is made for them.
-
-```
-$ npm run smoke:env-isolation   → [env-isolation-smoke] OK
-$ npm run smoke:workflow-resume → workflow-resume-smoke: 41 checks passed
+$ npm run -s smoke:docs
+[docs-smoke] OK: 14 documented commands ...           (exit 0)
 ```
 
-## V-03 — fold `/settings` into `/menu`, rename kit → menu (P1, the steward backlog's only item)
+The cycle-05 red was a host-load wall clock, not a code regression: the redaction corpus's check 4
+measures a CPU budget, and the same tree passes locally. No test is changed for it. `smoke:docs`
+is green because the `luna-ux-01/03` journal line it missed is already present at this base.
 
-The reviewed implementation already exists on the cycle-05 branch and was approved there by two
-reviewers. Re-checked against the actual code and the acceptance points:
+## V-09 — the one remaining clause (P2, evidence)
 
-- `index.ts`: `registerCommand("menu", …)` with the old `/kit` description and page completions;
-  `kit` and `helpers` on the same `open` handler, both `description: "Alias of /menu"`; the
-  `alt+m` shortcut sends `/menu` (`pi.sendUserMessage("/menu", …)`).
-- `extension.json`: `registers.commands` = `menu, kit, helpers`; summary names `/menu` with both
-  aliases. `command-menu.ts`: `PINNED_KIT_COMMANDS` starts `menu`; `ALL_COMMANDS_LOCATION` and
-  `locationOfRow` build `moved → /menu …`.
-- `model.ts`: `{ id: "settings", title: "Settings", parent: "main" }`, main row `page.settings`,
-  and the settings rows `settings.pi` (`prefill: "/settings "`), `settings.commandMenu`,
-  `settings.hubKey`, `settings.pinned`, `settings.hidden`, plus the `settings.display` page row.
-- `values.ts`: `HubValues` gains `commandMenu`/`hubKey`/`pinnedCommands`/`hiddenCommands`, filled
-  from a `MenuSettingsView` passed by `index.ts` (no import of `command-menu.ts` from values).
-- No `registerCommand("settings"` in the kit (`grep` empty); no `ui.json` write; `packages/kit`,
-  `PI_KIT_*`, `Symbol.for("pi-kit.*")`, the npm name and `core/eval/live/run.ts` are untouched.
-- Remaining `/kit` in docs are `packages/kit/` path references only (allowed); every `/kit`
-  command reference is an alias mention.
+`tests/docs-smoke.ts:473-491` pins provenance for **one** vendored directory: it reads
+`third_party/subagent/SOURCE.md` and requires a `2026-11-12` entry naming `wf-panel.ts` and
+`23725c2`. The other eleven `packages/extensions/third_party/*/SOURCE.md` are never read, and they
+have no bolded dated entry at all:
 
-**The Settings-page shape (operator steering).** The page has six rows: five setting item rows
-plus the explicit `settings.display` page link. The operator says the two assertions "now see six
-rows" and to name the shape rather than widen a filter.
-- `tests/control-center-smoke.ts:324-337` asserts the full six-id list (including
-  `settings.display`) and then `filter(kind !== "page").length === 5`. That names the shape.
-- `tests/menu-settings-smoke.ts:134-135` only counts `filter(kind !== "page").length === 5` and
-  never asserts the total is six; it is weaker than the control-center test.
-Decision: **keep five setting item rows plus one explicit page-link row**, and make both
-assertions state that shape explicitly (assert six rows on the page, five non-page, and the
-`settings.display` link). The operator's second option — a five-row page — would drop the
-Settings → Display entry the design calls for.
+```text
+$ grep -c '^ *- \*\*.*(20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]):' packages/extensions/third_party/*/SOURCE.md
+.../subagent/SOURCE.md:26
+(eleven other files: 0)
+```
 
-## V-73 — one alias wording, enforced (assigned, deferred)
+So a squash landing in any of those directories leaves its provenance log unpinned and the gate
+stays green. The board acceptance is exactly a generic scan: read every `third_party/*/SOURCE.md`,
+require at least one bolded `(YYYY-MM-DD)` entry, and keep the subagent pin on the entry that
+names `wf-panel.ts`. The existing subagent case also picks the **first** `2026-11-12` entry, so a
+reorder would pin the wrong bullet; it should select the entry that names `wf-panel.ts`.
 
-Cycle 05 implemented it (`384dcf4`, `00ff7c8`): `Alias of /<target>` for `firewall:status`,
-`webui`, and the `alias-target-missing` rule in `packages/core/lib/command-contract.ts`. It is
-**sound but cannot be merged this cycle**: the full cycle-05 diff is 65,288 characters excluding
-the lockfile and record files, above the 60,000-character review budget; V-03 alone is 45,670 and
-V-73 adds ~19,600 on top. The steward backlog for this cycle names V-03 as the only item.
-Deferred to a later cycle; the commits stay on `origin/attempts/luna-ux-01/cycle-05` and are
-carried in `HANDOFF.md`.
+## WorkflowPanel desync after `RunRegistry.prune()` (P2, defect)
 
-## New defect found this cycle
+`wf-panel.ts` decides the body from `current()` but the footer and key dispatch from `view`:
 
-`docs/control-center.md:54` (and cycle-05's copy): the mermaid draws `Y["System"] --> D[Doctor]`,
-but `PAGES` gives `doctor` `parent: "updates"` (`model.ts:96`), reached only as
-System → Updates & health → Doctor. The table above it is right; the edge is not. `smoke:docs`
-only checks the "levels strip plus N pages" wording, so it never caught it. One-line fix in the
-V-03 docs commit.
+- `render()` line 790: `const run = this.view === "run" ? this.current() : undefined;`
+- `footer()` lines 773-776: `if (this.view === "list") ... else` run legend.
+- `press()` line 647: `if (this.view === "list") this.pressList(key); else this.pressRun(key);`
 
-## Proposals checked against the code (all still valid)
+`RunRegistry.prune()` drops a finished run after enough newer ones. With that run open, the body
+falls back to the list while the footer keeps the run legend, and the first `down` is consumed by
+`pressRun`'s `!run` fallback instead of moving the list cursor. The cycle-03 proposal
+`autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md` records this and is still
+open; the existing test at `tests/workflow-panel-smoke.ts:410` covers a **save confirm** surviving
+the prune, not the list fallback or the first key. Fix: one `inRun()` state for body, footer and
+dispatch, leaving `view`/`confirm` untouched so a surviving confirm keeps its choices.
 
-- `luna-ux-01-01-human-console-multi-card-focus-theft.md` — valid: `processPending` fires one
-  `void processOne` per file (`human-console/index.ts:465,474-479`) and the input hold is checked
-  once per file, not across files.
-- `luna-ux-01-01-idle-cat-blink.md` — valid (deferred intent): `=^-.-^=` is in `idle`
-  (`cat.ts:36`) and the smoke asserts the blink (`tests/cat-status-smoke.ts:95`), but `idle` is not
-  in `TRANSIENT`, so `catView` passes `now - now` (`index.ts:387-391`); docs say it does not blink.
-- `luna-ux-01-04-overlay-mouse-forwarding.md` — valid: no `handleMouse` path in
-  `overlay-frame.ts` / `hub.ts` / `wf-panel.ts`.
-- `luna-ux-01-04-settings-display-back-navigation.md` — valid: `hub.ts` resolves Back through the
-  single static `parent`, so Settings → Display → Back lands on System.
-- New minor finding (proposal, not fixed): `withOverlayFrame` leaves its dim patch installed if
-  `build(finish)` throws (`overlay-frame.ts:124`).
+## V-93 — already done, verified
 
-## Mode
+`36565d97` + `5f59714f` put `HIDDEN_CHARS`/`oneVisibleLine` in
+`packages/core/shared/visible-text.ts`, registered it in `SHARED_COPIES`, and converted the four
+call sites. `grep` finds one hand-written class literal. No re-open; verification runs the V-93
+checks rather than editing them.
 
-Fix mode. The cycle's first obligation is the red `smoke:docs` gate; the assigned board item is a
-re-land of reviewed improve work, taken after the gate.
+## Proposals checked
 
-## Budget
-
-V-03 re-land ≈ 45,670 characters of diff plus two small fix hunks, under both the 30,000
-stop-starting mark (already exceeded by the board item itself) and the 60,000 review threshold.
-No V-73, no new broad work.
+The open `luna-ux-01-03-workflow-panel-footer-after-prune.md` is fixed here. The other open ux
+proposals (human-console multi-card focus theft, idle cat blink, hub typed command, workflow panel
+height) are outside this cycle's assigned items or already implemented; they are not taken. No new
+proposal is needed.

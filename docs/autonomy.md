@@ -911,7 +911,9 @@ changed, minutes, dollars) when it appends a generation; they are stored beside 
 and numbers that are not finite and non-negative are refused.
 
 **Cleaning and the size cap.** Each string has every Unicode control and format character
-(general categories Cc and Cf) and every default-ignorable code point other than tab and newline removed before the tag check: C0, DEL
+(general categories Cc and Cf) and every default-ignorable code point other than tab and newline
+removed before the tag check by `stripHiddenChars` in `packages/core/shared/visible-text.ts`, which
+the notebook imports (extensions use generated copies of the same file through `npm run gen:shared`): C0, DEL
 and C1 (which includes the single-byte CSI), the bidi embedding, override, isolate and mark
 characters, the zero-width and invisible format characters (U+200B, U+2060, U+FEFF, the soft hyphen
 U+00AD, U+180E and the tag characters U+E0000-U+E007F among them), and the default-ignorable

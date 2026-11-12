@@ -572,6 +572,30 @@ try {
     ok("list: the cursor stays on the same run when a new run arrives and falls back when it is pruned");
   }
 
+  // 5c. A run pruned while open in the run view falls back to the list body and keys.
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    const run = registry.start("20261023-180000-pruned-open", "yaml", "pruned-open");
+    run.finish("passed");
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {} }, run.id);
+    assert.equal(panel.view, "run");
+    for (let i = 0; i < 25; i++) {
+      now += 1000;
+      registry.start(`20261023-1801${String(i).padStart(2, "0")}-newer`, "yaml", `newer-${i}`).finish("passed");
+    }
+    assert.equal(registry.get(run.id), undefined, "the open run is pruned");
+    assert.equal(panel.view, "run", "the panel keeps its view");
+    const lines = panel.render(160);
+    assert.ok(lines.some((l) => l.includes("Workflows (")), "the list body renders");
+    assert.ok(lines.some((l) => l.includes("↑↓ select · enter open · esc close")), "the list footer renders");
+    assert.ok(!lines.some((l) => l.includes("esc back")), "the run footer does not render");
+    assert.equal(panel.listIndex, 0);
+    panel.press("down");
+    assert.equal(panel.listIndex, 1, "the first down moves the list cursor");
+    ok("run view: a pruned run falls back to the list body and keys");
+  }
+
   // 6. s save (No-first; overwrite asks; project workflows have nothing to save).
   {
     const registry = new RM.RunRegistry(clock);

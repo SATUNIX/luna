@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/trigger-compact.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - 2026-09-15: The upstream `COMPACT_THRESHOLD_TOKENS` constant was hardcoded at 100k, which
     fires auto-compaction far too early on large-context-window models (e.g. a 1.3M window).
     Made the threshold configurable: `PI_KIT_COMPACT_THRESHOLD_TOKENS` env var (managed-install

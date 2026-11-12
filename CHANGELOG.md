@@ -21,6 +21,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `pi-compat`. Pinned by `tests/workflow-policy-smoke.ts` and `tests/check-all-npm-smoke.ts`, and
   documented in `docs/ci-security.md`.
 
+- **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
+  `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
+  the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy
+  notebook, so a fix to one had to be made in each. They now live once in
+  `packages/core/shared/visible-text.ts` (`HIDDEN_CHARS`, `isHiddenChar`, `stripHiddenChars`,
+  `oneVisibleLine`); the control centre, `autonomy-run` and subagent hold generated copies, and the
+  autonomy CLI, store and notebook import the source. Behaviour is unchanged: the notebook still
+  keeps tab and newline in `state`, the hub still strips pi-tui sequences first and caps at 500
+  code points, and the subagent query still caps at 400. Pinned by
+  `tests/control-center-smoke.ts` (bidi override, 600-code-point cap, one class literal) and
+  `tests/autonomy-notebook-smoke.ts`.
 - **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
   `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
   was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes
@@ -76,6 +87,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
 
 ### Fixed
+
+- **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
+  the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave
+  `render()` showing the list body while `footer()` still showed the run legend and the first `↓`
+  was consumed by the run view's missing-run fallback instead of moving the list cursor. A new
+  `inRun()` (view is `run` and the run is still in the registry) now drives `press()`, `footer()`
+  and `render()`; `view` and an open save/stop confirm keep their state. Pinned by
+  `tests/workflow-panel-smoke.ts`.
 
 - `node packages/core/journal.ts` no longer checks for `autonomy/JOURNAL.md` and then writes it
   with a plain write. It reads the file once and replaces it through the safe write helper, so a

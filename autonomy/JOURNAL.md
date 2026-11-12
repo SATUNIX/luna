@@ -21,7 +21,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-fleet-01/05 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs into workflow_status and /workflows and repaired the red gate checks
 - luna-fleet-01/06 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs onto a clean base, repaired red smoke:docs gate, and recorded the cycle
 - luna-ux-01/03 | Board: V-09, DE-101 | successful | Cycle 03: vendored workflow-panel provenance recorded; pairing panel row budget fixed
-- luna-ux-01/06 | Board: V-03 | successful | Folded /settings into /menu as the primary command with kit/helpers aliases and a Settings page, and repaired the smoke:docs journal gate for luna-ux-01/03
+- luna-ux-01/06 | Board: V-09, V-93 | successful | Cycle 06: vendored provenance pinned, workflow panel prune fallback fixed
 - luna-ux-01/07 | Board: PG-59, V-05 | successful | Merged upstream trunk preserving both sides, made the trunk-gap notice own the session-start kit notice so pi-compat lanes pass, and re-verified the already-shipped launch screen
 - luna-ux-01/08 | Board: V-73, PG-12 | successful | Re-landed the reviewed V-73 alias wording and the alias-target-missing command-contract rule, fixed the withOverlayFrame dim leak when build throws, and re-verified the already-merged PG-12 trunk-ahead notice
 - luna-ux-01/09 | Board: V-73 | successful | Made control-centre Back follow the visited-page stack (Settings to Display to Back returns to Settings) and re-verified the already-merged V-73 alias wording and the green luna-ux-01/03 journal gate
@@ -84,6 +84,8 @@ journal: every report has a journal entry
 - luna-ux-01/32 | Board: DE-98 | successful | Carried over the seven missing Unreleased CHANGELOG entries for the merged ux fixes, corrected the /remote entry to name the smoke that actually pins the CJK fix, and restored the pairing QR fixture to 25 rows, with six targeted smokes, typecheck, lint, verify and an independent reviewer PASS
 - luna-ux-01/33 | Board: DE-98 | successful | Re-verified DE-98 at HEAD, then fixed the carry-over V-02 focus theft: the resume question and ask_human now wait out the broker's open run cards within their own timeout, re-check and fail closed, while the two-card broker contract stays pinned; cases 2g/24e fail on HEAD, docs and CHANGELOG updated, independent reviewer PASS
 - luna-ux-01/34 | Board: none | successful | Fixed the carry-over ui.json clobber: /footer and /tips now merge their owned fields over the parsed shared file instead of overwriting it, so hubKey, commandMenu, pinned/hidden commands, launchScreen and reducedMotion survive; a seeded-file case fails on the base source and passes at HEAD, docs and CHANGELOG updated, read-only independent reviewer PASS
+- luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
+- luna-ux-01/04 | Board: V-93, V-09 | successful | Cycle 04: hidden-character filter consolidated (V-93)
 - luna-guard-01/03 | Board: PG-24 | successful | Repaired the red manifest gate (`node:crypto` for secret-guard) and pinned the secret-content refusal record as the pattern label only, closing cycle-02 PG-24 review gaps; targeted smokes, typecheck, lint, verify and independent reviewer PASS
 - luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
 - luna-ops-01/05 | Board: DE-105, DE-106 | successful | Cycle 05 — Report (run luna-ops-01, stream `ops`)

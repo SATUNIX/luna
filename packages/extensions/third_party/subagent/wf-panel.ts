@@ -638,13 +638,18 @@ export class WorkflowPanel {
     return this.runId ? this.deps.registry.get(this.runId) : undefined;
   }
 
+  /** The run view is active only while its run is still in the registry. */
+  private inRun(): boolean {
+    return this.view === "run" && this.current() !== undefined;
+  }
+
   press(key: PanelKey): void {
     if (this.confirm) {
       this.pressConfirm(key);
       this.deps.requestRender?.();
       return;
     }
-    if (this.view === "list") this.pressList(key);
+    if (!this.inRun()) this.pressList(key);
     else this.pressRun(key);
     this.deps.requestRender?.();
   }
@@ -771,9 +776,9 @@ export class WorkflowPanel {
   }
 
   footer(): string {
-    if (this.view === "list") return "↑↓ select · enter open · esc close";
-    const run = this.current();
-    return `↑↓ select · k skip · x stop · p ${run?.paused ? "resume" : "pause"} · s save · esc back`;
+    const run = this.inRun() ? this.current() : undefined;
+    if (!run) return "↑↓ select · enter open · esc close";
+    return `↑↓ select · k skip · x stop · p ${run.paused ? "resume" : "pause"} · s save · esc back`;
   }
 
   /** The panel's lines, each cut to `width` columns. `rows` is the terminal height when known. */
@@ -785,7 +790,7 @@ export class WorkflowPanel {
     // Reserve those two rows so the framed component, not just its body, fits the 90% overlay.
     const maxLines = typeof rows === "number" && Number.isFinite(rows) ? Math.max(1, Math.floor(rows * 0.9) - 2) : undefined;
     const out: string[] = [rule];
-    const run = this.view === "run" ? this.current() : undefined;
+    const run = this.inRun() ? this.current() : undefined;
     if (run) {
       this.agentIndex = Math.min(this.agentIndex, Math.max(0, run.agents.length - 1));
       // The fixed parts never give way: the header, the note, the confirm/footer and both rules.

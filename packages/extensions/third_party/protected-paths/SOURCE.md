@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/protected-paths.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Changed from hardcoded array to env-var `PI_KIT_PROTECTED_PATHS` (colon-separated on Unix, semicolon on Windows)
   - Added `path.normalize` for Windows path comparison
   - Added `node:path` import (not needed upstream since it used string includes)

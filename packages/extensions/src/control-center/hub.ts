@@ -32,6 +32,7 @@ import {
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
+import { HIDDEN_CHARS } from "./shared/visible-text.ts";
 import { withOverlayFrame } from "./overlay-frame.ts";
 import type { HubValues } from "./values.ts";
 
@@ -167,15 +168,6 @@ export function terminalConfirm(ui: ExtensionUIContext): (title: string, detail:
 
 // --- display text ------------------------------------------------------------------------------
 
-/**
- * Every invisible or control code point: format characters (bidi overrides, zero-width joiners),
- * control characters (ESC, C0 and C1, so a C1 CSI byte cannot act as one) and default-ignorable
- * code points (variation selectors, Hangul fillers, ...). Same Unicode classes as HIDDEN_CHARS in
- * packages/autonomy/lib/notebook.ts, repeated here because the hub imports only pi peers and
- * sibling modules. Display text is one line, so tabs and newlines go too.
- */
-const HIDDEN_DISPLAY_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
-
 /** A repository-controlled string cannot flood a page or the header strip. */
 const MAX_DISPLAY_LENGTH = 500;
 
@@ -185,7 +177,7 @@ const MAX_DISPLAY_LENGTH = 500;
  * overrides), then trim, then the length bound. Capping by code point keeps a surrogate pair whole.
  */
 function displayText(text: string): string {
-  const filtered = stripTerminalSequences(text).replace(HIDDEN_DISPLAY_CHARS, "").trim();
+  const filtered = stripTerminalSequences(text).replace(HIDDEN_CHARS, "").trim();
   return Array.from(filtered).slice(0, MAX_DISPLAY_LENGTH).join("");
 }
 

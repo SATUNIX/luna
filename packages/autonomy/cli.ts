@@ -30,6 +30,7 @@ import { type EffortApi, effortApi } from "./lib/effort.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
 import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
 import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
+import { resolveGateSlots } from "./lib/gate-slots.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
@@ -702,9 +703,13 @@ const commands: Record<string, Command> = {
       let inbox;
       try { inbox = readInboxFile(path.resolve(opts.file)); }
       catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
-      writeInbox(store.p.control, inbox);
+      const cards = inbox;
+      await withBoardLock(store, deps, () => { writeInbox(store.p.control, cards); });
       return { data: { run: state.run, cards: inbox.cards }, text: "owner inbox saved; the next inbox read settles cards whose deadline has passed" };
     }
+    // Settling a card can unblock a board item, so the read, the settle and both writes happen under
+    // the board lock that `board claim` and `board --file` take.
+    return withBoardLock(store, deps, () => {
     let inbox;
     let board;
     try { inbox = readInbox(store.p.control); board = readBoard(store.p.control); }
@@ -727,6 +732,7 @@ const commands: Record<string, Command> = {
     });
     const text = `${lines.join("\n")}\n${open ? `answer with: pi-autonomy inbox --run ${state.run} --answer <id> --value "..."` : "no cards are waiting"}`;
     return { data: { run: state.run, cards: settled.inbox.cards, decided: settled.decided.map((c) => c.id), unblocked: applied.unblocked }, text };
+    });
   },
 
   async backlog(argv, deps) {
@@ -836,7 +842,7 @@ export async function supervise(store: RunStore, deps: CliDeps, { runtime }: { r
   if (!got.acquired) throw new CliError("refused", got.reason);
   if (isTerminal(state.status) && !(state.status === "succeeded" && ["pending", "awaiting_approval"].includes(state.promotion.status))) { lock.release(); throw new CliError("refused", resumeAction(state).message); }
   const rt = runtime ?? deps.runtimeFactory({ contract, cfg, store, env: deps.env });
-  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
+  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, gateSlotsHome: deps.home, gateSlots: resolveGateSlots(deps.env), effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
   const onSignal = () => { engine.signalled = true; };
   if (deps.signals) { process.on("SIGINT", onSignal); process.on("SIGTERM", onSignal); }
   try {
@@ -874,7 +880,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
-  top [--run <id>]                       runs with merged work not yet published
+  top [--run <id>]                       every run, and whether it has merged work not yet published
   inbox                                  runs waiting on you for over 30 minutes
   doctor                                 exit non-zero when merged work is unpublished
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>

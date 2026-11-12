@@ -66,6 +66,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- `/workflows` and `workflow_status` no longer print an autonomy worker's blocker question, options,
+  task titles or last error as written: control, format and bidirectional characters are removed,
+  the text is one line and it is capped (`tests/run-query-smoke.ts`). `pi-autonomy inbox --run`
+  takes the board lock for its writes, and the in-process autonomy CLI uses the gate slots of the
+  state home it was given.
 - **A second publish-blocked answer no longer wedges the run on a deleted cycle tag.** The reset that
   an answer triggers deletes every run tag that is not an ancestor of the published head and marks
   those cycles `discarded`, but the next cycle start still named `refs/tags/<prefix>cycle-NN` of the

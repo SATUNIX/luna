@@ -209,6 +209,19 @@ function readJsonFile(dir: string, name: string): unknown {
 
 const stringList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
+// A worker writes the blocker question, its options, task titles and the last error, and
+// `/workflows` prints them to the terminal while `workflow_status` hands them to a model. Control,
+// format and default-ignorable characters are removed, whitespace is collapsed to one line and the
+// length is capped, as lib/store.ts does for the same fields in the autonomy CLI.
+const HIDDEN_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
+const WORKER_TEXT_MAX = 400;
+const WORKER_OPTIONS_MAX = 12;
+function workerText(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const line = value.slice(0, WORKER_TEXT_MAX * 8).replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
+  return line.length > WORKER_TEXT_MAX ? `${line.slice(0, WORKER_TEXT_MAX)}\u2026` : line;
+}
+
 /** A validated autonomy state.json, or null when the file is missing or not a run state. */
 function autonomyStateOf(raw: unknown): AutonomyStateInfo | null {
   if (!isRecord(raw) || typeof raw.template !== "string" || typeof raw.status !== "string") return null;
@@ -216,10 +229,10 @@ function autonomyStateOf(raw: unknown): AutonomyStateInfo | null {
   const limits = isRecord(raw.limits) ? raw.limits : {};
   const budget = isRecord(limits.budget) ? limits.budget : {};
   const blocker = isRecord(raw.blocker) && typeof raw.blocker.question === "string"
-    ? { kind: stringOf(raw.blocker.kind), question: raw.blocker.question, options: stringList(raw.blocker.options) }
+    ? { kind: workerText(raw.blocker.kind), question: workerText(raw.blocker.question), options: stringList(raw.blocker.options).slice(0, WORKER_OPTIONS_MAX).map(workerText) }
     : null;
   const tasks = Array.isArray(raw.tasks)
-    ? raw.tasks.flatMap((task): AutonomyTask[] => (isRecord(task) && typeof task.title === "string" ? [{ title: task.title, status: stringOf(task.status) }] : []))
+    ? raw.tasks.flatMap((task): AutonomyTask[] => (isRecord(task) && typeof task.title === "string" ? [{ title: workerText(task.title), status: workerText(task.status) }] : []))
     : [];
   const history = Array.isArray(raw.history) ? raw.history : [];
   const firstHistory = history.find((entry): entry is Record<string, unknown> => isRecord(entry) && typeof entry.at === "string");
@@ -235,7 +248,7 @@ function autonomyStateOf(raw: unknown): AutonomyStateInfo | null {
     budget: { totalUsd: countOf(budget.totalUsd), maxSteps: countOf(budget.maxSteps), maxMinutes: countOf(budget.maxMinutes) },
     blocker,
     tasks,
-    lastError: stringOf(raw.lastError),
+    lastError: workerText(raw.lastError),
   };
 }
 

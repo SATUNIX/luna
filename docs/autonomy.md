@@ -281,8 +281,9 @@ Public deployment, production changes and anything outside the zone are never do
 
 ## Unpublished work
 
-`pi-autonomy top` lists every run under the state home whose merged integration branch is ahead
-of the remote ref the run already holds. It never fetches and never writes a ref: it compares
+`pi-autonomy top` lists every run under the state home and says, for each, whether its merged
+integration branch is ahead of the remote ref the run already holds (`nothing unpublished`
+otherwise). It never fetches and never writes a ref: it compares
 `refs/heads/<integration>` with `refs/integration/remote` in the run's own `mirror.git`. `status
 --run <id>` shows the same line for one run:
 
@@ -291,7 +292,9 @@ of the remote ref the run already holds. It never fetches and never writes a ref
 `unpublished:` means the work is merged locally but not on the git remote. The cause is the last
 `publish failed` line in the supervisor log; the timestamp is that line's, else the oldest
 unpublished commit's. A run with no integration branch, no configured remote or no fetched remote
-ref is `unknown`; a run whose local branch ref is missing is `absent`. Neither is flagged.
+ref is `unknown`, and so is a run whose branch has diverged from that ref; a run whose local branch
+ref is missing is `absent`. Neither is flagged, so `doctor` can pass while such a run holds work
+that has not been published.
 `pi-autonomy inbox` lists runs unpublished for 30 minutes or more (waiting on an
 operator), and `pi-autonomy doctor` exits non-zero while any run is ahead, naming each.
 
@@ -484,7 +487,8 @@ host-owned and out of worker mounts.
 `board --file` validates and atomically replaces `control/board.json`; `board claim` is the only
 way a worker takes one item. Both writes are serialised on `control/board.lock`, a real run lock
 separate from the supervisor's `supervisor.lock`, and the claimant retries with a bounded wait
-while another writer holds it. `board --json` returns the current board (an empty items list for
+while another writer holds it. `inbox --run` takes the same lock for its writes, because settling
+a card can unblock a board item (nothing pins that the inbox takes the lock). `board --json` returns the current board (an empty items list for
 older runs) without taking the lock. The commands are available to self-improve runs and are guarded
 for the `dispatch` template when it is registered.
 

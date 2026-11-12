@@ -71,7 +71,7 @@ It also skips four files whose contents must stay as they are: `package-lock.jso
 `CHANGELOG.md` (released history), this page, and `tests/brand-smoke.ts` itself, which exist
 to define and check the identities. Every line matching `pi[- ]system` must be explained by an
 allowed identity above or by an explicit allowance; after those forms are removed no such text may
-remain, so a failure prints `file:line: text`. The explicit allowances are the legacy identity
+remain, so a failure prints `file:line` only, never the matched text. The explicit allowances are the legacy identity
 regexes (a `pi-system` literal followed by a regex metacharacter, in the matchers that recognise an
 old checkout) and the `satunix-pi-system-<version>.tgz` npm tarball filename
 (`tests/clean-install-smoke.ts`). The generic `name: pi-system` allowance also covers

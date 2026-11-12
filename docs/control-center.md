@@ -90,8 +90,10 @@ imports another extension to get it:
 | Unattended | `pi-kit.unattended` |
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
-The header strip, page titles and the informational rows (Doctor, Security, Help) strip terminal
-control sequences from what they display; other rows are not yet sanitised.
+The header strip, page titles and the informational rows (Doctor, Security, Help) strip colour and
+cursor escape sequences and OSC and APC strings from what they display
+(`tests/control-center-smoke.ts`). Other escape sequences, C1 controls and bidirectional overrides
+are not removed, and other rows are not sanitised.
 
 ## Renderers by mode
 

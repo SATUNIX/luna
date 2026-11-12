@@ -37,7 +37,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * so it is untrusted. It is compiled only when the shared safe-regex check accepts it
  * (./shared/safe-regex.ts: no nested quantifiers, no backreferences, a length and choice cap), and
  * each test runs under a CPU-time budget; a trigger that exceeds the budget is switched off for
- * the session. tests/skill-routing-smoke.ts pins both.
+ * the rest of the pi process (the compiled-trigger map is module level and never cleared, so the
+ * switch survives `/new`). tests/skill-routing-smoke.ts pins both.
  */
 export const TRIGGER_TEST_MS = 50;
 // The budget above is CPU time, which a busy host does not inflate. `vm`'s timeout is wall clock,
@@ -114,7 +115,7 @@ export function matchTriggers(prompt: string, skills: SkillEntry[], exclude: Set
         const hit = timedTest(re, text);
         if (hit === "slow") {
           compiled.set(t, null);
-          refusedTriggers.set(t, `used more than ${TRIGGER_TEST_MS} ms of CPU on a prompt; switched off for this session`);
+          refusedTriggers.set(t, `used more than ${TRIGGER_TEST_MS} ms of CPU on a prompt; switched off for the rest of the pi process`);
           continue;
         }
         if (!hit) continue;

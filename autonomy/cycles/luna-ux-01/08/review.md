@@ -16,7 +16,8 @@ renderers against the code (one parallel plan, run `2026-11-12T15-50-07-390Z-pla
 - **V-93 done.** `packages/core/shared/visible-text.ts` is the single class and
   `oneVisibleLine()`; `packages/core/gen-shared.ts:105-108` generates the extension copies;
   `hub.ts:35`, `cli.ts:39`, `notebook.ts:20` and `store.ts:12` import it. `grep` for the
-  property class finds only the shared source and generated copies (count 1 hand-written).
+  property class finds the shared source and its three generated copies, not a hand-written
+  re-declaration in a consumer (count 1 hand-written source).
 
 ## New findings
 

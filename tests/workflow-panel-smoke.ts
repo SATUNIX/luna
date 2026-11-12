@@ -4,6 +4,9 @@
 //   2. render snapshot: a run view (header with name, description, done/total agents, elapsed;
 //      Phases done/total; Agents with label, model, tokens, elapsed, status dot; narrator lines;
 //      footer keys) and the run list, line for line, with a fixed clock.
+//   2b. height budget: on a short terminal the run view trims narration, then phase rows, then
+//      agent rows outside the selected window, keeping the header, selected agent, confirm and
+//      both rules; narration is kept from its last line.
 //   3. keys: pi keybindings map to panel keys; ↑↓ move the selection, enter opens a run, esc goes
 //      back to the list and then closes the panel.
 //   4. x stop is No-first: enter on the first choice, or esc, keeps the run; only the second
@@ -39,6 +42,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { fakePi, loadModule, type FakePiApi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import type * as OverlayModule from "../packages/extensions/third_party/subagent/overlay-frame.ts";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
 import type { AgentConfig } from "../packages/extensions/third_party/subagent/agents.ts";
 import type * as PanelModule from "../packages/extensions/third_party/subagent/wf-panel.ts";
@@ -133,6 +137,7 @@ try {
   const RM = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts");
   const C = await loadModule<typeof ControlModule>("vendor/subagent/control.ts");
   const W = await loadModule<WorkflowView>("vendor/subagent/workflow.ts");
+  const F = await loadModule<typeof OverlayModule>("vendor/subagent/overlay-frame.ts");
   const H = await loadModule<typeof HubModule>("extensions/control-center/hub.ts");
   const keepalive = setInterval(() => {}, 1000);
 
@@ -246,6 +251,184 @@ try {
     ok("render snapshot: header, phases done/total, agents (label, model, tokens, elapsed, dot), narrator, footer");
   }
 
+  // 2b. Height budget.
+  {
+    const registry = new RM.RunRegistry(clock);
+    // Start the narrator after the agents exist, so exactly six phase changes make six lines.
+    const run = registry.start("20261023-130000-big", "yaml", "big", { description: "Ten agents on a short terminal", file: "/kit/big.md", source: "kit" });
+    const phaseIds = ["one", "two", "three", "four", "five"];
+    for (const id of phaseIds) run.phase(id, `phase ${id}`);
+    for (let i = 0; i < 10; i++) {
+      const agent = run.agentStart({ label: `a${i}`, phase: phaseIds[i % phaseIds.length] ?? "one", role: "scout", model: i % 2 ? "test/big" : "test/fast" });
+      now += 1000;
+      if (i === 9) run.agentUpdate(agent, { usage: usage(2000, 100), activity: "reading src/index.ts" });
+      else run.agentEnd(agent, { status: i % 4 === 0 ? "failed" : "passed", usage: usage(1000 + i * 100, 10 + i), error: i % 4 === 0 ? "boom" : undefined });
+    }
+    const narrator = new P.Narrator();
+    const off = narrator.attach(registry);
+    for (const id of ["one", "two", "three"]) {
+      run.setPhaseStatus(id, "running");
+      run.setPhaseStatus(id, "passed");
+    }
+    off();
+    assert.equal(narrator.lines(run.id).length, 6, "six narration lines");
+    const lastNarration = narrator.lines(run.id).at(-1) ?? "";
+    const controls = new C.ControlRegistry();
+    const { control } = controls.open(run.id);
+    control.onChange(() => {});
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {}, isLive: (id) => controls.has(id) }, run.id);
+    panel.agentIndex = 9;
+    panel.press("stop");
+    assert.equal(panel.confirm?.action, "stop");
+    const question = panel.confirm?.question ?? "";
+    const rule = "─".repeat(120);
+    for (const rows of [20, 24]) {
+      const lines = panel.render(160, rows);
+      // The overlay host frames the panel (two border rows), so the framed component must fit.
+      const budget = Math.floor(rows * 0.9) - 2;
+      assert.ok(lines.length <= budget, `the panel fits ${budget} rows at ${rows} rows (got ${lines.length})`);
+      const framed = F.frameLines(lines, 160, { fg: (_color, text) => text });
+      assert.ok(framed.length <= Math.floor(rows * 0.9), `the framed panel fits ${Math.floor(rows * 0.9)} rows at ${rows} rows (got ${framed.length})`);
+      assert.ok(framed[0]?.startsWith("╭"), "the frame's top border is present");
+      assert.ok(framed.at(-1)?.startsWith("╰"), "the frame's bottom border is present");
+      assert.equal(lines[0], rule, "the top rule is present");
+      assert.equal(lines.at(-1), rule, "the bottom rule is present");
+      assert.ok(lines.some((l) => l.includes("big — Ten agents on a short terminal")), "the header is present");
+      assert.ok(lines.some((l) => l.includes(question)), "the confirm question is present");
+      assert.ok(lines.some((l) => l.includes(P.STOP_CHOICES[0])), "the No choice is present");
+      assert.ok(lines.some((l) => l.includes(P.STOP_CHOICES[1])), "the stop choice is present");
+      assert.ok(lines.some((l) => l.includes("↑↓ choose · enter confirm · esc cancel")), "the confirm hint is present");
+      assert.ok(lines.some((l) => l.includes("›") && l.includes("a9#1")), "the selected agent is kept");
+    }
+    // One line over the full render: only the oldest narration line gives way.
+    const loose = panel.render(160, 40);
+    assert.ok(!loose.some((l) => l.includes(narrator.lines(run.id)[0] ?? "\0")), "narration is trimmed from the oldest line");
+    assert.ok(loose.some((l) => l.includes(lastNarration)), "the last narration line is kept");
+    ok("height budget: short terminals trim narration, phases and agent rows but keep header, selected agent, confirm and rules");
+  }
+
+  // 2c. List and confirm-block height budget. These cases failed before the fix: with 14 runs
+  // the list view rendered 18 body lines and 20 framed lines at 20 terminal rows; a run view with
+  // a stop confirm rendered 12 framed lines at 12 rows and 12 at 10 rows, over the host cap.
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    for (let i = 0; i < 14; i++) {
+      const run = registry.start(`20261023-2000${String(i).padStart(2, "0")}-run${i}`, "yaml", `run-${i}`, { description: `run ${i}` });
+      if (i === 7) run.phase("work", "work", "running");
+    }
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {} });
+    panel.listIndex = 7;
+    const selectedId = registry.list()[7]?.id ?? assert.fail("the selected run");
+    const rule = "─".repeat(120);
+    const lines = panel.render(160, 20);
+    const budget = Math.floor(20 * 0.9) - 2;
+    assert.ok(lines.length <= budget, `the list panel fits ${budget} rows at 20 rows (got ${lines.length})`);
+    const framed = F.frameLines(lines, 160, { fg: (_color, text) => text });
+    assert.ok(framed.length <= Math.floor(20 * 0.9), `the framed list fits ${Math.floor(20 * 0.9)} rows (got ${framed.length})`);
+    assert.equal(lines[0], rule, "the list top rule is present");
+    assert.equal(lines.at(-1), rule, "the list bottom rule is present");
+    assert.ok(lines.some((l) => l.includes("esc close")), "the list footer is present");
+    assert.ok(lines.some((l) => l.includes(selectedId)), "the selected run is present");
+    assert.ok(lines.some((l) => /… \d+ (above|more)/.test(l)), "an omitted-run indicator is present");
+    // A budgeted list with no selection windows from the start instead of returning every run.
+    const unselected = P.renderListLines(registry.list(), P.plainPaint, undefined, 5);
+    assert.ok(unselected.length <= 5, `the unselected list fits 5 lines (got ${unselected.length})`);
+    assert.ok(unselected.some((l) => l.includes("run-0")), "the unselected list windows from the first run");
+    assert.ok(unselected.some((l) => /… \d+ more/.test(l)), "the unselected list still shows the omitted-run indicator");
+    ok("height budget: a 14-run list trims to a window with its rules, footer and selected run");
+  }
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    const run = registry.start("20261023-210000-stop", "yaml", "short", { description: "Short terminal" });
+    run.phase("work", "work", "running");
+    for (let i = 0; i < 3; i++) {
+      const agent = run.agentStart({ label: `a${i}`, phase: "work", role: "scout", model: "test/fast" });
+      if (i < 2) run.agentEnd(agent, { status: "passed", usage: usage(1000, 100) });
+    }
+    const controls = new C.ControlRegistry();
+    const { close } = controls.open(run.id);
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {}, isLive: (id) => controls.has(id) }, run.id);
+    panel.press("stop");
+    assert.equal(panel.confirm?.action, "stop");
+    const question = panel.confirm?.question ?? "";
+    const rule = "─".repeat(120);
+    const hint = "↑↓ choose · enter confirm · esc cancel";
+    for (const rows of [12, 8]) {
+      const lines = panel.render(160, rows);
+      const budget = Math.floor(rows * 0.9) - 2;
+      assert.ok(lines.length <= budget, `the confirm panel fits ${budget} rows at ${rows} rows (got ${lines.length})`);
+      const framed = F.frameLines(lines, 160, { fg: (_color, text) => text });
+      assert.ok(framed.length <= Math.floor(rows * 0.9), `the framed confirm fits ${Math.floor(rows * 0.9)} rows at ${rows} rows (got ${framed.length})`);
+      assert.equal(lines.at(-1), rule, `the confirm bottom rule is present at ${rows} rows`);
+      assert.ok(lines.some((l) => l.includes(question)), `the confirm question is present at ${rows} rows`);
+      assert.ok(lines.some((l) => l.includes("›") && l.includes(P.STOP_CHOICES[0])), `No is selected at ${rows} rows`);
+      assert.ok(lines.some((l) => l.includes(P.STOP_CHOICES[0])), `the No choice is present at ${rows} rows`);
+      assert.ok(lines.some((l) => l.includes(P.STOP_CHOICES[1])), `the stop choice is present at ${rows} rows`);
+      if (rows === 12) assert.ok(lines.some((l) => l.includes(hint)), "the confirm hint is present at 12 rows");
+    }
+    close();
+    ok("height budget: a stop confirm keeps its question, choices and bottom rule at 12 and 8 rows");
+  }
+  // 2d. Hard clamp below the fixed block. At 4-7 terminal rows even the fixed parts alone are
+  // taller than maxLines; the composed body must still fit, tail-preserving so the bottom rule
+  // stays. These cases failed before the clamp: the 14-run list rendered 4 body lines at 4-7
+  // rows, and a save confirm whose run had been pruned out of the registry (view stays "run")
+  // rendered 5 against maxLines 1-4.
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    for (let i = 0; i < 14; i++) registry.start(`20261023-2400${String(i).padStart(2, "0")}-clamp${i}`, "yaml", `clamp-${i}`, { description: `run ${i}` });
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {} });
+    panel.listIndex = 7;
+    const rule = "─".repeat(120);
+    for (const rows of [4, 5, 6, 7]) {
+      const lines = panel.render(160, rows);
+      const budget = Math.max(1, Math.floor(rows * 0.9) - 2);
+      assert.ok(lines.length <= budget, `the list clamped body fits ${budget} rows at ${rows} rows (got ${lines.length})`);
+      const framed = F.frameLines(lines, 160, { fg: (_color, text) => text });
+      assert.ok(framed.length <= Math.floor(rows * 0.9), `the framed clamped list fits ${Math.floor(rows * 0.9)} rows at ${rows} rows (got ${framed.length})`);
+      assert.equal(lines.at(-1), rule, `the list bottom rule survives the clamp at ${rows} rows`);
+    }
+    ok("height budget: a 14-run list clamps to maxLines with its bottom rule at 4-7 rows");
+  }
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    const userDir = path.join(ws, "agent", "workflows-clamp");
+    fs.mkdirSync(userDir, { recursive: true });
+    const def = path.join(userDir, "clamp.md");
+    fs.writeFileSync(def, "---\nname: clamp\n---\n");
+    const project = path.join(ws, "proj-clamp");
+    fs.mkdirSync(project, { recursive: true });
+    const run = registry.start("20261023-250000-clamp-save", "yaml", "clamp", { description: "Save on a short terminal", file: def, source: "user" });
+    run.phase("work", "work", "running");
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: project, paint: P.plainPaint, close: () => {} }, run.id);
+    panel.press("save");
+    assert.equal(panel.confirm?.action, "save");
+    // The reproduction's hardest case: the run is pruned out of the registry while its save
+    // confirm survives, so render() has only the fixed block and the confirm tail.
+    run.finish("passed");
+    for (let i = 0; i < 21; i++) {
+      now += 1000;
+      registry.start(`20261023-2600${String(i).padStart(2, "0")}-prune${i}`, "yaml", `prune-${i}`).finish("passed");
+    }
+    assert.equal(registry.get(run.id), undefined, "the saved run is pruned");
+    assert.equal(panel.view, "run", "the panel stays in the run view");
+    assert.equal(panel.confirm?.action, "save", "the save confirm survives the pruning");
+    const rule = "─".repeat(120);
+    for (const rows of [4, 5, 6, 7]) {
+      const lines = panel.render(160, rows);
+      const budget = Math.max(1, Math.floor(rows * 0.9) - 2);
+      assert.ok(lines.length <= budget, `the save-confirm clamped body fits ${budget} rows at ${rows} rows (got ${lines.length})`);
+      const framed = F.frameLines(lines, 160, { fg: (_color, text) => text });
+      assert.ok(framed.length <= Math.floor(rows * 0.9), `the framed clamped save confirm fits ${Math.floor(rows * 0.9)} rows at ${rows} rows (got ${framed.length})`);
+      assert.equal(lines.at(-1), rule, `the save-confirm bottom rule survives the clamp at ${rows} rows`);
+    }
+    ok("height budget: a save confirm clamps to maxLines with its bottom rule at 4-7 rows");
+  }
+
   // 3-5. Keys, x stop (No-first), p pause/resume.
   {
     const registry = new RM.RunRegistry(clock);
@@ -343,6 +526,50 @@ try {
     assert.equal(unknown.view, "list");
     assert.match(unknown.note ?? "", /No workflow run "nope"/);
     ok("keys: arrows, enter, esc back/close; x stop No-first; p pause/resume; not-live runs refuse");
+  }
+
+  // 5b. The list cursor follows the selected run, not its row number, when the list changes.
+  {
+    const registry = new RM.RunRegistry(clock);
+    const narrator = new P.Narrator();
+    registry.start("20261023-160000-a", "yaml", "a");
+    now += 1000;
+    const b = registry.start("20261023-160001-b", "yaml", "b");
+    now += 1000;
+    registry.start("20261023-160002-c", "yaml", "c");
+    const panel = new P.WorkflowPanel({ registry, narrator, cwd: ws, paint: P.plainPaint, close: () => {} });
+    // The list is newest first (c, b, a); move the cursor to b.
+    panel.press("down");
+    assert.equal(panel.listIndex, 1);
+    assert.equal(registry.list()[1]?.id, b.id);
+    now += 1000;
+    const d = registry.start("20261023-160003-d", "yaml", "d");
+    assert.equal(registry.list()[0]?.id, d.id, "the new run is first");
+    const lines = panel.render(120);
+    assert.equal(panel.listIndex, 2, "the cursor follows the selected run after a newer one arrives");
+    assert.ok(lines.some((l) => l.startsWith(" › ") && l.includes(b.id)), "the highlighted row is still the selected run");
+    panel.press("enter");
+    assert.equal(panel.view, "run");
+    assert.equal(panel.runId, b.id, "Enter opens the run that was highlighted, not the shifted row");
+    // Esc back to the list resolves the id again in the fresh list, after another run arrived.
+    now += 1000;
+    const e = registry.start("20261023-160004-e", "yaml", "e");
+    assert.equal(registry.list()[0]?.id, e.id);
+    panel.press("esc");
+    assert.equal(panel.view, "list");
+    assert.equal(registry.list()[panel.listIndex]?.id, b.id, "Esc back keeps the cursor on the open run");
+    assert.ok(panel.render(120).some((l) => l.startsWith(" › ") && l.includes(b.id)), "the highlight follows it back to the list");
+    // When the selected run is pruned out of the registry, the cursor falls back to the same row.
+    b.finish("passed");
+    for (let i = 0; i < 25; i++) {
+      now += 1000;
+      registry.start(`20261023-1700${String(i).padStart(2, "0")}-prune`, "yaml", `prune-${i}`).finish("passed");
+    }
+    assert.equal(registry.get(b.id), undefined, "the selected run was pruned");
+    panel.render(120);
+    assert.equal(panel.listIndex, 3, "the cursor falls back to the clamped row when the selected run is pruned");
+    assert.ok(registry.list()[panel.listIndex], "the fallback row is a real run");
+    ok("list: the cursor stays on the same run when a new run arrives and falls back when it is pruned");
   }
 
   // 6. s save (No-first; overwrite asks; project workflows have nothing to save).

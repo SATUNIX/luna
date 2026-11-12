@@ -11,6 +11,7 @@
 //   pi-autonomy board claim <id> --run <id> --by <agent>   atomically claim a board item
 //   pi-autonomy boundary --config run.json [--probe]   the boundary alone, or the live container probe
 //   pi-autonomy reconfigure --run <id> [flags]  the only way effort or budgets change for an existing run
+//   pi-autonomy inbox --run <id> [--file cards.json | --answer <card> --value <text>]   owner decision cards that settle into their default at the deadline
 //
 // Every command accepts --json and then prints exactly one JSON object ({ ok: true, ... } or
 // { ok: false, error, code }). Exit codes: 0 ok; 1 error; 2 usage or invalid contract; 3 refused
@@ -28,6 +29,7 @@ import { type Budget, formatProblems, resolveContract, type RunContract, type Te
 import { type EffortApi, effortApi } from "./lib/effort.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
 import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
+import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
@@ -61,7 +63,7 @@ const EXIT: Record<CliCode, number> = { usage: 2, invalid: 2, refused: 3, error:
 export type CliRuntime = Runtime;
 
 /** Where output goes: process.stdout / process.stderr, or a capture in tests. */
-export interface Writer { write(text: string): unknown }
+export interface Writer { write(text: string): void }
 
 export interface RuntimeFactoryOptions { contract: RunContract; cfg: RunConfig; store: RunStore; env: NodeJS.ProcessEnv }
 
@@ -107,8 +109,8 @@ interface CommandResult { data: Record<string, unknown>; text: string; exit?: nu
 type Command = (argv: string[], deps: CliDeps) => Promise<CommandResult>;
 
 /** A thrown value's `code` and `message`, whatever was thrown. */
-const codeOf = (e: unknown): unknown => (isRecord(e) ? e.code : undefined);
-const messageOf = (e: unknown): unknown => (isRecord(e) ? e.message : undefined);
+const codeOf = (e: unknown): string | undefined => (isRecord(e) && typeof e.code === "string" ? e.code : undefined);
+const messageOf = (e: unknown): string | undefined => (isRecord(e) && typeof e.message === "string" ? e.message : undefined);
 
 /** authorisationStatus's report, or the authorisation `plan --authorise` just recorded. */
 type AuthorisationView = ReturnType<typeof authorisationStatus>;
@@ -582,17 +584,6 @@ const commands: Record<string, Command> = {
     return { data: { runs: rows.map(({ run, u }) => ({ run, unpublished: u })) }, text };
   },
 
-  /** Runs that have stayed unpublished for 30 minutes or more: they are waiting on an operator. */
-  async inbox(argv, deps) {
-    parseArgs(argv, { flags: ["json"] });
-    const now = deps.now().getTime();
-    const waiting = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead" && u.since !== null && now - Date.parse(u.since) >= 30 * 60 * 1000);
-    const text = waiting.length
-      ? waiting.map(({ run, u }) => `run ${run}: unpublished ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} (waiting on operator) — ${u.reason ?? "not published"}`).join("\n")
-      : "inbox empty: no run is waiting on you";
-    return { data: { waiting: waiting.map(({ run, u }) => ({ run, unpublished: u })) }, text };
-  },
-
   /** Exit non-zero while any run has merged work that is not published. */
   async doctor(argv, deps) {
     parseArgs(argv, { flags: ["json"] });
@@ -683,6 +674,59 @@ const commands: Record<string, Command> = {
     try { board = readBoard(store.p.control); }
     catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
     return { data: { run: state.run, board }, text: JSON.stringify(board, null, 2) };
+  },
+
+  /**
+   * Without --run: the runs that have stayed unpublished for 30 minutes or more, which are waiting
+   * on an operator. With --run: that run's owner decision cards.
+   */
+  async inbox(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["run", "file", "answer", "value"], flags: ["json"] });
+    if (opts.run === undefined) {
+      if (opts.file !== undefined || opts.answer !== undefined || opts.value !== undefined) throw new CliError("usage", "--file, --answer and --value need --run <id>");
+      const now = deps.now().getTime();
+      const waiting = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead" && u.since !== null && now - Date.parse(u.since) >= 30 * 60 * 1000);
+      const text = waiting.length
+        ? waiting.map(({ run, u }) => `run ${run}: unpublished ${u.ahead} commit${u.ahead === 1 ? "" : "s"} since ${u.since ?? "unknown"} (waiting on operator) — ${u.reason ?? "not published"}`).join("\n")
+        : "inbox empty: no run is waiting on you";
+      return { data: { waiting: waiting.map(({ run, u }) => ({ run, unpublished: u })) }, text };
+    }
+    const store = openStore(opts.run, deps);
+    const state = readState(store);
+    if (state.template !== "self-improve") throw new CliError("refused", "inbox is for self-improve cycles");
+    if (opts.file && opts.answer) throw new CliError("usage", "--file and --answer cannot be combined");
+    if (opts.value !== undefined && !opts.answer) throw new CliError("usage", "--value is only valid with --answer");
+    if (opts.answer !== undefined && !opts.value?.trim()) throw new CliError("usage", "--answer <card-id> requires a non-empty --value <text>");
+    if (opts.value !== undefined && opts.value.trim().length > 2000) throw new CliError("usage", "--value must be at most 2000 characters");
+    if (opts.file) {
+      let inbox;
+      try { inbox = readInboxFile(path.resolve(opts.file)); }
+      catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+      writeInbox(store.p.control, inbox);
+      return { data: { run: state.run, cards: inbox.cards }, text: "owner inbox saved; the next inbox read settles cards whose deadline has passed" };
+    }
+    let inbox;
+    let board;
+    try { inbox = readInbox(store.p.control); board = readBoard(store.p.control); }
+    catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+    const answer = opts.value?.trim() ?? "";
+    let answered = false;
+    if (opts.answer) {
+      const card = inbox.cards.find((c) => c.id === opts.answer);
+      if (!card) throw new CliError("refused", `unknown inbox card ${opts.answer}`);
+      if (!card.outcome) { card.answer = answer; answered = true; }
+    }
+    const settled = settleInbox(inbox, deps.now());
+    const applied = applyOutcomes(board, settled.inbox);
+    if (answered || settled.decided.length > 0) writeInbox(store.p.control, settled.inbox);
+    if (applied.unblocked.length > 0) writeJsonAtomic(path.join(store.p.control, "board.json"), applied.board, { mode: 0o600 });
+    const open = settled.inbox.cards.some((c) => !c.outcome);
+    const lines = settled.inbox.cards.map((c) => {
+      const head = c.outcome ? `${c.id}  ${c.outcome.via === "answer" ? "answered" : "default used"} ${c.outcome.at}` : `${c.id}  open`;
+      return [head, `    question: ${c.question}`, `    default: ${c.default}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${c.outcome.text}`] : [])].join("\n");
+    });
+    const text = `${lines.join("\n")}\n${open ? `answer with: pi-autonomy inbox --run ${state.run} --answer <id> --value "..."` : "no cards are waiting"}`;
+    return { data: { run: state.run, cards: settled.inbox.cards, decided: settled.decided.map((c) => c.id), unblocked: applied.unblocked }, text };
   },
 
   async backlog(argv, deps) {
@@ -836,6 +880,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json
   board claim <id> --run <id> --by <agent>   atomically claim one board item
+  inbox --run <id> [--file <cards.json> | --json | --answer <card-id> --value <text>]
   resume --run <id> [--answer <text> | --approve | --deny]
   promote --run <id> [--yes]             carry out an approval-gated promotion
   export --run <id> [--out <dir>]        results, evidence, usage, decisions, the work
@@ -851,7 +896,7 @@ export async function main(argv: readonly string[], overrides: Partial<CliDeps> 
   const deps: CliDeps = { ...defaultDeps(), ...overrides };
   const [cmd, ...rest] = argv;
   const json = rest.includes("--json");
-  const emit = (obj: Record<string, unknown>): unknown => deps.stdout.write(`${JSON.stringify(obj, null, 2)}\n`);
+  const emit = (obj: Record<string, unknown>): void => { deps.stdout.write(`${JSON.stringify(obj, null, 2)}\n`); };
   if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") { deps.stdout.write(`${USAGE}\n`); return cmd ? 0 : 2; }
   const command = Object.hasOwn(commands, cmd) ? commands[cmd] : undefined;
   if (!command) { const msg = `unknown command ${cmd}`; if (json) emit({ ok: false, error: msg, code: "usage" }); else deps.stderr.write(`${msg}\n${USAGE}\n`); return EXIT.usage; }

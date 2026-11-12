@@ -46,3 +46,25 @@
 - A pricing file that parses to something other than a JSON object is reported as unreadable and
   the bar keeps its prior pricing, the same path a parse error takes; it is never cast (nothing
   pins this).
+- 2026-11-12 narrow-terminal hardening:
+  - The todo checklist is handed to pi cut to the terminal's columns (`renderTodoWidget` takes an
+    optional width), so a long item is truncated once instead of wrapped onto extra rows; an ASCII
+    theme ends the cut with `...`.
+  - In ASCII mode every generated ellipsis is ASCII too: the status bar's chip, alt-form and final
+    fit cuts, the shortened path and the working line's tool phrase use the glyph set's `...`
+    rather than the Unicode `…`. User-supplied text is untouched.
+  - `toolPhrase` clips by display columns and whole graphemes (`truncateDisplay`), so an emoji at
+    the 40-column cut is never split into a lone surrogate, and the automatic ISO/ANSI/TTY ASCII
+    choice reaches the tool phrase, not only the explicit `/footer ascii` setting.
+- 2026-11-13 cycle 29: per-render todo checklist width.
+  - `updateTodoWidget` mounts the checklist as a component instead of a `string[]` cut once from
+    `process.stdout.columns`, so pi calls `render(width)` with the terminal's current width each
+    frame and a resize (or an early mount before the TUI knows its columns) no longer leaves long
+    items wrapped. `renderTodoWidget` keeps its optional fifth `width` parameter.
+- 2026-11-13 cycle 30: width parity for emoji presentation sequences and tabs.
+  - `clusterWidth` promotes a cluster containing U+FE0F (VS16) or U+20E3 (keycap) to two columns,
+    as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
+    zero-width stay at 0.
+  - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
+  - Pinned by `tests/tui-layout-smoke.ts`, which now asserts both this module's `displayWidth` and
+    pi-tui's `visibleWidth`.

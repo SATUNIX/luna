@@ -28,10 +28,12 @@ node packages/autonomy/cli.ts start --config run.json       # confirm the bounda
 | `lib/runtime.ts`, `lib/egress-proxy.ts`, `relay.ts` | The container runtime, the allowlist egress proxy, and the inference relay. |
 | `lib/acceptance.ts`, `lib/check-runner.ts`, `lib/review.ts` | Trusted acceptance evaluation in clean, network-less containers, and the independent review. |
 | `lib/recovery.ts`, `lib/reconfigure.ts`, `lib/promotion.ts`, `lib/export.ts` | Bounded recovery, the only way limits change, promotion, and evidence export. |
+| `lib/board.ts`, `lib/inbox.ts` | The host-owned steward board and the owner decision inbox whose past-due cards settle into their default. |
 | `lib/templates/` | `implement`, `deploy` and `self-improve`. |
 | `image/`, `build-image.sh` | The image and the script that builds it from local git objects. |
 | `examples/` | Working run contracts. |
 | `tests/` | The in-container boundary probe (`boundary-probe.ts`, manual and run before every start), and the fake runtime and upstream the offline suites use. |
 
 Suites: `npm run smoke:autonomy*` (offline), and `npm run smoke:autonomy-container` on a real engine
-(it prints `SKIPPED` and exits 0 when there is none).
+(it prints `SKIPPED` and exits 0 when there is none). `smoke:autonomy-inbox` covers the owner inbox
+and the board item it unblocks (`tests/autonomy-inbox-smoke.ts`).

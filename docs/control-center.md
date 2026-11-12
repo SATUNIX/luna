@@ -18,9 +18,13 @@ below).
 | `/menu <page>` | Opens a named page directly (argument completion lists the page ids). |
 
 `alt+m` is the default key. Put `"hubKey": "alt+k"` (or another free key) in
-`<agent dir>/pi-kit/ui.json` to change it. The Help page and the `/menu` description name the
-configured key. The hub reads only that key and never rewrites the
-other settings in the file, so the status bar's own settings there are untouched.
+`<agent dir>/pi-kit/ui.json` to change it. Surrounding whitespace is trimmed. A `hubKey` that is
+not then a single key pi can parse (for example one containing spaces, control characters or
+several keys) is ignored with one warning and `alt+m` is used. The Help page and the `/menu`
+description name the configured key. The hub key takes effect on reload, and after a reload the
+launch-screen header, `/menu`, the Settings/Help text and the shortcut all name the bound key.
+The hub reads only that key and never rewrites the other settings in the file, so the status bar's
+own settings there are untouched.
 
 The hub is not registered in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the same rule
 `/workflow` follows, so a subagent never advertises a terminal hub.
@@ -86,6 +90,8 @@ imports another extension to get it:
 | Unattended | `pi-kit.unattended` |
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
+The header strip, page titles and the informational rows (Doctor, Security, Help) strip terminal
+control sequences from what they display; other rows are not yet sanitised.
 
 ## Renderers by mode
 
@@ -100,12 +106,21 @@ The header strip combines the profile, effort, thinking level, security level an
   content four cells narrower than the framed width (two border and two padding cells) and forwards
   mouse clicks and wheel events inside the content area, so the hub's rows and search respond to the
   pointer; below ten cells no frame is drawn and the content keeps the full width. The overlay
-  reduces its visible rows to fit a short terminal.
+  reduces its visible rows to fit a short terminal, dropping its title below fourteen rows and its
+  trailing hint/description lines before it gives up the focused row; at three or four rows the
+  search line gives way to the focused row instead of scrolling the cursor out of the box
+  (`tests/control-center-smoke.ts`).
 - **rpc** (a UI is present but not the TUI, as in a session the web console runs): a chain of
   `ctx.ui.select` dialogs. Every dialog carries a 60-second timeout, and a timeout counts as
   cancel, so a dialog nobody answers closes the hub instead of holding the session.
 - **print and json** (no UI): a text page with every row, its value and its typed command, written
   to stderr.
+
+Every renderer shows a row's typed command as `[command]` after its label: a legacy command, an
+editor pre-fill, or the command an informational row names (the Doctor lines and the Security
+page's Source row). The row name comes first, so a narrow terminal truncates the `[command]` suffix
+before the name. The All commands page is already labelled with the command it runs and does not
+repeat it. Choosing an informational row only shows information and keeps the hub open.
 
 A row that runs a typed command, or pre-fills the editor, closes the hub, so the command's own
 dialogs or the editor get the keyboard. Reopen the hub with `alt+m` or `/menu`. Changing the
@@ -122,6 +137,8 @@ hidden from the list. Nothing is unregistered: a hidden command runs exactly as 
 typed in full, and it appears again once at least four characters of its name have been typed, so
 muscle memory still completes. A name shorter than four characters appears once its full name is
 typed, so the hidden `/kit` alias completes at `/kit` (`tests/command-menu-smoke.ts`).
+The curated menu and the launch screen are installed for every session, so they still work after
+`/new`, `/resume`, `/fork` or a `/tree` switch replaces the session (`tests/command-menu-smoke.ts`).
 
 Hidden suggestions say where the command lives, for example
 `moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
@@ -155,9 +172,10 @@ json mode it never runs - and, like the hub, it is not registered in an internal
 The **Security** row shows the effective [security level](security-level.md), which the tool
 firewall publishes on `globalThis[Symbol.for("pi-kit.security")]`. When a floor raises the level
 above the one requested, the row shows both, for example `guarded (requested balanced)`. Opening
-the row shows the effective and requested levels. The hub reads the registry without importing the
-firewall. When the firewall is not loaded there is no registry, and the row says
-`not enforced (tool-firewall not loaded)`.
+the row shows the effective and requested levels: the **Effective** row shows the effective level
+alone, and the requested level appears on its own **Requested** row. The hub reads the registry
+without importing the firewall. When the firewall is not loaded there is no registry, the main row
+says `not enforced (tool-firewall not loaded)`, and the opened page's Effective row says `unknown`.
 
 The **Security level** row runs `/security`, which opens the level picker. The picker applies a
 stronger level at once and asks for a confirmation at the terminal before a weaker one. When

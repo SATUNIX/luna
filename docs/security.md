@@ -153,9 +153,10 @@ are pinned by `tests/governance-smoke.ts`.
    a non-run card is open, so two child requests that arrive in one poll are shown one at a time: the
    sibling waits for the next poll. A workflow-run approval card does not take that hold, because the
    run broker deliberately allows two outstanding prompts per run; non-run approval cards and child requests
-   still wait behind those open run cards. An attended `ask_human` question also waits for every
-   open run card to close, with the same timeout and abort outcome as a shared hold; it then holds
-   input while its own card is open. Aborting a turn ends that turn's wait, and a pentest action asks
+   still wait behind those open run cards. The resume question and an attended `ask_human` question
+   also wait for every open run card to close, within their own timeout: a run card still open at
+   the deadline leaves the run paused, or the question timed out, and an aborted turn ends the wait.
+   An `ask_human` question then holds input while its own card is open. Aborting a turn ends that turn's wait, and a pentest action asks
    scope and RoE again after the wait and after your Yes. A reload or the
    end of a session drops the hold, because pi removes an overlay without settling it
    (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,

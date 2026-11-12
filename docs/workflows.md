@@ -458,6 +458,8 @@ passed on the installed pi). It has two views:
 
 - **Run list** (`/workflows panel`): one row per run, newest first, with a status dot, name, status,
   done/total agents, elapsed time and run id. ↑↓ select, Enter opens a run, Esc closes the panel.
+  The selection stays on the highlighted run when a new run arrives while the list is open, and
+  falls back to the row at the same position if that run is pruned from the session.
 - **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds
@@ -475,7 +477,8 @@ passed on the installed pi). It has two views:
     An `agent()` call answered from a resumed run's journal (nothing launched) has a `◆` dot
     instead of `●`. Agents of a nested `workflow()` are indented under a `▸ <name>` line.
     ↑↓ select an agent; the selected agent's error, or else its last progress line, shows below
-    the list. Ten agents show at a time and the list scrolls with the selection;
+    the list. Up to ten agents show at a time (fewer on a short terminal) and the list scrolls with
+    the selection;
   - **Narrator**: the last six lines of the run's narration, such as `+14s scan#1 passed, 12.3k tok`.
     Narration starts when the extension loads and records run start and end, phase status
     changes, agent starts and ends (with tokens and the error; a journal answer is narrated as
@@ -484,6 +487,19 @@ passed on the installed pi). It has two views:
     lines of each run are kept in memory; nothing is written to disk.
   - the footer keys `↑↓ select · k skip · x stop · p pause · s save · esc back`. Elapsed times
     tick once a second while the panel is open.
+
+In the list view, on a terminal too short for the panel, the run list trims to a window around
+the selected run, keeping the header, footer and both rules, and shows `… n above` / `… n more`
+indicators for the runs it omits. In the run view, narration and extra phase/agent rows are
+dropped; the header, confirm block and footer are kept, and the selected agent is the last middle
+row dropped. Once even that does not fit, the middle collapses to one `… n more` line. Below the
+run-view minimum the confirm hint `↑↓ choose · enter confirm · esc cancel` and the blank spacer
+before the confirm block give way first, so the question, choices and bottom rule stay. On a
+terminal shorter than that fixed block (roughly seven rows or fewer) the panel makes one last
+clamp: the body is cut to the row budget from the bottom up, so the bottom rule is always kept and,
+where the budget allows, the lines next to it (a confirm's choices or question, the list's footer);
+the framed panel then never grows past the host overlay's height cap. At those heights some of the
+middle content is not shown, and a one-line budget leaves only the bottom rule.
 
 | Key | Effect |
 | --- | --- |
@@ -505,8 +521,10 @@ no run is active. The subagent extension's `session_start` handler points it at 
 footer (sessions with a UI only), and `session_shutdown` clears it.
 
 Checked by `tests/workflow-panel-smoke.ts` (`npm run smoke:workflow-panel`): a render snapshot of
-the run view and list, the keys, the No-first stop and save choices, a YAML run feeding the
-panel, the text fallback and the overlay; for script runs, the `▸` groups, the `◆` dot and the
+the run view and list, the keys, the No-first stop and save choices, the list cursor staying on
+the selected run when a newer run arrives (including Esc back from the run view) and the row it
+falls back to when that run is pruned, a YAML run feeding the panel, the text fallback and the
+overlay; for script runs, the `▸` groups, the `◆` dot and the
 badges, `k` skip, the No-first script save (digest trusted, overwrite, an edited script refused),
 the status line, and real engine runs (fake children) feeding the groups, `◆` on resume, the
 sandbox badge, `p` pause, `k` and `s`. `tests/workflow-hooks-smoke.ts`

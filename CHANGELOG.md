@@ -50,6 +50,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`pi-autonomy inbox` records owner decisions and settles expired cards into their default.**
+  `control/inbox.json` holds cards with a question, recommended default, deadline and optional
+  steward-board item. Every read settles past-due cards with `via: "deadline"` and the default text,
+  or records an answer with `via: "answer"`, then unblocks the linked board item from `blocked` to
+  `ready`; an unanswered card before its deadline leaves the item blocked, and a recorded outcome is
+  never rewritten. The command is self-improve only and record-only. Pinned by
+  `tests/autonomy-inbox-smoke.ts` (`smoke:autonomy-inbox`).
+
 - **Dated eval baselines.** `node packages/core/eval/baseline.ts --write` records the offline fixture
   suite's success rate, per-category counts and a chars/4 token estimate as
   `packages/core/eval/baselines/YYYY-MM-DD.json`, and `--check` fails when the newest baseline is
@@ -78,6 +86,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   exceed it (about 40% on a 50-token budget) and `sieve-budget.json` under-reported it. The whole message is
   now bounded: the still-current line names only the ids that fit, a budget smaller than the framing injects
   nothing, and `message.tokens` records the injected content (`tests/context-budget-smoke.ts`).
+- **`/footer` and `/tips` no longer erase the other settings in `<agent dir>/pi-kit/ui.json`.**
+  Saving wrote a six-field projection of the status bar's settings over the whole file, dropping
+  `hubKey`, `commandMenu`, `pinnedCommands`, `hiddenCommands`, `launchScreen` and `reducedMotion`
+  that the hub and launch screen keep there. Their own keys are now merged over the existing object
+  (and `ascii` is removed when it is off) so the foreign keys survive; pinned by
+  `npm run smoke:status-bar`.
+
 - **A publish-blocked operator answer now resumes publication instead of re-parking forever.** The
   cycle-10 fix let the answer run one more cycle, but publication is fast-forward only and the leak
   scan reads the whole pushed range, so removing the identifier in a later commit still left the
@@ -186,6 +201,21 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 - Piped `rg` and grep-family searches no longer treat a recognised search pattern as a secret
   path. File operands, pattern files and ambiguous shell commands retain the full secret scan
   (`tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts`).
+- **The `/workflows` panel keeps its selection and fits short terminals.** The list cursor was a positional index while the registry lists newest first, so a run started or pruned while the panel was open shifted the highlight and Enter, `x`, `p` or `s` acted on a different run; the panel now tracks the selected run id and restores the cursor by id. On terminals shorter than its fixed rules and footer block the panel also rendered past the overlay's height cap: the list and confirm views are budgeted after the fixed rows, the confirm hint and spacer are dropped before the question, and a last-resort clamp keeps the bottom rule. Pinned by `npm run smoke:workflow-panel`; `docs/workflows.md` states the selection and short-terminal behaviour.
+
+- **The `/` menu Security page shows the effective level, not the combined main-row string.** The Effective row printed `guarded (requested balanced)`, duplicating the requested level and contradicting `docs/control-center.md`; it now reads the raw effective value (`guarded`) while the main Security row keeps the combined string. Pinned by `npm run smoke:control-center`.
+
+- **The todo checklist is re-cut at the width pi passes.** `updateTodoWidget` measured `process.stdout.columns` once at mount and mounted a `string[]`, so a terminal resize or an early mount left long items wrapped; it now mounts a component whose `render(width)` re-renders `renderTodoWidget`. Pinned by `npm run smoke:status-bar` and `npm run smoke:tui-layout`.
+
+- **The `/remote` pairing panel wraps by terminal columns.** `wrap()` compared `String#length` and sliced by code units, so a CJK fingerprint word rendered a 22-column line on a 20-column terminal; it now measures with pi-tui's `visibleWidth` and cuts with `sliceByColumn(..., true)`, keeping grapheme clusters and wide characters whole, and drops a wide grapheme that cannot fit its room instead of emitting an over-wide remainder. Pinned by `npm run smoke:tui-layout`; `npm run smoke:remote-control` also exercises the panel; `docs/remote-control.md` says lines are measured in columns.
+
+- **The footer's working line clips tool phrases as graphemes and follows the automatic ASCII theme.** `toolPhrase` sliced by code units, so an emoji at the 40-column boundary became a lone surrogate and an ASCII result could reach 42 columns; an ISO/ANSI/TTY theme also kept the Unicode ellipsis because the tool handler passed only `settings.ascii`. It now cuts with `truncateDisplay` and resolves the effective ASCII flag through `footerGlyphs(theme, settings.ascii)`. The same pass makes `shortCwd` take the glyph set's ellipsis, so ASCII mode shortens a deep cwd with `...`. Pinned by `npm run smoke:tui-layout` and `npm run smoke:status-bar`.
+
+- **The status bar and todo checklist cut their text in terminal columns.** The status bar's cut helpers passed the default U+2026 even when ASCII mode selected the glyph set's `...`, and the todo checklist was rendered without a width, so long items wrapped; both now cut with the footer's grapheme-aware, column-measured truncation and use the glyph set's ellipsis. Pinned by `npm run smoke:tui-layout`.
+
+- **Footer and todo width measurement matches pi-tui for VS16/keycap emoji and tabs.** `width.ts` counted a cluster containing `U+FE0F` or `U+20E3` as one column where pi-tui's `visibleWidth` counts two, and a tab as zero where pi-tui counts three, so a heart or keycap in a todo, cwd, session name or status chip overflowed the bar and let pi-tui wrap it. The measurement now promotes those clusters to two and counts a tab as three; `tests/tui-layout-smoke.ts` also checks every line with pi-tui's own `visibleWidth`. Pinned by `npm run smoke:tui-layout`.
+
+- **The pause and question cards wait for an open workflow approval card.** The resume question after a paused run and an `ask_human` question gated only on the shared input owner, which deliberately does not see workflow-run approval cards because the run broker allows two per run. While the second run card was still open, the newer card could stack on it and take the keyboard. Both now wait for the console's run-card counter within their own timeout, re-check before showing, and fail closed at the deadline (the run stays paused; the question times out); one notice names the card they are waiting behind. Run cards still take no shared hold, so two still open together. Pinned by `npm run smoke:firewall-workflow-approvals` and `npm run smoke:firewall-overlay-queue`; `docs/security.md` states the wait.
 
 ## [0.3.0-beta.2]
 

@@ -89,12 +89,12 @@ export function fmtDuration(ms: number): string {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-export function shortCwd(cwd: string, home = os.homedir()): string {
+export function shortCwd(cwd: string, home = os.homedir(), ellipsis = "…"): string {
   const rel = path.relative(home, cwd);
   const inside = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   const shown = inside ? (rel ? `~${path.sep}${rel}` : "~") : cwd;
   const parts = shown.split(/[\\/]/);
-  return parts.length > 4 ? [parts[0], "…", ...parts.slice(-2)].join(path.sep) : shown;
+  return parts.length > 4 ? [parts[0], ellipsis, ...parts.slice(-2)].join(path.sep) : shown;
 }
 
 export type Glyphs = {
@@ -158,7 +158,7 @@ const SEVERITY_COLOR: Record<ChipSeverity, string> = { error: "error", warn: "wa
 export const TRANSIENT_KEYS = new Set(["subagent", "workflow", "orchestrator", "profile", "console", "kit-update", "verify-gate", "verify", "recovery-orchestrator"]);
 export const STALE_CHIP_MS = 120_000;
 
-export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40): string {
+export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40, ellipsis = "…"): string {
   const text = raw.replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim();
   const label = key.replace(/^pi-kit-/, "");
   // Many extensions already prefix their own name ("trace-ledger: lost=0").
@@ -167,7 +167,7 @@ export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40
   const name = sameName ? ownName : label;
   const value = sameName ? ownValue : text;
   const chip = `${theme.fg("dim", name)} ${theme.fg(SEVERITY_COLOR[chipSeverity(value)], value)}`;
-  return truncateDisplay(chip, maxWidth);
+  return truncateDisplay(chip, maxWidth, ellipsis);
 }
 
 // --- fitting ----------------------------------------------------------------------------------
@@ -181,7 +181,7 @@ const join = (segs: Seg[], sep: string) => segs.map((s) => s.text).join(sep);
  * alternative forms (least important first), then drop the least important segment, and only
  * truncate when nothing but critical segments and the anchor (the first left segment) remain.
  */
-export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): string {
+export function fitLine(left: Seg[], right: Seg[], width: number, sep: string, ellipsis = "…"): string {
   let l = left.filter((s) => s.text);
   let r = right.filter((s) => s.text);
   const size = () => {
@@ -228,8 +228,8 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string): 
   const { lw, rw, total } = size();
   if (total > width) {
     const leftRoom = width - (rw ? rw + 2 : 0);
-    if (rw && leftRoom >= 12) return `${truncateDisplay(join(l, sep), leftRoom)}  ${join(r, sep)}`;
-    return truncateDisplay(join(l, sep), width);
+    if (rw && leftRoom >= 12) return `${truncateDisplay(join(l, sep), leftRoom, ellipsis)}  ${join(r, sep)}`;
+    return truncateDisplay(join(l, sep), width, ellipsis);
   }
   if (!rw) return join(l, sep);
   return join(l, sep) + " ".repeat(width - lw - rw) + join(r, sep);
@@ -297,7 +297,7 @@ function workSegments({ state, theme, glyphs, mode }: Ctx): Seg[] {
 }
 
 /** Chips worth showing at this width: failing ones are warnings, running ones are work, the rest are extras. */
-function chipSegments({ state, theme, mode }: Ctx): Seg[] {
+function chipSegments({ state, theme, mode, glyphs }: Ctx): Seg[] {
   const out: Seg[] = [];
   const hideSubagent = mode !== "heavy" && Boolean(state.agents);
   for (const entry of state.statuses) {
@@ -308,7 +308,7 @@ function chipSegments({ state, theme, mode }: Ctx): Seg[] {
     if (stale) continue;
     const prio = severity === "error" ? 0 : severity === "warn" || severity === "active" ? 2 : 7;
     if (mode === "light" && prio > 0) continue;
-    out.push({ id: `chip:${entry.key}`, prio, text: statusChip(entry.key, entry.text, theme, mode === "heavy" ? 56 : 34) });
+    out.push({ id: `chip:${entry.key}`, prio, text: statusChip(entry.key, entry.text, theme, mode === "heavy" ? 56 : 34, glyphs.ellipsis) });
   }
   return out;
 }
@@ -347,43 +347,43 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   const work = workSegments(ctx);
   const chips = chipSegments(ctx);
   const catSeg: Seg[] = state.cat ? [{ id: "cat", prio: 5, text: state.cat.label ? `${state.cat.text} ${theme.fg("dim", state.cat.label)}` : state.cat.text, alts: [state.cat.text] }] : [];
-  const modelSeg: Seg | null = state.model ? { id: "model", prio: 1, text: theme.fg("accent", state.model), alts: [truncateDisplay(theme.fg("accent", state.model), 18)] } : null;
+  const modelSeg: Seg | null = state.model ? { id: "model", prio: 1, text: theme.fg("accent", state.model), alts: [truncateDisplay(theme.fg("accent", state.model), 18, glyphs.ellipsis)] } : null;
 
   if (mode === "light") {
     const branch = branchSegment(ctx);
     const left: Seg[] = [projectSeg, ...warnings, ...(effortShort ? [effortShort] : []), ...(security ? [security] : []), contextSegment(ctx), ...work, ...(branch ? [branch] : []), ...chips];
     const right: Seg[] = [...catSeg, ...(modelSeg ? [{ ...modelSeg, prio: 5 }] : [])];
-    return [truncateDisplay(fitLine(left, right, width, sep), width)];
+    return [truncateDisplay(fitLine(left, right, width, sep, glyphs.ellipsis), width, glyphs.ellipsis)];
   }
 
   // Line 1: where and with what
   const think = state.thinking && state.thinking !== "off" ? { id: "think", prio: 4, text: theme.fg(thinkingColor(state.thinking), `think ${state.thinking}`) } : null;
   const profile = state.profile ? { id: "profile", prio: 4, text: `${theme.fg("dim", "profile ")}${theme.fg("text", state.profile)}` } : null;
   const branch = branchSegment(ctx);
-  const line1Left: Seg[] = [projectSeg, ...(branch ? [branch] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(state.cwd)) }, ...(state.sessionName ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${state.sessionName}`) }] : [])];
+  const line1Left: Seg[] = [projectSeg, ...(branch ? [branch] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(state.cwd, os.homedir(), glyphs.ellipsis)) }, ...(state.sessionName ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${state.sessionName}`) }] : [])];
   // keep the path after the branch in reading order, but as the first thing to go
   const line1Right: Seg[] = [...(state.provider ? [{ id: "provider", prio: 6, text: theme.fg("dim", state.provider) }] : []), ...(modelSeg ? [modelSeg] : [{ id: "model", prio: 1, text: theme.fg("dim", "no model") }]), ...(think ? [think] : []), ...(profile ? [profile] : []), ...(effortFull ? [effortFull] : []), ...(security ? [security] : [])];
-  const lines = [fitLine(line1Left, line1Right, width, sep)];
+  const lines = [fitLine(line1Left, line1Right, width, sep, glyphs.ellipsis)];
 
   // Line 2: state of the work
   const line2Left: Seg[] = [...warnings, contextSegment(ctx), ...work];
   const line2Right: Seg[] = [...catSeg, ...(mode === "heavy" ? [] : chips)];
-  lines.push(fitLine(line2Left, line2Right, width, sep));
+  lines.push(fitLine(line2Left, line2Right, width, sep, glyphs.ellipsis));
 
   if (mode === "heavy") {
     // Line 3: telemetry and delegation budget
     const e = state.effort;
     const budget: Seg[] = e?.usage ? [{ id: "children", prio: 2, text: `${theme.fg("dim", "children ")}${theme.fg("text", `${e.usage.total}/${e.usage.maxTotal}`)}${theme.fg("dim", ` ${glyphs.dot} scouts `)}${theme.fg("text", `${e.usage.scouts}/${e.usage.maxScouts}`)}${e.usage.live ? theme.fg("accent", ` ${e.usage.live} running`) : ""}`, alts: [`${theme.fg("dim", "children ")}${theme.fg("text", `${e.usage.total}/${e.usage.maxTotal}`)}`] }] : [];
-    lines.push(fitLine([...tokenSegments(ctx), ...budget], state.pricingSource ? [{ id: "pricing", prio: 6, text: theme.fg("dim", /^unconfigured/.test(state.pricingSource) ? "no prices set" : `pricing ${path.basename(state.pricingSource)}`) }] : [], width, sep));
+    lines.push(fitLine([...tokenSegments(ctx), ...budget], state.pricingSource ? [{ id: "pricing", prio: 6, text: theme.fg("dim", /^unconfigured/.test(state.pricingSource) ? "no prices set" : `pricing ${path.basename(state.pricingSource)}`) }] : [], width, sep, glyphs.ellipsis));
     // Line 4: diagnostics and every extension chip
     const diag: Seg[] = [];
     if (state.firewall?.mode || state.firewall?.policy) diag.push({ id: "firewall", prio: 4, text: `${theme.fg("dim", "firewall ")}${theme.fg("text", [state.firewall.mode, state.firewall.policy].filter(Boolean).join("/"))}` });
     if (state.compaction) diag.push({ id: "compact-state", prio: 4, text: `${theme.fg("dim", "compaction ")}${theme.fg(state.compaction.enabled ? "success" : "warning", state.compaction.enabled ? `on${state.compaction.thresholdTokens ? ` @${fmtTokens(state.compaction.thresholdTokens)}` : ""}` : `off${state.compaction.reason ? ` (${state.compaction.reason})` : ""}`)}` });
     if (state.effort?.pinned) diag.push({ id: "pinned", prio: 4, text: theme.fg("dim", "effort pinned by the run or parent") });
     const all = [...diag, ...chips];
-    lines.push(all.length ? fitLine(all, [], width, sep) : theme.fg("dim", truncateDisplay("status no extension status", width)));
+    lines.push(all.length ? fitLine(all, [], width, sep, glyphs.ellipsis) : theme.fg("dim", truncateDisplay("status no extension status", width, glyphs.ellipsis)));
   }
-  return lines.map((line) => (displayWidth(line) > width ? truncateDisplay(line, width) : line));
+  return lines.map((line) => (displayWidth(line) > width ? truncateDisplay(line, width, glyphs.ellipsis) : line));
 }
 
 /** Plain-text detail for /footer status: everything the bar can show, with nothing dropped for width. */

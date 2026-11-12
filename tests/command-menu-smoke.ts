@@ -7,7 +7,8 @@
  *     built-ins, prompt templates and skill commands are untouched unless hiddenCommands names them;
  *   - the reveal rule: a hidden command returns at four typed characters (or at its full name when
  *     shorter), and dispatch/completion are never touched;
- *   - the location: a hidden suggestion's description says where the command moved;
+ *   - the location: a hidden suggestion's description says where the command moved, preferring an
+ *     exact legacy token over a row whose command name merely collides;
  *   - settings: commandMenu / pinnedCommands / hiddenCommands from pi-kit/ui.json, invalid values
  *     warned about once and replaced by the defaults;
  *   - registration: a provider only in the TUI, nothing over RPC, print or json, and nothing in a
@@ -101,18 +102,27 @@ interface FakeRegistration {
   api: FakeApi;
   handlers: Map<string, (event?: unknown, ctx?: unknown) => unknown>;
   providers: Array<(current: AutocompleteProvider) => AutocompleteProvider>;
-  ui: { addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void };
+  headers: unknown[];
+  ui: {
+    addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => void;
+    setHeader: (factory: unknown) => void;
+  };
 }
 
 function makeApi(commands: CommandMenuModule.CommandMenuCommand[]): FakeRegistration {
   const handlers = new Map<string, (event?: unknown, ctx?: unknown) => unknown>();
   const providers: Array<(current: AutocompleteProvider) => AutocompleteProvider> = [];
+  const headers: unknown[] = [];
   return {
     handlers,
     providers,
+    headers,
     ui: {
       addAutocompleteProvider: (factory): void => {
         providers.push(factory);
+      },
+      setHeader: (factory): void => {
+        headers.push(factory);
       },
     },
     api: {
@@ -320,6 +330,29 @@ tests.push([
   },
 ]);
 
+tests.push([
+  "an exact legacy command wins over another row whose command name collides",
+  async () => {
+    const menu = await loadMenu();
+    const model = await modelFor(["boost", "orchestrate"]);
+    assert.equal(
+      menu.hubLocationFor("boost", model),
+      "moved → /menu ▸ Work ▸ Recovery ▸ Reassess now",
+      "bare /boost is the Recovery row, not the earlier /boost status row",
+    );
+    assert.equal(
+      menu.locationFor(model)("boost"),
+      "moved → /menu ▸ Work ▸ Recovery ▸ Reassess now",
+      "the location map prefers the same exact legacy match",
+    );
+    assert.equal(
+      menu.hubLocationFor("orchestrate", model),
+      "moved → /menu ▸ Work ▸ Delegation ▸ Orchestration",
+      "a command without a collision still resolves normally",
+    );
+  },
+]);
+
 // --- settings ----------------------------------------------------------------------------------
 
 tests.push([
@@ -405,6 +438,26 @@ tests.push([
       const fake = await startWith("tui", true, fixture.dir, COMMANDS);
       assert.equal(fake.providers.length, 0, "nothing is filtered under commandMenu: all");
     } finally {
+      fixture.done();
+    }
+  },
+]);
+
+tests.push([
+  "a replacement session re-registers the curated menu and the launch header",
+  async () => {
+    const fixture = agentDirFixture("pi-kit-menu-replace-");
+    const restoreMotion = setEnv("PI_KIT_REDUCED_MOTION", "1");
+    try {
+      const fake = await startWith("tui", true, fixture.dir, COMMANDS);
+      const handler = fake.handlers.get("session_start");
+      assert.ok(handler, "control-center registers a session_start handler");
+      // pi clears the old provider and header on /new, /resume and /fork, then emits session_start.
+      await handler({}, { mode: "tui", hasUI: true, cwd: fixture.dir, ui: fake.ui });
+      assert.equal(fake.providers.length, 2, "the replacement session gets its own curated provider");
+      assert.equal(fake.headers.length, 2, "the replacement session gets its own launch header");
+    } finally {
+      restoreMotion();
       fixture.done();
     }
   },

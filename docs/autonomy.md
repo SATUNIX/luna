@@ -463,6 +463,10 @@ pi-autonomy backlog --run <run> --message "Check compaction recovery with eviden
 pi-autonomy board --run <run> --file board.json
 pi-autonomy board --run <run> --json
 pi-autonomy board claim V-01 --run <run> --by <agent> --json
+pi-autonomy inbox --run <run>
+pi-autonomy inbox --run <run> --file cards.json
+pi-autonomy inbox --run <run> --json
+pi-autonomy inbox --run <run> --answer <card-id> --value "Use the local branch"
 pi-autonomy reconfigure --run <run> --budget-usd 100
 pi-autonomy pause --run <run>
 pi-autonomy cancel --run <run> --reason "End the experiment"
@@ -704,6 +708,46 @@ publication avoids publishing rejected attempts, but the integration branch is s
 as it is pushed (`tests/autonomy-selfimprove-smoke.ts`). Exports and run logs are local operator
 evidence and are not made safe for public posting by the commit scan.
 
+### Owner inbox
+
+`inbox --file` validates and atomically replaces the host-owned `control/inbox.json`, exclusively
+for self-improve runs. A card records a question for the owner, the recommended default, a
+deadline, and optionally the steward-board item it blocks. The format is:
+
+```json
+{
+  "cards": [{
+    "id": "OWN-1",
+    "question": "Promote to the shared branch or keep the local one?",
+    "default": "Keep the local branch",
+    "deadline": "2026-11-12T00:00:00Z",
+    "board": "PG-09"
+  }]
+}
+```
+
+Every listing (`inbox --run <run>`, or the same with `--json`) or answer (`--answer <card-id> --value <text>`) settles cards whose deadline
+has passed: the card records an outcome `{at, via, text}` with `via: "deadline"` and the default as
+its text. The `--answer` call records the outcome immediately with `via: "answer"` and the owner's
+text, even before the deadline. Settling unblocks the linked
+board item (`blocked` becomes `ready`) so the next cycle sees it again; an unanswered card whose
+deadline has not passed leaves its item `blocked`. A card that already has an outcome is never
+rewritten, so repeated reads are idempotent, and the inbox command records only: it never writes
+run state or queues a control message. `--file` only saves the cards; the next read settles them.
+Use an ISO-8601 deadline with `Z` or an explicit offset: validation accepts any string `Date.parse`
+understands, and an offset-less value is parsed in the host's local time. A settled card keeps its
+linked board item `ready` on every later inbox read; to block that item again, drop the settled card
+with `inbox --file` and then set the item back to `blocked` with `board --file`.
+
+Card fields are `id`, `question`, `default`, `deadline`, optional `board`, optional `answer`, and
+optional `outcome`; outcome keys are `at`, `via` (`answer` or `deadline`) and `text`. Unknown keys,
+duplicate card ids, ids outside `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, board ids outside
+`^[A-Z]+-[0-9]{1,4}$`, unparseable deadlines, more than 50 cards, empty text, questions over 500
+characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written); input files are capped
+at 2 MiB. The file is written at mode 0600. `tests/autonomy-inbox-smoke.ts` pins the answered,
+past-due and still-open cases, idempotence, refusal of bad input, the record-only rule, and the
+self-improve-only rule.
+
 ## Setting up
 
 1. **A container engine.** The default is `podman` (rootless: no daemon, no `docker` group, and an
@@ -892,7 +936,7 @@ is written to `~/.pi`.
 | Path | Contents |
 |---|---|
 | `contract.json`, `state.json` | The authorised contract, and the one authoritative record of the run (status, usage, tasks, acceptance evidence, recovery counters, history). |
-| `supervisor.log`, `supervisor.lock`, `control/` | The event log, the single-owner lock, and queued control commands. |
+| `supervisor.log`, `supervisor.lock`, `control/` | The event log, the single-owner lock, and the host-owned control files (`board.json`, `inbox.json`) and queued control commands. |
 | `checks.json`, `overlay/` | The check definitions and the held-out files: supervisor-held, never mounted for the worker. |
 | `public/` | The sanitised contract, mounted read-only at `/run`. |
 | `mirror.git`, `steps/`, `results/` | The host's copy of the work, each step's evidence, and exports. |

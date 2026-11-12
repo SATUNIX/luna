@@ -17,10 +17,11 @@
  *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
  *     COVERAGE_MIN_TIMEOUT_MINUTES;
  *   - every required check in the expected settings names a job that exists;
- *   - every ci.yml job that runs `check:all` does so as a shard matrix whose shard count matches the
- *     `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check), with `--jobs`
- *     and a `--check-timeout`; every check:all run in ci.yml (including `coverage`, which runs
- *     check:all) passes `--check-timeout`, so a hung check fails named instead of as a silent job
+ *   - every ci.yml job that directly runs `check:all` does so as a shard matrix whose shard count
+ *     matches the `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check),
+ *     with `--jobs` and a `--check-timeout` (the measure-only `coverage` job runs check:all through
+ *     `npm run coverage` and is deliberately unsharded); every check:all run in ci.yml (including
+ *     `coverage`) passes `--check-timeout`, so a hung check fails named instead of as a silent job
  *     timeout; and ci.yml and security.yml gate pull requests to `main` and `integration/**`;
  *   - each line-pinned zizmor ignore still points at a `uses: ./` call.
  * Each rule is also run against a mutated copy, so the checker is shown to fail.
@@ -243,6 +244,7 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["pi-compat without --check-timeout", "ci.yml", ci.replace("--skip=smoke:package,test:typecheck,test:lint --check-timeout=600", "--skip=smoke:package,test:typecheck,test:lint"), /ci.yml pi-compat: .* has no --check-timeout/],
   ["pi-compat without --shard", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package", "--jobs=2 --skip=smoke:package"), /pi-compat: check:all is not given --shard/],
   ["pi-compat shard count disagrees", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3]'), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
+  ["pi-compat without a shard axis", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]'), /pi-compat: no matrix\.shard list/],
   ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --check-timeout=600", "npm run -s coverage"), /ci.yml coverage: .* has no --check-timeout/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],

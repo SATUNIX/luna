@@ -468,7 +468,16 @@ function testFootprintCli(): void {
     const created = run(["--profile", "lite", "--write-baseline", `--baseline=${fresh}`]);
     assert.equal(created.status, 0, created.stderr);
     assert.match(created.stdout, /baseline written/, "a missing baseline file is written, not rejected");
-    assert.match(fs.readFileSync(fresh, "utf8"), /"toolText": 7614/, "the new file records the measurement");
+    // Pin the measurement, not a literal: a deliberate kit-text change updates the reviewed row
+    // (f86cee0 shrank lite's tool text) and this check must follow it instead of a stale number.
+    const reviewedLiteChars = readBaseline().profiles.lite?.toolText;
+    assert.ok(reviewedLiteChars !== undefined, "lite has a reviewed baseline row");
+    const freshRecord = readSettingsFile(fresh);
+    const freshProfiles = freshRecord.profiles;
+    assert.ok(isRecord(freshProfiles), "the new baseline holds a profiles object");
+    const freshLite = freshProfiles.lite;
+    assert.ok(isRecord(freshLite), "the new baseline holds a lite row");
+    assert.equal(freshLite.toolText, reviewedLiteChars, "the new file records the measurement exactly");
 
     // A malformed baseline is a clean usage error, not a raw parse crash, and is left untouched.
     const malformed = path.join(ws, "malformed-baseline.json");

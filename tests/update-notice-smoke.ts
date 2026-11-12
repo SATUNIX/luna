@@ -150,8 +150,10 @@ async function waitFor(predicate: () => boolean, ms = 3000): Promise<void> {
 
 const tests: Record<string, () => void | Promise<void>> = {
   "the trunk-ahead notice is one exact line, or null when there is no gap": () => {
-    assert.equal(trunkNotice({ channel: "trunk", ahead: 19 }), "trunk is 19 commits ahead — /update channel trunk");
-    assert.equal(trunkNotice({ channel: "next", ahead: 1 }), "trunk is 1 commit ahead — /update channel next");
+    // Formatting only: the channel is passed through; session start always supplies TRUNK_CHANNEL.
+    assert.equal(trunkNotice({ channel: "latest", ahead: 19 }), "main is 19 commits ahead — /update channel latest");
+    assert.equal(trunkNotice({ channel: "next", ahead: 1 }), "main is 1 commit ahead — /update channel next");
+    assert.doesNotMatch(trunkNotice({ channel: TRUNK_CHANNEL, ahead: 2 }) ?? "", /trunk/i, "the line says main: the trunk channel follows a different branch");
     assert.equal(trunkNotice({ channel: "latest", ahead: 0 }), null);
     assert.equal(trunkNotice({ channel: "", ahead: 5 }), null);
     assert.equal(trunkNotice({ channel: "next", ahead: -1 }), null);
@@ -167,8 +169,8 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(report.kit.trunkAhead, 7);
       assert.equal(report.kit.available, false, "the release channel is current; only the trunk has moved");
       const notice = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
-      assert.equal(notice, "trunk is 7 commits ahead — /update channel next");
-      assert.match(formatReport(report), /trunk is 7 commits ahead — \/update channel next/, "the /update output carries the lossless line");
+      assert.equal(notice, "main is 7 commits ahead — /update channel next");
+      assert.match(formatReport(report), /main is 7 commits ahead — \/update channel next/, "the /update output carries the lossless line");
       assert.equal(report.kit.trunkAhead, 7, "the suggested channel follows the trunk, not the installed release channel");
     } finally {
       w.cleanup();
@@ -181,7 +183,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       const report = await checkForUpdates(w.cwd, fakeRegistry(PI_TAGS), "1.4.0", fakeGit({ tags: ["0.2.1-beta.0"], count: 0 }).git);
       assert.equal(report.kit.trunkAhead, 0);
       assert.equal(trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 }), null);
-      assert.doesNotMatch(formatReport(report), /trunk is/, "in sync, /update shows no gap line");
+      assert.doesNotMatch(formatReport(report), /main is \d+ commits? ahead/, "in sync, /update shows no gap line");
     } finally {
       w.cleanup();
     }
@@ -263,12 +265,12 @@ const tests: Record<string, () => void | Promise<void>> = {
       const notes: Note[] = [builtIn];
       const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {} } };
       await pi.handlers.get("session_start")({}, ctx);
-      await waitFor(() => notes.some((n) => n !== builtIn && n.m.startsWith("trunk is")));
+      await waitFor(() => notes.some((n) => n !== builtIn && n.m.startsWith("main is")));
       const kitNotes = notes.filter((n) => n !== builtIn);
-      assert.deepEqual(kitNotes, [{ m: "trunk is 3 commits ahead — /update channel next", l: "info" }]);
+      assert.deepEqual(kitNotes, [{ m: "main is 3 commits ahead — /update channel next", l: "info" }]);
       assert.ok(notes.includes(builtIn), "the built-in pi notice is left alone, not removed by the filter");
       assert.equal(
-        notes.filter((n) => n.m === "trunk is 3 commits ahead — /update channel next").length,
+        notes.filter((n) => n.m === "main is 3 commits ahead — /update channel next").length,
         1,
         "a gap report yields the trunk line exactly once",
       );
@@ -289,7 +291,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       const report = await checkForUpdates(w.cwd, fakeRegistry(PI_TAGS), "0.99.2", fakeGit({ tags: ["0.2.1-beta.0"], count: 3 }).git);
       assert.equal(report.pi.available, true, "the fixture pins an installed pi older than the registry's latest");
       const decision = sessionStartNotice(report);
-      assert.deepEqual(decision.notices, ["trunk is 3 commits ahead — /update channel next"]);
+      assert.deepEqual(decision.notices, ["main is 3 commits ahead — /update channel next"]);
       assert.equal(decision.setStatus, true, "the status bar still points at /update");
       assert.doesNotMatch(decision.notices.join("\n"), /^Updates available:/m, "the generic summary is not stacked on the trunk line");
     } finally {
@@ -318,7 +320,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       };
       await pi.commands.get("update").handler("", ctx);
       assert.ok(
-        notes.some((n) => n.m === "trunk is 3 commits ahead — /update channel next" && n.l === "info"),
+        notes.some((n) => n.m === "main is 3 commits ahead — /update channel next" && n.l === "info"),
         `the bare /update screen names the gap: ${JSON.stringify(notes)}`,
       );
     } finally {

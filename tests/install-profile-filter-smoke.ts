@@ -229,7 +229,7 @@ function testUnresolvedNameThrows() {
   assert.throws(() => resolveProfile(["definitely-not-a-real-extension"]), /Unresolved extension/);
 }
 
-// 7. Live-testing finding (pi-system container, 2026-08-06): pi itself
+// 7. Live-testing finding (Luna container, 2026-08-06): pi itself
 //    resolves its config dir from PI_CODING_AGENT_DIR when set (falling back to
 //    ~/.pi/agent). Before this fix, globalSettingsPath()/globalAgentDir() ignored that
 //    env var, so in any environment that sets it (e.g. that container, which points it

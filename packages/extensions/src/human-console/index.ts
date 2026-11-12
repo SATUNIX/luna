@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConsoleKey, requestDigest, signedAnswer, verifyAnswer } from "./console-auth.ts";
 import { PAUSE_CHOICE_NO, PAUSE_CHOICE_YES, RUN_CHOICE_ALLOW_RUN, RunApprovalBroker, runChoices, runRequestOf, type RunRequest } from "./run-broker.ts";
-import { cardTimeoutMs, inputHeld, releaseInputHolds, showWhenFree, withInputHold } from "./shared/input-owner.ts";
+import { cardTimeoutMs, inputHeld, releaseInputHolds, showWhenFree, timerMs, withInputHold } from "./shared/input-owner.ts";
 import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 
 const POLL_MS = 1000;
@@ -307,6 +307,25 @@ export default function humanConsole(pi: ExtensionAPI) {
   const RUN_CARD_HOLD = "the open workflow card";
   let openRunCards = 0;
   const runCardHolder = (): string | undefined => (openRunCards > 0 ? RUN_CARD_HOLD : undefined);
+  const runCardWaiters = new Set<() => void>();
+  const waitForRunCards = (signal: AbortSignal | undefined, timeoutMs: number): Promise<"free" | "aborted" | "timeout"> => {
+    if (signal?.aborted) return Promise.resolve("aborted");
+    if (!runCardHolder()) return Promise.resolve("free");
+    return new Promise((resolve) => {
+      const finish = (result: "free" | "aborted" | "timeout") => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        runCardWaiters.delete(onFree);
+        resolve(signal?.aborted ? "aborted" : result);
+      };
+      const onAbort = () => finish("aborted");
+      const onFree = () => finish("free");
+      const timer = setTimeout(() => finish("timeout"), timerMs(timeoutMs));
+      timer.unref();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      runCardWaiters.add(onFree);
+    });
+  };
   // Dismisses open deferred cards when the session ends.
   let cards = new AbortController();
   const noteHeld = (ctx: ExtensionContext, id: string, request: Pending, holder: string) => {
@@ -342,21 +361,43 @@ export default function humanConsole(pi: ExtensionAPI) {
       const header = `Workflow run ${runId} has had ${distinct} distinct actions approved, so it is paused: no new agents start.\nResume it?`;
       let resume = false;
       if (typeof ctx.ui?.select === "function") {
-        // Keys meant for an open overlay must not answer this. A hold that outlasts it leaves the run
-        // paused, the same as No: /workflow resume still lifts it.
-        const asked = await showWhenFree(async (card): Promise<{ shown: boolean; answer: string | null }> => {
-          // Another card can take the keyboard between the wait and this callback. Leave the run
-          // paused rather than stack a second prompt on top of that card.
-          if (inputHeld()) return { shown: false, answer: null };
-          // Hold input for our own prompt too, so a sibling pause prompt cannot stack on it.
-          const picked = await withInputHold("the open resume card", () => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal));
-          return { shown: true, answer: picked.settled && typeof picked.value === "string" ? picked.value : null };
-        }, {
-          signal: cards.signal,
-          timeoutMs: DEFAULT_TIMEOUT_MS,
-          onHeld: (holder) => ctx.ui?.notify?.(`human-console: workflow run ${runId} is paused and asks to resume; close ${holder} to answer.`, "warning"),
-        });
-        resume = asked.kind === "shown" && asked.value.shown && asked.value.answer === PAUSE_CHOICE_YES;
+        // A second run card may still be open. Run cards are outside the shared registry, so wait
+        // for the local counter within the same budget; if one is still open at the deadline, leave
+        // the run paused exactly as a held overlay does.
+        const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+        let heldNotified = false;
+        const noteHeld = (holder: string) => {
+          if (heldNotified) return;
+          heldNotified = true;
+          ctx.ui?.notify?.(`human-console: workflow run ${runId} is paused and asks to resume; close ${holder} to answer.`, "warning");
+        };
+        // Two runs that pause together are released by the same event, so both can find the keyboard
+        // free and only one may open its card. The other waits again inside the same budget instead of
+        // leaving its run paused without ever asking; each retry waits for a card to close, so this
+        // cannot spin.
+        const runHeld = runCardHolder();
+        if (runHeld) noteHeld(runHeld);
+        while (!cards.signal.aborted && Date.now() < deadline) {
+          const runCards = await waitForRunCards(cards.signal, Math.max(1, deadline - Date.now()));
+          if (runCards !== "free") break;
+          // Keys meant for an open overlay must not answer this. A hold that outlasts it leaves the run
+          // paused, the same as No: /workflow resume still lifts it.
+          const asked = await showWhenFree(async (card): Promise<{ shown: boolean; answer: string | null }> => {
+            // Another card can take the keyboard between the wait and this callback. Do not stack a
+            // second prompt on top of that card.
+            if (inputHeld() ?? runCardHolder()) return { shown: false, answer: null };
+            // Hold input for our own prompt too, so a sibling pause prompt cannot stack on it.
+            const picked = await withInputHold("the open resume card", () => waitForUi(ctx.ui.select(header, [PAUSE_CHOICE_NO, PAUSE_CHOICE_YES], card), card.timeout, card.signal));
+            return { shown: true, answer: picked.settled && typeof picked.value === "string" ? picked.value : null };
+          }, {
+            signal: cards.signal,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            onHeld: noteHeld,
+          });
+          if (asked.kind === "shown" && !asked.value.shown) continue;
+          resume = asked.kind === "shown" && asked.value.answer === PAUSE_CHOICE_YES;
+          break;
+        }
       }
       if (resume) controlWorkflowRun(runId, "resume");
       audit(ctx.cwd, { event: "workflow_approvals_resume_answer", runId, resumed: resume });
@@ -392,14 +433,15 @@ export default function humanConsole(pi: ExtensionAPI) {
       const title = `${text(request.title || "Approve tool call?")} · workflow run ${run.runId}${run.step === undefined ? "" : ` · step ${run.step}`}`;
       // The card does not take the input-owner hold: the broker allows two per run, and a hold
       // would make its second slot unreachable. openRunCards makes non-run cards and child requests
-      // wait behind it instead. The counter is dropped before askToResume so its showWhenFree is
-      // not waiting on this card.
+      // wait behind it instead. The counter is dropped before askToResume so its showWhenFree is not
+      // waiting on this answered card; a sibling run card still open defers the resume question.
       let result: Answer;
       openRunCards += 1;
       try {
         result = await answerApproval(ctx, { ...request, title, choices: runChoices(run.high) }, cardMs(request, deadline), signal);
       } finally {
         openRunCards -= 1;
+        if (openRunCards === 0) for (const wake of runCardWaiters) wake();
       }
       // The session ended under the card: nobody answered, and the requester's own deadline decides.
       if (signal.aborted) return;
@@ -543,17 +585,27 @@ export default function humanConsole(pi: ExtensionAPI) {
     if (ctx.hasUI && ctx.ui) {
       // An open overlay owns the keyboard here too (see processOne): `select` would take focus and Enter
       // would return the first option as the human's answer. The wait and the card share the timeout.
+      let heldNotified = false;
+      const noteQuestionHeld = (holder: string) => {
+        if (heldNotified) return;
+        heldNotified = true;
+        ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning");
+      };
       const asked = await showWhenFree(async (card): Promise<Asked> => {
-        // A console card can take the keyboard between the wait and this callback. Fail closed
+        const deadline = Date.now() + card.timeout;
+        if (runCardHolder()) noteQuestionHeld(RUN_CARD_HOLD);
+        const waited = await waitForRunCards(signal, card.timeout);
+        if (waited !== "free") return { outcome: waited, answer: null };
+        // A card can take the keyboard between either wait and this callback. Fail closed
         // rather than stack a second card on top of it.
-        if (inputHeld()) return { outcome: "dismissed", answer: null };
+        if (inputHeld() || runCardHolder()) return { outcome: "dismissed", answer: null };
         // Hold input for the question too, so a console card cannot open over it.
-        return withInputHold("the open question card", () => answerQuestion(ctx, { kind: "question", ...question }, signal, card.timeout));
+        return withInputHold("the open question card", () => answerQuestion(ctx, { kind: "question", ...question }, signal, Math.max(1, deadline - Date.now())));
       }, {
         signal,
         timeoutMs: requestedTimeout(params, cardTimeoutMs()),
         rawTimeout: true,
-        onHeld: (holder) => ctx.ui.notify?.(`human-console: a question is waiting; close ${holder} to see it.`, "warning"),
+        onHeld: noteQuestionHeld,
       });
       if (asked.kind === "shown") {
         outcome = asked.value.outcome;

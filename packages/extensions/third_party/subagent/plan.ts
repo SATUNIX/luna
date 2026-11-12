@@ -32,7 +32,7 @@ export const PLAN_DESCRIPTION =
   "A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. " +
   "outputs are files to write relative to the run directory. " +
   "{previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. " +
-  "gate: {pass, retry, max_loops?} loops until the output has pass; the host adds the review to the retry step itself. " +
+  "gate: {pass, retry, max_loops?} loops until the last non-empty line has pass; the host adds the review to the retry step itself. " +
   'expand answers {"steps":[...]} or {"done":"text"}.';
 
 const EXAMPLE = 'Example: {"steps":[{"task":"..."}]}';
@@ -192,7 +192,7 @@ function checkGate(entry: Entry, scope: Scope): void {
   }
   for (const key of Object.keys(gate)) if (!GATE_FIELDS.has(key)) scope.errors.push(planError(`${at}.${key}`, "this field is not part of a gate.", "Use only pass, retry and max_loops."));
   const { pass, retry, max_loops: loops } = gate;
-  if (typeof pass !== "string" || !pass) scope.errors.push(planError(`${at}.pass`, "a gate needs pass: text its output must contain.", 'Use "VERDICT: PASS".'));
+  if (typeof pass !== "string" || !pass) scope.errors.push(planError(`${at}.pass`, "a gate needs pass: text its verdict line (the last non-empty line) must contain.", 'Use "VERDICT: PASS".'));
   else {
     if (compileGate(pass)?.ok === false) scope.errors.push(planError(`${at}.pass`, `${shown(pass)} is not a safe pattern, so the gate could never pass.`, "Use plain text or a simpler pattern."));
   }

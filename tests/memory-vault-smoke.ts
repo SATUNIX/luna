@@ -7,10 +7,12 @@
 //   5. per-turn recaps: substantive turns are recapped into Projects/<p>/Recaps/<date>.md,
 //      flagged decisions are promoted (project-scoped, never global), trivial turns and
 //      subagent children are skipped.
-//   6. recall injection: continuity on the first prompt, each memory at most once per session,
-//      delivered as a hidden message (never a system prompt).
+//   6. recall injection: continuity on the first prompt, each memory at most once per session per
+//      unchanged content, delivered as a hidden message (never a system prompt).
+//  6b. a note updated mid-session (memory_save or /remember) is offered again with its new body.
 //   7. secrets are redacted before anything is written.
-//   8. memory-local's store is imported exactly once.
+//   8. memory-local's store is imported exactly once; a malformed or unreadable store is not
+//      tombstoned, so a repaired store imports on the next call.
 //   9. Obsidian compatibility: frontmatter round-trips; MEMORY.md and the hub use wikilinks.
 //  12. projects are keyed by canonical root, so same-named repositories never share recall;
 //      symlinked roots never split, a moved root is reported rather than taken over.
@@ -19,6 +21,10 @@
 //      for pinned/relevant memories, and with none present the recap is still truncated.
 //  14. oversized recaps with no pinned or matching memory are truncated, not dropped.
 //  15. pinned memories that outrank a relevant one do not crowd it out of the first-prompt recall.
+//  16. the stemmer makes inflectional forms meet: exact outputs, and a memory saved with a plural
+//      is found by a singular query and vice versa.
+//  17. a throw during first-prompt recall does not consume the first-prompt flag: the
+//      earlier-session recap is still offered on the next turn.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,6 +32,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { evalCacheDir, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as Vault from "../packages/extensions/src/memory-vault/vault.ts";
+import type * as Search from "../packages/extensions/src/memory-vault/search.ts";
 import type { MemoryVaultDeps } from "../packages/extensions/src/memory-vault/index.ts";
 import { isRecord, object, optional, parseJson, parseJsonAs, record, unknownValue } from "../packages/core/lib/guard.ts";
 import type { BeforeAgentStartEventResult } from "@earendil-works/pi-coding-agent";
@@ -54,6 +61,7 @@ const ok = (label: string): void => {
 try {
   const vault = await loadModule<typeof Vault>("extensions/memory-vault/vault.ts");
   const ext = await loadModule<MemoryVaultExtension>("extensions/memory-vault/index.ts");
+  const search = await loadModule<typeof Search>("extensions/memory-vault/search.ts");
 
   // 1. Save / update / dedupe.
   {
@@ -159,6 +167,37 @@ try {
     ok("recaps land in the daily log, decisions are promoted (project-scoped), recall is once-per-session, children are skipped");
   }
 
+  // 6b. A note updated mid-session is offered again with its new body. saveMemory rewrites the
+  //     note in place and returns the same rel, so a path-only once-per-session record hid the
+  //     fresh body for the rest of the session. On the base the second recall is undefined.
+  {
+    const updateRoot = path.join(ws, "vault-updated-recall");
+    const repo = path.join(ws, "updated-recall");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restoreUpdateVault = setEnv("PI_KIT_VAULT", updateRoot);
+    const restoreUpdateFloor = setEnv("PI_KIT_MEMORY_MIN_SCORE", "0.1");
+    try {
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-updated-recall" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      // Resolve the key the extension recorded rather than guessing the folder basename.
+      const project = vault.resolveProject(updateRoot, repo);
+      vault.saveMemory(updateRoot, { title: "Deploy target selection", body: "Deploy to the amber cluster by default.", project });
+      const first = (await pi.handlers.get("before_agent_start")({ prompt: "which cluster do we deploy to", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.match(first.message.content, /amber cluster/);
+      vault.saveMemory(updateRoot, { title: "Deploy target selection", body: "Deploy to the birch cluster now; the amber cluster is retired.", project });
+      const second = (await pi.handlers.get("before_agent_start")({ prompt: "which cluster do we deploy to now", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.ok(second, "an updated memory is offered again in the same session");
+      assert.match(second.message.content, /birch cluster now/);
+      assert.doesNotMatch(second.message.content, /amber cluster by default/);
+    } finally {
+      restoreUpdateFloor();
+      restoreUpdateVault();
+    }
+    ok("an updated memory is offered again with its new body in the same session");
+  }
+
   // 7. Redaction.
   {
     const r = vault.saveMemory(vaultRoot, { title: "Deploy token location", body: "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789 and sk-ant-api03-SECRETSECRETSECRETSECRET", project: "alpha" });
@@ -177,6 +216,19 @@ try {
     assert.equal(vault.migrateMemoryLocal(vaultRoot, "alpha"), 0, "migration runs once");
     assert.ok(fs.existsSync(path.join(vaultRoot, "Memory", "hyprland-crashes-after-sleep.md")));
     ok("memory-local store imported exactly once");
+  }
+
+  // 8b. A malformed store is not tombstoned: no marker, and a repaired store imports next call.
+  {
+    const repairRoot = path.join(ws, "vault-repair");
+    const legacy = path.join(ws, "agent", "memory-local");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(path.join(legacy, "memories.json"), "{ not json");
+    assert.equal(vault.migrateMemoryLocal(repairRoot, "alpha"), 0, "an unreadable store imports nothing");
+    assert.ok(!fs.existsSync(path.join(repairRoot, ".pi-index", "migrated-memory-local")), "an unreadable store leaves no migration marker");
+    fs.writeFileSync(path.join(legacy, "memories.json"), JSON.stringify([{ id: "1", text: "A repaired memory-local store imports on the next call.", tags: [] }]));
+    assert.equal(vault.migrateMemoryLocal(repairRoot, "alpha"), 1, "the repaired store imports");
+    ok("a malformed memory-local store is retried, not tombstoned");
   }
 
   // 9. Obsidian compatibility.
@@ -444,6 +496,65 @@ try {
       restorePin();
     }
     ok("pinned memories ranking above a relevant one do not crowd it out of the first-prompt recall");
+  }
+
+  // 16. Plurals and singulars meet: the exact stemmer outputs, plus a round trip where a note
+  //     saved with a plural is found by the singular query and a note saved with a singular is
+  //     found by the plural query. On the base, "files" -> "fil" and "processes" -> "proces",
+  //     so neither direction matched; the 4-character case was also broken, since the early
+  //     guard returned before the -s rule (minimum 4) could run, leaving "logs" as "logs".
+  {
+    assert.equal(search.stem("files"), "file");
+    assert.equal(search.stem("notes"), "note");
+    assert.equal(search.stem("values"), "value");
+    assert.equal(search.stem("processes"), "process");
+    assert.equal(search.stem("classes"), "class");
+    assert.equal(search.stem("addresses"), "address");
+    assert.equal(search.stem("commits"), "commit");
+    assert.equal(search.stem("response"), "respons");
+    assert.equal(search.stem("responses"), "respons");
+    assert.equal(search.stem("logs"), "log");
+    assert.equal(search.stem("docs"), "doc");
+    assert.equal(search.stem("cars"), "car");
+    assert.equal(search.stem("cases"), "case");
+    const stemRoot = path.join(ws, "vault-stem");
+    const pluralNote = vault.saveMemory(stemRoot, { title: "Config files layout", body: "Config files live under the etc directory.", project: "stem" });
+    const singularNote = vault.saveMemory(stemRoot, { title: "Process class address", body: "The process class address is stable.", project: "stem" });
+    assert.ok(vault.searchMemories(stemRoot, "config file", { project: "stem" }).some((h) => h.rel === pluralNote.rel), "a plural note is found by a singular query");
+    assert.ok(vault.searchMemories(stemRoot, "addresses", { project: "stem" }).some((h) => h.rel === singularNote.rel), "a singular note is found by a plural query");
+    const logNote = vault.saveMemory(stemRoot, { title: "Server logs rotation", body: "Server logs rotate nightly.", project: "stem" });
+    assert.ok(vault.searchMemories(stemRoot, "log", { project: "stem" }).some((h) => h.rel === logNote.rel), "a 4-character plural note is found by the singular query");
+    assert.ok(vault.searchMemories(stemRoot, "logs", { project: "stem" }).some((h) => h.rel === logNote.rel), "a 4-character plural note is found by the plural query");
+    ok("the stemmer makes singular and plural forms meet in search");
+  }
+
+  // 17. A throw during first-prompt recall must not consume the first-prompt flag. The handler
+  //     accepts `event.prompt` without a type guard and passes it to searchMemories; a non-string
+  //     prompt makes tokenize throw after the flag used to be cleared, and the catch returns
+  //     undefined, so the recap and pinned block were never offered again that session. The flag
+  //     is now consumed only after recall succeeds (or decides to inject nothing). On the base the
+  //     second call returns undefined and this check fails.
+  {
+    const throwRoot = path.join(ws, "vault-recall-throw");
+    const repo = path.join(ws, "recall-throw");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restoreThrow = setEnv("PI_KIT_VAULT", throwRoot);
+    try {
+      const project = vault.resolveProject(throwRoot, repo);
+      vault.appendRecap(throwRoot, project, { title: "Guard the recall throw", did: "Added the recall guard.", next: "Keep the recap." }, new Date(2026, 8, 24, 9, 0));
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-recall-throw" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const thrown = await pi.handlers.get("before_agent_start")({ prompt: 123, systemPrompt: "SYS" }, ctx);
+      assert.equal(thrown, undefined, "a malformed prompt is caught, not thrown");
+      const recalled = (await pi.handlers.get("before_agent_start")({ prompt: "continue where we left off", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.match(recalled.message.content, /Earlier sessions \(/, "the recap is still offered after the throw");
+      assert.match(recalled.message.content, /Guard the recall throw/);
+    } finally {
+      restoreThrow();
+    }
+    ok("a throw during first-prompt recall does not consume the first-prompt flag");
   }
 
   console.log(`[memory-vault-smoke] all ${checks} checks passed`);

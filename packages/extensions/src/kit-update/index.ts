@@ -617,11 +617,11 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
   if (migrateSource && !migrateTo) {
     available = true;
     target = `${migrateSource.replace(/^git:/, "")} (${kit.channel ?? "latest"})`;
-    note = `pi-system is registered from a previous public source; /update kit moves it to ${migrateSource}, keeping channel ${kit.channel ?? "latest"} and the same profile`;
+    note = `Luna is registered from a previous public source; /update kit moves it to ${migrateSource}, keeping channel ${kit.channel ?? "latest"} and the same profile`;
   } else if (migrateTo) {
     available = true;
     target = `${migrateTo} delivery`;
-    note = `pi-system is now delivered from ${migrateTo}: /update kit moves this install (channel ${kit.channel ?? "latest"}, same profile)`;
+    note = `Luna is now delivered from ${migrateTo}: /update kit moves this install (channel ${kit.channel ?? "latest"}, same profile)`;
   } else if (kit.kind === "npm") {
     if (kit.pinned) {
       note = `pinned to ${kit.channel}; /update channel latest|next to follow a channel`;
@@ -638,12 +638,12 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     const channel = kit.channel === "next" ? "next" : "latest";
     available = true;
     target = `${publicSource.replace(/^git:/, "")} (${channel})`;
-    note = `pi-system is registered from a retired private source (${kit.source}); /update kit moves it to ${publicSource.replace(/^git:/, "")} on channel ${channel}, keeping the profile and your hand edits`;
+    note = `Luna is registered from a retired private source (${kit.source}); /update kit moves it to ${publicSource.replace(/^git:/, "")} on channel ${channel}, keeping the profile and your hand edits`;
     if (dist.ignoredEnvSource) note += `. PI_SYSTEM_GIT_SOURCE=${dist.ignoredEnvSource} names the retired source and is ignored; unset it`;
   } else if (kit.kind === "git") {
     // detectKitInstall only reports kind "git" for a source parseGitSource accepted.
     const source = parseGitSource(kit.source);
-    if (!source) throw new Error(`pi-system: cannot parse the git source ${String(kit.source)}`);
+    if (!source) throw new Error(`Luna: cannot parse the git source ${String(kit.source)}`);
     const [remote, head] = await Promise.all([git(["ls-remote", "--tags", "--heads", source.repo]), kit.root ? git(["-C", kit.root, "rev-parse", "HEAD"]) : Promise.resolve(null)]);
     commit = head?.trim() || null;
     if (remote === null) {
@@ -704,7 +704,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
       }
     }
   } else {
-    note = `pi-system is not registered in pi settings`;
+    note = `Luna is not registered in pi settings`;
   }
 
   const packages: PackageStatus[] = others.map((e) => {
@@ -729,16 +729,17 @@ export interface TrunkAheadState {
 }
 
 /**
- * One line telling the owner the kit's trunk is ahead of the installed copy, or null when the
- * trunk is not ahead or no channel is known. The wording names the install's real channel so
- * `/update channel <name>` accepts it.
+ * One line telling the owner the kit's `main` branch is ahead of the installed copy, or null when
+ * it is not ahead or no channel is known. The line says `main`, not `trunk`: the opt-in `trunk`
+ * channel follows the integration branch, a different branch. The wording names the install's
+ * real channel so `/update channel <name>` accepts it.
  */
-/** The channel that follows the repository's branch (the trunk): `next` tracks `main` in git delivery. */
+/** The channel that follows `main` in git delivery (the name is historical; it is not the `trunk` channel). */
 export const TRUNK_CHANNEL = "next";
 
 export function trunkNotice(state: TrunkAheadState): string | null {
   if (!Number.isFinite(state.ahead) || state.ahead <= 0 || !state.channel) return null;
-  return `trunk is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
+  return `main is ${state.ahead} commit${state.ahead === 1 ? "" : "s"} ahead — /update channel ${state.channel}`;
 }
 
 /** Anything the user can act on (pinned-only notices do not count). */
@@ -766,9 +767,9 @@ export function sessionStartNotice(report: UpdateReport): SessionStartNotice {
 
 export function summaryLine(report: UpdateReport): string {
   const parts: string[] = [];
-  if (report.kit.legacy) parts.push("pi-system is on a retired private source and moves to the public one");
-  else if (report.kit.migrateTo) parts.push(`pi-system moves to ${report.kit.migrateTo} delivery`);
-  else if (report.kit.available) parts.push(`pi-system ${report.kit.version} → ${report.kit.target}${report.kit.channel ? ` (${report.kit.channel})` : ""}`);
+  if (report.kit.legacy) parts.push("Luna is on a retired private source and moves to the public one");
+  else if (report.kit.migrateTo) parts.push(`Luna moves to ${report.kit.migrateTo} delivery`);
+  else if (report.kit.available) parts.push(`Luna ${report.kit.version} → ${report.kit.target}${report.kit.channel ? ` (${report.kit.channel})` : ""}`);
   if (report.pi.available) parts.push(`pi ${report.pi.current} → ${report.pi.latest}`);
   const pkgs = report.packages.filter((p) => p.action === "reconcile" || p.action === "update");
   if (pkgs.length) parts.push(`${pkgs.length} linked package${pkgs.length === 1 ? "" : "s"}`);
@@ -779,13 +780,13 @@ export function summaryLine(report: UpdateReport): string {
 
 export function formatReport(report: UpdateReport): string {
   const k = report.kit;
-  const lines = ["pi-system update status", ""];
+  const lines = ["Luna update status", ""];
   const kitWhere =
     k.kind === "npm" || k.kind === "git"
       ? `${k.kind}, channel ${k.pinned ? `pinned ${k.channel}` : k.channel}${k.scope === "project" ? ", project scope" : ""}`
       : k.kind;
   const at = k.commit ? ` @${k.commit.slice(0, 7)}` : "";
-  lines.push(`  pi-system  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
+  lines.push(`  Luna  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
   if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}${k.tags.trunk !== undefined ? `, trunk ${k.tags.trunk}` : ""}`);
   if (k.note) lines.push(`             ${k.note}`);
   const trunkGap = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
@@ -794,7 +795,7 @@ export function formatReport(report: UpdateReport): string {
   const piState = piInfo.available
     ? `  →  ${piInfo.latest}`
     : piInfo.beyondTested
-      ? `  (${piInfo.latest} is out, past the tested ${piInfo.tested}: update pi-system first, or run "pi update --self" yourself)`
+      ? `  (${piInfo.latest} is out, past the tested ${piInfo.tested}: update Luna first, or run "pi update --self" yourself)`
       : piInfo.latest
         ? "  (up to date)"
         : "  (latest unknown)";
@@ -909,7 +910,7 @@ type Step = { label: string; command: string; args: string[]; cwd?: string; veri
 
 /** What the kit was before a step replaces it, and the command that returns to it when there is one. */
 function kitBefore(kit: KitInstall, switching = false): string {
-  const was = `pi-system ${kit.version ?? "(unknown version)"}${kit.channel ? ` on ${kit.channel}` : ""}${kit.commit ? ` (commit ${kit.commit.slice(0, 12)})` : ""}`;
+  const was = `Luna ${kit.version ?? "(unknown version)"}${kit.channel ? ` on ${kit.channel}` : ""}${kit.commit ? ` (commit ${kit.commit.slice(0, 12)})` : ""}`;
   if (switching && kit.channel && isChannelName(kit.channel)) return `${was}; /update channel ${kit.channel} goes back`;
   if ((kit.kind === "npm" || (kit.kind === "git" && kit.channel !== "next")) && isExactVersion(kit.version)) return `${was}; /update channel ${kit.version} goes back to it`;
   if (kit.kind === "local" && kit.root && kit.commit) return `${was}; git -C "${kit.root}" reset --keep ${kit.commit.slice(0, 12)} goes back to it`;
@@ -966,7 +967,7 @@ function verifyKitVersion(cwd: string, expected: string): () => Promise<string |
   return async () => {
     const after = detectKitInstall(cwd);
     if (after.version === expected) return null;
-    return `pi-system is ${after.version ?? "not installed"} after the update, expected ${expected}`;
+    return `Luna is ${after.version ?? "not installed"} after the update, expected ${expected}`;
   };
 }
 
@@ -976,7 +977,7 @@ function verifyKitCommit(root: string | null, target: string | null, git: GitLik
     const want = target?.split("@")[1];
     if (!root || !want) return null;
     const head = (await git(["-C", root, "rev-parse", "HEAD"]))?.trim() ?? null;
-    return head?.startsWith(want) ? null : `pi-system is at ${head ? head.slice(0, 7) : "an unknown commit"} after the update, expected ${want}`;
+    return head?.startsWith(want) ? null : `Luna is at ${head ? head.slice(0, 7) : "an unknown commit"} after the update, expected ${want}`;
   };
 }
 
@@ -1024,52 +1025,52 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
       // The retired private source is never contacted: the installer registers the public source
       // (capturing hand edits as overrides first) and applies the recorded profile itself.
       const channel = kit.channel === "next" ? "next" : "latest";
-      const step = installerStep(kit.root, `move pi-system from the retired private source to the public source (${channel})`, "git", channel, false, report.cwd);
+      const step = installerStep(kit.root, `move Luna from the retired private source to the public source (${channel})`, "git", channel, false, report.cwd);
       if (step) {
         step.verify = async () => {
           const after = detectKitInstall(report.cwd);
-          return after.kind === "git" && !after.legacy ? null : "pi-system is still registered from the retired private source";
+          return after.kind === "git" && !after.legacy ? null : "Luna is still registered from the retired private source";
         };
         steps.push(step);
-      } else notes.push("pi-system: cannot locate the kit installer to leave the retired private source. Reinstall from the public repository (see docs/INSTALL.md).");
+      } else notes.push("Luna: cannot locate the kit installer to leave the retired private source. Reinstall from the public repository (see docs/INSTALL.md).");
     } else if (kit.migrateSource && !kit.migrateTo) {
       const channel = kit.channel && isChannelName(kit.channel) ? kit.channel : "latest";
-      const step = kit.root ? installerStep(kit.root, `move pi-system to ${kit.migrateSource} (${channel})`, "git", channel, false, report.cwd) : null;
+      const step = kit.root ? installerStep(kit.root, `move Luna to ${kit.migrateSource} (${channel})`, "git", channel, false, report.cwd) : null;
       if (step) {
         step.verify = async () => {
           const after = detectKitInstall(report.cwd);
           return after.kind === "git" && isPreviousGitSource(after.source, [kit.migrateSource ?? ""]) && after.channel === channel
-            ? null : "pi-system has not moved to the current public source on the same channel";
+            ? null : "Luna has not moved to the current public source on the same channel";
         };
         steps.push(step);
-      } else notes.push("pi-system: cannot locate the kit installer to move to the current public source.");
+      } else notes.push("Luna: cannot locate the kit installer to move to the current public source.");
     } else if (kit.migrateTo && kit.root) {
       const channel = kit.channel && isChannelName(kit.channel) ? kit.channel : "latest";
-      const step = installerStep(kit.root, `move pi-system to ${kit.migrateTo} delivery (${channel})`, kit.migrateTo, channel, false, report.cwd);
+      const step = installerStep(kit.root, `move Luna to ${kit.migrateTo} delivery (${channel})`, kit.migrateTo, channel, false, report.cwd);
       if (step) steps.push(step);
-      else notes.push(`pi-system: cannot locate the kit installer to move to ${kit.migrateTo} delivery.`);
+      else notes.push(`Luna: cannot locate the kit installer to move to ${kit.migrateTo} delivery.`);
     } else if (kit.kind === "npm" && kit.available && kit.source) {
-      steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["update", kit.source], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
+      steps.push({ label: `update Luna to ${kit.target}`, command: pi, args: ["update", kit.source], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
       kitChanged = true;
     } else if (kit.kind === "git" && kit.available && kit.source) {
       if (kit.channel === "next") {
-        steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["update", kit.source], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
+        steps.push({ label: `update Luna to ${kit.target}`, command: pi, args: ["update", kit.source], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
       } else if (kit.channel === "trunk") {
         // The trunk branch is a moving ref (like next), so the command names the branch rather than a tag.
         const trunkBranch = readDistribution(kit.root).trunkBranch;
-        steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, trunkBranch), ...scopeFlag], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
+        steps.push({ label: `update Luna to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, trunkBranch), ...scopeFlag], verify: verifyKitCommit(kit.root, kit.target, git), changesKit: kitBefore(kit) });
       } else {
         const prefix = readDistribution(kit.root).tagPrefix;
-        steps.push({ label: `update pi-system to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, `${prefix}${kit.target}`), ...scopeFlag], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
+        steps.push({ label: `update Luna to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, `${prefix}${kit.target}`), ...scopeFlag], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
       }
       kitChanged = true;
     } else if (kit.kind === "local" && kit.legacyOrigin) {
-      notes.push(`pi-system: ${kit.note}`);
+      notes.push(`Luna: ${kit.note}`);
     } else if (kit.kind === "local" && kit.root && (kit.available || what === "kit")) {
       steps.push({ label: "pull the local checkout (fast-forward only)", command: "git", args: ["-C", kit.root, "pull", "--ff-only"], changesKit: kitBefore(kit) });
       kitChanged = true;
     } else if (what === "kit" && kit.note) {
-      notes.push(`pi-system: ${kit.note}`);
+      notes.push(`Luna: ${kit.note}`);
     }
   }
   if (what === "packages" || what === "all") {
@@ -1088,7 +1089,7 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
     steps.push({ label: `update pi to ${report.pi.latest}`, command: pi, args: ["update", "--self"], verify: pi_ && report.pi.latest ? verifyPiVersion(pi_, report.cwd, report.pi.latest) : undefined });
   } else if ((what === "pi" || what === "all") && report.pi.beyondTested) {
     // `pi update --self` always goes to the newest pi, so a step past the tested version cannot be capped: leave it to the user.
-    notes.push(`pi: ${report.pi.latest} is newer than ${report.pi.tested}, the pi this pi-system release is tested with, so /update leaves pi at ${report.pi.current}. Update pi-system first, or run "pi update --self" yourself.`);
+    notes.push(`pi: ${report.pi.latest} is newer than ${report.pi.tested}, the pi this Luna release is tested with, so /update leaves pi at ${report.pi.current}. Update Luna first, or run "pi update --self" yourself.`);
   }
   planStart = Date.now(); // the marker must be rewritten after planning, i.e. by a step that runs later
   return { steps, notes };
@@ -1105,7 +1106,7 @@ export function planChannelSwitch(report: UpdateReport, channel: string): { step
   if (last && !last.verify) {
     last.verify = async () => {
       const after = detectKitInstall(report.cwd);
-      return after.channel === channel ? null : `pi-system is on channel ${after.channel ?? "unknown"} after the switch, expected ${channel}`;
+      return after.channel === channel ? null : `Luna is on channel ${after.channel ?? "unknown"} after the switch, expected ${channel}`;
     };
   }
   return plan;
@@ -1127,7 +1128,7 @@ function planChannelSwitchSteps(report: UpdateReport, channel: string): { steps:
     // `pi install` rewrites the existing entry's source in place and keeps its filters.
     const name = parseNpmSource(kit.source ?? "")?.name ?? readDistribution(kit.root).npmPackage;
     const spec = channel === "latest" ? `npm:${name}` : `npm:${name}@${channel}`;
-    steps.push({ label: `switch pi-system to ${channel}`, command: piBinary(), args: ["install", spec, ...(kit.scope === "project" ? ["-l"] : [])], changesKit: kitBefore(kit, true) });
+    steps.push({ label: `switch Luna to ${channel}`, command: piBinary(), args: ["install", spec, ...(kit.scope === "project" ? ["-l"] : [])], changesKit: kitBefore(kit, true) });
     const step = reconcileStep(kit, report.cwd);
     if (step) steps.push(step);
   } else if (kit.root) {
@@ -1135,7 +1136,7 @@ function planChannelSwitchSteps(report: UpdateReport, channel: string): { steps:
     // it in place of the current copy, records the channel and applies the profile. Then the
     // profile is re-applied with the newly installed copy's own installer.
     const moving = kit.kind !== delivery || Boolean(kit.migrateSource);
-    const label = moving ? `move pi-system from ${kit.kind} to ${delivery} (${channel}), profile ${recordedProfile(report.cwd)}` : `switch pi-system to ${channel}`;
+    const label = moving ? `move Luna from ${kit.kind} to ${delivery} (${channel}), profile ${recordedProfile(report.cwd)}` : `switch Luna to ${channel}`;
     const step = installerStep(kit.root, label, delivery, channel, !moving, report.cwd);
     if (step) {
       steps.push(step);
@@ -1264,7 +1265,7 @@ export default function (pi: ExtensionAPI) {
     // Never block or break session start: the check runs in the background.
     void check(cwd)
       .then((report) => {
-        if (report.staleRoles?.length) ctx.ui.notify(`pi-system: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
+        if (report.staleRoles?.length) ctx.ui.notify(`Luna: ${report.staleRoles.length} stale role copies shadow shipped roles (see /update status).`, "warning");
         const { notices, setStatus } = sessionStartNotice(report);
         for (const notice of notices) ctx.ui.notify(notice, "info");
         if (setStatus) ctx.ui.setStatus("kit-update", "updates: /update");
@@ -1299,13 +1300,13 @@ export default function (pi: ExtensionAPI) {
         const options: Array<{ label: string; value: string }> = [];
         const pkgCount = report.packages.filter((p) => p.action === "reconcile" || p.action === "update").length;
         if (hasUpdates(report)) options.push({ label: "Update everything", value: "all" });
-        if (report.kit.migrateTo) options.push({ label: `Move pi-system to ${report.kit.migrateTo} delivery`, value: "kit" });
-        else if (report.kit.available && report.kit.kind !== "local") options.push({ label: `pi-system ${report.kit.version} → ${report.kit.target}`, value: "kit" });
-        if (report.kit.kind === "local") options.push({ label: `Pull the local pi-system checkout (git, fast-forward only)${report.kit.available ? ` → ${report.kit.target}` : ""}`, value: "kit" });
+        if (report.kit.migrateTo) options.push({ label: `Move Luna to ${report.kit.migrateTo} delivery`, value: "kit" });
+        else if (report.kit.available && report.kit.kind !== "local") options.push({ label: `Luna ${report.kit.version} → ${report.kit.target}`, value: "kit" });
+        if (report.kit.kind === "local") options.push({ label: `Pull the local Luna checkout (git, fast-forward only)${report.kit.available ? ` → ${report.kit.target}` : ""}`, value: "kit" });
         if (report.pi.available) options.push({ label: `pi ${report.pi.current} → ${report.pi.latest}`, value: "pi" });
         if (pkgCount) options.push({ label: `${pkgCount} linked package${pkgCount === 1 ? "" : "s"}`, value: "packages" });
         const other = (report.kit.kind === "npm" || report.kit.kind === "git") && report.kit.channel === "next" ? "latest" : "next";
-        options.push({ label: `Switch pi-system channel to ${other}${other === "next" ? " (tracks main)" : " (releases)"}`, value: `channel ${other}` });
+        options.push({ label: `Switch Luna channel to ${other}${other === "next" ? " (tracks main)" : " (releases)"}`, value: `channel ${other}` });
         options.push({ label: "Show details", value: "status" });
         // The bare /update screen already carries the trunk gap; the selector title is a single line.
         const trunkGap = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });

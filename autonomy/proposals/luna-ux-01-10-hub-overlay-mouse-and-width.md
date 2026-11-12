@@ -1,6 +1,8 @@
 # Proposal — forward mouse events and give the framed overlay its inner width
 
-Run `luna-ux-01`, cycle 10 (stream `ux`). Status: proposal, not implemented.
+Run `luna-ux-01`, cycle 10 (stream `ux`). Status: **implemented** in `fdfce6b`
+("fix(control-center): size framed content and forward mouse events"). Accepted as a proposal in
+cycle 10; the text below is the original finding.
 
 ## Findings
 

@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
-import { legacyCommandName, type HubModel } from "./model.ts";
+import { legacyCommandName, type HubModel, type HubRow } from "./model.ts";
 import { agentDir } from "./values.ts";
 
 /** A hidden command is offered again from this many typed characters after the slash. */
@@ -66,7 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const warned = new Set<string>();
 
 /** Write one line to stderr, once per key for the life of the process. */
-function warnOnce(key: string, message: string): void {
+export function warnOnce(key: string, message: string): void {
   if (warned.has(key)) return;
   warned.add(key);
   try {
@@ -193,9 +193,15 @@ function locationOfRow(model: HubModel, page: string, label: string): string {
   return `moved → ${["/menu", ...pageTrail(model, page), label].join(" ▸ ")}`;
 }
 
+/** The row whose legacy command is exactly `/<name>`, with no arguments. */
+function exactLegacyRow(model: HubModel, name: string): HubRow | undefined {
+  const token = `/${name}`;
+  return model.rows.find((candidate) => candidate.legacy?.trim() === token);
+}
+
 /** Where a command lives in the hub, for a hidden suggestion's description. */
 export function hubLocationFor(name: string, model: HubModel): string {
-  const row = model.rows.find((candidate) => legacyCommandName(candidate.legacy ?? "") === name);
+  const row = exactLegacyRow(model, name) ?? model.rows.find((candidate) => legacyCommandName(candidate.legacy ?? "") === name);
   return row ? locationOfRow(model, row.page, row.label) : ALL_COMMANDS_LOCATION;
 }
 
@@ -205,7 +211,11 @@ export function locationFor(model: HubModel): (name: string) => string {
   for (const row of model.rows) {
     if (row.legacy === undefined) continue;
     const name = legacyCommandName(row.legacy);
-    if (name !== "" && !locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label));
+    if (name === "") continue;
+    // An exact `/<name>` row beats an earlier row that only shares the command name (bare
+    // `/boost` vs `/boost status`), so the hint names the page the bare command runs.
+    if (row.legacy.trim() === `/${name}`) locations.set(name, locationOfRow(model, row.page, row.label));
+    else if (!locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label));
   }
   return (name) => locations.get(name) ?? ALL_COMMANDS_LOCATION;
 }

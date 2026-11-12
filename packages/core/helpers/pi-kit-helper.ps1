@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  General install/setup/config/update helper for pi-system.
+  General install/setup/config/update helper for Luna.
 .DESCRIPTION
   Run with no -Command for an interactive menu. See helpers/README.md.
 .PARAMETER Command
@@ -152,7 +152,7 @@ function Invoke-Configure {
 
 function Show-Usage {
   @"
-pi-kit-helper.ps1 - install, setup, configure, and update pi-system
+pi-kit-helper.ps1 - install, setup, configure, and update Luna
 
 Usage:
   helpers\pi-kit-helper.ps1 [-Command <name>]
@@ -170,7 +170,7 @@ With no -Command, shows an interactive menu.
 }
 
 function Show-Menu {
-  Write-Heading "pi-system helper"
+  Write-Heading "Luna helper"
   Write-Host "1) status"
   Write-Host "2) install"
   Write-Host "3) configure"

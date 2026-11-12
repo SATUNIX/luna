@@ -164,6 +164,9 @@ export const STATUS_KEY = "autonomy";
 
 const ROTATION_BOX: Record<string, string> = { minutes: "time box", usd: "dollar box" };
 
+/** The order a fleet summary lists statuses in; any other status follows alphabetically. */
+const FLEET_STATUS_ORDER = ["running", "blocked", "paused", "queued", "setup"] as const;
+
 /**
  * The footer status line for one run's `status --json` report: its generation n/N, the run's status
  * and why the last generation rotated. Undefined (the line is cleared) when the report is not a run
@@ -182,6 +185,39 @@ export function generationStatusLine(report: unknown): string | undefined {
   const box = field(last, "box");
   const why = isRecord(last) ? `; last rotation: ${typeof box === "string" && Object.hasOwn(ROTATION_BOX, box) ? ROTATION_BOX[box] : "box"}${field(last, "notebook") === true ? "" : ", no notebook"}` : "";
   return `memento ${run}: ${gen}${typeof status === "string" && /^[a-z_]{1,32}$/.test(status) ? `, ${status}` : ""}${why}`;
+}
+
+/** A worker string reaches the footer: collapse it to one visible line (no control or format characters). */
+const oneLine = (text: string): string => text.replace(/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
+
+/**
+ * The footer status line for the no-run `status --json` report: how many runs there are, how many
+ * are in each status, and the first blocked run with the question it waits on. Undefined (the line
+ * is cleared) when the fleet is empty or a run's status is unusable. Every field is narrowed.
+ */
+export function fleetStatusLine(report: unknown): string | undefined {
+  const runs = field(report, "runs");
+  if (!isArray(runs) || runs.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const r of runs) {
+    const status = field(r, "status");
+    if (typeof status !== "string" || !/^[a-z_]{1,32}$/.test(status)) return undefined;
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  const ordered = [
+    ...FLEET_STATUS_ORDER.filter((s) => counts.has(s)),
+    ...[...counts.keys()].filter((s) => !(FLEET_STATUS_ORDER as readonly string[]).includes(s)).sort(),
+  ];
+  let blocked: string | undefined;
+  for (const r of runs) {
+    if (field(r, "status") !== "blocked") continue;
+    const question = field(field(r, "blocker"), "question");
+    if (typeof question !== "string") continue;
+    const line = oneLine(question);
+    blocked = `${oneLine(String(field(r, "run")))} (${line.length > 80 ? `${line.slice(0, 80)}\u2026` : line})`;
+    break;
+  }
+  return `autonomy: ${runs.length} run${runs.length === 1 ? "" : "s"} \u2014 ${ordered.map((s) => `${counts.get(s) ?? 0} ${s}`).join(", ")}${blocked ? `; blocked: ${blocked}` : ""}`;
 }
 
 export default function autonomyRun(pi: ExtensionAPI) {
@@ -314,6 +350,11 @@ export default function autonomyRun(pi: ExtensionAPI) {
           if (words[0] && ctx.hasUI) {
             const report = await runCli(["status", "--run", words[0]], { cwd: ctx.cwd });
             ctx.ui.setStatus(STATUS_KEY, report.json?.ok === true ? generationStatusLine(report.json) : undefined);
+          }
+          // No run: a one-line fleet summary, or the line is cleared when there are no runs.
+          if (!words[0] && ctx.hasUI) {
+            const report = await runCli(["status"], { cwd: ctx.cwd });
+            ctx.ui.setStatus(STATUS_KEY, report.json?.ok === true ? fleetStatusLine(report.json) : undefined);
           }
           return;
         }

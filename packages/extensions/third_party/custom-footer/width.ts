@@ -35,6 +35,8 @@ const WIDE: Array<[number, number]> = [
 ];
 
 function codePointWidth(cp: number, ch: string): number {
+  // pi-tui gives a tab three columns (its graphemeWidth does the same).
+  if (ch === "\t") return 3;
   if (ZERO_WIDTH.test(ch)) return 0;
   if (cp >= 0xfe00 && cp <= 0xfe0f) return 0;
   if (EMOJI_PRESENTATION.test(ch)) return 2;
@@ -48,6 +50,9 @@ function clusterWidth(cluster: string): number {
     const w = codePointWidth(ch.codePointAt(0) ?? 0, ch);
     if (w > width) width = w;
   }
+  // pi-tui's visibleWidth counts emoji presentation sequences as two columns. An emoji that is
+  // only emoji with VS16 (heart, warning, check) or a keycap would otherwise measure 1.
+  if (width > 0 && (cluster.includes("\ufe0f") || cluster.includes("\u20e3"))) width = Math.max(width, 2);
   // A cluster made only of zero-width code points still occupies nothing.
   return width;
 }

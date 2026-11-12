@@ -2,12 +2,12 @@
 // PG-24: every refusal appends exactly one structured `tool_refused` record.
 //
 // The record names the guard, the cause, the matched rule identifier or path token, the tool, a
-// SHA-256 digest of the command and the session id. It never carries the command text or a secret
+// SHA-256 digest of the command when the call carries one, and the session id. It never carries the command text or a secret
 // value. The firewall and secret-guard are both exercised, because a secret-guard refusal used to
 // be a UI notice only.
 //
 // Exported for tests/firewall-outcomes-smoke.ts (the wired suite), and runnable on its own:
-//   node tests/firewall-refusal-record-smoke.ts
+//   node tests/firewall-refusal-record.ts
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -91,6 +91,7 @@ export async function checkRefusalRecords(): Promise<number> {
       assert.equal(record.guard, "secret-guard");
       assert.equal(record.cause, "secret-path");
       assert.equal(record.matched, "\\.env$");
+      assert.equal(record.commandDigest, undefined, "a write has no command to digest");
       assert.equal(record.tool, "write");
       assert.equal(record.sessionId, "S-refusal-secret");
       assert.ok(!JSON.stringify(record).includes("abcd1234"), "the refusal record never contains the secret value");
@@ -140,5 +141,5 @@ export async function checkRefusalRecords(): Promise<number> {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const count = await checkRefusalRecords();
-  console.log(`[firewall-refusal-record-smoke] all ${count} checks passed`);
+  console.log(`[firewall-refusal-record] all ${count} checks passed`);
 }

@@ -5,22 +5,23 @@ control-path change refused before review).
 
 ## What
 
-`tests/firewall-refusal-record-smoke.ts` is a standalone, self-contained smoke
-(`node tests/firewall-refusal-record-smoke.ts` passes on its own). It is wired into the gate by
-importing `checkRefusalRecords()` from `tests/firewall-outcomes-smoke.ts`, so
-`npm run smoke:firewall-outcomes` (and `npm run test:security`) runs it without touching
-`package.json`.
+`tests/firewall-refusal-record.ts` is a standalone, self-contained smoke
+(`node tests/firewall-refusal-record.ts` passes on its own). `tests/firewall-outcomes-smoke.ts`
+imports `checkRefusalRecords()` and awaits it, so the check runs inside `npm run smoke:firewall-outcomes`
+(and `npm run test:security`) without touching `package.json`. The file deliberately does not use
+the `-smoke` suffix: `tests/wiring.ts` treats every `*-smoke.ts` as a suite that a manifest script
+must name, and the manifest is a control path this cycle may not change.
 
 ## Suggested change
 
 Add one script, so the check can be selected directly and appears by name in `check-all --list`:
 
 ```json
-"smoke:firewall-refusal-record": "node tests/firewall-refusal-record-smoke.ts"
+"smoke:firewall-refusal-record": "node tests/firewall-refusal-record.ts"
 ```
 
 `check-all.ts` enumerates `smoke:*` / `test:*` scripts from the manifest, so the script is then a
-first-class check; `test:security` already reaches the same file through
+first-class check selectable by name; `test:security` already reaches the same checks through
 `firewall-outcomes-smoke.ts`, and `coveredAggregates` keeps a standalone script from
 double-counting it. No source change is needed beyond the manifest line.
 

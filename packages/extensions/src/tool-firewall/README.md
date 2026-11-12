@@ -196,7 +196,7 @@ Each tool call appends one JSONL record to `PI_KIT_FIREWALL_AUDIT_LOG`, or to
 `tool_refused` record from the shared `shared/refusal-record.ts` helper (guard, cause, matched rule
 or path token, tool, a command digest when the call carries a command, session id; never the command
 text or a secret value);
-`secret-guard` writes the same record (`tests/firewall-refusal-record-smoke.ts`). Decisions that wait on a judge or
+`secret-guard` writes the same record (`tests/firewall-refusal-record.ts`). Decisions that wait on a judge or
 human add a closing `tool_approved` or `tool_blocked` record. Before an append, a log over 4 MiB
 is renamed to `<file>.1`, replacing the previous copy (`tests/firewall-outcomes-smoke.ts`).
 

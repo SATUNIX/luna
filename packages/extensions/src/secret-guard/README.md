@@ -85,7 +85,7 @@ extensions).
 ## Refusal records
 
 A refusal is not only a UI notice: `blocked()` appends one `tool_refused` record to the firewall
-audit log through the shared `shared/refusal-record.ts` helper (`tests/firewall-refusal-record-smoke.ts`).
+audit log through the shared `shared/refusal-record.ts` helper (`tests/firewall-refusal-record.ts`).
 It names the guard, the cause (`secret-path`, `secret-read`, `protected-path`, `secret-content`,
 `secret-leak`, `secret-transfer`, or `invalid-input`), the matched rule source or path token, the
 tool, a SHA-256 digest of the command when the call carries one, and the session id. It never writes

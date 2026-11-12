@@ -790,8 +790,8 @@ const PROTECTIONS_KEY = Symbol.for("pi-kit.protections");
 
 /** What another protection may already have stored under the key (every copy of this helper stores a Set). */
 interface RegistryLike extends Iterable<unknown> {
-  add(name: string): unknown;
-  has(name: string): unknown;
+  add(name: string): this;
+  has(name: string): boolean;
   list?: unknown;
 }
 
@@ -900,7 +900,7 @@ interface RefusalDetail {
 
 function blocked(ctx: ExtensionContext, msg: string, detail: RefusalDetail): { block: true; reason: string } {
   if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-  // The log names the guard, cause, matched rule token, tool, a command digest and the session id;
+  // The log names the guard, cause, matched rule token, tool, a command digest when the call has a command, and the session id;
   // it never carries the command text or a secret value. Best effort: it cannot break the refusal.
   appendRefusal({ guard: "secret-guard", cause: detail.cause, matched: detail.matched, tool: detail.tool, commandDigest: commandDigest(detail.command), sessionId: sessionIdOf(ctx) });
   return { block: true, reason: msg };

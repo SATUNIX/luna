@@ -16,7 +16,7 @@ import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, i
 import { isRecord, number, object, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as Approvals from "../packages/extensions/src/tool-firewall/approvals.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
-import { checkRefusalRecords } from "./firewall-refusal-record-smoke.ts";
+import { checkRefusalRecords } from "./firewall-refusal-record.ts";
 
 const root = tmpWorkspace("pi-kit-fw-out-");
 const ws = path.join(root, "ws");

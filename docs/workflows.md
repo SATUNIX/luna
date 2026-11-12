@@ -459,7 +459,8 @@ passed on the installed pi). It has two views:
 - **Run list** (`/workflows panel`): one row per run, newest first, with a status dot, name, status,
   done/total agents, elapsed time and run id. ↑↓ select, Enter opens a run, Esc closes the panel.
   The selection stays on the highlighted run when a new run arrives while the list is open, and
-  falls back to the row at the same position if that run is pruned from the session.
+  falls back to the row at the same position if that run is pruned from the session. If a run
+  pruned from the session was open in the run view, the panel falls back to the list body and keys.
 - **Run view** (Enter on a run, or `/workflows panel <run-id>`):
   - a header with the workflow's name and description, then the run's status (and `paused`),
     done/total agents, how many were `cached` (when any), elapsed time and id. A third line holds

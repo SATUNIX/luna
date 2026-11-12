@@ -90,10 +90,15 @@ imports another extension to get it:
 | Unattended | `pi-kit.unattended` |
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
-The header strip, page titles and the informational rows (Doctor, Security, Help) strip colour and
-cursor escape sequences and OSC and APC strings from what they display
-(`tests/control-center-smoke.ts`). Other escape sequences, C1 controls and bidirectional overrides
-are not removed, and other rows are not sanitised.
+The header strip, page titles (including the text renderer's page titles) and the informational
+rows (Doctor, Security, Help) pass what they display through one display filter: pi-tui's terminal
+sequence strip first, then removal of every control and format code point (Unicode `Cc`, `Cf` and
+`Default_Ignorable_Code_Point`, which covers alternate-screen sequences, resets, C1 CSI and
+bidirectional overrides), then a trim, then a bound of 500 characters. The Unicode class and the
+one-line helpers live once in `packages/core/shared/visible-text.ts`; control-centre uses its
+generated copy (`packages/extensions/src/control-center/shared/visible-text.ts`), so it does not
+import another extension for the filter. Other rows are not sanitised
+(`tests/control-center-smoke.ts`).
 
 ## Renderers by mode
 

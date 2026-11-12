@@ -9,7 +9,7 @@ import { isStoredContract, type RunContract } from "./contract.ts";
 import { isPlainObject } from "./fsutil.ts";
 import { type RunState, STATE_SCHEMA_VERSION, type TransitionInfo, isRunState, transition } from "./lifecycle.ts";
 import { type RunPaths, runPaths, stateHome } from "./paths.ts";
-import { HIDDEN_CHARS } from "./notebook.ts";
+import { oneVisibleLine } from "../../core/shared/visible-text.ts";
 
 export const CONTROL_KINDS = ["pause", "unpause", "cancel", "steer", "backlog", "answer", "reconfigure"] as const;
 export type ControlKind = (typeof CONTROL_KINDS)[number];
@@ -145,9 +145,8 @@ export function listRuns(home: string = stateHome()): RunSummary[] {
     const budget = isPlainObject(limits?.budget) ? limits.budget : undefined;
     const rawBlocker = s.blocker;
     // A worker writes the question; collapse it to one visible line before it reaches a list or footer.
-    const oneLine = (text: string): string => text.replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
     const blocker = isPlainObject(rawBlocker) && typeof rawBlocker.kind === "string" && typeof rawBlocker.question === "string"
-      ? { kind: oneLine(rawBlocker.kind), question: oneLine(rawBlocker.question) }
+      ? { kind: oneVisibleLine(rawBlocker.kind), question: oneVisibleLine(rawBlocker.question) }
       : null;
     return [{ run, template: s.template ?? "self-improve", status: s.status, updatedAt: s.updatedAt ?? s.startedAt, outcome: s.outcome, spentUsd: finite(usage?.usd), budgetUsd: finite(budget?.totalUsd), step: finite(s.step), blocker, ...(s.schemaVersion === undefined ? { legacy: true as const } : {}) }];
   }).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));

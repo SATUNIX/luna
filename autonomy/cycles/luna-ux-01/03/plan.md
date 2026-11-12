@@ -1,65 +1,72 @@
 # Cycle 03 — Plan (run luna-ux-01, stream `ux`)
 
-Goal: land the carried, independently reviewed overlay-readability change (V-01) on a green branch,
-confirm the acceptance failure that rejected cycle 02 was not caused by it, and hand V-03 to cycle 04.
+Mode: **fix**. `/goal`: finish the one assigned V-09 clause (vendored provenance + the test that pins
+it), then fix the first real in-stream defect the review found (precedence 4), leaving the rest to a
+proposal. Every changed behaviour is pinned by a test that fails on the tree before the change.
 
-Mode: **fix** (re-land carried work; no new improvement).
+## Assignment
 
-## Item 1 — V-01 re-land (P1, board item 1)
+- `DE-101` (P1) is on the board's `review` column: accepted, merged at the base, and verified by the
+  steward panel. Not redone; `review.md` records where each of its six clauses lives.
+- `V-09` (P3) is narrowed by the steward's steer to exactly one clause:
+  - a dated `2026-11-12` entry in `packages/extensions/third_party/subagent/SOURCE.md` naming
+    `third_party/subagent/wf-panel.ts` and the `23725c2` change;
+  - a case in `tests/docs-smoke.ts` that isolates that entry, requires both facts, and fails on the
+    current tree.
+  The TUI width work the older V-09 text covered is merged; nothing is re-implemented, and no
+  animation, widget or renderer is touched.
 
-Justification (charter 1, 2, 3): cycle 02 shipped and tested the change but was rejected on a red
-acceptance run. The code is unchanged from the reviewed `72d1f4c`/`404b13a`; the scout confirmed the
-two copies are byte-identical, the logic restores the transcript on `done`/`dispose`, and the
-targeted smokes pass. Re-landing it is the smallest finished, verifiable unit.
+## Item 1 — V-09 clause: workflow-panel provenance is recorded and pinned
 
-Change: cherry-pick `72d1f4c` (frame + dim implementation and the two smoke additions) and
-`404b13a` (doc sentence naming the smokes) from `origin/attempts/luna-ux-01/cycle-02` onto this
-branch. No code edits: if a cherry-pick does not apply cleanly, stop and re-evaluate rather than
-rewriting reviewed code.
+Justification (charter 1, 2, 3): a vendored directory whose `SOURCE.md` stops at 2026-11-11 does not
+record the `maxLines` height budget that `23725c2` added to `wf-panel.ts`; nothing checks it, so the
+provenance can drift unnoticed. That is a missing, testable fact, not a cosmetic wording change.
 
-Checks (targeted only; never `npm test` or `npm run check:all`):
+Change: one dated entry under `- Changes:` in
+`packages/extensions/third_party/subagent/SOURCE.md` (after the 2026-11-11 entry), and one case in
+`tests/docs-smoke.ts` near the other subagent provenance checks. The case reads `SOURCE.md` through
+the existing `readRel` helper, isolates the bullet whose bolded heading carries `2026-11-12`, and
+requires that entry to name both `wf-panel.ts` and `23725c2` — not a loose whole-file regex.
+Regenerating `THIRD_PARTY_NOTICES.md` (`node packages/core/gen-notices.ts`) is part of the change,
+because it embeds these entries and `verify` fails when it is stale.
 
-- `npm run smoke:control-center` (28 checks) and `npm run smoke:workflow-panel` (14 checks).
-- `npm run test:typecheck`, `npm run test:lint`.
-- `cmp` the two `overlay-frame.ts` copies.
-- Confirm the diff touches no `packages/web-ui/`, no `package.json` `scripts`, no lockfile, no
-  `tool-firewall/`.
+Checks:
 
-Independent review: a `reviewer` subagent that did not write the change, on
-`git diff 876471a5bdbe..HEAD`, against the charter and this plan, ending PASS only if correct.
+- `node tests/docs-smoke.ts` fails before the entry with the assertion naming what is missing, and
+  prints `[docs-smoke] OK: ...` after it.
+- `npm run -s test:typecheck`, `npm run -s test:lint`, `npm run -s verify`.
 
-## Item 2 — V-03 (P1, board item 2) — not taken this cycle
+## Item 2 — `pairPanel` must budget the rows it actually emits (defect)
 
-Justification for deferral: the re-landed V-01 diff alone measures 31267 characters (lockfile and
-records excluded), past the cycle's 30000-character "stop taking new items" threshold, so starting
-V-03 would break the review budget rule. V-03's plan is fully written in
-`autonomy/cycles/luna-ux-01/02/plan.md` and validated in `02/review.md`; it starts cycle 04.
+Justification: `pairPanel` reserves 10 rows for the rest of the UI, then chooses a QR layout whose
+measured height exceeds the remaining room. On the 49-module QR the host really generates it returns
+38 lines for 36 rows at 70×46 (and similarly at 80×45 and 60×46); pi clips the top of an over-tall
+widget, so the panel's title and the start of the scan sentence disappear, and the details-only note
+understates the rows it needs. User-visible wrong behaviour, not a cosmetic gap.
 
-## Provenance of the recorded acceptance failure
+Change: in `packages/extensions/src/remote-control/index.ts`, build the beside and stacked bodies
+once and decide with `out.length + measuredBodyHeight <= room`; keep the emitted lines unchanged for
+layouts that already fit; compute `rowsNeeded` from the same measurement so the note is honest. Add
+a grid case in `tests/tui-layout-smoke.ts` section 4 (realistic 49-module QR, widths 40-160, heights
+40-60): whenever a QR is shown, `lines.length <= termRows - 10`, the note's stated minimum rows do
+show the QR and fit, and every line still fits the requested width. Update `docs/remote-control.md`
+(the ten-row reservation and the corrected QR size: 49 modules, 27 text rows, 53 columns).
 
-Cycle 02's red run named `check-all` and `check-all:smoke:web-console`. The carried diff touches no
-web-console code, and the smoke passes both standalone and from the branch worktree; two concurrent
-runs fail on the shared `packages/web-ui/.runtime/console.token`. This is recorded as a proposal in
-`autonomy/proposals/luna-ux-01-03-web-console-smoke-shared-runtime.md` for the owner of that test; it
-is outside the UX stream.
+Checks: `smoke:tui-layout`, `smoke:remote-control`, `test:typecheck`, `test:lint`, `verify`.
 
-## Checks that prove the cycle
+## Item 3 — Proposal, not this cycle
 
-- Targeted smokes for every changed file (Item 1).
-- `npm run test:typecheck`, `npm run test:lint`.
-- Independent `reviewer` on `git diff 876471a5bdbe..HEAD` against `autonomy/CHARTER.md`.
-- Never `npm test` or `npm run check:all`; the host gate runs the full suite on a clean checkout.
+`wf-panel.ts` `footer()` can describe a run view while `render()` falls back to the list after the
+open run is pruned from the registry. Written up as
+`autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`; it is outside the assigned
+clause and needs its own failing test against the registry's prune path.
 
-## Workflow plan (item 1)
+## Diff budget
 
-`workflow_run {steps}`: `implementer` cherry-picks the two commits, runs the four targeted checks and
-commits/pushes; then a gated `reviewer` (did not write the change) reviews against this plan and the
-charter, `max_loops` 1. Fallback if refused: `subagent` implementer then reviewer, plus a
-`Workflow: refused <reason>` line in `report.md`.
+Stop taking new items once the non-record diff passes 30,000 characters. The planned diff is under
+half of that.
 
-## Out of scope (recorded, not taken)
+## Review
 
-- Idle-cat blink intent (`autonomy/proposals/luna-ux-01-01-idle-cat-blink.md`) and human-console
-  multi-card focus theft (`luna-ux-01-01-human-console-multi-card-focus-theft.md`).
-- The ≤3-character hidden-command reveal gap; V-03 removes it.
-- Any change under `tool-firewall/` or to `package.json` `scripts`.
+Each change goes through a `workflow_run` step pair: `implementer`, then a gated `reviewer` that did
+not write it (`max_loops` 1), requiring a final line of exactly `VERDICT: PASS`.

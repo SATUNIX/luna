@@ -130,7 +130,7 @@ const GAP = 3;
  * Word-wrap `text` to `width`, indenting continuation lines by `hang` (dropped when it would leave too little
  * room); a word longer than the room is split. No line is ever longer than `width`.
  */
-function wrap(text: string, width: number, hang = 0): string[] {
+export function wrap(text: string, width: number, hang = 0): string[] {
   width = Math.max(1, width);
   const pad = " ".repeat(hang <= width / 2 ? hang : 0);
   const lines: string[] = [];
@@ -148,9 +148,15 @@ function wrap(text: string, width: number, hang = 0): string[] {
       const room = Math.max(1, width - visibleWidth(lead));
       // Cut on a cell boundary, never inside a wide character or an emoji cluster.
       const chunk = sliceByColumn(rest, 0, room, true);
-      // A single wide grapheme with less than its own width of room cannot be cut; drop it so
-      // the line still fits rather than falling through with an over-wide remainder.
-      if (!chunk) { rest = ""; break; }
+      // A single wide grapheme with less than its own width of room cannot be cut. Drop the
+      // continuation indent and retry on the next line before giving up a grapheme wider than
+      // the whole line, so the rest of the word is not lost.
+      if (!chunk) {
+        if (lead) { lead = ""; continue; }
+        const first = Array.from(rest)[0] ?? "";
+        rest = rest.slice(first.length);
+        continue;
+      }
       lines.push(lead + chunk);
       rest = rest.slice(chunk.length);
       lead = pad;
@@ -184,18 +190,25 @@ export function pairPanel(offer: Json, width: number, termRows: number, style?: 
   ];
   const approve = (w: number) => wrap("You approve the phone here after it asks; the code alone links nothing.", w);
   const out: string[] = wrap(title, inner).map((line) => (style ? style.title(line) : line));
+  // Build each candidate body once and measure what it actually emits: the title is already in
+  // `out`, and the scan and approve sentences wrap to more than one line on narrower terminals.
+  const beside = inner >= qrWidth + GAP + DETAILS_MIN;
+  const besideW = Math.max(1, inner - qrWidth - GAP);
+  const besideBody = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", besideW), "", ...fields(besideW), "", ...approve(besideW)];
+  const besideHeight = Math.max(qr.length, besideBody.length);
+  const stackedBody = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", inner), "", ...qr, "", ...fields(inner), "", ...approve(inner)];
 
-  if (qr.length && inner >= qrWidth + GAP + DETAILS_MIN && qr.length + 1 <= room) {
-    const w = inner - qrWidth - GAP;
-    const details = [...wrap("Scan this with the pi remote app, or add the host by hand in the app:", w), "", ...fields(w), "", ...approve(w)];
+  if (qr.length && beside && out.length + besideHeight <= room) {
     const blank = " ".repeat(qrWidth);
-    for (let i = 0; i < Math.max(qr.length, details.length); i++) out.push(`${qr[i] ?? blank}${" ".repeat(GAP)}${details[i] ?? ""}`);
-  } else if (qr.length && inner >= qrWidth && qr.length + fields(inner).length + approve(inner).length + 4 <= room) {
-    out.push(...wrap("Scan this with the pi remote app, or add the host by hand in the app:", inner), "", ...qr, "", ...fields(inner), "", ...approve(inner));
+    for (let i = 0; i < besideHeight; i++) out.push(`${qr[i] ?? blank}${" ".repeat(GAP)}${besideBody[i] ?? ""}`);
+  } else if (qr.length && inner >= qrWidth && out.length + stackedBody.length <= room) {
+    out.push(...stackedBody);
   } else {
     // The rows it would take at this width: beside the details when they fit, otherwise above them.
-    const beside = inner >= qrWidth + GAP + DETAILS_MIN;
-    const rowsNeeded = RESERVED_ROWS + qr.length + (beside ? 1 : fields(Math.max(inner, qrWidth)).length + approve(Math.max(inner, qrWidth)).length + 4);
+    const bodyHeight = !qr.length
+      ? beside ? 1 : fields(Math.max(inner, qrWidth)).length + approve(Math.max(inner, qrWidth)).length + 4
+      : beside ? besideHeight : stackedBody.length;
+    const rowsNeeded = RESERVED_ROWS + out.length + bodyHeight;
     const note = `The QR code needs a terminal of at least ${qrWidth + 2} columns by ${rowsNeeded} rows (this one is ${width} by ${termRows || "?"}); enlarge it, or add the host by hand in the pi remote app:`;
     out.push(...wrap(note, inner).map((line) => (style ? style.dim(line) : line)), "", ...fields(inner), "", ...approve(inner));
   }

@@ -546,7 +546,23 @@ async function runStep(ctx: StepContext): Promise<void> {
       log(`integration fetch failed; retaining the local head: ${errorMessage(e)}`);
       sync = { state: "ahead", head: local };
     }
-    if (sync.state === "diverged") { engine.go("failed", { reason: "integration_diverged", detail: `${cfg.integrationBranch} at the destination (${sync.remote.slice(0, 12)}) and here (${sync.head.slice(0, 12)}) have diverged; reconcile them, then start a new run` }); return; }
+    if (sync.state === "diverged") {
+      const rec = gm.reconcileIntegration(g, cfg, sync);
+      if (rec.state === "conflict") {
+        await engine.enterBlocked({ kind: "external", id: "integration-diverged", method: "integration", question: `${cfg.integrationBranch} at the destination (${rec.remote.slice(0, 12)}) and here (${rec.head.slice(0, 12)}) have diverged and the automatic rebase conflicts; reconcile them by hand, then answer to resume, or stop the run`, options: ["Reconciled by hand; resume", "Stop the run"] });
+        return;
+      }
+      log(`${cfg.integrationBranch} diverged: rebased ${rec.commits} local commit(s) ${rec.from.slice(0, 12)} -> ${rec.head.slice(0, 12)} onto the destination ${rec.remote.slice(0, 12)}`);
+      ctx.save((s) => {
+        const record = siState(s);
+        const rewritten = new Map(rec.mapping.map(({ from, to }) => [from, to]));
+        const through = (sha: string): string => rewritten.get(sha) ?? sha;
+        record.history = record.history.map((entry) => ({ ...entry, start: through(entry.start), head: through(entry.head) }));
+        record.lastGoodSha = through(record.lastGoodSha);
+        if (record.current) record.current.startSha = through(record.current.startSha);
+        record.reconciliations = [...(record.reconciliations ?? []), { at: new Date(rt.now()).toISOString(), from: rec.from, remote: rec.remote, head: rec.head, commits: rec.commits }];
+      });
+    }
     if (sync.state === "absent") throw new Error(`${cfg.integrationBranch} exists neither here nor at the destination`);
     if (sync.state === "adopted") log(`${cfg.integrationBranch} moved at the destination; continuing from ${sync.head.slice(0, 12)}`);
     upstream = gm.syncUpstream(g, cfg);

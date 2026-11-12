@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, rotateFileSafe, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
+import { appendRefusal, commandDigest } from "./shared/refusal-record.ts";
 import { cardTimeoutMs, showWhenFree } from "./shared/input-owner.ts";
 import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
@@ -934,6 +935,11 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // in the audit record.
     const blocked = (reason: string, decider: string, outcome: Outcome, extra: Record<string, unknown> = {}) => {
       finish("deny", decider, { outcome, reason, ...extra });
+      // One machine-readable record per refusal, alongside the existing tool_blocked line. The
+      // matched field names the finding or denial code that decided it, never the command text.
+      const deciding = a.findings.find((f) => f.tier !== "low");
+      const matched = [extra.matched, extra.unattendedDenial, extra.why, deciding?.code, decider].find((v): v is string => typeof v === "string" && v.length > 0) ?? outcome;
+      appendRefusal({ guard: "tool-firewall", cause: outcome, matched, tool: toolName, commandDigest: commandDigest(command), sessionId: sessionIdOf(ctx) });
       return { block: true as const, reason };
     };
 

@@ -35,7 +35,8 @@ import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/eng
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
 import { type LimitsSnapshot, type RunAuthorisation, type RunState, isTerminal, resumeAction, transition } from "./lib/lifecycle.ts";
-import { HIDDEN_CHARS, readNotebook, redactSecrets, renderNotebook } from "./lib/notebook.ts";
+import { readNotebook, redactSecrets, renderNotebook } from "./lib/notebook.ts";
+import { oneVisibleLine, stripHiddenChars } from "../core/shared/visible-text.ts";
 import { stateHome } from "./lib/paths.ts";
 import { planReconfigure } from "./lib/reconfigure.ts";
 import { createRun } from "./lib/rundir.ts";
@@ -246,7 +247,7 @@ function generationsReport(store: RunStore, state: RunState, contract: RunContra
   const last: unknown = Array.isArray(history) ? history.at(-1) : undefined;
   const current = isRecord(gs) ? gs.current : undefined;
   // state.json fields can quote worker text: every control and format character is dropped (newline and tab become a space) before redaction.
-  const text = (v: unknown): string => redactSecrets((typeof v === "string" ? v : String(v)).replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : ""))).text;
+  const text = (v: unknown): string => redactSecrets(stripHiddenChars(typeof v === "string" ? v : String(v)).replace(/[\n\t]/g, " ")).text;
   const problems = isRecord(last) ? last.problems : undefined;
   // The Memento decision (engine.ts mementoDecision), once the first step made it: the contract's maxGenerations capped to the allowance.
   const m: unknown = state.memento;
@@ -701,7 +702,7 @@ const commands: Record<string, Command> = {
     if (opts.value !== undefined && opts.value.trim().length > 2000) throw new CliError("usage", "--value must be at most 2000 characters");
     if (opts.file) {
       let inbox;
-      try { inbox = readInboxFile(path.resolve(opts.file)); }
+      try { inbox = readInboxFile(path.resolve(opts.file), true); }
       catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
       const cards = inbox;
       await withBoardLock(store, deps, () => { writeInbox(store.p.control, cards); });
@@ -715,11 +716,14 @@ const commands: Record<string, Command> = {
     try { inbox = readInbox(store.p.control); board = readBoard(store.p.control); }
     catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
     const answer = opts.value?.trim() ?? "";
+    // Card text is repository-controlled: collapse it to one visible line before the terminal sees it.
     let answered = false;
     if (opts.answer) {
       const card = inbox.cards.find((c) => c.id === opts.answer);
       if (!card) throw new CliError("refused", `unknown inbox card ${opts.answer}`);
-      if (!card.outcome) { card.answer = answer; answered = true; }
+      if (card.outcome) throw new CliError("refused", `inbox card ${card.id} already has an outcome (${card.outcome.via} at ${oneVisibleLine(card.outcome.at)})`);
+      card.answer = answer;
+      answered = true;
     }
     const settled = settleInbox(inbox, deps.now());
     const applied = applyOutcomes(board, settled.inbox);
@@ -727,8 +731,8 @@ const commands: Record<string, Command> = {
     if (applied.unblocked.length > 0) writeJsonAtomic(path.join(store.p.control, "board.json"), applied.board, { mode: 0o600 });
     const open = settled.inbox.cards.some((c) => !c.outcome);
     const lines = settled.inbox.cards.map((c) => {
-      const head = c.outcome ? `${c.id}  ${c.outcome.via === "answer" ? "answered" : "default used"} ${c.outcome.at}` : `${c.id}  open`;
-      return [head, `    question: ${c.question}`, `    default: ${c.default}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${c.outcome.text}`] : [])].join("\n");
+      const head = c.outcome ? `${c.id}  ${c.outcome.via === "answer" ? "answered" : "default used"} ${oneVisibleLine(c.outcome.at)}` : `${c.id}  open`;
+      return [head, `    question: ${oneVisibleLine(c.question)}`, `    default: ${oneVisibleLine(c.default)}`, `    deadline: ${c.deadline}`, ...(c.board ? [`    board: ${c.board}`] : []), ...(c.outcome ? [`    recorded: ${oneVisibleLine(c.outcome.text)}`] : [])].join("\n");
     });
     const text = `${lines.join("\n")}\n${open ? `answer with: pi-autonomy inbox --run ${state.run} --answer <id> --value "..."` : "no cards are waiting"}`;
     return { data: { run: state.run, cards: settled.inbox.cards, decided: settled.decided.map((c) => c.id), unblocked: applied.unblocked }, text };

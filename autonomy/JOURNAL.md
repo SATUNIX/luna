@@ -11,17 +11,17 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-improve-01/08 | Board: none | successful | Parsed a bare git:// source as git rather than a git:-prefixed path
 - luna-improve-01/09 | Board: none | successful | Rejected bad uninstall arguments and removed the dead getExternalByProfile export
 - luna-ops-01/02 | Board: A-91, A-01 | successful | Fixed the fail-closed harness check and added the team journal | decisions: autonomy/decisions/luna-ops-01-02-team-journal.md
-- luna-core-01/01 | Board: none | successful | Refused a value-less or unknown --category in the eval harness and declared the context-sieve message-budget env var
+- luna-core-01/01 | Board: PG-67, PG-55 | successful | Reconciled a diverged integration branch by rebasing local cycle commits onto the destination (first-parent mapping, tags never moved, conflict parks blocked) instead of failing the run with integration_diverged; PG-55 re-verified unchanged
 - luna-core-01/02 | Board: V-11, V-101 | successful | Framed first-prompt memory recall as background history and finished the Luna rename with a brand guard
 - luna-core-01/05 | Board: PG-10, PG-27 | successful | Added an opt-in trunk channel for the integration branch and repaired the luna-core-01/02 journal gate
 - luna-core-01/06 | Board: PG-10, PG-27 | successful | Added a dated offline eval baseline with a 7-day freshness check and consolidated the trunk channel docs and npm guard
 - luna-ops-01/03 | Board: A-01, A-91 | successful | Added the missing luna-core-01/01 entry that reddened smoke:docs and made the journal check flag an entry with no report | decisions: autonomy/decisions/luna-ops-01-03-team-journal.md
-- luna-ux-01/01 | Board: V-05 | successful | Added the Luna launch screen with a self-stopping reveal, reduced motion, narrow and ASCII fallbacks, tests and docs
+- luna-ux-01/01 | Board: DE-98, DE-101 | successful | Verified DE-98 already satisfied at base, then landed the control-centre whole-class display filter and the owner-inbox hardening (strict deadlines, refused settled/uploaded decisions, sanitised listing) plus the remote wrap remainder, with failing-at-base tests, docs, CHANGELOG entries and an independent reviewer PASS
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
 - luna-fleet-01/05 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs into workflow_status and /workflows and repaired the red gate checks
 - luna-fleet-01/06 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs onto a clean base, repaired red smoke:docs gate, and recorded the cycle
-- luna-ux-01/03 | Board: V-01, V-03 | partial | Re-landed the reviewed overlay frame and transcript dim improvements and carried the /settings-into-/menu V-03 work to cycle 04
-- luna-ux-01/06 | Board: V-03 | successful | Folded /settings into /menu as the primary command with kit/helpers aliases and a Settings page, and repaired the smoke:docs journal gate for luna-ux-01/03
+- luna-ux-01/03 | Board: V-09, DE-101 | successful | Cycle 03: vendored workflow-panel provenance recorded; pairing panel row budget fixed
+- luna-ux-01/06 | Board: V-09, V-93 | successful | Cycle 06: vendored provenance pinned, workflow panel prune fallback fixed
 - luna-ux-01/07 | Board: PG-59, V-05 | successful | Merged upstream trunk preserving both sides, made the trunk-gap notice own the session-start kit notice so pi-compat lanes pass, and re-verified the already-shipped launch screen
 - luna-ux-01/08 | Board: V-73, PG-12 | successful | Re-landed the reviewed V-73 alias wording and the alias-target-missing command-contract rule, fixed the withOverlayFrame dim leak when build throws, and re-verified the already-merged PG-12 trunk-ahead notice
 - luna-ux-01/09 | Board: V-73 | successful | Made control-centre Back follow the visited-page stack (Settings to Display to Back returns to Settings) and re-verified the already-merged V-73 alias wording and the green luna-ux-01/03 journal gate
@@ -84,3 +84,7 @@ journal: every report has a journal entry
 - luna-ux-01/32 | Board: DE-98 | successful | Carried over the seven missing Unreleased CHANGELOG entries for the merged ux fixes, corrected the /remote entry to name the smoke that actually pins the CJK fix, and restored the pairing QR fixture to 25 rows, with six targeted smokes, typecheck, lint, verify and an independent reviewer PASS
 - luna-ux-01/33 | Board: DE-98 | successful | Re-verified DE-98 at HEAD, then fixed the carry-over V-02 focus theft: the resume question and ask_human now wait out the broker's open run cards within their own timeout, re-check and fail closed, while the two-card broker contract stays pinned; cases 2g/24e fail on HEAD, docs and CHANGELOG updated, independent reviewer PASS
 - luna-ux-01/34 | Board: none | successful | Fixed the carry-over ui.json clobber: /footer and /tips now merge their owned fields over the parsed shared file instead of overwriting it, so hubKey, commandMenu, pinned/hidden commands, launchScreen and reducedMotion survive; a seeded-file case fails on the base source and passes at HEAD, docs and CHANGELOG updated, read-only independent reviewer PASS
+- luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)
+- luna-ux-01/04 | Board: V-93, V-09 | successful | Cycle 04: hidden-character filter consolidated (V-93)
+- luna-guard-01/03 | Board: PG-24 | successful | Repaired the red manifest gate (`node:crypto` for secret-guard) and pinned the secret-content refusal record as the pattern label only, closing cycle-02 PG-24 review gaps; targeted smokes, typecheck, lint, verify and independent reviewer PASS
+- luna-fleet-01/01 | Board: O-01 | partial | Cycle 01 report — luna-fleet-01 (stream `fleet`)

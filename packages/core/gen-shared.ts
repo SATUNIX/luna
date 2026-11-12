@@ -11,8 +11,9 @@
  *   node packages/core/gen-shared.ts --check   # exit 1 when a copy is missing or differs
  *
  * `npm run verify` runs the check (section "shared helper copies"), and
- * tests/redaction-corpus-smoke.ts, tests/workspace-symlink-smoke.ts, tests/workflow-resume-smoke.ts and
- * tests/verify-failclosed-smoke.ts exercise the copies.
+ * tests/redaction-corpus-smoke.ts, tests/workspace-symlink-smoke.ts, tests/workflow-resume-smoke.ts,
+ * tests/verify-failclosed-smoke.ts, tests/autonomy-notebook-smoke.ts and tests/control-center-smoke.ts
+ * exercise the copies.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -38,6 +39,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/progress-guard/shared/safe-fs.ts",
     "packages/extensions/src/recovery-orchestrator/shared/safe-fs.ts",
     "packages/extensions/src/save/shared/safe-fs.ts",
+    "packages/extensions/src/secret-guard/shared/safe-fs.ts",
     "packages/extensions/src/self-improvement/shared/safe-fs.ts",
     "packages/extensions/src/skill-forge/shared/safe-fs.ts",
     "packages/extensions/src/task-graph/shared/safe-fs.ts",
@@ -49,6 +51,10 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/third_party/plan-mode/shared/safe-fs.ts",
     "packages/extensions/third_party/subagent/shared/safe-fs.ts",
     "packages/extensions/third_party/todo/shared/safe-fs.ts",
+  ],
+  "refusal-record.ts": [
+    "packages/extensions/src/secret-guard/shared/refusal-record.ts",
+    "packages/extensions/src/tool-firewall/shared/refusal-record.ts",
   ],
   "redact.ts": [
     "packages/extensions/src/memory-mem0/shared/redact.ts",
@@ -95,6 +101,11 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   "safe-regex.ts": [
     "packages/extensions/src/skill-router/shared/safe-regex.ts",
     "packages/extensions/third_party/subagent/shared/safe-regex.ts",
+  ],
+  "visible-text.ts": [
+    "packages/extensions/src/control-center/shared/visible-text.ts",
+    "packages/extensions/src/autonomy-run/shared/visible-text.ts",
+    "packages/extensions/third_party/subagent/shared/visible-text.ts",
   ],
 };
 

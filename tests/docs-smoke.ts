@@ -470,6 +470,47 @@ for (const item of removedNames) {
 assert.ok(registeredTools.has("workflow_status") && registeredTools.has("workflow_control"), "the subagent extension registers workflow_status and workflow_control, the replacements this guard names");
 assert.ok(registeredCommands.has("workflow") && registeredCommands.has("workflows"), "the subagent extension registers /workflows and its /workflow alias");
 
+// The vendored extension's SOURCE.md is its only provenance log: a squash that lands without a dated
+// entry leaves the file's history incomplete and nothing pins it. The 2026-11-12 height budget in
+// `wf-panel.ts` (commit 23725c2) must therefore be named by its own entry. The entry is isolated
+// first, rather than matching the whole file, because all three facts have to travel together in one
+// dated bullet instead of being scattered over unrelated entries.
+const subagentSourceMd = readRel("packages/extensions/third_party/subagent/SOURCE.md");
+const changeEntryStarts = [...subagentSourceMd.matchAll(/^ {2}- \*\*/gm)].map((m) => m.index ?? 0);
+const changeEntries = changeEntryStarts.map((start, i) => subagentSourceMd.slice(start, changeEntryStarts[i + 1] ?? subagentSourceMd.length));
+const heightEntry = changeEntries.find((entry) => entry.includes("wf-panel.ts") && entry.includes("23725c2")) ?? "";
+assert.ok(
+  heightEntry.length > 0,
+  "SOURCE.md `- Changes:` needs one entry naming both `wf-panel.ts` and commit 23725c2: the 2026-11-12 height budget",
+);
+assert.match(
+  heightEntry,
+  /^ {2}- \*\*[^\n]*\(2026-11-12\):\*\*/,
+  "the SOURCE.md entry naming `wf-panel.ts` and 23725c2 must be a bolded label dated 2026-11-12",
+);
+
+// Every vendored extension's SOURCE.md is its provenance log, so each must carry at least one
+// bolded, dated change entry; a squash that lands without one leaves the file's history incomplete.
+const thirdPartyDir = path.join(ROOT, "packages", "extensions", "third_party");
+const sourceFiles = fs
+  .readdirSync(thirdPartyDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => `packages/extensions/third_party/${entry.name}/SOURCE.md`);
+const missingSourceFiles = sourceFiles.filter((rel) => !fs.existsSync(path.join(ROOT, rel)));
+assert.deepEqual(
+  missingSourceFiles,
+  [],
+  `every vendored extension directory needs a SOURCE.md provenance log; missing: ${missingSourceFiles.join(", ")}`,
+);
+const undatedSourceFiles = sourceFiles.filter(
+  (rel) => !/^ *- \*\*[^\n]*\(\d{4}-\d{2}-\d{2}\):\*\*/m.test(readRel(rel)),
+);
+assert.deepEqual(
+  undatedSourceFiles,
+  [],
+  `every vendored SOURCE.md needs a bolded dated change entry (for example \`  - **Vendored upstream (2026-06-17):** ...\`); undated: ${undatedSourceFiles.join(", ")}`,
+);
+
 const shippedPages: string[] = [];
 const addPage = (rel: string): void => {
   if (!shippedPages.includes(rel)) shippedPages.push(rel);

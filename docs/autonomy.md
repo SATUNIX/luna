@@ -128,8 +128,13 @@ The `autonomy-run` extension, in the `autonomous` profile, adds `/autonomy`:
 
 ```
 /autonomy templates | init <template> [flags] | plan <run.json> | start <run.json>
-/autonomy status [run] | pause | cancel | resume | steer | promote | export | reconfigure
+/autonomy status [run] | pause | cancel | resume | steer | promote | export | inbox | reconfigure
 ```
+
+`/autonomy inbox` lists a run's owner cards (or the fleet's runs waiting to be published) and
+`--answer <card> --value <text>` answers one; listing a run's cards settles its past-due ones, so
+it is not a pure read (settlement: `tests/autonomy-inbox-smoke.ts`; the forwarding:
+`tests/autonomy-command-smoke.ts`).
 
 It is a **command, not a tool**: the model has no tool that starts, authorises, steers, promotes or
 reconfigures a run. (A model with a shell tool can run the CLI itself; see "Limits" below for what
@@ -741,8 +746,10 @@ board item (`blocked` becomes `ready`) so the next cycle sees it again; an unans
 deadline has not passed leaves its item `blocked`. A card that already has an outcome is never
 rewritten, so repeated reads are idempotent, and the inbox command records only: it never writes
 run state or queues a control message. `--file` only saves the cards; the next read settles them.
-Use an ISO-8601 deadline with `Z` or an explicit offset: validation accepts any string `Date.parse`
-understands, and an offset-less value is parsed in the host's local time. A settled card keeps its
+Use a strict ISO-8601 deadline with `Z` or an explicit numeric offset: `YYYY-MM-DDTHH:MM:SS` with
+an optional fractional second, then `Z` or a numeric offset such as `+HH:MM` or `-HH:MM`.
+A bare date, an offset-less timestamp, or any other string `Date.parse` happens to accept is refused,
+because an offset-less value would be read in the host's local time. A settled card keeps its
 linked board item `ready` on every later inbox read; to block that item again, drop the settled card
 with `inbox --file` and then set the item back to `blocked` with `board --file`.
 
@@ -750,7 +757,7 @@ Card fields are `id`, `question`, `default`, `deadline`, optional `board`, optio
 optional `outcome`; outcome keys are `at`, `via` (`answer` or `deadline`) and `text`. Unknown keys,
 duplicate card ids, ids outside `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, board ids outside
 `^[A-Z]+-[0-9]{1,4}$`, unparseable deadlines, more than 50 cards, empty text, questions over 500
-characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written); input files are capped
+characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written). An uploaded file may not carry `answer` or `outcome`: only the owner's `--answer`, a passed deadline, or the existing host file records a decision. Answering a card that already has an outcome is refused with the card id instead of being silently ignored. The text listing collapses card text to one visible line, removing control, format and bidirectional characters. Input files are capped
 at 2 MiB. The file is written at mode 0600. `tests/autonomy-inbox-smoke.ts` pins the answered,
 past-due and still-open cases, idempotence, refusal of bad input, the record-only rule, and the
 self-improve-only rule.
@@ -904,7 +911,9 @@ changed, minutes, dollars) when it appends a generation; they are stored beside 
 and numbers that are not finite and non-negative are refused.
 
 **Cleaning and the size cap.** Each string has every Unicode control and format character
-(general categories Cc and Cf) and every default-ignorable code point other than tab and newline removed before the tag check: C0, DEL
+(general categories Cc and Cf) and every default-ignorable code point other than tab and newline
+removed before the tag check by `stripHiddenChars` in `packages/core/shared/visible-text.ts`, which
+the notebook imports (extensions use generated copies of the same file through `npm run gen:shared`): C0, DEL
 and C1 (which includes the single-byte CSI), the bidi embedding, override, isolate and mark
 characters, the zero-width and invisible format characters (U+200B, U+2060, U+FEFF, the soft hyphen
 U+00AD, U+180E and the tag characters U+E0000-U+E007F among them), and the default-ignorable
@@ -1010,8 +1019,20 @@ C-34 in [Security controls](security-controls.md).
 - **An allowlisted egress host is an opaque channel.** The egress proxy checks the destination of a
   `CONNECT` tunnel, never what passes through it, so anything the worker can read can be sent to any
   host in `permissions.network.egress`.
-- **One run per integration branch at a time.** Two runs merging into the same branch would diverge;
-  a diverged branch stops the run as `integration_diverged`.
+- **One run per integration branch at a time.** Two runs merging into the same branch diverge.
+  When the published integration branch has moved under a run, the next cycle reconciles it
+  mechanically: the sync's fetched destination is the base, and the run's local cycle commits are
+  rebased with `git rebase --rebase-merges --onto <destination> <merge-base> <local>` in a
+  temporary host worktree. The recorded cycle heads and start shas are rewritten through the
+  first-parent mapping of the old commits to their rebased equivalents, and the same cycle continues
+  from the reconciled head. Tags are never moved: each run tag keeps naming the commit that was
+  originally published, even when its commit is rewritten locally. Publication stays fast-forward
+  only, so the reconciled head is a descendant of the destination and the untouched tags still
+  push. If the rebase conflicts, the run parks `blocked` on an `integration-diverged` question (with
+  the branch and both short shas) instead of failing; reconcile by hand, then answer to resume or
+  stop the run. Reconciliation makes no network call beyond the sync's fetch. Pinned by
+  `tests/autonomy-smoke.ts` (`git mirror: reconcile a diverged integration branch...`) and
+  `tests/autonomy-selfimprove-smoke.ts` (`PG-67: ...` reconciliation cases).
 - **Dependencies are prebaked** from the base ref's lockfile. A change to dependencies fails the
   offline install; propose dependency changes rather than making them in a run.
 - **Model specifications.** pi's catalogue may not know a new model id; the supervisor fetches limits

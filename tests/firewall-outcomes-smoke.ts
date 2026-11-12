@@ -16,6 +16,7 @@ import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, i
 import { isRecord, number, object, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as Approvals from "../packages/extensions/src/tool-firewall/approvals.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
+import { checkRefusalRecords } from "./firewall-refusal-record.ts";
 
 const root = tmpWorkspace("pi-kit-fw-out-");
 const ws = path.join(root, "ws");
@@ -493,6 +494,9 @@ try {
     assert.ok(fs.statSync(file).size < 64 * 1024, "the live audit log restarts small");
     assert.ok(audit().some((l) => l.outcome === "hard_deny"), "and holds the new record");
     ok("the audit log rotates to .1 past 4 MiB");
+
+    // 9. PG-24: every refusal from either guard appends one structured tool_refused record.
+    checks += await checkRefusalRecords();
   }
 
   console.log(`[firewall-outcomes-smoke] all ${checks} checks passed`);

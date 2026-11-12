@@ -1,39 +1,44 @@
 # Run `luna-ux-01` — handoff
 
-State after cycle 34 (branch `pi/luna-ux-01`, cycle base `93481e6b8904`, code head `be41afb` plus
-the records commit). Report: `autonomy/cycles/luna-ux-01/34/report.md`, evidence in `verify.md`.
+State after cycle 06 (branch `pi/luna-ux-01`, cycle base `8416c502acc4`). Report:
+`autonomy/cycles/luna-ux-01/06/report.md`, evidence in `verify.md`.
 
-## What cycle 34 landed
+## Assignment state
 
-- `be41afb` fixes the carry-over `ui.json` settings clobber: `saveSettings()` in
-  `packages/extensions/third_party/custom-footer/index.ts` now parses the shared file (absent or
-  non-object → `{}`), merges the status bar's owned fields (`footer`, `mode`, `tips`, `todos`,
-  `cat`, `ascii` only when on) over it, and writes the merged object. `/footer light`,
-  `/footer ascii off` and `/tips off` no longer drop `hubKey`, `commandMenu`, `pinnedCommands`,
-  `hiddenCommands`, `launchScreen` or `reducedMotion`; a read or write failure returns the message
-  and never throws.
-- New case `uiSettingsMergePreservesForeignKeys` in `tests/status-bar-smoke.ts` seeds all six
-  foreign keys and runs `/footer light`, `/footer ascii on`, `/footer ascii off` and `/tips off`.
-  It fails 1/27 with only the base source restored and passes 27/27 at HEAD. `smoke:docs`,
-  `test:typecheck` and `test:lint` pass; the non-record diff is 6303 characters.
-- `docs/status-bar-and-costs.md` and `CHANGELOG.md` (Unreleased/Fixed) describe the merge.
-- Proposal `luna-ux-01-33-ui-json-settings-clobber.md` is implemented and marked closed.
-- Independent verdict came from a deliberately read-only `reviewer` subagent (`VERDICT: PASS`)
-  after two earlier reviewer runs were killed/hung mid-turn; the second left the base source staged
-  and the parent restored it from `HEAD` before the verdict.
+- **V-93** is done (already merged at `36565d9`/`5f59714`): `packages/core/shared/visible-text.ts`
+  holds the one hidden-character filter and `oneVisibleLine`, with generated copies for
+  control-center, autonomy-run and subagent; hand-written copies 4 -> 1. Cycle 06 verified it
+  (`gen-shared --check`, `smoke:control-center`, `smoke:autonomy-inbox`, `smoke:tui-layout`,
+  `smoke:redaction-corpus`) without re-opening it.
+- **V-09** is done. Cycle 03 had pinned only the subagent `SOURCE.md`; cycle 06 added one truthful
+  bolded `Vendored upstream (YYYY-MM-DD):` entry to each of the other eleven vendored
+  `SOURCE.md` files, made the subagent pin select the entry naming `wf-panel.ts`/`23725c2` and
+  require its bolded `(2026-11-12)` label, and added a generic docs-smoke scan over every
+  `third_party/*/SOURCE.md` (commit `17e0d4ab`). Do not re-open the TUI width work.
+- The cycle-03 WorkflowPanel/prune proposal is implemented (commit `88bc809d`): one `inRun()` drives
+  the body, footer and key dispatch, `view`/`confirm` are kept, and the new prune case in
+  `tests/workflow-panel-smoke.ts` pins the first `down` moving the cursor.
 
 ## Next cycle should know
 
 - Never run `npm test` / `npm run check:all`; the host gate owns the full suite.
 - Any new `autonomy/cycles/<run>/<NN>/report.md` needs its `autonomy/JOURNAL.md` line in the same
-  push or `smoke:docs` fails.
-- A reviewer subagent that runs the base-vs-head check may leave the reverted source staged. Always
-  check `git status` and restore the file before recording a verdict; `cmp` against a saved
-  snapshot plus a green `smoke:status-bar` is the safe confirmation.
-- Gated `workflow_run` plans here have reported `passed` even when the reviewer's final line was
-  `VERDICT: FAIL`; read the reviewer output and act on it.
-- Open, low-priority follow-ups from cycle 34's review: an array-shaped top-level `ui.json` is
-  spread into numeric keys (`isRecord` accepts arrays); `saveSettings()` writes in place (a crash
-  can truncate the shared file); no case covers a malformed existing file on the merge path.
-- Still deferred: idle-cat blink needs an intent decision; older pre-range ux changes and non-TUI
-  user-visible changes still lack Unreleased entries.
+  push or `smoke:docs` fails. `node packages/core/journal.ts` appends missing lines but does not
+  rewrite an existing one; derive the replacement with `journalLineFor` from
+  `packages/core/lib/journal.ts`.
+- Changing a vendored directory's `SOURCE.md` makes `THIRD_PARTY_NOTICES.md` stale: run
+  `node packages/core/gen-notices.ts` in the same commit or `verify` and `smoke:new-extension` fail.
+- A new shared helper needs a `SHARED_COPIES` entry and `npm run gen:shared`; generated copies are
+  committed byte for byte, and a dynamic `new RegExp` is rejected by lint.
+- Gated `workflow_run` plan implementers on this host do the file work and checks but leave it
+  **staged**, then claim they committed; the reviewer correctly returned FAIL twice. Always inspect
+  `git status`/`git log` after a plan, review the staged diff, then commit and push yourself.
+- The cycle-05 host red (`check-all`, `smoke:redaction-corpus`) did not reproduce on the cycle-06
+  base: the corpus passes all 6 checks and `smoke:docs` is green. Treat it as host-load flake unless
+  it repeats with a named failing assertion.
+- Follow-ups not taken: `autonomy/lib/engine.ts:1011` still applies its own `HIDDEN_CHARS` transform
+  via the notebook re-export (no class-literal duplicate, outside V-93's scope); cycle-05 V-73
+  (canonical `Alias of /<target>` wording) remains on `origin/attempts/luna-ux-01/cycle-05`;
+  `docs/workflows.md` could spell out that an open confirm still owns the keys after the prune
+  fallback, and `wf-panel.ts` `footer()` looks up `current()` twice.
+- Cycle 02 remains rejected and unmerged; its records are superseded by `03/` and later.

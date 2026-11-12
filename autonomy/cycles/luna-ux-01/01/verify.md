@@ -1,69 +1,42 @@
 # Cycle 01 — Verify (run luna-ux-01, stream `ux`)
 
-- Base `a43f32bae871`, head at verification `84e52cf`.
-- Cycle diff excluding the cycle records and lockfile: **27,672 chars** (under the 30,000
-  stop-new-work line and the 60,000 review cap).
+- Cycle base `5fda5d526514`, verified head `c638796`.
+- Cycle diff excluding records, runs and lockfile: **35,617 chars** (above the 30,000 stop-new-work line, below the 60,000 review cap).
+- Targeted check set derived with `node packages/core/check-all.ts --for-changed` over every changed path.
 
-## Targeted checks (all exit 0 at `84e52cf`)
+## Targeted checks (all exit 0 at the verified head)
 
 | Check | Result |
 |---|---|
-| `npm run smoke:launch-screen` | 10/10 |
-| `npm run smoke:command-menu` | 11/11 |
-| `npm run smoke:control-center` | 31/31 |
-| `npm run smoke:docs` | OK, journal in step |
-| `npm run test:typecheck` | OK |
-| `npm run test:lint` | OK |
-| `node packages/core/reference.ts --check` | docs/reference.md up to date |
-| `node packages/core/check-all.ts --list \| grep launch` | `smoke:launch-screen` is in the gate |
+| `npm run -s docs:check` | nav and internal links OK |
+| `npm run -s smoke:autonomy` | 32/32 |
+| `npm run -s smoke:autonomy-inbox` | 7/7 |
+| `npm run -s smoke:autonomy-run` | 15/15 |
+| `npm run -s smoke:autonomy-selfimprove` | 55/55 |
+| `npm run -s smoke:control-center` | 45/45 |
+| `npm run -s smoke:docs` | OK, journal in step |
+| `npm run -s smoke:new-extension` | OK |
+| `npm run -s smoke:remote-control` | 16/16 |
+| `npm run -s smoke:tui-layout` | 4/4 |
+| `npm run -s test:lint` | OK |
+| `npm run -s test:typecheck` | OK |
+| `npm run -s verify` | all checks passed |
 
-Never ran `npm test` or `npm run check:all` (the host gate runs the full suite on a clean checkout).
+Never ran `npm test` or `npm run check:all`; the host gate owns the full suite on a clean checkout.
+
+## Base-failure evidence
+
+- Restoring the base `hub.ts`, `inbox.ts`, `board.ts`, `cli.ts` and `remote-control/index.ts` while keeping the new tests makes `smoke:autonomy-inbox` fail on the offset-less deadline assertion and `smoke:tui-layout` fail at `remote.wrap is not a function`; the base files were restored afterwards and `git status` was clean before the commits.
+- The control-centre cases fail on the base source because `stripTerminalSequences` leaves the ESC in `\u001b[?1049h`, leaves C1 `\u009b` and leaves `\u202e`, and imposes no length bound.
+- At base `--answer` on a settled card exits 0, an uploaded card may carry `answer`/`outcome`, and the listing prints raw card text and `outcome.at`.
+- `wrap("abc🚀", 2, 1)` reaches `rest = ""; break` at base and drops the `🚀`; at HEAD it renders three lines that measure at most 2 columns and together keep `abc🚀`.
+
+## DE-98
+
+Verified at the cycle base, no source change: `CHANGELOG.md` Unreleased already has entries for the `/workflows` cursor/tail, effective Security level, `/remote` pairing wrap, footer `toolPhrase`/ASCII and status-bar/todo truncation, and `tests/tui-layout-smoke.ts` already declares `const size = 25`. The earlier board item was therefore satisfied; the cycle spent its budget on DE-101 instead.
 
 ## Independent review
 
-A `reviewer` subagent read `autonomy/CHARTER.md`, the plan and the whole diff (26.5 KB at the
-time) and ran the six targeted checks plus the reference check itself. Verdict **REVIEW-PASS**,
-no critical findings. Warnings, all addressed or recorded:
+A read-only `reviewer` subagent reviewed the complete non-record diff, the charter, the plan and the review, and ran the targeted checks itself. First verdict **FAIL** for missing/stale documentation and two unfiltered interpolations; all findings were fixed in `834963d` and `c638796`. Second verdict **PASS**, no critical findings. Its remaining warnings are addressed: both offset signs are documented and the page-parent filter has its own assertion.
 
-1. The documented "twelve frames, about 90 ms" was unpinned; the action list beyond the menu
-   command, the frame count and the `PI_KIT_ASCII` registration path were untested. **Fixed** in
-   `84e52cf`: the test asserts the final frame lists `alt+m`, `/profile`, `/model`, `/resume`, that
-   the reveal settles at `REVEAL_FRAMES - 1` renders, that the count 250 ms in is 1..4 (pinning the
-   80-120 ms interval and a burst regression), and renders through the registered header with
-   `PI_KIT_ASCII=1` at 20/80/120 columns.
-2. `installLaunchHeader`'s `PI_KIT_INTERNAL_CHILD` guard is unreachable because the extension
-   returns before registering the handler in a child. **Kept** deliberately: it is the explicit
-   condition the cycle was asked to enforce and costs one comparison; the test also pins the
-   observable outcome (no header in a child).
-3. `installLaunchHeader` requires `ctx.mode === "tui"` while the enclosing registration keeps a
-   `hasUI` fallback for hosts without `ctx.mode`. **Accepted**: `setHeader` is a TUI-only surface
-   and the pi pin (1.4.0) always sets `ctx.mode`; a host without it gets pi's stock header rather
-   than an untested code path.
-4. A copy fix (`29569d1`, "command menu" label) was untested. **Fixed** in `84e52cf` with the
-   action-label assertion.
-
-## Behaviour evidence, by acceptance criterion
-
-- Header installed exactly once in a TUI session, including when `commandMenu` is `"all"` — test
-  `a TUI session installs exactly one header...`.
-- No header over rpc/print, in a child, or with `launchScreen: "off"` — test `no header outside
-  the TUI...`.
-- Widths 20/40/60/80/120: every line `visibleWidth <= width`, output contains `Luna` and the
-  menu command, width 20 does not throw; <60 columns is one compact line at 20 and 40 — test
-  `every width fits...`.
-- Reduced motion (env and `ui.json`) starts no timer and renders identical frames — test
-  `reduced motion starts no timer...`; `TERM=dumb` and `CI` are pinned in
-  `reduced motion comes from the environment or ui.json`.
-- Animated reveal calls `requestRender`, stops by itself and `dispose()` stops it immediately —
-  test `the reveal requests renders...`.
-- ASCII is printable US-ASCII both pure and through registration — tests `ASCII mode keeps every
-  rendered character printable` and `PI_KIT_ASCII=1 through the real registration...`.
-- `/menu` when registered, `/kit` otherwise — test `the menu command follows getCommands...`.
-
-## Residual risk
-
-The steward P0 (`ci-complete` / `pi-compat` red on candidate `d827f5063521`) could not be
-reproduced offline; see `review.md`. All version-sensitive checks that can run here are green, and
-this cycle adds no new pi API surface (the header uses `ctx.ui.setHeader`, `visibleWidth`,
-`truncateToWidth` and `stripTerminalSequences`, all already imported by control-center's
-overlay-frame at the base). A rebuilt integration candidate is still required to confirm.
+The reviewer's base-failure note about `wrap` being newly exported is accurate: the base proof is the missing export plus the old `rest = ""; break` branch, while the behavioural assertion at HEAD proves the remainder is kept.

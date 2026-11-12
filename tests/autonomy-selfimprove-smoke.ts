@@ -1019,6 +1019,125 @@ await check("PG-55: a clean publish clears the blocker, the unpublished count an
   assert.doesNotMatch(text.out, /publication BLOCKED/);
 });
 
+await check("PG-67: a non-conflicting destination move is rebased at the next cycle, tags stay put, and publication stays fast-forward", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const captured: { originalHead?: string } = {};
+  let moved = false;
+  const h: Harness = harness(improveRaw(sourceRepo(), {
+    budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 },
+    promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false },
+  }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      const state = h.state();
+      const history = state.selfImprove?.history ?? [];
+      if (moved || history.length !== 1) return;
+      moved = true;
+      captured.originalHead = nth(history, 0).head;
+      const seedSha = state.selfImprove?.seedSha;
+      assert.ok(seedSha, "the run recorded its seed");
+      const cloneDir = scratch();
+      sh(cloneDir, "clone", "--quiet", "--no-checkout", bare, cloneDir);
+      sh(cloneDir, "checkout", "--quiet", seedSha);
+      fs.writeFileSync(path.join(cloneDir, "DEST.md"), "destination\n");
+      sh(cloneDir, "add", ".");
+      sh(cloneDir, "commit", "--quiet", "-m", "destination moved");
+      sh(cloneDir, "push", "--quiet", "--force", bare, "HEAD:refs/heads/pi-autonomy/integration");
+    } },
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1\n");
+      t.write("CYCLE.md", `${t.read("CYCLE.md") ?? ""}cycle ${t.step}\n`);
+      const dir = cycleDirOf(nth(t.prompts, t.prompts.length - 1));
+      assert.ok(dir, "the prompt names the cycle directory");
+      t.write(`${dir}/report.md`, "Outcome: successful\nMode: improve\n\nDone.\n");
+      t.commit(`cycle ${t.step}`);
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  assert.equal(state.status, "succeeded", JSON.stringify(state.outcome));
+  const history = state.selfImprove?.history ?? [];
+  assert.equal(history.length, 3);
+  assert.deepEqual(history.map((c) => c.n), [1, 2, 3], "the cycle counter kept going instead of restarting");
+  const reconciliations = state.selfImprove?.reconciliations ?? [];
+  assert.equal(reconciliations.length, 1);
+  const rec = nth(reconciliations, 0);
+  assert.ok(rec.from && rec.remote && rec.head, "the reconciliation records its from, remote and reconciled head");
+  assert.ok(rec.commits >= 1, "the reconciliation records the rebased commit count");
+  const integration = mirrorGit(rt)(["rev-parse", "refs/heads/pi-autonomy/integration"]);
+  assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), integration, "publication fast-forwarded the destination to the local integration head");
+  const log = fs.readFileSync(h.store.p.log, "utf8");
+  assert.match(log, /diverged: rebased/);
+  assert.doesNotMatch(log, /integration_diverged/);
+  assert.ok(captured.originalHead, "cycle 1's original head was captured before the destination moved");
+  const tagSha = mirrorGit(rt)(["rev-parse", "refs/tags/pi/improve-test-1/cycle-01"]);
+  assert.equal(tagSha, captured.originalHead, "the cycle-01 tag still names the original pre-rebase commit");
+  assert.notEqual(tagSha, nth(history, 0).head, "the recorded cycle head followed the rebase while the tag did not");
+  assert.equal(prompts.length, 3);
+});
+
+await check("PG-67: a conflicting destination move parks the run on an integration-diverged question instead of failing", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const slot: { engine?: MadeEngine; cycle1Head?: string; destination?: string } = {};
+  let moved = false;
+  let stopped = false;
+  const h: Harness = harness(improveRaw(sourceRepo(), {
+    budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 },
+    promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false },
+  }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      const state = h.state();
+      if (!stopped && state.status === "blocked" && slot.engine) {
+        stopped = true;
+        slot.engine.engine.signalled = true;
+      }
+    } },
+    script: async (t) => {
+      t.write("AUDIT_OK", "1\n");
+      t.write("README.md", "local\n");
+      const dir = cycleDirOf(nth(t.prompts, t.prompts.length - 1));
+      assert.ok(dir, "the prompt names the cycle directory");
+      t.write(`${dir}/report.md`, "Outcome: successful\nMode: improve\n\nDone.\n");
+      t.commit(`cycle ${t.step}`);
+      // Move the destination from the seed while cycle 1 is closing, so cycle 2's start sees the
+      // divergence. A hook after cycle 1 is recorded runs only once cycle 2 has already
+      // synchronised, which would leave the conflict for cycle 3.
+      if (t.step !== 1 || moved) return;
+      moved = true;
+      slot.cycle1Head = t.git(["rev-parse", "HEAD"]).stdout.trim();
+      const seedSha = h.state().selfImprove?.seedSha;
+      assert.ok(seedSha, "the run recorded its seed");
+      const cloneDir = scratch();
+      sh(cloneDir, "clone", "--quiet", "--no-checkout", bare, cloneDir);
+      sh(cloneDir, "checkout", "--quiet", seedSha);
+      fs.writeFileSync(path.join(cloneDir, "README.md"), "destination\n");
+      sh(cloneDir, "commit", "--quiet", "-am", "destination moved");
+      slot.destination = sh(cloneDir, "rev-parse", "HEAD");
+      sh(cloneDir, "push", "--quiet", "--force", bare, "HEAD:refs/heads/pi-autonomy/integration");
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "integration-diverged");
+  assert.ok(slot.cycle1Head && slot.destination, "the fixture captured both heads");
+  const question = state.blocker?.question ?? "";
+  assert.match(question, /pi-autonomy\/integration/);
+  assert.ok(question.includes(slot.destination.slice(0, 12)), question);
+  assert.ok(question.includes(slot.cycle1Head.slice(0, 12)), question);
+  assert.equal(state.selfImprove?.history.length, 1);
+  assert.equal(nth(state.selfImprove?.history ?? [], 0).head, slot.cycle1Head);
+  const g = mirrorGit(slot.engine.rt);
+  assert.equal(g(["rev-parse", "refs/heads/pi-autonomy/integration"]), slot.cycle1Head, "the local integration ref is unchanged");
+  assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), slot.destination, "the destination is unchanged");
+});
+
 await check("the deprecated v0 shape maps onto this template: same limits and budgets, no default remote, an explicit destination", () => {
   const v0 = { run: "perpetual-x", cycles: 4, gitRemote: "https://git.example.org/team/repo.git", promotion: "push", budget: { perCycleUsd: 2, totalUsd: 20 }, limits: { softMinutes: 60, hardMinutes: 90 }, integration: { branch: "experimental/main" } };
   const r = resolveContract(v0, { effort: testEffort });

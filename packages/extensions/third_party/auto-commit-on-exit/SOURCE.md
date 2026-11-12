@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/auto-commit-on-exit.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `pi.exec("git", [...])`, which is cross-platform
   - Stages with `git add -A -- . ":(exclude).pi"` instead of `git add -A`, so kit artefacts under `<cwd>/.pi/` are never committed
   - In no profile and `enabledByDefault: false`: opt-in only

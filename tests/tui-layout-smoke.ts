@@ -27,7 +27,8 @@ const RM = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts
 // A local view of the one pure export used here; a static type import of the module would pull
 // its host/bridge graph into the test typecheck, where pi's loader-only syntax is not allowed.
 type PairPanel = (offer: Record<string, unknown>, width: number, termRows: number, style?: { title(s: string): string; dim(s: string): string }) => string[];
-const remote = await loadModule<{ pairPanel: PairPanel }>("extensions/remote-control/index.ts");
+type Wrap = (text: string, width: number, hang?: number) => string[];
+const remote = await loadModule<{ pairPanel: PairPanel; wrap: Wrap }>("extensions/remote-control/index.ts");
 
 const W = widthMod.displayWidth;
 const WIDTHS = [20, 32, 40, 60, 80, 120];
@@ -238,7 +239,48 @@ try {
     const wide = remote.pairPanel(offer, 120, 60, style);
     assert.ok(wide.some((line) => line.includes("\x1b[30;107m")), "a wide terminal gets the QR code");
     fits(wide, 120, "pair panel wide");
+    // A realistic full-size QR code (49 modules, as the host generates) with short details. The
+    // layouts must budget for the title and every wrapped sentence they emit, not an estimate, so a
+    // shown QR code never exceeds the reserved room, and the details-only note must state a row
+    // count that really does show the QR code at that width.
+    const bigRows = Array.from({ length: 49 }, (_, r) => Array.from({ length: 49 }, (_, c) => ((r + c) % 3 === 0 ? "0" : "1")).join(""));
+    const bigOffer = {
+      addresses: ["198.51.100.200"],
+      port: 7331,
+      codeDisplay: "ABCDE-FGHIJ",
+      fingerprintDisplay: "0123456789ABCDEF0123456789ABCDEF01234",
+      expiresAt: new Date(1_700_000_000_000).toISOString(),
+      qr: { size: 49, rows: bigRows },
+    };
+    const showsQr = (lines: string[]): boolean => lines.some((line) => line.includes("\x1b[30;107m") || /[█▀▄]/u.test(line));
+    for (const width of [40, 55, 60, 70, 80, 100, 130, 160]) {
+      for (const termRows of [40, 44, 45, 46, 47, 48, 50, 60]) {
+        for (const pairStyle of [undefined, style]) {
+          const panel = remote.pairPanel(bigOffer, width, termRows, pairStyle);
+          fits(panel, width, `pair panel ${width}x${termRows}`);
+          if (showsQr(panel)) {
+            assert.ok(panel.length <= termRows - 10, `pair panel ${width}x${termRows}: QR shown with ${panel.length} lines, room ${termRows - 10}`);
+          }
+          const note = /at least (\d+) columns by (\d+) rows/.exec(widthMod.stripAnsi(panel.join(" ")).replace(/\s+/g, " "));
+          // A note cannot promise a narrower terminal than its own column minimum; widths below it
+          // are already told the QR code needs more columns.
+          if (note && Number(note[1]) <= width) {
+            const needed = Number(note[2]);
+            const enlarged = remote.pairPanel(bigOffer, width, needed, pairStyle);
+            assert.ok(showsQr(enlarged), `pair panel ${width}: the note's ${needed} rows show the QR code`);
+            assert.ok(enlarged.length <= needed - 10, `pair panel ${width}: the note's ${needed} rows fit ${enlarged.length} lines`);
+            fits(enlarged, width, `pair panel ${width} enlarged to ${needed}`);
+          }
+        }
+      }
+    }
+    // A wide grapheme that does not fit the continuation indent moves to the next line whole; the
+    // rest of the word is not dropped.
+    const carried = remote.wrap("abc🚀", 2, 1);
+    assert.equal(carried.map((line) => line.trim()).join(""), "abc🚀", "every grapheme of a wrapped word survives");
+    for (const line of carried) assert.ok(visibleWidth(line) <= 2, `carried line fits 2 columns: ${JSON.stringify(line)}`);
     ok("remote pairing panel: every line fits every width, with wide input and ANSI styling");
+    ok("remote pairing panel: a shown QR code fits the reserved rows and the note's minimum is honest");
   }
 
   console.log(`tui-layout-smoke: ${checks} checks passed`);

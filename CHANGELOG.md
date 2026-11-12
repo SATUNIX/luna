@@ -10,6 +10,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **One hidden-character filter and one-line rule replaces four hand-written copies.** The class
+  `/[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu` and the one-line logic were repeated in
+  the control centre hub, the `/autonomy` footer, the vendored subagent run query and the autonomy
+  notebook, so a fix to one had to be made in each. They now live once in
+  `packages/core/shared/visible-text.ts` (`HIDDEN_CHARS`, `isHiddenChar`, `stripHiddenChars`,
+  `oneVisibleLine`); the control centre, `autonomy-run` and subagent hold generated copies, and the
+  autonomy CLI, store and notebook import the source. Behaviour is unchanged: the notebook still
+  keeps tab and newline in `state`, the hub still strips pi-tui sequences first and caps at 500
+  code points, and the subagent query still caps at 400. Pinned by
+  `tests/control-center-smoke.ts` (bidi override, 600-code-point cap, one class literal) and
+  `tests/autonomy-notebook-smoke.ts`.
 - **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
   `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
   was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes
@@ -65,6 +76,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/eval-baseline-smoke.ts` (`smoke:eval-baseline`).
 
 ### Fixed
+
+- **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
+  the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave
+  `render()` showing the list body while `footer()` still showed the run legend and the first `↓`
+  was consumed by the run view's missing-run fallback instead of moving the list cursor. A new
+  `inRun()` (view is `run` and the run is still in the registry) now drives `press()`, `footer()`
+  and `render()`; `view` and an open save/stop confirm keep their state. Pinned by
+  `tests/workflow-panel-smoke.ts`.
 
 - `node packages/core/journal.ts` no longer checks for `autonomy/JOURNAL.md` and then writes it
   with a plain write. It reads the file once and replaces it through the safe write helper, so a
@@ -216,7 +235,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 - **The todo checklist is re-cut at the width pi passes.** `updateTodoWidget` measured `process.stdout.columns` once at mount and mounted a `string[]`, so a terminal resize or an early mount left long items wrapped; it now mounts a component whose `render(width)` re-renders `renderTodoWidget`. Pinned by `npm run smoke:status-bar` and `npm run smoke:tui-layout`.
 
-- **The `/remote` pairing panel wraps by terminal columns.** `wrap()` compared `String#length` and sliced by code units, so a CJK fingerprint word rendered a 22-column line on a 20-column terminal; it now measures with pi-tui's `visibleWidth` and cuts with `sliceByColumn(..., true)`, keeping grapheme clusters and wide characters whole, and drops a wide grapheme that cannot fit its room instead of emitting an over-wide remainder. Pinned by `npm run smoke:tui-layout`; `npm run smoke:remote-control` also exercises the panel; `docs/remote-control.md` says lines are measured in columns.
+- **The `/remote` pairing panel wraps by terminal columns.** `wrap()` compared `String#length` and sliced by code units, so a CJK fingerprint word rendered a 22-column line on a 20-column terminal; it now measures with pi-tui's `visibleWidth` and cuts with `sliceByColumn(..., true)`, keeping grapheme clusters and wide characters whole. A wide grapheme that does not fit the continuation indent now moves whole to the next line instead of being dropped with the rest of the word. Pinned by `npm run smoke:tui-layout` and `npm run smoke:remote-control`; `docs/remote-control.md` says lines are measured in columns and that a wrap keeps the remainder.
+
+- **The `/` menu hub removes every control and format character from what it displays.** The header strip, page titles and informational rows removed only pi-tui's colour/cursor CSI, OSC and APC, so an alternate-screen sequence, a reset, a C1 CSI or a bidi override could still reach the terminal, and a repository-controlled title was unbounded. One local display filter now removes every `Cc`, `Cf` and `Default_Ignorable_Code_Point` character after the pi-tui strip and caps the result at 500 characters; it covers the header, page titles, Doctor/Security/Help rows and typed commands. Pinned by `npm run smoke:control-center`; `docs/control-center.md` states the filter and bound.
+
+- **The owner inbox refuses a deadline it cannot read the same way on every host, and never records a decision it was not given.** A card deadline was validated with `Date.parse` alone, so an offset-less value was read in the host's local time; it now needs the same strict ISO timestamp with `Z` or an explicit offset that `lib/board.ts` uses. An uploaded file may no longer carry `answer` or `outcome`, `--answer` on a card that already has an outcome is refused with the card id instead of exiting 0, and the text listing collapses card text to one visible line. Pinned by `npm run smoke:autonomy-inbox`; `docs/autonomy.md` states the format and refusals.
 
 - **The footer's working line clips tool phrases as graphemes and follows the automatic ASCII theme.** `toolPhrase` sliced by code units, so an emoji at the 40-column boundary became a lone surrogate and an ASCII result could reach 42 columns; an ISO/ANSI/TTY theme also kept the Unicode ellipsis because the tool handler passed only `settings.ascii`. It now cuts with `truncateDisplay` and resolves the effective ASCII flag through `footerGlyphs(theme, settings.ascii)`. The same pass makes `shortCwd` take the glyph set's ellipsis, so ASCII mode shortens a deep cwd with `...`. Pinned by `npm run smoke:tui-layout` and `npm run smoke:status-bar`.
 

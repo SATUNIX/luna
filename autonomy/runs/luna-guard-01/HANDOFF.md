@@ -25,3 +25,28 @@
 4. Cycle 01 was recorded `partial` only because PG-23's standalone script registration is a
    control path; the corpus and false-positive fix themselves are merged-ready. PG-23's diff did
    not get a second subagent review (E3 child budget exhausted); host merge review covered it.
+
+## State after cycle 03 (branch `pi/luna-guard-01`, HEAD `a54463f`)
+
+- Priority-0 gate repaired: `packages/extensions/src/secret-guard/extension.json` now declares
+  `node:crypto`, matching the generated `shared/refusal-record.ts` import that cycle 02 added
+  without updating the manifest. `smoke:extension-manifest-hooks` exits 0. Commit `52ca07c`.
+- PG-24 carry-over landed: one structured `tool_refused` record per refusal from tool-firewall and
+  secret-guard (guard, cause, matched token/rule, command digest, session id; never command text),
+  best-effort append with rotation past 4 MiB. Commits `1b216ca`, `08ceb2d`, `87e50a8`,
+  `0d1a677`, `ae85343`.
+- Secret-content evidence gap closed: `tests/firewall-refusal-record.ts` now pins a
+  `cause: "secret-content"` refusal whose `matched` is the pattern label and whose record contains
+  neither the fake secret value nor the payload. Commit `7df2593`.
+- Independent reviewer verdict PASS. Diff vs base `e52f4362f991`: 58,006 characters excluding
+  lockfile and cycle/run records (review limit 60,000).
+
+## Open / next
+
+1. Proposal `autonomy/proposals/luna-guard-01-02-register-refusal-record-script.md`: register the
+   standalone refusal suite in `package.json` (control path, operator). The acceptance spec's name
+   `tests/firewall-refusal-record-smoke.ts` cannot be used until then.
+2. `luna-ops/luna-metrics.py` should consume `tool_refused` records instead of scraping session
+   JSONL.
+3. Cycle 01 proposals stay open: quoted search token command scan, `glob` adapter coverage,
+   standalone benign-corpus script registration.

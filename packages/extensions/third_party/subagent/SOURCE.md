@@ -276,3 +276,8 @@
     age). It reads with node builtins rather than importing
     `packages/autonomy`; a workflow or script row of the same id wins
     (`tests/run-query-smoke.ts`).
+  - **Workflow panel height budget (2026-11-12):** `wf-panel.ts` gives `renderRunLines` and
+    `renderListLines` an optional `maxLines` line budget. The run view trims narration first, then
+    phase rows, then the agent window outside the selected agent, keeping the selected agent and its
+    detail; the list view keeps a stable cursor and shrinks its window to the same budget, and
+    `undefined` still renders every section (the text fallback). Commit `23725c2`.

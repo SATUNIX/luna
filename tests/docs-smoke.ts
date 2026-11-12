@@ -470,6 +470,24 @@ for (const item of removedNames) {
 assert.ok(registeredTools.has("workflow_status") && registeredTools.has("workflow_control"), "the subagent extension registers workflow_status and workflow_control, the replacements this guard names");
 assert.ok(registeredCommands.has("workflow") && registeredCommands.has("workflows"), "the subagent extension registers /workflows and its /workflow alias");
 
+// The vendored extension's SOURCE.md is its only provenance log: a squash that lands without a dated
+// entry leaves the file's history incomplete and nothing pins it. The 2026-11-12 height budget in
+// `wf-panel.ts` (commit 23725c2) must therefore be named by its own entry. The entry is isolated
+// first, rather than matching the whole file, because all three facts have to travel together in one
+// dated bullet instead of being scattered over unrelated entries.
+const subagentSourceMd = readRel("packages/extensions/third_party/subagent/SOURCE.md");
+const changeEntryStarts = [...subagentSourceMd.matchAll(/^ {2}- \*\*/gm)].map((m) => m.index ?? 0);
+const changeEntries = changeEntryStarts.map((start, i) => subagentSourceMd.slice(start, changeEntryStarts[i + 1] ?? subagentSourceMd.length));
+const heightEntry = changeEntries.find((entry) => /^ {2}- \*\*[^\n]*2026-11-12/.test(entry)) ?? "";
+assert.ok(
+  heightEntry.length > 0,
+  "SOURCE.md `- Changes:` needs a 2026-11-12 entry: files: `wf-panel.ts` (commit 23725c2), describing the optional `maxLines` height budget",
+);
+assert.ok(
+  heightEntry.includes("wf-panel.ts") && heightEntry.includes("23725c2"),
+  "the 2026-11-12 SOURCE.md entry must name both files: `wf-panel.ts` and commit 23725c2 (the height-budget squash)",
+);
+
 const shippedPages: string[] = [];
 const addPage = (rel: string): void => {
   if (!shippedPages.includes(rel)) shippedPages.push(rel);

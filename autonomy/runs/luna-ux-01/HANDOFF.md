@@ -1,39 +1,49 @@
 # Run `luna-ux-01` — handoff
 
-State after cycle 34 (branch `pi/luna-ux-01`, cycle base `93481e6b8904`, code head `be41afb` plus
-the records commit). Report: `autonomy/cycles/luna-ux-01/34/report.md`, evidence in `verify.md`.
+State after cycle 03 (branch `pi/luna-ux-01`, cycle base `dfb939dd9e0a`, code head `c12d02a` plus
+the records commit). Report: `autonomy/cycles/luna-ux-01/03/report.md`, evidence in `verify.md`.
 
-## What cycle 34 landed
+## Assignment state
 
-- `be41afb` fixes the carry-over `ui.json` settings clobber: `saveSettings()` in
-  `packages/extensions/third_party/custom-footer/index.ts` now parses the shared file (absent or
-  non-object → `{}`), merges the status bar's owned fields (`footer`, `mode`, `tips`, `todos`,
-  `cat`, `ascii` only when on) over it, and writes the merged object. `/footer light`,
-  `/footer ascii off` and `/tips off` no longer drop `hubKey`, `commandMenu`, `pinnedCommands`,
-  `hiddenCommands`, `launchScreen` or `reducedMotion`; a read or write failure returns the message
-  and never throws.
-- New case `uiSettingsMergePreservesForeignKeys` in `tests/status-bar-smoke.ts` seeds all six
-  foreign keys and runs `/footer light`, `/footer ascii on`, `/footer ascii off` and `/tips off`.
-  It fails 1/27 with only the base source restored and passes 27/27 at HEAD. `smoke:docs`,
-  `test:typecheck` and `test:lint` pass; the non-record diff is 6303 characters.
-- `docs/status-bar-and-costs.md` and `CHANGELOG.md` (Unreleased/Fixed) describe the merge.
-- Proposal `luna-ux-01-33-ui-json-settings-clobber.md` is implemented and marked closed.
-- Independent verdict came from a deliberately read-only `reviewer` subagent (`VERDICT: PASS`)
-  after two earlier reviewer runs were killed/hung mid-turn; the second left the base source staged
-  and the parent restored it from `HEAD` before the verdict.
+- **DE-101** is on the board's `review` column (accepted; the steward panel verified all six
+  clauses). It was checked against the tree but **not redone**. The six fixes are cycle 01's
+  `c56acda` (control-centre `displayText()` filter), `922e732` (inbox hardening + `wrap()` wide
+  grapheme carry), and the `4e2938e`/`834963d`/`c638796` documentation and review follow-ups.
+- **V-09** was narrowed by the steward to one clause, now done: `c12d02a` adds the dated
+  2026-11-12 `SOURCE.md` entry naming `third_party/subagent/wf-panel.ts` and `23725c2`, a
+  `tests/docs-smoke.ts` case that isolates that entry and fails without it, and the regenerated
+  `THIRD_PARTY_NOTICES.md`. Do not re-open the TUI width work — it is merged and pinned by
+  `tests/tui-layout-smoke.ts`.
+
+## What cycle 03 landed beyond the assignment
+
+- `f711b23` fixes `pairPanel` (`packages/extensions/src/remote-control/index.ts`): it reserved ten
+  rows then emitted more (49-module QR: 38 lines for 36 rows at 70×46; sweep found 71 over-budget
+  cases), so pi clipped the title and the start of the scan sentence. It now measures the beside and
+  stacked bodies it actually emits and derives `rowsNeeded` from the same measurement. The new grid
+  case in `tests/tui-layout-smoke.ts` failed on the base source with
+  `pair panel 55: the note's 46 rows fit 38 lines`.
+- `a4dedfb` corrects `docs/remote-control.md` (ten-row reservation; the QR is 49 modules / 27 text
+  rows / 53 columns, not "about 25 rows and 50 columns").
+- Two non-blocking reviewer warnings remain: the grid's heights never exercise the wide-but-short
+  beside fallback, and the details-only row figure is measured at the current inner width.
 
 ## Next cycle should know
 
-- Never run `npm test` / `npm run check:all`; the host gate owns the full suite.
+- Never run `npm test` / `npm run check:all`; the host gate owns the full suite (`/opt/autonomy/gate.sh`
+  is skipped locally for the same reason).
 - Any new `autonomy/cycles/<run>/<NN>/report.md` needs its `autonomy/JOURNAL.md` line in the same
-  push or `smoke:docs` fails.
-- A reviewer subagent that runs the base-vs-head check may leave the reverted source staged. Always
-  check `git status` and restore the file before recording a verdict; `cmp` against a saved
-  snapshot plus a green `smoke:status-bar` is the safe confirmation.
-- Gated `workflow_run` plans here have reported `passed` even when the reviewer's final line was
-  `VERDICT: FAIL`; read the reviewer output and act on it.
-- Open, low-priority follow-ups from cycle 34's review: an array-shaped top-level `ui.json` is
-  spread into numeric keys (`isRecord` accepts arrays); `saveSettings()` writes in place (a crash
-  can truncate the shared file); no case covers a malformed existing file on the merge path.
-- Still deferred: idle-cat blink needs an intent decision; older pre-range ux changes and non-TUI
-  user-visible changes still lack Unreleased entries.
+  push or `smoke:docs` fails. `journal.ts` does not rewrite an existing line for the same cycle id;
+  replace it by hand with `journalLineFor` output when a cycle is re-recorded (done this cycle).
+- Changing a vendored directory's `SOURCE.md` makes `THIRD_PARTY_NOTICES.md` stale: run
+  `node packages/core/gen-notices.ts` in the same commit or `verify` and `smoke:new-extension` fail.
+- Gated `workflow_run` plans here have reported `passed` with no implementation; always inspect
+  `git status`/`git log` after a step. Implementers may also neglect `git push` — check
+  `git status -sb` for `ahead N` and push.
+- A `reviewer` step can return empty text while the workflow reports passed; an empty step file is
+  not a PASS. Re-run it with a narrower task when a reviewer burns its turn budget verifying.
+- Follow-ups not taken: `wf-panel.ts` `footer()` vs `render()` divergence after `RunRegistry.prune()`
+  (proposal `autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`, needs a failing
+  test on the prune path); the hub's `MAX_DISPLAY_LENGTH` counts code points, not columns; the wrap
+  test proves behaviour through the exported `wrap`, not through `pairPanel`'s old drop branch.
+- Cycle 02 remains rejected and unmerged; its records are superseded by this cycle's `03/` records.

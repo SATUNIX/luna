@@ -10,6 +10,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The `coverage` CI job no longer gates, and has more time.** Draft PR #72 (`integration/luna` to
+  `main`) went red on one job: `coverage` hit its 30-minute `timeout-minutes` on a slow runner and
+  was cancelled, and `ci-complete` failed because it needed it. The same commit had taken 19 minutes
+  and passed on the previous pull request; recent runs took 18 to 27 minutes. `coverage` measures and
+  never gated on a threshold, and the same suite already gates through the `verify` shards, so
+  `ci-complete` no longer needs it and its `timeout-minutes` is 45. `tests/workflow-policy-smoke.ts`
+  names the one measure-only job, refuses to let `ci-complete` need it again or let its timeout fall
+  below 40, requires the exempt job to really run coverage, and still requires every other job in
+  `needs`; its job-header check now also sees a header with a trailing comment. The repository ruleset
+  is unchanged: it requires only `ci-complete`. Not covered: a release run calls the whole of `ci.yml`,
+  so a failed `coverage` job still stops a release (`docs/ci-security.md`).
+
 - **The kit's TUI overlays frame themselves and dim the transcript.** The `/` menu hub and the
   `/workflows` panel draw a theme-coloured rounded border around their overlay and dim the chat
   behind it (`packages/extensions/src/control-center/overlay-frame.ts`, copied byte-identically to

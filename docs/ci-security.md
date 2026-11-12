@@ -10,7 +10,7 @@ operator actions ([Releasing](releasing.md)).
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job did (`tests/workflow-policy-smoke.ts` checks it needs them all) |
+| `ci.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, and as a reusable gate | `check:all` (verify, eval, every smoke and security suite, profile checks, the packed-tarball check and the clean install), lockfile integrity, the strict docs build, every profile on Linux and Windows, the pi-compat matrix at the supported floor and the last pi 0.x release (both must pass), the Android build with Gradle wrapper validation, and `check:all` again under coverage measurement ([Test coverage](#test-coverage)); `ci-complete` succeeds only when every other job except the measure-only `coverage` job did (`tests/workflow-policy-smoke.ts` checks it needs all the others) |
 | `security.yml` | push to `main`, pull requests to `main` or an `integration/**` branch, weekly, and as a reusable gate | CodeQL, Semgrep, gitleaks, dependency checks, OSV-Scanner, dependency review (pull requests), zizmor; weekly and on manual runs, the long form of the property-based fuzz tests ([Property-based fuzzing](#property-based-fuzzing)) |
 | `scorecard.yml` | push to `main`, weekly | OpenSSF Scorecard supply-chain rating, published; it fails nothing |
 | `scorecard-thresholds.yml` | weekly, manual | Runs Scorecard again without publishing and fails when a gating check scores below its floor in `.github/scorecard-thresholds.json` |
@@ -50,6 +50,18 @@ and attributed to its source. Test infrastructure (`packages/core/eval/`, every 
 and the compiled browser code are not counted. Files no check loads are not in the main totals; a
 separate row counts them as uncovered. The job measures and does not gate on a threshold; it fails
 only when `check:all` fails.
+
+`ci-complete` does not wait for this job: it is a measure-only job, named in `MEASURE_ONLY_JOBS` in
+`tests/workflow-policy-smoke.ts`, which refuses to let `ci-complete` need it again or its
+`timeout-minutes` fall below 40. It runs `check:all` one check at a time, so it is the slowest lane
+(18 to 27 minutes against the 30 it once had, and it was cancelled at the limit on a slow runner),
+and a measurement must not block a promotion. A failed or cancelled coverage job still shows on the
+pull request. The same suite gates through the `verify` shards.
+
+This is not covered: `release.yml` calls the whole of `ci.yml` as its `gate`, and `plan` waits for
+that call, so a failed or cancelled `coverage` job still stops a release. Only the required check
+on pull requests ignores it. Making it ignorable there too would need `continue-on-error`, which the
+fail-closed rule above forbids.
 
 ## Property-based fuzzing
 
@@ -181,7 +193,8 @@ A scanner or check that cannot do its job fails; it never reports a pass over no
   matrix lane, which is `false` on every lane), `|| true`, `|| :`, `|| exit 0`, `|| echo` or
   `set +e` (`tests/workflow-policy-smoke.ts`, from the shared list in `tests/ci-fail-open.ts`).
 - `ci-complete` treats any result but `success` of a job it needs, including `skipped` and
-  `cancelled`, as a failure.
+  `cancelled`, as a failure. It does not need the measure-only `coverage` job ([Test
+  coverage](#test-coverage)).
 
 ## Manifest coverage
 

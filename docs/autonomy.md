@@ -741,7 +741,8 @@ board item (`blocked` becomes `ready`) so the next cycle sees it again; an unans
 deadline has not passed leaves its item `blocked`. A card that already has an outcome is never
 rewritten, so repeated reads are idempotent, and the inbox command records only: it never writes
 run state or queues a control message. `--file` only saves the cards; the next read settles them.
-Use a strict ISO-8601 deadline with `Z` or an explicit numeric offset (`YYYY-MM-DDTHH:MM:SS[.sss](Z|+HH:MM)`).
+Use a strict ISO-8601 deadline with `Z` or an explicit numeric offset: `YYYY-MM-DDTHH:MM:SS` with
+an optional fractional second, then `Z` or `+HH:MM`.
 A bare date, an offset-less timestamp, or any other string `Date.parse` happens to accept is refused,
 because an offset-less value would be read in the host's local time. A settled card keeps its
 linked board item `ready` on every later inbox read; to block that item again, drop the settled card

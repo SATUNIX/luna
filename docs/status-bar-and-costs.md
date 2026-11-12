@@ -210,6 +210,11 @@ but only applies it after you select it in `/settings` or configure `theme` in
 
 For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer, todo widget, working line and launch
 screen use ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
+box drawing, symbols, or emoji. The working line's tool phrase follows the same automatic
+choice and is cut in terminal columns, so a wide glyph at the cut is dropped whole rather than
+split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
+footer making the same choice. Select a theme either way:
+screen use ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
 split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
 footer making the same choice. Select a theme either way:
 

@@ -269,7 +269,7 @@ try {
     registry.start("20261023-140001-wid2", "yaml", "short", {});
     const snap = registry.get(run.id) ?? assert.fail("run");
     const lines = P.renderRunLines(snap, { paint: P.plainPaint, narration: [] });
-    const phaseRows = lines.filter((l) => / {2}(running|passed|pending) {2}\d+\/\d+$/.test(l));
+    const phaseRows = lines.filter((l) => / {2}(running|passed|pending|failed|skipped) +\d+\/\d+$/.test(l));
     assert.equal(phaseRows.length, 3, "three phase rows");
     assert.equal(new Set(phaseRows.map((l) => visibleWidth(l))).size, 1, "phase rows share one width, so done/total is one column");
     const agentRows = lines.filter((l) => l.includes(" tok "));
@@ -286,6 +286,10 @@ try {
     for (const w of [68, 80, 100]) {
       assert.ok(panel.render(w).every((l) => visibleWidth(l) <= w), `every panel line fits ${w} columns`);
     }
+    // The non-TUI text fallback stays plain: a cut cell must not carry truncateToWidth's resets.
+    const text = P.renderText(registry, new P.Narrator(), run.id);
+    assert.ok(text.includes("…"), "the text fallback shows the cut name");
+    assert.ok(!text.includes(String.fromCharCode(27)), "the text fallback has no terminal sequences");
     ok("column widths: long titles, labels, models and run names are cut to display width; wide glyphs keep the columns aligned");
   }
 

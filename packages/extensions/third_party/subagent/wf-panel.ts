@@ -38,7 +38,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { VERSION, type ExtensionAPI, type ExtensionContext, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { controlRun, runControls, skipRunAgent, type ControlResult } from "./control.ts";
 import { runRegistry, type AgentRecord, type AgentStatus, type PhaseRecord, type PhaseStatus, type RunRegistry, type RunSnapshot, type RunStatus, type WorkflowEvent } from "./run-model.ts";
 import type { ToolContext } from "./types.ts";
@@ -253,7 +253,9 @@ export interface RunViewOptions {
  * a column stays aligned; `String.prototype.padEnd` counts code points instead and would shift it.
  */
 function cell(text: string, width: number): string {
-  const cut = visibleWidth(text) > width ? truncateToWidth(text, width, "…") : text;
+  // `truncateToWidth` closes a cut with colour resets even for plain text, and `renderText` (the
+  // non-TUI /workflows panel output) must stay free of terminal sequences.
+  const cut = visibleWidth(text) > width ? stripTerminalSequences(truncateToWidth(text, width, "…")) : text;
   return `${cut}${" ".repeat(Math.max(0, width - visibleWidth(cut)))}`;
 }
 

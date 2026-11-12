@@ -12,7 +12,8 @@
 //     generation n/N and last rotation reason, and clears it for a run without them;
 //   - `status` with no run sets a one-line fleet footer (counts by status, plus the first blocked
 //     run and its question) and clears it for an empty fleet; without a screen it is untouched;
-//   - `inbox` lists cards (or waiting runs) and answers with a literal --value; bad ids spawn nothing;
+//   - `inbox` lists cards (or waiting runs) and answers with a literal --value (any text, even one
+//     starting with `--`); bad ids spawn nothing;
 //   - against the REAL CLI, `templates` and `plan` work end to end (no container engine needed).
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -304,9 +305,11 @@ try {
     const value = "Ship it; $(rm -rf /)";
     await s.run(`inbox demo-run-1 --answer D3 --value "${value}"`);
     const answer = findCall((c) => c[0] === "inbox");
-    assert.deepEqual(answer, ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value", value]);
-    assert.equal(answer.filter((a) => a === "--value").length, 1);
-    assert.equal(answer[answer.indexOf("--value") + 1], value);
+    assert.deepEqual(answer, ["inbox", "--run", "demo-run-1", "--answer", "D3", `--value=${value}`]);
+    reset();
+    await s.run(`inbox demo-run-1 --answer D3 --value "--force it"`);
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value=--force it"], "a value starting with -- is passed in the equals form");
+    ok("inbox passes a free-text value that starts with -- in the equals form");
     reset();
     await s.run("inbox ../../etc/passwd");
     await s.run("inbox BAD_ID!");

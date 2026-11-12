@@ -411,7 +411,9 @@ export default function autonomyRun(pi: ExtensionAPI) {
             const w = words[i];
             const value = words[i + 1];
             if (w === "--file" && value !== undefined) rest.push(w, resolveFile(ctx, value));
-            else if ((w === "--answer" || w === "--value") && value !== undefined) rest.push(w, value);
+            else if (w === "--answer" && value !== undefined) rest.push(w, value);
+            // The equals form: the CLI's parser rejects a separate value that starts with "--", and an answer is free text.
+            else if (w === "--value" && value !== undefined) rest.push(`--value=${value}`);
             else { say(ctx, "usage: /autonomy inbox [run] [--file <path>] [--answer <card> --value <text>]", "error"); return; }
             i += 1;
           }

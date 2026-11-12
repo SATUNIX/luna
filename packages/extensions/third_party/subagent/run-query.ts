@@ -29,6 +29,7 @@ import { subagentStateDir } from "./logging.ts";
 import { runControls } from "./control.ts";
 import { runRegistry, type RunKind, type RunRegistry, type RunSnapshot } from "./run-model.ts";
 import { collectRuns, isValidRunId, type RunRow } from "./status.ts";
+import { oneVisibleLine } from "./shared/visible-text.ts";
 import { readJournal } from "./wf-engine.ts";
 import { loadState, MAX_SCRIPT_BYTES, readRunFile, runsRoot, summarizeRun } from "./workflow.ts";
 
@@ -210,15 +211,15 @@ function readJsonFile(dir: string, name: string): unknown {
 const stringList = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
 // A worker writes the blocker question, its options, task titles and the last error, and
-// `/workflows` prints them to the terminal while `workflow_status` hands them to a model. Control,
-// format and default-ignorable characters are removed, whitespace is collapsed to one line and the
-// length is capped, as lib/store.ts does for the same fields in the autonomy CLI.
-const HIDDEN_CHARS = /[\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
+// `/workflows` prints them to the terminal while `workflow_status` hands them to a model. The
+// generated shared/visible-text.ts copy removes control, format and default-ignorable characters,
+// collapses whitespace to one line and the length is capped, as lib/store.ts does for the same
+// fields in the autonomy CLI.
 const WORKER_TEXT_MAX = 400;
 const WORKER_OPTIONS_MAX = 12;
 function workerText(value: unknown): string {
   if (typeof value !== "string") return "";
-  const line = value.slice(0, WORKER_TEXT_MAX * 8).replace(HIDDEN_CHARS, (ch) => (ch === "\n" || ch === "\t" ? " " : "")).replace(/\s+/g, " ").trim();
+  const line = oneVisibleLine(value.slice(0, WORKER_TEXT_MAX * 8));
   return line.length > WORKER_TEXT_MAX ? `${line.slice(0, WORKER_TEXT_MAX)}\u2026` : line;
 }
 

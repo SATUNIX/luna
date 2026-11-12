@@ -1,7 +1,10 @@
 # Workflow panel shows the list with the run-view footer after its run is pruned
 
-Run `luna-ux-01`, cycle 03 (stream `ux`). Status: **proposed** — found during this cycle's review by a
-read-only scout, not fixed here (one finished change per cycle). Not an assigned board item.
+Run `luna-ux-01`, cycle 03 (stream `ux`). Status: **implemented in cycle 06** (`88bc809d`):
+`WorkflowPanel` uses one `inRun()` state for the body, footer and key dispatch, so a run pruned
+while open shows the list body and keys and the first `down` moves the cursor; `view` and an open
+save/stop confirm are kept. Pinned by `tests/workflow-panel-smoke.ts` (new prune case) and
+documented in `docs/workflows.md`.
 
 ## Problem
 

@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/todo.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream stores state in session entries and uses `@earendil-works/pi-tui` + `@earendil-works/pi-ai` for the `/todos` UI widget.
   - Simplified: state is persisted in a `TODO.md` file in the project root (visible to humans, git-trackable).
   - Removed all TUI rendering and pi-ai imports.

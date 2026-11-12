@@ -3,6 +3,7 @@
 - Upstream: `@earendil-works/pi-coding-agent@0.76.0` — `examples/extensions/custom-footer.ts`
 - Date: 2026-06-17
 - Changes:
+  - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Preserves the `custom-footer` extension id for compatibility while presenting it as the GitOps status bar in user docs.
   - Adds token totals, estimated cost, model id, git branch, context percentage, and `/footer status|reload`.
   - Reads pricing from `.pi-kit/costs.json`, `<agent dir>/pi-kit/costs.json`, or `PI_KIT_COST_*_PER_MTOK` environment overrides.

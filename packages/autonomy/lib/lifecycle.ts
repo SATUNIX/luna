@@ -207,6 +207,18 @@ export interface PendingAnswer {
   at: string;
 }
 
+/** One automatic reconciliation of a diverged integration branch (gitmirror.reconcileIntegration). */
+export interface ReconciliationRecord {
+  at: string;
+  /** The local integration head before the rebase. */
+  from: string;
+  /** The fetched destination head the local commits were rebased onto. */
+  remote: string;
+  /** The reconciled integration head. */
+  head: string;
+  commits: number;
+}
+
 /** The self-improve template's own record (lib/templates/self-improve.ts). */
 export interface SelfImproveState {
   history: CycleEntry[];
@@ -214,6 +226,8 @@ export interface SelfImproveState {
   lastGoodSha: string;
   seedSha: string;
   current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard } | null;
+  /** Automatic reconciliations of a diverged integration branch, oldest first. */
+  reconciliations?: ReconciliationRecord[];
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */
   lastPushed: string | null;
   publishError?: string | null;

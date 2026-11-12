@@ -1,42 +1,41 @@
 Outcome: successful
 Mode: fix
 
-Cycle 1 of run `luna-core-01` (stream `core`), continuation from base `d932d6f02e41`. Two
-evidenced docs-vs-code defects fixed, each with a check that fails without it. Diff 8,856 chars
-for code and docs (12,082 including this cycle's proposal); limit 30,000. No operator control path, `.github/`, `package.json` script or charter changed.
+Cycle 1 of run `luna-core-01` (stream `core`), base `5a511f35e7d5`. One P0 board item fixed, the
+other re-verified on the base with no change. Diff 26,562 chars for code, tests and docs (limit
+30,000); no operator control path, `.github/`, `package.json` script or charter changed.
 
-Item: install page documented `PI_KIT_GUIDELINES_FILE`, which nothing reads; renamed to `PI_KIT_GUIDELINES_PATH` and pinned every INSTALL env row to a manifest `env[]` - 486d3d2 - `npm run smoke:docs` (new assertion fails on the old row: `docs/INSTALL.md lists PI_KIT_GUIDELINES_FILE for "guidelines", but its manifest env[] does not declare it`)
-Item: documented settings `PI_KIT_LEAN_CTX` and `PI_KIT_VERIFY_PENDING_TTL_MS` were missing from the generated reference; declared them in their manifests and INSTALL table - a9b6f21 - `npm run smoke:docs` + `node packages/core/reference.ts --check` (both rows now appear with Purpose and link; dropping either manifest entry fails the assertion)
+Board: PG-67 done - When the destination moved under a run, the cycle start now rebases the local cycle commits onto it, records the reconciliation, rewrites recorded heads through a first-parent mapping, never moves tags, and continues with the same cycle counter; a conflicting rebase parks the run blocked instead of failing.
+Board: PG-55 done - Re-verified on the base with no code change: status carries the publish blocker and unpublished count, the next prompt names the commit and location, two blocked cycles park on a question, and a clean publish clears all three.
+
+Item: reconcile a diverged integration branch instead of killing the run - ce412c3 - `npm run smoke:autonomy-selfimprove` (57 checks; the new non-conflicting PG-67 check ends `failed`/`integration_diverged` on base `5a511f3` and `succeeded` with `[1,2,3]` at HEAD) and `npm run smoke:autonomy` (34 checks: rebase, first-parent mapping, unmoved tag, fast-forward publish, conflict abort)
+Item: re-verify PG-55 publish-blocked visibility, next-prompt location and two-cycle parking - no code change (verified on base `5a511f3`) - `npm run smoke:autonomy-selfimprove` PG-55 checks, all PASS
 
 ## What and why
 
-- `docs/INSTALL.md` told users to set `PI_KIT_GUIDELINES_FILE`, but
-  `packages/extensions/src/guidelines/index.ts` reads `PI_KIT_GUIDELINES_PATH` and the manifest
-  declares only that name, so the documented setting was a no-op. Renamed the row and regenerated
-  `docs/reference.md`, which also gained the row's Purpose and link. Added a `tests/docs-smoke.ts`
-  assertion: every INSTALL.md environment-table row must name an existing manifest whose `env[]`
-  declares that variable. That assertion fails against the pre-change INSTALL.md.
-- `.env.example` and `docs/architecture/profiles-and-install.md` document `PI_KIT_LEAN_CTX` and
-  `PI_KIT_VERIFY_PENDING_TTL_MS`, but no manifest declared either, so the generated
-  `docs/reference.md` (built from manifest `env[]`) omitted them. Declared them in
-  `session-helpers` and `verify-gate`, added both INSTALL rows, regenerated the reference; the
-  Item 1 assertion now guards both rows.
+`syncIntegration` already reported `diverged`, but the cycle start turned it into a terminal
+`engine.go("failed")` with reason `integration_diverged`, and the run contract had no reconciliation
+step. `luna-ux-01` (after its green cycle 10) and `luna-guard-01` were both killed this way; their
+merged work was stranded and their cycle counters restarted.
 
-## Verification
-
-Targeted checks only: `npm run smoke:docs` PASS; `node packages/core/reference.ts --check` PASS;
-`node tests/extension-manifest-hooks-smoke.ts` PASS. Independent `reviewer` over
-`git diff d932d6f02e41..HEAD`: **VERDICT: PASS**. See `verify.md`.
+`gitmirror.reconcileIntegration` now rebases `mergeBase..local` with `git rebase --rebase-merges
+--onto <fetched-destination> <merge-base> <local>` in a temporary host worktree (hooks and signing
+off, run identity), moves only the integration ref, and returns a first-parent old→new mapping. The
+template records `from`/`remote`/`head`/`commits` in `selfImprove.reconciliations`, rewrites
+`history[].head`/`start`, `lastGoodSha` and `current.startSha`, then continues the same cycle; the
+next publish fast-forwards the destination. Tags are deliberately never moved: publication is
+fast-forward only, so a rewritten tag would be refused by the destination; each run tag keeps naming
+the commit that was originally published. A conflicting rebase aborts cleanly and parks the run
+`blocked` on an `integration-diverged` question naming the branch and both short shas. No new
+network call is made beyond the sync's fetch; the leak scan, its patterns and its exceptions are
+untouched.
 
 ## Leftovers / next cycle
 
-- Broad env-manifest drift: further code-read `PI_KIT_*` vars (for example
-  `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS`, `PI_KIT_VERDICT_MAX_AGE_MS`) are documented only in
-  architecture pages and declared by no manifest. A general bidirectional check was judged
-  infeasible in `tests/extension-manifest-hooks-smoke.ts`; the sweep needs an ownership rule.
-  Proposal written: `autonomy/proposals/luna-core-01-01-env-manifest-ownership.md`.
-- `.github/CODEOWNERS:43` names `/packages/core/gitlab-release.ts`, which does not exist;
-  `docs/releasing.md` release examples carry older patch versions (cosmetic drift). Both outside
-  the stream area / a `.github/` edit; not worked.
-- The assigned defect IDs V-07/V-08/V-10/V-11 still have no in-tree finding list (`grep` over
-  `docs/` and `autonomy/` finds none), so they remain unactionable without the operator's list.
+- PG-67's non-conflicting end-to-end check moves the destination from an `onSleep` hook, so the
+  exact cycle on which the divergence is observed depends on the tick boundary; it always asserts
+  that a reconciliation happened, publication succeeded and the counter was kept.
+- PG-67 blocks on a conflict but does not retry automatically after the operator's hand
+  reconciliation; the answer resumes the same cycle, which re-syncs.
+- Carried in the handoff, not worked: `.github/CODEOWNERS` dead path (proposal territory), broad
+  env-manifest ownership, and the V-07/V-08/V-10/V-11 defect IDs that need the operator's list.

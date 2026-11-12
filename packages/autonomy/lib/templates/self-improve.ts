@@ -52,6 +52,8 @@ export interface CycleEntry {
   mode: ReportMode | null;
   merged: boolean;
   mergeReason: string;
+  /** True when the publish-blocked answer's rollback discarded this cycle's local-only history. */
+  discarded?: boolean;
   review: CycleReview["verdict"] | null;
   costUsd: number;
   decisions: Array<Pick<CycleDecision, "decision" | "reason" | "triggers">>;
@@ -228,6 +230,10 @@ function publishNow(ctx: StepContext): void {
   try {
     const r = gm.publish(repo.git(), siConfig(ctx.cfg), si.lastPushed);
     si.lastPushed = r.state;
+    // Nothing was pushed when the destination already holds the published state (for example after
+    // a blocked-publication reset). Only a real push is a successful publish, so only it clears the
+    // blocker and the streak; otherwise an unchanged state would silently reset the guard.
+    if (!r.pushed) return;
     if (si.publishError) log("publish recovered");
     si.publishError = null;
     si.publishBlocker = null;
@@ -239,6 +245,76 @@ function publishNow(ctx: StepContext): void {
     // A generic failure must not erase a real leak-scan blocker; only a PublishBlocked sets it (a successful publish clears it above).
     if (e instanceof gm.PublishBlocked) si.publishBlocker = message;
   }
+}
+
+/**
+ * The integration head recorded in the last successfully published refs state, or the seed when
+ * nothing has been published yet. The state string is `for-each-ref` output: `<sha> <refname>`.
+ */
+function lastPublishedHead(si: SelfImproveState, integrationBranch: string): string {
+  for (const line of (si.lastPushed ?? "").split("\n")) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (sha !== undefined && ref === `refs/heads/${integrationBranch}`) return sha;
+  }
+  return si.seedSha;
+}
+
+/** The mergeReason the publish-blocked rollback writes on the cycles it discarded. */
+const DISCARDED_BY_RESET = "discarded by the publish-blocked reset to ";
+
+/**
+ * Roll the local integration branch back to the last published state after the operator answers the
+ * publish-blocked question. Merged-but-unpublished cycles cannot be pushed (the leak scan refuses
+ * their commits, and publication is fast-forward only), and removing the identifier in a later
+ * commit leaves the refused commit in the range. Discarding that local-only history is the only
+ * way the answer can reach a publishable state; the next cycle redoes the work. The streak is left
+ * set, so a cycle that reintroduces the identifier parks the run again as before.
+ */
+function resetToLastPublished(ctx: StepContext): void {
+  const { repo, log } = ctx;
+  const cfg = siConfig(ctx.cfg);
+  const si = siState(ctx.state);
+  const g = repo.git();
+  const ref = `refs/heads/${cfg.integrationBranch}`;
+  const current = g(["rev-parse", ref]);
+  const published = lastPublishedHead(si, cfg.integrationBranch);
+  // The integration branch only ever fast-forwards, so the published head is an ancestor. A
+  // non-ancestor would mean the remote moved independently; publishing will surface that itself.
+  if (g(["merge-base", "--is-ancestor", published, current], { allowFail: true }) === null) return;
+  if (published !== current) g(["update-ref", ref, published, current]);
+  // The refused publish scanned the discarded cycle tags too, and with tag publication on (the
+  // default) they would be scanned again and refuse the answer's push. Drop this run's tags for
+  // the discarded history (cycle and abandoned tags alike); only tags that are not ancestors of
+  // the published head are affected. This also runs when the branch is already back at the
+  // published head: an unmerged answer cycle can leave a refused tag that a later clean push
+  // would scan.
+  const tagPrefix = `refs/tags/${cfg.tagPrefix}`;
+  let dropped = 0;
+  for (const line of g(["for-each-ref", "--format=%(objectname) %(refname)", `${tagPrefix}*`]).split("\n")) {
+    const [sha, tagRef] = line.trim().split(/\s+/);
+    if (sha === undefined || tagRef === undefined) continue;
+    if (g(["merge-base", "--is-ancestor", sha, published], { allowFail: true }) === null && g(["update-ref", "-d", tagRef, sha], { allowFail: true }) !== null) dropped += 1;
+  }
+  // The next cycle's prompt reads the last entry, and telling the worker that the work is
+  // integrated (or pointing at a report that is no longer on the branch) would hide the redo.
+  // Keep `merged` as the historical fact (the cycle-start bundle logic also treats an unmerged
+  // cycle's tag as fetchable, and the rollback just dropped those tags), but mark every entry
+  // whose head is not an ancestor of the published head as discarded so the prompt says so.
+  for (const entry of si.history) {
+    if (g(["merge-base", "--is-ancestor", entry.head, published], { allowFail: true }) !== null) continue;
+    entry.discarded = true;
+    entry.mergeReason = `${DISCARDED_BY_RESET}${published.slice(0, 12)}`;
+  }
+  si.lastGoodSha = published;
+  // Record the post-reset state so the cycle-start publish is a no-op for the integration branch:
+  // discarding the unpublishable history must not itself look like a successful publish (the next
+  // real push, after the answer cycle, is what clears the blocker and the streak).
+  si.lastPushed = gm.refsState(g, cfg);
+  if (published === current) {
+    if (dropped > 0) log(`publication blocked: dropped ${String(dropped)} tag(s) for discarded history; the integration branch already matches the published ${published.slice(0, 12)}`);
+    return;
+  }
+  log(`publication blocked: moved ${cfg.integrationBranch} from ${current.slice(0, 12)} back to the last published ${published.slice(0, 12)}${dropped > 0 ? `, dropping ${String(dropped)} tag(s)` : ""}; the unpublished merges are discarded and the next cycle redoes the work`);
 }
 
 // --- one cycle ----------------------------------------------------------------------------------------
@@ -260,7 +336,9 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
-    if (last.merged) {
+    if (last.discarded) {
+      previous += `its local work was discarded when the publish-blocked answer rolled ${cfg.integrationBranch} back to the last published head; redo it in this cycle instead of looking for its report on the branch.`;
+    } else if (last.merged) {
       previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
       if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider ${stewarded ? "any assigned improvements" : "improve mode"}.`;
@@ -404,6 +482,7 @@ async function runStep(ctx: StepContext): Promise<void> {
     // single cycle. If the leak scan still refuses that cycle's publication, publishBlocker and
     // publishBlockedCycles stay set, so the next runStep parks here again with a fresh question.
     if (state.pendingAnswer?.id === "publish-blocked") {
+      resetToLastPublished(ctx);
       ctx.save((s) => { s.pendingAnswer = null; });
     } else {
       const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";

@@ -298,10 +298,14 @@ export function buildCompressedSummary(event: SessionBeforeCompactEvent, note = 
     return text;
   };
   const cost = (i: number) => turnAt(i).length + 2;
-  for (const i of [0, turns.length - 1]) {
-    if (i < 0 || kept.has(i)) continue;
-    kept.add(i);
-    remaining -= cost(i);
+  // groupTurns can legitimately return no turns (e.g. a lone assistant message that renders to
+  // nothing). Only index into the array when there is something to keep.
+  if (turns.length > 0) {
+    for (const i of [0, turns.length - 1]) {
+      if (i < 0 || kept.has(i)) continue;
+      kept.add(i);
+      remaining -= cost(i);
+    }
   }
 
   let previous = "";

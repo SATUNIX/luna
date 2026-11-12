@@ -835,7 +835,7 @@ export default function (pi: ExtensionAPI) {
 
   function statusText(): string {
     const s = snapshot();
-    const lines = [`Effort: ${s.code} ${s.label} (${s.source === "default" ? "default" : s.source === "user" ? "saved default" : s.source === "env" ? "pinned by PI_KIT_EFFORT" : "capped by the parent"})${s.pinned && s.source !== "env" ? "" : ""}`];
+    const lines = [`Effort: ${s.code} ${s.label} (${s.source === "default" ? "default" : s.source === "user" ? "saved default" : s.source === "env" ? "pinned by PI_KIT_EFFORT" : "capped by the parent"})`];
     if (s.pendingTier) lines.push(`  next message: ${label(s.pendingTier)}`);
     lines.push(`  limits: ${s.limits.maxConcurrent} concurrent, ${s.limits.maxTotal} total, ${s.limits.maxScouts} scout${s.limits.maxScouts === 1 ? "" : "s"} (children per request, counted at every depth)`);
     if (s.ledger) lines.push(`  this request: ${s.usage.live} running, ${s.usage.total}/${s.limits.maxTotal} used, ${s.usage.scouts}/${s.limits.maxScouts} scouts`);

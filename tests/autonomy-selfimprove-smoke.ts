@@ -702,6 +702,49 @@ await check("PG-55: answering the publish-blocked question runs exactly one cycl
   assert.equal(state.pendingAnswer ?? null, null, "the answer was consumed");
 });
 
+await check("PG-55: answering the publish-blocked question with a leak-free cycle publishes and the run continues", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const slot: { engine?: MadeEngine } = {};
+  let answered = 0;
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => {
+      if (!slot.engine) return;
+      const s = h.state();
+      if (s.status === "blocked" && s.blocker?.id === "publish-blocked" && answered === 0) {
+        answered = 1;
+        h.store.enqueue("answer", { text: "Remove the identifier and resume" });
+      }
+    } },
+    script: async (t) => {
+      prompts.push(t.message);
+      if (t.step <= 2) { t.write("AUDIT_OK", "1"); t.write("internal/private-note.txt", `synthetic private-path fixture ${t.step}`); report(t, "successful"); t.commit(`leak cycle ${t.step}`); return; }
+      if (t.step === 3) { t.remove("internal"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("remove the identifier before publishing"); return; }
+      t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit(`cycle ${t.step}`);
+    },
+  });
+  slot.engine = h.engine();
+  assert.ok(slot.engine, "the engine was created");
+  await slot.engine.engine.run();
+  const state = h.state();
+  assert.equal(answered, 1, "the operator answered the publish-blocked question once");
+  assert.equal(prompts.length, 4, "the answer ran a cycle and a later cycle started, proving the run continued");
+  assert.equal(state.selfImprove?.history[2]?.merged, true, "the leak-free answer cycle merged");
+  assert.equal(state.selfImprove?.publishBlocker ?? null, null, "the leak-free publication cleared the blocker");
+  assert.equal(state.selfImprove?.publishBlockedCycles ?? 0, 0, "and the unpublished-cycle streak");
+  assert.equal(state.selfImprove?.history[0]?.discarded, true, "the first discarded cycle is recorded as discarded");
+  assert.equal(state.selfImprove?.history[1]?.discarded, true, "the second discarded cycle is recorded as discarded");
+  assert.match(state.selfImprove?.history[0]?.mergeReason ?? "", /discarded by the publish-blocked reset/, "the record says why the cycle was discarded");
+  assert.match(prompts[2] ?? "", /discarded when the publish-blocked answer rolled/, "the answer cycle is told the work was discarded and to redo it");
+  const tags = sh(bare, "tag", "--list");
+  assert.doesNotMatch(tags, /cycle-01|cycle-02/, "the discarded cycle tags are not published");
+  assert.notEqual(state.blocker?.id, "publish-blocked", "the run is not parked on the publish-blocked question");
+  const pushed = sh(bare, "ls-tree", "-r", "--name-only", "refs/heads/pi-autonomy/integration");
+  assert.doesNotMatch(pushed, /internal\/private-note\.txt/, "the pushed integration branch carries no leaked path");
+});
+
 await check("PG-55: a non-merged cycle between refused merges does not reset the blocked-cycle count", async () => {
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const prompts: string[] = [];

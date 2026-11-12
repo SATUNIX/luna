@@ -15,7 +15,10 @@
 //  12. projects are keyed by canonical root, so same-named repositories never share recall;
 //      symlinked roots never split, a moved root is reported rather than taken over.
 //  13. the first-prompt recall is framed as background history, never a resume prompt; a huge
-//      recap body is truncated with the header and footer kept.
+//      recap body is truncated with the header and footer kept; oversized recaps leave room
+//      for pinned/relevant memories, and with none present the recap is still truncated.
+//  14. oversized recaps with no pinned or matching memory are truncated, not dropped.
+//  15. pinned memories that outrank a relevant one do not crowd it out of the first-prompt recall.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -128,6 +131,9 @@ try {
     const pi2 = fakePi();
     ext.createMemoryVault(pi2.api, { complete: async () => reply });
     await pi2.handlers.get("session_start")({}, ctx);
+    // A run started by an extension custom message must not consume the first-user-prompt recall.
+    const custom = await pi2.handlers.get("before_agent_start")({ messageType: "custom", message: { customType: "x", content: "hi" }, systemPrompt: "SYS" }, ctx);
+    assert.equal(custom, undefined, "a custom-message run recalls nothing and keeps the first-user-prompt flag");
     const first = (await pi2.handlers.get("before_agent_start")({ prompt: "continue with the auth redirects work", systemPrompt: "SYS" }, ctx)) as Recall;
     assert.equal(first.systemPrompt, undefined, "memory never rewrites the system prompt");
     assert.equal(first.message.display, false);
@@ -347,13 +353,17 @@ try {
       const longDid = "Moved the auth module. ".repeat(60);
       const longNext = "Finish migrating the auth module. ".repeat(60);
       for (let i = 0; i < 5; i++) vault.appendRecap(truncRoot, "trunc", { title: `Auth migration ${i}`, did: longDid, next: longNext }, date);
+      // Pinned and relevant memories must survive the oversized recaps, and must be marked
+      // injected only if their own line survives truncation.
+      vault.saveMemory(truncRoot, { title: "Pinned anchor memory", body: "The operator pinned this for every session.", pinned: true, project: "trunc" });
+      vault.saveMemory(truncRoot, { title: "Auth migration checkpoint", body: "The auth module migration was paused mid-move; resume it next.", project: "trunc" });
       const recapFile = path.join(truncRoot, "Projects", "trunc", "Recaps", "2026-09-24.md");
       const before = fs.readFileSync(recapFile);
       const pi = fakePi();
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello, continue the auth migration", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.equal(result.message.display, false);
       assert.equal(result.systemPrompt, undefined);
       assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the recall starts with the history header");
@@ -362,14 +372,78 @@ try {
       assert.match(result.message.content, /current message/i);
       assert.doesNotMatch(result.message.content, /Where we left off/);
       assert.doesNotMatch(result.message.content, /\*\*Next:\*\*/);
-      assert.doesNotMatch(result.message.content, /### Relevant memories/);
+      assert.match(result.message.content, /### Pinned memories/, "the pinned block survives the oversized recaps");
+      assert.match(result.message.content, /Pinned anchor memory/, "the pinned memory survives the cap");
+      assert.match(result.message.content, /### Relevant memories/, "the relevant block survives the oversized recaps");
+      assert.match(result.message.content, /Auth migration checkpoint/, "the relevant memory survives the cap");
       assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
       assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
       assert.deepEqual(fs.readFileSync(recapFile), before, "the on-disk recap is unchanged");
-      ok("a greeting gets background history, not a resume prompt; truncation keeps the header and footer");
+      ok("a greeting gets background history, not a resume prompt; oversized recaps leave room for pinned and relevant memories");
     } finally {
       restoreTrunc();
     }
+  }
+
+  // 14. Oversized recaps with no pinned and no matching memory are still truncated (header,
+  //     marker and footer kept), not dropped when the recap cannot share room.
+  {
+    const soloRoot = path.join(ws, "vault-trunc-solo");
+    const repo = path.join(ws, "trunc-solo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restoreSolo = setEnv("PI_KIT_VAULT", soloRoot);
+    try {
+      const date = new Date(2026, 8, 24, 9, 0);
+      const longDid = "Moved the auth module. ".repeat(60);
+      const longNext = "Finish migrating the auth module. ".repeat(60);
+      for (let i = 0; i < 5; i++) vault.appendRecap(soloRoot, "trunc-solo", { title: `Solo migration ${i}`, did: longDid, next: longNext }, date);
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc-solo" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the header survives a recap-only truncation");
+      assert.match(result.message.content, /### Earlier sessions/, "an oversized recap is still shown");
+      assert.match(result.message.content, /truncated; use memory_search for more/, "the recap is truncated, not dropped");
+      assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
+      assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
+      ok("oversized recaps alone are truncated, not dropped");
+    } finally {
+      restoreSolo();
+    }
+  }
+
+  // 15. Pinned memories ranking above a relevant one must not crowd it out of the first-prompt
+  //     recall: the search over-fetches by the pinned count, so filtering the pins (which are
+  //     shown in their own block) still leaves a slot for the relevant hit behind them.
+  {
+    const pinRoot = path.join(ws, "vault-pinned-recall");
+    const repo = path.join(ws, "pinned-recall");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const restorePin = setEnv("PI_KIT_VAULT", pinRoot);
+    // Keep the relevance floor out of this check: the defect is the over-fetch limit, not the
+    // gate, and a lower floor makes every candidate eligible so only the limit decides.
+    const restoreFloor = setEnv("PI_KIT_MEMORY_MIN_SCORE", "0.1");
+    try {
+      // Distinct bodies (a shared body would be deduplicated into one note) that all outrank the
+      // non-pinned memory for the query. Three pins fill `recallLimit` on the first turn.
+      const markers = ["amber", "birch", "cobalt"];
+      for (const marker of markers) vault.saveMemory(pinRoot, { title: `Kestrel migration rollout ${marker}`, body: `Kestrel migration rollout ${marker}.`, pinned: true, project: "pinned-recall" });
+      const relevant = vault.saveMemory(pinRoot, { title: "Kestrel migration rollback", body: "A kestrel migration rollout can be rolled back safely.", project: "pinned-recall" });
+      const pi = fakePi();
+      ext.createMemoryVault(pi.api, { complete: async () => "{}" });
+      const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-pinned-recall" } };
+      await pi.handlers.get("session_start")({}, ctx);
+      const result = (await pi.handlers.get("before_agent_start")({ prompt: "kestrel migration rollout", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.match(result.message.content, /### Pinned memories/, "the pinned block is shown");
+      assert.match(result.message.content, /### Relevant memories/, "a relevant memory still appears when pinned memories rank above it");
+      assert.match(result.message.content, /Kestrel migration rollback/, "the non-pinned relevant memory survives the pinned block");
+      assert.ok(result.message.content.includes(`[${relevant.rel}]`), "the relevant memory is named by its rel");
+    } finally {
+      restoreFloor();
+      restorePin();
+    }
+    ok("pinned memories ranking above a relevant one do not crowd it out of the first-prompt recall");
   }
 
   console.log(`[memory-vault-smoke] all ${checks} checks passed`);

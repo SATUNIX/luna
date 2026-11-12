@@ -2,40 +2,64 @@
 
 ## Where the work stands
 
-- Branch `pi/luna-core-01`, base `d5c2cffe6d06` (head of `stream/core`, holds cycles 01–10).
-  Cycle 11 commits, all pushed: `7ec19bf` (review+plan), `822fcc8` (PG-51 carry-over), `6c98e36`
-  (`/compress` budget fix), plus the records under `autonomy/cycles/luna-core-01/11/` and the
-  `luna-core-01/11` line in `autonomy/JOURNAL.md`.
-- Cycle 11 outcome: **successful** (fix).
-- Reviewable diff 23,627 chars — under the 60,000 read budget and the 30,000 stop-new-items mark.
+- Branch `pi/luna-core-01`, base `ff6083ca18b2` (head of `stream/core`, holds cycles 01–16).
+  Cycle 17 commit: `3c1a9f3` (memory-vault first-turn recall over-fetches by the pinned count and
+  only excludes already-injected rels, so pins no longer crowd out relevant memories and a
+  truncated pin stays searchable), plus the records under `autonomy/cycles/luna-core-01/17/`.
+  - Cycle 17 outcome: **successful** (fix). One scout-found defect fixed and pinned by a new
+  `smoke:memory-vault` check 15 that fails on base `ff6083ca18b2` (`expected: /### Relevant
+  memories/`) and passes on head. All targeted checks green; diff 11,112 chars over 3 files,
+  +81/−26.
+  - The independent reviewer subagent hung without a verdict for the second cycle running
+  (`2026-11-11T22-23-38-772Z-reviewer-20dbf0` ends on a bare `tool_execution_start`). Verdict
+  replaced by objective base-vs-head checks, as in cycle 16. A second item plan was refused
+  (`plan-allowance`, 7/8 agents used); the implementer/reviewer fell back to `subagent`.
+  - Cycle 17 left three proposals: `luna-core-01-17-context-sieve-message-framing.md` (LOW),
+  `luna-core-01-17-doc-drift-64-token-and-guidelines.md` (doc-only one-liners), and
+  `luna-core-01-17-skill-trigger-session-lifetime.md` (security-adjacent, operator decision).
+  - Still deferred: HANDOFF #4 `tests/orchestrate-commands-smoke.ts` not clearing
+  `PI_KIT_INTERNAL_CHILD` (test robustness only); V-07/V-08/V-10 still need the operator's finding
+  list; #1 firewall timing noise is out of stream.
 
-## What cycle 11 did
+## What cycle 15 did
 
-1. **Carried the PG-51 timing guards (HANDOFF item 1).** Applied the cycle-08 tests-only range:
-   `tests/timing.ts`'s `cpuMs()` now reads the calling thread's CPU (`process.threadCpuUsage()`,
-   `process.cpuUsage()` fallback), the `workflow-redaction` guard is best-of-nine and warms both
-   sizes, and the load harness lists only CPU-bound smokes. No product code changed.
-2. **Fixed a `/compress` budget overrun.** `packages/extensions/src/compress/index.ts` undercounted
-   the final summary: `previous` added a separator not in `fixed`, and the ~45-char omission marker
-   was never charged to `remaining`. Measured 4047 against a 4000 budget. The fix charges
-   `## Conversation\n` to `fixed` and reserves the marker and its separator before the older-turns
-   loop; a new case `testBudgetReservesOmissionMarker` fails before and passes after.
+1. **Memory-vault first-prompt recall.** `memory-vault/index.ts` cleared `firstPrompt` on every
+   `before_agent_start`, including a run started by an extension custom message, so the real first
+   user prompt lost the earlier-session recap and pinned-memory block. Now the flag clears only on
+   a user prompt and the recap block is gated on `firstPrompt && "prompt" in event`. Pinned by a
+   new assertion in `tests/memory-vault-smoke.ts`; docs say "first user prompt".
+2. **Dead code.** Removed the always-empty ternary in `effort/index.ts` and the `memory-vault` /
+   `skill-router` ids in `context-sieve/index.ts` that no producer writes. Behaviour unchanged;
+   `smoke:effort` 38/38 and `smoke:ctx-contributions` 13/13.
+
+## What cycle 12 did
+
+1. **PG-55: the publish-blocked answer can now publish.** The answer rolls the local integration
+   branch back to the last published head with an ancestor-guarded `update-ref`, drops every run
+   tag whose commit is not an ancestor of that head (`cycle-NN` and `abandoned-NN` alike), marks
+   those history entries `discarded` so the next prompt says to redo the work, and keeps the
+   blocker/streak until a real push. A new smoke parks on two refused merges, answers, removes the
+   leak, and asserts a later cycle starts.
+2. **PG-19: paperwork budget.** `packages/core/paperwork-budget.ts` caps a cycle's four record
+   files at 60 lines and requires exactly one matching `JOURNAL.md` line (exit 1 on overrun, 2 on
+   bad args). It is a documented manual steward check, not a merge gate. This cycle's own four
+   files are 49/60.
+3. **V-81: footprint CLI.** `node packages/core/eval/footprint.ts --profile <name> [--json]
+   [--write-baseline]` prints the tool text, derived tokens and baseline problems; the write is
+   atomic and byte-identical when the record has not changed. Documented in
+   `docs/efficiency-and-loops.md`; `smoke:eval-footprint` is 13 checks.
 
 ## Checks that were run
 
-`compress-smoke` (9/9), `tool-capture-smoke` (14), `trace-ledger-bound-smoke` (5),
-`workflow-redaction-smoke` (4), `workflow-structured-smoke` (7), `workflow-sandbox-smoke` (19),
-`docs-smoke` (green, journal gate included) — all PASS. `timing-load-check` **53/55**: the two
-failures are `firewall-gate-smoke.ts`'s `redact on 200 KB` guard, which is not in this cycle's diff
-— see the new proposal below. Never ran `npm test` or `npm run check:all`. Independent reviewer on
-Item A: `VERDICT: PASS`; Item B had no independent reviewer (E3 child allowance exhausted) and needs
-one at merge review. See `verify.md`.
+`smoke:autonomy-selfimprove` (43/43), `smoke:paperwork-budget` (5/5), `smoke:eval-footprint`
+(13/13), `test:typecheck`, targeted `eslint`, `smoke:docs`, and the paperwork CLI on this cycle
+(49/60, one journal line). Never ran `npm test` or `npm run check:all`. Independent reviewer on
+`363dba0b9a25..be8f294`: **VERDICT PASS** after `be8f294`.
 
 ## Merge
 
-Every targeted check passes, but Item B lacks an independent review. Merge `pi/luna-core-01` into
-`stream/core` only after the host acceptance checks pass on a clean checkout and merge review covers
-Item B.
+All targeted checks pass and the independent review passed. Merge `pi/luna-core-01` into
+`stream/core` once the host acceptance checks pass on a clean checkout.
 
 ## Carry over to the next cycle
 
@@ -59,9 +83,22 @@ Item B.
    runner's watchdog semantics (`autonomy/proposals/luna-core-01-08-sandbox-watchdog-load.md`).
 8. Defect IDs V-07/V-08/V-10 still need the operator's in-tree finding list; the owner-side
    `coverage` CI job is red and untouched.
-9. Lower-priority found defects, not chosen: stale `session_start` "wipe" docs
-   (`docs/capability-research-workflow.md:45-48`, `third_party/caveman/index.ts:194`; code is
-   mtime-scoped) and dead code (`effort/index.ts:838`, `context-sieve/index.ts:67`).
+9. Remaining lower-priority found defect: HANDOFF #4, `tests/orchestrate-commands-smoke.ts` does
+   not clear `PI_KIT_INTERNAL_CHILD`; test robustness only. The cycle-13 stale "wipe" docs and the
+   cycle-15 dead-code sites are already fixed. V-07/V-08/V-10 still need the operator's finding list.
+10. **context-sieve hidden-message framing is outside its budget** (LOW, token efficiency):
+    `assembleWithBudget` bounds only the contribution text while the 78-char header and the
+    `stillCurrent` line are appended after, and `message.tokens` measures only the blocks. Suggested
+    fix and tests in `autonomy/proposals/luna-core-01-17-context-sieve-message-framing.md`.
+11. **Two doc drifts, one line each:** `docs/architecture/memory-compaction-context.md`'s "never
+    below 64 tokens" is false (the floor is itself capped at half the window; `tests/context-budget-smoke.ts:321`
+    pins 50 for a 100-token window), and `packages/extensions/src/guidelines/README.md` lists a
+    search path (`AGENTS.md`) the code never reads and omits the `pentest` profile. See
+    `autonomy/proposals/luna-core-01-17-doc-drift-64-token-and-guidelines.md`.
+12. **skill-router `re:` switch-off outlives the session** (security-adjacent, operator decision):
+    `match.ts` mutates process-lifetime `compiled`/`refusedTriggers` and `session_start` never clears
+    them, while the comment and two docs say "for the session". Options in
+    `autonomy/proposals/luna-core-01-17-skill-trigger-session-lifetime.md`.
 
 ## Rules for the next session
 

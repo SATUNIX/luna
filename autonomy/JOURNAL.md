@@ -20,7 +20,7 @@ One line per autonomy cycle report: `- <run>/<NN> | Board: <ID[, ID]>|none | <ou
 - luna-ops-01/04 | Board: V-41 | successful | Repaired the red smoke:docs journal gate for luna-ux-01/01 and recorded the V-04 /workflow(s) caller inventory
 - luna-fleet-01/05 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs into workflow_status and /workflows and repaired the red gate checks
 - luna-fleet-01/06 | Board: O-01, A-92 | partial | Carried PG-03 autonomy runs onto a clean base, repaired red smoke:docs gate, and recorded the cycle
-- luna-ux-01/03 | Board: V-01, V-03 | partial | Re-landed the reviewed overlay frame and transcript dim improvements and carried the /settings-into-/menu V-03 work to cycle 04
+- luna-ux-01/03 | Board: V-09, DE-101 | successful | Cycle 03: vendored workflow-panel provenance recorded; pairing panel row budget fixed
 - luna-ux-01/06 | Board: V-03 | successful | Folded /settings into /menu as the primary command with kit/helpers aliases and a Settings page, and repaired the smoke:docs journal gate for luna-ux-01/03
 - luna-ux-01/07 | Board: PG-59, V-05 | successful | Merged upstream trunk preserving both sides, made the trunk-gap notice own the session-start kit notice so pi-compat lanes pass, and re-verified the already-shipped launch screen
 - luna-ux-01/08 | Board: V-73, PG-12 | successful | Re-landed the reviewed V-73 alias wording and the alias-target-missing command-contract rule, fixed the withOverlayFrame dim leak when build throws, and re-verified the already-merged PG-12 trunk-ahead notice

@@ -2,88 +2,75 @@
 
 - Branch `pi/luna-ux-01`, cycle base `dfb939dd9e0a` (head of `stream/ux`).
 - Stream area: TUI overlays, the `/` menu, launch screen, animation and polish (V-01, V-02, V-03,
-  V-05, V-09). Assigned board items: **DE-101** (P1) and **V-09** (P3); there is no board file.
-- Mode chosen: **fix**. Both assigned items are already merged at the base, so the cycle verifies
-  them and fixes the first real defect the review finds (work precedence 4).
+  V-05, V-09). Assigned board items this cycle: **DE-101** (P1) and **V-09** (P3).
+- Mode: **fix**. Both assigned items were checked against the code before anything was changed.
+- The steward's mid-cycle steer is authoritative for this cycle: DE-101 is on the board's `review`
+  column (do not redo it), and V-09's acceptance is narrowed to one clause — a dated vendored-docs
+  entry plus the test that pins it. That clause is what this cycle implemented.
 
 ## Precedence
 
-No red gate and no upstream conflict at the base. Board items come first: DE-101 and V-09 were
-checked against the code, not against the cycle reports.
+No red gate and no upstream conflict at the base. Board items come first: DE-101 and the V-09 clause
+were checked against the tree, not against earlier cycle reports.
 
-## DE-101 — already complete at the base (verified)
+## DE-101 — already merged, on the board's `review` column (not redone)
 
-The six landing-review findings are implemented, documented and pinned by tests that fail on the
-earlier source (cycle 01 commits `c56acda`, `922e732`, `834963d`, `c638796` are ancestors of the
-base):
+The six landing-review findings are in the base and pinned by tests (cycle 01 commits `c56acda`,
+`922e732`, `834963d`, `c638796` are ancestors of it):
 
-1. `packages/extensions/src/control-center/hub.ts:173-190` — `HIDDEN_DISPLAY_CHARS` is the same
-   `\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}` class as `HIDDEN_CHARS` in
-   `packages/autonomy/lib/notebook.ts:126`, applied after `stripTerminalSequences`, with the
-   `MAX_DISPLAY_LENGTH = 500` bound. Cases for alternate screen, reset, C1 CSI, bidi and the cap are
-   in `tests/control-center-smoke.ts`; `docs/control-center.md` describes the filter.
-2. `packages/autonomy/lib/inbox.ts:56` uses `isIsoTimestamp()` imported from `./board.ts` (the same
-   strict ISO-with-offset check the board uses).
-3. `packages/autonomy/cli.ts:724` throws `CliError("refused", ...)` naming the card and its outcome
-   when `--answer` targets a settled card (exit 3 per `EXIT` at `:61`).
-4. `packages/autonomy/cli.ts:721,733-737` collapses card text and the recorded timestamp with
-   `HIDDEN_CHARS` to one visible line, as `lib/store.ts` does.
-5. `packages/autonomy/lib/inbox.ts:69-70` refuses `answer`/`outcome` in an uploaded file.
-6. `packages/extensions/src/remote-control/index.ts:133-168` retries a wide grapheme on the next
-   line after dropping the indent instead of dropping the rest of the word.
+1. `packages/extensions/src/control-center/hub.ts:173-190` — `HIDDEN_DISPLAY_CHARS`
+   (`\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}`, the same class as `HIDDEN_CHARS` in
+   `packages/autonomy/lib/notebook.ts:126`) applied after `stripTerminalSequences`, bounded by
+   `MAX_DISPLAY_LENGTH = 500`; cases in `tests/control-center-smoke.ts`.
+2. `packages/autonomy/lib/inbox.ts:56` — `isIsoTimestamp()` shared with `lib/board.ts`.
+3. `packages/autonomy/cli.ts:724` — `--answer` on a settled card is refused, naming the card.
+4. `packages/autonomy/cli.ts:721,733-737` — the listing collapses card text with `HIDDEN_CHARS`.
+5. `packages/autonomy/lib/inbox.ts:69-70` — `answer`/`outcome` refused in an uploaded file.
+6. `packages/extensions/src/remote-control/index.ts:133-168` — a wide grapheme moves to the next
+   line instead of dropping the rest of the word.
 
-Ran `npm run -s smoke:control-center` (45/45) and `npm run -s smoke:autonomy-inbox` (7/7): both
-pass at the base. No repair was needed.
+`smoke:control-center` (45/45) and `smoke:autonomy-inbox` (7/7) pass at the base, so no repair was
+needed and none was attempted.
 
-## V-09 — both sub-items already merged (verified)
+## V-09 — the one assigned clause was missing, and is now done
 
-- Status bar, todo checklist and remote pairing panel cut by display columns; ASCII glyph set and
-  ellipsis. `packages/extensions/third_party/custom-footer/render.ts`, `widgets.ts:10`
-  (`renderTodoWidget(items, theme, max, ascii, width)`), `index.ts:296-299` (mounts a component so
-  the checklist gets the live width), `width.ts`, and `remote-control/index.ts` `pairPanel`.
-- The working line's tool phrase is cut by columns and whole graphemes (no lone surrogate, ASCII
-  ellipsis in ASCII mode), `widgets.ts:53-66`.
-- `tests/tui-layout-smoke.ts` asserts every line at widths 20/32/40/60/80/120 for all three footer
-  modes, the todo widget, the workflow panel (run and list) and `pairPanel`, with wide and emoji
-  input and the ASCII-mode no-non-ASCII check. `smoke:tui-layout` exits 0 at the base (4 checks).
-- Wiring and vendored notices are already in place (`smoke:tui-layout` in `package.json`, dated
-  entries in both `SOURCE.md`).
+The steward narrowed V-09 to a single clause: a dated 2026-11-12 entry in
+`packages/extensions/third_party/subagent/SOURCE.md` naming `third_party/subagent/wf-panel.ts` and
+the `23725c2` change, plus a `tests/docs-smoke.ts` case that fails without it. The width work the
+older V-09 text described is already merged (`tests/tui-layout-smoke.ts`), so it was not
+re-implemented and no widget, animation or renderer was touched.
 
-So no new V-09 work was invented; the acceptance checks were re-run instead.
+What the review found: `SOURCE.md`'s `- Changes:` log stops at **2026-11-11**; `git log -S maxLines`
+places the panel's height budget in `23725c2` ("feat(ux): land the ux stream's accepted cycles 14 to
+34"), and neither that sha nor `wf-panel.ts`'s `maxLines` appears anywhere in `SOURCE.md`. Nothing in
+the test set required the entry, so the vendored file's provenance could silently drift.
 
-## Cycle 02 carry-over
+## Defect found in-stream (fixed, precedence 4)
 
-Cycle 02's claimed launch-screen change (`ctx.mode`/`hasUI` predicate passed into
-`installLaunchHeader`) is **already in the base**: `packages/extensions/src/control-center/index.ts:103,129-132`
-does exactly that and `tests/launch-screen-smoke.ts:352-362` pins the `mode: undefined` pair.
-That branch's only commit was records; nothing sound remained to cherry-pick. Its report's V-05
-claim is not repeated here — V-05 is not assigned to this cycle.
-
-## Scout findings (read-only, code checked against the hypotheses)
-
-One `scout` reviewed the TUI renderers and reported two real defects; both are in-stream, not
-covered by the completed board items.
-
-**Defect 1 (fixed this cycle).** `pairPanel` (`remote-control/index.ts:185-207`) computes
-`room = termRows - 10` but its fit checks undercount the emitted height: beside, it uses
-`qr.length + 1` and ignores the title lines already in `out` and the details column; stacked, it
+`pairPanel` (`packages/extensions/src/remote-control/index.ts:177-207`) computes
+`room = termRows - RESERVED_ROWS` (10) but its fit checks undercount the height it emits: beside, it
+uses `qr.length + 1` and ignores the title lines already in `out` and the details column; stacked, it
 ignores `out` and assumes the scan/approve sentences take one line although `wrap()` splits them on
-narrower terminals. Measured with the 49-module QR the host actually generates: `pairPanel(offer,
-70, 46)` returns 38 lines for 36 rows, `(80, 45)` 36 for 35, `(60, 46)` 38 for 36. pi clips the top
-of an over-tall widget, so the title and the start of the scan sentence scroll away, and the
-details-only note understates the rows it needs (says 46 where 48 are required). Evidence sweep:
-widths 20-200 x heights 10-100 produced 71 over-budget QR-shown cases, worst 2 lines.
-
-**Defect 2 (proposed, not fixed).** `wf-panel.ts` `footer()` (`:773-776`) follows `this.view`, while
-`render()` (`:788`) falls back to the list when `RunRegistry.prune()` has dropped the open run. An
-open run pruned after 20 newer finished runs leaves the list body with the run-view footer; the
-first key press is swallowed. Written up as
-`autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`.
+narrower terminals. Measured with the 49-module `pirc://pair` QR the host actually generates:
+`(70,46) → 38 lines for 36 rows`, `(80,45) → 36 for 35`, `(60,46) → 38 for 36`; a sweep of widths
+20-200 × heights 10-100 found 71 over-budget QR-shown cases. pi clips the **top** of an over-tall
+widget, so the title and the start of the scan sentence scroll away, and the details-only note
+understated the rows it needs (says 46 where 48 are required).
 
 ## Checked and set aside
 
-- `overlay-frame.ts` framing/dim/mouse math, hub focus clipping, `hubKey` validation, workflow
-  panel height budget, `/settings` folded into `/menu`, and the idle cat (documented as static in
-  `docs/status-bar-and-costs.md`) are already implemented.
-- `smoke:control-center` 45/45, `smoke:workflow-panel` 20/20, `smoke:launch-screen` 13/13,
-  `smoke:command-menu` 14/14, `smoke:menu-settings` 4/4 pass at the base.
+- `wf-panel.ts` `footer()` keys off `this.view` while `render()` falls back to the list after
+  `RunRegistry.prune()` drops the open run: the list body is shown under the run-view legend and the
+  first `down` is swallowed. Real, but outside the assigned clause → proposal
+  `autonomy/proposals/luna-ux-01-03-workflow-panel-footer-after-prune.md`, not fixed here.
+- `docs/remote-control.md` said the QR is "about 25 rows tall and 50 columns wide"; the real link
+  yields 49 modules (27 text rows, 53 columns). Corrected in the same docs commit as the row note.
+- Already merged and verified, not redone: overlay frame and transcript dim, hub focus clipping,
+  `hubKey` validation, workflow panel height budget, `/settings` folded into `/menu`, launch screen
+  `mode`/`hasUI` (cycle 02's claimed fix is in the base at `control-center/index.ts:103,129-132`).
+
+## Records replaced
+
+The `03/review.md`, `03/plan.md`, `03/report.md` and `03/verify.md` present at the cycle base
+described an earlier attempt (base `876471a5`, V-01/V-03). They are replaced by this cycle's records;
+the same replacement updates the `luna-ux-01/03` journal line to what this cycle actually did.

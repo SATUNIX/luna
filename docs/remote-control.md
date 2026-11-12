@@ -48,13 +48,16 @@ flowchart LR
    be reached at and the fingerprint of its certificate. The QR code is about 25 rows tall and 50
    columns wide, so the panel is laid out for the terminal it is in: the QR code beside the details
    when the terminal is wide, above them when it is only tall, and otherwise the details alone,
-   with the size the QR code needs. The details are enough to link a phone by hand. The panel
+   with the size the QR code needs. It reserves ten rows for the rest of the interface, so the QR
+   code is shown only when it fits the remaining rows, and the size it names when it does not fit is
+   a size that really does show the code. The details are enough to link a phone by hand. The panel
    follows the terminal as it is resized. Lines are measured in terminal columns, so a wide
    character or an emoji is never split or allowed past the edge; when a wide character does not fit
    the continuation indent it moves whole to the next line, keeping the rest of the word, and only a
    grapheme wider than the whole line is dropped. `tests/remote-control-extension-smoke.ts`
    pins the three layouts and that no line is wider than the terminal;
-   `tests/tui-layout-smoke.ts` pins the same at 20 to 120 columns with wide input.
+   `tests/tui-layout-smoke.ts` pins the same at 20 to 120 columns with wide input, and that a shown
+   QR code stays inside the rows the panel reserved.
 3. In the app, tap **Link a computer** and scan the QR code. The camera app works too: the code is
    a `pirc://pair` link that opens pi remote. Without a camera, choose **Enter the details
    instead** and type an address, the port and the code; the app then shows the fingerprint of the

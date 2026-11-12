@@ -549,7 +549,7 @@ await check("promotion: none by default; local-branch fast-forwards a branch in 
   assert.equal(sh(src, "for-each-ref", "refs/remotes"), "", "no remote is contacted or created");
   assert.equal(Object.keys(state.promotion.done).length, 1);
   // Idempotent: promoting again does nothing new.
-  const engine = new Engine({ contract: h.contract, cfg: h.cfg, store: h.store, rt: h.runtime(), template: TEMPLATES.implement, effortApi: testEffort });
+  const engine = new Engine({ contract: h.contract, cfg: h.cfg, store: h.store, rt: h.runtime(), template: TEMPLATES.implement, effortApi: testEffort, gateSlots: 0 });
   engine.state = h.state();
   const again = await engine.promote({ sha: rt.repo.head(), approved: false });
   assert.equal(again.status, "done");
@@ -562,7 +562,7 @@ await check("promotion: none by default; local-branch fast-forwards a branch in 
   assert.equal(waiting.state.status, "succeeded");
   assert.equal(waiting.state.promotion.status, "awaiting_approval");
   assert.equal(spawnSyncGit(src2, ["rev-parse", "--verify", "--quiet", "refs/heads/pi/x"]).status, 1, "nothing was written before approval");
-  const e2 = new Engine({ contract: h2.contract, cfg: h2.cfg, store: h2.store, rt: h2.runtime(), template: TEMPLATES.implement, effortApi: testEffort }) as EngineWithRt;
+  const e2 = new Engine({ contract: h2.contract, cfg: h2.cfg, store: h2.store, rt: h2.runtime(), template: TEMPLATES.implement, effortApi: testEffort, gateSlots: 0 }) as EngineWithRt;
   e2.state = h2.state(); e2.rt.repo.open();
   assert.equal((await e2.promote({ sha: waiting.rt.repo.head(), approved: true })).status, "done");
   assert.equal(sh(src2, "rev-parse", "refs/heads/pi/x"), waiting.rt.repo.head());

@@ -10,6 +10,7 @@ import type * as Approvals from "../packages/extensions/src/tool-firewall/approv
 import type * as Feedback from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { array, number, object, optional, parseJsonAs, string, unknownValue } from "../packages/core/lib/guard.ts";
 import { answerPending, startConsole } from "./console-answer.ts";
+import { assertSubQuadratic } from "./perf-budget.ts";
 import { assertCpuWithin } from "./timing.ts";
 
 type FakePi = ReturnType<typeof fakePi>;
@@ -564,7 +565,8 @@ try {
     ok("audit records carry tier/effects/decider/latency and redact secrets");
   }
 
-  // Redaction table for the audit, feedback and judge records (SEC-6), and linear time on 200 KB runs.
+  // Redaction table for the audit, feedback and judge records (SEC-6), and sub-quadratic
+  // (linear) growth from 50 KB to 4x that.
   {
     const { redact } = await loadModule<typeof Feedback>("extensions/tool-firewall/feedback.ts");
     const table: [string, string][] = [
@@ -586,8 +588,10 @@ try {
     ];
     for (const [input, want] of table) assert.equal(redact(input), want, input);
     for (const unit of ["x_token", "DB_", "a-", "mysql ", "curl -u ", "-----BEGIN RSA " + "PRIVATE KEY-----", "token="]) {
-      const text = unit.repeat(Math.ceil((200 * 1024) / unit.length));
-      assertCpuWithin(`redact on 200 KB of ${JSON.stringify(unit)}`, 200, () => redact(text));
+      const small = unit.repeat(Math.ceil((50 * 1024) / unit.length));
+      const large = unit.repeat(Math.ceil((200 * 1024) / unit.length));
+      assertSubQuadratic(`redact, ${JSON.stringify(unit)}`, redact, small, large);
+      assertCpuWithin(`redact on 200 KB of ${JSON.stringify(unit)}`, 200, () => redact(large));
     }
     ok("redact covers PREFIX_TOKEN=value, mysql -p<pw> and curl -u user:pw, in linear time");
     // The CPU-time guard must still have teeth. On a busy host CPU time ignores descheduled

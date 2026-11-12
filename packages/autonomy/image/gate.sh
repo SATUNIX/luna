@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The reference acceptance check for improving THIS kit's own repository (pi-system): its offline
+# The reference acceptance check for improving THIS kit's own repository (Luna): its offline
 # checks, run as one contract check (`run: ["/opt/autonomy/gate.sh"]`). It is an example of a
 # check definition, not a built-in: any contract can name other commands. It runs inside
 # lib/check-runner.ts, so the working directory is already a clean clone of the accepted head

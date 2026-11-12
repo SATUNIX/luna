@@ -20,8 +20,12 @@ the `packages/autonomy` CLI (`pi-autonomy`): it runs that CLI as a child process
 
 For a run with generations (Memento mode), `/autonomy status <run>` also shows generation n/N, the
 last rotation reason and the latest notebook (redacted), and sets the footer status line to
-`memento <run>: gen n/N, <status>; last rotation: ...`. The line changes only when you run that
-command (docs/autonomy.md, "Generations"; `tests/autonomy-command-smoke.ts`).
+`memento <run>: gen n/N, <status>; last rotation: ...`. `/autonomy status` with no run sets a
+one-line fleet footer instead: `autonomy: 3 runs — 1 running, 1 blocked, 1 succeeded; blocked:
+<run> (<question>)`, or clears it when there are no runs. The question is worker-written, so it
+is collapsed to one visible line and truncated; the footer is also cleared when a run's status
+is unusable. The line changes only when you run that command (docs/autonomy.md, "Generations";
+`tests/autonomy-command-smoke.ts`).
 
 ## Why it is a command and not a tool
 

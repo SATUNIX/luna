@@ -87,11 +87,13 @@ flowchart TD
     NOMSG --> TL
 ```
 
-Budgets are 4096 system tokens (`PI_KIT_CTX_BUDGET_TOKENS`) and 1200 message tokens (`PI_KIT_CTX_MESSAGE_BUDGET_TOKENS`), with `CHARS_PER_TOKEN = 4`, and each contribution's own `budgetTokens` is applied as well. With a known model context window the defaults are cut to 10% (system) and 3% (message) of the window when that is smaller, never below 64 tokens, and any budget, even an explicit one, is held to half the window. An unknown window (no model, or `contextWindow <= 0`) keeps the configured numbers and is recorded as `null` in `sieve-budget.json`, together with `windowClamped`. Message-channel contributions are compared one by one with `lastInjected`, a map from contribution id to the text last injected for it this session. Only new or changed contributions are injected; the unchanged ones are named in a single "(Still current, injected earlier in this conversation: ...)" line, and when nothing is new or changed no message is injected and `message.skippedUnchanged` is `true`. The injected ids are recorded under `message.injected` in `sieve-budget.json`. A contribution that disappears is dropped from `lastInjected`, so it is injected again if it comes back, and `lastInjected` is cleared at `session_start` and after every compaction (`tests/context-budget-smoke.ts`).
+Budgets are 4096 system tokens (`PI_KIT_CTX_BUDGET_TOKENS`) and 1200 message tokens (`PI_KIT_CTX_MESSAGE_BUDGET_TOKENS`), with `CHARS_PER_TOKEN = 4`, and each contribution's own `budgetTokens` is applied as well. With a known model context window the defaults are cut to 10% (system) and 3% (message) of the window when that is smaller; the 64-token floor is itself capped at half the window, and any budget, even an explicit one, is held to half the window (`tests/context-budget-smoke.ts` pins this pure-function check). An unknown window (no model, or `contextWindow <= 0`) keeps the configured numbers and is recorded as `null` in `sieve-budget.json`, together with `windowClamped`. Message-channel contributions are compared one by one with `lastInjected`, a map from contribution id to the text last injected for it this session. Only new or changed contributions are injected; the unchanged ones are named in a single "(Still current, injected earlier in this conversation: ...)" line, and when nothing is new or changed no message is injected and `message.skippedUnchanged` is `true`. The injected ids are recorded under `message.injected` in `sieve-budget.json`. A contribution that disappears is dropped from `lastInjected`, so it is injected again if it comes back, and `lastInjected` is cleared at `session_start` and after every compaction (`tests/context-budget-smoke.ts`).
+
+The hidden message's framing, block separators and optional still-current line are charged to the message budget; if the framing cannot fit, no message is injected and its contributions are recorded as dropped (`tests/context-budget-smoke.ts`). The recorded `message.tokens` counts the content actually injected, so it is 0 on a turn that injects nothing.
 
 ## Memory lifecycle (save, search, recap)
 
-Explicit tools and the automatic recap queue both write deduplicated Markdown notes into scope-specific vault folders. Search and recall read a BM25 index built from those notes, but only the automatic recall path applies the relevance floor. Subagent children never recap or recall. The first prompt of a session also gets the three most recent recaps (background history from earlier sessions, history-only — not instructions to resume) and the pinned memories; every prompt gets at most `recallLimit` (3) memories that clear the floor (`minScore` 1.5 and, for multi-term queries, two matching terms), each memory at most once per session. The recall message is capped at 2400 characters and is cleared for reinjection at compaction.
+Explicit tools and the automatic recap queue both write deduplicated Markdown notes into scope-specific vault folders. Search and recall read a BM25 index built from those notes, but only the automatic recall path applies the relevance floor. Subagent children never recap or recall. The first user prompt of a session also gets the three most recent recaps (background history from earlier sessions, history-only — not instructions to resume) and the pinned memories; every prompt gets at most `recallLimit` (3) memories that clear the floor (`minScore` 1.5 and, for multi-term queries, two matching terms), each memory at most once per session per unchanged content (a note edited mid-session is offered again). The recall message is capped at 2400 characters and is cleared for reinjection at compaction.
 
 ```mermaid
 flowchart LR
@@ -186,7 +188,7 @@ flowchart TD
     DET["compress: deterministic summary, active goal pinned"]
     NAT["pi native LLM summary"]
     SC["session_compact"]
-    MVC["memory-vault: clear the injected set"]
+    MVC["memory-vault: clear the injection record"]
     CSC["context-sieve: clear lastInjected"]
     SVC["save: copy the summary to Latest Compact.md and Compacts"]
     SAVE["/save: summariser side call, no compaction"]
@@ -230,7 +232,7 @@ sequenceDiagram
     User->>Sieve: prompt
     Sieve->>Sieve: read contributions, split channels, budget to the model window
     Sieve-->>Model: system prompt plus a hidden context-sieve message
-    MV-->>Model: hidden memory-recall message, the first prompt also gets recaps and pinned memories
+    MV-->>Model: hidden memory-recall message, the first user prompt also gets recaps and pinned memories
     Model-->>User: answer
     MV->>MV: agent_end: digestTurn, then the recap model
     MV->>Vault: appendRecap and promote decision, preference and gotcha candidates
@@ -243,7 +245,7 @@ sequenceDiagram
     PI->>Sieve: session_compact
     Sieve->>Sieve: clear lastInjected
     PI->>MV: session_compact
-    MV->>MV: clear the injected set
+    MV->>MV: clear the injection record
 ```
 
 ## Source files

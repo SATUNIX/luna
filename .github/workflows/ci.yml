@@ -52,10 +52,14 @@ jobs:
 
   # Test coverage of the same suite: check:all again with NODE_V8_COVERAGE set, summarised by
   # packages/core/coverage.ts (no coverage dependency). The line, branch and function figures are
-  # in this job's log and its run summary. It measures; it does not gate on a threshold.
+  # in this job's log and its run summary. It measures; it does not gate on a threshold, and
+  # ci-complete does not wait for it (it is a measure-only job in tests/workflow-policy-smoke.ts), so a
+  # slow runner cannot block a promotion. It runs check:all one check at a time, so it is the slowest
+  # lane: it took 18 to 27 minutes against the old 30 and was cancelled at the limit on a slow
+  # runner. 45 keeps room, and the policy test refuses to let it drop back below 40.
   coverage:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -178,13 +182,13 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_21_X64"
           ./gradlew --no-daemon --no-build-cache --console=plain assembleDebug lintDebug
 
-  # The one required check for this workflow: it succeeds only when every job above
-  # succeeded, so a new job or matrix lane is gated by adding it to `needs` here rather than by
+  # The one required check for this workflow: it succeeds only when every job above except the
+  # measure-only coverage job succeeded, so a new job or matrix lane is gated by adding it to `needs` here rather than by
   # editing the repository ruleset. tests/workflow-policy-smoke.ts checks that `needs` names every
-  # other job.
+  # other job except the measure-only ones it lists (today: coverage).
   ci-complete:
     if: always()
-    needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]
+    needs: [verify, docs-build, profile-regression, pi-compat, android]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

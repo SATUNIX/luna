@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { syncJournal } from "../packages/core/journal.ts";
 import { checkJournal, journalWarnings } from "../packages/core/lib/journal.ts";
 import { installPinFiles, installPinVersions, readmeBadgeAltVersion, readmeBadgeVersion, setInstallPins, setReadmeBadgeVersion } from "../packages/core/lib/version-badge.ts";
 import { skillsCatalogueContent } from "../packages/core/skills-catalogue.ts";
@@ -72,10 +73,10 @@ for (const rel of DOCS) {
   for (const cmd of fencedCommands(md)) {
     const tokens = cmd.split(/\s+/);
     // Node resolves the installer path against the current working directory, so
-    // `node pi-system/...` only works from the clone's parent and breaks from inside the clone.
+    // `node luna/...` only works from the clone's parent and breaks from inside the clone.
     assert.ok(
-      !(tokens[0] === "node" && tokens[1]?.startsWith("pi-system/")),
-      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd pi-system' then 'node packages/core/install.ts ...')`,
+      !(tokens[0] === "node" && tokens[1]?.startsWith("luna/")),
+      `${rel}: '${cmd}' only resolves from the clone's parent; use the clone root ('cd luna' then 'node packages/core/install.ts ...')`,
     );
     const [bin, arg1] = tokens;
 
@@ -202,6 +203,14 @@ const capabilityMd = fs.readFileSync(path.join(ROOT, "docs", "capability-researc
 assert.ok(
   !capabilityMd.includes("includeInCompact}`); context-sieve assembles them under a token budget"),
   "docs/capability-research-workflow.md contains the orphaned duplicated injection-monopoly fragment",
+);
+assert.ok(
+  !capabilityMd.includes("wipes contributions on `session_start`"),
+  "docs/capability-research-workflow.md still claims context-sieve wipes contributions on session_start",
+);
+assert.ok(
+  capabilityMd.includes("module-load epoch"),
+  "docs/capability-research-workflow.md does not describe context-sieve's epoch admission",
 );
 const profilesMd = fs.readFileSync(path.join(ROOT, "docs", "architecture", "profiles-and-install.md"), "utf8");
 assert.ok(
@@ -626,6 +635,22 @@ function removeJournalFixture(fixture: JournalFixture): void {
   }
 }
 
+// syncJournal also skips a host close-out report: no line is derived or written.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "Outcome: partial\n\nHost close-out: the worker exited before recording report.md.\n",
+    );
+    fixture.journal([]);
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal wrote a line for a host close-out report");
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a host close-out report");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
 // An entry whose cycle directory exists but has no report.md fails, naming the key.
 {
   const fixture = journalFixture();
@@ -637,6 +662,131 @@ function removeJournalFixture(fixture: JournalFixture): void {
       problems.some((problem) => problem.includes("journal entry has no report: run-01/01")),
       `journal checker missed an entry with no report: ${problems.join("; ")}`,
     );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// Identical duplicate entries (a `merge=union` artifact) are accepted; only a key repeated
+// with different content is a conflict.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did a thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.deepEqual(problems, [], `identical duplicate entries produced a failure: ${problems.join("; ")}`);
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// The same key twice with different content is a conflict, not a union-merge artifact.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([
+      "- run-01/01 | Board: none | successful | did a thing",
+      "- run-01/01 | Board: none | successful | did another thing",
+    ]);
+    const problems = checkJournal(fixture.root);
+    assert.ok(
+      problems.some((problem) => problem.includes("conflicting journal entries: run-01/01")),
+      `journal checker missed a conflicting duplicate: ${problems.join("; ")}`,
+    );
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// syncJournal derives the missing line, then checkJournal accepts it and a second sync is a no-op.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a derived line");
+    assert.deepEqual(syncJournal(fixture.root), [], "syncJournal was not idempotent");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A report may name a decisions file that does not exist: the derived line must not link it, so
+// checkJournal still accepts the very line it derived (the missing-link regression).
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write(
+      "autonomy/cycles/run-01/01/report.md",
+      "# Report\n\nOutcome: successful\n\nThe decision is in autonomy/decisions/missing.md.\n",
+    );
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, `syncJournal wrote ${wrote.length} lines, expected 1`);
+    const line = wrote[0] ?? "";
+    assert.ok(!line.includes("missing.md"), `derived line linked a missing decisions file: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected the line it derived");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A decisions file named by the report and present on disk is linked, and that link satisfies
+// checkJournal's rule that every decisions file carries a Board line and is referenced.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n\nSee autonomy/decisions/real.md.\n");
+    fixture.write("autonomy/decisions/real.md", "Board: PG-20\n");
+    fixture.journal([]);
+    const wrote = syncJournal(fixture.root);
+    const line = wrote[0] ?? "";
+    assert.ok(line.includes("decisions: autonomy/decisions/real.md"), `derived line omitted the decisions link: ${line}`);
+    assert.deepEqual(checkJournal(fixture.root), [], "checkJournal rejected a linked decisions file");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// syncJournal never follows a link: a committed `autonomy/JOURNAL.md` symlink is refused and the
+// file it points at is left exactly as it was.
+if (process.platform !== "win32") {
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    fixture.write("outside.txt", "# Team journal\n");
+    fs.symlinkSync(path.join(fixture.root, "outside.txt"), path.join(fixture.root, "autonomy", "JOURNAL.md"));
+    assert.throws(() => syncJournal(fixture.root), /symbolic link/, "syncJournal wrote through a symlinked journal");
+    assert.equal(fs.readFileSync(path.join(fixture.root, "outside.txt"), "utf8"), "# Team journal\n", "the link target was modified");
+  } finally {
+    removeJournalFixture(fixture);
+  }
+}
+
+// A cycle directory name is untrusted: one that could forge a second journal line is refused
+// before anything is written, and a journal created by syncJournal is an ordinary readable file.
+{
+  const fixture = journalFixture();
+  try {
+    fixture.write("autonomy/cycles/run-01/01/report.md", "# Report\n\nOutcome: successful\n");
+    const wrote = syncJournal(fixture.root);
+    assert.equal(wrote.length, 1, "syncJournal did not create the journal");
+    const journal = path.join(fixture.root, "autonomy", "JOURNAL.md");
+    const created = fs.readFileSync(journal, "utf8");
+    assert.ok(created.startsWith("# Team journal\n"), "a created journal lacks the standard header");
+    if (process.platform !== "win32") assert.equal(fs.statSync(journal).mode & 0o044, 0o044, "a created journal is not group and world readable");
+    if (process.platform !== "win32") {
+      fixture.write("autonomy/cycles/run-01/02\n- forged | Board: none | successful | forged/report.md", "# Report\n\nOutcome: successful\n");
+      assert.throws(() => syncJournal(fixture.root), /cannot be a journal key/, "syncJournal accepted a forged cycle directory name");
+      assert.equal(fs.readFileSync(journal, "utf8"), created, "a refused sync still changed the journal");
+    }
   } finally {
     removeJournalFixture(fixture);
   }

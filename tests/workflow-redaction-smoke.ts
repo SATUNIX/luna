@@ -128,13 +128,14 @@ try {
       " ".repeat(n),
       "a-".repeat(n / 2),
     ];
-    // Best of three in CPU time, so a GC pause or a busy CI runner does not read as growth.
-    // CPU time (not wall clock) is what makes a busy host harmless; a quadratic rule still grows
-    // its CPU work with the input.
-    const time = (s: string): number => bestCpuMs(3, () => R.redact(s));
+    // Best of nine in CPU time, so a GC pause, a busy CI runner or a one-off scheduler blip does
+    // not read as growth. CPU time (not wall clock) is what makes a busy host harmless; a quadratic
+    // rule still grows its CPU work with the input.
+    const time = (s: string): number => bestCpuMs(9, () => R.redact(s));
     const small = adversarial(64_000);
     const large = adversarial(256_000);
-    small.forEach(time); // warm up
+    small.forEach(time); // warm up both sizes so the first timed large run is not the one that
+    large.forEach(time); // pays for JIT-compiling the pattern and growing the heap
     small.forEach((s, i) => {
       const a = Math.max(time(s), 5); // a quadratic rule takes seconds at 256 KB, far past 10x this floor
       const big = large[i] ?? "";

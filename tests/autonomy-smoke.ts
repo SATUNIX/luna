@@ -499,6 +499,7 @@ await check("git mirror: integration branch seeded and continued, fast-forward o
     assert.equal(g(["rev-parse", `refs/heads/${c.branch}`]), seed);
     let pub = gm.publish(g, c, null);
     assert.equal(remoteRef("refs/heads/experimental/main"), seed);
+    assert.equal(g(["rev-parse", "refs/integration/remote"]), seed, "a successful publish records the pushed remote ref");
     assert.equal(remoteRef("refs/heads/experimental/git-test"), null, "the working branch is never published");
     assert.equal(gm.publish(g, c, pub.state).pushed, false, "nothing new, no push");
 
@@ -533,6 +534,7 @@ await check("git mirror: integration branch seeded and continued, fast-forward o
     pub = gm.publish(g, c, pub.state);
     assert.equal(pub.pushed, true);
     assert.equal(remoteRef("refs/heads/experimental/main"), c2);
+    assert.equal(g(["rev-parse", "refs/integration/remote"]), c2, "a publish advances the recorded remote ref");
     assert.equal(remoteRef("refs/tags/exp/git-test/cycle-01"), c2);
     assert.equal(remoteRef("refs/heads/main"), base, "main untouched");
     assert.equal(remoteRef("refs/tags/v9.9.9"), null);

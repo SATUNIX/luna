@@ -26,8 +26,10 @@ that step's child.
 
 Each step's task must stand alone; the previous step's output is `{previous}`, and
 `{{steps.<id>.output}}` names an earlier step by id. A failed step fails the run unless it has
-`continue_on_error`. A `gate` `{pass, retry, max_loops}` sends work back until the output matches
-`pass`; keep `max_loops` low.
+`continue_on_error`. A `gate` `{pass, retry, max_loops}` sends work back until the reviewer's
+verdict line — the last non-empty line of the output — matches `pass`, and a `/regex/` is tested
+on the output tail; keep `max_loops` low. A reviewer told to answer `VERDICT: PASS` or
+`VERDICT: FAIL` should be gated on an anchored `/regex/` so an echoed template line cannot pass.
 
 `expand: true` lets a step answer `{"steps":[...]}` or `{"done":"..."}` when the work is only
 clear once running. It counts as 2 agents, so it needs E3 or above; its steps cannot use a tool
@@ -39,7 +41,7 @@ a step per item. For a bigger job, run one plan per phase across turns and read 
 before deciding the next.
 
 ```json
-{"steps":[{"id":"fix","task":"Fix the bug in src/a.ts. Run npm test."},{"agent":"reviewer","task":"Review: {previous}. Say PASS or FAIL.","gate":{"pass":"PASS","retry":"fix","max_loops":2}}]}
+{"steps":[{"id":"fix","task":"Fix the bug in src/a.ts. Run npm test."},{"agent":"reviewer","task":"Review: {previous}. End with one line: VERDICT: PASS or VERDICT: FAIL.","gate":{"pass":"/(?:^|\\n)VERDICT: PASS\\s*$/","retry":"fix","max_loops":2}}]}
 ```
 
 ## Script workflows

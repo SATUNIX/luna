@@ -253,6 +253,8 @@ export interface HubValues {
   effort?: string | undefined;
   thinking?: string | undefined;
   security?: string | undefined;
+  /** The effective security level alone, for the Security page; unset when no firewall is loaded. */
+  securityEffective?: string | undefined;
   /** True when the tool firewall's security registry is not published. */
   securityMissing: boolean;
   securityRequested?: string | undefined;
@@ -301,6 +303,7 @@ export function readValues(input: ValueInput): HubValues {
     effort: readEffort(),
     thinking: input.thinkingLevel,
     security: security.requested ? `${security.effective} (requested ${security.requested})` : security.effective,
+    securityEffective: security.missing ? undefined : security.effective,
     securityMissing: security.missing,
     securityRequested: security.requested,
     approvals: firewall.mode ? `${firewall.mode}${firewall.policy ? `/${firewall.policy}` : ""}` : undefined,

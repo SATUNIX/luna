@@ -16,7 +16,7 @@ How to read the columns:
 - **CI job** is `<workflow>:<job>` under `.github/workflows/`.
 - **Required check** is the status-check context the `main` ruleset in
   `.github/expected-settings.json` requires. `ci-complete` succeeds only when every job of
-  `ci.yml` succeeded. "No" means the job runs but no required check depends on it. Whether GitHub
+  `ci.yml` except the measure-only `coverage` job succeeded. "No" means the job runs but no required check depends on it. Whether GitHub
   enforces what that file declares is a repository setting, not something a test can see
   ([CI security](ci-security.md#repository-settings)).
 
@@ -40,7 +40,7 @@ check is not one `.github/expected-settings.json` declares.
 | C-10 | Human-console answers carry an HMAC over the request digest and decision; only the interactive console creates the key | `packages/extensions/src/human-console/console-auth.ts` | `tests/human-console-auth-smoke.ts` | `smoke:human-console-auth` | `ci.yml:verify` | `ci-complete` |
 | C-11 | Every child agent starts with its parent's protections and fails closed when one is missing | `packages/extensions/src/delegation-guard/index.ts` | `tests/delegation-guard-smoke.ts` | `smoke:delegation-guard` | `ci.yml:verify` | `ci-complete` |
 | C-12 | Every profile loads the mandatory protections, or records why not | `packages/core/lib/protection-coverage.ts` | `tests/profile-protections-smoke.ts` | `smoke:profile-protections` | `ci.yml:verify` | `ci-complete` |
-| C-13 | secret-guard blocks secret files, secret content and shell commands that leak them | `packages/extensions/src/secret-guard/index.ts` | `tests/secret-guard-smoke.ts` | `smoke:secret-guard` | `ci.yml:verify` | `ci-complete` |
+| C-13 | secret-guard blocks secret files, secret content and shell commands that leak them; a recognised pattern in a plain leading `rg` or grep-family command is excluded from the path scan while file operands and pattern files remain scanned, and ambiguous syntax keeps the full scan | `packages/extensions/src/secret-guard/index.ts` | `tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts` | `smoke:secret-guard`, `smoke:tool-firewall` | `ci.yml:verify` | `ci-complete` |
 | C-14 | The shipped firewall policy is default-deny, and its destructive patterns cover the pentest gate's | `packages/core/verify.ts` | `packages/core/verify.ts` | `verify` | `ci.yml:verify` | `ci-complete` |
 
 ## Secure development helpers

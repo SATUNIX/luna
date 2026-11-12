@@ -615,8 +615,8 @@ try {
 
       // 16-17. A session's own `ask_human` is a card too: under a hold it would take focus from the
       //         box and Enter would hand the agent the first option as the human's answer.
-      const askHuman = async (signal?: AbortSignal): Promise<string> => {
-        const result = await hpi.tools.get("ask_human").execute("ask", { question: "Deploy now?", options: ["Yes, deploy", "No"] }, signal, undefined, consoleCtx);
+      const askHuman = async (signal?: AbortSignal, timeoutMs?: number): Promise<string> => {
+        const result = await hpi.tools.get("ask_human").execute("ask", { question: "Deploy now?", options: ["Yes, deploy", "No"], ...(timeoutMs === undefined ? {} : { timeoutMs }) }, signal, undefined, consoleCtx);
         const first = result.content[0];
         return first?.type === "text" ? first.text : "";
       };
@@ -895,6 +895,78 @@ try {
           while (manualCards.length) manualCards.shift()?.();
           for (const id of ["run-pair-first", "run-pair-second", "run-pair-child"]) fs.rmSync(pendingFile(id), { force: true });
           await Promise.race([Promise.all([first, second, ...(child ? [child] : [])]), sleep(1500)]);
+        }
+      });
+
+      // 24e. Run cards do not own the shared hold. The local run-card counter must also hold an
+      //      attended question until both outstanding run prompts close, without stealing focus.
+      await attempt("ask_human waits for both run cards, then asks and answers normally", async () => {
+        selects.length = 0;
+        consoleNotices.length = 0;
+        cardOptions.length = 0;
+        manual = true;
+        manualCards.length = 0;
+        pick = "Allow once";
+        const first = brokerRequest(ws, runRequest("question-run-first", "1", 30000));
+        const second = brokerRequest(ws, runRequest("question-run-second", "2", 30000));
+        try {
+          await until(() => selects.length === 2, 2500);
+          assert.equal(selects.length, 2, "both run cards are open");
+          assert.equal(owner.inputHeld(), undefined, "run cards still do not take the shared hold");
+          const controller = new AbortController();
+          const asked = askHuman(controller.signal, 5000);
+          await sleep(100);
+          assert.equal(selects.length, 2, "ask_human does not open over the run cards");
+          assert.equal(consoleNotices.filter((n) => /a question is waiting; close the open workflow card/.test(n)).length, 1, "the question gives one notice naming the run card");
+          manualCards.shift()?.();
+          await sleep(100);
+          assert.equal(selects.length, 2, "the question still waits for the second run card");
+          manualCards.shift()?.();
+          await until(() => selects.length === 3, 1000);
+          assert.equal(selects.length, 3, "the question opens after the last run card closes");
+          assert.match(selects[2] ?? "", /Deploy now\?/);
+          assertBounded(cardOptions[2], 5000, "question after run cards");
+          pick = "No";
+          manualCards.shift()?.();
+          assert.match(await asked, /Human answer: No/);
+          assert.equal((await first).approved, true);
+          assert.equal((await second).approved, true);
+        } finally {
+          manual = false;
+          while (manualCards.length) manualCards.shift()?.();
+          for (const id of ["question-run-first", "question-run-second"]) fs.rmSync(pendingFile(id), { force: true });
+          await Promise.race([Promise.all([first, second]), sleep(1500)]);
+        }
+      });
+
+      // 24f. A run card left open cannot extend an attended question's deadline or turn abort.
+      await attempt("ask_human times out or aborts behind a run card without opening later", async () => {
+        selects.length = 0;
+        manual = true;
+        manualCards.length = 0;
+        pick = "Allow once";
+        const run = brokerRequest(ws, runRequest("question-run-expiry", "3", 30000));
+        try {
+          await until(() => selects.length === 1, 2500);
+          assert.equal(selects.length, 1, "the run card is open");
+          const timedOut = await Promise.race([askHuman(undefined, 50), sleep(500).then(() => "parked" as const)]);
+          assert.notEqual(timedOut, "parked", "the run card cannot park ask_human past its timeout");
+          assert.match(timedOut, /the question timed out/);
+          const controller = new AbortController();
+          const aborted = askHuman(controller.signal, 5000);
+          await sleep(50);
+          controller.abort();
+          assert.match(await aborted, /the turn was aborted/);
+          assert.equal(selects.length, 1, "neither question opens under the run card");
+          manualCards.shift()?.();
+          assert.equal((await run).approved, true);
+          await sleep(50);
+          assert.equal(selects.length, 1, "neither expired question opens after the run card closes");
+        } finally {
+          manual = false;
+          while (manualCards.length) manualCards.shift()?.();
+          fs.rmSync(pendingFile("question-run-expiry"), { force: true });
+          await Promise.race([run, sleep(1500)]);
         }
       });
     } finally {

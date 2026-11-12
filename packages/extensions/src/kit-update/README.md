@@ -46,12 +46,12 @@ If a kit release changes its delivery (for example from git to npm), `/update ki
 install to the new delivery, keeping its channel and profile.
 
 When the kit is installed from git, the check also counts how far the repository's `main` branch
-is ahead of your checked-out commit. If it has moved ahead, the line `trunk is N commits ahead —
+is ahead of your checked-out commit. If it has moved ahead, the line `main is N commits ahead —
 /update channel next` appears at start-up (subject to the background throttle), on `/update`, and
 under `/update status`. It names `next`, the channel that follows `main`, so the suggested command
 really applies the newer commits; the installed release channel would not. The notice is silent
 when your copy is in sync or already ahead, and when git could not be reached (offline, or no
-credentials): a failed count is never reported as a gap. When the gap exists, the trunk line is
+credentials): a failed count is never reported as a gap. When the gap exists, this line is
 the whole start-up kit notice: the generic `Updates available: ...` summary is not stacked on it
 (pi's own built-in update notice is separate and may still appear).
 

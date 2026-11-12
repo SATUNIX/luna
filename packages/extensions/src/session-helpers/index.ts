@@ -220,7 +220,7 @@ export function findKitRoot(cwd: string = process.cwd(), warn?: (message: string
   const fromMarker = marker.kitSource ? markerKitRoot(marker.kitSource, cwd) : null;
   if (fromMarker && "root" in fromMarker) return fromMarker.root;
   if (fromMarker && warn && !(installed && sameDir(installed, path.resolve(cwd, marker.kitSource ?? "")))) {
-    const message = `pi-system: ignored ${fromMarker.ignored}; using the installed kit${installed ? ` at ${installed}` : ""}. An install marker never chooses the installer that runs.`;
+    const message = `Luna: ignored ${fromMarker.ignored}; using the installed kit${installed ? ` at ${installed}` : ""}. An install marker never chooses the installer that runs.`;
     if (!kitRootWarnings.has(message)) {
       kitRootWarnings.add(message);
       warn(message);
@@ -816,9 +816,9 @@ async function applyDefaultProfile(pi: ExtensionAPI, ctx: ExtensionContext): Pro
     announce: () => {},
   });
   if (outcome.ok) {
-    ctx.ui.notify(`pi-system: applied the "${profile}" profile (the package was loading every extension). Run /reload to load it, or /profile to choose another.${outcome.warnings.length ? `\n${outcome.warnings.join("\n")}` : ""}`, "info");
+    ctx.ui.notify(`Luna: applied the "${profile}" profile (the package was loading every extension). Run /reload to load it, or /profile to choose another.${outcome.warnings.length ? `\n${outcome.warnings.join("\n")}` : ""}`, "info");
   } else {
-    ctx.ui.notify(`pi-system: every extension is loaded because no profile is applied, and applying "${profile}" failed. Run /profile.\n${outcome.message.slice(-800)}`, "warning");
+    ctx.ui.notify(`Luna: every extension is loaded because no profile is applied, and applying "${profile}" failed. Run /profile.\n${outcome.message.slice(-800)}`, "warning");
   }
 }
 

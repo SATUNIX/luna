@@ -302,7 +302,7 @@ export async function ensureHost(): Promise<EnsureResult> {
   const root = findWebUiRoot(process.cwd(), (message) => ignored.push(message));
   if (!root) {
     throw new HostError(
-      `could not locate packages/web-ui (the remote host ships there). Run pi from the pi-system checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.${ignored.map((m) => ` (${m})`).join("")}`,
+      `could not locate packages/web-ui (the remote host ships there). Run pi from the Luna checkout, or set PI_KIT_WEBUI_ROOT=/path/to/packages/web-ui.${ignored.map((m) => ` (${m})`).join("")}`,
       "start_failed",
     );
   }

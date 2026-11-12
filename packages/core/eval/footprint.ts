@@ -264,9 +264,23 @@ const FootprintBaselineSchema = object({
 /** The reviewed record of the kit's floor (footprint-baseline.json beside this module). */
 export type FootprintBaseline = Infer<typeof FootprintBaselineSchema>;
 
+/** One profile's row in the reviewed baseline. */
+export type FootprintProfileBaseline = Infer<typeof ProfileBaselineSchema>;
+
+/** The reviewed baseline file beside this module. */
+function defaultBaselineFile(): string {
+  return fileURLToPath(new URL("./footprint-baseline.json", import.meta.url));
+}
+
+/** Whole-file replacement: a crash while writing must not leave a half-written baseline. */
+function writeBaselineAtomic(file: string, text: string): void {
+  const tmp = `${file}.${String(process.pid)}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 /** Read and validate the baseline. A malformed record is an error: a silent default hides a drift. */
-export function readBaseline(): FootprintBaseline {
-  const file = fileURLToPath(new URL("./footprint-baseline.json", import.meta.url));
+export function readBaseline(file = defaultBaselineFile()): FootprintBaseline {
   return parseJsonAs(FootprintBaselineSchema, fs.readFileSync(file, "utf8"), file);
 }
 
@@ -333,6 +347,166 @@ export function footprintProblems(f: Footprint, baseline: FootprintBaseline): st
   return problems;
 }
 
+// --- the command line -------------------------------------------------------------------------
+
+/**
+ * The baseline text as the reviewed file formats it: two-space objects, and a list of strings on
+ * one line. Writing an unchanged record must leave the file byte-identical, so this is not
+ * `JSON.stringify`.
+ */
+export function serializeBaseline(baseline: FootprintBaseline): string {
+  const text = (value: unknown, indent: number): string => {
+    if (Array.isArray(value)) return `[${(value as unknown[]).map((entry) => text(entry, 0)).join(", ")}]`;
+    if (value !== null && typeof value === "object") {
+      const entries: Array<[string, unknown]> = Object.entries(value);
+      if (entries.length === 0) return "{}";
+      const pad = " ".repeat(indent + 2);
+      return `{\n${entries.map(([key, entry]) => `${pad}${JSON.stringify(key)}: ${text(entry, indent + 2)}`).join(",\n")}\n${" ".repeat(indent)}}`;
+    }
+    return JSON.stringify(value);
+  };
+  return `${text(baseline, 0)}\n`;
+}
+
+/** The baseline row `--write-baseline` records: measured numbers, keeping any reviewed ceiling. */
+export function baselineEntry(f: Footprint, previous: FootprintProfileBaseline | undefined): FootprintProfileBaseline {
+  // Keep the reviewed shape: a profile whose baseline has no delegation row (lite) must stay
+  // byte-identical, so only extend delegation when the reviewed row already pins it.
+  const delegation =
+    previous?.delegation === undefined || f.delegation === null
+      ? undefined
+      : {
+          tools: [...f.delegation.tools],
+          toolText: f.delegation.toolText,
+          ...(previous.delegation.ceiling === undefined ? {} : { ceiling: previous.delegation.ceiling }),
+        };
+  return {
+    toolText: f.toolText,
+    ...(previous?.ceiling === undefined ? {} : { ceiling: previous.ceiling }),
+    ...(delegation === undefined ? {} : { delegation }),
+    tools: Object.fromEntries(f.tools.map((tool) => [tool.name, tool.chars])),
+  };
+}
+
+/** What `--json` prints: the measurement, its derived token count and any baseline problems. */
+export interface FootprintReport {
+  profile: string;
+  chars: number;
+  tokens: number;
+  tools: readonly FootprintTool[];
+  delegation: Footprint["delegation"];
+  problems: readonly string[];
+}
+
+/** Build the report both output modes use, so the human and JSON views cannot disagree. */
+export function footprintReport(f: Footprint, baseline: FootprintBaseline): FootprintReport {
+  return {
+    profile: f.profile,
+    chars: f.toolText,
+    tokens: Math.ceil(f.toolText / 4),
+    tools: f.tools,
+    delegation: f.delegation,
+    problems: footprintProblems(f, baseline),
+  };
+}
+
+const USAGE =
+  "usage: node packages/core/eval/footprint.ts [--profile <name>] [--json] [--write-baseline]\n" +
+  "  --profile <name>   profile to measure (default: balanced)\n" +
+  "  --json             print one deterministic JSON object\n" +
+  "  --baseline <file>  check or write this baseline instead of the reviewed one\n" +
+  "  --write-baseline   record this profile's measured numbers in the baseline\n";
+
+/** Parse one option's value, from `--name value` or `--name=value`. */
+function optionValue(argv: readonly string[], index: number, name: string): { value: string | undefined; next: number } {
+  const arg = argv[index] ?? "";
+  if (arg === name) return { value: argv[index + 1], next: index + 1 };
+  return { value: arg.slice(name.length + 1), next: index };
+}
+
+/** Measure one profile, print it and its baseline drift, and record it with `--write-baseline`. */
+export async function main(argv: readonly string[]): Promise<number> {
+  let profile = "balanced";
+  let json = false;
+  let write = false;
+  let baselineFile: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    if (arg === "--help" || arg === "-h") {
+      console.log(USAGE);
+      return 0;
+    } else if (arg === "--json") json = true;
+    else if (arg === "--write-baseline") write = true;
+    else if (arg === "--profile" || arg.startsWith("--profile=")) {
+      const option = optionValue(argv, i, "--profile");
+      i = option.next;
+      if (option.value === undefined || option.value.trim() === "") {
+        console.error(`footprint: --profile needs a name\n${USAGE}`);
+        return 2;
+      }
+      profile = option.value;
+    } else if (arg === "--baseline" || arg.startsWith("--baseline=")) {
+      const option = optionValue(argv, i, "--baseline");
+      i = option.next;
+      if (option.value === undefined || option.value.trim() === "") {
+        console.error(`footprint: --baseline needs a file\n${USAGE}`);
+        return 2;
+      }
+      baselineFile = option.value;
+    } else {
+      console.error(`footprint: unknown argument "${arg}"\n${USAGE}`);
+      return 2;
+    }
+  }
+  let f: Footprint;
+  try {
+    f = await measureFootprint(profile);
+  } catch (error) {
+    console.error(`footprint: cannot measure profile "${profile}": ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
+  }
+  const file = baselineFile ?? defaultBaselineFile();
+  let baseline: FootprintBaseline;
+  if (fs.existsSync(file)) {
+    try {
+      baseline = readBaseline(file);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`footprint: cannot read baseline ${file}: ${message}. Remove the file to regenerate it.`);
+      return 2;
+    }
+  } else {
+    baseline = { schemaVersion: 1, profiles: {} };
+  }
+  if (write) {
+    baseline.profiles[profile] = baselineEntry(f, baseline.profiles[profile]);
+    const text = serializeBaseline(baseline);
+    const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    if (text === current) console.log(`[footprint] ${profile}: baseline unchanged`);
+    else {
+      writeBaselineAtomic(file, text);
+      console.log(`[footprint] ${profile}: baseline written`);
+    }
+    return 0;
+  }
+  const report = footprintReport(f, baseline);
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+    return report.problems.length === 0 ? 0 : 1;
+  }
+  console.log(`[footprint] ${report.profile}: ${String(report.chars)} chars (~${String(report.tokens)} tokens at 4 chars/token)`);
+  for (const tool of report.tools) console.log(`  ${tool.name}: ${String(tool.chars)}`);
+  if (report.delegation !== null) {
+    console.log(`  delegation (${report.delegation.tools.join(", ")}): ${String(report.delegation.toolText)}`);
+  }
+  if (report.problems.length === 0) console.log("[footprint] OK: matches the reviewed baseline");
+  else for (const problem of report.problems) console.error(`[footprint] FAIL: ${problem}`);
+  return report.problems.length === 0 ? 0 : 1;
+}
+
+if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = await main(process.argv.slice(2));
+}
 // --- plan-valid rate --------------------------------------------------------------------------
 
 /** One model's plan-valid count. `rate` is valid/total, rounded to three decimals. */

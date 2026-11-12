@@ -193,7 +193,7 @@ function registerTools(server: McpServer): void {
     "evidence_append",
     {
       title: "Append Evidence",
-      description: "Append a normalized evidence record and optional text artifact to the Pi System evidence ledger.",
+      description: "Append a normalized evidence record and optional text artifact to the Luna evidence ledger.",
       inputSchema: {
         summary: z.string().min(1).max(FIELD_LIMITS.long),
         source_tool: z.string().min(1).max(FIELD_LIMITS.short),

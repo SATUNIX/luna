@@ -19,7 +19,9 @@ function kv(rows) {
     return list;
 }
 function contextBar(percent) {
-    const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
+    if (typeof percent !== "number" || !Number.isFinite(percent))
+        return el("div", { class: "bar unknown" });
+    const clamped = Math.max(0, Math.min(100, percent));
     const cls = clamped >= 90 ? "high" : clamped >= 70 ? "mid" : "";
     return el("div", { class: "bar" }, [
         el("div", { class: "bar-fill " + cls, style: `width:${clamped}%` }),

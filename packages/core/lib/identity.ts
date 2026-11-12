@@ -8,7 +8,7 @@ export function isKitPackageName(name: unknown): boolean {
   return typeof name === "string" && KIT_PACKAGE_NAMES.has(name);
 }
 
-/** Bare pi-system is a legacy checkout name; bare luna belongs to another package. */
+/** The bare legacy checkout name; bare luna belongs to another package. */
 export function isKitLocalPackageName(name: unknown): boolean {
   return isKitPackageName(name) || name === "pi-system";
 }

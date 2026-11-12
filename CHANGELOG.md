@@ -8,6 +8,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.3.0-beta.3]
+
 ### Changed
 
 - **The curated `/` menu honours `PI_KIT_ASCII`.** Hidden suggestions still say where a command

@@ -918,6 +918,78 @@
       "lineSha256": "1d0f2efd5db296e380320a2e35b31b1f9e9111288d0e8ba51d70d080d024d0b8",
       "reason": "Audited: the public IPv6 prefix Tailscale assigns from, used to label where a pairing claim came from; exact line only",
       "matchSha256": "6f037facf8704b94c0a4ed03d469dba31f09b98b900880ecd71a7545f2d55c2c"
+    },
+    {
+      "path": "packages/container/scripts/validate-engagement-env.sh",
+      "lineSha256": "569bd2102948a925ffb4bf287e72dee8d7592cd7c5ad0e3e63cc480524fb5514",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only (path renamed from validate-pentest-env.sh in 0.4.0)",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/container/scripts/validate-engagement-env.sh",
+      "lineSha256": "4799125ad9778506045a8a5b61a4c740757fcd128871bc30970ca30a23317957",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only (path renamed from validate-pentest-env.sh in 0.4.0)",
+      "matchSha256": "f38309f1f632c4a3f9c567dda28c142bcdbb0b3079b1ed8550cfc72518b99b7a"
+    },
+    {
+      "path": "packages/extensions/src/engagement-governance/index.ts",
+      "lineSha256": "91855502b903a8b2a90d79e7b6273377f5a374c49a6359aa81c4dae6872bb5e1",
+      "reason": "Audited existing synthetic fixture or private-network rejection logic; exact line only (path renamed from pentest-governance-domain in 0.4.0)",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/auto-commit-smoke.ts",
+      "lineSha256": "d006d47f3035d996b5a1e545cb6539fe506d565b184dbafd13e63e4fb0ef6a43",
+      "reason": "Synthetic credential-like file names the auto-commit exclusion test writes and expects to be skipped; no real values",
+      "matchSha256": "e52226005623e20d686114932869f6d46eb426a89257e6036f319cedc8fba58c"
+    },
+    {
+      "path": "tests/judge-smoke.ts",
+      "lineSha256": "958c33ba386ab5d48b83a1b9ef2448c97af27fc96f743503875701b745b8ef74",
+      "reason": "Synthetic RFC 1918 address proving the judge treats a private-network provider as local; not a real host",
+      "matchSha256": "552354592821b7e6b76f87d10c0cb4ff512ffed049dde0e40769a0bcf9f50c8d"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "8e099943f7370d7ecd46ad56442e02670e8ed1a8b2ba5c42a69f06f1c050189b"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "f9863b6fa829fa6e80ffce0a30779b91c9affd96c0ee47f303c2c000b84a7b24"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "4a8bb3ec2bbec6799d82c89772053bb29b237399feac0828529409dd944b8d11"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "cb2a2b4daa42034943ad79697518ed2ad1b34c4755827a0376b0d25ba754be7f"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "5566591c278c2b9ccd26676c6a39ab1ced38df04743445872ac997f5d3db5fbd"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "0fe657f5ac43bc9534f9640c7857a1f261f13ab24e3b5097dc84c92df7c6e7b5"
+    },
+    {
+      "path": "tests/model-fit-smoke.ts",
+      "lineSha256": "a52c7b55b86149908b88312e9aa6a44d0ae68d2116fb36697eacc4dc030d5be9",
+      "reason": "Synthetic loopback, RFC 1918, link-local and ULA URLs proving local-provider detection; not real hosts",
+      "matchSha256": "ffbfbed477106459b2d32518d53bd1902166910c379dc1472e26984fb9993439"
     }
   ]
 }

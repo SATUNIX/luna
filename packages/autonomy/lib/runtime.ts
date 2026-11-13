@@ -377,6 +377,7 @@ export class DockerRuntime implements Runtime {
     fs.mkdirSync(p.meter, { recursive: true });
     const state = this.state();
     this.relay?.kill();
+    this.setBudgetCap(state.limits.budget.totalUsd);
     this.relay = await this.startServer({
       removeName: names.relay, runArgs: dk.relayRunArgs(cfg, p, path.join(PKG, "relay.ts")), connect: ["network", "connect", "--alias", dk.RELAY_HOST, names.net, names.relay], execArgs: dk.relayExecArgs(cfg),
       config: relayConfigFor({ contract, cfg, apiKey: this.key(), maxUsd: state.limits.budget.totalUsd }),
@@ -607,6 +608,11 @@ export class DockerRuntime implements Runtime {
       for (const [role, usd] of Object.entries(m.byRole)) total.byRole[role] = (total.byRole[role] ?? 0) + usd;
     }
     return total;
+  }
+
+  /** Make the run's spending cap live for the relay (it reads meter/limit.json on every request), so a reconfigure needs no relay restart. */
+  setBudgetCap(usd: number): void {
+    try { fs.mkdirSync(this.p.meter, { recursive: true }); writeJsonAtomic(path.join(this.p.meter, "limit.json"), { maxUsd: usd }); } catch { /* the relay then keeps the cap it started with */ }
   }
 
   /** Tell the relay, and the host's own calls, whose spend this is from now on: written for the relay to read on its next request. */

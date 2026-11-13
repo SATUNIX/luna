@@ -100,6 +100,20 @@ relay = await serve(0.3);
 fs.writeFileSync(path.join(dir, "manager.jsonl"), `${JSON.stringify({ costUsd: 0.5, role: "manager", cycle: 4 })}\n`);
 assert.equal(await relay.call("ok"), 429, "manager and review spend count toward the relay's stop");
 await relay.close();
+// A raised cap is live: the supervisor rewrites limit.json and the same relay serves again, no restart.
+fs.rmSync(path.join(dir, "manager.jsonl"), { force: true });
+fs.writeFileSync(meter, "");
+relay = await serve(0.3);
+assert.equal(await relay.call("ok"), 200);
+await settle();
+assert.equal(await relay.call("ok"), 200);
+await settle();
+assert.equal(await relay.call("ok"), 429, "0.50 spent passes the 0.30 cap");
+fs.writeFileSync(path.join(dir, "limit.json"), JSON.stringify({ maxUsd: 5 }));
+assert.equal(await relay.call("ok"), 200, "a raised cap takes effect on the running relay");
+fs.writeFileSync(path.join(dir, "limit.json"), JSON.stringify({ maxUsd: 0.1 }));
+assert.equal(await relay.call("ok"), 429, "a lowered cap does too");
+await relay.close();
 await new Promise<void>((r) => provider.close(() => r()));
 
 // --- provider refusals park with an explicit waiting reason -----------------------------------------------------------------
@@ -109,8 +123,10 @@ assert.match(providerBlocker("402 requires more credits").question, /^\[waiting_
 assert.equal(providerBlocker(fail("429 Run budget exhausted") ?? "").waiting, "waiting_budget", "the relay's own spending stop is the budget, not a rate limit");
 const watch: ProviderLimitWatch = { clamped: 0 };
 assert.equal(fail("429 Too Many Requests", watch), null, "one rate limit is left to the retry");
+assert.equal(fail("429 Too Many Requests", watch), null, "two are a short burst, not a wait");
+for (let i = 0; i < 2; i++) fail("429 Too Many Requests", watch);
 const second = fail("429 Too Many Requests", watch);
-assert.ok(second, "the second in a row parks");
+assert.ok(second, "a long run of them in a row parks");
 assert.equal(providerBlocker(second).waiting, "waiting_provider");
 const w403: ProviderLimitWatch = { clamped: 0 };
 assert.equal(fail("403 Forbidden: key disabled", w403), null);

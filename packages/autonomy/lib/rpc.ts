@@ -207,14 +207,19 @@ const RELAY_REFUSAL = /only inference requests are allowed|not allowed for this 
 const RELAY_BUDGET = /run budget exhausted/i;
 const FORBIDDEN = /(?<![a-z0-9])403(?![a-z0-9])|\bforbidden\b|key (?:is )?(?:disabled|revoked|invalid)|not authori[sz]ed for this (?:key|model)/i;
 
+/** Consecutive failed assistant messages with a rate limit before the run parks (a retry that gave up parks at once). */
+const RATE_LIMIT_RUN = 5;
+
 /** What a failure message means for parking: the reason to wait, and whether one occurrence is enough, or null when it is an ordinary failure. */
-export function limitKind(message: string): { waiting: WaitingReason; clampTo?: number | undefined; terminalAtOnce: boolean } | null {
+export function limitKind(message: string): { waiting: WaitingReason; clampTo?: number | undefined; terminalAtOnce: boolean; consecutive?: number } | null {
   if (RELAY_REFUSAL.test(message)) return null;
   if (RELAY_BUDGET.test(message)) return { waiting: "waiting_budget", terminalAtOnce: true };
   const failure = classifyProviderError(message);
   if (failure.kind === "credit") return { waiting: "waiting_budget", clampTo: failure.clampTo, terminalAtOnce: true };
   // A rate limit or a refused key may pass; the second in a row (or a retry that gave up) is a wait, not a failure to retry again.
-  if (failure.kind === "rate_limit" || FORBIDDEN.test(message)) return { waiting: "waiting_provider", terminalAtOnce: false };
+  // pi retries a throttled request itself and each attempt surfaces as a failed message, so a rate limit needs a long run of them (or a retry that gave up) before it parks; a refused key needs two.
+  if (failure.kind === "rate_limit") return { waiting: "waiting_provider", terminalAtOnce: false, consecutive: RATE_LIMIT_RUN };
+  if (FORBIDDEN.test(message)) return { waiting: "waiting_provider", terminalAtOnce: false };
   return null;
 }
 
@@ -244,7 +249,7 @@ export function providerLimitError(ev: RpcFrame, watch: ProviderLimitWatch = { c
   if (!kind.terminalAtOnce && ev.type !== "auto_retry_end") {
     if (ev.type !== "message_end") return null; // an update repeats the message its end settles: count each failure once
     watch.refused = (watch.refused ?? 0) + 1;
-    if (watch.refused < 2) return null;
+    if (watch.refused < (kind.consecutive ?? 2)) return null;
   }
   return redactProviderError(message, 300);
 }

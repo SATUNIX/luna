@@ -34,6 +34,8 @@ export interface RelayConfig {
   apiKey: string;
   meterFile?: string;
   maxUsd?: number | null;
+  /** Where the live spending cap ({ maxUsd }) is read from on every request; default: limit.json beside the meter file. It overrides maxUsd, so a reconfigure takes effect without a relay restart. */
+  limitFile?: string;
   models?: string[];
   provider?: string;
   pricing?: Pricing;
@@ -48,12 +50,13 @@ const isObject = (v: unknown): v is JsonObject => typeof v === "object" && v !==
  */
 export function parseRelayConfig(value: unknown): RelayConfig {
   if (!isObject(value)) throw new Error("relay config must be a JSON object");
-  const { upstream, apiKey, meterFile, maxUsd, models, provider, pricing, headers, attributionFile } = value;
+  const { upstream, apiKey, meterFile, maxUsd, models, provider, pricing, headers, attributionFile, limitFile } = value;
   if (typeof upstream !== "string" || !upstream) throw new Error("relay config: upstream must be a URL");
   if (typeof apiKey !== "string" || !apiKey) throw new Error("relay config: apiKey must be a non-empty string");
   const config: RelayConfig = { upstream, apiKey };
   if (meterFile !== undefined) { if (typeof meterFile !== "string" || !meterFile) throw new Error("relay config: meterFile must be a path"); config.meterFile = meterFile; }
   if (attributionFile !== undefined) { if (typeof attributionFile !== "string" || !attributionFile) throw new Error("relay config: attributionFile must be a path"); config.attributionFile = attributionFile; }
+  if (limitFile !== undefined) { if (typeof limitFile !== "string" || !limitFile) throw new Error("relay config: limitFile must be a path"); config.limitFile = limitFile; }
   if (maxUsd !== undefined) { if (maxUsd !== null && (typeof maxUsd !== "number" || !Number.isFinite(maxUsd) || maxUsd < 0)) throw new Error("relay config: maxUsd must be a non-negative number or null"); config.maxUsd = maxUsd; }
   if (models !== undefined) { if (!Array.isArray(models) || !models.every((m) => typeof m === "string")) throw new Error("relay config: models must be a list of model ids"); config.models = models; }
   if (provider !== undefined) { if (typeof provider !== "string") throw new Error("relay config: provider must be a string"); config.provider = provider; }
@@ -200,6 +203,12 @@ export function createRelayHandler(config: RelayConfig): (req: http.IncomingMess
   const upstream = config.upstream.replace(/\/$/, "");
   const meterFile = config.meterFile ?? "/meter/usage.jsonl";
   const attributionFile = config.attributionFile ?? path.join(path.dirname(meterFile), "attribution.json");
+  const limitFile = config.limitFile ?? path.join(path.dirname(meterFile), "limit.json");
+  /** The cap now in force: the supervisor's limit file when it holds a number (a reconfigure rewrites it), else the config's. */
+  const cap = (): number | null | undefined => {
+    try { const v: unknown = JSON.parse(fs.readFileSync(limitFile, "utf8")); if (isObject(v) && typeof v.maxUsd === "number" && Number.isFinite(v.maxUsd) && v.maxUsd >= 0) return v.maxUsd; } catch { /* absent or unreadable: the config's cap */ }
+    return config.maxUsd;
+  };
   const hostMeter = path.join(path.dirname(meterFile), "manager.jsonl");
   const provider = config.provider ?? "openrouter";
   const pricing = config.pricing ?? {};
@@ -215,7 +224,8 @@ export function createRelayHandler(config: RelayConfig): (req: http.IncomingMess
     let model: unknown = null;
     const refuse = (status: number, message: string): void => { res.writeHead(status).end(message); append(liabilityRow(new Date().toISOString(), who, model, status, "refused", message)); };
     if (!target) { refuse(403, "Only inference requests are allowed"); return; }
-    if (config.maxUsd && total() >= config.maxUsd) { refuse(429, "Run budget exhausted"); return; }
+    const maxUsd = cap();
+    if (maxUsd && total() >= maxUsd) { refuse(429, "Run budget exhausted"); return; }
     const chunks: Buffer[] = []; let size = 0;
     for await (const chunk of req as AsyncIterable<Buffer>) {
       size += chunk.length;

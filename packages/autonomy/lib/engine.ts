@@ -116,6 +116,8 @@ export interface Runtime extends AcceptanceRuntime {
   complete(model: string, opts?: { timeoutMs?: number; role?: string }): Complete;
   /** Spend, liabilities and unreadable rows from the meters, for one cycle or the run (optional: a runtime without meters has none). */
   meterSummary?(cycle?: number): MeterSummary;
+  /** Make a changed run budget live for the relay's spending stop. */
+  setBudgetCap?(usd: number): void;
   /** Why the worker cannot be used (e.g. the kit harness did not load), or null. */
   workerProblem?(): string | null;
 }
@@ -651,6 +653,7 @@ export class Engine {
     this.state.effort = plan.next.effort;
     this.state.limits = { budget, recovery: plan.next.limits.recovery };
     this.publishWorkerContract();
+    this.rt.setBudgetCap?.(budget.totalUsd);
     this.log(`reconfigured: ${Object.keys(isRecord(changes) ? changes : {}).join(", ")}`);
     if (this.status === "budget_exhausted") this.go("paused", { reason: "limits raised", by: "reconfigure" });
   }

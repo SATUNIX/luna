@@ -61,6 +61,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
   (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
   Luna builds no trust prompt of its own.
+- Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` resumes after the budget is raised; a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
+
 - **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and
   host-call meter row carries the run, cycle and role (worker, manager, review); an error, aborted,
   non-200 or usage-less reply is an unresolved liability row instead of a gap; each `cycle.json`

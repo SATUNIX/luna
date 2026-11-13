@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The three outcomes are never confused, and no path waits for a UI that is not there.
-//   HARD DENY         policy says never (critical tier, a policy deny, a pentest rule): no approval and no
+//   HARD DENY         policy says never (critical tier, a policy deny, an engagement rule): no approval and no
 //                     judge can override it, and the operator is never asked.
 //   UNCERTAIN         the automatic layers could not settle it (the judge unsure of a block, unavailable,
 //                     timed out, aborted; a command the classifier cannot read) or nobody could be asked:
@@ -158,7 +158,7 @@ try {
     assert.equal(r.block, true, "an approval cannot override a hard deny");
     assert.deepEqual(tagsIn(r.reason), ["HARD DENY"]);
     fs.rmSync(path.join(agentDir, "pi-kit", "firewall-approvals.json"), { force: true });
-    // A policy deny rule and a pentest command rule are hard denies too.
+    // A policy deny rule and an engagement command rule are hard denies too.
     const policyFile = path.join(root, "policy.json");
     fs.writeFileSync(policyFile, JSON.stringify({ defaults: { unknown: "ask" }, tools: { never_tool: { decision: "deny" } }, command_rules: { deny: [], ask: [] } }));
     const restorePolicy = setEnv("PI_KIT_FIREWALL_POLICY", policyFile);
@@ -169,13 +169,13 @@ try {
     } finally {
       restorePolicy();
     }
-    config({ mode: "manual", policy: "pentest" });
+    config({ mode: "manual", policy: "engagement" });
     const p = await gate(null);
     const pv = ui(["Allow once"]);
     const rule = await bash(p.pi, "rm -r build", pv.ctx);
     assert.deepEqual(tagsIn(rule.reason), ["HARD DENY"]);
     assert.equal(pv.seen.length, 0);
-    // Pentest, headless, high impact: the policy needs an interactive operator: hard deny, no console request.
+    // Engagement, headless, high impact: the policy needs an interactive operator: hard deny, no console request.
     const high = await bash(p.pi, "git push --force origin main", headless());
     assert.deepEqual(tagsIn(high.reason), ["HARD DENY"]);
     assert.match(high.reason, /interactive operator/);

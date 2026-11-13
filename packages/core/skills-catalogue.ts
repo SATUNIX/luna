@@ -27,7 +27,7 @@ const CATEGORY_ORDER: readonly (readonly [category: string, heading: string])[] 
   ["memory", "Memory"],
   ["orchestration-recovery", "Orchestration & recovery"],
   ["mcp-governance", "MCP & governance operations"],
-  ["pentest", "Pentest assessment"],
+  ["engagement", "Engagement assessment"],
   ["evidence-reporting", "Evidence & reporting"],
   ["documentation", "Documentation"],
   ["maintainer", "Kit maintainers"],

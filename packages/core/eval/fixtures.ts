@@ -228,7 +228,7 @@ export const fixtures: readonly Fixture[] = [
         await call(pi.handlers.get("turn_end"), "turn_end handler", { message: { role: "assistant", stopReason: "stop" } }, { cwd: ws, ui: { notify() {}, setStatus() {} } });
         assert(pi.steers.length === 1, "final turn must diagnose unverified work");
         const steer = dig(pi.steers[0], "message", "content");
-        assert(typeof steer === "string" && /verification diagnostic/.test(steer), "diagnostic must explain the block");
+        assert(typeof steer === "string" && /Orchestrator verification/.test(steer), "diagnostic must explain the block");
 
         // All-pass -> not blocked, no steer.
         fs.writeFileSync(verdicts, JSON.stringify({ verdicts: { verify: { pass: true, summary: "ok", at: new Date().toISOString() } } }));

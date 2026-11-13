@@ -58,17 +58,33 @@ export function parseDecision(text: string | null | undefined): ManagerDecision 
   }
 }
 
-/** The JSON object in a model reply (fenced, or the outermost braces), or null. */
-export function extractJson(text: string | null | undefined): Record<string, unknown> | null {
-  const s = (text ?? "").trim();
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(s);
-  const candidate = fenced?.[1] ?? s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1);
+const parseRecord = (candidate: string): Record<string, unknown> | null => {
   try {
     const v = parseJson(candidate);
     return isRecord(v) ? v : null;
   } catch {
     return null;
   }
+};
+
+/**
+ * The JSON object in a model reply: a fenced block, else the outermost braces. Prose around the
+ * object is tolerated, but not another brace outside it (a second object, a stray `{`): such a reply
+ * may quote an object from the untrusted diff or report, so it is malformed and the caller fails
+ * closed.
+ */
+export function extractJson(text: string | null | undefined): Record<string, unknown> | null {
+  const s = (text ?? "").trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(s);
+  let found: Record<string, unknown> | null;
+  if (fenced) found = parseRecord(fenced[1] ?? "");
+  else {
+    const from = s.indexOf("{");
+    const to = s.lastIndexOf("}");
+    if (from === -1 || to < from || /[{}]/.test(s.slice(0, from) + s.slice(to + 1))) return null;
+    found = parseRecord(s.slice(from, to + 1));
+  }
+  return found;
 }
 
 /** Keep the head and tail of a long text, marking what was cut. */

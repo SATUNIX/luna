@@ -35,6 +35,9 @@ interface CompactOptions {
 
 type FakePi = ReturnType<typeof fakePi>;
 
+// The cooldown is pinned by its own test; the rest of this file exercises the trigger itself.
+setEnv("PI_KIT_COMPACT_COOLDOWN_MS", "0");
+
 function fakeCtx(contextWindow = 1_300_000) {
   const notices: Notice[] = [];
   const compactCalls: CompactOptions[] = [];
@@ -290,6 +293,28 @@ async function testFirstObservationAboveThresholdFiresOnce() {
   });
 }
 
+// A compaction that ends and then reads above the threshold again (a summary that is still big, a
+// failing compaction) must not start another one a turn later.
+async function testBackToBackCompactionWaitsOutTheCooldown() {
+  await withAgentDir(async () => {
+    const restore = setEnv("PI_KIT_COMPACT_COOLDOWN_MS", "600000");
+    try {
+      const pi = fakePi();
+      (await loadExtension("vendor/trigger-compact/index.ts"))(pi.api);
+      const high = (tokens: number) => ({ ...liveCtx({ tokens }), getContextUsage: () => ({ tokens, contextWindow: 1_300_000, percent: 5 }) });
+      const ctx = liveCtx({ tokens: 150_000 });
+      await pi.handlers.get("turn_end")(withTools, ctx);
+      assert.equal(ctx.compactCalls.length, 1);
+      firstCompact(ctx.compactCalls).onError(new Error("model refused"));
+      // Usage drops, then climbs again within the cooldown: no second compaction.
+      await pi.handlers.get("turn_end")(withTools, high(30_000));
+      const again = liveCtx({ tokens: 150_000 });
+      await pi.handlers.get("turn_end")(withTools, again);
+      assert.equal(again.compactCalls.length, 0, "no compaction right after one ended");
+    } finally { restore(); }
+  });
+}
+
 async function testUnknownUsageIsNeverTreatedAsZeroOrAbove() {
   await withAgentDir(async () => {
     const pi = fakePi();
@@ -471,6 +496,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["/compact-threshold rejects a value pi's own trigger would pre-empt", testThresholdBetweenNativeAndWindowIsRejected],
   ["one-shot children (print/json, PI_KIT_INTERNAL_CHILD) never call ctx.compact", testOneShotChildNeverCallsCompact],
   ["a mid-run compaction aborts the run, so the extension resumes it exactly once", testMidRunCompactionIsResumedOnce],
+  ["back-to-back compactions wait out the cooldown", testBackToBackCompactionWaitsOutTheCooldown],
   ["a final turn compacts after agent_settled, without resuming anything", testFinalTurnCompactsAfterSettling],
   ["an operator interrupt (signal aborted) suppresses the trigger", testEscapeIsRespected],
   ["an untrusted project's settings are ignored, as pi ignores them", testUntrustedProjectSettingsAreIgnored],

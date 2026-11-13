@@ -3,6 +3,7 @@ import { isContextOverflow } from "@earendil-works/pi-ai/compat";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { classifyProviderError, clampOutputTokens, redactProviderError } from "./provider-errors.ts";
 
 // pi's built-in auto-retry (settings.retry.enabled/maxRetries/baseDelayMs, see
 // docs/settings.md "Retry") only retries an errored assistant message when its
@@ -134,12 +135,120 @@ function tell(ctx: ExtensionContext | undefined, message: string, level: "info" 
   }
 }
 
+// --- turn doctor ----------------------------------------------------------------------------------
+// Small models stall without saying so: a turn with no text and no tool call, or a tool call whose
+// arguments do not validate. The first leaves the person typing "continue"; the second gets a long
+// schema dump a small model cannot act on. Both are handled here, and both are bounded.
+
+/** Empty turns answered with a steer before the person is left to take over (reset by the next user message). */
+export const MAX_EMPTY_TURN_STEERS = 2;
+export const EMPTY_TURN_STEER =
+  "Your last reply was empty. Either call a tool to make progress, or reply with a short plain-text answer or the specific question you are blocked on.";
+
+const prop = (o: object, key: string): unknown => Reflect.get(o, key);
+
+/** An assistant turn that finished normally but produced neither visible text nor a tool call. */
+export function isEmptyTurn(message: { stopReason?: string; content?: unknown }): boolean {
+  if (message.stopReason !== "stop" || !Array.isArray(message.content)) return false;
+  return !message.content.some((part: unknown) => {
+    if (typeof part !== "object" || part === null) return false;
+    const type = prop(part, "type");
+    if (type === "toolCall") return true;
+    const text = prop(part, "text");
+    return type === "text" && typeof text === "string" && text.trim() !== "";
+  });
+}
+
+interface ToolShape {
+  name: string;
+  parameters?: unknown;
+}
+
+/** The property names a tool's JSON schema lists as required and optional. */
+function schemaKeys(parameters: unknown): { required: string[]; optional: string[] } {
+  const props = typeof parameters === "object" && parameters !== null ? prop(parameters, "properties") : undefined;
+  const req = typeof parameters === "object" && parameters !== null ? prop(parameters, "required") : undefined;
+  const all = typeof props === "object" && props !== null ? Object.keys(props) : [];
+  const required = Array.isArray(req) ? req.filter((k): k is string => typeof k === "string") : [];
+  return { required, optional: all.filter((k) => !required.includes(k)) };
+}
+
+/**
+ * Rewrite pi's tool-argument error into one a small model can act on: the bad fields with the reason,
+ * the keys the tool requires, and the instruction to call again. pi's own text echoes the whole
+ * received argument object, which for a long write call is thousands of tokens of what the model just
+ * got wrong. Returns null for any other text.
+ */
+export function clearerToolArgumentError(text: string, tools: readonly ToolShape[]): string | null {
+  const invalid = /^Invalid arguments for tool "([^"]+)": ([\s\S]*)$/.exec(text);
+  if (invalid?.[1]) {
+    return `Tool "${invalid[1]}" was not run: its arguments were not valid JSON (${invalid[2]?.split("\n")[0]?.slice(0, 160) ?? "unparseable"}). ` +
+      "The call was probably cut off. Send it again with shorter arguments (write large files in several smaller steps).";
+  }
+  const failed = /^Validation failed for tool "([^"]+)":\n([\s\S]*?)(?:\n\nReceived arguments:|$)/.exec(text);
+  if (!failed?.[1]) return null;
+  const name = failed[1];
+  const problems = (failed[2] ?? "").split("\n").map((l) => l.trim().replace(/^- /, "")).filter(Boolean).slice(0, 6);
+  const tool = tools.find((t) => t.name === name);
+  const { required, optional } = schemaKeys(tool?.parameters);
+  return [
+    `Tool "${name}" was not run: its arguments are wrong.`,
+    ...problems.map((p) => `  ${p}`),
+    required.length ? `Required: ${required.join(", ")}.` : "",
+    optional.length ? `Optional: ${optional.slice(0, 10).join(", ")}.` : "",
+    "Call it again with corrected arguments.",
+  ].filter(Boolean).join("\n");
+}
+
 export default function (pi: ExtensionAPI) {
   let lastLengthNote = "";
+  let emptySteers = 0;
+  // After a 402 that says what the account can afford, the model's output maximum is held at that
+  // for the rest of the session (per model), so the retry and later turns cannot hit the same wall.
+  let clamp: { model: string; tokens: number } | null = null;
+
+  pi.on("session_start", async () => {
+    emptySteers = 0;
+    clamp = null;
+  });
+
+  // A message the person (or a remote client) typed starts a fresh budget of steers.
+  pi.on("input", async (event) => {
+    if (event.source !== "extension") emptySteers = 0;
+    return undefined;
+  });
+
+  pi.on("before_provider_request", async (event, ctx) => {
+    if (clamp?.model !== (ctx?.model?.id ?? "")) return undefined;
+    if (!clamp) return undefined;
+    clampOutputTokens(event.payload, clamp.tokens);
+    return event.payload;
+  });
+
+  pi.on("tool_result", async (event) => {
+    if (!event.isError) return undefined;
+    const part = event.content[0];
+    if (event.content.length !== 1 || part?.type !== "text") return undefined;
+    let tools: ToolShape[] = [];
+    try {
+      tools = pi.getAllTools();
+    } catch {
+      /* no tool list: the keys are simply not named */
+    }
+    const better = clearerToolArgumentError(part.text, tools);
+    return better ? { content: [{ type: "text", text: better }] } : undefined;
+  });
 
   pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "assistant") return undefined;
     const message = event.message;
+
+    if (isEmptyTurn(message) && emptySteers < MAX_EMPTY_TURN_STEERS) {
+      emptySteers += 1;
+      tell(ctx, `The model returned an empty turn; asking it to continue (${emptySteers}/${MAX_EMPTY_TURN_STEERS}).`, "info");
+      pi.sendMessage({ customType: "turn-doctor", content: EMPTY_TURN_STEER, display: false }, { deliverAs: "followUp", triggerTurn: true });
+      return undefined;
+    }
 
     // Truncated by the token limit. Explain the arithmetic (input + output <= window, with headroom)
     // so a clamped reply is not mistaken for the model choosing to stop; pi itself compacts and
@@ -192,6 +301,33 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    if (typeof message.errorMessage === "string" && message.errorMessage !== TARGET_ERROR_MESSAGE) {
+      const failure = classifyProviderError(message.errorMessage);
+      const shown = redactProviderError(message.errorMessage, 2000);
+      const modelId = ctx?.model?.id ?? "";
+      // A 402 that names what the account can afford: hold the maximum there and let pi retry once more.
+      // Each retry needs a strictly lower clamp, so this cannot loop.
+      if (failure.kind === "credit" && failure.clampTo !== undefined && (clamp?.model !== modelId || failure.clampTo < clamp.tokens)) {
+        clamp = { model: modelId, tokens: failure.clampTo };
+        tell(ctx, `The provider can only afford ${failure.clampTo} output tokens for this request; retrying with that maximum.`, "warning");
+        return { message: { ...message, errorMessage: toRetryableErrorMessage(shown) } };
+      }
+      if (failure.kind !== "other") {
+        // Offer the failure to a fallback list (provider-router); a taken one is retried on the next model.
+        const note: { kind: string; model: string; provider: string; handled: boolean; switching?: Promise<unknown> } = { kind: failure.kind, model: modelId, provider: ctx?.model?.provider ?? "", handled: false };
+        try {
+          pi.events?.emit("luna:provider-failure", note);
+        } catch {
+          /* observers only */
+        }
+        // The model switch must finish before pi retries, and a switch that did not happen (false) is no retry.
+        if (note.handled && (await note.switching) !== false) {
+          return { message: { ...message, errorMessage: toRetryableErrorMessage(shown) } };
+        }
+        if (shown !== message.errorMessage) return { message: { ...message, errorMessage: shown } };
+      }
+      return undefined;
+    }
     if (message.errorMessage !== TARGET_ERROR_MESSAGE) return undefined;
     const errorMessage = toRetryableErrorMessage(message.errorMessage);
     // Guard: never hand pi a message its own retry regex will not match (that was the

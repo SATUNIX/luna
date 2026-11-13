@@ -256,7 +256,7 @@ function registerTools(server: McpServer): void {
     },
     async (params) => {
       const record = await audit({ event: "note", category: params.category || "general", note: params.note, via: "pi_system_governance_mcp" });
-      return textAndStructured("Pentest note recorded", record);
+      return textAndStructured("Engagement note recorded", record);
     }
   );
 

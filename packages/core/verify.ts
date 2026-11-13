@@ -16,7 +16,7 @@ import { checkSharedCopies, SHARED_COPIES } from "./gen-shared.ts";
 import { referenceContent } from "./reference.ts";
 import { skillsCatalogueContent } from "./skills-catalogue.ts";
 import { buildDistributionContract, distributionContractProblems } from "./distribution-contract.ts";
-import { buildCommandContractInput, commandContractProblems } from "./lib/command-contract.ts";
+import { buildCommandContractInput, commandContractProblems, promptDescriptionProblems } from "./lib/command-contract.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { parseProfile, type Profile } from "./lib/profiles.ts";
 import type { Sources } from "./lib/sources.ts";
@@ -128,6 +128,7 @@ console.log("\n[verify] command contract");
   const before = errors;
   try {
     for (const problem of commandContractProblems(buildCommandContractInput())) fail(problem.message);
+    for (const problem of promptDescriptionProblems()) fail(problem);
     if (errors === before) console.log("  OK: command names are unique, do not shadow prompts or built-ins, and match their manifests");
   } catch (error) {
     fail(`command contract could not be derived: ${errorMessage(error)}`);
@@ -445,7 +446,7 @@ if (fs.existsSync(sourcesPath)) {
     const actual = [...(membership.get(name) ?? new Set<string>())].sort();
     if (declared.join(",") !== actual.join(",")) {
       fail(
-        `profile metadata drift for "${name}": extension.json profiles [${declared.join(", ")}] != profiles/*.json membership [${actual.join(", ")}]`,
+        `profile metadata drift for "${name}": extension.json profiles [${declared.join(", ")}] != profiles/*.json membership [${actual.join(", ")}] (run 'npm run catalog': it derives the array from the profile files)`,
       );
     }
     // A real (stable/beta) extension must ship in at least one profile.
@@ -523,13 +524,13 @@ if (fs.existsSync(sourcesPath)) {
           fail("firewall starter policy defaults.unknown must not be 'allow' (default-deny requirement)");
         }
         // v2: shell commands are classified by the firewall's analyser (covered by
-        // tests/firewall-shell-smoke.ts); the regex deny list is the strict pentest policy's.
-        const strict = at(policy, "policies", "pentest", "command_rules");
+        // tests/firewall-shell-smoke.ts); the regex deny list is the strict engagement policy's.
+        const strict = at(policy, "policies", "engagement", "command_rules");
         const operatorDeny = items(at(policy, "command_rules", "deny")).length;
         const strictDeny = items(at(strict, "deny")).length;
         const denyCount = operatorDeny + strictDeny;
-        if (denyCount === 0) fail("firewall starter policy has zero deny command_rules (operator + pentest)");
-        if (errors === 0) console.log(`  OK: policy default unknown=${typeof unknownDefault === "string" ? unknownDefault : JSON.stringify(unknownDefault)}, pentest policy ${strictDeny} deny + ${items(at(strict, "ask")).length} ask rules, ${operatorDeny} operator deny rules`);
+        if (denyCount === 0) fail("firewall starter policy has zero deny command_rules (operator + engagement)");
+        if (errors === 0) console.log(`  OK: policy default unknown=${typeof unknownDefault === "string" ? unknownDefault : JSON.stringify(unknownDefault)}, engagement policy ${strictDeny} deny + ${items(at(strict, "ask")).length} ask rules, ${operatorDeny} operator deny rules`);
       }
     } else {
       fail("packages/core/policies/default.json missing (canonical starter policy mirror)");
@@ -538,16 +539,16 @@ if (fs.existsSync(sourcesPath)) {
     fail("tool-firewall/default-policy.json missing (shipped starter policy)");
   }
 
-  // 8d. Security pattern parity (Epic 2 Sprint 2.2 cross-link): the firewall's strict pentest
-  //     policy must be at least as strict as pentest-governance-domain. Firewall pentest
-  //     deny patterns >= pentest DESTRUCTIVE_COMMANDS; secret-guard PROTECTED_PATTERNS >=
-  //     pentest PROTECTED_PATTERNS. (Coding policies classify shell commands structurally;
+  // 8d. Security pattern parity (Epic 2 Sprint 2.2 cross-link): the firewall's strict engagement
+  //     policy must be at least as strict as engagement-governance. Firewall engagement
+  //     deny patterns >= engagement DESTRUCTIVE_COMMANDS; secret-guard PROTECTED_PATTERNS >=
+  //     engagement PROTECTED_PATTERNS. (Coding policies classify shell commands structurally;
   //     tests/firewall-shell-smoke.ts pins that each destructive class is still caught.)
   console.log("\n[verify] security pattern parity");
-  const pentestSrcPath = path.join(FIRST_PARTY_DIR, "pentest-governance-domain", "index.ts");
+  const engagementSrcPath = path.join(FIRST_PARTY_DIR, "engagement-governance", "index.ts");
   const secretGuardSrcPath = path.join(FIRST_PARTY_DIR, "secret-guard", "index.ts");
-  if (fs.existsSync(pentestSrcPath) && fs.existsSync(secretGuardSrcPath) && fs.existsSync(embeddedPolicyPath)) {
-    const pentestSrc = fs.readFileSync(pentestSrcPath, "utf8");
+  if (fs.existsSync(engagementSrcPath) && fs.existsSync(secretGuardSrcPath) && fs.existsSync(embeddedPolicyPath)) {
+    const engagementSrc = fs.readFileSync(engagementSrcPath, "utf8");
     const secretGuardSrc = fs.readFileSync(secretGuardSrcPath, "utf8");
 
     const extractArrayBlock = (src: string, varName: string): string => {
@@ -580,32 +581,34 @@ if (fs.existsSync(sourcesPath)) {
       return out;
     };
 
-    // Destructive-command parity: firewall deny >= pentest DESTRUCTIVE_COMMANDS.
-    const pentestDestructive = regexSources(extractArrayBlock(pentestSrc, "DESTRUCTIVE_COMMANDS"));
+    // Destructive-command parity: firewall deny >= engagement DESTRUCTIVE_COMMANDS.
+    const engagementDestructive = regexSources(extractArrayBlock(engagementSrc, "DESTRUCTIVE_COMMANDS"));
     const policy = readJsonFile(embeddedPolicyPath);
-    const firewallDeny = new Set([...items(at(policy, "command_rules", "deny")), ...items(at(policy, "policies", "pentest", "command_rules", "deny"))].map((r) => at(r, "pattern")));
-    const missingDestructive = pentestDestructive.filter((p) => !firewallDeny.has(p));
-    if (pentestDestructive.length === 0) {
-      fail("could not extract DESTRUCTIVE_COMMANDS from pentest-governance-domain (parity check broken)");
+    const firewallDeny = new Set([...items(at(policy, "command_rules", "deny")), ...items(at(policy, "policies", "engagement", "command_rules", "deny"))].map((r) => at(r, "pattern")));
+    const missingDestructive = engagementDestructive.filter((p) => !firewallDeny.has(p));
+    if (engagementDestructive.length === 0) {
+      fail("could not extract DESTRUCTIVE_COMMANDS from engagement-governance (parity check broken)");
     } else if (missingDestructive.length) {
-      fail(`firewall starter policy is missing pentest DESTRUCTIVE_COMMANDS patterns: ${missingDestructive.join(" | ")}`);
+      fail(`firewall starter policy is missing engagement DESTRUCTIVE_COMMANDS patterns: ${missingDestructive.join(" | ")}`);
     }
 
-    // Protected-path parity: secret-guard PROTECTED_PATTERNS >= pentest PROTECTED_PATTERNS.
-    const pentestProtected = stringLiterals(extractArrayBlock(pentestSrc, "PROTECTED_PATTERNS"));
+    // Protected-path parity: secret-guard PROTECTED_PATTERNS >= engagement PROTECTED_PATTERNS.
+    const engagementProtected = stringLiterals(extractArrayBlock(engagementSrc, "PROTECTED_PATTERNS"));
     const secretGuardProtected = new Set(stringLiterals(extractArrayBlock(secretGuardSrc, "PROTECTED_PATTERNS")));
-    const missingProtected = pentestProtected.filter((p) => !secretGuardProtected.has(p));
-    if (pentestProtected.length === 0) {
-      fail("could not extract PROTECTED_PATTERNS from pentest-governance-domain (parity check broken)");
+    const missingProtected = engagementProtected.filter((p) => !secretGuardProtected.has(p));
+    if (engagementProtected.length === 0) {
+      fail("could not extract PROTECTED_PATTERNS from engagement-governance (parity check broken)");
     } else if (missingProtected.length) {
-      fail(`secret-guard PROTECTED_PATTERNS is missing pentest patterns: ${missingProtected.join(" | ")}`);
+      fail(`secret-guard PROTECTED_PATTERNS is missing engagement patterns: ${missingProtected.join(" | ")}`);
     }
 
     if (errors === 0) {
-      console.log(`  OK: firewall covers ${pentestDestructive.length} destructive patterns; secret-guard covers ${pentestProtected.length} protected patterns`);
+      console.log(`  OK: firewall covers ${engagementDestructive.length} destructive patterns; secret-guard covers ${engagementProtected.length} protected patterns`);
     }
   } else {
-    console.log("  SKIP: parity sources not all present");
+    // A missing source is a failure, not a skip: a renamed or moved extension must not switch the check off.
+    const missing = [engagementSrcPath, secretGuardSrcPath, embeddedPolicyPath].filter((f) => !fs.existsSync(f));
+    fail(`security pattern parity cannot run: missing ${missing.map((f) => path.relative(WORKSPACE_ROOT, f)).join(", ")}`);
   }
 
   // 8d'. Workflow redaction copies: third_party/subagent/redact.ts holds byte-identical copies of
@@ -646,7 +649,7 @@ if (fs.existsSync(sourcesPath)) {
     // silently filed the skill nowhere in the generated catalogue instead of failing loud.
     const KNOWN_SKILL_CATEGORIES = new Set([
       "coding-workflow", "efficiency", "context-and-small-models", "memory", "orchestration-recovery",
-      "mcp-governance", "pentest", "evidence-reporting", "documentation", "maintainer", "uncategorised",
+      "mcp-governance", "engagement", "evidence-reporting", "documentation", "maintainer", "uncategorised",
     ]);
     // Frontmatter lint: every SKILL.md must have name + description + a recognized category.
     const skillsDir = path.join(SKILLS_DIR);
@@ -715,7 +718,7 @@ if (fs.existsSync(sourcesPath)) {
   console.log("\n[verify] extension READMEs");
   {
     const EXTENSIONS_WITHOUT_README = new Set([
-      "autonomous-loop", "conductor", "context-sieve", "control-center", "custom-compaction", "delegation-guard", "dual-review",
+      "autonomous-loop", "conductor", "context-sieve", "control-center", "delegation-guard", "dual-review",
       "effort", "finish-reason-retry", "memory-local", "memory-vault", "orchestrator", "skill-router",
       "auto-commit-on-exit", "caveman", "custom-footer", "dirty-repo-guard", "git-checkpoint", "handoff", "notify", "plan-mode",
       "protected-paths", "subagent", "todo", "trigger-compact",

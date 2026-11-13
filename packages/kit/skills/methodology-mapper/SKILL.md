@@ -1,6 +1,6 @@
 ---
 name: methodology-mapper
-category: pentest
+category: engagement
 description: Map observations and hypotheses to methodology coverage (OWASP/WSTG/PTES). Use when tracking assessment coverage or checking which methodology areas remain untested — methodology guidance never changes scope, ROE, approval, or evidence thresholds.
 disable-model-invocation: true
 triggers: ["owasp", "wstg", "ptes", "methodology coverage"]

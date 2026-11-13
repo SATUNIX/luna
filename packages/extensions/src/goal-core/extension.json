@@ -1,14 +1,14 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "goal-core",
-  "summary": "Explicit mission-goal management. Stores the active goal in .pi/GOAL.yaml and writes a contribution file for context-sieve to inject (survives compaction). /goal sets, shows, or clears the goal.",
+  "summary": "Explicit mission-goal management. Stores the active goal in .pi/GOAL.yaml and writes a contribution file for context-sieve to inject (survives compaction). /goal sets, shows, or clears the goal. Also enforces the unattended ceiling (PI_KIT_CEILING_*, or /away): the first of turns, money or wall time reached parks the run, and a terminal bell/OSC 9 rings for a card left unanswered a minute, a long run ending, or a park.",
   "category": "planning",
   "tier": "T3",
   "layer": 4,
   "entry": "index.ts",
-  "hooks": ["session_start"],
+  "hooks": ["session_start", "message_end", "turn_end", "tool_call", "agent_start", "agent_end", "session_shutdown"],
   "registers": { "tools": [], "commands": ["goal"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
@@ -20,7 +20,7 @@
   },
   "profileRequires": ["context-sieve"],
   "pulls": [],
-  "env": [],
+  "env": ["PI_KIT_CEILING_TURNS", "PI_KIT_CEILING_USD", "PI_KIT_CEILING_SECONDS"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,
   "status": "beta"

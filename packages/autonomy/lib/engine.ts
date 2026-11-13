@@ -18,7 +18,7 @@ import type { IngestResult } from "./gitmirror.ts";
 import { type BlockerRecord, type BudgetReason, type GenerationRecord, type MementoDecision, type PendingAnswer, type RunState, type RunStatus, type TransitionInfo, applyResultsToBoard, resumeAction, transition } from "./lifecycle.ts";
 import type { Complete } from "./manager.ts";
 import { type PromotionRun, type PromotionTarget, runPromotions } from "./promotion.ts";
-import { type Blocker, type RpcFrame, type UiResponse, activityLine, operatorDecision } from "./rpc.ts";
+import { type Blocker, type RpcFrame, type UiResponse, activityLine, operatorDecision, providerBlocker, providerLimitError, reviewBlocker } from "./rpc.ts";
 import type { RunConfig } from "./runcfg.ts";
 import type { RunLock } from "./runlock.ts";
 import type { RunStore } from "./store.ts";
@@ -29,6 +29,8 @@ import { type Measured, type TakenNotebook, HIDDEN_CHARS, WORKER_NOTEBOOK, appen
 import { clip } from "./templates/common.ts";
 import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
 import { stateHome } from "./paths.ts";
+import { reportRun } from "./agent-report.ts";
+import { ceilingBreach } from "../../core/shared/ceiling.ts";
 import { BoundaryError, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
 
@@ -278,6 +280,15 @@ export function defaultEngineLog(store: RunStore, rt: Runtime): (line: string) =
   };
 }
 
+/** How many refused-work refs a run keeps under refs/wip/<run>/; older ones are deleted when a new one is kept. */
+export const WIP_REFS_KEPT = 5;
+
+/** Keep only the newest `WIP_REFS_KEPT` refs of the run (step numbers sort by name), never `keep`. */
+export function pruneWip(g: (args: readonly string[], opts: { allowFail: true }) => string | null, run: string, keep: string): void {
+  const refs = (g(["for-each-ref", "--format=%(refname)", `refs/wip/${run}/`], { allowFail: true }) ?? "").split("\n").filter(Boolean).sort();
+  for (const old of refs.slice(0, Math.max(0, refs.length - WIP_REFS_KEPT))) if (old !== keep) g(["update-ref", "-d", old], { allowFail: true });
+}
+
 export class Engine {
   contract: RunContract;
   cfg: RunConfig;
@@ -341,6 +352,7 @@ export class Engine {
     for (const k of Object.keys(this.state)) if (!(k in next)) Reflect.deleteProperty(this.state, k);
     Object.assign(this.state, next);
     this.store.writeState(this.state);
+    reportRun(this.state, this.store.p);
     this.log(`state ${to}${info.reason ? ` (${info.reason})` : ""}`);
   }
 
@@ -414,10 +426,10 @@ export class Engine {
   limitReached({ atStepBoundary = false }: { atStepBoundary?: boolean } = {}): BudgetReason | null {
     const s = this.state;
     const b = s.limits.budget;
-    if (s.usage.usd >= b.totalUsd) return "total_usd";
-    if (s.usage.minutes >= b.maxMinutes) return "max_minutes";
-    if (atStepBoundary && s.usage.steps >= b.maxSteps) return "max_steps";
-    return null;
+    // The run's budget is the shared ceiling (core/shared/ceiling.ts); steps are only counted between steps.
+    const ceiling = { costUsd: b.totalUsd, seconds: b.maxMinutes * 60, ...(atStepBoundary ? { turns: b.maxSteps } : {}) };
+    const breach = ceilingBreach(ceiling, { costUsd: s.usage.usd, seconds: s.usage.minutes * 60, turns: s.usage.steps });
+    return breach === "cost" ? "total_usd" : breach === "time" ? "max_minutes" : breach === "turns" ? "max_steps" : null;
   }
 
   ctx(): StepContext {
@@ -649,10 +661,13 @@ export class Engine {
       say: (message) => { session.agent?.send(session.settled ? { type: "prompt", message } : { type: "steer", message }); },
     };
     const unattended = this.contract.permissions.unattended;
+    const limitWatch = { clamped: 0 };
     const onEvent = (ev: RpcFrame): void => {
       session.lastEventAt = this.rt.now();
       if (ev.type === "agent_start") session.settled = false;
       if (ev.type === "agent_settled") session.settled = true;
+      const limited = providerLimitError(ev, limitWatch);
+      if (limited && !session.blocker) session.blocker = providerBlocker(limited);
       if (ev.type === "extension_ui_request") {
         const d = operatorDecision({ id: ev["id"], method: ev["method"], title: ev["title"], message: ev["message"], options: ev["options"], prefill: ev["prefill"] }, unattended);
         if (d.action === "reply") { if (d.reply) session.agent?.send(d.reply); this.uiAnswered++; }
@@ -810,7 +825,25 @@ export class Engine {
     const res = repo.ingest(r.bundle, { areas: contract.permissions.writeAreas });
     if (res.violation) this.log(`refused: the worker's commits touch paths outside permissions.writeAreas: ${res.violation.slice(0, 8).join(", ")}`);
     if (res.diverged) this.log("the worker's branch diverged from the accepted head; not accepted");
+    if ((res.diverged || res.violation) && res.agent) this.keepUnaccepted(res.agent, res.diverged ? "diverged from the accepted head" : "touches paths outside the write areas");
     return res;
+  }
+
+  /**
+   * Work the host refused to accept (a diverged branch, a write-area violation) would otherwise be
+   * overwritten by the next ingest and by the next workspace reset. Keep it under refs/wip/<run>/
+   * (host-only, never published) and record where and how big for the next briefing.
+   */
+  keepUnaccepted(sha: string, why: string): void {
+    const g = this.repo.git();
+    const ref = `refs/wip/${this.contract.run}/step-${String(this.state.step).padStart(2, "0")}-${sha.slice(0, 12)}`;
+    try {
+      g(["update-ref", ref, sha]);
+      pruneWip(g, this.contract.run, ref);
+      const stat = g(["diff", "--shortstat", this.repo.head(), sha], { allowFail: true }) ?? "";
+      this.save((s) => { s.unaccepted = { ref, sha, why, stat: stat.trim(), at: new Date(this.rt.now()).toISOString() }; });
+      this.log(`unaccepted work kept at ${ref} (${why}${stat.trim() ? `; ${stat.trim()}` : ""})`);
+    } catch (e) { this.log(`could not keep unaccepted work ${sha.slice(0, 12)}: ${errorText(e)}`); }
   }
 
   writeStepSummary(n: number, extra: Record<string, unknown>): void {
@@ -1030,12 +1063,19 @@ export class Engine {
         gitLog: start ? repo.logSince(start, head) : repo.logOneline(null, head, 40), diff: start ? repo.diffText(start, head) : "", sha: head,
       };
       let verdict: TaskReview;
-      try { verdict = await this.rt.review(bundle); } catch (e) { verdict = { verdict: "REJECT", reason: `review unavailable (${errorText(e)}); not approved`, concerns: [], failed: true }; }
+      try { verdict = await this.rt.review(bundle); } catch (e) { verdict = { verdict: "REJECT", reason: `review unavailable (${errorText(e)}); not judged`, concerns: [], failed: true, unavailable: true }; }
       await this.refreshUsage();
+      if (verdict.unavailable) {
+        // Infrastructure, not a verdict: not counted as an attempt, not fed back to the worker. The
+        // accepted head is already held; the answer re-runs the step's evaluation and review.
+        this.log(`review unavailable at ${head.slice(0, 12)}; parked`);
+        await this.enterBlocked(reviewBlocker(verdict.reason, head));
+        return true;
+      }
       const attempts = (s.acceptance.review.attempts ?? 0) + 1;
       const approved = verdict.verdict === "APPROVE";
       this.save((st) => { st.acceptance.review = { ...st.acceptance.review, required: true, status: approved ? "approved" : "rejected", verdict: verdict.verdict, reason: verdict.reason, concerns: verdict.concerns, sha: head, at: new Date(this.rt.now()).toISOString(), attempts }; });
-      this.store.event(n, { type: "review", verdict: verdict.verdict, reason: verdict.reason });
+      this.store.event(n, { type: "review", verdict: verdict.verdict, reason: verdict.reason, ...(verdict.fallbackUsed ? { fallbackUsed: true } : {}) });
       if (!approved) {
         this.pendingFeedback.push({ text: `The independent review did not approve the change: ${clip(verdict.reason, 600)}${verdict.concerns.length ? ` Concerns: ${verdict.concerns.join("; ")}` : ""} Address these against the ORIGINAL specification, then stop.` });
         if (attempts >= s.limits.recovery.maxAttemptsPerStep) {
@@ -1086,8 +1126,9 @@ export class Engine {
     const gs = state.generations;
     const g = this.generationSettings();
     const reasons: Record<string, string> = { generation: `its generation's time box ran out; you are generation ${gs?.current ?? "?"} of ${g?.maxGenerations ?? "?"}, a fresh worker continuing from the previous generation's notebook`, hard_restart: "it was restarted by the supervisor's recovery", crash: "it crashed", supervisor_restart: "the supervisor was restarted", resumed: "the run was paused and resumed", answer: "the run was blocked on a question and has now been answered", session_ended: "it ended", continue: "it ended" };
-    const text = buildBriefing({ contract, state, why: reasons[why] ?? why, head, log: repo.logOneline(start ?? null, head), changed: start ? repo.changedPaths(start, head) : [], activity: this.lastActivity, answer, steers, notebook: g ? this.latestNotebook() : null });
-    if (answer) this.save((s) => { s.pendingAnswer = null; });
+    const unaccepted = state.unaccepted ?? null;
+    const text = buildBriefing({ contract, state, why: reasons[why] ?? why, head, unaccepted, log: repo.logOneline(start ?? null, head), changed: start ? repo.changedPaths(start, head) : [], activity: this.lastActivity, answer, steers, notebook: g ? this.latestNotebook() : null });
+    if (answer || unaccepted) this.save((s) => { if (answer) s.pendingAnswer = null; s.unaccepted = null; });
     return text;
   }
 

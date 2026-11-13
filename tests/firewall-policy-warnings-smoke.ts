@@ -59,7 +59,7 @@ async function invalidPoliciesDenyAll(): Promise<void> {
     { ...base, command_rules: { deny: [{ pattern: "(unterminated[" }] } },
     { ...base, command_rules: { deny: [{ pattern: "echo", flags: 3 }] } },
     { ...base, command_rules: { deni: [{ pattern: "echo" }] } },
-    { ...base, policies: { pentest: { command_rules: { ask: [{ pattern: "[" }] } } } },
+    { ...base, policies: { engagement: { command_rules: { ask: [{ pattern: "[" }] } } } },
   ]) {
     const f = await fixture(bad);
     try {

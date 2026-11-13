@@ -85,7 +85,7 @@ Out of scope (documented limits, not vulnerabilities, unless the documentation s
 - actions by a process of your own account that does not go through a tool call, by root, or by
   code running inside the pi process;
 - a secret in a shape `secret-guard` or the redaction table does not know: detection is
-  heuristic, and `secret-guard` loads only in the `balanced` and `autonomous` profiles;
+  heuristic, and `secret-guard` loads only in the `balanced` profile;
 - secrets that [tool capture](docs/tool-capture.md) records: it stores tool input and output
   losslessly by design, in owner-only files;
 - an action you approved, and approval prompts that list *Approve* first (an operator decision,
@@ -110,9 +110,9 @@ support action against research that follows these rules.
   `/firewall revoke`). Every decision is audited.
 - **`protected-paths`** is in every profile and protects agent-control files, including the
   firewall's own policy, approvals and audit files.
-- **`secret-guard`** loads in the `balanced` and `autonomous` profiles: a name-based backstop that
+- **`secret-guard`** loads in the `balanced` profile: a name-based backstop that
   blocks writes of secret files and content, and shell commands that leak them.
-- **`pentest-governance-domain`** (the `pentest` profile) adds scope and rules-of-engagement
+- **`engagement-governance`** (the `engagement` profile) adds scope and rules-of-engagement
   enforcement with action-card approval for authorised engagements.
 - **`delegation-guard`** makes every child agent load the same protections as its parent, and
   fails closed when one is missing. **Effort** budgets delegation, but is a cost policy, not a

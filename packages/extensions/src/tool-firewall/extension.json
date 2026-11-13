@@ -7,8 +7,8 @@
   "layer": 2,
   "entry": "index.ts",
   "hooks": ["tool_call", "session_start", "session_shutdown", "before_agent_start"],
-  "registers": { "tools": [], "commands": ["firewall", "firewall:status", "firewall:reload", "auto", "auto-mode", "security"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "registers": { "tools": [], "commands": ["away", "firewall", "auto", "security"] },
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

@@ -10,6 +10,7 @@
  * Self-containment rule: import only node:* builtins and pi peer types.
  */
 import fs from "node:fs";
+import { migrateStoredProfile } from "./shared/profile-names.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -71,13 +72,15 @@ function hasProjectMarker(cwd: string): boolean {
   return fs.existsSync(path.join(cwd, ".pi", ".pi-kit.json"));
 }
 
+const migrated = (name: string | undefined): string | undefined => (name === undefined ? undefined : migrateStoredProfile(name));
+
 /** The install marker: a project `.pi/.pi-kit.json` wins, else the global `<agent dir>/.pi-kit.json`. */
 export function readMarker(cwd: string): KitMarkerView {
   const file = hasProjectMarker(cwd) ? path.join(cwd, ".pi", ".pi-kit.json") : path.join(agentDir(), ".pi-kit.json");
   const raw = readJson(file);
   const record = isRecord(raw) ? raw : {};
   return {
-    profile: text(record.profile),
+    profile: migrated(text(record.profile)),
     scope: text(record.scope),
     mode: text(record.mode),
     kitSource: text(record.kitSource),
@@ -100,6 +103,19 @@ function packageSource(entry: unknown): string | undefined {
   if (typeof entry === "string") return entry;
   if (isRecord(entry)) return text(entry.source);
   return undefined;
+}
+
+/** Present once the first prompt has been sent, so the first-run card on the launch screen is shown once. */
+export function firstRunStamp(): string {
+  return path.join(kitStateDir(), "first-run.json");
+}
+
+/** Extensions the operator switched off in `<agent dir>/pi-kit/overrides.json` (`extensions.remove`). */
+export function readDisabledExtensions(): string[] {
+  const raw = readJson(path.join(kitStateDir(), "overrides.json"));
+  const extensions = isRecord(raw) ? raw.extensions : undefined;
+  const remove = isRecord(extensions) ? extensions.remove : undefined;
+  return Array.isArray(remove) ? remove.filter((name): name is string => typeof name === "string") : [];
 }
 
 /** The package sources registered in a pi settings.json. */
@@ -253,11 +269,8 @@ export interface HubValues {
   effort?: string | undefined;
   thinking?: string | undefined;
   security?: string | undefined;
-  /** The effective security level alone, for the Security page; unset when no firewall is loaded. */
-  securityEffective?: string | undefined;
   /** True when the tool firewall's security registry is not published. */
   securityMissing: boolean;
-  securityRequested?: string | undefined;
   approvals?: string | undefined;
   policy?: string | undefined;
   compaction?: string | undefined;
@@ -303,9 +316,7 @@ export function readValues(input: ValueInput): HubValues {
     effort: readEffort(),
     thinking: input.thinkingLevel,
     security: security.requested ? `${security.effective} (requested ${security.requested})` : security.effective,
-    securityEffective: security.missing ? undefined : security.effective,
     securityMissing: security.missing,
-    securityRequested: security.requested,
     approvals: firewall.mode ? `${firewall.mode}${firewall.policy ? `/${firewall.policy}` : ""}` : undefined,
     policy: firewall.policy,
     compaction: readCompaction(),

@@ -29,6 +29,7 @@ It checks three things:
 | `/update status` | Show installed and available versions |
 | `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
+| `/update undo` | Return the kit and its configuration files to how they were before the last update (pi itself is not rolled back) |
 | `/update channel latest\|next\|trunk\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
 Updates go through pi's own package manager (`pi update`, `pi install`). A new release on

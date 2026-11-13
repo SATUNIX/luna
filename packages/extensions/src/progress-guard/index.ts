@@ -11,7 +11,7 @@ import { writeFileSafe } from "./shared/safe-fs.ts";
 //   - "auto"    : inject a guidance nudge (into the running loop and as a context-sieve
 //                 contribution for the next prompt) AND notify.
 //   - "suggest" : notify a suggestion only, never inject (default).
-// The autonomous profile should set PI_KIT_GUARD_MODE=auto; other profiles stay "suggest".
+// The long-horizon profile should set PI_KIT_GUARD_MODE=auto; other profiles stay "suggest".
 //
 // What a signal turns into, and its words, is the effort extension's one decision policy (its
 // strategy.ts); this file detects, counts and delivers. Without effort it delivers one fixed line,
@@ -141,6 +141,46 @@ function isWrite(tool: string): boolean {
 function isRead(tool: string): boolean {
   return !isWrite(tool) && (READ_HINT.test(tool) || tool.toLowerCase().includes("read"));
 }
+// A bash command that only looks at files or directories. Workers were measured reading files
+// through bash (1,055 of 2,660 bash calls were cat/sed/head/tail) far more than through `read`,
+// which skips read's anchored, cheaper output and hides the read from the stall counter.
+// Commands that only look. `awk` is left out (it can run commands and write files) and `sed` is a
+// viewer only as a plain `sed -n 'N,Mp'` (a `w` or `e` command writes or runs).
+const BASH_VIEWERS = new Set(["cat", "head", "tail", "less", "more", "nl", "bat"]);
+const BASH_SEARCHERS = new Set(["grep", "egrep", "fgrep", "rg", "ls", "find", "wc", "tree", "stat", "file"]);
+const SED_PRINT = /^sed\s+-n\s+(['"]?)[\d,$]+p\1(\s|$)/;
+function bashWords(command: string): { words: string[]; commands: string[] } | null {
+  // Redirecting stderr is still reading; any other redirect, an in-place edit or a delete is not.
+  const plain = command.replace(/\d?>&\d|\d?>\s*\/dev\/null/g, "");
+  if (/>|\bsed\s+(-\w*i|--in-place)|\btee\b|\bxargs\b|\$\(|`|-delete\b|-exec\b|-fprint|-fls/.test(plain)) return null;
+  const commands = plain
+    .split(/&&|\|\||[;|\n]/)
+    .map((part) => part.trim())
+    .filter((part) => part !== "" && !/^cd(\s|$)/.test(part));
+  return { words: commands.map((part) => part.split(/\s+/)[0] ?? ""), commands };
+}
+/** A bash command that only looks at files or directories: it counts toward the stall counter. */
+export function isBashRead(command: string): boolean {
+  const parsed = bashWords(command);
+  if (!parsed || parsed.words.length === 0) return false;
+  return parsed.commands.every((part, i) => {
+    const word = parsed.words[i] ?? "";
+    return BASH_VIEWERS.has(word) || BASH_SEARCHERS.has(word) || (word === "sed" && SED_PRINT.test(part));
+  });
+}
+/** A bash command that views a file the `read` tool could show: only these earn the read-tool hint. */
+export function isBashView(command: string): boolean {
+  const parsed = bashWords(command);
+  if (!parsed || parsed.words.length === 0) return false;
+  return parsed.commands.every((part, i) => {
+    const word = parsed.words[i] ?? "";
+    return BASH_VIEWERS.has(word) || (word === "sed" && SED_PRINT.test(part));
+  }) && parsed.words.some((w) => BASH_VIEWERS.has(w) || w === "sed");
+}
+function commandOf(input: unknown): string {
+  const command: unknown = typeof input === "object" && input !== null ? Reflect.get(input, "command") : undefined;
+  return typeof command === "string" ? command : "";
+}
 function short(t: string): string {
   return t.length > 56 ? "…" + t.slice(-53) : t;
 }
@@ -215,6 +255,7 @@ export default function (pi: ExtensionAPI) {
   let cwd = process.cwd();
   let turn = 0;
   let readsSinceWrite = 0;
+  let bashReadsSinceWrite = 0;
   let lastActedSignature = "";
   let lastActedTurn = -COOLDOWN_TURNS;
   let runtimeMode: "auto" | "suggest" | null = null;
@@ -271,7 +312,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   function guidance(reason: string, steer: string | null): string {
-    return `progress-guard: ${reason}. ${steer ?? NO_POLICY_LINE} Recent actions: ${digest()}`;
+    // Reading through bash costs more than `read` and hides the read from its caching: say so once reads dominate.
+    const readHint = bashReadsSinceWrite >= 3 ? " Read files with the read tool, not cat/sed/head through bash." : "";
+    return `progress-guard: ${reason}. ${steer ?? NO_POLICY_LINE}${readHint} Recent actions: ${digest()}`;
   }
 
   // Bare /boost: this moment, not the next detection. It goes in through the same marker the
@@ -319,6 +362,10 @@ export default function (pi: ExtensionAPI) {
       sinceWrite.push(`${tool}|${action.target ?? ""}`);
       if (sinceWrite.length > WINDOW) sinceWrite.shift();
       if (isRead(tool)) readsSinceWrite += 1;
+      else if (tool === "bash" && isBashRead(commandOf(ev.input))) {
+        readsSinceWrite += 1;
+        if (isBashView(commandOf(ev.input))) bashReadsSinceWrite += 1;
+      }
     }
     return undefined; // never block
   });
@@ -330,6 +377,7 @@ export default function (pi: ExtensionAPI) {
       // progress was actually made: reset the stall counter and stand down any active nudge
       cwd = ctx.cwd ?? cwd;
       readsSinceWrite = 0;
+      bashReadsSinceWrite = 0;
       lastActedSignature = "";
       sinceWrite.length = 0;
       recent.length = 0;

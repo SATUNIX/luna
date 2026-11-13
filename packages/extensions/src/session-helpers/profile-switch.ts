@@ -157,7 +157,7 @@ export interface Expectation {
    */
   extensions: string[] | (() => string[]);
   /** Firewall policy the profile demands, and the mode it defaults to. */
-  firewall: { policy: "coding" | "pentest"; mode: "auto" | "manual" };
+  firewall: { policy: "coding" | "engagement"; mode: "auto" | "manual" };
   /** ms epoch the switch started; the marker (the installer's last write) must be newer. */
   startedAt: number;
   /** Reads the kit entry's extension names from a settings file (null: entry missing or unfiltered). */
@@ -240,7 +240,7 @@ export function verifySwitch(exp: Expectation): string[] {
     problems.push(`firewall config ${exp.firewallFile} ${firewall.error ?? "is not an object"}`);
   } else {
     const { policy, mode, source } = fwValue;
-    if (policy !== "coding" && policy !== "pentest") problems.push(`firewall policy "${shown(policy)}" is not a known policy (coding|pentest)`);
+    if (policy !== "coding" && policy !== "engagement") problems.push(`firewall policy "${shown(policy)}" is not a known policy (coding|engagement)`);
     else if (policy !== exp.firewall.policy) problems.push(`firewall policy is "${policy}", profile "${exp.profile}" requires "${exp.firewall.policy}"`);
     if (mode !== "auto" && mode !== "manual") problems.push(`firewall mode "${shown(mode)}" is not a known mode (auto|manual)`);
     else if (source !== "user" && mode !== exp.firewall.mode) problems.push(`firewall mode is "${mode}", profile "${exp.profile}" requires "${exp.firewall.mode}"`);
@@ -248,7 +248,9 @@ export function verifySwitch(exp: Expectation): string[] {
   if (exp.security) {
     const result = readJson(exp.security.file);
     const v = result.value;
-    const levels = ["relaxed", "balanced", "guarded", "strict"];
+    // A stored `relaxed` (removed) reads as balanced; the firewall rewrites it on its next save.
+    if (isRecord(v) && v.level === "relaxed") v.level = "balanced";
+    const levels = ["balanced", "guarded", "strict"];
     if (result.error || !isRecord(v) || v.schemaVersion !== 1 || typeof v.level !== "string" || !levels.includes(v.level)
       || (v.source !== "operator" && v.source !== "profile") || typeof v.revision !== "number" || !Number.isSafeInteger(v.revision) || v.revision < 0
       || typeof v.changedAt !== "string" || !Number.isFinite(Date.parse(v.changedAt))) {
@@ -256,7 +258,7 @@ export function verifySwitch(exp: Expectation): string[] {
     } else {
       // Verify the effective result including the engagement and strengthening-only env
       // floors. An operator's request survives a profile switch, even beneath a floor.
-      const floor = exp.firewall.policy === "pentest" ? levels.indexOf("guarded") : 0;
+      const floor = exp.firewall.policy === "engagement" ? levels.indexOf("guarded") : 0;
       const pin = levels.indexOf(process.env.PI_KIT_SECURITY_LEVEL ?? "");
       const effective = Math.max(levels.indexOf(v.level), floor, pin);
       const expected = Math.max(levels.indexOf(v.source === "operator" ? v.level : exp.security.level), floor, pin);

@@ -82,30 +82,6 @@ async function testStartupPreservesForeignContributions(): Promise<void> {
   } finally { rmWorkspace(ws); }
 }
 
-async function testCustomCompactionUsesNativeFallback(): Promise<void> {
-  const ws = tmpWorkspace("pi-kit-compact-custom-");
-  const templatePath = path.join(ws, "template.md");
-  fs.writeFileSync(templatePath, "Preserve the deployment checklist above all else.");
-  const restore = setEnv("PI_KIT_COMPACT_TEMPLATE", templatePath);
-  try {
-    const pi = fakePi();
-    (await loadExtension("extensions/custom-compaction/index.ts"))(pi.api);
-    const notices: string[] = [];
-    await pi.handlers.get("session_start")({}, { cwd: ws, hasUI: true, ui: { notify: (message: string) => notices.push(message) } });
-    assert.equal(notices.length, 1);
-    const [notice] = notices;
-    assert.ok(notice !== undefined, "a notice was shown");
-    assert.match(notice, /unsupported.*native summarization/);
-    const event = {
-      customInstructions: "Keep the latest correction",
-      preparation: fakePreparation({ messagesToSummarize: [{ role: "user", content: "x".repeat(12000) + "LATEST CORRECTION" }] }),
-    };
-    const before = structuredClone(event);
-    assert.equal(await pi.handlers.get("session_before_compact")(event), undefined);
-    assert.deepEqual(event, before, "configured template must not remove later transcript state");
-  } finally { restore(); rmWorkspace(ws); }
-}
-
 // --- continuity across a whole compaction cycle ------------------------------------------------------
 // What must survive session_before_compact -> session_compact: the goal, the todo list, recovery
 // state, and any custom session entries (the effort tier is one; an extension re-applies it every turn
@@ -129,11 +105,12 @@ async function testGoalTodoRecoveryAndCustomEntriesSurviveACompactionCycle(): Pr
       { type: "message", id: "e1", message: { role: "user", content: "start" } },
       { type: "custom", id: "e2", customType: "effort-tier", data: { tier: "high", source: "session" } },
       { type: "custom", id: "e3", customType: "caveman-state", data: { level: "full" } },
+      { type: "message", id: "e4", message: { role: "assistant", content: [{ type: "toolCall", name: "edit", arguments: { path: "src/invoice.ts" } }] } },
     ];
     const ctx = sessionCtx(ws, entries);
     // fakePi keeps one handler per event, so each extension under test gets its own instance.
     const hooks: Array<{ name: string; p: ReturnType<typeof fakePi> }> = [];
-    for (const name of ["context-sieve", "custom-compaction", "compress"]) {
+    for (const name of ["context-sieve", "compress"]) {
       const p = fakePi();
       (await loadExtension(`extensions/${name}/index.ts`))(p.api);
       hooks.push({ name, p });
@@ -182,7 +159,7 @@ async function testGoalTodoRecoveryAndCustomEntriesSurviveACompactionCycle(): Pr
       assert.equal(result, undefined, `${name}: automatic compaction must use pi's native summary (no cancel, no replacement)`);
       assert.deepEqual(ev, snapshot, `${name}: must not mutate the prepared input or the session entries`);
     }
-    assert.deepEqual(entries.map((e) => e.id), ["e1", "e2", "e3"], "custom entries (effort tier, caveman state) are all still there");
+    assert.deepEqual(entries.map((e) => e.id), ["e1", "e2", "e3", "e4"], "custom entries (effort tier, caveman state) are all still there");
     assert.deepEqual(entries[1]?.data, { tier: "high", source: "session" });
 
     for (const { p } of hooks) await p.handlers.find("session_compact")?.({ compactionEntry: { id: "c1" }, fromExtension: false, reason: "threshold", willRetry: false }, ctx);
@@ -193,6 +170,11 @@ async function testGoalTodoRecoveryAndCustomEntriesSurviveACompactionCycle(): Pr
     assert.match(after.systemPrompt, /## Active Goal\nShip the invoice migration by Friday/, "the goal is re-injected on the first turn after compaction");
     assert.ok(after.message, "the recovery directive is injected");
     assert.match(after.message.content, /recovery: stuck on 'repeat:xyz'/, "recovery state is injected again after compaction");
+    // The survivor record: open plan items and the last edited file come back whatever the summary kept, once.
+    assert.doesNotMatch(after.message.content, /Goal:/, "the goal is goal-core's to inject, not the survivor's");
+    assert.match(after.message.content, /#1 write the migration/);
+    assert.match(after.message.content, /#2 \(in progress\) backfill old invoices/);
+    assert.match(after.message.content, /Last files edited: src\/invoice\.ts/);
     assert.equal(fs.readFileSync(todoFile, "utf8"), todoBefore, "todo state is on disk and untouched by compaction");
     assert.equal(fs.readFileSync(path.join(ws, ".pi", "GOAL.yaml"), "utf8"), goalBefore);
     const listing = await todo.execute("t3", { action: "list" }, undefined, undefined, ctx);
@@ -240,7 +222,7 @@ async function testCompressKeepsTheActiveObjectiveAndOperatorNote(): Promise<voi
 async function testKitHooksNeverCancelOrReplaceAnAutomaticCompaction(): Promise<void> {
   const ws = tmpWorkspace("pi-kit-compact-hooks-");
   try {
-    for (const name of ["context-sieve", "custom-compaction", "compress"]) {
+    for (const name of ["context-sieve", "compress"]) {
       const pi = fakePi();
       (await loadExtension(`extensions/${name}/index.ts`))(pi.api);
       for (const reason of ["manual", "threshold", "overflow"]) {
@@ -257,7 +239,6 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["kit hooks never cancel or replace a manual/threshold/overflow compaction", testKitHooksNeverCancelOrReplaceAnAutomaticCompaction],
   ["native compaction receives full unchanged transcript and custom instructions", testNativeCompactionPreservesPreparedInput],
   ["startup preserves and excludes unchanged foreign contributions", testStartupPreservesForeignContributions],
-  ["configured template falls back to native compaction with notice", testCustomCompactionUsesNativeFallback],
 ];
 
 let failed = 0;

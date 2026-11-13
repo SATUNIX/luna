@@ -19,53 +19,51 @@ describes. Commands are for the operator: the model cannot call them.
 | Command | Extension | Description | Documented in |
 |---|---|---|---|
 | `/auto` | `tool-firewall` | Auto mode: /auto [status\|on\|off\|explain [n]\|learned\|forget <sig>\|learn on\|off\|stats\|profile [rebuild\|reset]\|check <command>] | [autonomy-gate](autonomy-gate.md) |
-| `/auto-mode` | `tool-firewall` | Alias of /auto | [autonomy-gate](autonomy-gate.md) |
 | `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|inbox\|boundary\|reconfigure. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
+| `/away` | `tool-firewall` | /away [--for 2h] [--budget 5] \| off \| status. Automatic approvals for a bounded time and budget; anything that would need your approval is refused with the reason. Needs the terminal of an interactive session. | [autonomy](autonomy.md) |
 | `/boost` | `progress-guard` | Auto-boost control: /boost reassesses now; /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |
 | `/caveman` | `caveman` | Toggle/set output compression: /caveman [on\|off\|lite\|full\|ultra\|micro\|status] | [control-center](control-center.md) |
-| `/clear` | `session-helpers` | How to reset context (pi has no native /clear). Non-destructive: prints guidance only. | [control-center](control-center.md) |
+| `/checkpoints` | `git-checkpoint` | List this session's working-tree checkpoints (kept under refs/luna/checkpoints, never on your branch) | [profiles](profiles.md) |
+| `/clear` | `session-helpers` | Start a new session (asks first). --handoff writes HANDOFF.md before leaving. | [control-center](control-center.md) |
 | `/compact-threshold` | `trigger-compact` | View or change the kit auto-compact trigger: /compact-threshold [amount\|off\|on\|reset], e.g. /compact-threshold 500k | [INSTALL](INSTALL.md) |
-| `/compaction` | `session-helpers` | Show or change auto-compaction: /compaction [status\|on\|off\|trigger on\|trigger off] | [troubleshooting](troubleshooting.md) |
+| `/compaction` | `session-helpers` | Show or change auto-compaction: /compaction [status\|on\|off\|trigger on\|trigger off] | [model-resilience](model-resilience.md) |
 | `/compress` | `compress` | Instant deterministic compaction: keeps user asks and assistant replies, drops tool output. No model call. Optional note: /compress <note> | [control-center](control-center.md) |
 | `/console` | `web-console` | Start/stop the bundled Pi Console web UI. Usage: /console [start\|stop\|status\|open]. | [web-console](web-console.md) |
 | `/effort` | `effort` | Choose how deep and broad the agent works and how much it delegates: `/effort` (picker), `/effort <minimal\|focused\|standard\|thorough\|exhaustive \| E1..E5>`, `/effort status`, `/effort reset`, `/effort memento [status\|on\|off] [provider/model]` (per-model Memento opt-in, off by default), `/effort ultracode [--size N] [--budget N\|none] \| off` (alias uc, or e5 --standing: E5 plus standing workflow mode). Independent of thinking level, profile and permissions. | [effort](effort.md) |
-| `/engagement` | `conductor` | Manage engagement lifecycle: /engagement start \| status \| phase <name> | [control-center](control-center.md) |
+| `/engagement` | `conductor` | Manage engagement lifecycle: /engagement start \| status \| phase <name> | [security](security.md) |
+| `/engagement:actions` | `engagement-governance` | Show where action approvals are audited | [security](security.md) |
+| `/engagement:reload-policy` | `engagement-governance` | Reload engagement policy metadata and scope/ROE files from disk immediately | [security](security.md) |
+| `/engagement:status` | `engagement-governance` | Show engagement data-root and governance status | [security](security.md) |
 | `/firewall` | `tool-firewall` | Tool firewall: /firewall [status \| list \| revoke <id>\|session\|workspace\|all\|host:<name> \| reload]. Lists remembered approvals with their scope and revokes them. | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:reload` | `tool-firewall` | Alias of /firewall reload - reload the tool-firewall policy from disk | [autonomy-gate](autonomy-gate.md) |
-| `/firewall:status` | `tool-firewall` | Alias of /firewall status - show policy, mode, judge, learning and remembered approvals | [autonomy-gate](autonomy-gate.md) |
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
-| `/helpers` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/improve` | `self-improvement` | Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md. | [control-center](control-center.md) |
-| `/kit` | `control-center` | Alias of /menu | [control-center](control-center.md) |
 | `/loop` | `autonomous-loop` | Enable autonomous loop: /loop <goal> starts the loop; /loop stop ends it. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/memory` | `memory-vault` | Memory vault: /memory [status\|recent\|search <q>\|forget <id>\|migrate] | [memory](memory.md) |
 | `/menu` | `control-center` | Open the control centre: profile, effort, thinking, security and every page (also …) | [control-center](control-center.md) |
 | `/orchestrate` | `orchestrator` | Control autonomous delegation: /orchestrate [on\|off\|auto\|status] | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-implement-review` | `orchestrator` | Delegate the full plan → implement → review loop: /orchestrate-implement-review <task> | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-plan` | `orchestrator` | Delegate planning only, no changes: /orchestrate-plan <task> | [agent-orchestration](agent-orchestration.md) |
-| `/pentest:actions` | `pentest-governance-domain` | Show where action approvals are audited | [security](security.md) |
-| `/pentest:reload-policy` | `pentest-governance-domain` | Reload pentest policy metadata and scope/ROE files from disk immediately | [security](security.md) |
-| `/pentest:status` | `pentest-governance-domain` | Show pentest data-root and governance status | [security](security.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
 | `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
 | `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [memory](memory.md) |
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
-| `/security` | `tool-firewall` | /security [off\|relaxed\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
+| `/security` | `tool-firewall` | /security [off\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
 | `/skills` | `skill-router` | List installed skills: which are listed in the prompt, which are on-demand (skill_search / hints), and their triggers. | [control-center](control-center.md) |
+| `/status` | `control-center` | Show what is installed and running, one line each with the command for detail | [control-center](control-center.md) |
 | `/tips` | `custom-footer` | Show or hide usage tips while the agent works: /tips on\|off | [control-center](control-center.md) |
 | `/todos` | `todo` | Show this session's todo list and its file path | [control-center](control-center.md) |
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
+| `/undo` | `git-checkpoint` | Put the working tree back to the latest checkpoint (or /undo <n>), showing what changes first | [profiles](profiles.md) |
 | `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
+| `/usage` | `trace-ledger` | Where this session's tokens and money went: by model, child and tool, cache hit rate, the largest results. | [status-bar-and-costs](status-bar-and-costs.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
-| `/webui` | `web-console` | Alias of /console - start/stop the bundled Pi Console web UI. | [web-console](web-console.md) |
-| `/workflow` | `subagent` | Alias of /workflows. … | [workflows](workflows.md) |
 | `/workflows` | `subagent` | Every workflow, subagent and autonomous run, live or finished: list them, show one, stop one or all. … | [workflows](workflows.md) |
 
 ## Tools
@@ -92,7 +90,6 @@ Extension `branch-lab`. Create a git worktree branch for isolated work.
 | Parameter | Type | Description |
 |---|---|---|
 | `taskId?` | string | Task identifier |
-| `name?` | string | Compatibility alias for taskId |
 | `baseBranch?` | string | Base branch or commit |
 
 ### `branch_discard`
@@ -102,7 +99,6 @@ Extension `branch-lab`. Remove a branch-lab worktree and lease. Refuses a worktr
 | Parameter | Type | Description |
 |---|---|---|
 | `taskId?` | string | Task identifier |
-| `name?` | string | Compatibility alias for taskId |
 | `force?` | boolean | Discard even uncommitted changes and unmerged commits |
 
 ### `branch_list`
@@ -118,7 +114,6 @@ Extension `branch-lab`. Merge a branch-lab branch into the current git branch.
 | Parameter | Type | Description |
 |---|---|---|
 | `taskId?` | string | Task identifier |
-| `name?` | string | Compatibility alias for taskId |
 | `strategy?` | string | Optional git merge strategy: ort, recursive, resolve, ours, or subtree |
 
 ### `branch_switch`
@@ -128,7 +123,6 @@ Extension `branch-lab`. Return the worktree path for an isolated branch.
 | Parameter | Type | Description |
 |---|---|---|
 | `taskId?` | string | Task identifier |
-| `name?` | string | Compatibility alias for taskId |
 
 ### `dispatch_specialist`
 
@@ -200,7 +194,7 @@ Extension `memory-vault`. Forget a memory by id, name or path (moved to the vaul
 
 ### `memory_save`
 
-Extension `memory-vault`. Save a durable memory to the vault (Obsidian-compatible markdown). Use when the user says to remember something, states a preference, or a non-obvious decision/gotcha should persist across sessions. Updates an existing memory instead of duplicating it. Do not save what the code or git history already records.
+Extension `memory-vault`. Save a durable memory to the vault. Use when asked to remember something, for a stated preference, or for a non-obvious decision or gotcha that should outlive the session. Updates an existing memory rather than duplicating it. Do not save what code or git history already records.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -247,14 +241,14 @@ Extension `memory-local`. Save a note to persistent local memory. Use for facts,
 
 ### `record_verdict`
 
-Extension `verifier-board`. Record a verdict from a check, reviewer, or validator. Use it only for a result that another check or reviewer produced, not to grade your own work. The mission is not done until all verdicts pass.
+Extension `verifier-board`. Record a verdict from a check or reviewer, never your own grade. The mission is not done until all verdicts pass.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `source` | string | Who or what produced this verdict, e.g. 'reviewer', 'tests', 'lint', 'manual-check' |
-| `pass` | boolean | Did this check pass? |
-| `summary` | string | One-line result, or what must be fixed if it failed |
-| `evidence?` | string | Where the result came from: a command and its exit code, a file path, or a report path |
+| `source` | string | Who produced it: 'reviewer', 'tests', 'lint' |
+| `pass` | boolean | — |
+| `summary` | string | One line, or what must be fixed |
+| `evidence?` | string | Command and exit code, or a file path |
 
 ### `skill_archive`
 
@@ -354,14 +348,14 @@ Extension `task-graph`. Update a task's status (pending\|in_progress\|done\|bloc
 
 ### `todo`
 
-Extension `todo`. Manage the task todo list for this session (stored in a per-session file, so parallel sessions in the same workspace don't share lists). Actions: list; add (text, or items for several at once); start (id) marks one item in progress; done (id) marks it complete; toggle (id) flips done/open; remove (id); clear. Add the plan before you start work. Mark an item in progress when you start it and done when you finish it. Every action returns the whole list.
+Extension `todo`. The session's todo list. Actions: list, add (text or items), start, done, toggle, remove (id), clear. Add the plan first, then start and finish items. Returns the whole list.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `action` | "list" \| "add" \| "start" \| "done" \| "toggle" \| "remove" \| "clear" | — |
-| `text?` | string | Todo text (for add) |
-| `items?` | string[] | Several todo texts to add at once (for add) |
-| `id?` | number | Todo ID (for start, done, toggle, remove) |
+| `text?` | string | For add |
+| `items?` | string[] | Several texts, for add |
+| `id?` | number | For start, done, toggle, remove |
 
 ### `verdict_status`
 
@@ -428,10 +422,15 @@ absolute or relative to the working directory.
 | Variable | Read by | Purpose | Documented in |
 |---|---|---|---|
 | `DUAL_REVIEW_MODEL` | `dual-review` | Second model name for reviewer agent | [INSTALL](INSTALL.md#environment-variables) |
+| `HERDR_ENV` | `herdr` | — | [herdr](herdr.md) |
+| `HERDR_PANE_ID` | `herdr` | — | [herdr](herdr.md) |
+| `HERDR_SOCKET_PATH` | `herdr` | — | [herdr](herdr.md) |
 | `LMSTUDIO_BASE_URL` | `memory-local` | — | — |
+| `LUNA_AGENT_STATE_DIR` | `herdr` | — | [autonomy](autonomy.md) |
 | `MEM0_API_KEY` | `memory-mem0` | mem0 API key (if auth enabled) | [INSTALL](INSTALL.md#environment-variables) |
 | `MEM0_API_URL` | `memory-mem0` | mem0 REST service URL | [INSTALL](INSTALL.md#environment-variables) |
 | `MEM0_USER_ID` | `memory-mem0` | mem0 user/agent ID (default `pi-agent`) | [INSTALL](INSTALL.md#environment-variables) |
+| `NO_COLOR` | `control-center` | — | [control-center](control-center.md) |
 | `PI_AUTONOMY_CLI` | `autonomy-run` | — | — |
 | `PI_AUTONOMY_GATE_SLOTS` | `autonomy-run` | — | [autonomy](autonomy.md) |
 | `PI_AUTONOMY_HOME` | `autonomy-run` | — | [autonomy](autonomy.md) |
@@ -460,8 +459,12 @@ absolute or relative to the working directory.
 | `PI_KIT_CAPTURE_SEGMENT_BYTES` | `tool-capture` | — | [tool-capture](tool-capture.md) |
 | `PI_KIT_CAT` | `custom-footer` | — | [status-bar-and-costs](status-bar-and-costs.md) |
 | `PI_KIT_CAVEMAN_LEVEL` | `caveman` | — | — |
+| `PI_KIT_CEILING_SECONDS` | `goal-core` | — | [autonomy](autonomy.md) |
+| `PI_KIT_CEILING_TURNS` | `goal-core` | — | [autonomy](autonomy.md) |
+| `PI_KIT_CEILING_USD` | `goal-core` | — | [autonomy](autonomy.md) |
+| `PI_KIT_CHECKPOINT_MAX` | `git-checkpoint` | — | [profiles](profiles.md) |
 | `PI_KIT_CHILD_REQUIRE` | `delegation-guard` | — | — |
-| `PI_KIT_COMPACT_TEMPLATE` | `custom-compaction` | — | — |
+| `PI_KIT_COMPACT_COOLDOWN_MS` | `trigger-compact` | — | — |
 | `PI_KIT_COMPACT_THRESHOLD_TOKENS` | `trigger-compact` | Token count that triggers auto-compaction; locks out `/compact-threshold` when set. Without it, `/compact-threshold <amount>` (e.g. `500k`) persists to `~/.pi/agent/pi-kit/trigger-compact.json` (default `100000`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_COMPRESS_MAX_CHARS` | `compress` | — | — |
 | `PI_KIT_COST_CACHE_READ_PER_MTOK` | `custom-footer` | Optional cache-read dollars per million tokens | [INSTALL](INSTALL.md#environment-variables) |
@@ -499,8 +502,10 @@ absolute or relative to the working directory.
 | `PI_KIT_GUIDELINES_PATH` | `guidelines` | Path to guidelines file (default `GUIDELINES.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_HANDOFF_AUTO` | `handoff` | — | — |
 | `PI_KIT_HANDOFF_FILE` | `handoff` | — | — |
-| `PI_KIT_HUMAN_CONSOLE_DIR` | `human-console`, `pentest-governance-domain`, `tool-firewall` | — | [future-work](future-work.md) |
-| `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `pentest-governance-domain`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
+| `PI_KIT_HERDR` | `herdr` | — | [herdr](herdr.md) |
+| `PI_KIT_HERDR_NOTIFY_MIN_SECONDS` | `herdr` | — | [herdr](herdr.md) |
+| `PI_KIT_HUMAN_CONSOLE_DIR` | `engagement-governance`, `human-console`, `tool-firewall` | — | [future-work](future-work.md) |
+| `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` | `engagement-governance`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_INTERNAL_CHILD` | `control-center`, `trigger-compact` | — | [control-center](control-center.md) |
 | `PI_KIT_LEAN_CTX` | `session-helpers` | Set to `0` to disable the lean-ctx preflight warning | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_LOOP_MAX` | `autonomous-loop` | — | [efficiency-and-loops](efficiency-and-loops.md) |
@@ -526,7 +531,7 @@ absolute or relative to the working directory.
 | `PI_KIT_RECOVERY_SCOUTS` | `recovery-orchestrator` | — | — |
 | `PI_KIT_REDUCED_MOTION` | `control-center` | — | [control-center](control-center.md) |
 | `PI_KIT_ROOT` | `kit-update`, `session-helpers` | — | [security](security.md) |
-| `PI_KIT_ROUTING_POLICY` | `provider-router` | — | — |
+| `PI_KIT_ROUTING_POLICY` | `provider-router` | — | [model-resilience](model-resilience.md) |
 | `PI_KIT_SAVE_DIR` | `save` | — | — |
 | `PI_KIT_SAVE_ON_COMPACT` | `save` | — | — |
 | `PI_KIT_SAVE_PROJECT` | `save` | — | — |
@@ -540,9 +545,10 @@ absolute or relative to the working directory.
 | `PI_KIT_SPEC_PLAN_STRICT` | `spec-plan` | — | — |
 | `PI_KIT_STRUCTURED_OUTPUT_SCHEMA` | `subagent` | — | [structured-output](structured-output.md) |
 | `PI_KIT_SUBAGENT_APPROVAL_TIMEOUT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
-| `PI_KIT_SUBAGENT_CONCURRENCY` | `subagent` | — | — |
+| `PI_KIT_SUBAGENT_CONCURRENCY` | `subagent` | — | [model-resilience](model-resilience.md) |
 | `PI_KIT_SUBAGENT_DEPTH` | `subagent` | — | — |
 | `PI_KIT_SUBAGENT_DETACH_SIGNAL` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
+| `PI_KIT_SUBAGENT_DISCOVERY` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_EXTENSIONS` | `delegation-guard`, `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_HEARTBEAT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_SUBAGENT_IDLE_TIMEOUT_MS` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
@@ -557,6 +563,7 @@ absolute or relative to the working directory.
 | `PI_KIT_TIPS` | `custom-footer` | `0` hides usage tips on the working line (default on) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_TODO_FILE` | `custom-footer`, `todo` | Path to todo file (default `TODO.md`) | [INSTALL](INSTALL.md#environment-variables) |
 | `PI_KIT_TODO_WIDGET` | `custom-footer` | `0` hides the todo checklist widget (default on) | [INSTALL](INSTALL.md#environment-variables) |
+| `PI_KIT_TOOL_RESULT_MAX_CHARS` | `subagent` | — | [efficiency-and-loops](efficiency-and-loops.md) |
 | `PI_KIT_TRUSTED_PROJECT_ROLES` | `subagent` | — | [agent-orchestration](agent-orchestration.md) |
 | `PI_KIT_TRUSTED_WORKFLOWS` | `subagent` | — | [workflows](workflows.md) |
 | `PI_KIT_UNATTENDED` | `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
@@ -587,6 +594,7 @@ absolute or relative to the working directory.
 | `PI_REMOTE_STATE_DIR` | `remote-control`, `tool-firewall`, `protected-paths` | — | [remote-control](remote-control.md) |
 | `PI_REMOTE_TOKEN_TTL_MIN` | `remote-control` | — | [remote-control](remote-control.md) |
 | `PI_SYSTEM_GIT_SOURCE` | `kit-update` | — | [migration](migration.md) |
+| `XDG_STATE_HOME` | `herdr` | — | [autonomy](autonomy.md) |
 
 ## Configuration files
 

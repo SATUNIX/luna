@@ -27,7 +27,7 @@
  * CI time without new signal. It remains its own required `npm run eval` CI job.
  *
  * Also retained: non-experimental profiles carry no stub/experimental extension;
- * tool-firewall loads before pentest-governance-domain when both present.
+ * tool-firewall loads before engagement-governance when both present.
  *
  * A live `pi install` + real-model run remains deliberately out of scope (the kit is
  * hardened offline by design); CI runs this across every profile as the matrix.
@@ -86,9 +86,9 @@ function checkStubsAndOrdering(includes: readonly string[], label: string, isExp
     }
   }
   const fw = includes.indexOf("tool-firewall");
-  const gov = includes.indexOf("pentest-governance-domain");
+  const gov = includes.indexOf("engagement-governance");
   if (fw >= 0 && gov >= 0 && fw > gov) {
-    fail(`${label}: tool-firewall must load before pentest-governance-domain`);
+    fail(`${label}: tool-firewall must load before engagement-governance`);
   }
 }
 
@@ -100,14 +100,14 @@ function checkStubsAndOrdering(includes: readonly string[], label: string, isExp
 // Every mandatory protection (tool-firewall, secret-guard, protected-paths) must be included or carry
 // a recorded exemption in packages/core/lib/protection-coverage.ts (tests/profile-protections-smoke.ts).
 const REQUIRED_EVERYWHERE = requiredProfileExtensions();
-const FIREWALL_POLICIES = ["coding", "pentest"];
+const FIREWALL_POLICIES = ["coding", "engagement"];
 const FIREWALL_MODES = ["auto", "manual"];
 function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readonly string[], label: string, name: string): void {
   for (const required of REQUIRED_EVERYWHERE) {
     if (!includes.includes(required)) fail(`${label}: '${required}' is missing (every profile must carry it)`);
   }
   for (const problem of protectionCoverageProblems(name, includes)) fail(`${label}: ${problem}`);
-  if (!["relaxed", "balanced", "guarded", "strict"].includes(String(def.securityLevel))) fail(`${label}: unknown or missing securityLevel ${JSON.stringify(def.securityLevel)}`);
+  if (!["balanced", "guarded", "strict"].includes(String(def.securityLevel))) fail(`${label}: unknown or missing securityLevel ${JSON.stringify(def.securityLevel)}`);
   const fw = def.firewall;
   if (fw !== undefined) {
     if (!isRecord(fw)) fail(`${label}: "firewall" must be an object`);
@@ -120,7 +120,6 @@ function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readon
   if (isRecord(skills) && skills.only !== undefined && skills.exclude !== undefined) fail(`${label}: skills.only and skills.exclude are both set; only one may apply`);
   const managers: string[] = [];
   if (includes.includes("trigger-compact")) managers.push("trigger-compact (fixed 100k trigger, below pi's own when the window is larger)");
-  if (includes.includes("custom-compaction")) managers.push("custom-compaction (no-op shim: warns only when PI_KIT_COMPACT_TEMPLATE is set)");
   if (includes.includes("compress")) managers.push("/compress");
   if (includes.includes("context-sieve")) managers.push("context-sieve (window-sized budgets)");
   if (includes.includes("finish-reason-retry")) managers.push("finish-reason-retry (explains an exhausted window, also in subagent children)");

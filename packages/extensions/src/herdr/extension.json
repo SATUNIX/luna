@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../core/schema/extension.schema.json",
+  "name": "herdr",
+  "summary": "Optional herdr integration. Inside a herdr pane it raises a herdr notification and the pane's blocked state when Luna waits on an approval or a question, when a verify check fails, and when a long run finishes. Outside herdr it does nothing. It works beside herdr's own pi integration (`herdr integration install pi`), which reports working and idle.",
+  "category": "ui",
+  "tier": "T0",
+  "layer": 3,
+  "entry": "index.ts",
+  "hooks": ["session_start", "agent_start", "agent_end", "message_end", "session_shutdown"],
+  "registers": { "tools": [], "commands": [] },
+  "profiles": ["lite", "balanced", "long-horizon", "self-improving", "engagement"],
+  "enabledByDefault": true,
+  "platforms": ["linux", "darwin"],
+  "runtime": {
+    "nodeBuiltins": ["node:net", "node:fs", "node:os", "node:path", "node:crypto"],
+    "npm": [],
+    "piPeers": [],
+    "services": [],
+    "models": []
+  },
+  "pulls": [],
+  "env": ["LUNA_AGENT_STATE_DIR", "XDG_STATE_HOME", "PI_KIT_HERDR", "PI_KIT_HERDR_NOTIFY_MIN_SECONDS", "HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"],
+  "provenance": { "origin": "custom" },
+  "homeRepo": null,
+  "status": "beta"
+}

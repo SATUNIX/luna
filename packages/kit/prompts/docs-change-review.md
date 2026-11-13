@@ -1,4 +1,5 @@
 ---
+description: "Review a documentation change against what the code does"
 argument-hint: "[change]"
 ---
 

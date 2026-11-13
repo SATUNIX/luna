@@ -1,6 +1,6 @@
 # web-console
 
-`/console` (alias `/webui`) — start, stop and check the bundled **Pi Console** web UI
+`/console` — start, stop and check the bundled **Pi Console** web UI
 that ships in [`packages/web-ui`](../../web-ui).
 
 The command does one thing: launch the existing zero-dependency server

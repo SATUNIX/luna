@@ -1,7 +1,7 @@
 ---
 name: scope-roe-governance
 category: mcp-governance
-description: Enforce deterministic scope and rules-of-engagement checks before any pentest action. Use whenever planning or reviewing tool use on an engagement — scope/ROE files are the authority, deny overrides allow, unknown is out.
+description: Enforce deterministic scope and rules-of-engagement checks before any engagement action. Use whenever planning or reviewing tool use on an engagement — scope/ROE files are the authority, deny overrides allow, unknown is out.
 disable-model-invocation: true
 triggers: ["rules of engagement", "roe", "scope file", "out of scope", "in-scope target", "in scope target"]
 ---

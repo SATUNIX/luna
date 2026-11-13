@@ -1,9 +1,9 @@
 ---
 name: api-testing
-category: pentest
+category: engagement
 description: Plan and review authorized API security tests. Use when assessing an API's auth, authorization, input validation, rate limits, and error behavior — with controlled, low-volume, evidence-backed requests.
 disable-model-invocation: true
-triggers: ["api security", "api pentest", "api security test", "test the api's auth", "rate limit testing", "api authorization test"]
+triggers: ["api security", "api engagement", "api security test", "test the api's auth", "rate limit testing", "api authorization test"]
 ---
 
 # API Testing

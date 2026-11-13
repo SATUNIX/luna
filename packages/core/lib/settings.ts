@@ -5,8 +5,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { array, isRecord, literal, nullable, object, optional, parseJson, safeParse, string, union, ValidationError, type Infer, type OptionalSchema, type Schema } from "./guard.ts";
+import { array, boolean, isRecord, literal, nullable, object, optional, parseJson, safeParse, string, union, ValidationError, type Infer, type OptionalSchema, type Schema } from "./guard.ts";
 import { extensionRelPath } from "./paths.ts";
+import { migrateStoredExtension, migrateStoredProfile } from "../shared/profile-names.ts";
 import { parseGitSource, readDistribution, isPreviousGitSource } from "./distribution.ts";
 import { isKitGitKey, isKitPackageName, isKitLocalPackageName } from "./identity.ts";
 export { KIT_PACKAGE_NAME } from "./identity.ts";
@@ -284,6 +285,30 @@ export function mergePackageBlock(settingsPath: string, kitSource: string, resol
   console.log(`[settings] Updated ${settingsPath}`);
 }
 
+/**
+ * pi's startup listing prints every extension, skill and prompt by full path and buries the launch
+ * screen. Set `quietStartup` to "header" (warnings stay, the listing goes) unless the operator has
+ * already chosen. Returns true when this call set it, so the marker can record that Luna owns it.
+ */
+export function ensureQuietStartup(settingsPath: string): boolean {
+  if (!fs.existsSync(settingsPath)) return false; // `pi install` creates it; never invent a settings file
+  return updateSettings(settingsPath, (settings) => {
+    if (settings.quietStartup !== undefined) return false;
+    settings.quietStartup = "header";
+    return true;
+  });
+}
+
+/** Undo `ensureQuietStartup`, only while the value is still the one Luna wrote. */
+export function releaseQuietStartup(settingsPath: string): boolean {
+  if (!fs.existsSync(settingsPath)) return false;
+  return updateSettings(settingsPath, (settings) => {
+    if (settings.quietStartup !== "header") return false;
+    delete settings.quietStartup;
+    return true;
+  });
+}
+
 // Is `source` (as written in settings.json) a copy of this kit? npm: the package or a retired
 // split package; git: a clone of a Luna repository; local: a checkout whose package.json
 // names the kit (current or pre-publish name) or a retired dist/pi-kit-* export.
@@ -383,13 +408,25 @@ const stringItems: Schema<string[]> = {
   },
 };
 
+/** A stored profile name, migrated one way: the next marker write records the new name. */
+const storedProfileName: Schema<string> = {
+  expected: "string",
+  parse: (value, path = "value") => migrateStoredProfile(string().parse(value, path)),
+};
+
+/** Stored extension names, with a renamed extension read as its replacement. */
+const storedExtensionNames: Schema<string[]> = {
+  expected: stringItems.expected,
+  parse: (value, path = "value") => stringItems.parse(value, path).map(migrateStoredExtension),
+};
+
 export const KitMarkerSchema = object({
   /** The source registered with `pi install` (a checkout path, `npm:` or `git:` source). */
   kitSource: lenient(string()),
-  /** A profile name, "all" (--all) or "custom" (--only). */
-  profile: lenient(string()),
+  /** A profile name, "all" (--all) or "custom" (--only). A renamed profile reads as its replacement. */
+  profile: lenient(storedProfileName),
   /** The extensions selected for the kit entry. */
-  extensions: lenient(stringItems),
+  extensions: lenient(storedExtensionNames),
   /** The overrides.json applied, or null when there were none. */
   overrides: lenient(nullable(string())),
   scope: lenient(literal("global", "project")),
@@ -400,6 +437,8 @@ export const KitMarkerSchema = object({
   channel: lenient(nullable(string())),
   /** Companion package sources this install registered; uninstall.ts passes them to `pi remove`. */
   companions: lenient(stringItems),
+  /** True when the installer set pi's `quietStartup`; uninstall removes it again (only if still "header"). */
+  setQuietStartup: lenient(boolean()),
   installedAt: lenient(string()),
 });
 export type KitMarker = Infer<typeof KitMarkerSchema>;

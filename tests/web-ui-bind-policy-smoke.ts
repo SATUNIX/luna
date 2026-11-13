@@ -80,7 +80,7 @@ try {
     const base = { PI_CONSOLE_HOST: "0.0.0.0", PI_CONSOLE_ALLOW_REMOTE: "1" };
     assert.throws(() => security.resolvePolicy(base), security.PolicyError);
     assert.doesNotThrow(() => security.resolvePolicy({ ...base, PI_CONSOLE_ALLOWED_HOSTS: "pi.example.com, 10.0.0.5:8123" }));
-    for (const bad of ["http://pi.example.com", "*.example.com", "pi.example.com/x", "pi example", "pi.example.com:99999", "@evil"]) {
+    for (const bad of ["http://pi.example.com", "*.example.com", "pi.example.com/x", "pi example", "pi.example.com:99999", "pi.example.com:0", "@evil", "[:::]", "[abc]", "[a:b:c]", "[::1]junk", "[::1]:abc", "[::1"]) {
       assert.throws(() => security.resolvePolicy({ ...base, PI_CONSOLE_ALLOWED_HOSTS: bad }), security.PolicyError, bad);
     }
   });
@@ -113,6 +113,7 @@ try {
     assert.equal(security.normalizeAuthority("Evil.EXAMPLE:80@x"), null);
     assert.equal(security.normalizeAuthority("a b"), null);
     assert.equal(security.normalizeAuthority("localhost:8123"), "localhost:8123");
+    for (const ok of ["[::1]", "[::1]:8123", "[2001:db8::1]:443"]) assert.equal(security.normalizeAuthority(ok), ok, ok);
   });
 
   // ---------------------------------------------------- constant-time compare ------------

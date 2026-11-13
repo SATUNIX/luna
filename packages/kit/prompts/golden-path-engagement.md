@@ -1,0 +1,24 @@
+---
+description: "Run the controlled assessment loop end to end"
+argument-hint: "[focus]"
+---
+
+# Golden Path Engagement
+
+Run the controlled assessment loop.
+
+Focus: ${@:-the whole engagement}
+
+Return the current state for:
+
+- Scope and ROE loaded
+- MCP servers connected
+- MCP tools classified
+- Read-only evidence triaged
+- Hypotheses and states
+- Proposed action cards
+- Approval decisions
+- Evidence IDs
+- Findings ready or blocked
+
+Do not execute active actions from this prompt.

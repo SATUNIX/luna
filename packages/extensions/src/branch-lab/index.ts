@@ -17,7 +17,7 @@ type Lease = {
 };
 
 // Tool parameters as the schemas below declare them (pi validates them before execute).
-type TaskParams = { taskId?: string; name?: string };
+type TaskParams = { taskId?: string };
 
 // `git merge --strategy=<x>` makes git look up a `git-merge-<x>` helper, so only git's
 // own two-head strategies are accepted (CRT-5).
@@ -205,7 +205,7 @@ function textResult(text: string) {
 }
 
 function taskIdFrom(input: TaskParams): string {
-  return sanitizeTaskId(input?.taskId || input?.name || "");
+  return sanitizeTaskId(input?.taskId || "");
 }
 
 async function createBranch(input: TaskParams & { baseBranch?: string }): Promise<string> {
@@ -339,7 +339,6 @@ export default function branchLab(pi: ExtensionAPI) {
     description: "Create a git worktree branch for isolated work.",
     parameters: Type.Object({
       taskId: Type.Optional(Type.String({ description: "Task identifier" })),
-      name: Type.Optional(Type.String({ description: "Compatibility alias for taskId" })),
       baseBranch: Type.Optional(Type.String({ description: "Base branch or commit" })),
     }),
     async execute(_toolCallId, params) {
@@ -364,7 +363,6 @@ export default function branchLab(pi: ExtensionAPI) {
     description: "Return the worktree path for an isolated branch.",
     parameters: Type.Object({
       taskId: Type.Optional(Type.String({ description: "Task identifier" })),
-      name: Type.Optional(Type.String({ description: "Compatibility alias for taskId" })),
     }),
     async execute(_toolCallId, params) {
       const taskId = taskIdFrom(params);
@@ -380,7 +378,6 @@ export default function branchLab(pi: ExtensionAPI) {
     description: "Remove a branch-lab worktree and lease. Refuses a worktree with uncommitted changes or a branch not merged into HEAD unless force is true.",
     parameters: Type.Object({
       taskId: Type.Optional(Type.String({ description: "Task identifier" })),
-      name: Type.Optional(Type.String({ description: "Compatibility alias for taskId" })),
       force: Type.Optional(Type.Boolean({ description: "Discard even uncommitted changes and unmerged commits" })),
     }),
     async execute(_toolCallId, params) {
@@ -394,7 +391,6 @@ export default function branchLab(pi: ExtensionAPI) {
     description: "Merge a branch-lab branch into the current git branch.",
     parameters: Type.Object({
       taskId: Type.Optional(Type.String({ description: "Task identifier" })),
-      name: Type.Optional(Type.String({ description: "Compatibility alias for taskId" })),
       strategy: Type.Optional(Type.String({ description: "Optional git merge strategy: ort, recursive, resolve, ours, or subtree" })),
     }),
     async execute(_toolCallId, params) {

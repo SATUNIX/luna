@@ -1,14 +1,14 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "finish-reason-retry",
-  "summary": "Makes pi's built-in auto-retry recognise 'Provider finish_reason: error' (raw OpenAI-completions providers, e.g. OpenRouter) as a transient error, and makes an exhausted context window visible: when pi auto-compaction is off an overflow error says so and how to recover, a reply clamped by the window headroom is explained from the model's real maxTokens/contextWindow, and a failed compact-and-retry names the way out. Loaded in subagent children, where the parent otherwise sees only a raw provider error.",
+  "summary": "Makes pi's built-in auto-retry recognise 'Provider finish_reason: error' (raw OpenAI-completions providers, e.g. OpenRouter) as a transient error, and makes an exhausted context window visible: when pi auto-compaction is off an overflow error says so and how to recover, a reply clamped by the window headroom is explained from the model's real maxTokens/contextWindow, and a failed compact-and-retry names the way out. Also the turn doctor: one bounded steer (two per user message) when a model returns an empty turn, tool-argument errors rewritten to name the bad fields and the required keys, and a 402 that says how many output tokens the account can afford is retried once with that maximum. Provider failures are classified once (credit, rate limit, server) and offered to provider-router's fallback list. Loaded in subagent children, where the parent otherwise sees only a raw provider error.",
   "category": "safety",
   "tier": "T0",
   "layer": 1,
   "entry": "index.ts",
-  "hooks": ["message_end", "session_compact_failed"],
+  "hooks": ["message_end", "session_compact_failed", "session_start", "input", "before_provider_request", "tool_result"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

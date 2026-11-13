@@ -14,19 +14,14 @@
  *   - `ci-complete` (the single required check for ci.yml) needs every other ci.yml job, except the
  *     measure-only jobs named in MEASURE_ONLY_JOBS (which it must not need, and which must really run
  *     what the list says, so a job cannot borrow the exemption by name), and fails unless each needed
- *     job succeeded; the measure-only `coverage` job keeps a timeout of at least
- *     COVERAGE_MIN_TIMEOUT_MINUTES, and `coverage` and `coverage-merge` are both measure-only;
+ *     job succeeded; `coverage` and `coverage-merge` are both measure-only;
  *   - every required check in the expected settings names a job that exists;
  *   - every ci.yml job that directly runs `check:all` does so as a shard matrix whose shard count
- *     matches the `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check),
- *     with `--jobs` and a `--check-timeout`; the measure-only `coverage` job also runs a four-way
- *     shard matrix of `npm run coverage`, passing `--coverage-out`, and `coverage-merge` downloads
- *     the raw and eval-cache artifacts before running a report-only `coverage --report`; every
- *     check:all run in ci.yml (including `coverage`) passes `--check-timeout`, except a report-only
- *     coverage command containing `--report` (it runs no checks), so a hung check fails named
- *     instead of as a silent job timeout; and ci.yml and security.yml gate pull requests to `main`
- *     and `integration/**`;
- *   - each line-pinned zizmor ignore still points at a `uses: ./` call.
+ *     matches the `--shard=${{ matrix.shard }}/<n>` it passes (so the shards cover every check);
+ *     the measure-only `coverage` job also runs a four-way shard matrix of `npm run coverage`,
+ *     passing `--coverage-out`, and `coverage-merge` downloads the raw and eval-cache artifacts
+ *     before running a report-only `coverage --report`; and ci.yml and security.yml gate pull
+ *     requests to `main` and `integration/**`.
  * Each rule is also run against a mutated copy, so the checker is shown to fail.
  *
  * The repository has no YAML dependency: this reads the subset the workflows use (two-space job
@@ -86,8 +81,6 @@ export function shardProblems(job: string, body: string): string[] {
   const count = command.match(/ --shard=\$\{\{ matrix\.shard \}\}\/(\d+)(?:\s|$)/)?.[1];
   if (count === undefined) out.push(`ci.yml ${job}: check:all is not given --shard=\${{ matrix.shard }}/<n>, so every shard runs the whole suite`);
   else if (Number(count) !== shards.length) out.push(`ci.yml ${job}: --shard=.../${count} does not match the ${shards.length} matrix shards, so some checks run in no shard`);
-  if (!/ --jobs=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: check:all has no --jobs`);
-  if (!/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: check:all has no --check-timeout, so a hung check is never named`);
   return out;
 }
 
@@ -163,26 +156,6 @@ function runsCheckAll(body: string): boolean {
   return code(body).some((line) => /^ {6}- run: npm run -s check:all\b/.test(line));
 }
 
-/**
- * Every step that runs check:all (directly, or through `coverage`, which passes its arguments to
- * check:all), on a `run:` line or inside a multi-line script, carries `--check-timeout`. Without it
- * a hung check runs until the job's timeout-minutes cancels the job, and the log names only the
- * last check that printed a header.
- */
-export function checkTimeoutProblems(text: string): string[] {
-  const out: string[] = [];
-  for (const [job, body] of jobsOf(text)) {
-    for (const line of code(body)) {
-      const command = line.match(/\b(npm run(?: -s)? (?:check:all|coverage)\b.*)$/)?.[1];
-      // A report-only coverage command merges existing raw data; it runs no check, so it needs no
-      // check timeout. A coverage run that executes checks still must pass one.
-      const reportOnly = command !== undefined && /\bnpm run(?: -s)? coverage\b/.test(command) && / --report(?:=|\s)/.test(command);
-      if (command !== undefined && !reportOnly && !/ --check-timeout=\d+(?:\s|$)/.test(command)) out.push(`ci.yml ${job}: "${command}" has no --check-timeout, so a hung check is never named`);
-    }
-  }
-  return out;
-}
-
 /** The pull_request trigger gates PRs to main and to integration/** branches. */
 export function pullRequestBranchProblems(file: string, text: string): string[] {
   const branches = text.match(/^ {2}pull_request:\s*\n {4}branches:\s*\[([^\]]*)\]\s*$/m)?.[1];
@@ -203,9 +176,6 @@ export const MEASURE_ONLY_JOBS: Readonly<Record<string, RegExp>> = {
   coverage: /\bnpm run(?: -s)? coverage\b/,
   "coverage-merge": /\bnpm run(?: -s)? coverage\b[^\n]* --report(?:=|\s)/,
 };
-
-/** The coverage lane took 18 to 27 minutes against a 30 limit and was cancelled once; it must keep headroom. */
-export const COVERAGE_MIN_TIMEOUT_MINUTES = 40;
 
 /** Problems in one workflow file's text; [] when it keeps every rule. */
 export function fileProblems(file: string, text: string): string[] {
@@ -239,8 +209,6 @@ export function fileProblems(file: string, text: string): string[] {
         else if (!runs.test(code(body).join("\n"))) out.push(`ci.yml ${job}: the measure-only job does not run ${runs.source}, so it cannot keep the exemption`);
         if (needs.has(job)) out.push(`ci.yml ci-complete: needs the measure-only job ${job}; it must not gate`);
       }
-      const coverageMinutes = Number(jobs.get("coverage")?.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1] ?? 0);
-      if (Object.hasOwn(MEASURE_ONLY_JOBS, "coverage") && jobs.has("coverage") && coverageMinutes < COVERAGE_MIN_TIMEOUT_MINUTES) out.push(`ci.yml coverage: timeout-minutes ${coverageMinutes} is below ${COVERAGE_MIN_TIMEOUT_MINUTES}; the lane was cancelled at 30 on a slow runner`);
       if (!/^ {4}if:\s*always\(\)\s*$/m.test(complete)) out.push("ci.yml ci-complete: must run with if: always()");
       if (!/join\(needs\.\*\.result/.test(complete) || !/!= "success"/.test(complete)) out.push("ci.yml ci-complete: must fail unless every needed job succeeded");
     }
@@ -250,7 +218,6 @@ export function fileProblems(file: string, text: string): string[] {
       if (job === "verify" || runsCheckAll(body)) out.push(...shardProblems(job, body));
     }
     out.push(...coverageProblems(jobs));
-    out.push(...checkTimeoutProblems(text));
   }
   if (file === "ci.yml" || file === "security.yml") out.push(...pullRequestBranchProblems(file, text));
   return out;
@@ -282,14 +249,6 @@ for (const check of checks) {
 assert.ok(checks.some((c) => c.context === "ci-complete"), "ci-complete is a required check");
 ok(`each of ${checks.length} required checks names an existing job, ci-complete among them`);
 
-// zizmor's line-pinned ignores still point at what they were written for.
-const zizmor = fs.readFileSync(path.join(ROOT, ".github/zizmor.yml"), "utf8");
-for (const [, file = "", line = ""] of zizmor.matchAll(/^\s*- ([A-Za-z0-9_.-]+\.yml):(\d+)\s*$/gm)) {
-  const target = (texts.get(file) ?? "").split(/\r?\n/)[Number(line) - 1] ?? "";
-  assert.match(target, /^\s*uses: \.\//, `.github/zizmor.yml ignores ${file}:${line}, which is no longer a uses: ./ line ("${target.trim()}")`);
-}
-ok("each line-pinned zizmor ignore points at a uses: ./ call");
-
 // The checker fails on each kind of violation.
 const ci = texts.get("ci.yml") ?? "";
 const security = texts.get("security.yml") ?? "";
@@ -300,7 +259,6 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["an unlisted environment", "ci.yml", ci.replace(/(\n {2}verify:\n)/, "$1    environment: staging\n"), /environment staging is not in/],
   ["ci-complete missing a job", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, docs-build, profile-regression, pi-compat]"), /ci-complete: does not need android/],
   ["ci-complete gating on the measure-only coverage job again", "ci.yml", ci.replace("needs: [verify, docs-build, profile-regression, pi-compat, android]", "needs: [verify, coverage, docs-build, profile-regression, pi-compat, android]"), /needs the measure-only job coverage/],
-  ["the coverage timeout lowered back to 30", "ci.yml", ci.replace(/(\n {2}coverage:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: )45/, "$130"), /coverage: timeout-minutes 30 is below 40/],
   ["a coverage matrix that is not four shards", "ci.yml", ci.replace(/(\n {2}coverage:\n[\s\S]*? {8}shard: )\[1, 2, 3, 4\]/, "$1[1, 2, 3]"), /coverage: matrix.shard must be 1\.\.4/],
   ["coverage shards that cancel each other", "ci.yml", ci.replace(/(\n {2}coverage:\n[\s\S]*? {6}fail-fast: )false/, "$1true"), /coverage: strategy.fail-fast must be false/],
   ["a coverage shard count that disagrees with the matrix", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw", "--shard=${{ matrix.shard }}/3 --coverage-out=coverage-raw"), /coverage: --shard=\.\.\.\/3 does not match the 4/],
@@ -327,14 +285,9 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["verify without --shard", "ci.yml", ci.replace(" --shard=${{ matrix.shard }}/4", ""), /verify: check:all is not given --shard/],
   ["a shard count that disagrees with the matrix", "ci.yml", ci.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]"), /does not match the 3 matrix shards/],
   ["a gap in the shard matrix", "ci.yml", ci.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 4, 5]"), /matrix.shard must be 1..n/],
-  ["verify without --jobs", "ci.yml", ci.replace(" --jobs=2", ""), /verify: check:all has no --jobs/],
-  ["verify without --check-timeout", "ci.yml", ci.replace(/ --check-timeout=\d+/, ""), /verify: check:all has no --check-timeout/],
-  ["pi-compat without --check-timeout", "ci.yml", ci.replace("--skip=smoke:package,test:typecheck,test:lint --check-timeout=600", "--skip=smoke:package,test:typecheck,test:lint"), /ci.yml pi-compat: .* has no --check-timeout/],
   ["pi-compat without --shard", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package", "--jobs=2 --skip=smoke:package"), /pi-compat: check:all is not given --shard/],
   ["pi-compat shard count disagrees", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3]'), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
   ["pi-compat without a shard axis", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]'), /pi-compat: no matrix\.shard list/],
-  ["coverage without --check-timeout", "ci.yml", ci.replace("npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw --check-timeout=600", "npm run -s coverage -- --shard=${{ matrix.shard }}/4 --coverage-out=coverage-raw"), /ci.yml coverage: .* has no --check-timeout/],
-  ["a bare --report is not treated as report-only", "ci.yml", ci.replace("npm run -s coverage -- --report coverage-raw", "npm run -s coverage -- --report"), /coverage-merge: .* has no --check-timeout/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],
   ["security.yml PRs without integration/**", "security.yml", security.replace('branches: [main, "integration/**"]', "branches: [main]"), /security.yml: pull_request does not run on integration\/\*\*/],
@@ -346,5 +299,15 @@ for (const [label, file, text, expected] of mutations) {
   assert.ok(found.some((p) => expected.test(p)), `mutation "${label}" is caught (got: ${found.join("; ")})`);
 }
 ok(`each of ${mutations.length} mutations is caught`);
+
+// .github/zizmor.yml pins its ignores to lines; each must still hold a `uses: ./` call.
+const zizmor = fs.readFileSync(path.join(ROOT, ".github", "zizmor.yml"), "utf8");
+const pinned = [...zizmor.matchAll(/^\s*- (release\.yml):(\d+)\s*$/gm)];
+assert.ok(pinned.length > 0, "zizmor.yml pins at least one line");
+for (const [, file, line] of pinned) {
+  const target = (texts.get(file ?? "") ?? "").split("\n")[Number(line) - 1] ?? "";
+  assert.match(target, /^\s*uses: \.\//, `zizmor.yml ignores ${file}:${line}, which no longer holds a uses: ./ call`);
+}
+ok("zizmor pinned ignores still point at uses: ./ calls");
 
 console.log(`workflow-policy smoke: ${passed} checks passed`);

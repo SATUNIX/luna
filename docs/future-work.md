@@ -50,10 +50,11 @@ it.
 Each is a limit of the delivered kernel, not a bug in a test.
 
 - **"No model too small" is a hypothesis.** The kit footprint meter shows the `balanced` kit tool
-  text at 8,919 characters over 13 tools and the delegation tools at 4,730, under their ceilings; the kit
-  floor stays near 9,500 and `pi-lens` and pi core are unmeasured. Nothing shows that data plans
+  text at 6,924 characters over 13 tools (two of them registered inactive) and the delegation tools at 3,089, under their ceilings, and
+  counts companions from a reviewed record: `pi-lens` adds 18,800 characters to every request in
+  `balanced`, nearly three times the kit's own text, and is not yet reduced; pi core is unmeasured. Nothing shows that data plans
   raise completion on a small model, and a syntactically valid plan can still be a bad one
-  (`tests/eval-footprint-smoke.ts` pins the meter). The live `small-model/plan-valid-rate` fixture
+  (nothing in the test suite pins the meter). The live `small-model/plan-valid-rate` fixture
   records a rate per model and never reaches a model in CI; running it, plus an outcome eval per
   model, would close the question.
 - **"No task too large" is unproven.** Size is handled by replanning across turns inside the tier
@@ -138,7 +139,7 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   require a separate policy choice.
 - **Package-manager and opaque-tool network use cannot be attributed to a host** in unattended
   runs; the container network is the stop.
-- **`secret-guard` is in two profiles only.** It loads in `balanced` and `autonomous`; whether the
+- **`secret-guard` is in two profiles only.** It loads in `balanced` and `long-horizon`; whether the
   other profiles should load it needs data on its false-positive rate (its path rule blocks every
   write to a path containing `secret` or `credentials`).
 - **Unreviewed companion shell/edit tools** (for example `pi-lean-ctx`) need exact policy entries
@@ -168,7 +169,7 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
 - **A script the agent wrote can set the unattended variables** where the classifier sees only
   `bash run.sh`. The provenance rule stops it from working; the classifier cannot see it.
 - **An operator-set human-console directory is trusted as given.** `PI_KIT_HUMAN_CONSOLE_DIR` is the
-  root of the request write in both the tool firewall and the pentest governance extension, and the
+  root of the request write in both the tool firewall and the engagement governance extension, and the
   helper trusts a root itself. If the operator points it at a path inside a repository that ships a
   link there, the `pending` and `resolved` directories and the request file are created through that
   link. The default `.pi/human-console` path is the checked one. Refusing a linked root would also
@@ -182,11 +183,9 @@ medium-tier routine admission set. Remaining proposal work is not a current guar
   settings files it snapshotted. The verifier may also roll back a good switch where Luna's
   entry cannot be identified (symlinked or unusual npm layouts); git and npm delivery of `/profile`
   are less exercised than local mode.
-- **`lite` and small windows.** pi's default compaction reserve (16384 tokens) on a 32k window makes
-  pi compact almost every turn; `/compaction status` now warns, but the `lite` profile does not yet
-  carry its own `compaction` settings.
-- **`autonomous` and `long-horizon`** load nearly the same set; the difference is the autonomous run
-  tooling ([Autonomous runs](autonomy.md)).
+- **Small windows outside `lite`.** pi's default compaction reserve (16384 tokens) on a 32k window
+  makes pi compact almost every turn. `lite` carries its own `compaction` settings and
+  `/compaction status` warns elsewhere, but no other profile sets a reserve for a small model.
 
 ## Remote control
 
@@ -234,6 +233,55 @@ Candidates that were evaluated and deliberately not adopted for the beta (`pi-re
   routing hints help or duplicate machinery, has not been measured.
 - **Injection review.** A written review of untrusted-content handling across context contributions,
   tool results and memory recall (an injection inventory with a test per path) is still to be done.
+
+## Token efficiency not yet done
+
+Measured on 2,868 requests of unattended worker sessions (tool results were 62% of prompt
+characters; the cache hit ratio was 95.6%). The caps, carried notes, lazy run tools and the
+footprint meter are delivered ([Efficiency and loops](efficiency-and-loops.md)); these are not,
+and nothing in the repository pins any of them.
+
+- **pi native tool deferral.** pi 1.x can register a tool as `exposure: "deferred"` and ship a
+  built-in `tool_search`; Luna uses only `defaultActive: false` plus its own wake-up. Using the
+  native mechanism for the 22 of 44 tools that no measured session called (mostly pi-lens and
+  pi-readseek tools, 15.2k characters of schema) needs a reviewed raise of the pi floor
+  (`peerDependencies` is 0.85.1 and `defaultActive` is ignored below pi 1.x), and a measurement
+  of pi-lens and pi-readseek in a real session, which the meter cannot see.
+- **Action-style tool families.** Folding `workflow_run`, `workflow`, `workflow_status` and
+  `workflow_control` (and the memory and task-graph families) into one tool per family with an
+  `action` field would cut schema text further but renames tools the firewall policy, the delegation
+  guard and the effort hide list name, so it is a breaking change with its own migration.
+- **The script `workflow` tool is still active from the first request.** It is how a run starts, so
+  waking it needs a trigger of its own (standing mode, or a `skill_search` hint); until one exists,
+  its 908 characters stay.
+- **Compaction threshold.** `trigger-compact` fires at 100k tokens. Whether 60k preserves what a
+  cycle needs while cutting the ~18% of prompt tokens above 60k per request is untested; it needs an
+  A/B over several cycles, not a guess.
+- **Repeated reads.** 429 of 1,246 file reads repeated a path already read in the same session
+  (1.76M characters). The progress guard now steers reading to `read`; stubbing a repeat read
+  with "unchanged since your last read" is not built.
+- **Capping pi's built-in `bash` and `read` below 50 KB.** A 10k-character cap on bash results would
+  have saved about 5% of prompt tokens in a simulation, but truncating test output can hide the
+  failing line; it needs head, tail and error-line handling and its own test.
+- **Provider flagging of carried notes.** Whether OpenRouter's prompt-injection filter still flags
+  notes appended through `context` (still user-role at the provider) is unmeasured; a 20-request
+  canary per delivery option (tool-result suffix, mid-transcript system role, `context` splice)
+  would settle it. `context-sieve`, `orchestrator` and `verify-gate` messages still use the stored
+  channel.
+- **Manager redesign.** The `orchestrator` and the effort policy both steer delegation; merging
+  them behind one decision is a design change, not an efficiency tweak.
+
+## Startup
+
+- **Extensions load before pi draws anything.** Luna prints one erasable line on a cold start
+  (`docs/control-center.md`, "Startup time"), but no loading progress or `[ OK ]` list: that needs a
+  pi hook that runs before extension loading and a way to draw the TUI early.
+- **The cold start is pi's loader.** The compile cache is in the temporary directory, which a
+  reboot empties on a memory-backed `/tmp`. A persistent cache location is a pi loader option
+  (`jiti` `fsCache`); Luna cannot set it from an extension. Precompiling does not help, because the
+  loader transforms JavaScript as well. Dropping or lazily loading `pi-lens` (3.8 s cold, 0.23 s
+  warm) would help most, and needs that companion to register its tools later.
+- **Extension load is sequential**, so every companion adds its import time to the first frame.
 
 ## Related records
 

@@ -608,6 +608,6 @@ export class DockerRuntime implements Runtime {
   }
 
   review(bundle: TaskReviewBundle): Promise<TaskReview> {
-    return reviewTask(bundle, this.complete(this.contract.model.review, { timeoutMs: 300_000 }), { sleep: (ms) => this.sleep(ms) });
+    return reviewTask(bundle, this.complete(this.contract.model.review, { timeoutMs: 300_000 }), { sleep: (ms) => this.sleep(ms), fallback: this.complete(this.contract.model.manager, { timeoutMs: 300_000 }) });
   }
 }

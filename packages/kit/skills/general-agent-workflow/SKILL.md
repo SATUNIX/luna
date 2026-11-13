@@ -1,7 +1,9 @@
 ---
 name: general-agent-workflow
 category: coding-workflow
-description: A reliable inspect-plan-act-verify loop for general (non-coding, non-pentest) tasks. Use for research, config, ops, and writing tasks where you need structure without over-gathering.
+description: A reliable inspect-plan-act-verify loop for general (non-coding, non-engagement) tasks. Use for research, config, ops, and writing tasks where you need structure without over-gathering.
+disable-model-invocation: true
+triggers: ["non-coding task", "research and summarise", "research and summarize", "write up a report on"]
 ---
 
 # General Agent Workflow
@@ -9,7 +11,7 @@ description: A reliable inspect-plan-act-verify loop for general (non-coding, no
 A dependable loop for general work that keeps you from over-gathering or drifting.
 
 ## When to use
-- Non-pentest, non-code tasks: research, configuration, ops, writing, analysis.
+- Non-engagement, non-code tasks: research, configuration, ops, writing, analysis.
 
 ## Procedure
 1. **Restate the outcome** in one sentence. If you can't, you don't understand the ask —

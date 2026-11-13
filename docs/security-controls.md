@@ -41,7 +41,7 @@ check is not one `.github/expected-settings.json` declares.
 | C-11 | Every child agent starts with its parent's protections and fails closed when one is missing | `packages/extensions/src/delegation-guard/index.ts` | `tests/delegation-guard-smoke.ts` | `smoke:delegation-guard` | `ci.yml:verify` | `ci-complete` |
 | C-12 | Every profile loads the mandatory protections, or records why not | `packages/core/lib/protection-coverage.ts` | `tests/profile-protections-smoke.ts` | `smoke:profile-protections` | `ci.yml:verify` | `ci-complete` |
 | C-13 | secret-guard blocks secret files, secret content and shell commands that leak them; a recognised pattern in a plain leading `rg` or grep-family command is excluded from the path scan while file operands and pattern files remain scanned, and ambiguous syntax keeps the full scan | `packages/extensions/src/secret-guard/index.ts` | `tests/secret-guard-smoke.ts`, `tests/firewall-benign-corpus.ts` | `smoke:secret-guard`, `smoke:tool-firewall` | `ci.yml:verify` | `ci-complete` |
-| C-14 | The shipped firewall policy is default-deny, and its destructive patterns cover the pentest gate's | `packages/core/verify.ts` | `packages/core/verify.ts` | `verify` | `ci.yml:verify` | `ci-complete` |
+| C-14 | The shipped firewall policy is default-deny, and its destructive patterns cover the engagement gate's | `packages/core/verify.ts` | `packages/core/verify.ts` | `verify` | `ci.yml:verify` | `ci-complete` |
 
 ## Secure development helpers
 
@@ -58,6 +58,7 @@ check is not one `.github/expected-settings.json` declares.
 | C-23 | Shared temporary roots are per user, mode 0700, and a link or foreign owner is refused | `packages/extensions/src/branch-lab/index.ts` | `tests/branch-lab-smoke.ts` | `smoke:branch-lab` | `ci.yml:verify` | `ci-complete` |
 | C-24 | A network client refuses to send a credential over plain HTTP to a non-loopback host and caps response size | `packages/extensions/src/memory-mem0/index.ts` | `tests/memory-mem0-smoke.ts` | `smoke:memory-mem0` | `ci.yml:verify` | `ci-complete` |
 | C-61 | An install marker never chooses the installer `/profile` and the first-run auto-profile run, or the web UI server `/console` and the remote-control host spawn: a `kitSource` that is relative, resolves inside the workspace or is not a kit by package name is ignored with a warning | `packages/core/shared/kit-source.ts` | `tests/kit-root-trust-smoke.ts` | `smoke:kit-root-trust` | `ci.yml:verify` | `ci-complete` |
+| C-62 | A hostile project's `.pi/` extensions, skills, prompts and settings are not loaded until the operator trusts the folder, under every profile; pi's own project trust does this and Luna adds no bypass, and the autonomy worker starts pi with `--no-approve` | `node_modules/@earendil-works/pi-coding-agent` (pi's trust manager; no Luna code) | `tests/project-trust-smoke.ts` | `smoke:project-trust` | `ci.yml:verify` | `ci-complete` |
 
 ## Consoles and remote control
 

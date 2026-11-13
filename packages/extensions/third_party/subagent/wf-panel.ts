@@ -414,7 +414,7 @@ export function renderListLines(runs: RunSnapshot[], paint: Paint, selected?: nu
   const active = runs.filter((r) => r.status === "running").length;
   const out = [paint.bold(`Workflows (${runs.length} run${runs.length === 1 ? "" : "s"}, ${active} active)`)];
   if (!runs.length) {
-    if (maxLines === undefined || maxLines >= 2) out.push(paint.dim("No workflow runs in this session. Start one with /workflow run <name>."));
+    if (maxLines === undefined || maxLines >= 2) out.push(paint.dim("No workflow runs in this session. Start one with /workflows run <name>."));
     return out;
   }
   const nameWidth = Math.min(28, Math.max(4, ...runs.map((r) => visibleWidth(r.name))));
@@ -1015,7 +1015,7 @@ let attached = false;
 
 /**
  * Start narrating the session's runs, and bind the panel to `/workflows panel [run-id]` (the
- * command itself is registered in workflow-tools.ts, so `/workflow` is its alias).
+ * command itself is registered in workflow-tools.ts).
  */
 export function registerWorkflowPanel(_pi: ExtensionAPI): void {
   // Workflows run in the operator's session; a subagent child has no panel.

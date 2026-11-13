@@ -12,6 +12,7 @@
 //   blocked           NOT terminal: a genuinely external blocker or an approval/answer is needed
 import { clone, isPlainObject } from "./fsutil.ts";
 import type { CycleEntry } from "./templates/self-improve.ts";
+import type { CycleOutcome } from "./cycle.ts";
 import type { StewardBoard } from "./board.ts";
 import type { UpstreamSync } from "./gitmirror.ts";
 import type { Budget, ContractDraft, EffortChoice, PromotionPolicy, RecoverySettings, RunContract, TemplateId } from "./contract.ts";
@@ -225,7 +226,7 @@ export interface SelfImproveState {
   merged: number;
   lastGoodSha: string;
   seedSha: string;
-  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard } | null;
+  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard; /** Set while parked on review-pending: the cycle's close-out result, so the answer re-runs the review on the held head without a new worker session. */ reviewPending?: { outcome: Exclude<CycleOutcome, "blocked">; reason: string; attempts: number; costUsd: number; head: string } } | null;
   /** Automatic reconciliations of a diverged integration branch, oldest first. */
   reconciliations?: ReconciliationRecord[];
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */
@@ -270,6 +271,8 @@ export interface RunState {
   setup?: SetupState;
   ui?: { autoAnswered: number; blocked: number };
   pendingAnswer?: PendingAnswer | null;
+  /** Worker commits the host refused to accept, kept under refs/wip/ until the next briefing says so (engine.keepUnaccepted). */
+  unaccepted?: { ref: string; sha: string; why: string; stat: string; at: string } | null;
   /** The last fatal error the supervisor recorded before it stopped (the run stays resumable). */
   lastError?: string;
   selfImprove?: SelfImproveState;

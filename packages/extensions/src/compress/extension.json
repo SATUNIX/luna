@@ -6,7 +6,7 @@
   "entry": "index.ts",
   "hooks": ["session_before_compact"],
   "registers": { "tools": [], "commands": ["compress"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

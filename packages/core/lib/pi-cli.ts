@@ -6,6 +6,8 @@
 // `.cmd` shim that Node will only start through a shell, so an argument with a shell metacharacter is refused
 // instead of being quoted and hoped for.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 const CONTROL = /[\0\r\n]/;
 const WINDOWS_UNSAFE = /["&|<>^%!`]/;
@@ -53,4 +55,72 @@ export function runPi(bin: string, args: readonly string[], { stdio = "inherit",
     throw new PiExitError(`pi ${args[0] ?? ""} exited with ${r.status ?? r.signal}`.trim(), r.status, r.stderr);
   }
   return r;
+}
+
+export interface WarmResult {
+  readonly ok: boolean;
+  readonly ms: number;
+}
+
+/**
+ * Load every installed extension once, so pi compiles them now and not on the first `pi` start (pi
+ * draws nothing while it does, which looks like a hang). RPC mode loads the extensions without a
+ * model or a terminal and exits when its input ends; `get_commands` makes it finish loading first.
+ * Offline, so it never waits on a network. A failure is reported, never fatal: the next start just
+ * compiles for itself.
+ */
+export function warmPiExtensions(bin: string, { platform = process.platform, spawn = spawnSync, timeoutMs = 120_000 }: { platform?: NodeJS.Platform; spawn?: typeof spawnSync; timeoutMs?: number } = {}): WarmResult {
+  const started = Date.now();
+  const windows = platform === "win32";
+  const command = windows && /\s/.test(bin) ? `"${bin}"` : bin;
+  const r = spawn(command, ["--mode", "rpc"], {
+    input: `${JSON.stringify({ type: "get_commands", id: "warm" })}\n`,
+    stdio: ["pipe", "ignore", "ignore"],
+    timeout: timeoutMs,
+    shell: windows,
+    windowsHide: true,
+    env: { ...process.env, PI_OFFLINE: "1" },
+  });
+  return { ok: !r.error && r.status === 0, ms: Date.now() - started };
+}
+
+export interface PiSpawnPlan {
+  command: string;
+  args: string[];
+}
+
+export interface PiSpawnDeps {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  nodePath?: string;
+  readFile?: (file: string) => string | undefined;
+}
+
+const readText = (file: string): string | undefined => {
+  try { return fs.readFileSync(file, "utf8"); } catch { return undefined; }
+};
+
+/**
+ * How to start pi for a run that must pass a prompt as one argument. On POSIX that is `bin args`.
+ * On Windows pi is an npm `.cmd` shim, which Node refuses to start without a shell, and a shell
+ * splits a prompt at its spaces; so the shim is read and pi's own node entry is started directly,
+ * with no shell. When the entry cannot be found it returns the reason instead of falling back to a
+ * shell, which would split the prompt and read its metacharacters.
+ */
+export function piSpawnPlan(bin: string, args: readonly string[], { platform = process.platform, env = process.env, nodePath = process.execPath, readFile = readText }: PiSpawnDeps = {}): PiSpawnPlan | string {
+  if (platform !== "win32") return { command: bin, args: [...args] };
+  const win = path.win32;
+  const candidates: string[] = [];
+  if (/\.[cm]?js$/i.test(bin)) {
+    return { command: nodePath, args: [bin, ...args] };
+  }
+  const named = /\.(?:cmd|bat)$/i.test(bin) ? [bin] : [`${bin}.cmd`];
+  if (/[\\/]/.test(bin)) candidates.push(...named);
+  else for (const dir of (env.PATH ?? env.Path ?? "").split(";")) if (dir) for (const n of named) candidates.push(win.join(dir, n));
+  for (const shim of candidates) {
+    const text = readFile(shim);
+    const entry = text === undefined ? undefined : /%dp0%\\([^"\r\n]+?\.[cm]?js)"/i.exec(text)?.[1];
+    if (entry) return { command: nodePath, args: [win.resolve(win.dirname(shim), entry), ...args] };
+  }
+  return `could not find pi's node entry (looked for ${named.join(" or ")} on PATH); pass the path to pi's cli.js as the pi binary`;
 }

@@ -48,7 +48,7 @@ statement the evidence does not already support.
 - The data block, risk statement and overview must agree — the same likelihood/impact story in all three.
 - Every claim in the Overview and Remediation traces to an Evidence ID; unsupported lines are cut, not hedged.
 - Background and Remediation carry no evidence IDs (general knowledge and instructions, respectively).
-- Applies to the pentest reporting workflow; use the engagement's own evidence store for the IDs.
+- Applies to the engagement reporting workflow; use the engagement's own evidence store for the IDs.
 
 ## Anti-patterns
 - "attacker could potentially…" — wrong noun *and* unproven. Use "threat actor" and only state what evidence supports.

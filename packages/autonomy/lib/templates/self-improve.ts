@@ -22,9 +22,10 @@ import { LockLost } from "../errors.ts";
 import * as gm from "../gitmirror.ts";
 import type { RunState, SelfImproveState } from "../lifecycle.ts";
 import { decide } from "../manager.ts";
+import { reviewBlocker } from "../rpc.ts";
 import { promotionTargets } from "../promotion.ts";
 import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, REVIEW_REPORT_BUDGET, controlChanges, isReviewRecord, reviewCriticalPaths, reviewCycle, reviewRecordDirectories, scriptTargets, upstreamMergeScope } from "../review.ts";
-import { ledgerCommits, uncoveredCommits } from "../ledger.ts";
+import { isNewReport, ledgerCommits, uncoveredCommits, unknownShas } from "../ledger.ts";
 import { globProblem } from "../glob.ts";
 import type { RunConfig } from "../runcfg.ts";
 import { type ReportMode, type ReportOutcome, nothingFoundInARow, reportOutcome } from "../triggers.ts";
@@ -80,6 +81,8 @@ interface MergeDecision {
   merge: boolean;
   reason: string;
   review?: CycleReview["verdict"];
+  /** No reviewer gave a usable reply: the cycle is parked (review-pending), not recorded as rejected. */
+  reviewUnavailable?: string;
   merged?: boolean;
   unknownClaims?: string[];
 }
@@ -350,6 +353,8 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits, report and handoff are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: read its ${dir(last.n)}/report.md and ${paths.handoff} there and bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
     if (last.unknownClaims?.length) previous += ` Its report claimed board items that were not assigned to it (${last.unknownClaims.join(", ")}); name only the IDs listed under "Assigned work" in Board: lines.`;
   }
+  const kept = state.unaccepted;
+  if (kept) previous += ` Worker commits the host refused to accept (${kept.why}${kept.stat ? `; ${kept.stat}` : ""}) are kept at ${kept.ref} (${kept.sha.slice(0, 12)}) in the host mirror for the operator; they are not on your branch and not part of the verified head.`;
   const b = state.limits.budget;
   const egress = contract.permissions.network.egress.map((e) => e.host);
   const start = (si.current?.startSha ?? ctx.repo.head()).slice(0, 12);
@@ -424,7 +429,10 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
       return agent;
     },
     headSha: async () => repo.head(),
-    reportExists: async () => repo.fileAt(branchRef, `${dir}/report.md`) !== null,
+    // A report already on the branch when the cycle began (a reused cycle directory) is not this cycle's: only a new or rewritten one counts.
+    reportExists: async () => {
+      return isNewReport(repo.fileAt(branchRef, `${dir}/report.md`), repo.fileAt(startSha, `${dir}/report.md`));
+    },
     reportGaps: async () => {
       const upstream = si.current?.upstream;
       const also = upstream?.outcome === "conflict" ? [upstream.head] : [];
@@ -581,9 +589,19 @@ async function runStep(ctx: StepContext): Promise<void> {
   state.phase = "work";
   ctx.save();
   log(`cycle ${pad(n)}/${state.limits.budget.maxSteps} ${resume ? "resuming" : "starting"}; spent $${state.usage.usd.toFixed(2)} of $${state.limits.budget.totalUsd}`);
+  const held = si.current.reviewPending;
+  if (held) {
+    // Parked on review-pending: the cycle already ended and its head is held, so the answer retries
+    // the review; no worker session starts and the head cannot change before the close-out.
+    if (state.pendingAnswer?.id === "review-pending") ctx.save((s) => { s.pendingAnswer = null; });
+    ctx.save(() => { if (si.current) delete si.current.reviewPending; });
+    await closeCycle(ctx, n, { ...held, decisions: [] });
+    return;
+  }
   await engine.applyControl({ only: ["backlog"] });
   if (!engine.active) return;
   const prompt = cyclePrompt(ctx, n);
+  if (state.unaccepted) ctx.save((s) => { s.unaccepted = null; });
   const restartBriefing = resume ? `The previous session of this cycle was interrupted. Re-read ${bookkeepingPaths(cfg, n).handoff} and this cycle's files under ${dir}/, check \`git status\` and \`git log\`, then continue the cycle from where it stopped.${state.pendingAnswer ? `\n\n${await engine.briefing("answer")}` : ""}` : undefined;
   const runCfg = { ...cfg, budget: { ...cfg.budget, totalUsd: state.limits.budget.totalUsd, perCycleUsd: state.limits.budget.perStepUsd }, cycles: state.limits.budget.maxSteps };
   let salvagedEvaluation: AcceptanceEvaluation | undefined;
@@ -639,6 +657,14 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   if (salvaged && !salvage) throw new Error(`cycle ${pad(n)} host report is missing or does not match ${sha}`);
   const merge = await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage, failing });
   if (engine.stopRequested) return;
+  if (merge.reviewUnavailable !== undefined) {
+    // The work was never judged: keep the cycle current (its commits stay on the branch and under
+    // the cycle tag) and park for a person; the answer re-runs the review, nothing is rejected.
+    log(`cycle ${pad(n)} review unavailable; parked at ${sha.slice(0, 12)}`);
+    ctx.save(() => { if (si.current) si.current.reviewPending = { outcome: result.outcome === "blocked" ? "aborted" : result.outcome, reason: result.reason, attempts: result.attempts, costUsd: result.costUsd, head: result.head }; });
+    await engine.enterBlocked(reviewBlocker(merge.reviewUnavailable, sha));
+    return;
+  }
   if (merge.merge) {
     const r = gm.integrate(g, cfg, sha);
     merge.merged = r.merged;
@@ -741,6 +767,12 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   const unknownClaims = board.items.length ? claims.filter((c) => !known.includes(c)).map((c) => c.id) : [];
   const claimedItems: BoardItem[] = known.length ? known.flatMap((c) => board.items.filter((i) => i.id === c.id)) : assignedItems(board);
   const extra = unknownClaims.length ? { unknownClaims } : {};
+  // Commits the report names must be commits of this cycle's diff: checked by the host before any model reads the report.
+  if (!salvage) {
+    const inRange = g(["log", "--format=%H", `--max-count=5000`, sha, `^${start}`, ...(resolves ? [`^${resolves}`] : [])], { allowFail: true }) ?? "";
+    const phantom = unknownShas(at(`${dir}/report.md`), inRange.split("\n").map((l) => l.trim()).filter(Boolean));
+    if (phantom.length) return { merge: false, reason: `${dir}/report.md names commit(s) that are not in this cycle's diff: ${phantom.slice(0, 8).join(", ")}`, ...extra };
+  }
   if (!cfg.integration.review && !salvage && result.outcome !== "partial") {
     return gateGreen ? { merge: true, reason: "checks passed (review disabled)", ...extra } : { merge: false, reason: failingNote, ...extra };
   }
@@ -772,11 +804,11 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
     charter: cfg.integrationUpstream ? streamCharter(cfg, ctx.contract, start, rt.now()) : repo.fileAt(start, CHARTER_PATH), report: reviewReport, verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha, resolves ? [resolves] : []), diff, recordStat: read.recordStat,
     ledger, shortstat, uncovered, context, claimsFromReport: known.length > 0,
     criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
-  }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms) });
+  }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms), fallback: rt.complete(cfg.managerModel, { timeoutMs: 300_000 }) });
   await ctx.engine.refreshUsage();
-  writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: cfg.reviewModel, ...review });
-  const reason = `${gateGreen ? "" : `${failingNote}; `}review ${review.verdict}: ${review.reason}${review.concerns.length ? ` Concerns: ${review.concerns.join("; ")}` : ""}`;
-  return { merge: gateGreen && review.verdict === "MERGE", reason, review: review.verdict, ...extra };
+  writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: review.fallbackUsed ? cfg.managerModel : cfg.reviewModel, ...review });
+  const reason = `${gateGreen ? "" : `${failingNote}; `}review${review.fallbackUsed ? " (by the fallback reviewer, the manager model)" : ""} ${review.verdict}: ${review.reason}${review.concerns.length ? ` Concerns: ${review.concerns.join("; ")}` : ""}`;
+  return { merge: gateGreen && review.verdict === "MERGE", reason, review: review.verdict, ...(review.unavailable ? { reviewUnavailable: review.reason } : {}), ...extra };
 }
 
 /** The end of a non-finite run: cycles done, nothing left to find, or an operator stop after blocked publication. Evidence is a green acceptance run on the integration head. */

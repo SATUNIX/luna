@@ -23,11 +23,8 @@
  * converted: CPU time does not advance while the process waits, so measuring CPU there would make
  * the hang/cut-off guard a no-op.
  *
- * `tests/timing-load-check.ts` runs the smokes whose timing assertions are CPU-bound under full
- * CPU load five times, as the evidence that they are load-tolerant; it is CPU-heavy by design and
- * is not part of the CI gate. A smoke that keeps a wall-clock hang or wait guard is left out of
- * that run (see its header), and a noisier measurement may need more repeats than the default
- * three — `workflow-redaction-smoke.ts` uses best-of-nine.
+ * A noisier measurement may need more repeats than the default three;
+ * `workflow-redaction-smoke.ts` uses best-of-nine.
  */
 import assert from "node:assert/strict";
 

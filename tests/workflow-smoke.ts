@@ -209,7 +209,8 @@ steps:
     assert.equal(final.loops.review, 1);
     const never = await run(gate, {}, (task) => (task.startsWith("implement") ? "DONE" : "## Verdict\nFAIL"));
     assert.equal(never.final.status, "failed");
-    assert.match(never.final.error ?? "", /gate review did not pass after 2 loop/);
+    assert.match(never.final.error ?? "", /gate review did not pass after 2 retry loop/);
+    assert.match(never.final.error ?? "", /it read: ## Verdict FAIL/, "the failed gate's own words are in the error");
     assert.equal(never.calls.filter((c) => c.startsWith("implement")).length, 3);
     ok("gates loop back with the review attached and stop at max_loops");
   }

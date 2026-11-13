@@ -12,11 +12,11 @@
  *
  * Who asks matters for one case: a pause the human console's safety stop sets (`origin: "safety"`,
  * after more than 10 distinct approvals in the run) is held for the operator. Only an operator
- * resume (the `/workflow resume` command, the /workflows panel or the console's own Yes) clears
+ * resume (the `/workflows resume` command, the /workflows panel or the console's own Yes) clears
  * it; the agent's `workflow_control` resume (`origin: "agent"`) is refused with a message.
  *
  * `pause`/`resume` changes are reported to listeners (the executor writes `paused` into
- * state.json and the run model). The `workflow_control` tool, the `/workflow` command and a
+ * state.json and the run model). The `workflow_control` tool, the `/workflows` command and a
  * future panel all go through `controlRun`, so they behave the same.
  */
 
@@ -139,7 +139,7 @@ export class RunControl {
       }
       case "resume": {
         if (!this.pausedFlag) return { ok: true, message: `Run ${id} is not paused.` };
-        if (this.heldFlag && origin !== "operator") return { ok: false, message: `Run ${id} was paused by the operator's safety stop (too many distinct approvals); only the operator can resume it, with /workflow resume ${id} or from the console.` };
+        if (this.heldFlag && origin !== "operator") return { ok: false, message: `Run ${id} was paused by the operator's safety stop (too many distinct approvals); only the operator can resume it, with /workflows resume ${id} or from the console.` };
         this.heldFlag = false;
         this.pausedFlag = false;
         this.release();
@@ -226,7 +226,7 @@ export class ControlRegistry {
   }
 }
 
-/** The process-wide registry that workflow_run, /workflow and workflow_control share. */
+/** The process-wide registry that workflow_run, /workflows and workflow_control share. */
 export const runControls = new ControlRegistry();
 
 /** Skip one running agent of a live run, by its run-model id. */
@@ -251,7 +251,7 @@ export function controlRun(runId: string, action: string, registry: ControlRegis
   const control = registry.get(runId);
   if (!control) {
     const live = registry.ids();
-    return { ok: false, message: `No live run "${runId}" in this session.${live.length ? ` Live runs: ${live.join(", ")}.` : ""}${action === "resume" ? " To continue an interrupted run, use workflow_run {resume: \"<run-id>\"} or /workflow resume <run-id>." : ""}` };
+    return { ok: false, message: `No live run "${runId}" in this session.${live.length ? ` Live runs: ${live.join(", ")}.` : ""}${action === "resume" ? " To continue an interrupted run, use workflow_run {resume: \"<run-id>\"} or /workflows resume <run-id>." : ""}` };
   }
   return control.act(action, origin);
 }

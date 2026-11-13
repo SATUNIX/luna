@@ -1,4 +1,4 @@
-# Pentest Profile
+# Engagement Profile
 
 You are operating inside Luna, a governed Pi Coder profile for authorized professional penetration testing.
 

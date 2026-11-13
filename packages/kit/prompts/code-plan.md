@@ -1,4 +1,5 @@
 ---
+description: "Plan a coding change before touching files"
 argument-hint: "[change]"
 ---
 

@@ -183,8 +183,21 @@ try {
     // The card says how far the allow reaches.
     const card = v.seen[0];
     assert.ok(card, "the operator was shown a card");
-    assert.match(card.title, /session allow: this session \+ workspace, 24h/);
+    assert.match(card.title, /this session \+ workspace, 24h/);
     ok("a session allow is stored with schemaVersion, creation time, scope, grantor and a 24h expiry");
+  }
+
+  // 1b. The card announces itself on `luna:attention` (the herdr extension listens), opened then closed,
+  // including around the follow-up "tell the agent why" prompt.
+  {
+    const { pi } = await gate();
+    const events: boolean[] = [];
+    pi.api.events.on("luna:attention", (d) => events.push((d as { active: boolean }).active));
+    const v = ui(["Deny and tell the agent why…"], "S-attn");
+    const res = await bash(pi, PUSH, v.ctx);
+    assert.equal((res as { block?: boolean } | undefined)?.block, true);
+    assert.deepEqual(events, [true, false, true, false], "approval card and the typed-reason prompt each open and close attention");
+    ok("approval cards emit luna:attention open then close, also around the deny-reason prompt");
   }
 
   // 2. Scope: same session, but another workspace or working directory is asked again. ------------
@@ -264,10 +277,10 @@ try {
       "wrong-typed hash": JSON.stringify({ ...good, approvals: [{ ...goodEntry, hash: 42 }] }),
       "unknown context": JSON.stringify({ ...good, approvals: [{ ...goodEntry, context: "forever" }] }),
       "session approval without a session": JSON.stringify({ ...good, approvals: [{ ...goodEntry, session: null }] }),
-      "operator persistent approval": JSON.stringify({ ...good, approvals: [{ ...goodEntry, context: "persistent", session: null }] }),
+      "operator persistent approval above the medium tier": JSON.stringify({ ...good, approvals: [{ ...goodEntry, context: "persistent", session: null, tier: "high" }] }),
       "null and partial elements": JSON.stringify({ ...good, approvals: [null, { hash: goodEntry.hash, families: [] }] }),
       "bad expiry": JSON.stringify({ ...good, approvals: [{ ...goodEntry, expiresAt: "someday" }] }),
-      "pentest policy entry": JSON.stringify({ ...good, approvals: [{ ...goodEntry, policy: "pentest" }] }),
+      "engagement policy entry": JSON.stringify({ ...good, approvals: [{ ...goodEntry, policy: "engagement" }] }),
     };
     for (const [label, text] of Object.entries(variants)) {
       fs.writeFileSync(approvalsFile, text);
@@ -381,6 +394,31 @@ try {
     assert.deepEqual(readStore().approvals, []);
     for (const [sess, cwd] of [["A1", wsA], ["A2", wsB]]) assert.equal((await bash(pi, PUSH, ui([undefined], sess, cwd).ctx))?.block, true);
     ok("revoke workspace/all clear approvals and what was learned; a revoked learned action must be re-earned");
+  }
+
+  // 6b. "Always allow this exact command in this project (30 days)": medium only, exact, revocable. ------------
+  fs.rmSync(approvalsFile, { force: true });
+  config({ mode: "manual" });
+  {
+    const { pi } = await gate();
+    const ALWAYS = "Always allow this exact command in this project (30 days)";
+    const first = ui([ALWAYS], "AP1");
+    assert.equal(await bash(pi, PUSH, first.ctx), undefined);
+    assert.ok(first.seen[0]?.options.includes(ALWAYS), "a medium action offers it");
+    const kept = readStore().approvals.find((a) => a.context === "persistent");
+    assert.ok(kept?.grantedBy.actor === "operator" && kept.session === null, "stored as the operator's persistent approval");
+    assert.equal(await bash(pi, PUSH, ui([], "AP2").ctx), undefined, "a new session runs the exact command without asking");
+    const wider = ui([undefined], "AP2");
+    assert.equal((await bash(pi, `${PUSH} --tags`, wider.ctx))?.block, true, "a different command still asks");
+    const other = ui([undefined], "AP3", wsB);
+    assert.equal((await bash(pi, PUSH, other.ctx))?.block, true, "another project still asks");
+    const high = ui([undefined], "AP4");
+    assert.equal((await bash(pi, "sudo systemctl restart mysql", high.ctx))?.block, true);
+    assert.ok(!high.seen[0]?.options.includes(ALWAYS), "a high-tier action never offers it");
+    await cmd(pi, "firewall", "revoke all", ui([], "AP1").ctx);
+    assert.deepEqual(readStore().approvals, []);
+    assert.equal((await bash(pi, PUSH, ui([undefined], "AP5").ctx))?.block, true, "revoked, it asks again");
+    ok("always-in-this-project is exact, per project, medium tier only, and revocable");
   }
 
   // 7. After a /reload (a new instance, same session) approvals persist and are not widened. --------
@@ -505,13 +543,12 @@ try {
       await cmd(pi, "firewall", "status", headless);
       await cmd(pi, "firewall", "revoke nosuch", headless);
       await cmd(pi, "firewall", "revoke all", headless);
-      await cmd(pi, "firewall:status", "", headless);
+      await cmd(pi, "firewall", "status", headless);
     });
     assert.match(stderr, /tool-firewall approvals \(/);
     assert.match(stderr, /tool-firewall: policy=coding/);
     assert.match(stderr, /no approval matches "nosuch"/);
     assert.match(stderr, /revoked 0 approval\(s\); reset everything learned/);
-    assert.equal(stderr.match(/tool-firewall: policy=coding/g)?.length, 2, "the /firewall:status alias prints too");
     ok("non-interactive sessions get the /firewall output on stderr, not a silent no-op");
   }
 

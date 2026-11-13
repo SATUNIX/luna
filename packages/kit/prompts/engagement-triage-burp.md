@@ -1,0 +1,12 @@
+---
+description: "Triage read-only Burp evidence into candidate vulnerabilities"
+argument-hint: "[focus]"
+---
+
+# Burp Triage
+
+Use read-only Burp-derived evidence only. Inventory endpoints, parameters, authentication states, interesting responses, and candidate vulnerability classes.
+
+Focus: ${@:-all read-only Burp evidence in context}
+
+Return observations and hypotheses. Do not convert anything to a finding without evidence IDs and validation.

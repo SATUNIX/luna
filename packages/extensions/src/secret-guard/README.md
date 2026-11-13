@@ -1,7 +1,7 @@
 # secret-guard
 
 Name- and pattern-based backstop for secret files and credentials, loaded by the `balanced` and
-`autonomous` profiles (see Profiles below). When loaded, its `tool_call` hook blocks the actions below; every
+`long-horizon` profiles (see Profiles below). When loaded, its `tool_call` hook blocks the actions below; every
 item is pinned by `tests/secret-guard-smoke.ts` unless another test is named.
 
 ## What it blocks
@@ -68,7 +68,7 @@ extension in your own repo that hooks `tool_call` with your patterns.
 
 ## Profiles
 
-Loaded by the `balanced` and `autonomous` profiles. It is one of the three mandatory protections
+Loaded by the `balanced` and `long-horizon` profiles. It is one of the three mandatory protections
 (with `tool-firewall` and `protected-paths`): every other shipped profile records, with a reason, why
 it goes without it in `packages/core/lib/protection-coverage.ts`, and `npm run profile:check` fails a
 profile that drops a mandatory protection without such an exemption

@@ -1,7 +1,7 @@
 FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797
 
 # pi and pi-mcp-adapter come from tools/package-lock.json (npm ci, below); these two pins must match
-# it, and the build fails when they do not (scripts/validate-pentest-env.sh checks the same).
+# it, and the build fails when they do not (scripts/validate-engagement-env.sh checks the same).
 ARG PI_CODING_AGENT_VERSION=1.4.0
 ARG PI_MCP_ADAPTER_VERSION=6.0.0
 # The npm the base image bundles carries known advisories in its own dependencies (brace-expansion,
@@ -51,7 +51,7 @@ RUN apk add --no-cache \
 
 # pi-mcp-adapter (overlays/pi/mcp-adapter.json) reads only its own config file, never the shared,
 # .agents, Pi mcp.json or project MCP files, and registers no `mcp__*` tools beside the `mcp` proxy,
-# so every MCP call reaches pentest-governance-domain as an `mcp` call.
+# so every MCP call reaches engagement-governance as an `mcp` call.
 ENV PI_MCP_CONFIG_MODE=exclusive \
     MCP_DIRECT_TOOLS=__none__
 

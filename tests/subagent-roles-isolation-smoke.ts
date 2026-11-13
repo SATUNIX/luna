@@ -229,6 +229,19 @@ try {
     ok("children load --no-extensions plus enabled safety extensions only");
   }
 
+  // 6b. A child does not rediscover what it never uses: skills (preloaded), commands and themes; a
+  //     read-only or scout role also skips the project's context files, a writing role keeps them.
+  {
+    const Runner = await loadModule<{ childDiscoveryFlags(agent: AgentConfig, tools: string[] | undefined, env?: NodeJS.ProcessEnv): string[] }>("vendor/subagent/runner.ts");
+    const role = (name: string, tools?: string[]): AgentConfig => ({ name, description: "", systemPrompt: "", source: "user", filePath: "", ...(tools ? { tools } : {}) });
+    const common = ["--no-skills", "--no-prompt-templates", "--no-themes"];
+    assert.deepEqual(Runner.childDiscoveryFlags(role("implementer"), undefined, {}), common, "a writing role keeps its context files");
+    assert.deepEqual(Runner.childDiscoveryFlags(role("scout"), undefined, {}), [...common, "--no-context-files"], "a scout skips them");
+    assert.deepEqual(Runner.childDiscoveryFlags(role("custom", ["read", "grep"]), undefined, {}), [...common, "--no-context-files"], "a read-only role skips them");
+    assert.deepEqual(Runner.childDiscoveryFlags(role("scout"), undefined, { PI_KIT_SUBAGENT_DISCOVERY: "1" }), [], "the operator can put discovery back");
+    ok("children skip skill, template, theme and (read-only roles) context-file discovery");
+  }
+
   // 7. Orphans + registry compaction.
   {
     const dir = path.join(ws, "reg");

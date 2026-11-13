@@ -594,22 +594,20 @@ function verify(t: Theme): string {
   );
 }
 
-// ---- 5. Profiles: one package, seven shapes ----------------------------------------------------
+// ---- 5. Profiles: one package, five shapes ----------------------------------------------------
 
 function profiles(t: Theme): string {
   const list: Array<[string, string]> = [
-    ["quick", "Fast edits with the safety guards and checkpoints, no ceremony."],
     ["balanced", "Everyday work with verification and context helpers (the default)."],
-    ["long-horizon", "Multi-hour work: goals, task graph, branches, delegation."],
-    ["autonomous", "Long-running sessions, including unattended runs."],
+    ["long-horizon", "Multi-hour work and unattended runs: goals, task graph, branches, delegation."],
     ["self-improving", "Research use: memory services, dual review and skill mining."],
-    ["pentest", "Authorised engagements: strict firewall policy, scope and rules."],
-    ["lite", "Small local models and short contexts."],
+    ["engagement", "Authorised engagements: strict firewall policy, scope and rules."],
+    ["lite", "Quick tasks, small local models and short contexts."],
   ];
   const W = 1200, H = 300, step = 2, L = list.length * step;
   const a = new Art(W, H, L, t);
   a.add(text(40, 50, "/profile", `class="mono" font-size="22" font-weight="700" fill="${t.fg}"`));
-  a.add(text(W - 40, 48, "ONE PACKAGE · SEVEN PROFILES", `class="micro" text-anchor="end" fill="${t.muted}"`));
+  a.add(text(W - 40, 48, "ONE PACKAGE · FIVE PROFILES", `class="micro" text-anchor="end" fill="${t.muted}"`));
   a.add(`<path d="M0 74H${W}" stroke="${t.rule}" stroke-width="2"/>`);
   const tw = (W - 80) / list.length;
   list.forEach(([name, desc], i) => {
@@ -625,7 +623,7 @@ function profiles(t: Theme): string {
   // A viewer who prefers reduced motion sees the default profile, balanced, highlighted.
   return a.render(
     "Seven profiles in one package",
-    "The seven Luna profiles, highlighted one after another with what each is for: quick, balanced (the default), long-horizon, autonomous, self-improving, pentest and lite.",
+    "The five Luna profiles, highlighted one after another with what each is for: balanced (the default), long-horizon, self-improving, engagement and lite.",
     step * 1.5,
   );
 }

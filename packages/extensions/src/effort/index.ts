@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as ledger from "./ledger.ts";
-import { installedProfile, isModelKey, MEMENTO_PROFILES, mementoAllowance, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
+import { installedProfile, isModelKey, mementoAllowance, mementoProfiles, modelKey, optInPath, readOptIn, writeOptIn } from "./memento.ts";
 import { clampTier, loadPolicy, mementoGenerations, normalizeTier, renderCard, renderPrompt, renderStanding, renderStepPrompt, tierLabel, tierLimits, tierOf, withEffortBlock, workflowAllowance, workflowLimits } from "./policy.ts";
 import type { EffortPolicy, LimitOverrides, TierLimits } from "./policy.ts";
 import { DEFAULT_SIZE, lastStandingEntry, parseStandingArgs, STANDING_ENTRY_TYPE, STANDING_OFF, STANDING_REMINDER_TYPE, standingData, WAKE_CHAIN_CAP, WORKFLOW_RESULT_TYPE, WORKFLOW_TOOL } from "./standing.ts";
@@ -964,7 +964,7 @@ export default function (pi: ExtensionAPI) {
     const lines = [
       `Memento mode (generations): ${allowance.maxGenerations} for the current model at ${label(s.tier)} (${allowance.reason}).`,
       `  tiers: ${policy.tiers.map((t) => `${t.code} ${mementoGenerations(policy, t.id)}`).join(", ")}`,
-      `  profile: ${profile ?? "unknown"} (allowed in ${MEMENTO_PROFILES.join(" and ")})`,
+      `  profile: ${profile ?? "unknown"} (allowed in ${mementoProfiles().join(" and ")})`,
       `  opted-in models (${optInPath()}): ${optIn.models.size ? [...optIn.models].map(([k, v]) => (v.maxGenerations === null ? k : `${k} (max ${v.maxGenerations})`)).join(", ") : "none"}`,
       ...optIn.warnings.map((w) => `  warning: ${w}`),
       "Off by default. `/effort memento on [provider/model] [--max N]` opts a model in (you confirm it), `/effort memento off [provider/model]` opts it out. pi-autonomy reads the same allowance: a run whose contract enables generations uses at most this many for its worker model at its tier, and one generation when it is 0.",
@@ -1025,8 +1025,8 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     const profile = installedProfile(ctx.cwd ?? process.cwd());
-    if (!profile || !MEMENTO_PROFILES.includes(profile)) {
-      say(ctx, `effort: Memento mode is only available in the ${MEMENTO_PROFILES.join(" and ")} profiles (installed: ${profile ?? "unknown"}). Nothing was changed.`, "error");
+    if (!profile || !mementoProfiles().includes(profile)) {
+      say(ctx, `effort: Memento mode is only available in the ${mementoProfiles().join(" and ")} profile (installed: ${profile ?? "unknown"}). Nothing was changed.`, "error");
       return;
     }
     const tiers = policy.tiers.map((t) => `${t.code} ${max === null ? mementoGenerations(policy, t.id) : Math.min(max, mementoGenerations(policy, t.id))}`).join(", ");

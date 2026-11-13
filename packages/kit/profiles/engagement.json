@@ -1,0 +1,18 @@
+{
+  "name": "engagement",
+  "description": "Security engagements under the strict engagement firewall policy: manual approvals, no learned or leased shortcuts, full protected paths, engagement governance gate, and the Conductor root orchestrator with dynamic specialist synthesis and independent validation.",
+  "securityLevel": "guarded",
+  "pinnedCommands": ["engagement"],
+  "firewall": { "mode": "manual", "policy": "engagement" },
+  "include": [
+    "herdr",
+    "protected-paths", "tool-firewall", "human-console", "engagement-governance", "git-checkpoint",
+    "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
+    "context-sieve", "guidelines", "spec-plan", "verify-gate",
+    "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
+    "goal-core", "task-graph", "subagent", "branch-lab",
+    "verifier-board", "provider-router",
+    "caveman", "pi-lens", "pi-readseek",
+    "orchestrator", "conductor"
+  ]
+}

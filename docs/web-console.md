@@ -14,8 +14,8 @@ requests from other origins. This page states exactly what is enforced.
 
 ## Starting it
 
-From inside pi (the `web-console` extension registers `/console`, alias `/webui`, in the
-`balanced`, `long-horizon`, `autonomous`, `self-improving` and `pentest` profiles):
+From inside pi (the `web-console` extension registers `/console` in the
+`balanced`, `long-horizon`, `self-improving` and `engagement` profiles):
 
 ```
 /console                      start and print the login link

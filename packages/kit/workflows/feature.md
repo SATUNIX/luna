@@ -65,5 +65,5 @@ The reviewer is the gate: the last non-blank line of its reply must be `VERDICT:
 ignored), or the implementer runs again with the review as feedback (at most 2 more times). Any other last line,
 including an echoed template such as `VERDICT: PASS or FAIL`, counts as a failed review.
 
-Run it with `/workflow run feature goal="add rate limiting to the /api/orders endpoint"`, or
+Run it with `/workflows run feature goal="add rate limiting to the /api/orders endpoint"`, or
 ask the agent to use `workflow_run`.

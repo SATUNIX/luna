@@ -5,8 +5,14 @@
  * A small model pays for every character of tool description and parameter schema before it reads
  * the task, so the kit's floor is a measured number, not a claim. `footprint-baseline.json` beside
  * this module is the reviewed record of that floor: a deliberate kit-text change updates it in the
- * same commit, an accidental one fails `smoke:eval-footprint`. The ceiling itself (9,500 characters
- * for `balanced`, 4,900 for its delegation tools) lives in the baseline.
+ * same commit, an accidental one fails `smoke:eval-footprint`. The ceilings (7,500 characters for
+ * `balanced`, 3,200 for its delegation tools, 9,000 for `lite` counting companions) live in the baseline.
+ *
+ * Companion packages (pi-readseek, pi-lens) register tools of their own that reach the model in every
+ * request, and they cannot be loaded offline here. Their cost is a reviewed record in the baseline's
+ * `companions`, measured against the pinned release in a real pi (the active tools a scratch agent
+ * directory reports, name + description + parameter JSON, the same arithmetic as the kit's), and tied
+ * to the pinned `source` so a version bump fails until it is measured again.
  *
  * The prompt meter exists because a prefix that changes between turns throws away the
  * provider-side cache and re-reads the whole system prompt: two consecutive turns must agree up to
@@ -30,15 +36,26 @@ import { array, isRecord, literal, number, object, optional, parseJsonAs, record
 export interface FootprintTool {
   name: string;
   chars: number;
+  /** Registered inactive (`defaultActive: false`): its text reaches the model only once something activates it. */
+  lazy: boolean;
 }
 
 /** What one profile's tool surface costs, and the delegation part of it. */
 export interface Footprint {
   profile: string;
   tools: readonly FootprintTool[];
+  /** The text of the tools active from the first request; the lazy tools are counted in `lazyText`. */
   toolText: number;
+  /** The text of tools registered inactive: not in every request, but there once a run or mode wakes them. */
+  lazyText: number;
+  /** The one-line snippets and guideline rules pi renders into the system prompt for these tools. */
+  promptText: number;
+  /** What the profile's before_agent_start handlers add to the system prompt on a first turn. */
+  systemAdditions: number;
   /** The delegation tools the profile registers (null when it registers none), alphabetically. */
   delegation: { tools: readonly string[]; toolText: number } | null;
+  /** The external companion packages the profile loads, with the pinned source each resolves to. */
+  companions: readonly { name: string; source: string }[];
 }
 
 /** Every tool that starts an agent, wherever it lives (DESIGN §5 measures these together). */
@@ -57,6 +74,12 @@ const BASE_PROMPT = "You are a coding agent. This base prompt stands in for pi's
 /** What one tool costs: its name, its description and its parameter schema, as JSON. */
 function toolChars(tool: FakeTool): number {
   return tool.name.length + (tool.description ?? "").length + JSON.stringify(tool.parameters ?? "").length;
+}
+
+/** What a tool's snippet and guidelines cost in the system prompt (pi lists "- name: snippet" and each rule). */
+function promptChars(tool: FakeTool): number {
+  const guidelines = tool.promptGuidelines ?? [];
+  return (tool.promptSnippet ?? "").length + guidelines.reduce((sum, rule) => sum + rule.length, 0);
 }
 
 /** pi's headless extension context: no UI, a given cwd, and the session manager call sites read. */
@@ -94,34 +117,58 @@ async function hermetically<T>(prefix: string, fn: (workspace: string) => Promis
 /**
  * Measure what `profile` costs: the profile's extensions are loaded and registered against a fake
  * pi, its session_start handler fires once, and every tool registered by then is counted. External
- * companions are left out: their text is not the kit's to review. A tool registered twice counts
- * once, as pi would show it.
+ * companions cannot be loaded offline: they are listed in `companions` and priced from the baseline
+ * (`companionTotals`). A tool registered twice counts once, as pi would show it.
  */
 export async function measureFootprint(profile: string): Promise<Footprint> {
   return hermetically("pi-kit-footprint-", async (workspace) => {
     const definition = loadProfileDef(profile);
-    const tools = new Map<string, number>();
+    const tools = new Map<string, { chars: number; lazy: boolean }>();
+    const prompts = new Map<string, number>();
+    const chain: Array<FakeHandler<"before_agent_start">> = [];
+    const context = headlessContext(workspace);
+    const companions: Array<{ name: string; source: string }> = [];
     for (const resolved of resolveProfile(definition.include ?? [])) {
-      if (resolved.avenue === "external") continue;
+      if (resolved.avenue === "external") {
+        companions.push({ name: resolved.name, source: resolved.source });
+        continue;
+      }
       const register = await loadExtension(extensionRelPath(resolved.name, resolved.avenue));
       const pi = fakePi();
       register(pi.api);
       const onSessionStart = pi.handlers.find("session_start");
-      if (onSessionStart) await onSessionStart({}, headlessContext(workspace));
-      for (const [name, tool] of pi.tools) tools.set(name, toolChars(tool));
+      if (onSessionStart) await onSessionStart({}, context);
+      const beforeAgentStart = pi.handlers.find("before_agent_start");
+      if (beforeAgentStart) chain.push(beforeAgentStart);
+      for (const [name, tool] of pi.tools) {
+        const lazy = tool.defaultActive === false;
+        tools.set(name, { chars: toolChars(tool), lazy });
+        prompts.set(name, lazy ? 0 : promptChars(tool));
+      }
+    }
+    // The system prompt a first turn ends with, minus the stand-in base it started from.
+    let systemPrompt = BASE_PROMPT;
+    for (const handler of chain) {
+      const result = await handler({ systemPrompt, messageType: "user", prompt: "measure" }, context);
+      if (typeof result?.systemPrompt === "string") systemPrompt = result.systemPrompt;
     }
     const measured = [...tools]
-      .map(([name, chars]) => ({ name, chars }))
+      .map(([name, tool]) => ({ name, chars: tool.chars, lazy: tool.lazy }))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    const delegation = measured.filter((tool) => DELEGATION_TOOLS.includes(tool.name));
+    const upFront = measured.filter((tool) => !tool.lazy);
+    const delegation = upFront.filter((tool) => DELEGATION_TOOLS.includes(tool.name));
     return {
       profile,
       tools: measured,
-      toolText: measured.reduce((sum, tool) => sum + tool.chars, 0),
+      toolText: upFront.reduce((sum, tool) => sum + tool.chars, 0),
+      lazyText: measured.filter((tool) => tool.lazy).reduce((sum, tool) => sum + tool.chars, 0),
+      promptText: [...prompts.values()].reduce((sum, chars) => sum + chars, 0),
+      systemAdditions: systemPrompt.length - BASE_PROMPT.length,
       delegation:
         delegation.length === 0
           ? null
           : { tools: delegation.map((tool) => tool.name), toolText: delegation.reduce((sum, tool) => sum + tool.chars, 0) },
+      companions,
     };
   });
 }
@@ -249,15 +296,33 @@ const DelegationBaselineSchema = object({
 
 const ProfileBaselineSchema = object({
   toolText: number(),
+  /** Snippet and guideline text of the profile's tools; absent in a row recorded before it was measured. */
+  promptText: optional(number()),
+  /** The system-prompt additions of a first turn; absent in a row recorded before it was measured. */
+  systemAdditions: optional(number()),
   /** The most this profile's tool text may cost; absent for a profile with no agreed ceiling. */
   ceiling: optional(number()),
+  /** The most the kit's tool text plus its companions' may cost together (a hard ceiling for `lite`). */
+  totalCeiling: optional(number()),
   delegation: optional(DelegationBaselineSchema),
   /** Every tool the profile registers and its measured characters. */
+  tools: record(number()),
+  /** The tools registered inactive; their characters are in `tools` but not in `toolText`. */
+  lazy: optional(array(string())),
+});
+
+const CompanionBaselineSchema = object({
+  /** The pinned source the numbers were measured against (sources.json `source`). */
+  source: string(),
+  /** Tool text active in every request, and the snippet and guideline text, as measured in a real pi. */
+  toolText: number(),
+  promptText: number(),
   tools: record(number()),
 });
 
 const FootprintBaselineSchema = object({
   schemaVersion: literal(1),
+  companions: optional(record(CompanionBaselineSchema)),
   profiles: record(ProfileBaselineSchema),
 });
 
@@ -284,6 +349,19 @@ export function readBaseline(file = defaultBaselineFile()): FootprintBaseline {
   return parseJsonAs(FootprintBaselineSchema, fs.readFileSync(file, "utf8"), file);
 }
 
+/** What the profile's companions add to every request, from the reviewed record. */
+export function companionTotals(f: Footprint, baseline: FootprintBaseline): { toolText: number; promptText: number } {
+  let toolText = 0;
+  let promptText = 0;
+  for (const companion of f.companions) {
+    const recorded = baseline.companions?.[companion.name];
+    if (recorded === undefined) continue;
+    toolText += recorded.toolText;
+    promptText += recorded.promptText;
+  }
+  return { toolText, promptText };
+}
+
 /**
  * Every way `f` differs from the reviewed baseline: over a ceiling, off the recorded total, a tool
  * whose text changed or that appeared or disappeared, and the delegation total. Empty when the
@@ -307,6 +385,14 @@ export function footprintProblems(f: Footprint, baseline: FootprintBaseline): st
         `(delta ${signed(f.toolText - entry.toolText)}); update footprint-baseline.json if the change is deliberate`,
     );
   }
+  for (const [what, measuredChars, recorded] of [
+    ["tool snippet and guideline text", f.promptText, entry.promptText],
+    ["system-prompt additions", f.systemAdditions, entry.systemAdditions],
+  ] as const) {
+    if (recorded !== undefined && measuredChars !== recorded) {
+      problems.push(`${f.profile}: ${what} is ${String(measuredChars)} chars, the baseline records ${String(recorded)} (delta ${signed(measuredChars - recorded)})`);
+    }
+  }
   for (const [name, chars] of counts) {
     const recorded = entry.tools[name];
     if (recorded === undefined) problems.push(`${f.profile}: tool "${name}" (${String(chars)} chars) is not in the baseline`);
@@ -314,8 +400,24 @@ export function footprintProblems(f: Footprint, baseline: FootprintBaseline): st
       problems.push(`${f.profile}: tool "${name}" is ${String(chars)} chars, the baseline records ${String(recorded)} (delta ${signed(chars - recorded)})`);
     }
   }
+  const lazyNow = f.tools.filter((tool) => tool.lazy).map((tool) => tool.name).sort();
+  const lazyThen = [...(entry.lazy ?? [])].sort();
+  if (lazyNow.join(",") !== lazyThen.join(",")) {
+    problems.push(`${f.profile}: lazy tools are [${lazyNow.join(", ")}], the baseline records [${lazyThen.join(", ")}]`);
+  }
   for (const name of Object.keys(entry.tools)) {
     if (!counts.has(name)) problems.push(`${f.profile}: the baseline records tool "${name}", which the profile no longer registers`);
+  }
+  for (const companion of f.companions) {
+    const recorded = baseline.companions?.[companion.name];
+    if (recorded === undefined) problems.push(`${f.profile}: companion "${companion.name}" (${companion.source}) has no measured record in footprint-baseline.json`);
+    else if (recorded.source !== companion.source) {
+      problems.push(`${f.profile}: companion "${companion.name}" is pinned to ${companion.source}, the baseline measured ${recorded.source}; measure the new release and update its record`);
+    }
+  }
+  if (entry.totalCeiling !== undefined) {
+    const total = f.toolText + companionTotals(f, baseline).toolText;
+    if (total > entry.totalCeiling) problems.push(`${f.profile}: tool text with companions is ${String(total)} chars, over the ${String(entry.totalCeiling)}-char ceiling`);
   }
   const wanted = entry.delegation;
   if (wanted !== undefined) {
@@ -382,9 +484,13 @@ export function baselineEntry(f: Footprint, previous: FootprintProfileBaseline |
         };
   return {
     toolText: f.toolText,
+    promptText: f.promptText,
+    systemAdditions: f.systemAdditions,
     ...(previous?.ceiling === undefined ? {} : { ceiling: previous.ceiling }),
+    ...(previous?.totalCeiling === undefined ? {} : { totalCeiling: previous.totalCeiling }),
     ...(delegation === undefined ? {} : { delegation }),
     tools: Object.fromEntries(f.tools.map((tool) => [tool.name, tool.chars])),
+    ...(f.tools.some((tool) => tool.lazy) ? { lazy: f.tools.filter((tool) => tool.lazy).map((tool) => tool.name).sort() } : {}),
   };
 }
 
@@ -393,6 +499,13 @@ export interface FootprintReport {
   profile: string;
   chars: number;
   tokens: number;
+  /** Tool schema text, snippets, guidelines and system-prompt additions together: all the text the kit adds. */
+  totalChars: number;
+  lazyText: number;
+  promptText: number;
+  systemAdditions: number;
+  /** Tool text the profile's companion packages add to every request (reviewed record), in characters. */
+  companionText: number;
   tools: readonly FootprintTool[];
   delegation: Footprint["delegation"];
   problems: readonly string[];
@@ -404,6 +517,11 @@ export function footprintReport(f: Footprint, baseline: FootprintBaseline): Foot
     profile: f.profile,
     chars: f.toolText,
     tokens: Math.ceil(f.toolText / 4),
+    totalChars: f.toolText + f.promptText + f.systemAdditions,
+    lazyText: f.lazyText,
+    promptText: f.promptText,
+    systemAdditions: f.systemAdditions,
+    companionText: companionTotals(f, baseline).toolText,
     tools: f.tools,
     delegation: f.delegation,
     problems: footprintProblems(f, baseline),
@@ -495,7 +613,10 @@ export async function main(argv: readonly string[]): Promise<number> {
     return report.problems.length === 0 ? 0 : 1;
   }
   console.log(`[footprint] ${report.profile}: ${String(report.chars)} chars (~${String(report.tokens)} tokens at 4 chars/token)`);
-  for (const tool of report.tools) console.log(`  ${tool.name}: ${String(tool.chars)}`);
+  console.log(`  plus ${String(report.promptText)} of snippets and guidelines and ${String(report.systemAdditions)} of system-prompt additions: ${String(report.totalChars)} chars in all (~${String(Math.ceil(report.totalChars / 4))} tokens)`);
+  if (report.companionText > 0) console.log(`  companions (${f.companions.map((c) => c.name).join(", ")}) add ${String(report.companionText)} chars more: ${String(report.chars + report.companionText)} chars of tools in every request`);
+  if (report.lazyText > 0) console.log(`  not in every request: ${String(report.lazyText)} chars of lazy tools, active once a run or mode starts`);
+  for (const tool of report.tools) console.log(`  ${tool.name}: ${String(tool.chars)}${tool.lazy ? " (lazy)" : ""}`);
   if (report.delegation !== null) {
     console.log(`  delegation (${report.delegation.tools.join(", ")}): ${String(report.delegation.toolText)}`);
   }

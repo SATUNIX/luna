@@ -5,7 +5,7 @@
 // (trajectory.ts), and decided by the matrix below. Human decisions become calibrated
 // precedents (feedback.ts); in auto mode a small model judges medium actions (judge.ts).
 //
-//   tier      manual      auto (coding)                           once-only (pentest / strict security)
+//   tier      manual      auto (coding)                           once-only (engagement / strict security)
 //   low       allow       allow                                   allow
 //   medium    ask         judge: allow, or block + tell the agent ask
 //   high      ask         exact repeat of a grant / learned exact       ask, no grants (deny headless)
@@ -28,15 +28,16 @@ import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignatur
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
 import { appendJudgement, computeStats, distillInBackground, profileFor, readProfile, resetProfile, statsLine, distill } from "./profile.ts";
-import { isUncertainBlock, runJudge, type Completer, type Verdict } from "./judge.ts";
+import { isLocalProvider, isUncertainBlock, runJudge, type Completer, type Verdict } from "./judge.ts";
 import { loadSession, recordAction, rootSessionId, saveSession, trajectoryFindings, type SessionGrant, type SessionState } from "./trajectory.ts";
 import { addApproval, describeScope, findExact, floorFor, readApprovals, reportProblems, revokeApprovals, sessionApprovals, similarApprovals, SESSION_APPROVAL_TTL_MS, type Approval, type ApprovalsView } from "./approvals.ts";
 import { createUnattended, unattendedDenial, type ProvenanceIo, type UnattendedState } from "./unattended.ts";
 import { loadConsoleKey, requestDigest, verifyAnswer } from "./console-auth.ts";
-import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isSessionChoice, type CardExtras } from "./card.ts";
+import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isProjectChoice, isSessionChoice, projectAllowOffered, type CardExtras } from "./card.ts";
 
 import { profileDefault, REGISTRY_KEY, resolveSecurity, securityPath, type SecuritySnapshot } from "./security-level.ts";
 import { atRootTerminal, chooseAtTerminal, registerSecurityCommand } from "./security-command.ts";
+import { registerAway } from "./away.ts";
 import { disableCompanionInstalls } from "./companion-installs.ts";
 
 type Decision = "allow" | "ask" | "deny";
@@ -74,8 +75,8 @@ type FirewallPolicy = {
   tools: Record<string, ToolRule>;
   // Operator rules: matched in every policy, against the raw command and each parsed step.
   command_rules: RuleSet;
-  // Extra rules for the strict pentest policy, matched against the raw command text.
-  pentest: RuleSet;
+  // Extra rules for the strict engagement policy, matched against the raw command text.
+  engagement: RuleSet;
 };
 
 export type FirewallDeps = {
@@ -89,7 +90,7 @@ const BUILTIN_FALLBACK: FirewallPolicy = {
   defaults: { unknown: "deny" },
   tools: {},
   command_rules: { deny: [], ask: [] },
-  pentest: { deny: [], ask: [] },
+  engagement: { deny: [], ask: [] },
 };
 
 let cachedPolicy: FirewallPolicy = BUILTIN_FALLBACK;
@@ -232,16 +233,16 @@ function normalizePolicy(value: unknown): FirewallPolicy {
   }
   const commandRules = raw.command_rules;
   if (commandRules !== undefined) checkPolicyObject(commandRules, "command_rules", ["deny", "ask"]);
-  if (raw.policies !== undefined) checkPolicyObject(raw.policies, "policies", ["pentest"]);
-  const pentest = field(raw.policies, "pentest");
-  if (pentest !== undefined) checkPolicyObject(pentest, "policies.pentest", ["command_rules"]);
-  const pentestRules = field(pentest, "command_rules");
-  if (pentestRules !== undefined) checkPolicyObject(pentestRules, "policies.pentest.command_rules", ["deny", "ask"]);
+  if (raw.policies !== undefined) checkPolicyObject(raw.policies, "policies", ["engagement"]);
+  const engagement = field(raw.policies, "engagement");
+  if (engagement !== undefined) checkPolicyObject(engagement, "policies.engagement", ["command_rules"]);
+  const engagementRules = field(engagement, "command_rules");
+  if (engagementRules !== undefined) checkPolicyObject(engagementRules, "policies.engagement.command_rules", ["deny", "ask"]);
   const policy: FirewallPolicy = {
     defaults: { unknown: normalizeDecision(field(raw.defaults, "unknown")) || "ask" },
     tools,
     command_rules: { deny: compileCommandRules(field(commandRules, "deny"), "command_rules.deny"), ask: compileCommandRules(field(commandRules, "ask"), "command_rules.ask") },
-    pentest: { deny: compileCommandRules(field(pentestRules, "deny"), "policies.pentest.command_rules.deny"), ask: compileCommandRules(field(pentestRules, "ask"), "policies.pentest.command_rules.ask") },
+    engagement: { deny: compileCommandRules(field(engagementRules, "deny"), "policies.engagement.command_rules.deny"), ask: compileCommandRules(field(engagementRules, "ask"), "policies.engagement.command_rules.ask") },
   };
   return lastPolicyWarnings.length ? BUILTIN_FALLBACK : policy;
 }
@@ -297,7 +298,7 @@ function policyRevision(): string {
 }
 
 function ruleCount(policy: FirewallPolicy): number {
-  return Object.keys(policy.tools).length + policy.command_rules.deny.length + policy.command_rules.ask.length + policy.pentest.deny.length + policy.pentest.ask.length;
+  return Object.keys(policy.tools).length + policy.command_rules.deny.length + policy.command_rules.ask.length + policy.engagement.deny.length + policy.engagement.ask.length;
 }
 
 function stableJson(value: unknown): string {
@@ -391,7 +392,7 @@ function regexFindings(policy: FirewallPolicy, policyName: string, a: Assessment
   const out: Finding[] = [];
   const texts = new Set([command, deobfuscateShellText(command), ...a.segments.map((s) => s.text)]);
   const sets: { rules: RuleSet; label: string }[] = [{ rules: policy.command_rules, label: "policy rule" }];
-  if (policyName === "pentest") sets.push({ rules: policy.pentest, label: "pentest rule" });
+  if (policyName === "engagement") sets.push({ rules: policy.engagement, label: "engagement rule" });
   for (const { rules, label } of sets) {
     for (const rule of rules.deny) if ([...texts].some((t) => rule.re?.test(t))) out.push({ tier: "critical", effect: "security_control", code: "policy_deny_rule", detail: `${label}: ${rule.reason}`, key: `rule ${rule.pattern}` });
     for (const rule of rules.ask) if ([...texts].some((t) => rule.re?.test(t))) out.push({ tier: "high", effect: "unknown_exec", code: "policy_ask_rule", detail: `${label}: ${rule.reason}`, key: `rule ${rule.pattern}` });
@@ -634,13 +635,16 @@ function modelCompleter(ctx: ExtensionContext, cfg: FirewallConfig): Completer |
   }
   if (!model) return null;
   const chosen = model;
-  return async (system, prompt, signal) => {
+  const completer: Completer = async (system, prompt, signal) => {
     const auth = await registry.getApiKeyAndHeaders(chosen);
     if (!auth?.ok) throw new Error(`no request auth for ${chosen.provider}`);
     const headers = auth.headers ? Object.fromEntries(Object.entries(auth.headers).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
     const reply = await completeSimple(chosen, { systemPrompt: system, messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] }, { ...(auth.apiKey !== undefined ? { apiKey: auth.apiKey } : {}), ...(headers ? { headers } : {}), ...(signal ? { signal } : {}), maxTokens: 300 });
     return reply.content.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
   };
+  completer.isLocal = isLocalProvider(chosen.baseUrl);
+  completer.onSlow = () => ctx.ui?.notify?.(`tool-firewall: the auto-mode judge (${chosen.provider}/${chosen.id}) keeps timing out, so actions are being passed to you. Set PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS higher, or point PI_KIT_AUTO_MODE_MODEL at a faster model.`, "warning");
+  return completer;
 }
 
 const JUDGE_SAFE_STRICT = new Set(["read", "network_read"]);
@@ -770,7 +774,14 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     s.securityBinding = binding;
     saveSession(s);
   };
-  registerSecurityCommand(pi, securitySnapshot, (ctx) => securityDefault(ctx), (ctx) => syncSecurity(ctx, securitySnapshot(ctx), true), say, promptTimeoutMs);
+  registerSecurityCommand(pi, securitySnapshot, (ctx) => securityDefault(ctx), (ctx) => syncSecurity(ctx, securitySnapshot(ctx), true), say, promptTimeoutMs, (ctx) => {
+    const cfg = readConfig();
+    const m = resolveMode(ctx.cwd, cfg);
+    const shown = securitySnapshot(ctx).effective === "strict" ? `operator (configured ${m.mode})` : m.mode === "auto" ? "auto" : "manual";
+    return `${shown} from ${m.source}; policy ${resolvePolicy(cfg).policy}`;
+  });
+  // /away: automatic approvals for a bounded time, and a card is refused rather than waited for (./away.ts).
+  const away = registerAway(pi, { atRootTerminal, choose: chooseAtTerminal, say, strict: (ctx) => securitySnapshot(ctx).effective === "strict", timeoutMs: promptTimeoutMs });
 
   // Malformed approval entries are ignored (never an allow); this makes sure someone is told: stderr
   // once per distinct set, the audit log, and a warning in an interactive session.
@@ -816,7 +827,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       const policy = getPolicy();
       const cfg = readConfig();
       const mode = resolveMode(ctx?.cwd || process.cwd(), cfg).mode;
-      const pol = resolvePolicy(cfg).policy;
+      const resolved = resolvePolicy(cfg);
+      const pol = resolved.policy;
+      if (resolved.error) say(ctx, `tool-firewall: ${resolved.error}`, "warning");
       session = null;
       lastRequest = "";
       lastDetail = "";
@@ -824,7 +837,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       sshWarned = false;
       // Export the root session before any subagent is spawned, so children share its approvals.
       rootSessionId(sessionIdOf(ctx));
-      ctx.ui?.notify?.(`tool-firewall: loaded (${cachedPolicyLabel}, default unknown=${policy.defaults.unknown}, rules=${ruleCount(policy)}, mode=${mode}, policy=${pol})`, "info");
+      ctx.ui?.notify?.(`tool-firewall: loaded (default unknown=${policy.defaults.unknown}, rules=${ruleCount(policy)}, mode=${mode}, policy=${pol})`, "info");
       if (lastPolicyWarnings.length > 0 || lastPolicyAdjustments.length > 0) {
         audit({ event: "policy_rule_warnings", warnings: lastPolicyWarnings, adjustments: lastPolicyAdjustments });
         if (lastPolicyWarnings.length > 0) ctx.ui?.notify?.(`tool-firewall: WARNING — ${lastPolicyWarnings.length} invalid policy item(s); fail-closed (deny all) active: ${lastPolicyWarnings.join("; ")}`, "warning");
@@ -866,7 +879,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const hash = actionHash(toolName, input);
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
     const cfg = readConfig();
-    const { mode } = resolveMode(cwd, cfg);
+    const mode = away.active() ? "auto" : resolveMode(cwd, cfg).mode;
     const { policy: policyName } = resolvePolicy(cfg);
     const policy = getPolicy(ctx);
     const security = securitySnapshot(ctx, policyName);
@@ -901,7 +914,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const traj = trajectoryFindings(a, s);
     a.findings.push(...traj);
     a.effects = [...new Set(a.findings.map((f) => f.effect))];
-    // The pentest policy never trusts auto-low shortcuts.
+    // The engagement policy never trusts auto-low shortcuts.
     const classifierUnsure = a.findings.some((f) => f.effect === "opaque" || f.code === "classifier_error");
     const trustAuto = auto && policyName === "coding" && !(guarded && classifierUnsure);
     const tier = effectiveTier(a, trustAuto);
@@ -988,15 +1001,15 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     }
     // Ultracode standing mode: the operator pre-authorised workflow runs for this session. It answers
     // only the policy's own "ask" for the workflow tool: any other finding (a trajectory chain, a
-    // secret path), strict security, the pentest policy, a child and a session without a screen
+    // secret path), strict security, the engagement policy, a child and a session without a screen
     // are decided as before.
-    if (toolName === "workflow" && !operatorOnly && policyName !== "pentest" && ctx?.hasUI && process.env.PI_KIT_INTERNAL_CHILD !== "1"
+    if (toolName === "workflow" && !operatorOnly && policyName !== "engagement" && ctx?.hasUI && process.env.PI_KIT_INTERNAL_CHILD !== "1"
       && a.findings.every((f) => f.tier === "low" || f.code === "policy_ask") && workflowPreauthorised()) {
       finish("allow", "standing");
       return undefined;
     }
-    // Pentest approvals are per action: no session approvals (the card does not offer one).
-    const strict = operatorOnly || policyName === "pentest";
+    // Engagement approvals are per action: no session approvals (the card does not offer one).
+    const strict = operatorOnly || policyName === "engagement";
     const families = familiesFromSignature(sig);
     const scopes = [...new Set(a.findings.flatMap((f) => (f.tier !== "low" && f.scope ? [f.scope] : [])))];
     const root = rootSessionId(s.id);
@@ -1011,7 +1024,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
 
     // What may run without asking again: an approval that covers exactly this action here (approvals.ts).
     // Approvals are read from the file on every call, so a revocation applies to the next call. Never
-    // under the pentest policy, and never for a hard deny (handled above).
+    // under the engagement policy, and never for a hard deny (handled above).
     const view: ApprovalsView | null = strict ? null : readApprovals();
     if (view) noteApprovalProblems(view, ctx);
     const learnedScope = () => scopeRecords(readFeedback(), { workspace, since: view ? floorFor(view, workspace, hash) : 0 });
@@ -1032,10 +1045,13 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     let approvalHit = view ? findExact(view, match) : undefined;
     if (approvalHit?.grantedBy.actor === "learned") approvalHit = learnedApproval(approvalHit); // a later denial, or learning switched off, suspends it
     else approvalHit ??= learnedApproval();
+    // An operator's "always in this project" choice never outlives the conditions it was offered under.
+    if (approvalHit?.context === "persistent" && approvalHit.grantedBy.actor === "operator" && !projectAllowOffered(tier, { guarded, strict, needsOperator: needsOperator(a) })) approvalHit = undefined;
     if (approvalHit) {
-      if (approvalHit.context === "session") s.stats.grantHits++;
+      const byOperator = approvalHit.grantedBy.actor === "operator";
+      if (byOperator) s.stats.grantHits++;
       else s.stats.learnedHits++;
-      finish("allow", approvalHit.context === "session" ? "grant" : "precedent", { approval: approvalHit.id, approvalContext: approvalHit.context });
+      finish("allow", byOperator ? "grant" : "precedent", { approval: approvalHit.id, approvalContext: approvalHit.context });
       return undefined;
     }
 
@@ -1109,6 +1125,12 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // The classifier could not tell what this does (an unparsed or computed command): also UNCERTAIN.
     if (!uncertainWhy && a.findings.some((f) => f.tier !== "low" && (f.effect === "opaque" || f.code === "classifier_error"))) uncertainWhy = "classifier_unsure";
 
+    // Away: nobody can answer a card, so it is refused with the reason, and the agent is told to choose another way.
+    if (away.active()) {
+      audit({ event: "away_refused", toolName, actionHash: hash });
+      return blocked(`tool-firewall: denied ${toolName} [${TAG.uncertain}: no operator decision] — ${summary}. It needs operator approval, and ${away.reason()}. Nothing ran. Choose a lower-impact approach or leave it for the operator; do not retry it unchanged.`, "away", "uncertain", { why: "away" });
+    }
+
     // Ask a human.
     const precedent = statusFor(sig, Date.now(), feedbackHere);
     const allowSession = !strict;
@@ -1120,13 +1142,16 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const extras: CardExtras = { tier, trajectory: traj, ...(judgeNote !== undefined ? { judgeNote } : {}), precedent, hash, signature: sig, mode, policy: policyName, ...(covers !== undefined ? { covers } : {}), ...(sessionScope !== undefined ? { scope: sessionScope } : {}), uncertain };
     const card = buildCard(a, extras);
     lastDetail = buildDetail(a, extras);
-    const choices = choicesFor(allowSession, judged);
+    const allowProject = allowSession && projectAllowOffered(tier, { guarded, strict, needsOperator: needsOperator(a) });
+    const choices = choicesFor(allowSession, judged, allowProject);
     const grant = (via: "card" | "console", choice?: string) => {
+      const project = allowProject && isProjectChoice(choice);
+      // The approval schema holds medium or high only, so a low-tier allow is stored as medium (see approvals.ts).
       try {
-        addApproval({ context: "session", session: root, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier, grantedBy: { actor: "operator", via, session: s.id, mode, policy: policyName, ...(choice ? { choice: choice.slice(0, 280) } : {}) }, action: actionRecord });
+        addApproval({ context: project ? "persistent" : "session", session: project ? null : root, workspace, cwd, policy: policyName, tool: toolName, hash, families, scopes, tier: tier === "high" ? "high" : "medium", grantedBy: { actor: "operator", via, session: s.id, mode, policy: policyName, ...(choice ? { choice: choice.slice(0, 280) } : {}) }, action: actionRecord });
       } catch (error) {
         audit({ event: "approval_store_error", error: errorText(error) });
-        say(ctx, `tool-firewall: could not store the session allow (${errorText(error)}); you will be asked again`, "warning");
+        say(ctx, `tool-firewall: could not store the allow (${errorText(error)}); you will be asked again`, "warning");
       }
     };
     const record = (decision: "allow" | "deny", source: FeedbackRecord["source"], note?: string, choice?: string) => {
@@ -1158,7 +1183,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       return blocked(`tool-firewall: denied ${toolName} [${TAG.uncertain}: no operator decision] — ${summary}. ${uncertain ? "The automatic checks could not settle this, and it" : "It"} needs operator approval, and ${what}. Nothing ran. Ask the user to approve it or to run it themselves, or choose a lower-impact approach; do not retry it unchanged.`, why === "timeout" ? (via === "console" ? "broker_timeout" : "prompt_timeout") : why, "uncertain", { why });
     };
 
-    if (!ctx?.hasUI && policyName === "pentest" && tier === "high") return blocked(`tool-firewall: denied ${toolName} [${TAG.hard_deny}] — ${summary}. The pentest policy does not approve high-impact actions without an interactive operator.`, "policy", "hard_deny");
+    if (!ctx?.hasUI && policyName === "engagement" && tier === "high") return blocked(`tool-firewall: denied ${toolName} [${TAG.hard_deny}] — ${summary}. The engagement policy does not approve high-impact actions without an interactive operator.`, "policy", "hard_deny");
 
     if (uncertain) audit({ event: "tool_escalated", outcome: "uncertain", why: uncertainWhy, toolName, actionHash: hash, operator: ctx?.hasUI ? "interactive" : "console" });
 
@@ -1170,8 +1195,14 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const promptMs = promptTimeoutMs();
     let heldBy = "";
     // boundedPrompt reports the card's own timeout; a timeout of showWhenFree's is the hold.
+    // `luna:attention` tells anything listening (the herdr extension) that Luna is blocked on the operator.
+    // A listener must never be able to break an approval, so a failing bus is ignored.
+    const attention = (active: boolean) => { try { pi.events?.emit("luna:attention", { kind: "approval", active, label: `approve ${toolName}` }); } catch { /* observers only */ } };
     const ask = <T>(run: Parameters<typeof boundedPrompt<T>>[1]) =>
-      showWhenFree((held) => boundedPrompt(ctx, run, held.timeout), {
+      showWhenFree(async (held) => {
+        attention(true);
+        try { return await boundedPrompt(ctx, run, held.timeout); } finally { attention(false); }
+      }, {
         signal: ctx?.signal,
         timeoutMs: promptMs,
         rawTimeout: true,
@@ -1190,16 +1221,19 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       if (res.kind === "timeout") return noAnswer("timeout", "prompt", Math.round(promptTimeoutMs() / 1000));
       if (res.kind === "error") return noAnswer("error", "prompt", 0, res.message);
       const choice = res.value;
-      if (choice === CHOICE_ALLOW_ONCE || isSessionChoice(choice)) {
+      const remembered = isSessionChoice(choice) || (allowProject && isProjectChoice(choice));
+      if (choice === CHOICE_ALLOW_ONCE || remembered) {
         if (policyChanged()) return reconsider();
-        if (allowSession && isSessionChoice(choice)) grant("card", choice);
-        record("allow", isSessionChoice(choice) ? "grant" : "card", undefined, choice);
+        if (allowSession && remembered) grant("card", choice);
+        record("allow", remembered ? "grant" : "card", undefined, choice);
         finish("allow", "human", { outcome: "operator_decision", choice });
         return undefined;
       }
       let note: string | undefined;
       if (choice === CHOICE_DENY_TELL && typeof ctx.ui.input === "function") {
-        const typed = await boundedPrompt(ctx, (o) => ctx.ui.input("Tell the agent why (it sees this):", "e.g. don't touch production; use the staging host", o));
+        // Still blocked on the operator while they type, so the pane stays marked blocked.
+        attention(true);
+        const typed = await boundedPrompt(ctx, (o) => ctx.ui.input("Tell the agent why (it sees this):", "e.g. don't touch production; use the staging host", o)).finally(() => attention(false));
         if (typed.kind === "answered" && typeof typed.value === "string") note = typed.value.trim() || undefined;
       }
       record("deny", "card", note, choice ?? "dismissed");
@@ -1228,7 +1262,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       note = res.note;
       picked = res.choice;
       if (approved && policyChanged()) return reconsider();
-      if (approved && allowSession && isSessionChoice(res.choice)) {
+      if (approved && allowSession && (isSessionChoice(res.choice) || (allowProject && isProjectChoice(res.choice)))) {
         grant("console", res.choice);
         source = "grant";
       }
@@ -1307,18 +1341,19 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const decides =
       zone.active && p.policy === "coding"
         ? `UNATTENDED zone (${zone.boundary}): ${zone.autoApprove ? "low, medium and high run with no prompt and no judge" : "only low runs; everything above fails closed (no operator, no auto-approve)"}; critical, hard-denied classes and anything outside the zone are refused (the mode above is not consulted)`
-        : p.policy === "pentest"
-        ? "pentest policy: medium and high ask the operator each time (denied headless); no session allows, no learning"
+        : p.policy === "engagement"
+        ? "engagement policy: medium and high ask the operator each time (denied headless); no session allows, no learning"
         : m.mode === "auto"
           ? "auto: low runs; medium is judged (a high-confidence block is final, an unsure one asks you); high runs only on an exact approval, else judge-if-similar, else asks you; critical is denied"
           : "manual: low runs; medium and high ask you; critical is denied; only an exact approval runs without asking";
     return [
       `tool-firewall: policy=${p.policy} (${p.source}) mode=${m.mode} (${m.source})`,
+      ...(p.error ? [`  WARNING: ${p.error}`] : []),
       `  security: ${securitySnapshot(ctx).effective} (requested ${securitySnapshot(ctx).requested}); /security status explains the active restrictions and unavailable checks`,
       `  configured strategy (security restrictions apply on top): ${decides}`,
       `  runs without asking: low-tier actions in every mode (reads of non-credential paths, git reads, network GETs, workspace writes, dev tooling, explicitly allowed external tools); unknown tool names need operator authority${m.mode === "auto" && p.policy === "coding" ? "; in auto mode also read-only ssh and sudo -n reads on known hosts" : "; read-only ssh/sudo -n on known hosts is NOT trusted in this mode and asks"}`,
       `  outcomes: HARD DENY (policy says never; no approval or judge overrides) · UNCERTAIN (judge/classifier unsure, unavailable or timed out: asks you, or fails closed when nobody can be asked) · OPERATOR DECISION (you allowed or denied; remembered only within the scope the card names)`,
-      `  rules: ${cachedPolicyLabel} default-unknown=${policy.defaults.unknown} tool-rules=${Object.keys(policy.tools).length} operator-rules=${policy.command_rules.deny.length}/${policy.command_rules.ask.length} pentest-rules=${policy.pentest.deny.length}/${policy.pentest.ask.length}${warningSuffix}`,
+      `  rules: ${cachedPolicyLabel} default-unknown=${policy.defaults.unknown} tool-rules=${Object.keys(policy.tools).length} operator-rules=${policy.command_rules.deny.length}/${policy.command_rules.ask.length} engagement-rules=${policy.engagement.deny.length}/${policy.engagement.ask.length}${warningSuffix}`,
       `  judge model: ${judgeModelName(ctx, cfg) ?? "unset"} · learning ${cfg.learn ? "on" : "off"} (${learned} learned here) · known hosts: ${[...kh.hosts].join(", ") || "none"}`,
       unattendedLine(),
       `  approvals: ${view.approvals.length} remembered (${view.approvals.filter((a) => a.context === "session").length} session, ${view.approvals.filter((a) => a.context === "persistent").length} persistent)${problems.length ? `, ${problems.length} malformed ignored (/firewall list)` : ""} — ${view.file}`,
@@ -1402,12 +1437,6 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
 
   pi.registerCommand("firewall", { description: "Tool firewall: /firewall [status | list | revoke <id>|session|workspace|all|host:<name> | reload]. Lists remembered approvals with their scope and revokes them.", handler: async (args, ctx) => {
     await firewallCommand(args, ctx);
-  } });
-  pi.registerCommand("firewall:reload", { description: "Alias of /firewall reload - reload the tool-firewall policy from disk", handler: async (_args, ctx) => {
-    await firewallCommand("reload", ctx);
-  } });
-  pi.registerCommand("firewall:status", { description: "Alias of /firewall status - show policy, mode, judge, learning and remembered approvals", handler: async (_args, ctx) => {
-    await firewallCommand("status", ctx);
   } });
 
   const autoCommand = async (args: string, ctx: ExtensionContext) => {
@@ -1540,7 +1569,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       const unsure = a.findings.some((f) => f.effect === "opaque" || f.code === "classifier_error");
       const auto = resolveMode(cwd, cfg).mode === "auto" && security.effective !== "strict" && !(security.effective === "guarded" && unsure);
       const sigc = signatureOf(a, auto);
-      const covers = env.policy === "pentest" ? undefined : describeFamilies(familiesFromSignature(sigc)) || undefined;
+      const covers = env.policy === "engagement" ? undefined : describeFamilies(familiesFromSignature(sigc)) || undefined;
       say(ctx, buildDetail(a, { tier: effectiveTier(a, auto), trajectory: [], hash: actionHash("bash", { command }), signature: sigc, mode: auto ? "auto" : "manual", policy: env.policy, ...(covers !== undefined ? { covers } : {}) }), "info");
       return;
     }
@@ -1548,7 +1577,6 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
   };
 
   pi.registerCommand("auto", { description: "Auto mode: /auto [status|on|off|explain [n]|learned|forget <sig>|learn on|off|stats|profile [rebuild|reset]|check <command>]", handler: autoCommand });
-  pi.registerCommand("auto-mode", { description: "Alias of /auto", handler: autoCommand });
   // Only once every hook is installed: a factory that failed earlier never registers.
   registerProtection("tool-firewall");
 }

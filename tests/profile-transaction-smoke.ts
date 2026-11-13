@@ -61,7 +61,7 @@ const writeSettings = (extra) => {
 const writeMarker = (over) => write(markerPath, JSON.stringify(Object.assign({ kitSource: root, profile, scope, mode: "local", extensions: include, installedAt: new Date().toISOString() }, over || {}), null, 2));
 const writeFirewall = (over) => {
   write(firewallPath, JSON.stringify(Object.assign({ mode: (def.firewall && def.firewall.mode) || "manual", policy: (def.firewall && def.firewall.policy) || "coding", source: "profile" }, over || {}), null, 2));
-  write(path.join(agent, "pi-kit", "security.json"), JSON.stringify({ schemaVersion: 1, level: def.securityLevel || (profile === "pentest" ? "guarded" : "balanced"), source: "profile", revision: 1, changedAt: new Date().toISOString() }));
+  write(path.join(agent, "pi-kit", "security.json"), JSON.stringify({ schemaVersion: 1, level: def.securityLevel || (profile === "engagement" ? "guarded" : "balanced"), source: "profile", revision: 1, changedAt: new Date().toISOString() }));
   // As install step 4c does: the ownership record of the pi settings this profile now owns.
   write(path.join(agent, "pi-kit", "profile-settings.json"), JSON.stringify({ schemaVersion: 2, previous: { "compaction.reserveTokens": { present: false, wrote: profile.length * 1000 } } }));
 };
@@ -211,7 +211,7 @@ function makeWorld(): World {
   const profile = (name: string, include: string[], firewall: { mode: string; policy: string }): void => fs.writeFileSync(path.join(root, "packages", "kit", "profiles", `${name}.json`), JSON.stringify({ name, description: `${name} profile`, include, firewall }));
   profile("balanced", ["tool-firewall", "protected-paths", "alpha", "beta"], { mode: "manual", policy: "coding" });
   profile("long", ["tool-firewall", "protected-paths", "alpha", "gamma"], { mode: "auto", policy: "coding" });
-  profile("pentest", ["tool-firewall", "protected-paths", "beta"], { mode: "manual", policy: "pentest" });
+  profile("engagement", ["tool-firewall", "protected-paths", "beta"], { mode: "manual", policy: "engagement" });
   profile("broken-fw", ["tool-firewall", "protected-paths"], { mode: "manual", policy: "pentset" });
   fs.mkdirSync(agent, { recursive: true });
   fs.mkdirSync(project, { recursive: true });
@@ -660,7 +660,7 @@ tests["restore writes through an exclusive 0600 temporary file and leaves none b
 // The real thing: the actual packages/core/install.ts and the shipped profiles, driven through the real
 // command, must pass the command's own verification for every profile (a verifier that rejects a good
 // switch would roll back every /profile in production).
-tests["the real installer and the shipped profiles pass /profile's verification for all seven profiles"] = async () => {
+tests["the real installer and the shipped profiles pass /profile's verification for every shipped profile"] = async () => {
   const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
   const dir = tmp("pi-kit-txn-real-");
   const agent = path.join(dir, "agent");
@@ -677,18 +677,18 @@ tests["the real installer and the shipped profiles pass /profile's verification 
   ];
   try {
     const { handler } = loadCommand({});
-    for (const profile of ["balanced", "quick", "long-horizon", "autonomous", "self-improving", "pentest", "lite"]) {
-      // quick and lite default to relaxed: entering them from a balanced profile asks first.
+    for (const profile of ["balanced", "long-horizon", "self-improving", "engagement", "lite"]) {
+      // engagement leaves guarded, so entering lite (balanced) afterwards lowers security and asks first.
       const asked: string[] = [];
       const ctx = makeCtx({ project, agent }, { select: async (title: string, options: string[]) => { asked.push(title); return options.find((o) => o.startsWith("Yes")); } });
       await handler(profile, ctx);
       assert.equal(ctx.reloads, 1, `${profile}: ${ctx.notes.map((n) => n.message).join("\n")}`);
-      assert.equal(asked.length, profile === "quick" || profile === "lite" ? 1 : 0, `${profile}: lowering prompts ${JSON.stringify(asked)}`);
+      assert.equal(asked.length, profile === "lite" ? 1 : 0, `${profile}: lowering prompts ${JSON.stringify(asked)}`);
       assert.match(ctx.notes[0]?.message ?? "", new RegExp(`switched to "${profile}"\\. Verified`));
       const marker = JSON.parse(fs.readFileSync(path.join(agent, ".pi-kit.json"), "utf8")) as MarkerFile;
       assert.equal(marker.profile, profile);
       const fw = parseJsonAs(object({ policy: string() }), fs.readFileSync(path.join(agent, "pi-kit", "firewall.json"), "utf8"));
-      assert.equal(fw.policy, profile === "pentest" ? "pentest" : "coding");
+      assert.equal(fw.policy, profile === "engagement" ? "engagement" : "coding");
       const status = makeCtx({ project, agent });
       await handler("status", status);
       assert.match(last(status).message, new RegExp(`^Current: ${profile}\\n`), `${profile} is reported as the current profile`);
@@ -715,7 +715,7 @@ tests["the real installer reports a bogus profile cleanly with exit 2 and no sta
     const output = r.stdout + r.stderr;
     assert.equal(r.code, 2, `a bogus profile must exit 2 (the clean operator-error contract):\n${output}`);
     assert.match(output, /Profile not found/);
-    const named = ["balanced", "lite", "quick"].filter((name) => output.includes(name));
+    const named = ["balanced", "lite", "long-horizon"].filter((name) => output.includes(name));
     assert.ok(named.length >= 2, `the error must name the real profiles; saw ${JSON.stringify(named)} in:\n${output}`);
     for (const line of output.split(/\r?\n/)) {
       assert.doesNotMatch(line, /at loadProfile|node:internal/, `a user error must not print a stack trace: ${line}`);
@@ -753,11 +753,11 @@ tests["a project /profile with the real installer leaves the global firewall.jso
   try {
     const { handler, calls } = loadCommand({});
     const ctx = makeCtx({ project, agent }, { select: async (_title: string, options: string[]) => options.find((o) => o.startsWith("Yes")) });
-    await handler("autonomous", ctx);
+    await handler("long-horizon", ctx);
     const all = ctx.notes.map((n) => n.message).join("\n");
     assert.ok(calls[0]?.args.includes("project"), "the switch ran the installer at project scope");
     assert.equal(ctx.reloads, 1, all);
-    assert.match(all, /switched to "autonomous"/);
+    assert.match(all, /switched to "long-horizon"/);
     assert.match(all, /firewall auto\/coding[^\n]*firewall\.json/, "the differing global firewall mode is announced");
     assert.deepEqual(fs.readFileSync(firewallPath), firewallBefore, "global firewall.json is byte-identical");
     assert.deepEqual(fs.readFileSync(securityPath), securityBefore, "global security.json is byte-identical");

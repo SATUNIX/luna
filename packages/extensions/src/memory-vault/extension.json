@@ -6,9 +6,9 @@
   "tier": "T1",
   "layer": 3,
   "entry": "index.ts",
-  "hooks": ["session_start", "session_compact", "before_agent_start", "agent_end", "session_shutdown"],
+  "hooks": ["session_start", "session_compact", "before_agent_start", "context", "agent_end", "session_shutdown"],
   "registers": { "tools": ["memory_save", "memory_search", "memory_forget"], "commands": ["remember", "memory"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

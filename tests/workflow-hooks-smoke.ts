@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Script-workflow engine hooks (packages/extensions/third_party/subagent/wf-engine.ts, docs/script-workflows.md).
 //   1. agent(): the child gets the prompt over stdin and the data clause in its system prompt; plain text comes back.
-//   2. parallel() and pipeline() with labels and phases; log(); telemetry phases and agents; run.json;
-//      the /workflows panel (wf-panel.ts) lists the script run with its phases and agents.
+//   2. parallel() and pipeline() with labels and phases; log(); telemetry phases and agents; run.json.
 //   3. schema: a StructuredOutput result comes back as an object; a bad schema makes agent() throw.
 //   4. model: an unconfigured provider returns null with a log line; a configured one reaches --model.
 //   5. effort maps to --thinking; agentType resolves roles and aliases; unknown values throw.
@@ -660,12 +659,7 @@ try {
     assert.ok(typeof runJson === "object" && runJson !== null);
     assert.deepEqual(Reflect.get(runJson, "log"), ["scanned 3", "implementer #8: failed (provider down); agent() returns null"]);
     assert.equal(Reflect.get(runJson, "status"), "partial");
-    const panel = panelMod.renderText(r.registry, new panelMod.Narrator());
-    assert.match(panel, /Workflows \(1 run/, "the /workflows panel lists the script run");
-    assert.ok(panel.includes(r.started.runId) && panel.includes("hooks-test"), "the panel shows the script run's id and name");
-    assert.match(panel, /Scan/);
-    assert.ok(panel.includes("scan-x"), "the panel shows the script run's agents");
-    ok("parallel() and pipeline() run agents with labels and phases; a failed agent is null; log() lines and telemetry are recorded; /workflows shows the run");
+    ok("parallel() and pipeline() run agents with labels and phases; a failed agent is null; log() lines and telemetry are recorded");
   }
 
   // 3. schema

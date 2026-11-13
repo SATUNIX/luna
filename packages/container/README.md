@@ -26,8 +26,8 @@ docker compose -f capability/compose/compose.yaml \
 docker exec -it pi-system-pi-agent-1 pi-agent
 ```
 
-Use `PI_KIT_PROFILE=balanced` for the full kit default, `PI_KIT_PROFILE=quick` for a smaller
-profile, or `PI_KIT_PROFILE=lite` for small local models.
+Use `PI_KIT_PROFILE=balanced` for the full kit default, `PI_KIT_PROFILE=lite` for a smaller
+profile for small local models.
 
 ## Model default
 
@@ -105,13 +105,13 @@ from nothing else: the image sets `PI_MCP_CONFIG_MODE=exclusive`, so Pi's own `m
 not read. Add a server, such as the Burp bridge in `capability/docs/BURP_MCP.md`, to that file.
 The image also sets `MCP_DIRECT_TOOLS=__none__`, and `mcp-adapter.json` sets
 `namespaceProxyTools: false`, so the model sees one MCP tool, `mcp`, and every MCP call reaches
-`pentest-governance-domain` under that name. Without them, 6.0.0 registers an `mcp__<server>` proxy
+`engagement-governance` under that name. Without them, 6.0.0 registers an `mcp__<server>` proxy
 per server and a deferred `mcp__<server>__<tool>` tool per server tool, and runs each `mcp` call as
 a nested call to that tool, which MCP-only mode blocks. `allowInstall`, `allowScriptToolSave` and
 `jev` are off, so the model cannot add servers or script tools, and tool search never calls the
 remote Jev service.
 
-`scripts/validate-pentest-env.sh` (run by `tests/container-static-smoke.ts`) fails when a pin
+`scripts/validate-engagement-env.sh` (run by `tests/container-static-smoke.ts`) fails when a pin
 drifts between the Dockerfile, `tools/package.json` and its lockfile, when the overlay registers the
 adapter from npm, or when one of these settings or one of the two environment variables changes. No
 automated test loads the adapter into pi: the tool surface above was checked by hand in a built
@@ -160,7 +160,7 @@ change the files on the host. See `engagement/*.example.*` for templates.
 
 - **Scope files are read-only to the agent.** `PI_ENGAGEMENT_DIR` is mounted read-only at
   `/workspace/engagement`, from outside the data root (`tests/compose-policy-smoke.ts`).
-  `pentest-governance-domain` also refuses tool calls that name the scope and policy files, by
+  `engagement-governance` also refuses tool calls that name the scope and policy files, by
   matching paths and command text; that check is a second layer, not the boundary.
 - **The network is not scope-limited.** The container runs on the default bridge with ordinary
   egress and a route to the host (for a local model). Scope and rules of

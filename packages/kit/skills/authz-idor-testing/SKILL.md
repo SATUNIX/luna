@@ -1,6 +1,6 @@
 ---
 name: authz-idor-testing
-category: pentest
+category: engagement
 description: Plan and run low-impact authorization / IDOR validation on an authorized engagement. Use when testing access controls or object-reference authorization — with test accounts, paired allowed/denied comparisons, and PoC-only data handling.
 disable-model-invocation: true
 triggers: ["idor", "authorization bypass", "broken access control", "access control testing", "object reference authorization"]

@@ -1,8 +1,11 @@
+import { announceColdStart } from "./cold-start.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+announceColdStart();
 
 // Self-containment rule: import only node:* builtins and the pi peer. No sibling-extension
 // imports. See CONTRIBUTING.md.
@@ -13,7 +16,7 @@ import { fileURLToPath } from "node:url";
 // building them itself, so no path can forget a protection:
 //
 //   - the child loads the mandatory protections (tool-firewall, secret-guard, protected-paths)
-//     and any task-specific governance the parent runs (pentest governance), every extension whose
+//     and any task-specific governance the parent runs (engagement governance), every extension whose
 //     manifest says `childGovernance: true` and that the PARENT actually has loaded;
 //   - a protection that cannot be located, or an override that tries to drop one, refuses the
 //     launch (fail closed, with the reason), never a silently weaker child;
@@ -180,7 +183,7 @@ export interface ChildRequest {
   /**
    * "isolated" (default): the child loads exactly the guard's extension set (`--no-extensions`).
    * "ambient": the child keeps loading the operator's installed extensions (for launchers whose
-   * children need tools those extensions provide, e.g. MCP servers in a pentest specialist); the
+   * children need tools those extensions provide, e.g. MCP servers in an engagement specialist); the
    * guard hands back only `-e <delegation-guard>` (so the check below always runs) and the
    * environment, and the child's own delegation-guard then verifies that every required protection
    * is loaded, failing closed when one is not.

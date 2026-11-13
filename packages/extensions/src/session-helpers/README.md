@@ -7,15 +7,15 @@ It is in every profile, so every profile can see and fix its own configuration.
 ## Why
 
 Luna is designed to run autonomously. Operators still need to see and change what is loaded and
-whether pi will keep the context under control, and `pi` ships no `/clear` and no one-stop command list.
+whether pi will keep the context under control, and `pi` ships no one-stop command list.
 This extension fills those gaps. It changes nothing on its own except publishing state and warning once.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `/clear` | **Guidance only — does not clear anything.** Explains `/compact` (shrink context, keep thread), `/new` (fresh session), and `/fork` (branch). |
-| `/menu`, `/kit`, `/helpers` | The cheatsheet of pi built-ins plus Luna helpers. |
+| `/clear` | Starts a new session after a confirm. `/clear --handoff` appends the last asks and tools to `HANDOFF.md` first. `/compact` shrinks the context and keeps the thread instead. |
+| `/menu` | The cheatsheet of pi built-ins plus Luna helpers. |
 | `/profile` | Switch the profile, all-or-nothing (below). `/profile` picker, `/profile <name>`, `/profile list`, `/profile status`. |
 | `/compaction` | `status` (default without a UI) shows whether pi auto-compaction is really on, at what token count it triggers, the kit trigger, and why it is degraded. `on` / `off` write pi's global `compaction.enabled` and reload; `trigger on\|off` toggles the kit's fixed-budget trigger. |
 

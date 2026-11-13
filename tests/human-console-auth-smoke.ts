@@ -91,9 +91,9 @@ try {
 
   // 1. One protocol: every extension that files or answers console requests carries the same file.
   {
-    const copies = ["human-console", "tool-firewall", "pentest-governance-domain"].map((e) => fs.readFileSync(path.join(REPO, "packages/extensions/src", e, "console-auth.ts"), "utf8"));
+    const copies = ["human-console", "tool-firewall", "engagement-governance"].map((e) => fs.readFileSync(path.join(REPO, "packages/extensions/src", e, "console-auth.ts"), "utf8"));
     for (const copy of copies) assert.equal(copy, copies[0], "the console-auth.ts copies are identical");
-    ok("tool-firewall, human-console and pentest-governance-domain carry the same console-auth.ts");
+    ok("tool-firewall, human-console and engagement-governance carry the same console-auth.ts");
   }
 
   // 2. The key: created once, by the console only, owner-only, in the agent directory; an exposed or linked

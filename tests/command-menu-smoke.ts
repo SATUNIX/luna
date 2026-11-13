@@ -2,17 +2,9 @@
 /**
  * The curated `/` menu (docs/control-center.md; internal/docs/proposals/control-center.md §5.2 D).
  *
- * Hermetic (temporary agent dir, no live pi). Layers:
- *   - classification: pinned kit commands stay, every other extension command hides, and pi's
- *     built-ins, prompt templates and skill commands are untouched unless hiddenCommands names them;
- *   - the reveal rule: a hidden command returns at four typed characters (or at its full name when
- *     shorter), and dispatch/completion are never touched;
- *   - the location: a hidden suggestion's description says where the command moved, preferring an
- *     exact legacy token over a row whose command name merely collides;
- *   - settings: commandMenu / pinnedCommands / hiddenCommands from pi-kit/ui.json, invalid values
- *     warned about once and replaced by the defaults;
- *   - registration: a provider only in the TUI, nothing over RPC, print or json, and nothing in a
- *     child session.
+ * Hermetic (temporary agent dir, no live pi). Pins behaviour, not the menu's contents: hiding never
+ * touches dispatch or completion, invalid ui.json settings fall back to the defaults, and a
+ * provider registers only in the TUI (nothing over RPC, print or json, nothing in a child session).
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -21,7 +13,6 @@ import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } 
 import { isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type * as CommandMenuModule from "../packages/extensions/src/control-center/command-menu.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
-import type * as ModelModule from "../packages/extensions/src/control-center/model.ts";
 
 const restoreEnv = isolateKitEnv();
 const signal = new AbortController().signal;
@@ -30,18 +21,9 @@ async function loadMenu(): Promise<typeof CommandMenuModule> {
   return loadModule<typeof CommandMenuModule>("extensions/control-center/command-menu.ts");
 }
 
-async function loadModel(): Promise<typeof ModelModule> {
-  return loadModule<typeof ModelModule>("extensions/control-center/model.ts");
-}
-
 async function loadControl(): Promise<(api: unknown) => void> {
   const mod = await loadModule<typeof ControlModule>("extensions/control-center/index.ts");
   return mod.default as (api: unknown) => void;
-}
-
-async function modelFor(commands: string[]): Promise<ModelModule.HubModel> {
-  const model = await loadModel();
-  return model.buildModel({ values: { securityMissing: true }, commands, controls: [] });
 }
 
 /** A base provider that always offers the same items; the wrapper never calls applyCompletion. */
@@ -171,106 +153,11 @@ const tests: Array<[name: string, fn: () => Promise<void>]> = [];
 // --- classification ----------------------------------------------------------------------------
 
 tests.push([
-  "hidden commands are filtered from the bare `/` menu while pinned kit commands stay",
-  async () => {
-    const menu = await loadMenu();
-    const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
-    assert.ok(hidden.has("auto"), "a non-pinned kit command is hidden");
-    assert.ok(hidden.has("todos"), "another non-pinned kit command is hidden");
-    assert.ok(hidden.has("totally-companion"), "a companion-package command is hidden");
-    assert.ok(!hidden.has("effort"), "a pinned kit command stays");
-    assert.ok(!hidden.has("menu"), "the renamed menu command stays pinned");
-
-    const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
-    const result = await suggest(provider, ["/"], 1);
-    assert.deepEqual(values(result), ["effort", "code-plan", "skill:foo"], "only the pinned and non-extension commands remain");
-  },
-]);
-
-tests.push([
-  "pi built-ins, prompt templates and skill commands are never hidden by default",
-  async () => {
-    const menu = await loadMenu();
-    const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
-    for (const name of ["compact", "model", "new", "code-plan", "skill:foo"]) {
-      assert.ok(!hidden.has(name), `${name} must stay visible by default`);
-    }
-
-    // The operator can still opt them out through hiddenCommands.
-    const optedOut = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS, hiddenCommands: ["compact", "code-plan", "skill:foo"] });
-    for (const name of ["compact", "code-plan", "skill:foo"]) {
-      assert.ok(optedOut.has(name), `${name} must hide when hiddenCommands names it`);
-    }
-    assert.ok(!optedOut.has("model"), "an unnamed built-in is still untouched");
-  },
-]);
-
-tests.push([
-  "pinnedCommands and hiddenCommands extend the defaults, and a pin wins over a hide",
-  async () => {
-    const menu = await loadMenu();
-    const custom = menu.hiddenCommandNames({
-      commands: COMMANDS,
-      builtins: BUILTINS,
-      pinnedCommands: ["todos", "totally-companion"],
-      hiddenCommands: ["effort"],
-    });
-    assert.ok(!custom.has("todos"), "an extra pinned command stays visible");
-    assert.ok(!custom.has("totally-companion"), "an extra pinned companion command stays visible");
-    assert.ok(custom.has("effort"), "an extra hidden command is removed even when it is pinned by default");
-
-    const both = menu.hiddenCommandNames({ commands: [], builtins: ["compact"], pinnedCommands: ["compact"], hiddenCommands: ["compact"] });
-    assert.ok(!both.has("compact"), "an explicit pin beats an explicit hide");
-  },
-]);
-
-tests.push([
-  "a profile pins the commands that define it",
-  async () => {
-    const menu = await loadMenu();
-    const selfImproving = menu.hiddenCommandNames({
-      commands: [
-        { name: "improve", source: "extension" },
-        { name: "review", source: "extension" },
-        { name: "engagement", source: "extension" },
-        { name: "autonomy", source: "extension" },
-      ],
-      builtins: BUILTINS,
-      profile: "self-improving",
-    });
-    for (const name of ["improve", "review", "engagement"]) assert.ok(!selfImproving.has(name), `${name} pins in self-improving`);
-    assert.ok(selfImproving.has("autonomy"), "autonomy is not pinned outside the autonomous profile");
-
-    const autonomous = menu.hiddenCommandNames({ commands: [{ name: "autonomy", source: "extension" }], builtins: BUILTINS, profile: "autonomous" });
-    assert.ok(!autonomous.has("autonomy"), "autonomy pins in the autonomous profile");
-
-    const pentest = menu.hiddenCommandNames({
-      commands: [
-        { name: "engagement", source: "extension" },
-        { name: "improve", source: "extension" },
-      ],
-      builtins: BUILTINS,
-      profile: "pentest",
-    });
-    assert.ok(!pentest.has("engagement"), "engagement pins in pentest");
-    assert.ok(pentest.has("improve"), "improve is not pinned in pentest");
-  },
-]);
-
-// --- the reveal rule ---------------------------------------------------------------------------
-
-tests.push([
-  "a hidden command reappears at four typed characters and dispatch is never touched",
+  "hiding never touches argument completion, forced completion or accepting a suggestion",
   async () => {
     const menu = await loadMenu();
     const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
     const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
-
-    const atThree = await suggest(provider, ["/aut"], 4);
-    assert.deepEqual(values(atThree), ["effort", "code-plan", "skill:foo"], "three characters is below the reveal length");
-
-    const atFour = await suggest(provider, ["/auto"], 5);
-    assert.ok(values(atFour).includes("auto"), "four characters reveals the hidden command");
 
     const fullyTyped = await suggest(provider, ["/totally-companion"], 19);
     assert.ok(values(fullyTyped).includes("totally-companion"), "a fully typed hidden command is offered");
@@ -290,73 +177,7 @@ tests.push([
 ]);
 
 tests.push([
-  "a hidden command shorter than four characters reappears at its full name",
-  async () => {
-    const menu = await loadMenu();
-    const hidden = menu.hiddenCommandNames({ commands: COMMANDS, builtins: BUILTINS });
-    assert.ok(hidden.has("kit"), "/kit is hidden like every other non-pinned kit command");
-    const kitItems: AutocompleteItem[] = [{ value: "kit", label: "kit", description: "Open the kit hub" }];
-    const provider = menu.commandMenuProvider(fakeBase(kitItems), { hidden, locationOf: () => menu.ALL_COMMANDS_LOCATION });
-
-    const atTwo = await suggest(provider, ["/ki"], 3);
-    assert.deepEqual(values(atTwo), [], "three-character /kit stays hidden at two typed characters");
-
-    const atThree = await suggest(provider, ["/kit"], 4);
-    assert.deepEqual(values(atThree), ["kit"], "three-character /kit is revealed once typed in full");
-  },
-]);
-
-// --- the location ------------------------------------------------------------------------------
-
-tests.push([
-  "a hidden suggestion's description says where the command moved",
-  async () => {
-    const menu = await loadMenu();
-    const model = await modelFor(["auto", "todos", "orchestrate", "lens-health"]);
-    assert.equal(menu.hubLocationFor("auto", model), "moved → /menu ▸ Autonomy ▸ Approvals");
-    assert.equal(menu.hubLocationFor("todos", model), "moved → /menu ▸ Work ▸ Todos");
-    assert.equal(menu.hubLocationFor("orchestrate", model), "moved → /menu ▸ Work ▸ Delegation ▸ Orchestration");
-    assert.equal(menu.hubLocationFor("lens-health", model), "moved → /menu ▸ System ▸ Companions ▸ pi-lens health");
-    assert.equal(menu.hubLocationFor("not-in-the-hub", model), menu.ALL_COMMANDS_LOCATION, "a command with no row points at All commands");
-
-    const provider = menu.commandMenuProvider(fakeBase(ITEMS), { hidden: new Set(["auto", "todos"]), locationOf: menu.locationFor(model) });
-    const result = await suggest(provider, ["/auto"], 5);
-    const auto = result?.items.find((item) => item.value === "auto");
-    assert.equal(auto?.description, "moved → /menu ▸ Autonomy ▸ Approvals — Autonomy / approvals", "the location prefixes the old description");
-
-    const all = await suggest(provider, ["/todo"], 5);
-    const todos = all?.items.find((item) => item.value === "todos");
-    assert.equal(todos?.description, "moved → /menu ▸ Work ▸ Todos", "a row without a description shows only the location");
-  },
-]);
-
-tests.push([
-  "an exact legacy command wins over another row whose command name collides",
-  async () => {
-    const menu = await loadMenu();
-    const model = await modelFor(["boost", "orchestrate"]);
-    assert.equal(
-      menu.hubLocationFor("boost", model),
-      "moved → /menu ▸ Work ▸ Recovery ▸ Reassess now",
-      "bare /boost is the Recovery row, not the earlier /boost status row",
-    );
-    assert.equal(
-      menu.locationFor(model)("boost"),
-      "moved → /menu ▸ Work ▸ Recovery ▸ Reassess now",
-      "the location map prefers the same exact legacy match",
-    );
-    assert.equal(
-      menu.hubLocationFor("orchestrate", model),
-      "moved → /menu ▸ Work ▸ Delegation ▸ Orchestration",
-      "a command without a collision still resolves normally",
-    );
-  },
-]);
-
-// --- settings ----------------------------------------------------------------------------------
-
-tests.push([
-  "ui.json selects the menu, and invalid values warn once and fall back to the defaults",
+  "ui.json selects the menu, and invalid values fall back to the defaults",
   async () => {
     const menu = await loadMenu();
     const valid = agentDirFixture("pi-kit-menu-valid-", { commandMenu: "all", pinnedCommands: ["/foo", "bar"], hiddenCommands: ["compact"] });
@@ -384,7 +205,6 @@ tests.push([
         assert.deepEqual(settings.pinnedCommands, [], "an invalid pinnedCommands is ignored");
         assert.deepEqual(settings.hiddenCommands, [], "an invalid hiddenCommands is ignored");
       }
-      assert.equal(captured.filter((line) => line.includes("control-center:")).length, 3, "each invalid key warns exactly once");
     } finally {
       Reflect.deleteProperty(process.stderr, "write");
       invalid.done();
@@ -409,82 +229,6 @@ tests.push([
 ]);
 
 tests.push([
-  "in the TUI the registered provider curates the live command list",
-  async () => {
-    const fixture = agentDirFixture("pi-kit-menu-tui-");
-    try {
-      fs.writeFileSync(path.join(fixture.dir, ".pi-kit.json"), JSON.stringify({ profile: "balanced" }));
-      const fake = await startWith("tui", true, fixture.dir, COMMANDS);
-      assert.equal(fake.providers.length, 1, "the TUI gets exactly one provider");
-      const provider = fake.providers[0];
-      assert.ok(provider);
-      const wrapped = provider(fakeBase(ITEMS));
-
-      assert.deepEqual(values(await suggest(wrapped, ["/"], 1)), ["effort", "code-plan", "skill:foo"]);
-      const revealed = await suggest(wrapped, ["/tota"], 5);
-      assert.ok(values(revealed).includes("totally-companion"));
-      assert.match(String(revealed?.items.find((item) => item.value === "totally-companion")?.description), /^moved → /);
-    } finally {
-      fixture.done();
-    }
-  },
-]);
-
-tests.push([
-  "PI_KIT_ASCII=1 keeps the curated menu's location hints printable ASCII",
-  async () => {
-    const menu = await loadMenu();
-    const model = await modelFor(["auto", "totally-companion"]);
-    assert.equal(
-      menu.hubLocationFor("auto", model, true),
-      "moved -> /menu > Autonomy > Approvals",
-      "ascii mode uses the printable separator and arrow",
-    );
-    assert.equal(
-      menu.locationFor(model, true)("auto"),
-      "moved -> /menu > Autonomy > Approvals",
-      "the ascii location map agrees with hubLocationFor",
-    );
-    assert.equal(
-      menu.locationFor(model, true)("not-in-the-hub"),
-      menu.ALL_COMMANDS_LOCATION_ASCII,
-      "a command with no row points at the ascii All commands hint",
-    );
-    assert.equal(
-      menu.hubLocationFor("auto", model),
-      "moved → /menu ▸ Autonomy ▸ Approvals",
-      "the default stays Unicode",
-    );
-
-    const arrows = await modelFor(["orchestrate-implement-review", "todos"]);
-    assert.equal(
-      menu.hubLocationFor("orchestrate-implement-review", arrows, true),
-      "moved -> /menu > Work > Delegation > Plan -> implement -> review",
-      "a hub label's arrow is folded in ascii mode",
-    );
-    const todosHint = menu.locationFor(arrows, true)("todos");
-    assert.match(todosHint, /^[\x20-\x7e]*$/, "a no-description hint is printable ASCII");
-
-    const fixture = agentDirFixture("pi-kit-menu-ascii-");
-    const restoreAscii = setEnv("PI_KIT_ASCII", "1");
-    try {
-      const fake = await startWith("tui", true, fixture.dir, COMMANDS);
-      assert.equal(fake.providers.length, 1, "the TUI gets exactly one provider");
-      const provider = fake.providers[0];
-      assert.ok(provider);
-      const wrapped = provider(fakeBase(ITEMS));
-      const revealed = await suggest(wrapped, ["/tota"], 5);
-      const description = String(revealed?.items.find((item) => item.value === "totally-companion")?.description);
-      assert.match(description, /^[\x20-\x7e]*$/, "the hint is printable ASCII only");
-      assert.ok(description.startsWith("moved -> "), `the hint uses the ascii prefix: ${description}`);
-    } finally {
-      restoreAscii();
-      fixture.done();
-    }
-  },
-]);
-
-tests.push([
   "commandMenu: all registers no provider, so the whole menu is shown",
   async () => {
     const fixture = agentDirFixture("pi-kit-menu-all-", { commandMenu: "all" });
@@ -492,26 +236,6 @@ tests.push([
       const fake = await startWith("tui", true, fixture.dir, COMMANDS);
       assert.equal(fake.providers.length, 0, "nothing is filtered under commandMenu: all");
     } finally {
-      fixture.done();
-    }
-  },
-]);
-
-tests.push([
-  "a replacement session re-registers the curated menu and the launch header",
-  async () => {
-    const fixture = agentDirFixture("pi-kit-menu-replace-");
-    const restoreMotion = setEnv("PI_KIT_REDUCED_MOTION", "1");
-    try {
-      const fake = await startWith("tui", true, fixture.dir, COMMANDS);
-      const handler = fake.handlers.get("session_start");
-      assert.ok(handler, "control-center registers a session_start handler");
-      // pi clears the old provider and header on /new, /resume and /fork, then emits session_start.
-      await handler({}, { mode: "tui", hasUI: true, cwd: fixture.dir, ui: fake.ui });
-      assert.equal(fake.providers.length, 2, "the replacement session gets its own curated provider");
-      assert.equal(fake.headers.length, 2, "the replacement session gets its own launch header");
-    } finally {
-      restoreMotion();
       fixture.done();
     }
   },

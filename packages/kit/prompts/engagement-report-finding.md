@@ -1,0 +1,26 @@
+---
+description: "Draft a finding from validated evidence only"
+argument-hint: "[hypothesis or evidence IDs]"
+---
+
+# Report Finding
+
+Draft a finding only from validated evidence.
+
+Finding: ${@:-the validated hypothesis under discussion}
+
+Required sections:
+
+- Title
+- Affected assets
+- Vulnerability class
+- Evidence IDs
+- Reproduction steps
+- Impact
+- Exploitability constraints
+- Severity rationale
+- Remediation
+- Limitations
+- False-positive checks
+
+Do not add unsupported technical claims.

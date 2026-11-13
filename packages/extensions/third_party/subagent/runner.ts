@@ -118,7 +118,7 @@ export interface RunAgentOptions {
   // Per-call overrides (workflow steps), applied over the role definition.
   overrides?: RunOverrides | undefined;
   // "discretionary" (default): the agent's own delegation, bounded by the effort tier.
-  // "user": a launch the person typed (a /workflow command), bounded only by the platform ceilings.
+  // "user": a launch the person typed (a /workflows command), bounded only by the platform ceilings.
   // "workflow": an agent of a script run or a model-started YAML run, charged to the run's pinned
   // scope (`workflowRun`).
   launchKind?: "discretionary" | "user" | "workflow" | undefined;
@@ -251,7 +251,7 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
     return { ...early, exitCode: 1, stopReason: "denied", errorMessage: `Subagent not started: role "${agentName}" has no tool a workflow agent may use (workflow agents cannot delegate)`, deniedCode: "no-tools" };
   }
   const childCwd = cwd ?? defaultCwd;
-  const baseArgs: string[] = ["--mode", "json", "-p", "--no-session"];
+  const baseArgs: string[] = ["--mode", "json", "-p", "--no-session", ...childDiscoveryFlags(agent, tools)];
   if (selectedModel) baseArgs.push("--model", selectedModel);
   if (thinking) baseArgs.push("--thinking", thinking);
   if (tools && tools.length > 0) baseArgs.push("--tools", tools.join(","));
@@ -615,6 +615,19 @@ export async function runAgent(options: RunAgentOptions): Promise<SingleResult> 
 }
 
 // Positional wrapper kept for existing callers/tests.
+/**
+ * What a child does not rediscover. A child gets its skills through `skillPreamble`, its commands and
+ * themes are never used in a headless run, and a read-only or scout role gets its conventions from the
+ * task text, so it skips the project's AGENTS.md (6.7k characters in the worker logs) too; a role that
+ * writes keeps its context files. PI_KIT_SUBAGENT_DISCOVERY=1 puts every discovery back.
+ */
+export function childDiscoveryFlags(agent: AgentConfig, tools: string[] | undefined, env: NodeJS.ProcessEnv = process.env): string[] {
+  if (env.PI_KIT_SUBAGENT_DISCOVERY === "1") return [];
+  const flags = ["--no-skills", "--no-prompt-templates", "--no-themes"];
+  if (isScoutRole(agent) || isReadOnlyRole(agent, tools)) flags.push("--no-context-files");
+  return flags;
+}
+
 export async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],

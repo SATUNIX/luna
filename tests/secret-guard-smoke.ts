@@ -88,7 +88,7 @@ async function run() {
       "secret content inside a template still blocked",
     );
 
-    // 2. Write to a protected engagement/repo path (parity with pentest-governance).
+    // 2. Write to a protected engagement/repo path (parity with engagement-governance).
     await blocks("write", { path: "engagement/scope.yaml", content: "scope: all" }, "protected engagement path");
     await blocks("write", { path: ".git/config", content: "[remote]" }, ".git/ path");
 

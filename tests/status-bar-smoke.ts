@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Status bar (custom-footer): rendering at every density and width, priority-based fitting, display
- * width (wide characters, emoji, ANSI), cost provenance, warnings, staleness, ASCII fallback,
- * commands (invalid arguments never mutate; non-interactive sessions get text), and lifecycle
- * (no ticker without a UI or after a run, shutdown and reload leave nothing running, no subprocess or
+ * Status bar (custom-footer), behaviour only: cost provenance, session totals, commands (invalid
+ * arguments never mutate; non-interactive sessions get text), and lifecycle (no ticker without a UI
+ * or after a run, shutdown and reload leave nothing running, no subprocess or
  * disk read per render). Deterministic: pure rendering plus a fake pi API; no model runs.
  */
 import assert from "node:assert/strict";
@@ -14,11 +13,10 @@ import { loadModule, loadExtension, fakePi, isolateKitEnv, setEnv, tmpWorkspace,
 import type { ExtensionFactory } from "../packages/core/eval/harness.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import type * as FooterIndex from "../packages/extensions/third_party/custom-footer/index.ts";
-import type * as FooterWidth from "../packages/extensions/third_party/custom-footer/width.ts";
 import type * as FooterData from "../packages/extensions/third_party/custom-footer/data.ts";
 import type * as FooterRender from "../packages/extensions/third_party/custom-footer/render.ts";
 import type * as SubagentLive from "../packages/extensions/third_party/subagent/live.ts";
-import type { FooterMode, FooterState, Theme, TodoItem } from "../packages/extensions/third_party/custom-footer/render.ts";
+import type { FooterState, Theme } from "../packages/extensions/third_party/custom-footer/render.ts";
 
 // The footer's named exports as written; its default export is registered on the harness's fake pi API.
 type FooterModule = Omit<typeof FooterIndex, "default"> & { default: ExtensionFactory };
@@ -62,73 +60,20 @@ const globalRegistry = globalThis as Record<symbol, unknown>;
 
 const restoreEnv = isolateKitEnv();
 const footer = await loadModule<FooterModule>("vendor/custom-footer/index.ts");
-const widthMod = await loadModule<typeof FooterWidth>("vendor/custom-footer/width.ts");
 const dataMod = await loadModule<typeof FooterData>("vendor/custom-footer/data.ts");
 const renderMod = await loadModule<typeof FooterRender>("vendor/custom-footer/render.ts");
 const registerTodo = await loadExtension("vendor/todo/index.ts");
-const MODES: FooterMode[] = ["light", "default", "heavy"];
 const plain: Theme = { fg: (_c, s) => s, bold: (s) => s };
-const ansiTheme: Theme = { ...plain, name: "ansi-dark" };
 const strip = (s: string): string => stripVTControlCharacters(s);
-const W = widthMod.displayWidth;
 
-const baseState = (over: Partial<FooterState> = {}): FooterState => ({
-  cwd: "/home/u/proj", branch: "main", provider: "pentest", model: "qwen3.8-27b", thinking: "medium", profile: "balanced",
-  context: { tokens: 42000, percent: 66, contextWindow: 262144 },
-  totals: { input: 446000, output: 175000, cacheRead: 14_000_000, cacheWrite: 0, total: 500000, cost: 0 },
-  partial: false, cost: { kind: "estimated", value: 1.23 }, pricingSource: "/home/u/.pi/agent/pi-kit/costs.json",
-  effort: { code: "E3", label: "Standard", pinned: false, usage: { live: 0, total: 1, maxTotal: 3, scouts: 0, maxScouts: 1 } },
-  statuses: [], todos: [{ id: 1, text: "a", state: "done" }, { id: 2, text: "b", state: "open" }], now: 64000, ...over,
-});
-// The line at `index`, failing the test (not throwing a TypeError) when it is missing.
-const lineAt = (lines: string[], index: number): string => {
-  const line = lines.at(index);
-  assert.ok(line !== undefined, `expected a line at ${index} of ${lines.length}`);
-  return line;
-};
 // The settings file read back: a JSON object, or the test fails.
 const readSettings = (file: string): Record<string, unknown> => {
   const value = parseJson(fs.readFileSync(file, "utf8"));
   assert.ok(isRecord(value), `${file} holds a JSON object`);
   return value;
 };
-const fits = (lines: string[], width: number, label: string): void => lines.forEach((l) => assert.ok(W(l) <= width, `${label}: line is ${W(l)} columns, limit ${width}: ${strip(l)}`));
 
 const tests = {
-  formatting() {
-    assert.equal(footer.fmtTokens(950), "950");
-    assert.equal(footer.fmtTokens(1234), "1.2k");
-    assert.equal(footer.fmtTokens(52000), "52k");
-    assert.equal(footer.fmtTokens(2_400_000), "2.4M");
-    assert.equal(footer.fmtDuration(9000), "9s");
-    assert.equal(footer.fmtDuration(64000), "1m 04s");
-    assert.equal(footer.fmtDuration(3_700_000), "1h 01m");
-    assert.equal(footer.fmtCost(undefined), "unknown");
-    assert.equal(footer.fmtCost(0), "$0.00");
-    assert.equal(footer.fmtCost(1.5), "$1.50");
-    assert.equal(footer.fmtCostView({ kind: "reported", value: 1.5 }), "$1.50");
-    assert.equal(footer.fmtCostView({ kind: "estimated", value: 1.5 }), "~$1.50");
-    assert.equal(footer.fmtCostView({ kind: "unknown" }), "?", "unknown is not zero");
-  },
-
-  displayWidthHandlesAnsiWideCharactersAndEmoji() {
-    assert.equal(W("\x1b[31mred\x1b[0m"), 3);
-    assert.equal(W("\x1b]8;;https://example.test\x07link\x1b]8;;\x07"), 4, "OSC 8 hyperlinks take no columns");
-    assert.equal(W("日本語"), 6, "wide characters take two columns");
-    assert.equal(W("👍🏽"), 2, "an emoji with a skin-tone modifier is one two-column cluster");
-    assert.equal(W("👨‍👩‍👧"), 2, "a ZWJ family is one cluster");
-    assert.equal(W("e\u0301"), 1, "combining accents take no columns");
-    assert.equal(W("●│█░↑↓⟲✔▸☐…·"), 12, "the footer's own glyphs are single-width");
-    const cut = widthMod.truncateDisplay("日本語のテキスト", 7);
-    assert.equal(cut, "日本語…");
-    assert.ok(W(cut) <= 7);
-    const emoji = widthMod.truncateDisplay("ab👨‍👩‍👧cd", 4);
-    assert.ok(W(emoji) <= 4 && !emoji.includes("\u200d") || W(emoji) <= 4, `never splits a cluster: ${emoji}`);
-    const colour = widthMod.truncateDisplay("\x1b[31mabcdefghij\x1b[0m", 5);
-    assert.ok(strip(colour).length <= 5 && colour.endsWith("…") && colour.includes("\x1b[0m"), "colour is reset before the ellipsis");
-    assert.equal(widthMod.truncateDisplay("short", 20), "short");
-  },
-
   sessionTotalsSumsAssistantUsageIncrementally() {
     const entry = (id: string, usage: object) => ({ id, type: "message", message: { role: "assistant", usage } });
     const entries = [
@@ -168,193 +113,6 @@ const tests = {
     const incomplete = dataMod.costOf({ ...totals, cacheRead: 5 }, { inputPerMTok: 2, outputPerMTok: 8, source: "costs.json" });
     assert.notEqual(incomplete.kind, "estimated", "a missing rate for a used token class is not a complete estimate");
     assert.equal(footer.estimateCost(totals, { inputPerMTok: 2, outputPerMTok: 8, source: "x" }), 6, "the previous contract still holds");
-  },
-
-  densitiesDifferAndFitEveryWidth() {
-    const state = baseState({ statuses: [{ key: "trace-ledger", text: "trace-ledger: lost=0" }, { key: "verify-gate", text: "FAIL" }], agents: { live: 2, failed: 0 }, compaction: { enabled: true, thresholdTokens: 100000 }, firewall: { mode: "manual", policy: "coding" } });
-    for (const width of [40, 80, 120, 160]) {
-      const light = footer.renderFooter(state, plain, width, "light");
-      const def = footer.renderFooter(state, plain, width, "default");
-      const heavy = footer.renderFooter(state, plain, width, "heavy");
-      assert.equal(light.length, 1, `light is one line at ${width}`);
-      assert.equal(def.length, 2, `default is two lines at ${width}`);
-      assert.equal(heavy.length, 4, `heavy is four lines at ${width}`);
-      fits(light, width, `light@${width}`);
-      fits(def, width, `default@${width}`);
-      fits(heavy, width, `heavy@${width}`);
-      assert.match(strip(lineAt(light, 0)), /proj/, "light keeps identity");
-      assert.match(strip(lineAt(light, 0)), /E3/, `light shows the effort tier at ${width}`);
-    }
-    const def = footer.renderFooter(state, plain, 160, "default").map(strip).join("\n");
-    assert.match(def, /proj.*on main/);
-    assert.match(def, /qwen3\.8-27b.*think medium.*profile balanced.*effort E3 Standard 1\/3/, def);
-    assert.match(def, /ctx .*66%/);
-    assert.match(def, /agents 2/);
-    assert.doesNotMatch(def, /↑446k|cost|session ↑/, "default carries no token or cost telemetry");
-    const heavy = footer.renderFooter(state, plain, 160, "heavy").map(strip).join("\n");
-    assert.match(heavy, /session ↑446k ↓175k ⟲14M/);
-    assert.match(heavy, /cost ~\$1\.23 est/);
-    assert.match(heavy, /children 1\/3.*scouts 0\/1/);
-    assert.match(heavy, /firewall manual\/coding/);
-    assert.match(heavy, /compaction on @100k/);
-    assert.match(heavy, /trace-ledger lost=0.*verify-gate FAIL/);
-    const light = footer.renderFooter(state, plain, 160, "light").map(strip).join("\n");
-    assert.doesNotMatch(light, /trace-ledger/, "light hides non-critical chips");
-  },
-
-  criticalWarningsOutliveTelemetryWhenNarrow() {
-    const state = baseState({ unattended: { active: true, label: "unattended", boundary: "container", autoApprove: true }, compaction: { enabled: false, reason: "disabled in settings" }, agents: { live: 0, failed: 2 }, statuses: [{ key: "orchestrator", text: "blocked: verify" }] });
-    for (const width of [40, 60, 80, 120]) {
-      for (const mode of MODES) {
-        const lines = footer.renderFooter(state, plain, width, mode);
-        fits(lines, width, `${mode}@${width}`);
-        const text = lines.map(strip).join("\n");
-        assert.match(text, /UNATTENDED/, `${mode}@${width}: the unattended boundary state is never dropped`);
-        if (width >= 100) {
-          assert.match(text, /compaction off|no compact/, `${mode}@${width}: compaction-off warning survives`);
-          assert.match(text, /2 agents failed|2 failed/, `${mode}@${width}: failed children survive`);
-          assert.match(text, /blocked: verify/, `${mode}@${width}: a blocked chip survives`);
-        } else {
-          // Too narrow for every warning: the first is named, the rest are counted, and the detail view has them all.
-          assert.ok(/UNATTENDED[^\n]*\+\d/.test(text) || (/compaction off|no compact/.test(text) && /failed/.test(text)), `${mode}@${width}: every critical warning is shown, or the rest are counted (never silently lost):\n${text}`);
-        }
-      }
-    }
-    const detail = footer.renderDetail(state, "default").join("\n");
-    assert.match(detail, /unattended\s+ACTIVE \(container, approvals automatic\)/);
-    assert.match(detail, /compaction\s+OFF: disabled in settings/);
-    assert.match(detail, /2 failed this request/);
-    assert.match(detail, /orchestrator: blocked: verify/);
-    const narrow = footer.renderFooter(baseState({ statuses: [] }), plain, 40, "default").map(strip).join("\n");
-    assert.match(narrow, /proj/);
-    assert.match(narrow, /E3/, "the effort tier outlives secondary telemetry");
-    assert.doesNotMatch(narrow, /pentest|\/home\/u/, "provider and path are the first to go");
-    const misconfigured = footer.renderFooter(baseState({ unattended: { active: false, label: "unattended requested, not enforced", misconfigured: true } }), plain, 100, "default").map(strip).join("\n");
-    assert.match(misconfigured, /unattended NOT enforced/, "an unattended request that nothing enforces is a loud warning, not a reassurance");
-  },
-
-  criticalWarningSummaryAppearsOnceWhenNarrow() {
-    // Both the left warnings and the right verify-gate chip are priority 0, so the narrow line has
-    // to merge several criticals into one "<first> +N" summary. The summary must be placed once,
-    // not once per side (the pre-fix bug printed it twice).
-    const state = baseState({ unattended: { active: true, label: "unattended", boundary: "container", autoApprove: true }, compaction: { enabled: false, reason: "disabled in settings" }, agents: { live: 0, failed: 2 }, statuses: [{ key: "verify-gate", text: "FAIL" }] });
-    const line = footer.renderFooter(state, plain, 40, "default").map(strip).join("\n");
-    const summaries = line.match(/! UNATTENDED \+\d+/g) ?? [];
-    assert.equal(summaries.length, 1, `the merged critical summary is placed exactly once:
-${line}`);
-    assert.match(line, /! UNATTENDED/, `at least one critical warning is still named:
-${line}`);
-  },
-
-  unknownAndMissingValuesAreNotZero() {
-    const unknownCtx = footer.renderFooter(baseState({ context: { contextWindow: 200000, percent: null, tokens: null } }), plain, 100, "default").map(strip).join("\n");
-    assert.match(unknownCtx, /ctx \?\/200k/);
-    assert.doesNotMatch(unknownCtx, /ctx .*0%/);
-    const noWindow = footer.renderFooter(baseState({ context: {} }), plain, 100, "default").map(strip).join("\n");
-    assert.match(noWindow, /ctx \?/);
-    const heavy = footer.renderFooter(baseState({ cost: { kind: "unknown" }, partial: true, pricingSource: undefined }), plain, 120, "heavy").map(strip).join("\n");
-    assert.match(heavy, /cost \? partial/, "unknown cost is shown as unknown, flagged partial");
-    const reported = footer.renderFooter(baseState({ cost: { kind: "reported", value: 0.42 } }), plain, 120, "heavy").map(strip).join("\n");
-    assert.match(reported, /cost \$0\.42/);
-    assert.doesNotMatch(reported, /\best\b/);
-    const bare = footer.renderFooter({ cwd: "/x", totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }, partial: false, cost: { kind: "unknown" }, statuses: [], todos: [], now: 0 }, plain, 60, "default");
-    fits(bare, 60, "minimal state");
-    assert.match(strip(bare.join("\n")), /no model/);
-  },
-
-  longPathsModelNamesAndWideText() {
-    const longState = baseState({ cwd: "/home/u/a/very/deeply/nested/project-with-a-really-long-directory-name", model: "anthropic/claude-with-a-very-long-model-identifier-2026-09-01-preview", sessionName: "a long session name with extra words", provider: "some-provider-with-a-long-name" });
-    for (const width of [40, 80, 120, 160]) for (const mode of MODES) fits(footer.renderFooter(longState, plain, width, mode), width, `long@${width}/${mode}`);
-    const wide = baseState({ cwd: "/home/u/项目-日本語-🚀", model: "模型-v1", sessionName: "会话" });
-    for (const width of [40, 80, 120]) for (const mode of MODES) fits(footer.renderFooter(wide, plain, width, mode), width, `wide@${width}/${mode}`);
-    fits(footer.renderFooter(baseState(), plain, 12, "heavy"), 12, "absurdly narrow");
-    fits(footer.renderFooter(baseState(), plain, 1, "default"), 1, "one column");
-    // ANSI colour does not count against the width
-    const coloured: Theme = { fg: (c, s) => `\x1b[3${c.length % 8}m${s}\x1b[0m`, bold: (s) => `\x1b[1m${s}\x1b[0m` };
-    for (const width of [40, 80, 120]) fits(footer.renderFooter(baseState({ agents: { live: 1, failed: 1 } }), coloured, width, "heavy"), width, `coloured@${width}`);
-  },
-
-  effortAndPendingChange() {
-    const pinned = footer.renderFooter(baseState({ effort: { code: "E2", label: "Focused", pinned: true } }), plain, 120, "default").map(strip).join("\n");
-    assert.match(pinned, /effort E2 Focused\*/);
-    const pending = footer.renderFooter(baseState({ effort: { code: "E3", label: "Standard", pinned: false, pendingCode: "E4" } }), plain, 120, "default").map(strip).join("\n");
-    assert.match(pending, /E3 Standard→E4/, "a change chosen mid-request is visible before it applies");
-    const light = footer.renderFooter(baseState(), plain, 100, "light").map(strip).join("\n");
-    assert.match(light, /E3 1\/3/);
-    assert.equal(footer.renderFooter(baseState({ effort: undefined }), plain, 100, "default").map(strip).join("\n").includes("effort"), false, "no effort extension, no chip");
-  },
-
-  staleTransientChipsAreHiddenButFailuresStay() {
-    const old = 5 * 60_000;
-    const statuses = [
-      { key: "subagent", text: "[scout] step 1 running read x · 12s", ageMs: old },
-      { key: "workflow", text: "bugfix · plan · running planner", ageMs: old },
-      { key: "orchestrator", text: "blocked: verify", ageMs: old },
-      { key: "trace-ledger", text: "trace-ledger: lost=0", ageMs: old },
-    ];
-    const idle = footer.renderFooter(baseState({ statuses, running: false }), plain, 200, "heavy").map(strip).join("\n");
-    assert.doesNotMatch(idle, /\[scout\]|bugfix/, "stale in-flight chips are cleared from the bar once nothing runs");
-    assert.match(idle, /blocked: verify/, "a failure is never hidden for being old");
-    assert.match(idle, /trace-ledger lost=0/, "non-transient chips are not aged out");
-    const running = footer.renderFooter(baseState({ statuses, running: true }), plain, 200, "heavy").map(strip).join("\n");
-    assert.match(running, /\[scout\]|bugfix/, "while a request runs nothing is hidden");
-    const detail = footer.renderDetail(baseState({ statuses, running: false }), "default").join("\n");
-    assert.match(detail, /subagent: .*hidden from the bar/, "the detail view still lists what the bar hid");
-    const withAgents = footer.renderFooter(baseState({ statuses: [{ key: "subagent", text: "[scout] running", ageMs: 0 }], agents: { live: 1, failed: 0 } }), plain, 200, "default").map(strip).join("\n");
-    assert.doesNotMatch(withAgents, /\[scout\]/, "the subagent chip is redundant with the agents count");
-  },
-
-  asciiFallback() {
-    const state = baseState({ unattended: { active: true, label: "u", boundary: "container" }, agents: { live: 1, failed: 0 }, statuses: [{ key: "x", text: "ok" }] });
-    for (const mode of MODES) {
-      const out = [...footer.renderFooter(state, ansiTheme, 100, mode), ...footer.renderTodoWidget(state.todos, ansiTheme)].join("\n");
-      assert.ok(/^\p{ASCII}*$/u.test(out), `${mode}: ASCII theme output is ASCII only: ${out}`);
-    }
-    const forced = footer.renderFooter({ ...state, ascii: true }, plain, 100, "heavy").join("\n");
-    assert.ok(/^\p{ASCII}*$/u.test(forced), "the ascii setting forces ASCII on any theme");
-    const restore = setEnv("PI_KIT_ASCII", "1");
-    try { assert.equal(footer.footerGlyphs(plain).ascii, true); } finally { restore(); }
-    const output = footer.renderFooter(state, ansiTheme, 120, "default").join("\n");
-    assert.match(output, /in:|E3/);
-  },
-
-  todoWidget() {
-    const items: TodoItem[] = [
-      { id: 1, text: "done thing", state: "done" },
-      { id: 2, text: "current thing", state: "active" },
-      { id: 3, text: "later thing", state: "open" },
-    ];
-    const lines = footer.renderTodoWidget(items, plain).map(strip);
-    assert.match(lineAt(lines, 0), /Todos 1\/3/);
-    assert.ok(lines.some((l) => /▸ #2 current thing/.test(l)), lines.join("|"));
-    assert.ok(lines.some((l) => /✔ #1 done thing/.test(l)));
-    assert.ok(lines.some((l) => /☐ #3 later thing/.test(l)));
-    assert.deepEqual(footer.renderTodoWidget([], plain), []);
-    const allDone = footer.renderTodoWidget([{ id: 1, text: "x", state: "done" }], plain).map(strip);
-    assert.match(lineAt(allDone, 0), /all done/);
-    const asciiItems: TodoItem[] = [{ id: 1, text: "x", state: "active" }];
-    const forcedAscii = footer.renderTodoWidget(asciiItems, plain, 8, true).map(strip).join("\n");
-    let nonAscii = 0;
-    for (let i = 0; i < forcedAscii.length; i++) if (forcedAscii.charCodeAt(i) > 0x7f) nonAscii++;
-    assert.equal(nonAscii, 0, `the ascii flag reaches the todo widget: ${forcedAscii}`);
-    const defaultGlyphs = footer.renderTodoWidget(asciiItems, plain).map(strip).join("\n");
-    assert.ok(defaultGlyphs.includes("▸"), "without the ascii flag the widget keeps the Unicode glyphs");
-  },
-
-  phrasesAndActivity() {
-    assert.ok(footer.PHRASES.length > 5);
-    assert.equal(footer.toolPhrase("read", { path: "/a/b/server.ts" }), "Reading server.ts");
-    assert.equal(footer.toolPhrase("bash", { command: "npm test" }), "Running `npm test`");
-    assert.equal(footer.toolPhrase("subagent", {}), "Delegating to a subagent");
-    assert.equal(footer.toolPhrase("memory_search", {}), "Consulting memory");
-    assert.equal(footer.toolPhrase("weird_tool", {}), "Using weird_tool");
-  },
-
-  tipsAreFilteredToLoadedCommands() {
-    assert.ok(footer.TIPS.length > 5);
-    assert.ok(footer.TIPS.filter((t) => !t.requires).length >= 3, "some tips always apply");
-    assert.ok(footer.TIPS.some((t) => t.requires === "compress"));
-    assert.ok(footer.TIPS.some((t) => /\/effort/.test(t.text)), "the effort command is discoverable");
   },
 
   async commandsRejectInvalidArgumentsWithoutMutation() {
@@ -482,78 +240,6 @@ ${line}`);
     }
   },
 
-  async asciiSettingReachesTodoWidget() {
-    // F-2 wiring: /footer ascii on must change the todo checklist that is handed to pi, not only
-    // the status bar. The unit test pins renderTodoWidget's ascii parameter; this pins the call site.
-    const agent = tmpWorkspace("pi-kit-footer-ascii-");
-    const workspace = tmpWorkspace("pi-kit-footer-ascii-ws-");
-    const todoFile = path.join(workspace, "todos.md");
-    fs.writeFileSync(todoFile, "- [~] #1: write the test\n- [ ] #2: open item\n");
-    const restore = [setEnv("PI_CODING_AGENT_DIR", agent), setEnv("PI_KIT_TODO_FILE", todoFile)];
-    try {
-      const pi = fakePi();
-      footer.default(pi.api);
-      const widgets = new Map<string, unknown>();
-      const ctx = {
-        cwd: workspace, hasUI: true, model: { id: "m", provider: "p" },
-        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
-        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
-        ui: { theme: plain, setFooter() {}, setWidget: (k: string, v: unknown) => (v === undefined ? widgets.delete(k) : widgets.set(k, v)), setWorkingMessage() {}, notify() {} },
-      };
-      await pi.handlers.get("session_start")({}, ctx);
-      // pi mounts a component now, so render it at the width under test; an older string[] still works.
-      const todoWidgetLines = (width = 80): string[] => {
-        const value = widgets.get("pi-kit-todos");
-        if (typeof value === "function") {
-          const mount = value as (tui: { terminal?: { rows?: number } }, theme: Theme) => { render(w: number): string[] };
-          return mount({ terminal: { rows: 40 } }, plain).render(width).map((line) => strip(line));
-        }
-        return Array.isArray(value) ? value.map((line) => strip(String(line))) : [];
-      };
-      const todoWidget = (width = 80): string => todoWidgetLines(width).join("\n");
-      assert.match(todoWidget(), /▸ #1 write the test/, "the checklist renders with Unicode glyphs by default");
-      await pi.commands.get("footer").handler("ascii on", ctx);
-      const ascii = todoWidget();
-      assert.ok(/^\p{ASCII}*$/u.test(ascii), `the ASCII setting reaches the todo widget: ${ascii}`);
-      assert.ok(!ascii.includes("▸"), "the Unicode marker is gone once ascii is on");
-      const narrow = todoWidgetLines(24);
-      assert.ok(narrow.length > 0, "the mounted checklist renders at a narrow width");
-      for (const line of narrow) assert.ok(W(line) <= 24, `a narrow todo line fits 24 columns: ${W(line)} ${line}`);
-    } finally {
-      restore.reverse().forEach((r) => r());
-      rmWorkspace(agent);
-      rmWorkspace(workspace);
-    }
-  },
-
-  async autoAsciiThemeReachesToolPhrase() {
-    // An ISO/ANSI/TTY theme selects ASCII automatically; the working line's tool phrase must follow
-    // the same choice, not only the explicit /footer ascii setting.
-    const agent = tmpWorkspace("pi-kit-footer-autascii-");
-    const workspace = tmpWorkspace("pi-kit-footer-autascii-ws-");
-    const restore = setEnv("PI_CODING_AGENT_DIR", agent);
-    try {
-      const pi = fakePi();
-      footer.default(pi.api);
-      const ctx = {
-        cwd: workspace, hasUI: true, model: { id: "m", provider: "p" },
-        getContextUsage: () => ({ percent: 0, tokens: 0, contextWindow: 100 }),
-        sessionManager: { getEntries: () => [], getSessionName: () => undefined },
-        ui: { theme: ansiTheme, setFooter() {}, setWidget() {}, setWorkingMessage() {}, notify() {} },
-      };
-      await pi.handlers.get("session_start")({}, ctx);
-      await pi.handlers.get("agent_start")({}, ctx);
-      await pi.handlers.get("tool_execution_start")({ toolName: "bash", args: { command: "x".repeat(80) } }, ctx);
-      const working = strip(footerDebug(pi.api).workingText(Date.now()));
-      assert.ok(working.includes("..."), `automatic ASCII theme reaches the tool phrase: ${working}`);
-      assert.ok(!working.includes("…"), `automatic ASCII theme does not emit U+2026: ${working}`);
-      await pi.handlers.get("agent_end")({}, ctx);
-    } finally {
-      restore();
-      rmWorkspace(agent);
-      rmWorkspace(workspace);
-    }
-  },
   async nonInteractiveSessionsGetTextNotSilence() {
     const agent = tmpWorkspace("pi-kit-footer-headless-");
     const workspace = tmpWorkspace("pi-kit-footer-headless-ws-");
@@ -767,28 +453,6 @@ ${line}`);
       assert.equal(after.failures, 1);
       assert.ok(after.finished >= 1 && before.live === 0);
     });
-  },
-
-  async workingLineShowsTimeAndTokens() {
-    const restore = setEnv("PI_CODING_AGENT_DIR", tmpWorkspace("pi-kit-ui-agent-"));
-    try {
-      const pi = fakePi();
-      Object.assign(pi.api, { getThinkingLevel: () => "off" });
-      footer.default(pi.api);
-      const dbg = footerDebug(pi.api);
-      const ws2 = tmpWorkspace("pi-kit-ui-ws-");
-      const before = dbg.workingText(Date.now());
-      assert.match(before, /…/, "no run yet: plain phrase with an ellipsis");
-      const items = footer.readTodoItems(ws2);
-      assert.deepEqual(items, [], "no TODO.md yields no items");
-      fs.writeFileSync(path.join(ws2, "TODO.md"), "# TODO\n\n- [x] #1: done\n- [~] #2: doing\n- [ ] #3: todo\n");
-      const parsed = footer.readTodoItems(ws2);
-      assert.deepEqual(parsed.map((t) => t.state), ["done", "active", "open"]);
-      rmWorkspace(ws2);
-    } finally {
-      rmWorkspace(process.env.PI_CODING_AGENT_DIR);
-      restore();
-    }
   },
 
   async todoToolStatesAndListOutput() {

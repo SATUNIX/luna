@@ -1,6 +1,6 @@
 /**
  * Workflows — tool and command registration (`workflow_run`, `workflow_status`, `workflow_control`,
- * `/workflows` and its alias `/workflow`). Pause, resume, stop and skip of a live run all go
+ * `/workflows`). Pause, resume, stop and skip of a live run all go
  * through control.ts; the status list and the stop path read run-query.ts, so a background
  * subagent, a finished script run, a finished YAML run and an autonomous container run appear
  * together. A plan as data (`workflow_run {steps}`) compiles through plan.ts and runs like a saved
@@ -12,7 +12,8 @@ import path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, type AgentConfig } from "./agents.ts";
-import { agentDir } from "./config.ts";
+import { agentDir, capConcurrency } from "./config.ts";
+import { capText } from "./cap.ts";
 import { CONTROL_ACTIONS, controlRun, runControls, type ControlOrigin, type ControlResult } from "./control.ts";
 import { subagentStateDir } from "./logging.ts";
 import { describeRun, formatRunList, MAX_RUN_LIST, queryRuns } from "./run-query.ts";
@@ -21,7 +22,7 @@ import { isReadOnlyRole, READ_ONLY_TOOLS } from "./launch.ts";
 import { compileExpansion, compilePlan, generationOf, parseExpandAnswer, planRefusal, PLAN_DESCRIPTION, resampleNote, spliceExpansion, type PlanError } from "./plan.ts";
 import { redact } from "./shared/redact.ts";
 import { producedResult } from "./run-contract.ts";
-import { duplicateRefusal, liveRuns, runIdentity } from "./run-model.ts";
+import { duplicateRefusal, liveRuns, runIdentity, runRegistry } from "./run-model.ts";
 import { resolveSkillFile } from "./skills.ts";
 import { effortRegistry } from "./wf-engine.ts";
 import {
@@ -51,6 +52,11 @@ import {
 } from "./workflow.ts";
 import type { SpawnChild, ToolContext } from "./types.ts";
 import { showWhenFree, type CardOptions } from "./shared/input-owner.ts";
+
+/** Where a run's full records live, named in a truncation marker. */
+function runsDirHint(cwd: string): string {
+  return `${runsRoot(cwd)} and ${subagentStateDir(cwd)}`;
+}
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], details: undefined, ...(isError ? { isError: true } : {}) };
@@ -185,7 +191,7 @@ export async function resumeWriterGate(w: WorkflowDef, state: RunState, agents: 
   const writers = interruptedWriterSteps(w, state, agents);
   if (!writers.length) return null;
   const names = writers.map((s) => s.id).join(", ");
-  if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: run ${state.id} was interrupted while writer step(s) ${names} ran; they may have left partial changes. Resume it interactively (/workflow resume ${state.id}) to choose whether to re-run or skip them.`;
+  if (!ctx.hasUI || !ctx.ui?.select) return `Blocked: run ${state.id} was interrupted while writer step(s) ${names} ran; they may have left partial changes. Resume it interactively (/workflows resume ${state.id}) to choose whether to re-run or skip them.`;
   const select = ctx.ui.select.bind(ctx.ui);
   const asked = await askFree(ctx, {
     what: `workflow run ${state.id}: waiting for your answer`,
@@ -335,6 +341,10 @@ async function launchRun(ctx: ToolContext, w: WorkflowDef, state: RunState, agen
       return charged.ok ? null : charged.reason;
     };
   }
+  // A serial local model gets one agent at a time however many the plan allows (config.ts modelConcurrencyCap).
+  const wanted = launch.concurrency ?? 4;
+  const capped = capConcurrency(wanted, ctx.model);
+  if (capped < wanted) launch = { ...launch, concurrency: capped };
   const release = liveRuns.hold(identity, { runId: state.id, name: w.name });
   // The run's control (pause/resume/stop/skip); the tool call's signal (Esc) stops it.
   const { control, close } = runControls.open(state.id, opts.signal);
@@ -611,9 +621,52 @@ export interface WorkflowToolDeps {
   spawnChild?: SpawnChild;
 }
 
+/**
+ * The tools that only mean something once a run exists. They are registered inactive (pi 1.x
+ * honours `defaultActive: false`; an older pi ignores the field and simply leaves them active), so
+ * their 1,636 characters of text are not in every request of a session that never starts a run.
+ */
+const RUN_TOOLS = ["workflow_status", "workflow_control"];
+
+/** Make the run tools callable: a run has started, or is about to. A pi without tool control skips it. */
+export function activateRunTools(pi: ExtensionAPI): void {
+  try {
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+    const current = pi.getActiveTools();
+    const missing = RUN_TOOLS.filter((name) => !current.includes(name));
+    if (missing.length > 0) pi.setActiveTools([...current, ...missing]);
+  } catch {
+    /* activation is an optimisation; the tools stay inactive and /workflows still lists runs */
+  }
+}
+
 export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps = {}): void {
   // Workflows orchestrate subagents; a subagent child never starts one itself.
   if (process.env.PI_KIT_INTERNAL_CHILD === "1") return;
+
+  // A run begins in one of three ways: the model starts one (workflow_run, workflow, or a background
+  // subagent), the operator starts one with a command, or a run is resumed. Each one wakes the tools.
+  pi.on("tool_call", async (event) => {
+    const background = event.toolName === "subagent" && Reflect.get(event.input, "background") === true;
+    if (background || event.toolName === "workflow_run" || event.toolName === "workflow") activateRunTools(pi);
+    return undefined;
+  });
+  runRegistry.subscribe((event) => {
+    if (event.type === "run_start") activateRunTools(pi);
+  });
+  // An autonomous container run never goes through the registry: the operator starts it with
+  // /autonomy or a CLI, and it can outlive the session. Look for one before each prompt, so a session that only watches it still gets the tools.
+  const wakeForAutonomy = (cwd: string): void => {
+    try {
+      if (queryRuns(cwd).some((run) => run.format === "autonomy" && (run.live || run.status === "blocked"))) activateRunTools(pi);
+    } catch {
+      /* the lookup is an optimisation; /workflows still lists the run */
+    }
+  };
+  pi.on("before_agent_start", async (_event, ctx) => {
+    wakeForAutonomy(ctx.cwd ?? process.cwd());
+    return undefined;
+  });
 
   pi.registerTool({
     name: "workflow_run",
@@ -655,7 +708,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
         const dir = path.join(runsRoot(cwd), r.state.id);
         // A parsed workflow always has at least one step.
         const last = r.workflow.steps[r.workflow.steps.length - 1];
-        const tail = producedResult(r.state.status) ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflow resume ${r.state.id}` : "";
+        const tail = producedResult(r.state.status) ? `\n\nFinal step (${last?.id}) output: ${dir}/steps/${last?.id}.md` : r.state.status === "interrupted" || r.state.status === "failed" ? `\n\nResume with workflow_run {resume: "${r.state.id}"} or /workflows resume ${r.state.id}` : "";
         return textResult(`${summarizeRun(r.state, r.workflow)}\n\nRun directory: ${dir}${tail}`, r.state.status === "failed");
       } finally {
         try {
@@ -674,6 +727,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
       "List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. " +
       "With id: YAML steps, script counters, a subagent's log tail, or an autonomous run's template, spend, blocker and liveness.",
     promptSnippet: "Inspect workflow, subagent and autonomy runs",
+    defaultActive: false,
     parameters: Type.Object({
       id: Type.Optional(Type.String({ description: "One run's id; without it, the newest runs of every format" })),
       limit: Type.Optional(Type.Number({ description: "How many runs to list (default 20, max 100)" })),
@@ -685,10 +739,10 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
         // The id is model-supplied and is joined into a filesystem path: check it before reading.
         if (!isValidRunId(params.id)) return textResult("Invalid run id.", true);
         const text = describeRun(cwd, params.id, { tail: params.tail });
-        return text ? textResult(text) : textResult(`No run "${params.id}".`, true);
+        return text ? textResult(capText(text, `under ${runsDirHint(cwd)}`)) : textResult(`No run "${params.id}".`, true);
       }
       const limit = Math.max(1, Math.min(Number(params.limit) || 20, MAX_RUN_LIST));
-      return textResult(formatRunList(queryRuns(cwd), limit));
+      return textResult(capText(formatRunList(queryRuns(cwd), limit), `under ${runsDirHint(cwd)}`));
     },
   });
 
@@ -700,6 +754,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
       "stop (a live run's agents stop and it ends interrupted, resumable with workflow_run {resume}; a background subagent run id stops that child; all stops every live run and every background subagent, orphans included), " +
       "or skip (stop the agents running now and record their steps as skipped; a skipped required step can fail the run or leave it partial).",
     promptSnippet: "Pause, resume, stop or skip a live workflow run or a background subagent",
+    defaultActive: false,
     parameters: Type.Object({
       runId: Type.Optional(Type.String({ description: "The live run's id, or a background subagent run id (workflow_status lists both)" })),
       action: Type.Union(CONTROL_ACTIONS.map((a) => Type.Literal(a)), { description: CONTROL_ACTIONS.join(" | ") }),
@@ -722,7 +777,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     },
   });
 
-  // One command for both names: `/workflows` is the surface, `/workflow` is its alias. Bare
+  // One command: `/workflows` is the surface. Bare
   // `/workflows` lists runs of every format, past runs included; `list` keeps showing the saved
   // workflow definitions, and `panel` opens the live TUI panel.
   const runCommand = async (args: string, rawCtx: ExtensionContext): Promise<void> => {
@@ -823,7 +878,7 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
           }
           const text = r.error !== undefined ? `workflow ${name}: ${r.error}` : `${summarizeRun(r.state, r.workflow)}\nRun directory: ${path.join(runsRoot(cwd), r.state.id)}`;
           try {
-            pi.sendMessage({ customType: "workflow-result", content: text, display: true }, { deliverAs: "followUp", triggerTurn: false });
+            pi.sendMessage({ customType: "workflow-result", content: capText(text, `under ${path.join(runsRoot(cwd), r.state?.id ?? "")}`), display: true }, { deliverAs: "followUp", triggerTurn: false });
           } catch {
             notify(text, r.error || r.state?.status !== "passed" ? "warning" : "info");
           }
@@ -855,11 +910,6 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
 
   pi.registerCommand("workflows", {
     description: `Every workflow, subagent and autonomous run, live or finished: list them, show one, stop one or all. ${COMMAND_USAGE}`,
-    getArgumentCompletions: completions,
-    handler: runCommand,
-  });
-  pi.registerCommand("workflow", {
-    description: `Alias of /workflows. ${COMMAND_USAGE}`,
     getArgumentCompletions: completions,
     handler: runCommand,
   });

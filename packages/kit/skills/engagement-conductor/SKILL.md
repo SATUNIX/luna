@@ -3,7 +3,7 @@ name: engagement-conductor
 category: orchestration-recovery
 description: Drive durable Conductor engagement lifecycles across sessions. Use when a security engagement or large coding project needs multi-phase coordination and resumption, not for a single quick delegated task.
 disable-model-invocation: true
-triggers: ["security engagement", "pentest engagement", "/engagement", "engagement conductor", "conductor engagement", "conductor phase"]
+triggers: ["security engagement", "/engagement", "engagement conductor", "conductor engagement", "conductor phase"]
 ---
 
 # Engagement conductor
@@ -24,4 +24,4 @@ do not treat a phase change as a substitute for evidence.
 This composes the existing `agent-orchestration` flow above it. Use that skill for individual
 planner/implementer/reviewer tasks; use Conductor to persist and govern the larger engagement. For
 security work, read-only recon, planning, coding, and reporting can proceed autonomously, while
-active target actions remain human-gated by `pentest-governance-domain`.
+active target actions remain human-gated by `engagement-governance`.

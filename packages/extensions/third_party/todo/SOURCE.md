@@ -13,3 +13,4 @@
     The checklist widget lives in `custom-footer` (reads the same `TODO.md`).
   - 2026-10-15: typed for strict TypeScript (no behaviour change).
   - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).
+  - 2026-11-13: shorter tool and parameter descriptions (the lite profile footprint ceiling); no behaviour change.

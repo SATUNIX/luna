@@ -65,7 +65,7 @@ Every source file is strict TypeScript, and `check:all` keeps it that way
 - **Lint.** `npm run test:lint` (typescript-eslint `strictTypeChecked`, type-aware) with zero
   warnings: no `any`, no unsafe use of untyped values, no floating promises, and security bans
   (no `shell: true`, no `exec`/`execSync`, no `vm`, no `eval`/`new Function`, no HTML sinks such
-  as `innerHTML`). An `eslint-disable` needs `-- <reason>` and counts against a ceiling.
+  as `innerHTML`). An `eslint-disable` needs `-- <reason>`.
 - **Untrusted data is `unknown`.** JSON from files, the network, child processes, models, the
   browser and the command line is checked before use: `packages/core/lib/guard.ts` for structured
   data (`parseJsonAs`, `object`, `string`, `Infer<>`), `typeof` for scalars. Never cast it: outside

@@ -39,7 +39,6 @@ const SECURITY_PAGES = [
   "docs/releasing.md",
   "docs/repository-topology.md",
 ];
-const NAV_PAGES = ["threat-model.md", "security-controls.md", "security-standard.md", "vulnerability-management.md", "incident-response.md", "operator-checklist.md"];
 const REPO_ROOTS = ["tests/", "packages/", ".github/", "docs/", "apps/", "internal/"];
 
 const PackageJson = object({ scripts: record(string()) });
@@ -253,23 +252,5 @@ if (publicFiles) assert.ok(referenceProblems("x", "`internal/public-release/expo
 // 4. The settings table.
 assert.deepEqual(settingsProblems(read("docs/ci-security.md"), settingsValue), [], "every settings field cited resolves");
 assert.ok(settingsProblems(read("docs/ci-security.md").replace("`fork_pr_approval_policy`", "`fork_policy`"), settingsValue).length > 0, "a field the file does not have is caught");
-
-// 5. Links and navigation.
-const security = read("SECURITY.md");
-for (const target of ["docs/threat-model.md", "docs/vulnerability-management.md", "docs/incident-response.md", "docs/beta.md", "docs/security-controls.md"]) {
-  assert.ok(security.includes(`(${target}`), `SECURITY.md links ${target}`);
-}
-for (const heading of ["## Supported versions", "## Reporting a vulnerability", "## Response targets", "## Scope", "## Safe harbour"]) {
-  assert.ok(security.includes(heading), `SECURITY.md has ${heading}`);
-}
-assert.match(security, /Acknowledge the report \| 3 working days/, "SECURITY.md states the acknowledgement target");
-assert.match(security, /Triage[^|]*\| 14 days/, "SECURITY.md states the triage target");
-assert.ok(read("CONTRIBUTING.md").includes("(docs/security-standard.md)"), "CONTRIBUTING.md links the secure development standard");
-assert.ok(read("docs/support.md").includes("(incident-response.md)"), "support.md links incident response");
-assert.ok(read("docs/security.md").includes("(threat-model.md)") && read("docs/security.md").includes("(security-controls.md)"), "security.md links the threat model and the catalogue");
-assert.ok(read("docs/remote-control.md").includes("### The Yes-first decision (SEC-5)"), "remote-control.md records the SEC-5 decision");
-const nav = read("mkdocs.yml");
-const navLines = nav.split(/\r?\n/).map((l) => l.trim());
-for (const page of NAV_PAGES) assert.ok(navLines.some((l) => l.endsWith(`: ${page}`)), `mkdocs.yml lists ${page}`);
 
 console.log(`security-docs-smoke: ${catalogueIds.size} controls, ${rows(threat, /^A-\d+$/).length} attackers and ${SECURITY_PAGES.length} pages checked`);

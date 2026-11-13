@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "tool_call", "tool_result", "turn_end"],
   "registers": { "tools": [], "commands": ["boost"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

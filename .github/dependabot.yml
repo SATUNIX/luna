@@ -5,6 +5,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -17,6 +18,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /
+    target-branch: integration/luna
     schedule:
       interval: weekly
     # Give new releases a week before proposing them: most malicious package versions are
@@ -43,6 +45,7 @@ updates:
     directories:
       - /packages/container/mcp-servers/governance
       - /packages/container/mcp-servers/memory-mcp
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -58,6 +61,7 @@ updates:
     directories:
       - /packages/autonomy/image/tools
       - /packages/container/tools
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -71,6 +75,7 @@ updates:
   # The docs toolchain (requirements-docs.txt).
   - package-ecosystem: pip
     directory: /
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -89,6 +94,7 @@ updates:
       - /packages/container
       - /packages/autonomy/image
       - /packages/role-runner
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -98,6 +104,7 @@ updates:
 
   - package-ecosystem: docker-compose
     directory: /packages/container/mcp-servers/memory-mcp
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:
@@ -108,6 +115,7 @@ updates:
   # The Android companion app's Gradle plugins and libraries.
   - package-ecosystem: gradle
     directory: /apps/android
+    target-branch: integration/luna
     schedule:
       interval: weekly
     cooldown:

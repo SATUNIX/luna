@@ -46,6 +46,13 @@ since the last edit** — and helps break out:
   steered into the run on older pi), and is kept as a `context-sieve` contribution for the
   next prompt (`tests/progress-guard-agsix-smoke.ts`).
 
+A `bash` command that only looks at files (`cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `ls`,
+`find` and the like, with no redirect, in-place edit or delete) counts as a read, and when
+three or more reads since the last edit went through `bash` the nudge adds "Read files with the
+read tool". In the worker logs 1,055 of 2,660 `bash` calls were file reads against 191 `read`
+calls, which hid them from the stall counter and skipped `read`'s anchored output
+(`tests/progress-guard-agsix-smoke.ts`).
+
 **Auto mode is automatic on unattended runs:** arming `autonomous-loop`
 (`/loop <goal>`) writes `.pi/autonomous-loop.armed.json`, and `progress-guard` flips to
 `auto` when that marker is present — no `PI_KIT_GUARD_MODE=auto` needed. `/boost on|off`
@@ -69,7 +76,7 @@ enters the deep
 scaffold and steers the multi-agent root-cause pass (fresh scouts + a forked top-10 of
 causes + a primary/backup plan + a delegated fix). Non-destructive; bounded to
 `PI_KIT_RECOVERY_MAX_ATTEMPTS` (default 2) per signature before escalating to the operator.
-On demand, a bare `/boost` enters the same flow. Ships in `long-horizon`/`autonomous`/`self-improving`.
+On demand, a bare `/boost` enters the same flow. Ships in `long-horizon`/`self-improving`.
 
 ## Threshold calibration
 
@@ -89,13 +96,55 @@ them. The reasoning:
 Re-tune by exporting the env vars above; they have not been fitted to a corpus of real
 sessions.
 
+## Bounding what the model reads
+
+Tool results are most of what an agent re-reads on every request (62% of prompt characters in
+the autonomy worker logs that were measured), so a result that can carry log or transcript text
+is capped before it reaches the model. `workflow_status` (a list, a run's steps, a subagent log
+tail) and the workflow-finished notice keep the first two thirds and the last third of 12,000
+characters and say how much was dropped and where the full text lives; a tailed log line is cut at
+600 characters first, because those lines are JSON events with whole partial results in them. Set
+`PI_KIT_TOOL_RESULT_MAX_CHARS` (at least 1,000) to change the cap. The verify gate's own
+diagnostics and check output were already bounded (1,500 to 4,000 characters). Pinned by
+`tests/run-query-smoke.ts`. **Not covered:** pi's built-in `bash` and `read` keep pi's own
+50 KB limit, and other extensions' tools are not capped.
+
+## Discovery on demand
+
+What a request carries up front is kept to what most sessions use; the rest is one step away.
+
+- **Lazy run tools.** `workflow_status` and `workflow_control` register inactive
+  (`defaultActive: false`, honoured by pi 1.x; an older pi ignores it and leaves them active) and
+  wake when a run starts: a `workflow_run` or `workflow` call, a background `subagent` call, or a run
+  an operator command starts. They were 1,636 characters of text in every request of a session that
+  never started a run (`tests/lazy-run-tools-smoke.ts`). The script `workflow` tool stays active: it
+  is how a run starts.
+- **Two skills listed, the rest searchable.** pi lists a skill in the system prompt unless it sets
+  `disable-model-invocation`; only `coding-agent-workflow` and `verification-loop` are listed now.
+  `general-agent-workflow` and `memory` are matched by `skill-router` triggers and found with
+  `skill_search` like the other 34 (`tests/skill-routing-smoke.ts`).
+- **Shorter always-on text.** The effort block, the caveman style, and the `todo` and `memory_save`
+  descriptions say the same thing in fewer words. The footprint meter below measures the result.
+- **Quieter children.** A governed child does not rediscover skills, commands or themes, and a
+  read-only role does not reload the project's context files (see `docs/agent-orchestration.md`).
+
+On the meter, `balanced` went from 11,091 to 8,735 characters in all (tools, snippets, guidelines
+and system additions), `lite` from 9,674 to 7,348, and the delegation tools from 4,725 to 3,089
+characters up front.
+
 ## Measuring the footprint
 
 A small model pays for every character of tool description and parameter schema before it reads
 the task, so the kit's floor is a measured number. `packages/core/eval/footprint.ts` loads a
-profile against a fake pi in a temp HOME, fires its `session_start` handler and totals the text of
-every tool it registers; external companions are left out because their text is not the kit's to
-review. The derived token figure is `ceil(chars / 4)`.
+profile against a fake pi in a temp HOME, fires its `session_start` handler and totals three
+things: the name, description and parameter schema of every tool it registers; the one-line
+snippets and guideline rules those tools add to pi's system prompt; and what the profile's
+`before_agent_start` handlers add to the system prompt on a first turn (the effort block and the
+caveman style). Companion packages (`pi-readseek`, `pi-lens`) register tools that reach the model
+in every request but cannot be loaded offline, so the baseline records their measured cost
+(`companions`, taken from a real pi with the pinned release and tied to its `source`: a version
+bump fails until it is measured again) and the report adds it. pi's own base prompt is left out. The derived token figure is `ceil(chars / 4)`; `--json`
+also reports `totalChars`, the sum of the three.
 
 ```bash
 node packages/core/eval/footprint.ts --profile lite --json
@@ -112,9 +161,15 @@ keeps the reviewed ceilings and rewrites the file only when the measured numbers
 up-to-date baseline stays byte-for-byte the same. A malformed or foreign baseline is a clean
 error (exit 2) and is left untouched, so remove the file to regenerate it.
 
-`smoke:eval-footprint` pins the balanced and lite text against that baseline, the prompt prefix
-that survives a turn, and the CLI's JSON, argument errors and byte-identical rewrite
-(`tests/eval-footprint-smoke.ts`).
+`lite` has a hard ceiling on the kit's tool text plus its companions' (`totalCeiling`, 9,000
+characters; `pi-readseek` is most of it), and registers no delegation or workflow tool
+(nothing in the test suite pins either; the meter reports them). `pi-lens` adds 18,800 characters to every other profile, which
+is why their companion-inclusive totals are several times the kit-only figure: that cost is
+reported, not yet reduced.
+
+Every shipped profile has a baseline row (tools, snippets and guidelines, system additions), not
+only `balanced` and `lite`. The meter is a development tool: no test pins its figures, the prompt
+prefix that survives a turn, or the CLI's output, because they change with every kit-text edit.
 
 ## Measuring Memento mode
 

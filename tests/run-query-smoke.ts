@@ -8,7 +8,7 @@
 //      leave the run root is refused.
 //   3. queryRuns merges the same stores plus this process's live registry, labelled by format, and
 //      a runs.jsonl row that belongs to a run is not listed twice.
-//   4. /workflows lists past runs; /workflow is an alias.
+//   4. /workflows lists past runs.
 //   5. workflow_control stops a background subagent by id, and `all` stops live children and
 //      recorded orphans; /workflows stop does the same.
 //   6. both firewall policy copies keep workflow_status read_only and workflow_control
@@ -315,6 +315,11 @@ const lines = (text: string): string[] => text.split("\n");
   assert.match(subagent, /Format: subagent/);
   assert.match(subagent, /scout/);
   assert.match(subagent, /# end status=end/, "a subagent run shows its log tail");
+  // A log full of huge JSON events (one was 1.79M characters in a real run) must not reach the model whole.
+  fs.appendFileSync(SUBAGENT_LOG, `${JSON.stringify({ partialResult: "x".repeat(2_000_000) })}\n`.repeat(30));
+  const huge = textOf(await status({ id: SUBAGENT_ID, tail: 1000 }));
+  assert.ok(huge.length < 14_000, `a subagent log tail is capped (got ${huge.length} characters)`);
+  assert.match(huge, /characters omitted; the full text is under|more characters\]/, "a cut result names what was dropped");
   const autonomyLive = textOf(await status({ id: AUTONOMY_LIVE_ID }));
   assert.match(autonomyLive, /Format: autonomy · run /);
   assert.match(autonomyLive, /Ship the autonomy status row/);
@@ -425,7 +430,7 @@ const lines = (text: string): string[] => text.split("\n");
   live.finish("passed");
 }
 
-// 4. /workflows lists past runs, and /workflow is an alias.
+// 4. /workflows lists past runs.
 {
   const notes: string[] = [];
   const cmdCtx = { cwd: ws, hasUI: true, ui: { notify: (m: string) => notes.push(m) } };
@@ -440,17 +445,16 @@ const lines = (text: string): string[] => text.split("\n");
   assert.ok(listed.includes(AUTONOMY_BLOCKED_ID), `/workflows must list a blocked autonomous run:\n${listed}`);
   assert.ok(listed.includes("Which database should the importer use?"), `/workflows must show why an autonomous run is blocked:\n${listed}`);
   assert.ok(!listed.includes(YAML_CHILD_ID) && !listed.includes(SCRIPT_CHILD_ID), `/workflows must not list a run's children:\n${listed}`);
-  const alias = pi.commands.get("workflow");
-  assert.ok(alias, "/workflow is still registered");
+  assert.ok(!pi.commands.has("workflow"), "the retired /workflow alias is not registered");
   const seen: string[] = [];
-  await alias.handler("", { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
-  assert.ok(seen.join("\n").includes(SCRIPT_ID), "/workflow is an alias of /workflows and lists the same runs");
-  await alias.handler(`status ${SCRIPT_ID}`, { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
+  await workflows.handler("", { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
+  assert.ok(seen.join("\n").includes(SCRIPT_ID), "/workflows lists script runs");
+  await workflows.handler(`status ${SCRIPT_ID}`, { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
   assert.match(seen.at(-1) ?? "", /Format: script/);
   // `panel` still reaches the live view, now through the one command.
   await workflows.handler("panel", cmdCtx);
   assert.match(notes.at(-1) ?? "", /^Workflows \(/);
-  ok("/workflows lists past runs, /workflow is its alias, status <id> shows a past run, and panel opens the live view");
+  ok("/workflows lists past runs, status <id> shows a past run, and panel opens the live view");
 }
 
 // 5. stop: a background subagent by id, then all live children and recorded orphans.

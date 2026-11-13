@@ -180,6 +180,17 @@ function isOneShotChild(ctx: ExtensionContext): boolean {
   return mode === "print" || mode === "json";
 }
 
+// Back-to-back guard: after a compaction ends (done or failed) the kit trigger waits this long
+// before it may fire again. A summary that lands just under the threshold, or a failing compaction,
+// would otherwise start another one a turn later, each costing a model call and a summary of a
+// summary. Read at call time so a test or an operator's env change applies without a reload.
+const DEFAULT_COOLDOWN_MS = 120_000;
+function cooldownMs(): number {
+  const raw = process.env.PI_KIT_COMPACT_COOLDOWN_MS;
+  const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_COOLDOWN_MS;
+}
+
 export const RESUME_MESSAGE =
   "[pi-kit] Your context was compacted automatically (fixed-budget trigger) while you were working, which interrupted the run. " +
   "Continue the task from where you left off; the summary at the top of this conversation holds the state.";
@@ -195,6 +206,7 @@ export default function (pi: ExtensionAPI) {
   let armed = true;
   let inFlight = false;
   let inFlightSince = 0;
+  let lastEndedAt = 0;
   let pendingAtSettle = false;
   let notedInactive = false;
 
@@ -206,6 +218,7 @@ export default function (pi: ExtensionAPI) {
       ...(opts.customInstructions !== undefined ? { customInstructions: opts.customInstructions } : {}),
       onComplete: () => {
         inFlight = false;
+        lastEndedAt = Date.now();
         notifySafely(ctx, "Compaction completed", "info");
         if (!opts.resume) return;
         // The compaction aborted a live run and pi never continues an aborted run: continue it, but
@@ -224,6 +237,7 @@ export default function (pi: ExtensionAPI) {
       },
       onError: (error) => {
         inFlight = false;
+        lastEndedAt = Date.now();
         notifySafely(ctx, `Compaction failed: ${error.message}`, "error");
       },
     });
@@ -242,6 +256,8 @@ export default function (pi: ExtensionAPI) {
     // A compaction whose callback never arrived (a reload swallowed it) must not disarm the trigger for good.
     if (inFlight && Date.now() - inFlightSince > 5 * 60_000) inFlight = false;
     if (isOneShotChild(ctx) || inFlight) return;
+    // Stays armed (and pending): the first check after the cooldown fires it.
+    if (lastEndedAt > 0 && Date.now() - lastEndedAt < cooldownMs()) return;
     let usage: ReturnType<ExtensionContext["getContextUsage"]>;
     try {
       usage = ctx.getContextUsage();

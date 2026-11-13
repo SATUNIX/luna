@@ -559,11 +559,11 @@ try {
       assert.equal(b.judged.length, 0);
       b.close();
     }
-    // pentest policy: the mode needs an operator, so it does not activate.
-    config({ mode: "manual", policy: "pentest" });
+    // engagement policy: the mode needs an operator, so it does not activate.
+    config({ mode: "manual", policy: "engagement" });
     const p = await boot({ env: envFor(contract) });
     assert.equal(unattended().active, false);
-    assert.match(p.stderr, /pentest policy needs an interactive operator/);
+    assert.match(p.stderr, /engagement policy needs an interactive operator/);
     p.close();
     config({ mode: "manual" });
     // Ignored egress entries are dropped (fewer hosts, never more) and reported.
@@ -575,7 +575,7 @@ try {
     assert.match(st, /permissions\.egress entry "\*" ignored/);
     assert.equal((await bash(o, "curl https://evil.example/", headless(o)))?.block, true, "a bare * never allows everything");
     o.close();
-    ok(`${Object.keys(variants).length} missing/malformed/contradictory contracts and the pentest policy: NOT unattended, loud warning, normal rules (asks; headless fails closed and bounded), no judge`);
+    ok(`${Object.keys(variants).length} missing/malformed/contradictory contracts and the engagement policy: NOT unattended, loud warning, normal rules (asks; headless fails closed and bounded), no judge`);
   }
   // Provenance. A contract a process running as this user could have written is not the supervisor's read-only
   // copy, whatever its mode bits: an agent can write a file outside the workspace, chmod it 0444 and start a nested

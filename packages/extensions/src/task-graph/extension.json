@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": [],
   "registers": { "tools": ["task_create", "task_update", "task_list", "task_next", "task_complete", "task_clear"], "commands": [] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["long-horizon", "self-improving", "engagement"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

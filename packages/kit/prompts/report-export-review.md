@@ -1,4 +1,5 @@
 ---
+description: "Check that a report is ready to export"
 argument-hint: "[findings]"
 ---
 

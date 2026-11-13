@@ -1,16 +1,17 @@
 // Firewall configuration: global mode/policy, where state lives, and what counts as a known host.
 //
 // ~/.pi/agent/pi-kit/firewall.json is written by the profile installer and by `/auto`:
-//   { "mode": "auto" | "manual", "policy": "coding" | "pentest", "judgeModel": "provider/id",
+//   { "mode": "auto" | "manual", "policy": "coding" | "engagement", "judgeModel": "provider/id",
 //     "learn": true, "knownHosts": ["ms01"], "untrustedHosts": ["old-box"], "source": "profile" | "user" }
 // Precedence for the mode: PI_KIT_AUTO_MODE env > a project .pi/auto-mode.json (legacy, which can
 // only downgrade to manual: a repo-carried file never turns auto mode on) > firewall.json > manual. For the policy: PI_KIT_FIREWALL_PROFILE env > firewall.json > coding.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { FIREWALL_POLICIES, isFirewallPolicy, migrateStoredPolicy, type FirewallPolicy } from "./shared/profile-names.ts";
 
 export type FirewallMode = "auto" | "manual";
-export type PolicyName = "coding" | "pentest";
+export type PolicyName = FirewallPolicy;
 export type FirewallConfig = {
   mode: FirewallMode;
   policy: PolicyName;
@@ -21,6 +22,9 @@ export type FirewallConfig = {
   // set even when ~/.ssh/config names them.
   untrustedHosts: string[];
   source: "profile" | "user" | "default";
+  // Set when firewall.json names a policy this kit does not know. The policy is then the strict one,
+  // never the weaker one: a typo or a downgrade must not loosen the gate. Surfaced loudly by the caller.
+  invalid?: string;
 };
 
 const DEFAULTS: FirewallConfig = { mode: "manual", policy: "coding", learn: true, knownHosts: [], untrustedHosts: [], source: "default" };
@@ -59,14 +63,34 @@ export function stringList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((h): h is string => typeof h === "string") : [];
 }
 
+// What an unreadable policy value selects: the strict policy, never the weaker one.
+const STRICT_POLICY: PolicyName = "engagement";
+
+function unknownPolicyMessage(where: string, value: unknown): string {
+  return `${where} names an unknown policy ${JSON.stringify(value)} (known: ${FIREWALL_POLICIES.join(", ")}); using the strict "${STRICT_POLICY}" policy until it is fixed`;
+}
+
 export function readConfig(): FirewallConfig {
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-    const raw: Record<string, unknown> = isRecord(parsed) ? parsed : {};
+    text = fs.readFileSync(configPath(), "utf8");
+  } catch (error) {
+    // Only an absent file is the coding default. One that exists but cannot be read is not.
+    if (isRecord(error) && error.code === "ENOENT") return { ...DEFAULTS };
+    return unreadableConfig(`${configPath()} cannot be read`);
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed)) return unreadableConfig(`${configPath()} is not a JSON object`);
+    const raw: Record<string, unknown> = parsed;
     const judgeModel = typeof raw.judgeModel === "string" && raw.judgeModel.trim() ? raw.judgeModel.trim() : undefined;
+    // A stored value from an earlier release (`pentest`) is migrated here and rewritten on the next write.
+    const stored = migrateStoredPolicy(raw.policy);
+    const known = stored === undefined ? "coding" : isFirewallPolicy(stored) ? stored : undefined;
     return {
       mode: raw.mode === "auto" ? "auto" : "manual",
-      policy: raw.policy === "pentest" ? "pentest" : "coding",
+      policy: known ?? STRICT_POLICY,
+      ...(known === undefined ? { invalid: unknownPolicyMessage("firewall.json policy", stored) } : {}),
       ...(judgeModel !== undefined ? { judgeModel } : {}),
       learn: raw.learn !== false,
       knownHosts: stringList(raw.knownHosts),
@@ -74,8 +98,14 @@ export function readConfig(): FirewallConfig {
       source: raw.source === "user" || raw.source === "profile" ? raw.source : "default",
     };
   } catch {
-    return { ...DEFAULTS };
+    return unreadableConfig(`${configPath()} is not valid JSON`);
   }
+}
+
+// A firewall.json that exists but cannot be trusted selects the strict policy, never the weaker one:
+// a truncated or replaced file must not loosen the gate.
+function unreadableConfig(why: string): FirewallConfig {
+  return { ...DEFAULTS, policy: STRICT_POLICY, invalid: `${why}; using the strict "${STRICT_POLICY}" policy until it is fixed` };
 }
 
 export function writeConfig(patch: Partial<FirewallConfig>): FirewallConfig {
@@ -87,7 +117,8 @@ export function writeConfig(patch: Partial<FirewallConfig>): FirewallConfig {
   } catch {
     /* new file */
   }
-  const next = { ...current, ...patch };
+  // The one-way migration of a renamed policy: rewritten here, the first write after the upgrade.
+  const next = { ...current, ...(current.policy === undefined ? {} : { policy: migrateStoredPolicy(current.policy) }), ...patch };
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
@@ -116,10 +147,15 @@ export function resolveMode(cwd: string, cfg: FirewallConfig = readConfig()): { 
   return { mode: cfg.mode, source: cfg.source === "default" ? "default" : configPath() };
 }
 
-export function resolvePolicy(cfg: FirewallConfig = readConfig()): { policy: PolicyName; source: string } {
+export function resolvePolicy(cfg: FirewallConfig = readConfig()): { policy: PolicyName; source: string; error?: string } {
   const env = process.env.PI_KIT_FIREWALL_PROFILE?.trim();
-  if (env === "pentest" || env === "coding") return { policy: env, source: `env PI_KIT_FIREWALL_PROFILE=${env}` };
-  return { policy: cfg.policy, source: cfg.source === "default" ? "default" : configPath() };
+  if (env) {
+    // A typed value is never migrated: an unknown one (including the old `pentest`) is an error and selects the strict policy.
+    if (isFirewallPolicy(env)) return { policy: env, source: `env PI_KIT_FIREWALL_PROFILE=${env}` };
+    return { policy: STRICT_POLICY, source: `env PI_KIT_FIREWALL_PROFILE=${env}`, error: unknownPolicyMessage("PI_KIT_FIREWALL_PROFILE", env) };
+  }
+  const source = cfg.source === "default" ? "default" : configPath();
+  return cfg.invalid === undefined ? { policy: cfg.policy, source } : { policy: cfg.policy, source, error: cfg.invalid };
 }
 
 // Hosts named in ~/.ssh/config (aliases and literal HostNames, no wildcards) plus firewall.json,

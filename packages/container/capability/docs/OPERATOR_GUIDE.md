@@ -25,7 +25,7 @@ Use the full kit profiles by setting `PI_KIT_PROFILE`:
 PI_KIT_PROFILE=balanced docker compose -f capability/compose/compose.yaml --env-file capability/env/defaults.env up -d --build
 ```
 
-`quick` is the smallest general profile and `balanced` is the default. `long-horizon`, `autonomous`, and `self-improving` are for longer or more advanced sessions. `lite` is for small local models and tight context limits.
+`lite` is the smallest general profile (quick tasks, small local models and tight context limits) and `balanced` is the default. `long-horizon` and `self-improving` are for longer or more advanced sessions.
 
 Profiles, extension building, status bar costs, and searchable docs live in `docs/index.md` of the Luna repository.
 
@@ -67,7 +67,7 @@ tool-policy.json
 ```
 
 The compose files mount that directory **read-only** at `/workspace/engagement`, where
-`pentest-governance-domain` reads it, so the agent cannot widen its own scope or tool policy from
+`engagement-governance` reads it, so the agent cannot widen its own scope or tool policy from
 inside the container; edit the files on the host. An empty directory means no engagement. The
 mount is checked by `tests/compose-policy-smoke.ts`. The committed `*.example.yaml` files are
 examples only.
@@ -88,8 +88,8 @@ Useful Pi commands:
 /mcp
 /mcp setup
 /footer status
-/pentest:status
-/pentest:actions
+/engagement:status
+/engagement:actions
 /model
 /compact
 ```
@@ -110,13 +110,13 @@ Direct Pi tools such as `bash`, `write`, `edit`, `read`, `grep`, `find`, and `ls
 
 For coding work, configure MCP servers that provide repository, filesystem, search, shell, and test capabilities. Keep those servers behind the MCP proxy and classify their tools in the engagement policy before use.
 
-Coding and documentation MCP tools should use non-target action types such as repository, filesystem, or test execution. The scope/ROE gate is intentionally applied to target-facing action types and inputs so long-horizon coding work can still proceed through policy and approval without pretending local repo operations are pentest target activity.
+Coding and documentation MCP tools should use non-target action types such as repository, filesystem, or test execution. The scope/ROE gate is intentionally applied to target-facing action types and inputs so long-horizon coding work can still proceed through policy and approval without pretending local repo operations are engagement target activity.
 
 ## Small Context Profile
 
 For small local models or tight context limits, use `.pi/settings.small-context.json` and `engagement/model.small.example.json` as overlay templates. The workflow should checkpoint before compaction and keep exactly one active step.
 
-Start recovery or continuation by calling `pi_system_governance.state_summary` with `max_items` no higher than 5. Use `.pi/prompts/code-compact.md`, `.pi/prompts/pentest-compact.md`, or `.pi/prompts/agent-checkpoint.md` so handoffs stay in stable `task_state` or `pentest_state` blocks.
+Start recovery or continuation by calling `pi_system_governance.state_summary` with `max_items` no higher than 5. Use `.pi/prompts/code-compact.md`, `.pi/prompts/engagement-compact.md`, or `.pi/prompts/agent-checkpoint.md` so handoffs stay in stable `task_state` or `engagement_state` blocks.
 
 For Luna's `lite` profile, see `docs/profiles.md` in the Luna repository.
 

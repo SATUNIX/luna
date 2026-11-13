@@ -1,4 +1,5 @@
 ---
+description: "Review a proposed MCP tool call before it runs"
 argument-hint: "[server, tool and inputs]"
 ---
 

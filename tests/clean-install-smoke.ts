@@ -263,6 +263,12 @@ try {
     }
     const errors = events.filter((e) => /error/i.test(typeof e.type === "string" ? e.type : "") || (e.method === "notify" && e.notifyType === "error"));
     assert.deepEqual(errors, [], `${profile}: pi reported extension errors: ${JSON.stringify(errors).slice(0, 600)}`);
+    // The installer applied the profile itself: the first start needs no /reload and no auto-profile notice.
+    const reloadAsks = events.filter((e) => e.method === "notify" && typeof e.message === "string" && /\/reload|applied the .* profile/.test(e.message));
+    assert.deepEqual(reloadAsks, [], `${profile}: the first start asked for a reload`);
+    // With no model configured there is nothing to size compaction for, so no compaction warning either.
+    const warnings = events.filter((e) => e.method === "notify" && e.notifyType === "warning" && typeof e.message === "string" && /compaction/i.test(e.message));
+    assert.deepEqual(warnings, [], `${profile}: a first start with no model warned about compaction`);
     assert.ok(!/failed to load|cannot find module|unhandled/i.test(stderr), `${profile}: pi wrote load errors to stderr:\n${stderr.slice(-600)}`);
     ok(`profile ${profile}: installed from the artefact, real pi loaded ${selected} extensions with no error and offers ${commands.size} commands`);
   }

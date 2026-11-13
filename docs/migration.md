@@ -32,7 +32,7 @@ node ~/.pi/agent/git/github.com/SATUNIX/luna/packages/core/install.mjs \
   --profile <your profile> --yes --settings-only --capture-overrides
 ```
 
-(Once a release is tagged, `pi install git:github.com/SATUNIX/luna@v0.3.0-beta.3` pins it.) The
+(Once a release is tagged, `pi install git:github.com/SATUNIX/luna@v0.4.0-beta.0` pins it.) The
 installer sees the retired registration and:
 
 - **registers the public source and removes the retired one**, so Luna is not loaded twice

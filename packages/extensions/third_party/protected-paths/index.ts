@@ -10,7 +10,7 @@ import { inlineAgentConfigWrite, patchCallTargets, patchCallsInText } from "./sh
 //             `node_modules/` and `.pi/agents/` are ordinary work there, except git's
 //             hooks/, config and info/ and a linked worktree's link to its git dir (see
 //             gitControlPaths), protected under both.
-//   pentest — everything in coding plus repository internals, dependencies, agent
+//   engagement — everything in coding plus repository internals, dependencies, agent
 //             definitions and the engagement records.
 // PI_KIT_PROTECTED_PATHS (semicolon-separated) can only ADD entries.
 const CODING_PROTECTED = [
@@ -33,7 +33,7 @@ const CODING_PROTECTED = [
   "packages/core/policies/",
   "packages/extensions/src/tool-firewall/default-policy.json",
 ];
-const PENTEST_PROTECTED = [
+const ENGAGEMENT_PROTECTED = [
   ...CODING_PROTECTED,
   ".git/", "node_modules/", ".pi/agents/", ".pi/pentest/", ".pi/engagement/",
 ];
@@ -51,15 +51,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // Self-contained mirror of tool-firewall's resolvePolicy: env, then firewall.json, then coding.
-// An unreadable config falls back to coding, whose list still covers secrets and control files.
-export function firewallPolicy(): "coding" | "pentest" {
-  const env = process.env.PI_KIT_FIREWALL_PROFILE?.trim().toLowerCase();
-  if (env === "pentest" || env === "coding") return env;
+// An absent config is coding, whose list still covers secrets and control files. A
+// config that exists but cannot be read or parsed, or a policy value this kit does not know, selects the stricter list, never the weaker one; `pentest` in
+// a stored firewall.json is the pre-rename spelling of `engagement`.
+export function firewallPolicy(): "coding" | "engagement" {
+  const env = process.env.PI_KIT_FIREWALL_PROFILE?.trim();
+  if (env === "coding") return env;
+  if (env) return "engagement";
   try {
     const config: unknown = JSON.parse(fs.readFileSync(firewallConfigPath(), "utf8"));
-    if (isRecord(config) && config.policy === "pentest") return "pentest";
-  } catch {
-    /* no config: coding */
+    if (!isRecord(config) || Array.isArray(config)) return "engagement";
+    if (config.policy !== undefined && config.policy !== "coding") return "engagement";
+  } catch (error) {
+    // Only an absent file is coding; one that exists but is unreadable or not JSON is strict.
+    if (!(isRecord(error) && error.code === "ENOENT")) return "engagement";
   }
   return "coding";
 }
@@ -174,7 +179,7 @@ function readText(file: string): string {
 }
 
 function getProtectedPaths(cwd: string): string[] {
-  const policyDefaults = firewallPolicy() === "pentest" ? PENTEST_PROTECTED : CODING_PROTECTED;
+  const policyDefaults = firewallPolicy() === "engagement" ? ENGAGEMENT_PROTECTED : CODING_PROTECTED;
   const git = trustedGitControl(cwd);
   const mainCheckout = git.roots.flatMap((root) => policyDefaults.filter((entry) => entry.includes("/")).map((entry) => normalizeSlashes(path.join(root, entry))));
   const defaults = [...policyDefaults, ...git.paths, ...mainCheckout];

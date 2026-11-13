@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "input"],
   "registers": { "tools": [], "commands": ["caveman"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

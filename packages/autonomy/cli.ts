@@ -27,6 +27,9 @@ import { authorisationStatus, boundaryDigest, decideStart, renderBoundary } from
 import { num, parseArgs } from "./lib/cli-args.ts";
 import { type Budget, formatProblems, resolveContract, type RunContract, type TemplateId } from "./lib/contract.ts";
 import { type EffortApi, effortApi } from "./lib/effort.ts";
+import { type EngineCli, engineInfo, setupReport, setupText, unattendedLine } from "./lib/doctor.ts";
+import { engineIsRootless } from "./lib/docker.ts";
+import { providerKey } from "./lib/runtime.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
 import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
 import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
@@ -91,6 +94,8 @@ export interface CliDeps {
   confirm: (question: string) => Promise<boolean>;
   /** Ask for a line on the terminal; an empty answer is `def`. */
   ask: (question: string, def?: string) => Promise<string>;
+  /** Run the container engine's CLI (podman or docker); `doctor --setup` and `plan` ask it about itself. */
+  engineCli: EngineCli;
   /** Start a detached supervisor for the run; returns its pid. */
   spawnSupervisor: (run: string, store: RunStore) => number | undefined;
 }
@@ -136,6 +141,10 @@ export function defaultDeps(): CliDeps {
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       try { const a = (await rl.question(def ? `${question} [${def}] ` : `${question} `)).trim(); return a || def; } finally { rl.close(); }
     },
+    engineCli: (engine, args) => {
+      const r = spawnSync(engine, [...args], { encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+      return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+    },
     /** Start `cli.ts supervise --run <id>` detached, logging to the run's supervisor.log. */
     spawnSupervisor: (run: string, store: RunStore) => {
       fs.mkdirSync(store.p.root, { recursive: true });
@@ -156,6 +165,17 @@ function loadConfig(file: string | undefined, deps: CliDeps, { checkFs = true }:
   try { raw = parseJson(text); } catch (e) { throw new CliError("invalid", `${file} is not valid JSON: ${String(messageOf(e))}`); }
   const r = resolveContract(raw, { baseDir: path.dirname(path.resolve(file)), effort: deps.effort, checkFs });
   return { ...r, raw, file: path.resolve(file) };
+}
+
+/** This kit's version (the root package.json), which the image's kit-ref label is compared against. */
+const kitVersion = (): string => {
+  try { const pkg = parseJson(fs.readFileSync(path.join(HERE, "package.json"), "utf8")); return isRecord(pkg) && typeof pkg["version"] === "string" ? pkg["version"] : "unknown"; } catch { return "unknown"; }
+};
+
+/** Whether the engine is rootless, or null when it does not answer (plan then says it is unknown). */
+function engineRootless(engine: "podman" | "docker", deps: CliDeps): boolean | null {
+  const info = engineInfo(deps.engineCli, engine);
+  return isRecord(info) ? engineIsRootless(info) : null;
 }
 
 const effortFor = (deps: CliDeps): EffortApi | null => effortApi(deps.effort);
@@ -503,7 +523,9 @@ const commands: Record<string, Command> = {
       wrote = cfg.file;
     }
     const data = { ok: cfg.ok, run: cfg.contract.run, template: cfg.contract.template, legacy: cfg.legacy, problems: cfg.problems, digest: b.digest, boundary: b.json.boundary, invariants: b.json.invariants, authorisation, effort: cfg.contract.effort, ...(wrote !== undefined ? { wrote } : {}) };
-    const text = [cfg.problems.length ? `${formatProblems(cfg.problems)}\n` : "", b.text, "", `authorisation: ${authorisation.status}${authorisation.status === "authorised" ? ` by ${String(authorisation.by)} at ${String(authorisation.at)}` : authorisation.status === "mismatch" ? " (the contract changed since it was authorised)" : ""}`, cfg.ok ? "" : "The contract has errors; fix them before starting."].filter((x) => x !== "").join("\n");
+    // Only a run that asks for unattended operation needs to know whether this engine enforces it.
+    const unattended = cfg.contract.permissions.unattended.authorised ? unattendedLine(engineRootless(cfg.contract.runtime.engine, deps)) : null;
+    const text = [cfg.problems.length ? `${formatProblems(cfg.problems)}\n` : "", b.text, "", ...(unattended ? [unattended] : []), `authorisation: ${authorisation.status}${authorisation.status === "authorised" ? ` by ${String(authorisation.by)} at ${String(authorisation.at)}` : authorisation.status === "mismatch" ? " (the contract changed since it was authorised)" : ""}`, cfg.ok ? "" : "The contract has errors; fix them before starting."].filter((x) => x !== "").join("\n");
     return { data, text };
   },
 
@@ -586,9 +608,24 @@ const commands: Record<string, Command> = {
     return { data: { runs: rows.map(({ run, u }) => ({ run, unpublished: u })) }, text };
   },
 
-  /** Exit non-zero while any run has merged work that is not published. */
+  /**
+   * Exit non-zero while any run has merged work that is not published. With `--setup`, report what
+   * this host can do for an unattended run instead: the engine, whether unattended mode is enforced
+   * on it, the image against this kit's version, and whether a provider key resolves.
+   */
   async doctor(argv, deps) {
-    parseArgs(argv, { flags: ["json"] });
+    const { opts } = parseArgs(argv, { values: ["config", "engine", "image"], flags: ["json", "setup"] });
+    if (opts.setup) {
+      const cfg = opts.config ? loadConfig(opts.config, deps) : null;
+      if (cfg && !cfg.ok) throw new CliError("invalid", formatProblems(cfg.problems), { problems: cfg.problems });
+      const contract = cfg?.ok ? cfg.contract : null;
+      const engine = opts.engine ?? contract?.runtime.engine ?? "podman";
+      if (engine !== "podman" && engine !== "docker") throw new CliError("usage", '--engine must be "podman" or "docker"');
+      let keyPresent: boolean | null = null;
+      if (contract) { try { providerKey(contract, deps.env); keyPresent = true; } catch { keyPresent = false; } }
+      const report = setupReport({ engine, image: opts.image ?? contract?.runtime.image ?? "pi-autonomy:local", kitVersion: kitVersion(), unattendedRequested: contract?.permissions.unattended.authorised ?? false, keyPresent, cli: deps.engineCli });
+      return { data: { ...report }, text: setupText(report), exit: report.ok ? 0 : 3 };
+    }
     const ahead = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead");
     if (!ahead.length) return { data: { ok: true, ahead: [] }, text: "doctor: every run's merged work is published" };
     const text = `doctor: ${ahead.length} run${ahead.length === 1 ? "" : "s"} with unpublished merged work:\n${ahead.map(({ run, u }) => `  run ${run}: ${unpublishedText(u) ?? "ahead"}`).join("\n")}\nPush the work (or recreate the run) before it is lost.`;
@@ -887,6 +924,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   top [--run <id>]                       every run, and whether it has merged work not yet published
   inbox                                  runs waiting on you for over 30 minutes
   doctor                                 exit non-zero when merged work is unpublished
+  doctor --setup [--config run.json] [--engine podman|docker] [--image <tag>]   engine, whether unattended is enforced, image vs kit, key present
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json
   board claim <id> --run <id> --by <agent>   atomically claim one board item

@@ -1,14 +1,14 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "provider-router",
-  "summary": "Opt-in model router that switches between two operator-configured models (hot_path_model and strong_model) by task class from PI_KIT_ROUTING_POLICY; a no-op when the policy is unset, and it does not select providers by cost or availability or manage local model runtimes.",
+  "summary": "Opt-in model router that switches between two operator-configured models (hot_path_model and strong_model) by task class from PI_KIT_ROUTING_POLICY; a no-op when the policy is unset. The policy may also list up to three fallback models: on a credit, rate-limit or server failure reported by finish-reason-retry the session moves to the next one that is not cooling down and returns afterwards. It does not select providers by cost or manage local model runtimes.",
   "category": "execution",
   "tier": "T3",
   "layer": 4,
   "entry": "index.ts",
   "hooks": ["before_agent_start", "session_start"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["long-horizon", "self-improving", "engagement"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

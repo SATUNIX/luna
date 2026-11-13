@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start"],
   "registers": { "tools": ["branch_create", "branch_list", "branch_switch", "branch_discard", "branch_merge"], "commands": [] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["long-horizon", "self-improving", "engagement"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

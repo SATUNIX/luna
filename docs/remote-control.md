@@ -55,9 +55,7 @@ flowchart LR
    character or an emoji is never split or allowed past the edge; when a wide character does not fit
    the continuation indent it moves whole to the next line, keeping the rest of the word, and only a
    grapheme wider than the whole line is dropped. `tests/remote-control-extension-smoke.ts`
-   pins the three layouts and that no line is wider than the terminal;
-   `tests/tui-layout-smoke.ts` pins the same at 20 to 120 columns with wide input, and that a shown
-   QR code stays inside the rows the panel reserved.
+   pins the three layouts and that no line is wider than the terminal.
 3. In the app, tap **Link a computer** and scan the QR code. The camera app works too: the code is
    a `pirc://pair` link that opens pi remote. Without a camera, choose **Enter the details
    instead** and type an address, the port and the code; the app then shows the fingerprint of the

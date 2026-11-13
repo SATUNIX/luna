@@ -211,12 +211,12 @@ export default function (pi: ExtensionAPI) {
     name: "record_verdict",
     label: "Verdict: record",
     description:
-      "Record a verdict from a check, reviewer, or validator. Use it only for a result that another check or reviewer produced, not to grade your own work. The mission is not done until all verdicts pass.",
+      "Record a verdict from a check or reviewer, never your own grade. The mission is not done until all verdicts pass.",
     parameters: Type.Object({
-      source: Type.String({ description: "Who or what produced this verdict, e.g. 'reviewer', 'tests', 'lint', 'manual-check'" }),
-      pass: Type.Boolean({ description: "Did this check pass?" }),
-      summary: Type.String({ description: "One-line result, or what must be fixed if it failed" }),
-      evidence: Type.Optional(Type.String({ description: "Where the result came from: a command and its exit code, a file path, or a report path" })),
+      source: Type.String({ description: "Who produced it: 'reviewer', 'tests', 'lint'" }),
+      pass: Type.Boolean(),
+      summary: Type.String({ description: "One line, or what must be fixed" }),
+      evidence: Type.Optional(Type.String({ description: "Command and exit code, or a file path" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (isTrustedVerdictSource(params.source)) {

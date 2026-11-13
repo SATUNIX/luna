@@ -57,4 +57,4 @@ A git install of Luna includes `packages/autonomy`; the npm package deliberately
 runner (`packages/core/pack-check.ts` forbids it), so under npm delivery `/autonomy` says the CLI is
 not installed.
 
-Ships in the `autonomous` profile only.
+Ships in the `long-horizon` profile only.

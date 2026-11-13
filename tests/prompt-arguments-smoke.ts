@@ -9,7 +9,7 @@
 //   3. A profile that allowlists skills hidden by `disable-model-invocation` loads `skill-router`,
 //      the only way the model can find them; a profile that lists the `memory` skill loads a
 //      memory extension that registers `memory_save`.
-//   4. A prompt shown in a profile without `pentest-governance-domain` only calls the
+//   4. A prompt shown in a profile without `engagement-governance` only calls the
 //      `pi_system_governance` MCP tools conditionally.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -103,11 +103,11 @@ try {
   }
   ok("every profile that lists hidden skills loads skill-router, and every profile listing the memory skill loads memory-vault");
 
-  // 4. Governance MCP calls are conditional outside pentest.
+  // 4. Governance MCP calls are conditional outside engagement.
   const conditional = "If the `pi_system_governance` MCP server is available";
   for (const name of listProfiles()) {
     const def = loadProfileDef(name);
-    if ((def.include ?? []).includes("pentest-governance-domain")) continue;
+    if ((def.include ?? []).includes("engagement-governance")) continue;
     const off = new Set(excludedPrompts(def, normalizeOverrides({})));
     for (const t of templates) {
       if (off.has(t.name)) continue;
@@ -116,7 +116,7 @@ try {
       }
     }
   }
-  ok("prompts shown outside pentest only call pi_system_governance tools when the server is available");
+  ok("prompts shown outside engagement only call pi_system_governance tools when the server is available");
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -17,7 +17,7 @@
  *    recovery extension has recovery active, and only for read-only roles;
  *  - "mandatory" launches (completion review, validators) are required by verification policy,
  *    so they are always allowed up to a fixed bound and never draw on the discretionary budget;
- *  - "user" launches are ones the person typed (a /workflow command): they are not the agent's own
+ *  - "user" launches are ones the person typed (a /workflows command): they are not the agent's own
  *    initiative, so only the platform ceilings bound them, and they never draw on the tier budget;
  *  - "workflow" launches are the agents of a script-workflow run. They are charged to the session's
  *    workflow ledger, a separate file that the per-turn scope rotation never replaces, against the

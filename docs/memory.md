@@ -52,8 +52,10 @@ near-identical title updates the existing note instead of copying it.
 
 ## Recall
 
-Memories are recalled into a **hidden message** before your prompt, never into the system
-prompt (that would break prompt caching). Recall is scoped to the current project plus
+Memories are recalled as a **carried note**: text added to each request after your messages,
+through pi's `context` event. It is never written into the session file, never replayed as a
+stored user turn, and never put in the system prompt (that would break prompt caching). Compaction
+drops what was carried, so it is offered again afterwards (`tests/memory-vault-smoke.ts`). Recall is scoped to the current project plus
 global memories. It is gated by relevance (BM25 with stopwords and stemming, a minimum score,
 and two matching terms for multi-word prompts); light stemming makes common inflections meet, so a
 note saved as "files" is recalled by "file" and vice versa.

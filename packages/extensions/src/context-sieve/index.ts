@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDirSafe, writeFileSafe } from "./shared/safe-fs.ts";
+import { buildSurvivor, lastTouchedFiles, SURVIVOR_ID } from "./survivor.ts";
 
 interface Contribution {
   id: string;
@@ -15,7 +16,7 @@ interface Contribution {
 const DEFAULT_BUDGET_TOKENS = 4096;
 const DEFAULT_MESSAGE_BUDGET_TOKENS = 1200;
 const CHARS_PER_TOKEN = 4;
-const MESSAGE_FRAMING = "[Context for this request — injected automatically, not written by the user]\n\n";
+const MESSAGE_FRAMING = "Working notes for this request, from Luna extensions:\n\n";
 
 // Upper bound on a single contribution file. Files above this are skipped before parse so a
 // runaway/hostile producer cannot force a huge JSON parse on every before_agent_start.
@@ -65,7 +66,7 @@ export function compareContributions(a: Contribution, b: Contribution): number {
 //    (memory recall, delegation directives, loop/progress nudges). Appending a message keeps
 //    the cached prefix intact; rewriting the system prompt every turn (the previous behaviour
 //    for all contributions) threw the cache away on nearly every prompt.
-const DYNAMIC_IDS = new Set(["memory-local", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop"]);
+const DYNAMIC_IDS = new Set([SURVIVOR_ID, "memory-local", "orchestrator", "progress-guard", "recovery-orchestrator", "autonomous-loop"]);
 
 function channelOf(c: Contribution): "system" | "message" {
   if (c.channel === "system" || c.channel === "message") return c.channel;
@@ -269,8 +270,32 @@ export default function (pi: ExtensionAPI) {
   // Reset when compaction may have summarised the earlier copies away.
   const lastInjected = new Map<string, string>();
 
-  pi.on("session_compact", async () => {
+  // The branch's last edited files, read before compaction removes the entries that name them.
+  let touchedBeforeCompact: string[] = [];
+  pi.on("session_before_compact", async (event, ctx) => {
+    try {
+      const entries: unknown = (event as { branchEntries?: unknown }).branchEntries ?? ctx.sessionManager.getBranch();
+      touchedBeforeCompact = Array.isArray(entries) ? lastTouchedFiles(entries) : [];
+    } catch {
+      touchedBeforeCompact = [];
+    }
+    return undefined;
+  });
+
+  // After a compaction, pin the state the summary may have dropped: written as a message-channel
+  // contribution for the next prompt (removed once injected, see before_agent_start).
+  pi.on("session_compact", async (_event, ctx) => {
     lastInjected.clear();
+    try {
+      const sessionId = resolveSessionId(ctx.sessionManager);
+      const text = buildSurvivor({ cwd: ctx.cwd, sessionId, files: touchedBeforeCompact });
+      const file = path.join(contribDir || getContribDir(ctx.cwd, sessionId), `${SURVIVOR_ID}.json`);
+      if (text === "") return;
+      ensureDirSafe(path.dirname(file), { root: ctx.cwd });
+      writeFileSafe(file, JSON.stringify({ id: SURVIVOR_ID, priority: 95, budgetTokens: 500, channel: "message", content: text }), { root: ctx.cwd });
+    } catch {
+      /* the record is best effort: a refused directory leaves the summary alone */
+    }
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -347,6 +372,8 @@ export default function (pi: ExtensionAPI) {
       }
       if (stillCurrentIds.length > 0) content += `\n\n(Still current, injected earlier in this conversation: ${stillCurrentIds.join(", ")}.)`;
       for (const id of injected) lastInjected.set(id, current.get(id) ?? "");
+      // The survivor record is for one prompt: it is gone once it has been shown.
+      if (injected.includes(SURVIVOR_ID)) fs.rmSync(path.join(dir, `${SURVIVOR_ID}.json`), { force: true });
       result.message = { customType: "context-sieve", content, display: false };
     }
 
@@ -365,9 +392,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Pi's supported compaction return contract can cancel or replace the whole
-  // summary; it cannot amend summarizer instructions. A truncated transcript is
-  // not a summary and discards later corrections. Leave native summarization and
-  // its full prepared transcript intact. Current contributions remain available
-  // to ordinary prompt assembly; do not import an unscoped GOAL.yaml here.
-  pi.on("session_before_compact", async () => undefined);
+  // summary; it cannot amend summarizer instructions, and a truncated transcript
+  // is not a summary. So session_before_compact above only reads and returns
+  // undefined: native summarization gets its full prepared transcript, and the
+  // survivor record (session_compact) carries what the summary may drop.
 }

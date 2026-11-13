@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { appendFileSafe, rotateFileSafe } from "./shared/safe-fs.ts";
+import { asResult, asUsage, cacheDrop, renderUsage, resultChars, summariseUsage, usageFromMessage, type ResultRecord, type UsageRecord } from "./usage.ts";
 
 // trace-ledger: append-only action records in .pi/trace.jsonl; memory windows are bounded.
 // EFF-6: before an append, a ledger over ROTATE_BYTES is renamed to trace.jsonl.1 (one old copy,
@@ -41,6 +42,8 @@ interface Entry {
   target?: string | undefined;
   argsHash: string;
   status?: "ok" | "error";
+  /** Characters of text the tool returned (results only). */
+  chars?: number;
 }
 
 function ledgerPath(cwd: string): string {
@@ -94,7 +97,7 @@ function shortTarget(t: string): string {
 // The ledger lives in the workspace, which a cloned repository controls: every directory from the
 // workspace root down and the file itself are opened without following symlinks (./shared/safe-fs.ts,
 // tests/workspace-symlink-smoke.ts). A planted link makes the append fail, never redirect.
-function appendEntry(cwd: string, entry: Entry): void {
+function appendEntry(cwd: string, entry: object): void {
   const p = ledgerPath(cwd);
   rotateFileSafe(p, ROTATE_BYTES, { root: cwd });
   appendFileSafe(p, JSON.stringify(entry) + "\n", { root: cwd });
@@ -117,14 +120,13 @@ function toLedgerRecord(value: unknown): LedgerRecord | null {
   return { kind, tool, target, ...(status === undefined ? {} : { status }) };
 }
 
-function readEntries(cwd: string, tail: number): { entries: LedgerRecord[]; corrupt: number } {
-  const p = ledgerPath(cwd);
-  // Read a bounded byte tail rather than the whole shared file.
+/** The ledger's last megabyte as lines: a bounded read of a file other writers share. */
+function readTailLines(cwd: string): string[] {
   let fd: number;
   try {
-    fd = fs.openSync(p, "r");
+    fd = fs.openSync(ledgerPath(cwd), "r");
   } catch {
-    return { entries: [], corrupt: 0 }; // no ledger yet
+    return []; // no ledger yet
   }
   try {
     const size = fs.fstatSync(fd).size;
@@ -133,21 +135,43 @@ function readEntries(cwd: string, tail: number): { entries: LedgerRecord[]; corr
     const bytes = fs.readSync(fd, buffer, 0, buffer.length, start);
     let text = buffer.subarray(0, bytes).toString("utf8");
     if (start > 0) text = text.slice(text.indexOf("\n") + 1);
-    // Parse per line: one corrupt record must not abort the whole /trace summary.
-    const entries: LedgerRecord[] = [];
-    let corrupt = 0;
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      try {
-        // A syntactically valid non-object (null, false, 0), or an object whose fields have the
-        // wrong type, is corrupt: same skip/count path as a parse failure.
-        const record = toLedgerRecord(JSON.parse(line));
-        if (record) entries.push(record);
-        else corrupt++;
-      } catch { corrupt++; }
-    }
-    return { entries: entries.slice(-tail), corrupt };
+    return text.split("\n").filter(Boolean);
   } finally { fs.closeSync(fd); }
+}
+
+function readEntries(cwd: string, tail: number): { entries: LedgerRecord[]; corrupt: number } {
+  // Parse per line: one corrupt record must not abort the whole /trace summary.
+  const entries: LedgerRecord[] = [];
+  let corrupt = 0;
+  for (const line of readTailLines(cwd)) {
+    try {
+      const raw: unknown = JSON.parse(line);
+      if (isRecord(raw) && raw.kind === "usage") continue; // accounting records, read by /usage
+      // A syntactically valid non-object (null, false, 0), or an object whose fields have the
+      // wrong type, is corrupt: same skip/count path as a parse failure.
+      const record = toLedgerRecord(raw);
+      if (record) entries.push(record);
+      else corrupt++;
+    } catch { corrupt++; }
+  }
+  return { entries: entries.slice(-tail), corrupt };
+}
+
+/** Usage and result records of this run, plus its children's (same workspace, written since this run began). */
+function readAccounting(cwd: string, runId: string, since: string): { usage: UsageRecord[]; results: ResultRecord[] } {
+  const usage: UsageRecord[] = [];
+  const results: ResultRecord[] = [];
+  for (const line of readTailLines(cwd)) {
+    let raw: unknown;
+    try { raw = JSON.parse(line); } catch { continue; }
+    if (!isRecord(raw) || typeof raw.ts !== "string") continue;
+    if (raw.runId !== runId && !(typeof raw.childId === "string" && raw.ts >= since)) continue;
+    const u = asUsage(raw);
+    if (u) { usage.push(u); continue; }
+    const r = asResult(raw);
+    if (r) results.push(r);
+  }
+  return { usage, results };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -155,6 +179,11 @@ export default function (pi: ExtensionAPI) {
   let sequence = 0;
   let lostEntries = 0;
   const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  // A kit child (subagent, workflow agent) writes the same workspace ledger; its records say so.
+  const childId = process.env.PI_KIT_INTERNAL_CHILD === "1" ? `child-${process.pid}` : null;
+  let pendingResultChars: Record<string, number> = {};
+  let lastUsage: UsageRecord | undefined;
   let failureNotified = false;
 
   function health(ctx: ExtensionContext, failed: boolean): void {
@@ -167,12 +196,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function metadata(ctx: ExtensionContext, toolCallId?: string) {
-    return { eventId: crypto.randomUUID(), runId, sessionId: ctx.sessionManager?.getSessionId?.() ?? null,
+    return { eventId: crypto.randomUUID(), runId, childId, sessionId: ctx.sessionManager?.getSessionId?.() ?? null,
       processId: process.pid, cwd: ctx.cwd, toolCallId: toolCallId ?? null, sequence: ++sequence, lostEntries,
       retention: "append-only/rotated-at-4MiB" as const };
   }
 
-  function persist(ctx: ExtensionContext, entry: Entry): void {
+  function persist(ctx: ExtensionContext, entry: object): void {
     try { appendEntry(ctx.cwd ?? process.cwd(), entry); if (failureNotified) health(ctx, false); }
     catch { lostEntries += 1; health(ctx, true); }
   }
@@ -216,9 +245,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event, ctx) => {
     const c = ctx;
-    const ev = event as { toolName?: string; input?: unknown; isError?: boolean; toolCallId?: string };
+    const ev = event as { toolName?: string; input?: unknown; isError?: boolean; toolCallId?: string; content?: unknown };
     const tool = ev.toolName ?? "unknown";
+    const chars = resultChars(ev.content);
+    pendingResultChars[tool] = (pendingResultChars[tool] ?? 0) + chars;
     const entry: Entry = {
+      chars,
       ...metadata(c, ev.toolCallId),
       ...targetOf(ev.input),
       ts: new Date().toISOString(),
@@ -234,6 +266,31 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", async () => { turn += 1; });
+
+  // One record per model request, as the provider reported it. The tool results returned since the
+  // previous request are the ones this request carried, so their size is attributed to it.
+  pi.on("message_end", async (event, ctx) => {
+    const record = usageFromMessage((event as { message?: unknown }).message, { runId, childId, resultChars: pendingResultChars });
+    if (!record) return undefined;
+    pendingResultChars = {};
+    persist(ctx, { ...metadata(ctx), turn, tool: "model", ...record });
+    if (cacheDrop(lastUsage, record) && ctx.hasUI) {
+      ctx.ui.setStatus?.("trace-ledger-cache", "cache: hit rate dropped (prompt prefix changed or cache expired); see /usage");
+    } else if (lastUsage && ctx.hasUI && record.cacheRead > 0) ctx.ui.setStatus?.("trace-ledger-cache", undefined);
+    if (record.input + record.cacheRead + record.cacheWrite > 0) lastUsage = record;
+    return undefined;
+  });
+
+  pi.registerCommand("usage", {
+    description: "Where this session's tokens and money went: by model, child and tool, cache hit rate, the largest results.",
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI) return;
+      try {
+        const { usage, results } = readAccounting(ctx.cwd ?? process.cwd(), runId, startedAt);
+        ctx.ui.notify(renderUsage(summariseUsage(usage, results)), "info");
+      } catch { ctx.ui.notify("usage: the ledger could not be read", "error"); }
+    },
+  });
 
   pi.registerCommand("trace", {
     description: "Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads.",

@@ -7,69 +7,67 @@
 
 | Profile | Task class | Tiers | Extensions |
 |---|---|---|---|
-| `lite` | Low-context / small local models | T0–T1 | 23 |
-| `quick` | Quick fix | T0–T1 | 25 |
+| `lite` | Quick fixes / small local models | T0–T1 | 24 |
 | `balanced` | Daily coding | T0–T2 | 35 |
-| `long-horizon` | Multi-hour / multi-day | T0–T3 | 40 |
-| `autonomous` | Set-and-walk-away | T0–T3 | 42 |
-| `self-improving` | Full / self-improving (experimental) | T0–T4 | 47 |
-| `pentest` | Security engagement (strict) | T0–T3+ | 41 |
+| `long-horizon` | Multi-hour / multi-day / set-and-walk-away | T0–T3 | 43 |
+| `self-improving` | Full / self-improving (experimental) | T0–T4 | 48 |
+| `engagement` | Security engagement (strict) | T0–T3+ | 42 |
 
 ## Extension × profile
 
-| Extension | Category | Status | lite | quick | balanced | long&#8209;horizon | autonomous | self&#8209;improving | pentest |
-|---|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `branch-lab` | execution | beta | · | · | · | ✓ | ✓ | ✓ | ✓ |
-| `dual-review` | execution | experimental | · | · | · | · | · | ✓ | · |
-| `git-checkpoint` | execution | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `provider-router` | execution | beta | · | · | · | ✓ | ✓ | ✓ | ✓ |
-| `self-improvement` | execution | beta | · | · | · | · | · | ✓ | · |
-| `skill-forge` | execution | beta | · | · | · | · | · | ✓ | · |
-| `tool-capture` | execution | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `trace-ledger` | execution | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `verifier-board` | execution | beta | ✓ | · | · | ✓ | ✓ | ✓ | ✓ |
-| `verify-gate` | execution | beta | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `pi-lens` | external | external | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `pi-readseek` | external | external | ✓ | · | · | ✓ | ✓ | ✓ | ✓ |
-| `context-sieve` | memory | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `memory-mem0` | memory | experimental | · | · | · | · | · | ✓ | · |
-| `memory-vault` | memory | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `save` | memory | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `conductor` | planning | beta | · | · | · | · | · | ✓ | ✓ |
-| `goal-core` | planning | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `orchestrator` | planning | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `plan-mode` | planning | stable | · | · | · | · | · | ✓ | · |
-| `spec-plan` | planning | stable | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `subagent` | planning | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `task-graph` | planning | beta | · | · | · | ✓ | ✓ | ✓ | ✓ |
-| `delegation-guard` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `dirty-repo-guard` | safety | stable | · | · | · | · | · | ✓ | · |
-| `finish-reason-retry` | safety | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `pentest-governance-domain` | safety | beta | · | · | · | · | · | · | ✓ |
-| `protected-paths` | safety | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `secret-guard` | safety | beta | · | · | ✓ | · | ✓ | · | · |
-| `tool-firewall` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `control-center` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `custom-footer` | ui | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `human-console` | ui | beta | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `kit-update` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `notify` | ui | stable | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `remote-control` | ui | beta | · | · | ✓ | ✓ | ✓ | ✓ | · |
-| `session-helpers` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `web-console` | ui | beta | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `autonomous-loop` | workflow | beta | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `autonomy-run` | workflow | beta | · | · | · | · | ✓ | · | · |
-| `caveman` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `compress` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `custom-compaction` | workflow | stable | · | · | ✓ | · | · | · | · |
-| `effort` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `guidelines` | workflow | stable | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `handoff` | workflow | stable | · | · | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `progress-guard` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `recovery-orchestrator` | workflow | beta | · | · | · | ✓ | ✓ | ✓ | ✓ |
-| `skill-router` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `todo` | workflow | stable | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `trigger-compact` | workflow | stable | · | · | · | ✓ | ✓ | ✓ | ✓ |
+| Extension | Category | Status | lite | balanced | long&#8209;horizon | self&#8209;improving | engagement |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|
+| `branch-lab` | execution | beta | · | · | ✓ | ✓ | ✓ |
+| `dual-review` | execution | experimental | · | · | · | ✓ | · |
+| `git-checkpoint` | execution | stable | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `provider-router` | execution | beta | · | · | ✓ | ✓ | ✓ |
+| `self-improvement` | execution | beta | · | · | · | ✓ | · |
+| `skill-forge` | execution | beta | · | · | · | ✓ | · |
+| `tool-capture` | execution | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `trace-ledger` | execution | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `verifier-board` | execution | beta | ✓ | · | ✓ | ✓ | ✓ |
+| `verify-gate` | execution | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `pi-lens` | external | external | · | ✓ | ✓ | ✓ | ✓ |
+| `pi-readseek` | external | external | ✓ | · | ✓ | ✓ | ✓ |
+| `context-sieve` | memory | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `memory-mem0` | memory | experimental | · | · | · | ✓ | · |
+| `memory-vault` | memory | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `save` | memory | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `conductor` | planning | beta | · | · | · | ✓ | ✓ |
+| `goal-core` | planning | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `orchestrator` | planning | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `plan-mode` | planning | stable | · | · | · | ✓ | · |
+| `spec-plan` | planning | stable | · | ✓ | ✓ | ✓ | ✓ |
+| `subagent` | planning | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `task-graph` | planning | beta | · | · | ✓ | ✓ | ✓ |
+| `delegation-guard` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `dirty-repo-guard` | safety | stable | · | · | · | ✓ | · |
+| `engagement-governance` | safety | beta | · | · | · | · | ✓ |
+| `finish-reason-retry` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `protected-paths` | safety | stable | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `secret-guard` | safety | beta | · | ✓ | ✓ | · | · |
+| `tool-firewall` | safety | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `control-center` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `custom-footer` | ui | stable | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `herdr` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `human-console` | ui | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `kit-update` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `notify` | ui | stable | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `remote-control` | ui | beta | · | ✓ | ✓ | ✓ | · |
+| `session-helpers` | ui | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `web-console` | ui | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `autonomous-loop` | workflow | beta | · | ✓ | ✓ | ✓ | ✓ |
+| `autonomy-run` | workflow | beta | · | · | ✓ | · | · |
+| `caveman` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `compress` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `effort` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `guidelines` | workflow | stable | · | ✓ | ✓ | ✓ | ✓ |
+| `handoff` | workflow | stable | · | ✓ | ✓ | ✓ | ✓ |
+| `progress-guard` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `recovery-orchestrator` | workflow | beta | · | · | ✓ | ✓ | ✓ |
+| `skill-router` | workflow | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `todo` | workflow | stable | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `trigger-compact` | workflow | stable | · | · | ✓ | ✓ | ✓ |
 
 Legend: ✓ enabled in that profile · `·` not included. `experimental`/`stub` extensions
 appear only in the experimental `self-improving` profile (see `SECURITY.md` and the

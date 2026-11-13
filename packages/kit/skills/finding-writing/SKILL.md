@@ -1,9 +1,9 @@
 ---
 name: finding-writing
 category: evidence-reporting
-description: Write evidence-backed, professional pentest findings. Use when turning a validated observation into a report finding — every claim traced to evidence, with impact, reproduction, severity rationale, remediation, and limitations.
+description: Write evidence-backed, professional engagement findings. Use when turning a validated observation into a report finding — every claim traced to evidence, with impact, reproduction, severity rationale, remediation, and limitations.
 disable-model-invocation: true
-triggers: ["write a finding", "write the finding", "write up the finding", "pentest report", "finding write-up"]
+triggers: ["write a finding", "write the finding", "write up the finding", "engagement report", "finding write-up"]
 ---
 
 # Finding Writing

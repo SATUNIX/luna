@@ -49,14 +49,14 @@ were not adopted.
 
 | Package | Version | In a profile? | Native or opaque parts | Notes |
 |---|---|---|---|---|
-| `pi-lens` | 4.4.4 | balanced, long-horizon, autonomous, self-improving, pentest | `@ast-grep/napi` (native `.node`), `@ast-grep/cli` platform binary and tree-sitter WASM | MIT; Node >=22.19.0. Diagnostics on edit plus 13 pi tools, with exact firewall policy entries. See registration review below. |
-| `pi-readseek` | 0.4.26 | long-horizon, autonomous, self-improving, pentest, lite | `@jarkkojs/readseek` native CLI and xxhash-wasm | MIT. Hash-anchored reads and edits. 0.12.0 replaces the tool surface with 16 new tools beside the built-ins, takes `@path` rule files the firewall's path checks do not see, and was not adopted. |
+| `pi-lens` | 4.4.4 | balanced, long-horizon, self-improving, engagement | `@ast-grep/napi` (native `.node`), `@ast-grep/cli` platform binary and tree-sitter WASM | MIT; Node >=22.19.0. Diagnostics on edit plus 13 pi tools, with exact firewall policy entries. See registration review below. |
+| `pi-readseek` | 0.4.26 | long-horizon, self-improving, engagement, lite | `@jarkkojs/readseek` native CLI and xxhash-wasm | MIT. Hash-anchored reads and edits. 0.12.0 replaces the tool surface with 16 new tools beside the built-ins, takes `@path` rule files the firewall's path checks do not see, and was not adopted. |
 | `pi-lean-ctx` | 3.11.4 | **none (opt-in)** | The external `lean-ctx` Rust CLI, not bundled | Apache-2.0. Registers extra shell, read and edit tools that the firewall does not classify as shell and `secret-guard` does not inspect. Installed by `install.ts --all` only when its CLI is on `PATH`. Its vendored MCP client bundle is built from `@modelcontextprotocol/sdk` 1.32, which audit tools cannot see. |
 
 The container image installs `pi-mcp-adapter@6.0.0` (and pi) at build time with `npm ci
 --ignore-scripts` from `packages/container/tools/package-lock.json`, and the overlay
 (`packages/container/overlays/pi/settings.json`) registers that baked copy by path, so nothing is
-fetched from npm at start; `validate-pentest-env.sh` checks the pins agree. See the review below.
+fetched from npm at start; `validate-engagement-env.sh` checks the pins agree. See the review below.
 
 ### pi-mcp-adapter review
 
@@ -81,7 +81,7 @@ adapter (`packages/container/README.md` describes what the image configures).
 - **Tools and firewall.** By default 6.0.0 registers, beside the `mcp` proxy, an `mcp__<server>`
   proxy per server and a deferred `mcp__<server>__<tool>` tool per server tool, and runs each `mcp`
   call as a nested call to that tool. In the image with the 2.8.0 settings, every MCP call was
-  then blocked by `pentest-governance-domain`'s MCP-only mode, and the `settings` block in Pi's
+  then blocked by `engagement-governance`'s MCP-only mode, and the `settings` block in Pi's
   `mcp.json` was ignored. The overlay therefore moves to `mcp-adapter.json` and the image sets
   `PI_MCP_CONFIG_MODE=exclusive` and `MCP_DIRECT_TOOLS=__none__`; with them the tool surface is
   `mcp` alone, as with 2.8.0, and `mcp` calls to both bundled servers succeed with and without

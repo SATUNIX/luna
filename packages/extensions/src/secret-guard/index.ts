@@ -4,14 +4,14 @@ import { appendRefusal, commandDigest, sessionIdOf } from "./shared/refusal-reco
 import fs from "node:fs";
 
 // secret-guard is a pattern-based secrets/protected-path backstop, loaded by the balanced and
-// autonomous profiles; the others record an exemption (packages/core/lib/protection-coverage.ts).
+// long-horizon profiles; the others record an exemption (packages/core/lib/protection-coverage.ts).
 // When loaded it blocks four classes (tests/secret-guard-smoke.ts):
 //   0. read/grep/find/ls/glob of a credential file (SECRET_READ_* patterns),
 //   1. writes/edits to secret files or protected engagement/repo-control paths,
 //   2. writes/edits whose CONTENT is a high-confidence secret (key material, tokens),
 //   3. shell commands that read/copy/encode/exfiltrate a secret or protected path.
 //
-// Self-containment forbids importing pentest-governance-domain, so PROTECTED_PATTERNS
+// Self-containment forbids importing engagement-governance, so PROTECTED_PATTERNS
 // below is kept a SUPERSET of that extension's list and verify.ts fails if they diverge
 // (Epic 2 Sprint 2.2 "cross-link ... so the two lists can't silently diverge").
 
@@ -33,7 +33,7 @@ const SECRET_PATH_PATTERNS = [
   /\.pi\/agent\/auth\.json$/i,
 ];
 
-// Protected paths — MUST remain a superset of pentest-governance-domain's PROTECTED_PATTERNS.
+// Protected paths — MUST remain a superset of engagement-governance's PROTECTED_PATTERNS.
 // verify.ts enforces the parity. Keep the string forms identical so the check can match.
 const PROTECTED_PATTERNS = [
   ".env",
@@ -50,6 +50,15 @@ const PROTECTED_PATTERNS = [
   ".pi/trace.jsonl",
   ".pi/agents/",
   ".pi/engagement/",
+  ".pi/engagement/audit/",
+  ".pi/engagement/checkpoints/",
+  ".pi/engagement/evidence/",
+  ".pi/engagement/findings/",
+  ".pi/engagement/hypotheses/",
+  ".pi/engagement/memory/",
+  ".pi/engagement/reports/",
+  ".pi/engagement/tasks/",
+  ".pi/engagement/verification/",
   ".pi/ctx-contributions/",
   ".pi/verdicts.json",
   "packages/extensions/src/tool-firewall/default-policy.json",
@@ -540,7 +549,7 @@ const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth
 // basenames only, and content is STILL scanned for secrets further down, so a template that
 // actually contains a credential remains blocked. PROTECTED_PATTERNS and SECRET_PATH_PATTERNS
 // are left untouched so verify.ts's literal parity extraction against
-// pentest-governance-domain still holds. Mirrored in pentest-governance-domain and
+// engagement-governance still holds. Mirrored in engagement-governance and
 // third_party/protected-paths, which carry the same exemption.
 function isEnvTemplatePath(filePath: string): boolean {
   const base = path.posix.basename(normalizePath(filePath));

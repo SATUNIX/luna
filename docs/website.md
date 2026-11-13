@@ -29,7 +29,8 @@ and loads no syntax highlighter.
 
 `tests/site-smoke.ts` pins this: it builds the site in memory, checks which tag the page names
 (the newest pushed one, with the pending release reported), that every placeholder is filled, that the page has no script and every local link and image
-resolves, and that the illustrations are current, script-free and within their size budget.
+resolves. Nothing in the test suite pins the illustrations or the documentation theme;
+`pages.yml` runs `node packages/core/readme-art.ts --check` before it deploys.
 
 ## Illustrations
 
@@ -54,7 +55,7 @@ sees each loop paused on its finished frame.
 
 `.github/workflows/pages.yml` builds the site and deploys it from `main`, on each push and on a
 manual run (the `deploy` job, in the `github-pages` environment). It never runs on a pull request:
-there, `ci.yml` checks the same build (`smoke:site` builds the page and checks the illustrations,
+there, `ci.yml` checks the same build (`smoke:site` builds the page and checks its links,
 `docs-build` runs `mkdocs build --strict`). The deploy job is the only one with `pages: write` and
 `id-token: write`, and it checks out no code. `tests/release-workflow-smoke.ts` pins that shape.
 

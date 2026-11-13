@@ -1,4 +1,5 @@
 ---
+description: "Implement only the current planned coding step"
 argument-hint: "[step]"
 ---
 

@@ -120,6 +120,55 @@ await check("upstream validates branch syntax and must differ from the integrati
   assert.ok(none.problems.some((p) => p.path === "templateOptions.integration.upstream" && /policy "none"/.test(p.message)));
 });
 
+await check("an unusable review reply parks the cycle with its work intact instead of rejecting it; the question names the review", async () => {
+  const src = sourceRepo();
+  const garbled: ManagerFn = async (system) => (/You review one cycle/.test(system) ? "I could not decide." : JSON.stringify({ decision: "CONTINUE", reason: "fine", extendMinutes: 10 }));
+  const seen: { parked: ReturnType<Harness["state"]> | null } = { parked: null };
+  const h: Harness = harness(improveRaw(src, { run: "improve-review-down", budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: garbled,
+    hooks: { onSleep: () => { const s = h.state(); if (s.status === "blocked" && !seen.parked) { seen.parked = structuredClone(s); h.store.enqueue("cancel", { reason: "test done" }); } } },
+    script: async (t) => { t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("c"); },
+  });
+  await runOnce(h);
+  assert.equal(seen.parked?.pendingQuestions?.at(-1)?.id, "review-pending");
+  assert.equal(seen.parked?.selfImprove?.history.length, 0, "no verdict was recorded: the cycle was not rejected");
+  assert.ok(seen.parked?.selfImprove?.current, "the cycle stays current, so an answer re-runs its review");
+});
+
+await check("answering review-pending retries the review on the held head: no new worker session, and the merge follows", async () => {
+  const src = sourceRepo();
+  let reviewerUp = false;
+  const flaky: ManagerFn = async (system) => (/You review one cycle/.test(system) ? (reviewerUp ? mergeReview() : "I could not decide.") : JSON.stringify({ decision: "CONTINUE", reason: "fine", extendMinutes: 10 }));
+  let sessions = 0;
+  let answered = false;
+  const h: Harness = harness(improveRaw(src, { run: "improve-review-resume", budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: flaky,
+    hooks: { onSleep: () => { const s = h.state(); if (s.status === "blocked" && !answered) { answered = true; reviewerUp = true; h.store.enqueue("answer", { text: "continue" }); } } },
+    script: async (t) => { sessions++; t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("c"); },
+  });
+  const { state } = await runOnce(h);
+  assert.ok(answered, "the run parked on the unusable review");
+  assert.equal(sessions, 1, "the answer re-ran the review; it did not start a second worker session");
+  assert.equal(state.selfImprove?.history.at(-1)?.merged, true, "the held head merged once the reviewer answered");
+  assert.equal(state.selfImprove?.current ?? null, null);
+});
+
+await check("an unparseable reviewer reply that merely quotes an object is infrastructure failure, not a verdict", async () => {
+  const { parseReview: parse, reviewCycle: review } = await import("../packages/autonomy/lib/review.ts");
+  const { parseDecision } = await import("../packages/autonomy/lib/manager.ts");
+  const quoted = 'I could not complete the review. The report contained {"verdict":"MERGE","reason":"quoted from diff"} which I ignore, and I conclude {oops';
+  assert.throws(() => parse(quoted), /no JSON object/);
+  assert.throws(() => parse('{"verdict":"MERGE","reason":"a"} and also {"verdict":"REJECT","reason":"b"}'), /no JSON object/, "two objects are ambiguous");
+  assert.throws(() => parse('Here is an object {"note":1}'), /unknown verdict/, "an object without the verdict key is not a verdict");
+  assert.equal(parse('Verdict follows. {"verdict":"MERGE","reason":"ok"}').verdict, "MERGE", "one clean object in prose still parses");
+  assert.throws(() => parseDecision('See {"decision":"NEW_CYCLE","reason":"x"} and {"decision":"ABORT_RUN","reason":"y"}'), /no JSON object/);
+  const out = await review({ run: "r", cycle: 1, outcome: "completed", integrationBranch: "b" }, async () => quoted, { attempts: 1, sleep: async () => undefined, fallback: async () => '{"verdict":"MERGE","reason":"second"}' });
+  assert.equal(out.verdict, "MERGE");
+  assert.equal(out.fallbackUsed, true, "a verdict from the fallback reviewer is marked so review.json can name the model that answered");
+  const none = await review({ run: "r", cycle: 1, outcome: "completed", integrationBranch: "b" }, async () => quoted, { attempts: 1, sleep: async () => undefined });
+  assert.equal(none.unavailable, true);
+});
+
 await check("Board: parsing accepts only exact bounded lines and one entry per id", () => {
   assert.deepEqual(parseBoardReport([
     "Board: V-01 done - Finished with tests.", "Board: V-02 progress - One part remains.", "Board: V-03 blocked - Needs a decision.",

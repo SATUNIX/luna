@@ -145,9 +145,9 @@ test pins the lifetime.
   any repair and never reverts unrelated changes (same rule as `code-recover`).
 - **Bounded fan-out.** Cap scouts (2–3) and cap total recovery attempts per signature to
   avoid a spawn storm on a genuinely hard bug — escalate to the operator instead.
-- **Fits the autonomous profile.** It is a natural companion to `autonomous-loop`: the
+- **Fits the long-horizon profile.** It is a natural companion to `autonomous-loop`: the
   loop keeps working, and recovery is what the loop *does* when it detects it is stuck,
-  rather than grinding. On non-autonomous profiles it should prefer to surface the plan
+  rather than grinding. Outside the armed autonomous loop it should prefer to surface the plan
   and wait.
 - **One injection authority.** Drop a `ctx-contribution` for `context-sieve`; do not
   emit a `systemPrompt`.

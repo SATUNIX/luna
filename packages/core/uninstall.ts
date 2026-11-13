@@ -10,7 +10,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { globalAgentDir, findPackageEntry, KitMarkerSchema, SettingsSchema, type KitMarker } from "./lib/settings.ts";
+import { globalAgentDir, findPackageEntry, releaseQuietStartup, KitMarkerSchema, SettingsSchema, type KitMarker } from "./lib/settings.ts";
 import { isRecord, parseJson, safeParse } from "./lib/guard.ts";
 import { displayCommand, runPi } from "./lib/pi-cli.ts";
 import { ownedSettingKeys, profileSettingsPath, readProfileSettingsRecord, removeProfileSettings } from "./lib/profiles.ts";
@@ -163,6 +163,16 @@ if (effectiveScope === "global") {
   } catch (e) {
     console.error(`[uninstall] Incomplete: could not restore the profile's settings in ${settingsFile}: ${errorMessage(e)}. State marker retained at ${markerPath}. Resolve the error and retry the same uninstall command.`);
     process.exit(1);
+  }
+}
+
+// 3b. Hand back pi's quietStartup when the installer set it (and the operator has not changed it).
+if (marker?.setQuietStartup === true && !dryRun) {
+  const settingsFile = path.join(path.dirname(markerPath), "settings.json");
+  try {
+    if (releaseQuietStartup(settingsFile)) console.log(`[uninstall] Removed quietStartup from ${settingsFile}`);
+  } catch (e) {
+    console.warn(`[uninstall] WARN: could not remove quietStartup from ${settingsFile}: ${errorMessage(e)}`);
   }
 }
 

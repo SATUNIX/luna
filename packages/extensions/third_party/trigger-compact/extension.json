@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["turn_end", "agent_settled"],
   "registers": { "tools": [], "commands": ["trigger-compact", "compact-threshold"] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
@@ -19,7 +19,7 @@
     "models": []
   },
   "pulls": [],
-  "env": ["PI_KIT_COMPACT_THRESHOLD_TOKENS", "PI_KIT_INTERNAL_CHILD", "PI_CODING_AGENT_DIR"],
+  "env": ["PI_KIT_COMPACT_THRESHOLD_TOKENS", "PI_KIT_COMPACT_COOLDOWN_MS", "PI_KIT_INTERNAL_CHILD", "PI_CODING_AGENT_DIR"],
   "provenance": { "origin": "vendored" },
   "homeRepo": null,
   "status": "stable"

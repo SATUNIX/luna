@@ -120,7 +120,9 @@ const RAW_WRITE_ALLOWED: Readonly<Record<string, string>> = {
   "packages/extensions/src/effort/index.ts": "the effort config in the agent directory, not the workspace",
   "packages/extensions/src/effort/ledger.ts": "the effort ledger, lock and breaker in the agent directory",
   "packages/extensions/src/effort/memento.ts": "the Memento opt-in file in the agent directory",
+  "packages/extensions/src/control-center/index.ts": "the first-run stamp in the agent directory (created exclusive, wx)",
   "packages/extensions/src/kit-update/index.ts": "kit-update state in the agent directory",
+  "packages/extensions/src/kit-update/journal.ts": "the update journal and the restore of agent-directory configuration files (temp file created exclusive, 0600, then renamed)",
   "packages/extensions/src/memory-local/index.ts": "memories.json under PI_KIT_MEMORY_DIR or the agent directory (workspace contributions use writeFileSafe)",
   "packages/extensions/src/memory-vault/vault.ts": "the operator's memory vault (PI_KIT_VAULT or ~/.pi/vault), outside any workspace",
   "packages/extensions/src/remote-control/host.ts": "the remote-control host log in the agent state directory",
@@ -140,7 +142,7 @@ const RAW_WRITE_ALLOWED: Readonly<Record<string, string>> = {
   "packages/extensions/third_party/subagent/workflow-tools.ts": "the trusted-workflows digest file in the agent directory",
   "packages/extensions/third_party/trigger-compact/index.ts": "trigger-compact settings in the agent directory",
   "packages/extensions/src/human-console/console-auth.ts": "the console answer key in the agent directory: created exclusive (wx, 0600) in a 0700 directory and linked into place; a linked, foreign or open key path is refused when loaded",
-  "packages/extensions/src/pentest-governance-domain/console-auth.ts": "byte-identical copy of the console answer-key module (see human-console/console-auth.ts)",
+  "packages/extensions/src/engagement-governance/console-auth.ts": "byte-identical copy of the console answer-key module (see human-console/console-auth.ts)",
   "packages/extensions/src/tool-firewall/console-auth.ts": "byte-identical copy of the console answer-key module (see human-console/console-auth.ts)",
 };
 
@@ -163,7 +165,7 @@ const DYNAMIC_REGEXP_ALLOWED: Readonly<Record<string, string>> = {
   "packages/extensions/src/autonomy-run/index.ts": "a digest already checked to be 64 hex characters",
   "packages/extensions/src/effort/policy.ts": "prompt markers are constants, escaped",
   "packages/extensions/src/kit-update/index.ts": "a branch name, escaped",
-  "packages/extensions/src/pentest-governance-domain/index.ts": "YAML keys are constants",
+  "packages/extensions/src/engagement-governance/index.ts": "YAML keys are constants",
   "packages/extensions/src/secret-guard/index.ts": "operator protected-path globs, escaped; and re-compiles the guard's own patterns",
   "packages/extensions/src/skill-router/match.ts": "phrase triggers are escaped; re: triggers go through compileCheckedRegex and a time limit",
   "packages/extensions/src/tool-firewall/classify.ts": "tool-name globs from the operator's firewall policy, escaped",

@@ -62,4 +62,4 @@ Nothing pins the three limits below; they describe what the code has no path to 
 - `PI_KIT_RECOVERY_SCOUTS` (default 3) — how many fresh scouts the steer asks for (nothing
   pins the default).
 
-Ships in `long-horizon`, `autonomous`, and `self-improving` (the recovery-heavy tiers).
+Ships in `long-horizon` and `self-improving` (the recovery-heavy tiers).

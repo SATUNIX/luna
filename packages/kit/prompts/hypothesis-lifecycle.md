@@ -1,4 +1,5 @@
 ---
+description: "Update the state of a hypothesis"
 argument-hint: "[hypothesis]"
 ---
 

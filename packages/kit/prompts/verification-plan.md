@@ -1,4 +1,5 @@
 ---
+description: "Plan how to verify a change"
 argument-hint: "[change]"
 ---
 

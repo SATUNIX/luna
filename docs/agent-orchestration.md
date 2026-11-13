@@ -48,7 +48,7 @@ model. Set `PI_KIT_SUBAGENT_INHERIT_MODEL=1` to force the parent model for every
 ## Child governance
 
 A child is a separate `pi` process started with `--no-extensions` plus an allowlist that
-`delegation-guard` builds. Every launch path uses it: the `subagent` tool, `/workflow`, the
+`delegation-guard` builds. Every launch path uses it: the `subagent` tool, `/workflows`, the
 completion reviewer in `verify-gate`, the specialists and validators in `conductor`, the second-model
 reviewer in `dual-review` (`/review` and the `dual_review` tool), and recovery. A test scans the
 extension sources and fails when a launcher of `pi` children does not ask the guard
@@ -69,7 +69,7 @@ flowchart TD
 
 - **Governance first.** The child loads `delegation-guard`, then `protected-paths`, `secret-guard`
   and `tool-firewall` (each if the parent has it), then any other extension whose manifest says
-  `childGovernance: true` (`effort`, `pentest-governance-domain`), then the companions
+  `childGovernance: true` (`effort`, `engagement-governance`), then the companions
   `finish-reason-retry` and `todo`. The firewall is always ahead of anything that could act.
 - **Fail closed.** If a required protection cannot be located or did not load in the child, the
   child is not started, or (if it started) blocks every tool call and exits with code 78
@@ -84,9 +84,16 @@ flowchart TD
   (`tests/subagent-roles-isolation-smoke.ts`). A role or step can add `extensions:`, by **name**: a
   kit extension's registry name, never a path, so a role, workflow or settings file cannot load
   arbitrary code into a governed child (a name that is not one is skipped). Ambient launchers (a
-  pentest specialist that needs the operator's MCP servers) keep the operator's extensions but are
+  engagement specialist that needs the operator's MCP servers) keep the operator's extensions but are
   always given `delegation-guard` explicitly and the guard's environment, so the child-side check
   runs even if the child's settings would not have loaded it.
+
+A governed child is started with `--no-skills --no-prompt-templates --no-themes`: its skills come
+from the role's `skills` preload, and a headless child uses no command or theme. A read-only or
+scout role also gets `--no-context-files`, so it does not re-read the project's `AGENTS.md` (6.7k
+characters in the measured worker logs) on top of a task that already says what it needs; a role
+that writes keeps its context files. `PI_KIT_SUBAGENT_DISCOVERY=1` restores every discovery. Pinned
+by `tests/subagent-roles-isolation-smoke.ts`.
 
 `PI_KIT_SUBAGENT_EXTENSIONS=a,b` replaces the **companion** list (governance cannot be removed).
 `PI_KIT_SUBAGENT_ISOLATE=0` no longer disables isolation. The task reaches the child over stdin
@@ -161,7 +168,7 @@ suppressed entirely in a session with no write-capable tool active. See
 - `/orchestrate-plan <task>`: scout + planner produce a plan (no changes). Sent as a message.
 - `/orchestrate-implement-review <task>`: planner → implementer → reviewer, looping until it
   passes.
-- `/workflow run feature goal=…` / `bugfix` / `research`: the same flows as saved, resumable
+- `/workflows run feature goal=…` / `bugfix` / `research`: the same flows as saved, resumable
   [workflows](workflows.md).
 - `workflow({name: "review-changes", args})` and the other kit
   [built-in script workflows](script-workflows.md#built-in-script-workflows) (`understand`,

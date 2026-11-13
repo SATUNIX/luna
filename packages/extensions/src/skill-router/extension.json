@@ -6,9 +6,9 @@
   "tier": "T1",
   "layer": 3,
   "entry": "index.ts",
-  "hooks": ["session_start", "session_compact", "tool_call", "before_agent_start"],
+  "hooks": ["session_start", "session_compact", "tool_call", "before_agent_start", "context", "agent_end"],
   "registers": { "tools": ["skill_search"], "commands": ["skills"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

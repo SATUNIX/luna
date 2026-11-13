@@ -97,7 +97,7 @@ try {
   for (const bad of ["..", ".", "a/b", "a\\b", "/tmp/x", ""] ) {
     assert.equal(isSafeExtensionName(bad), false, `isSafeExtensionName(${JSON.stringify(bad)})`);
   }
-  for (const good of ["fakeext", "pentest-governance-domain", "a.b_c-1"]) {
+  for (const good of ["fakeext", "engagement-governance", "a.b_c-1"]) {
     assert.equal(isSafeExtensionName(good), true, `isSafeExtensionName(${JSON.stringify(good)})`);
   }
 } finally {

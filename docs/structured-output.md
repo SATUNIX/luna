@@ -6,7 +6,7 @@ itself before using it.
 
 This is a runner capability: code that calls the subagent extension's `runAgent` passes
 `schema`. [Script workflows](script-workflows.md) use it for `agent(..., { schema })`; the
-`subagent` tool, `/workflow` and YAML workflows do not expose it.
+`subagent` tool, `/workflows` and YAML workflows do not expose it.
 
 ## What a schema may contain
 

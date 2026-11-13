@@ -120,9 +120,8 @@ async function run(): Promise<void> {
     register(pi.api);
 
     const consoleCmd = pi.commands.get("console");
-    const webuiCmd = pi.commands.get("webui");
     assert.ok(consoleCmd, "/console must be registered");
-    assert.ok(webuiCmd, "/webui alias must be registered");
+    assert.ok(!pi.commands.has("webui"), "the retired /webui alias is not registered");
 
     // Not running yet.
     await consoleCmd.handler("status", ctx);

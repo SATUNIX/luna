@@ -74,7 +74,7 @@ export type ClassifyEnv = {
   home: string;
   tmpRoots: string[];
   knownHosts: Set<string>;
-  policy: "coding" | "pentest";
+  policy: "coding" | "engagement";
   // Files that are the boundary of an unattended run (the contract): a control surface like the kit's own state.
   boundaryPaths?: string[];
 };

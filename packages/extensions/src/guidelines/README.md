@@ -22,4 +22,4 @@ On `session_start`, scans the project's working directory for a guidelines file 
 
 ## Profiles
 
-Included in: `balanced`, `long-horizon`, `autonomous`, `self-improving`, `pentest`
+Profiles: see `docs/EXTENSIONS.md` (generated from `packages/kit/profiles/*.json`).

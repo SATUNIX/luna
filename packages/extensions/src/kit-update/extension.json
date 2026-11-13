@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "kit-update",
-  "summary": "Update checker and /update command: notifies (at most daily, in the background) when pi, Luna on its latest, next or trunk channel (from its git repository or npm), or a linked package can be updated, then applies it with pi's package manager and re-applies the active profile.",
+  "summary": "Update checker and /update command: notifies (at most daily, in the background) when pi, Luna on its latest, next or trunk channel (from its git repository or npm), or a linked package can be updated, then applies it with pi's package manager and re-applies the active profile. `/update undo` returns to the journalled state before the last update.",
   "category": "ui",
   "entry": "index.ts",
   "hooks": [
@@ -13,15 +13,7 @@
       "update"
     ]
   },
-  "profiles": [
-    "quick",
-    "balanced",
-    "long-horizon",
-    "autonomous",
-    "self-improving",
-    "pentest",
-    "lite"
-  ],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": [
     "windows",

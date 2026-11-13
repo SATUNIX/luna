@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { createEventBus, type EventBusController } from "@earendil-works/pi-coding-agent";
 import type {
   AgentBeforeSettleEventResult,
   AgentToolResult,
@@ -280,6 +281,7 @@ export interface FakeShortcut {
 /** The subset of pi's ExtensionAPI the fake implements. */
 export interface FakePiApi {
   on: (name: string, handler: RegisteredHandler) => unknown;
+  events: EventBusController;
   registerTool: (tool: FakeTool) => unknown;
   registerCommand: (name: string, cmd: FakeCommand) => unknown;
   registerShortcut: (shortcut: string, options: FakeShortcut) => unknown;
@@ -310,6 +312,36 @@ export interface FakePiOptions {
   cwd?: string;
 }
 
+/** What each fake pi had already carried, so `startRun` reports only the note a call added. */
+const carriedSeen = new WeakMap<object, number>();
+
+/**
+ * One run's start as pi performs it: `before_agent_start`, then the `context` event for the first
+ * request. Returns the message that start added to the request, a returned message or a note the
+ * extension carries through `context` (never stored in the session), or undefined when it added none.
+ */
+export async function startRun(pi: FakePi, event: unknown, ctx: unknown): Promise<{ message: { customType: string; content: string; display: boolean } } | undefined> {
+  const result: unknown = await pi.handlers.get("before_agent_start")(event, ctx);
+  const returned = isMessageResult(result) ? result.message : undefined;
+  if (returned) return { message: returned };
+  const onContext = pi.handlers.find("context");
+  if (!onContext) return undefined;
+  const out: unknown = await onContext({ messages: [] }, ctx);
+  const notes = typeof out === "object" && out !== null && Array.isArray(Reflect.get(out, "messages")) ? (Reflect.get(out, "messages") as unknown[]).filter(isCarried) : [];
+  const added = notes.slice(carriedSeen.get(pi) ?? 0);
+  carriedSeen.set(pi, notes.length);
+  const last = added[added.length - 1];
+  return last ? { message: last } : undefined;
+}
+
+type StartedMessage = { customType: string; content: string; display: boolean };
+function isCarried(value: unknown): value is StartedMessage {
+  return typeof value === "object" && value !== null && typeof Reflect.get(value, "customType") === "string" && typeof Reflect.get(value, "content") === "string";
+}
+function isMessageResult(value: unknown): value is { message?: StartedMessage } {
+  return typeof value === "object" && value !== null;
+}
+
 export function fakePi(options: FakePiOptions = {}): FakePi {
   const handlers = new HandlerRegistry();
   const tools = new Registry<FakeTool>("tool");
@@ -321,6 +353,7 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
   return {
     api: {
       on: (name, handler) => handlers.set(name, handler),
+      events: createEventBus(),
       registerTool: (tool) => tools.set(tool.name, tool),
       registerCommand: (name, cmd) => commands.set(name, cmd),
       registerShortcut: (shortcut, opts) => shortcuts.set(shortcut, opts),

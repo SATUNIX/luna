@@ -25,7 +25,7 @@ const restores = [
   setEnv("HOME", path.join(ws, "home")),
   setEnv("PI_CODING_AGENT_DIR", agentDir),
   setEnv("PI_KIT_FIREWALL_SESSIONS_DIR", path.join(ws, "sessions")),
-  setEnv("PI_KIT_FIREWALL_PROFILE", "pentest"),
+  setEnv("PI_KIT_FIREWALL_PROFILE", "engagement"),
 ];
 const ctx = { hasUI: false, ui: { notify() {} }, cwd: ws };
 
@@ -129,15 +129,15 @@ async function testSessionHelpers() {
     process.chdir(cwd);
   }
 
-  assert.deepEqual(helpers.firewallExpectation({ firewall: { policy: "pentest", mode: "auto" } }), { policy: "pentest", mode: "auto" }, "session-helpers: a valid firewall block is read");
+  assert.deepEqual(helpers.firewallExpectation({ firewall: { policy: "engagement", mode: "auto" } }), { policy: "engagement", mode: "auto" }, "session-helpers: a valid firewall block is read");
   assert.equal(helpers.firewallExpectation({ firewall: [] }), null, "session-helpers: an array firewall block is refused");
 
   const guard = await loadModule<typeof SecurityGuard>("extensions/session-helpers/security-guard.ts");
   const security = path.join(ws, "security.json");
   fs.writeFileSync(security, JSON.stringify({ source: "operator", level: "strict" }));
-  assert.equal(guard.securityLowering(security, "balanced", "relaxed"), null, "security-guard: an operator-chosen level is never lowered by a switch");
+  assert.equal(guard.securityLowering(security, "guarded", "balanced"), null, "security-guard: an operator-chosen level is never lowered by a switch");
   fs.writeFileSync(security, JSON.stringify(["operator"]));
-  assert.deepEqual(guard.securityLowering(security, "balanced", "relaxed"), { from: "balanced", to: "relaxed" }, "security-guard: a wrong-shape file counts as the profile default");
+  assert.deepEqual(guard.securityLowering(security, "guarded", "balanced"), { from: "guarded", to: "balanced" }, "security-guard: a wrong-shape file counts as the profile default");
 }
 
 try {

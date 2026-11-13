@@ -4,7 +4,7 @@ This page covers how a profile becomes a working pi configuration. It describes 
 
 A *profile* is a JSON file under `packages/kit/profiles/` that selects which extensions load, which kit skills and prompt templates are hidden, and which tool-firewall policy and default mode apply. The installer is the single writer. It wraps `pi install`, narrows the kit's entry in `settings.json` to the resolved profile set, records a state marker and writes the firewall config. It records operator drift into `overrides.json` only under `--capture-overrides` (and automatically when it migrates off a retired source), and only when the installed entry has drifted from the marker's profile and no overrides exist yet. Unless it is the fast `--settings-only` path, a local checkout first passes the `verify.ts` consistency gate. Overrides and firewall settings are validated before the first write and fail closed, and a `--settings-only` run restores every file it may have touched if it does not finish.
 
-The in-TUI `/profile` command in `packages/extensions/src/session-helpers/index.ts` is a front end for that. It locates the kit checkout, picks a profile (accepting the `engagement` alias for `pentest`), and re-invokes the installer in `--settings-only` mode inside a transaction: it snapshots every file a switch can change, runs the installer, judges the result by the files on disk, rolls back on any failure, and only then reloads so pi re-reads its settings without a restart. Operator customisations live in `overrides.json` and are applied on top of every profile, so a profile switch never silently undoes a hand-made change.
+The in-TUI `/profile` command in `packages/extensions/src/session-helpers/index.ts` is a front end for that. It locates the kit checkout, picks a profile (accepting the `engagement` alias for `engagement`), and re-invokes the installer in `--settings-only` mode inside a transaction: it snapshots every file a switch can change, runs the installer, judges the result by the files on disk, rolls back on any failure, and only then reloads so pi re-reads its settings without a restart. Operator customisations live in `overrides.json` and are applied on top of every profile, so a profile switch never silently undoes a hand-made change.
 
 The installer writes `settings.json` and the install marker to the scope chosen by `--scope` (global to `~/.pi/agent`, project to `<cwd>/.pi`). The other side files (`pi-kit/overrides.json`, `pi-kit/firewall.json` and the `.env` scaffold) stay in the global agent directory.
 
@@ -57,7 +57,7 @@ The installer parses these flags on `process.argv.slice(2)`:
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--profile <name>` | `balanced` | Canonicalised through `canonicalProfileName`. `--surface lite` is a deprecated alias for `--profile lite`; any other `--surface` exits 1. |
+| `--profile <name>` | `balanced` | A profile that was renamed or merged (`quick`, `autonomous`; the table is `RENAMED_PROFILES` in `packages/core/shared/profile-names.ts`) exits 1 with a message naming its replacement; there are no aliases (`tests/profile-rename-smoke.ts`). `--surface lite` is a deprecated alias for `--profile lite`; any other `--surface` exits 1. |
 | `--only <a,b>` | null | Comma-split and trimmed. Any `requiredProfileExtensions` member (`packages/core/distribution.json`) it leaves out is added back with a WARN (`tests/install-marker-smoke.ts`). |
 | `--all` | false | Every in-repo, vendor and external name; the package is not narrowed. |
 | `--scope <global\|project>` | `global` | Project settings live at `<cwd>/.pi/settings.json`. |
@@ -174,7 +174,7 @@ The kit source is `WORKSPACE_ROOT` for local mode, or the git or npm source chos
 Safety-critical configuration is validated before the first write, and an error stops the run with exit 1 and nothing changed.
 
 - **Overrides.** Only a profile install applies overrides, so only then can they stop the run. An `overrides.json` that exists but cannot be read, is not valid JSON, or is not a JSON object is refused, because it may hold the removal of a protection the installer cannot see. Removing a mandatory protection extension (`tool-firewall`, `secret-guard` or `protected-paths`) in `extensions.remove` is refused outright. Removing any other required extension (`delegation-guard`, `effort` or `session-helpers`, from `requiredProfileExtensions`) is ignored with a warning, so it still loads (`tests/profile-safety-smoke.ts`). Names that no longer exist in Luna (a renamed or removed extension, skill or prompt) are dropped with a warning, so a stale override does not fail the whole switch.
-- **Firewall.** `checkFirewallConfig` runs first: a profile whose `firewall` block is not an object or names an unknown policy (`coding` or `pentest`) or mode (`auto` or `manual`), and an existing `firewall.json` that names an unknown policy or mode, cannot be read, or is not a JSON object, all stop the run. Nothing falls back to a default, so a typo cannot loosen the gate. Under `--scope global`, writing `firewall.json` and `security.json` at the end is fail-closed as well. Both files are machine-global, so a `--scope project` install never writes them: it leaves them byte-identical and prints a `WARN` naming the global file and the `--scope global` command when the profile wants a different firewall mode, policy or securityLevel (`tests/install-marker-smoke.ts`).
+- **Firewall.** `checkFirewallConfig` runs first: a profile whose `firewall` block is not an object or names an unknown policy (`coding` or `engagement`) or mode (`auto` or `manual`), and an existing `firewall.json` that names an unknown policy or mode, cannot be read, or is not a JSON object, all stop the run. Nothing falls back to a default, so a typo cannot loosen the gate. Under `--scope global`, writing `firewall.json` and `security.json` at the end is fail-closed as well. Both files are machine-global, so a `--scope project` install never writes them: it leaves them byte-identical and prints a `WARN` naming the global file and the `--scope global` command when the profile wants a different firewall mode, policy or securityLevel (`tests/install-marker-smoke.ts`).
 - **Rollback.** Under `--settings-only` the installer snapshots `settings.json`, the marker, `firewall.json`, `security.json`, `overrides.json`, `pi-kit/profile-settings.json` and `.env` first. Any exit that is not a clean finish (a failed step, an uncaught exception, `SIGINT`, `SIGTERM` or `SIGHUP`) restores every one of them, so the configuration is either the old one or the complete new one. The run counts as finished only once the marker, its last write, is on disk.
 
 ## How a profile becomes settings, overrides, marker and firewall
@@ -243,7 +243,7 @@ Extensions are applied remove-then-append (`add`); skills and prompts use `exclu
 { "mode": "auto", "policy": "coding", "source": "profile" }
 ```
 
-`policy` always follows the profile (`pentest` only when the profile says so, otherwise `coding`). `mode` follows the profile too, unless the existing file has `source: "user"` with the same policy and a valid mode; then the operator's `/auto` choice is kept with `source: "user"`. Other keys such as `judgeModel`, `learn`, `knownHosts` and `untrustedHosts` are always preserved.
+`policy` always follows the profile (`engagement` only when the profile says so, otherwise `coding`). `mode` follows the profile too, unless the existing file has `source: "user"` with the same policy and a valid mode; then the operator's `/auto` choice is kept with `source: "user"`. Other keys such as `judgeModel`, `learn`, `knownHosts` and `untrustedHosts` are always preserved.
 
 **The install marker** is `<globalAgentDir()>/.pi-kit.json` for a global install and `<cwd>/.pi/.pi-kit.json` for a `--scope project` install, so a project install never clobbers the global marker (and vice versa). Runtime readers that resolve install state (`/update`, `/profile`, `/console`, the standalone web-ui installer) follow the same precedence as `uninstall.ts`: a project marker in the current directory wins when it exists, otherwise the global marker is used. It is written with `writeSettingsAtomic`. Its exact keys are `kitSource`, `profile`, `extensions`, `overrides`, `scope`, `mode`, `ref`, `channel`, `companions` and `installedAt`.
 
@@ -259,21 +259,19 @@ The per-profile firewall and exclusion data is fixed in the profile JSON:
 
 | Profile | firewall mode | firewall policy | skills/prompts exclusions |
 |---|---|---|---|
-| quick | manual | coding | yes |
 | balanced | manual | coding | yes |
 | long-horizon | auto | coding | yes |
-| autonomous | auto | coding | yes |
 | self-improving | auto | coding | yes, plus `experimental: true` |
-| pentest | manual | pentest | none: the profile has no `skills` or `prompts` keys |
+| engagement | manual | engagement | none: the profile has no `skills` or `prompts` keys |
 | lite | manual | coding | allowlists: `skills.only` (12 skills) and `prompts.only` (the four `code-*` templates) |
 
-The five other non-pentest profiles share the same exclusions: `skills.excludeCategories` is `["pentest","mcp-governance","evidence-reporting","maintainer"]`, `skills.exclude` is `["engagement-conductor","dynamic-agent-synthesis"]`, and `prompts.exclude` lists `golden-path-pentest`, `pentest-action-card`, `pentest-compact`, `pentest-plan`, `pentest-report-finding`, `pentest-triage-burp`, `pentest-verify-evidence`, `mcp-action-review`, `report-export-review`, `tool-policy-onboarding` and `hypothesis-lifecycle`. Because `pentest` carries no skill or prompt keys, no skill or prompt exclusions are applied for it. `--only` and `--all` likewise leave existing skill and prompt keys untouched.
+The three other non-engagement profiles share the same exclusions: `skills.excludeCategories` is `["engagement","mcp-governance","evidence-reporting","maintainer"]`, `skills.exclude` is `["engagement-conductor","dynamic-agent-synthesis"]`, and `prompts.exclude` lists `golden-path-engagement`, `engagement-action-card`, `engagement-compact`, `engagement-plan`, `engagement-report-finding`, `engagement-triage-burp`, `engagement-verify-evidence`, `mcp-action-review`, `report-export-review`, `tool-policy-onboarding` and `hypothesis-lifecycle`. Because `engagement` carries no skill or prompt keys, no skill or prompt exclusions are applied for it. `--only` and `--all` likewise leave existing skill and prompt keys untouched.
 
 The marker's `companions` array closes the loop: `packages/core/uninstall.ts` reads it and removes each recorded `source` with `pi remove`, so a plain `uninstall.ts` run does not leave the companions behind.
 
 ## The /profile round trip
 
-`/profile` is the TUI front end. It resolves the kit root, reads the actually loaded set back out of `settings.json`, offers to capture drift, and then switches all-or-nothing. `transactionalSwitch` in `packages/extensions/src/session-helpers/profile-switch.ts` snapshots every file a switch can change, runs the installer with `--settings-only`, checks the result against the files on disk, and restores the snapshot byte for byte on any failure. It reloads only after a verified switch. The `engagement` alias is applied in the handler, mirroring `PROFILE_ALIASES` in `packages/core/lib/profiles.ts`.
+`/profile` is the TUI front end. It resolves the kit root, reads the actually loaded set back out of `settings.json`, offers to capture drift, and then switches all-or-nothing. `transactionalSwitch` in `packages/extensions/src/session-helpers/profile-switch.ts` snapshots every file a switch can change, runs the installer with `--settings-only`, checks the result against the files on disk, and restores the snapshot byte for byte on any failure. It reloads only after a verified switch. A renamed profile typed to `/profile` is refused with the same message from `RENAMED_PROFILES`; the install marker's stored `profile` is migrated one way on read (`migrateStoredProfile`) and rewritten by the next install.
 
 ```mermaid
 sequenceDiagram
@@ -286,13 +284,13 @@ sequenceDiagram
     participant Pi as pi
 
     U->>SH: /profile engagement
-    SH->>SH: alias engagement to pentest, check the profile and its firewall block
+    SH->>SH: reject a renamed name, check the profile and its firewall block
     SH->>Kit: findKitRoot then resolveKitLayout
     SH->>Files: loadedKitExtensions and matchProfile against the profile files
     SH->>U: confirm capture when drift is detected
     SH->>TS: runSwitch
     TS->>Files: snapshot every file the switch can change
-    TS->>Inst: node install.ts --profile pentest --yes --settings-only
+    TS->>Inst: node install.ts --profile engagement --yes --settings-only
     Inst->>Files: rewrite settings, firewall and marker
     Inst-->>TS: exit code and output
     TS->>Files: verifySwitch: marker, settings entry and firewall agree with the profile
@@ -302,7 +300,7 @@ sequenceDiagram
         SH-->>U: error notification, no reload
     else consistent
         TS-->>SH: announce the switch
-        SH-->>U: switched to pentest
+        SH-->>U: switched to engagement
         TS->>Pi: waitForIdle then reload
         opt the reload fails
             TS->>Files: restore the snapshot
@@ -319,7 +317,7 @@ sequenceDiagram
 
 The files snapshotted are `switchFiles()`: the global and the project `settings.json` and marker, `firewall.json`, `security.json`, `overrides.json`, `pi-kit/profile-settings.json` (the record of the pi settings a profile's `settings` block owns, which must roll back with `settings.json`) and `.env`, so a global switch cannot disturb a project and the reverse. Leftover lock and temporary files an interrupted installer leaves beside them are removed. If a file cannot be restored, the original bytes are saved to a backup directory and named in the error. Before any of this, `runSwitch` refuses a profile whose firewall block names an unknown policy or mode. The same transaction runs the first-run auto-profile: a kit registered unfiltered (a bare `pi install` of the git or npm source) gets the `balanced` profile at the first interactive session (`PI_KIT_AUTO_PROFILE=0` turns this off, a profile name picks another), applied without a reload and with a notice to run `/reload`.
 
-Command surface: no argument opens an interactive `ui.select` picker in the TUI, or prints `profile: usage: /profile <autonomous|balanced|lite|long-horizon|pentest|quick|self-improving> (or /profile status)` in a non-UI context. `/profile <name>` switches. Arguments are validated before anything can change: one word or nothing, and a known profile name. `/profile list` and `/profile --list` print the current profile, the settings path, the profile list and, when the file exists, an overrides line. `/profile status` prints the effective configuration (profile, install mode, channel and source, the loaded extensions with a warning for a missing `tool-firewall` or `protected-paths`, the firewall policy and mode, the compaction state, overrides and companions), then `extra vs <closest>` and `missing vs <closest>` drift lines when a kit entry is loaded, no profile matches exactly and a closest profile exists, then the profile list. `getArgumentCompletions` offers `status`, `list` and every profile name.
+Command surface: no argument opens an interactive `ui.select` picker in the TUI, or prints `profile: usage: /profile <balanced|lite|long-horizon|engagement|self-improving> (or /profile status)` in a non-UI context. `/profile <name>` switches. Arguments are validated before anything can change: one word or nothing, and a known profile name. `/profile list` and `/profile --list` print the current profile, the settings path, the profile list and, when the file exists, an overrides line. `/profile status` prints the effective configuration (profile, install mode, channel and source, the loaded extensions with a warning for a missing `tool-firewall` or `protected-paths`, the firewall policy and mode, the compaction state, overrides and companions), then `extra vs <closest>` and `missing vs <closest>` drift lines when a kit entry is loaded, no profile matches exactly and a closest profile exists, then the profile list. `getArgumentCompletions` offers `status`, `list` and every profile name.
 
 Kit root resolution is `PI_KIT_ROOT` first (validated by `resolveKitLayout`; a value that is not a kit is an error, not a fall-through), then the marker's `kitSource` when it is an absolute path that resolves outside the workspace (the enclosing git work tree, else the session directory) and whose `package.json` names a Luna package (`@satunix/pi-system` or `@satunix/luna`) (any other path is ignored with a warning, since a project marker is repository content; see the [Security model](../security.md#the-luna-installer-and-install-markers)), then the module's own location (four levels up in the monorepo layout, two in the legacy flat one). `resolveKitLayout` accepts the monorepo layout (`packages/core/install.ts` plus `packages/kit/profiles/`) or the legacy flat layout (`kit/install.mjs` plus `profiles/`). The published npm package keeps the monorepo layout, so `/profile` works the same for npm installs; if no layout is found it errors and tells the operator to set `PI_KIT_ROOT`.
 
@@ -362,8 +360,8 @@ Environment variables that affect this subsystem:
 
 - Installer entry point, flag parsing, source and channel selection, ordered install steps, whole-run rollback: `packages/core/install.ts`
 - Delivery and source rules (`readDistribution`, `parseGitSource`, `isLegacyGitSource`, `gitSourceFor`, `releaseTags`, `latestRelease`, `channelOfGitSource`): `packages/core/lib/distribution.ts`, with the settings in `packages/core/distribution.json`
-- Profile definitions, firewall block and include lists: `packages/kit/profiles/quick.json`, `packages/kit/profiles/balanced.json`, `packages/kit/profiles/long-horizon.json`, `packages/kit/profiles/autonomous.json`, `packages/kit/profiles/self-improving.json`, `packages/kit/profiles/pentest.json`, `packages/kit/profiles/lite.json`
-- `PROFILE_ALIASES`, `canonicalProfileName`, `applyExtensionOverrides`, `readOverridesChecked`, `reconcileOverrides`, `excludedSkills` and `excludedPrompts`, `skillFilterPatterns` and `promptFilterPatterns`, `captureDrift`, `readOverrides` and `writeOverrides`, `firewallConfigPath`, `checkFirewallConfig`, `firewallConfigFor` and `writeFirewallConfig`, `snapshotFiles` and `restoreSnapshots`: `packages/core/lib/profiles.ts`
+- Profile definitions, firewall block and include lists: `packages/kit/profiles/balanced.json`, `packages/kit/profiles/long-horizon.json`, `packages/kit/profiles/self-improving.json`, `packages/kit/profiles/engagement.json`, `packages/kit/profiles/lite.json`
+- `applyExtensionOverrides`, `readOverridesChecked`, `reconcileOverrides`, `excludedSkills` and `excludedPrompts`, `skillFilterPatterns` and `promptFilterPatterns`, `captureDrift`, `readOverrides` and `writeOverrides`, `firewallConfigPath`, `checkFirewallConfig`, `firewallConfigFor` and `writeFirewallConfig`, `snapshotFiles` and `restoreSnapshots`: `packages/core/lib/profiles.ts`
 - `globalAgentDir`, `globalSettingsPath`, `mergePackageBlock`, `removeOtherKitEntries`, `isKitNpmSource`, `isKitGitSource`, `findPackageEntry`, `writeSettingsAtomic`, `updateSettings`, `withSettingsLock`, `leanCtxBinaryAvailable`: `packages/core/lib/settings.ts`
 - Layout constants (`WORKSPACE_ROOT`, `PROFILES_DIR`, `FIRST_PARTY_DIR`, `THIRD_PARTY_DIR`, `SOURCES_PATH`, `ENV_EXAMPLE`) and `extensionRelPath`: `packages/core/lib/paths.ts`
 - Name resolution to in-repo, vendor or external avenue: `packages/core/lib/resolve.ts`

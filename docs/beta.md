@@ -22,7 +22,7 @@ plainly.
 | Node.js | 22.19 or newer | pi's own minimum; CI runs the suite on Node 26 and the pi-compat lanes on Node 22 |
 | pi | 0.85.1 to 1.4.0 | The suite is pinned to 1.4.0; 0.85.1 (the floor) and 0.99.2 (the last 0.x release) run the whole suite in CI |
 | Operating system | Linux | Every profile is also install-checked on Windows in CI; the full suite and interactive use are not. macOS has not been tested |
-| Delivery | `git` | `pi install git:github.com/SATUNIX/luna@v0.3.0-beta.3`. The npm package is not published |
+| Delivery | `git` | `pi install git:github.com/SATUNIX/luna@v0.4.0-beta.0`. The npm package is not published |
 
 ## What has been verified, and how
 
@@ -61,7 +61,7 @@ In short:
   including the default rootless Podman, the worker's firewall cannot tell its namespace from one
   an agent made, so it is not unattended and runs under the normal headless rules
   ([Autonomy gate](autonomy-gate.md), `tests/firewall-unattended-smoke.ts`).
-- `secret-guard` loads only in the `balanced` and `autonomous` profiles; `pi-lean-ctx` is opt-in and outside the firewall's shell
+- `secret-guard` loads only in the `balanced` and `long-horizon` profiles; `pi-lean-ctx` is opt-in and outside the firewall's shell
   classification ([Supply chain](supply-chain.md)).
 - A profile switch restores the settings it changed; it cannot undo a package that `pi install`
   already fetched ([Future work](future-work.md#profiles-and-compaction)).

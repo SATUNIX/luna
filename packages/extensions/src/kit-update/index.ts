@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeRuntime } from "./shared/node-runtime.ts";
+import { migrateStoredProfile } from "./shared/profile-names.ts";
+import { markJournalComplete, migrationNotes, readJournal, removeJournal, restoreFiles, writeJournal, type Journal } from "./journal.ts";
 
 // Self-containment rule: import only node:* builtins and the pi peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -880,7 +882,7 @@ function readMarker(cwd: string): MarkerData {
   const marker: MarkerData = {};
   for (const key of MARKER_FIELDS) {
     const value = field(raw, key);
-    if (typeof value === "string") marker[key] = value;
+    if (typeof value === "string") marker[key] = key === "profile" ? migrateStoredProfile(value) : value;
   }
   return marker;
 }
@@ -1151,6 +1153,32 @@ function planChannelSwitchSteps(report: UpdateReport, channel: string): { steps:
   return { steps, notes };
 }
 
+/**
+ * The steps that return the kit to what a journal recorded: install the recorded version (or commit)
+ * again. The configuration files are put back by the caller after these succeed, so the settings entry
+ * ends up exactly as it was. pi itself and linked packages are not rolled back.
+ */
+export function planUndo(journal: Journal, cwd: string, git: GitLike = runGit): { steps: Step[]; notes: string[] } {
+  const k = journal.kit;
+  const steps: Step[] = [];
+  const notes: string[] = [];
+  const scopeFlag = k.scope === "project" ? ["-l"] : [];
+  const before = `Luna ${k.version ?? "(unknown version)"}${k.channel ? ` on ${k.channel}` : ""}`;
+  const parsedNpm = k.source ? parseNpmSource(k.source) : null;
+  if (k.kind === "npm" && parsedNpm && k.version) {
+    steps.push({ label: `return Luna to ${k.version}`, command: piBinary(), args: ["install", `npm:${parsedNpm.name}@${k.version}`, ...scopeFlag], verify: verifyKitVersion(cwd, k.version) });
+  } else if (k.kind === "git" && k.source) {
+    const moving = k.channel === "next" || k.channel === "trunk";
+    const ref = moving ? k.commit : k.version ? `${readDistribution(k.root).tagPrefix}${k.version}` : null;
+    if (ref) steps.push({ label: `return Luna to ${moving ? `commit ${ref.slice(0, 12)}` : ref}`, command: piBinary(), args: ["install", gitSourceWithRef(k.source, ref), ...scopeFlag], verify: moving ? verifyKitCommit(k.root, `kit@${ref}`, git) : k.version ? verifyKitVersion(cwd, k.version) : undefined });
+  } else if (k.kind === "local" && k.root && k.commit) {
+    steps.push({ label: `return the local checkout to ${k.commit.slice(0, 12)}`, command: "git", args: ["-C", k.root, "reset", "--keep", k.commit], verify: verifyKitCommit(k.root, `kit@${k.commit}`, git) });
+  }
+  if (steps.length === 0) notes.push(`The kit itself cannot be returned automatically (it was ${before}); only the configuration files will be restored.`);
+  notes.push(`pi is not rolled back (it was ${journal.pi || "an unknown version"}) and neither are linked packages: run "pi update --self" only forward, or reinstall a package by hand.`);
+  return { steps, notes };
+}
+
 export interface StepOutcome {
   ok: boolean;
   done: string[];
@@ -1226,16 +1254,48 @@ export function successMessage(outcome: StepOutcome): string {
   return `Updated: ${parts.join("; ")}.`;
 }
 
-async function runSteps(pi: ExtensionAPI, ctx: ExtensionCommandContext, steps: Step[]): Promise<StepOutcome> {
+async function runSteps(pi: ExtensionAPI, ctx: ExtensionCommandContext, steps: Step[], offerUndo = true): Promise<StepOutcome> {
   const outcome = await runPlan(pi, ctx.cwd, steps, ctx.hasUI ? ctx.ui : undefined);
   if (!outcome.ok && outcome.failed) {
-    const next = outcome.kitChanged
-      ? `\nNothing after it was run, and /update does not undo "${outcome.kitChanged.label}": the new kit is installed, but the profile was not re-applied, so the settings still hold the previous profile selection. ` +
-        `Before the update it was ${outcome.kitChanged.before}. To finish instead, fix the cause and re-apply the profile with: ${outcome.kitChanged.reapply}`
+    let next = outcome.kitChanged
+      ? `\nNothing after it was run: "${outcome.kitChanged.label}" installed the new kit, but the profile was not re-applied, so the settings still hold the previous profile selection. ` +
+        `Before the update it was ${outcome.kitChanged.before}. /update undo returns to that. To finish instead, fix the cause and re-apply the profile with: ${outcome.kitChanged.reapply}`
       : "\nNothing after it was run. Fix the cause and run /update again; /update status shows where things stand.";
+    if (offerUndo && !outcome.kitChanged) next += "\n/update undo returns Luna and its configuration to how they were before this update.";
     say(ctx, `update: "${outcome.failed.label}" failed: ${outcome.failed.reason}${outcome.done.length ? `\nDone before it: ${outcome.done.join("; ")}.` : ""}${next}`, "error");
   }
   return outcome;
+}
+
+/** `/update undo`: return the kit to the journal's version, then put the configuration files back. */
+async function undoUpdate(pi: ExtensionAPI, c: ExtensionCommandContext): Promise<void> {
+  const cwd = c.cwd ?? process.cwd();
+  const journal = readJournal();
+  if (!journal) {
+    say(c, "update: nothing to undo (no update has been journalled, or its journal is unreadable).", "info");
+    return;
+  }
+  const plan = planUndo(journal, cwd);
+  if (c.hasUI) {
+    const ok = await c.ui.confirm("Undo the last update?", [...plan.steps.map((s) => `• ${s.label}`), `• restore ${journal.files.length} configuration file(s) as of ${journal.createdAt} (changes made to them since, such as a profile switch or a default model, are lost)`, ...plan.notes.map((n) => `Note: ${n}`)].join("\n"));
+    if (!ok) return;
+  }
+  const outcome = plan.steps.length ? await runSteps(pi, c, plan.steps, false) : { ok: true, done: [] };
+  if (!outcome.ok) return; // the failure is already shown; the journal stays so undo can be retried
+  const failed = restoreFiles(journal);
+  if (failed.length) {
+    say(c, `update: the kit was returned but these files could not be restored: ${failed.join(", ")}. The journal is kept at its path; fix the cause and run /update undo again.`, "error");
+    return;
+  }
+  removeJournal();
+  try {
+    fs.rmSync(stateFile(), { force: true });
+  } catch {
+    /* best-effort */
+  }
+  say(c, ["Undone: " + [...outcome.done, "configuration files restored"].join("; ") + ".", ...plan.notes, "Reloading..."].join("\n"), "info");
+  await c.waitForIdle?.();
+  await c.reload();
 }
 
 // --- extension ------------------------------------------------------------------
@@ -1277,10 +1337,15 @@ export default function (pi: ExtensionAPI) {
     description:
       "Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|trunk|X.Y.Z>`.",
     getArgumentCompletions: (prefix: string) =>
-      ["status", "all", "kit", "pi", "packages", "channel latest", "channel next", "channel trunk"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
+      ["status", "undo", "all", "kit", "pi", "packages", "channel latest", "channel next", "channel trunk"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, c) => {
       const cwd = c.cwd ?? process.cwd();
       let arg = args.trim().toLowerCase();
+
+      if (arg === "undo") {
+        await undoUpdate(pi, c);
+        return;
+      }
 
       if (c.hasUI) c.ui.setStatus("kit-update", "checking for updates...");
       const report = await check(cwd);
@@ -1331,7 +1396,7 @@ export default function (pi: ExtensionAPI) {
       } else if (["all", "kit", "pi", "packages"].includes(arg)) {
         plan = planUpdate(report, arg as "all" | "kit" | "pi" | "packages", pi);
       } else {
-        say(c, `update: unknown option "${arg}". Use status, all, kit, pi, packages or channel <name>.`, "error");
+        say(c, `update: unknown option "${arg}". Use status, undo, all, kit, pi, packages or channel <name>.`, "error");
         return;
       }
 
@@ -1344,8 +1409,28 @@ export default function (pi: ExtensionAPI) {
         if (!ok) return;
       }
 
+      // The state before the first step, so a bad release can be undone. No journal, no update.
+      const migrated = migrationNotes(cwd);
+      // A journal from an update that did not finish and whose kit state differs from the current one still
+      // marks the original state (a retry after a partial failure): keep it, do not overwrite. A finished
+      // update's journal is replaced, so /update undo always returns to the immediately previous version.
+      const earlier = readJournal();
+      const keepEarlier = earlier !== null && !earlier.complete && (earlier.kit.version !== report.kit.version || (earlier.kit.commit ?? null) !== (report.kit.commit ?? null));
+      try {
+        if (!keepEarlier) writeJournal({
+          cwd,
+          steps: plan.steps.map((s) => s.label),
+          pi: PI_VERSION,
+          profile: readMarker(cwd).profile ?? null,
+          kit: { kind: report.kit.kind, source: report.kit.source, version: report.kit.version, commit: report.kit.commit ?? null, channel: report.kit.channel, root: report.kit.root, scope: report.kit.scope },
+        });
+      } catch (error) {
+        say(c, `update: could not write the undo journal (${error instanceof Error ? error.message : String(error)}); nothing was changed.`, "error");
+        return;
+      }
       const outcome = await runSteps(pi, c, plan.steps);
       if (!outcome.ok) return;
+      try { markJournalComplete(); } catch { /* the journal stays unfinished: a retry then keeps it, which is the safe side */ }
       const piUpdated = plan.steps.some((s) => s.args.includes("--self"));
       const reloadNeeded = plan.steps.some((s) => !s.args.includes("--self"));
       try {
@@ -1353,7 +1438,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         /* best-effort */
       }
-      say(c, [successMessage(outcome), ...plan.notes, piUpdated ? "Restart pi to run the new pi version." : "", reloadNeeded ? "Reloading..." : ""].filter(Boolean).join("\n"), "info");
+      say(c, [successMessage(outcome), ...plan.notes, ...(migrated.length ? [`Migrated stored settings: ${migrated.join("; ")}.`] : []), "/update undo returns to the previous version.", piUpdated ? "Restart pi to run the new pi version." : "", reloadNeeded ? "Reloading..." : ""].filter(Boolean).join("\n"), "info");
       if (reloadNeeded) {
         await c.waitForIdle?.();
         await c.reload();

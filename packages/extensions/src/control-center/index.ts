@@ -1,7 +1,7 @@
 /**
  * The control centre: one navigable hub for the kit's settings and actions.
  *
- * `/menu` (and its `/kit` and `/helpers` aliases, and the `alt+m` shortcut) opens a searchable tree. Every row
+ * `/menu` (and the `alt+m` shortcut) opens a searchable tree. Every row
  * carries its typed command; the hub never renames anything, and the TUI's `/` menu only filters
  * autocomplete suggestions (see `command-menu.ts`) while every command keeps running when typed.
  *
@@ -9,11 +9,12 @@
  * extension can register a real control that the hub and the old command share (phase 2). Until
  * then the hub uses its built-in fallback table.
  *
- * Nothing registers in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the rule `/workflow`
+ * Nothing registers in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the rule `/workflows`
  * follows.
  *
  * Self-containment rule: import only node:* builtins, pi peers and sibling modules.
  */
+import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
@@ -21,12 +22,14 @@ import type { KeyId } from "@earendil-works/pi-tui";
 import { getOrCreateControls } from "./controls.ts";
 import { buildModel, PAGES } from "./model.ts";
 import { openHub, terminalConfirm, type CommandInfo, type HubDeps } from "./hub.ts";
-import { agentDir, readMarker, readCompaction, readDelegation, readEffort, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
-import { doctorLines, kitRootFromModuleUrl, readKitManifest } from "./doctor.ts";
+import { agentDir, firstRunStamp, readMarker, readCompaction, readDisabledExtensions, readDelegation, readEffort, readFirewallFile, readProtections, readSecurity, readSubagents, readUnattended, readValues, settingsFileFor } from "./values.ts";
+import { say } from "./shared/say.ts";
+import { doctorLines, kitRootFromModuleUrl, readKitManifest, readToolProbes } from "./doctor.ts";
 import { builtinCommandNames } from "./builtins.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
 import { commandMenuProvider, hiddenCommandNames, locationFor, readCommandMenuSettings, readUiFile, warnOnce } from "./command-menu.ts";
-import { isReducedMotion, launchHeader } from "./launch-screen.ts";
+import { firstRunCard, isReducedMotion, launchHeader, type LaunchInfo } from "./launch-screen.ts";
+import { classify, extensionNameOf, readShipped, type ShippedExtension } from "./boot-status.ts";
 
 const DEFAULT_HUB_KEY: KeyId = "alt+m";
 
@@ -98,7 +101,7 @@ function warnInvalidHubKey(): void {
  * RPC and print have no header, a child session stays quiet, and `launchScreen: "off"` in
  * `pi-kit/ui.json` disables it. The caller passes the same `isTui` predicate it uses for the menu,
  * so older pi without `ctx.mode` gets the header too when `hasUI` is true. The menu command is
- * `/menu`, or `/kit` when `/menu` is absent.
+ * `/menu`.
  */
 function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean, hubKey: KeyId): void {
   if (!isTui) return;
@@ -106,11 +109,41 @@ function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boo
   if (typeof ctx.ui.setHeader !== "function") return;
   const ui = readUiFile();
   if (ui?.launchScreen === "off") return;
-  const menuCmd = pi.getCommands().some((command) => command.name === "menu") ? "/menu" : "/kit";
+  const cwd = ctx.cwd || process.cwd();
+  // The marker is re-read on each render (for the first second only), so a profile switch shows up;
+  // the shipped manifests are read once, on first use, because they only change on an update.
+  let shipped: ShippedExtension[] | undefined;
+  // pi hands out a placeholder model (provider and id "unknown") until one is configured.
+  const model: unknown = ctx.model;
+  const hasModel = typeof model === "object" && model !== null && !("provider" in model && model.provider === "unknown");
+  const firstRun = !fs.existsSync(firstRunStamp()) ? firstRunCard(hasModel) : undefined;
+  const info = (): LaunchInfo => {
+    const marker = readMarker(cwd);
+    const profile = marker.profile;
+    shipped ??= readShipped(kitRootFromModuleUrl(import.meta.url));
+    const seen = new Set<string>();
+    for (const source of [...pi.getCommands(), ...(typeof pi.getAllTools === "function" ? pi.getAllTools() : [])]) {
+      const name = extensionNameOf(source.sourceInfo?.path);
+      if (name !== undefined) seen.add(name);
+    }
+    const security = readSecurity();
+    // Strict pins every approval to the operator, so the stored mode is not what applies there.
+    const approvals = security.effective === "strict" ? "operator" : readFirewallFile().mode;
+    return {
+      version: `pi ${VERSION}`,
+      hubKey,
+      menuCmd: "/menu",
+      facts: [
+        ...(profile ? [`profile ${profile}`] : []),
+        ...(security.missing ? [] : [`security ${security.effective}`]),
+        ...(approvals ? [`approvals ${approvals}`] : []),
+      ],
+      items: classify(marker.extensions, shipped, seen),
+      ...(firstRun ? { firstRun } : {}),
+    };
+  };
   ctx.ui.setHeader(launchHeader({
-    version: VERSION,
-    hubKey,
-    menuCmd,
+    info,
     ascii: process.env.PI_KIT_ASCII === "1",
     reducedMotion: isReducedMotion(ui),
   }));
@@ -142,7 +175,7 @@ function registerCommandMenu(pi: ExtensionAPI, hubKey: KeyId): void {
     });
     const ascii = process.env.PI_KIT_ASCII === "1";
     const model = buildModel({ values: { securityMissing: true }, commands: commands.map((command) => command.name), controls: getOrCreateControls().list() });
-    ctx.ui.addAutocompleteProvider((current) => commandMenuProvider(current, { hidden, locationOf: locationFor(model, ascii), ascii }));
+    ctx.ui.addAutocompleteProvider((current) => commandMenuProvider(current, { hidden, locationOf: locationFor(model, ascii, commands.some((command) => command.name === "skills")), ascii }));
   });
 }
 
@@ -192,6 +225,8 @@ function buildDoctor(ctx: ExtensionContext) {
     kitTestedPin: manifest.testedPin,
     kitFloor: manifest.floor,
     settingsFile: settingsFileFor(cwd),
+    disabled: readDisabledExtensions(),
+    toolProbes: readToolProbes(agentDir()),
     registries: {
       effort: readEffort(),
       protections: readProtections().length,
@@ -271,14 +306,12 @@ export default function controlCenter(pi: ExtensionAPI): void {
     handler: open,
   });
 
-  pi.registerCommand("kit", {
-    description: "Alias of /menu",
-    handler: open,
-  });
-
-  pi.registerCommand("helpers", {
-    description: "Alias of /menu",
-    handler: open,
+  pi.registerCommand("status", {
+    description: "Show what is installed and running, one line each with the command for detail",
+    handler: async (_args, ctx) => {
+      const lines = buildDoctor(ctx).map((line) => `[${line.ok ? " OK " : "WARN"}] ${line.label}: ${line.value}  -> ${line.command}`);
+      say(ctx, lines.join("\n"), lines.some((line) => line.startsWith("[WARN]")) ? "warning" : "info");
+    },
   });
 
   pi.registerShortcut(hubKey, {
@@ -289,4 +322,18 @@ export default function controlCenter(pi: ExtensionAPI): void {
   });
 
   registerCommandMenu(pi, hubKey);
+
+  // The first prompt ends the first run: the launch screen's card is shown until then, once.
+  pi.on("agent_start", (_event, ctx) => {
+    // A headless run or a child session never saw the launch screen: it must not consume the card.
+    if (!ctx.hasUI || process.env.PI_KIT_INTERNAL_CHILD === "1") return;
+    try {
+      const stamp = firstRunStamp();
+      if (fs.existsSync(stamp)) return;
+      fs.mkdirSync(path.dirname(stamp), { recursive: true });
+      fs.writeFileSync(stamp, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: "wx" });
+    } catch {
+      /* the card showing once more is harmless */
+    }
+  });
 }

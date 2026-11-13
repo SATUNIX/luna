@@ -14,11 +14,12 @@ import { discoverAgents, staleProjectRoleCopies, type AgentConfig, type AgentSco
 import { projectRoleDigest, runAgent, mapWithConcurrencyLimit } from "./runner.ts";
 import { getFinalOutput, getResultOutput, isFailedResult, truncate } from "./result.ts";
 import { stopAllLive } from "./live.ts";
-import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, envInt, loadInheritParentModel } from "./config.ts";
+import { DEFAULT_CONCURRENCY, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING, MAX_PARALLEL_TASKS, capConcurrency, envInt, loadInheritParentModel } from "./config.ts";
 import type { SingleResult, ToolContext } from "./types.ts";
 import { bindWorkflowStatus, workflowStatus } from "./wf-panel.ts";
 import { releaseInputHolds } from "./shared/input-owner.ts";
 import { askFree } from "./workflow-tools.ts";
+import { interruptedNotice, interruptOrphanedRuns } from "./run-recovery.ts";
 
 // The parallel item's fields mean what the single-mode fields of the same name mean, so only the
 // effort cap is described again: every description is tool text the model pays for on each turn.
@@ -169,7 +170,7 @@ async function runParallelMode(
   if (tasks.length > MAX_PARALLEL_TASKS) {
     return textResult(`Too many parallel tasks (${tasks.length}). Max ${MAX_PARALLEL_TASKS}.`, true);
   }
-  const concurrency = envInt("PI_KIT_SUBAGENT_CONCURRENCY", DEFAULT_CONCURRENCY, 1, MAX_PARALLEL_TASKS);
+  const concurrency = capConcurrency(envInt("PI_KIT_SUBAGENT_CONCURRENCY", DEFAULT_CONCURRENCY, 1, MAX_PARALLEL_TASKS), ctx.model);
   // Background tasks all launch at once (each returns immediately); the concurrency limit only
   // bounds tasks the parent actually waits on.
   const results = await mapWithConcurrencyLimit(tasks, background ? tasks.length : concurrency, (t) =>
@@ -192,6 +193,9 @@ export function registerSubagentTools(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, rawCtx) => {
     const ctx: ToolContext = rawCtx;
     if (process.env.PI_KIT_INTERNAL_CHILD === "1" || !ctx.hasUI) return;
+    // A run its process left "running" is marked interrupted, and said so once.
+    const orphaned = interruptOrphanedRuns(ctx.cwd ?? process.cwd());
+    if (orphaned.length) ctx.ui?.notify?.(interruptedNotice(orphaned), "warning");
     // The /workflows status line reports to this session's footer.
     bindWorkflowStatus(ctx);
     const stale = staleProjectRoleCopies(ctx.cwd ?? process.cwd());

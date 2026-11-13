@@ -57,7 +57,7 @@ At runtime an extension imports **only** `node:*` built-ins and the bundled `typ
 
 This rule is what makes "extract to own repo" a 5-minute job. Because extensions can't import
 each other, cross-extension invariants (e.g. secret-guard's protected paths staying a superset
-of pentest-governance-domain's) are held instead by **`verify.ts` parity checks** and shared
+of engagement-governance's) are held instead by **`verify.ts` parity checks** and shared
 on-disk contracts (`.pi/verdicts.json`, `.pi/recovery/sessions/<session id>/escalation.json`), never by imports. The
 full list of enforced checks — each with a worked failure example — is in
 [`WRITING_EXTENSIONS.md`](WRITING_EXTENSIONS.md).

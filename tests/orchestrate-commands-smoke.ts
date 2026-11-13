@@ -125,6 +125,11 @@ async function testDirectiveComesFromThePolicy() {
     assert.doesNotMatch(text, /\bchain\b/, "the directive no longer names chain");
     assert.match(text, /verify_completion/);
   }
+  const mod = await loadModule<typeof Orchestrator>("extensions/orchestrator/index.ts");
+  const full = mod.directive(5);
+  assert.ok(full.length <= mod.DIRECTIVE_BUDGET_TOKENS * 4, "the complete directive fits its contribution budget");
+  assert.match(full, /untrusted/);
+  assert.doesNotMatch(full, /workflowScript|subagents_enable/, "the directive names the retained guarded provider only");
 }
 
 async function testDirectiveFallsBackToOneLine() {

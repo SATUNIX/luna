@@ -2,7 +2,7 @@
 /**
  * Memento opt-in (docs/effort.md, "Memento mode"): the per-model allow-list in
  * <agent dir>/pi-kit/autonomy.json is off by default, read with type guards only, clamped to the
- * tier's memento.maxGenerations, limited to the long-horizon and autonomous profiles, and switched
+ * tier's memento.maxGenerations, limited to the long-horizon profile, and switched
  * on only through `/effort memento on` and a No-first select (never headless, never in a child).
  *
  * Deterministic and offline: the effort extension runs against a fake pi API with a temp HOME and
@@ -114,8 +114,8 @@ const tests: Record<string, () => void | Promise<void>> = {
     const off = { models: new Map(), warnings: [] };
     const allow = (tierMax: number, profile: string | null, model: string | null, optIn: MementoModule.OptIn = on): number => mementoAllowance({ tierMax, profile, model, optIn }).maxGenerations;
     assert.equal(allow(4, "long-horizon", MODEL), 4);
-    assert.equal(allow(2, "autonomous", MODEL), 2);
-    assert.equal(allow(4, "balanced", MODEL), 0, "a profile outside long-horizon and autonomous allows none");
+    assert.equal(allow(2, "long-horizon", MODEL), 2);
+    assert.equal(allow(4, "balanced", MODEL), 0, "a profile outside long-horizon allows none");
     assert.equal(allow(4, null, MODEL), 0, "an unknown profile allows none");
     assert.equal(allow(4, "long-horizon", MODEL, off), 0, "a model not opted in gets none");
     assert.equal(allow(4, "long-horizon", null), 0, "no model gets none");
@@ -126,9 +126,9 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   "the installed profile comes from the install marker, a project marker first": () => {
-    const w = world("autonomous");
+    const w = world("long-horizon");
     try {
-      assert.equal(installedProfile(w.cwd), "autonomous");
+      assert.equal(installedProfile(w.cwd), "long-horizon");
       fs.mkdirSync(path.join(w.cwd, ".pi"));
       fs.writeFileSync(path.join(w.cwd, ".pi", ".pi-kit.json"), JSON.stringify({ profile: "balanced" }));
       assert.equal(installedProfile(w.cwd), "balanced");
@@ -196,9 +196,9 @@ const tests: Record<string, () => void | Promise<void>> = {
     try {
       let b = await boot(w.cwd, { answer: yes });
       await b.command("memento on");
-      assert.match(b.last(), /only available in the long-horizon and autonomous profiles \(installed: balanced\)/);
+      assert.match(b.last(), /only available in the long-horizon profile \(installed: balanced\)/);
       assert.equal(b.selects.length, 0, "no select outside the allowed profiles");
-      fs.writeFileSync(path.join(w.agent, ".pi-kit.json"), JSON.stringify({ profile: "autonomous" }));
+      fs.writeFileSync(path.join(w.agent, ".pi-kit.json"), JSON.stringify({ profile: "long-horizon" }));
       const stderr = process.stderr.write.bind(process.stderr);
       const lines: string[] = [];
       process.stderr.write = (chunk: string | Uint8Array): boolean => { lines.push(String(chunk)); return true; };

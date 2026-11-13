@@ -10,7 +10,7 @@ import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace } from "../pac
 
 // Isolate from the operator's firewall.json; each test picks its policy explicitly.
 const agentWs = tmpWorkspace("pi-kit-protected-paths-");
-const globalRestores = [setEnv("PI_CODING_AGENT_DIR", path.join(agentWs, "agent")), setEnv("PI_KIT_FIREWALL_CONFIG", undefined), setEnv("PI_KIT_FIREWALL_PROFILE", "pentest")];
+const globalRestores = [setEnv("PI_CODING_AGENT_DIR", path.join(agentWs, "agent")), setEnv("PI_KIT_FIREWALL_CONFIG", undefined), setEnv("PI_KIT_FIREWALL_PROFILE", "engagement")];
 
 async function loadProtectedPaths() {
   const register = await loadExtension("vendor/protected-paths/index.ts");
@@ -61,7 +61,7 @@ async function testAllowlistBypasses() {
   }
 }
 
-// Denylist (always-on, no allowlist configured; pentest policy) must still block
+// Denylist (always-on, no allowlist configured; engagement policy) must still block
 // .env/.git//node_modules/ without regressing to substring-anywhere matching.
 async function testDenylistStillWorksAndIsBounded() {
   const pi = await loadProtectedPaths();
@@ -159,18 +159,21 @@ async function testCodingPolicy() {
   } finally {
     restore();
   }
-  // No env: firewall.json decides; missing or unreadable config means coding.
+  // No env: firewall.json decides; a missing config means coding, an unreadable one the strict list.
   const restoreEnv = setEnv("PI_KIT_FIREWALL_PROFILE", undefined);
   try {
     const pi = await loadProtectedPaths();
     assert.equal(await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }), undefined, "no config defaults to coding");
     const cfg = path.join(agentWs, "agent", "pi-kit", "firewall.json");
     fs.mkdirSync(path.dirname(cfg), { recursive: true });
-    fs.writeFileSync(cfg, JSON.stringify({ mode: "manual", policy: "pentest" }));
-    assert.equal((await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }))?.block, true, "firewall.json policy pentest must restore the strict list");
+    fs.writeFileSync(cfg, JSON.stringify({ mode: "manual", policy: "engagement" }));
+    assert.equal((await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }))?.block, true, "firewall.json policy engagement must restore the strict list");
     fs.writeFileSync(cfg, "{not json");
-    assert.equal(await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }), undefined, "an unreadable config falls back to coding");
+    assert.equal((await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }))?.block, true, "a config that exists but is unreadable selects the strict list");
+    fs.writeFileSync(cfg, "[]");
+    assert.equal((await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }))?.block, true, "a config that is not an object selects the strict list");
     fs.rmSync(cfg);
+    assert.equal(await call(pi, "write", { path: ".git/COMMIT_EDITMSG" }), undefined, "only an absent config is coding");
   } finally {
     restoreEnv();
   }

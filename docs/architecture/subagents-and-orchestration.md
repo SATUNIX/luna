@@ -149,7 +149,7 @@ flowchart TD
 - **Other delegation tools.** While `.pi/engagement/engagement.json` holds an engagement record whose
   phase is not yet `close-out`, the `tool_call` hook blocks `subagent`, `workflow_run`, `workflow`
   and `dual_review`, so `dispatch_specialist` is the only model-callable way to start a discretionary
-  child, and only where the tool policy allows it: pentest MCP-only mode does not exempt it
+  child, and only where the tool policy allows it: engagement MCP-only mode does not exempt it
   (`tests/governance-smoke.ts`). Advancing the engagement to `close-out` with `/engagement phase close-out` lifts the block. In
   a headless session the only delegation path while the block holds is a specialist whose digest is in
   `PI_KIT_TRUSTED_PROJECT_ROLES` (`tests/conductor-recursion-smoke.ts`).
@@ -186,7 +186,7 @@ What the child loads:
   `childGovernance: true` that the parent has actually loaded, plus the mandatory protections the
   parent has. `delegation-guard` and `effort` are always required. In Luna the governance
   extensions are `delegation-guard`, `effort`, `tool-firewall`, `secret-guard`, `protected-paths` and
-  `pentest-governance-domain`.
+  `engagement-governance`.
 - **Order.** `delegation-guard` first, so its blocking hook runs before anything else, then
   `protected-paths`, `secret-guard` and `tool-firewall`, then the remaining governance extensions by
   name, then the optional ones. The firewall is always ahead of anything that could act.
@@ -241,7 +241,7 @@ readable ledger, it runs unbudgeted rather than not at all. It never skips the p
 | `subagent` tool (single or parallel) | `discretionary` | isolated | Each task reserves its own slot. The `effort` argument can ask for a lower tier. |
 | `workflow_run` tool | `workflow` | isolated | Hidden at E1, in recovery too; charged to the plan allowance. |
 | `workflow` tool | `workflow` | isolated | Hidden at E1, in recovery too; `openRunScope` refuses a run at a tier with no workflow allowance (code `tier`), so E1 launches nothing even without active-tool control (`tests/effort-smoke.ts`). |
-| `/workflow run` and `/workflow resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
+| `/workflows run` and `/workflows resume` | `user` | isolated | You typed it, so only the platform ceilings bound it. |
 | Completion reviewer (`/verify`, `verify_completion`) | `mandatory` | isolated | Role `reviewer`, read-only, tools `read,grep,find,ls`. |
 | `dispatch_specialist` (`conductor`) | `discretionary` | ambient | Read-only when the role's tool list is non-empty and names only `read`, `grep`, `find` and `ls`, the same rule as `subagent` (`tests/conductor-specialist-bounds-smoke.ts`). |
 | `dispatch_validator` (`conductor`) | `mandatory` | ambient | Role `validator`, read-only. |

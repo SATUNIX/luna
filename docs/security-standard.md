@@ -112,7 +112,7 @@ suppressed line updates the inventory in the same change. The full policy, with 
 of suppression may be used for, is in [CI security](ci-security.md#suppression-policy).
 
 - `@ts-ignore`, `as unknown as` and the non-null `!` are not used at all (`CONTRIBUTING.md`).
-- An `eslint-disable` needs `-- <reason>` and counts against a ceiling
+- An `eslint-disable` needs `-- <reason>`
   (`tests/typescript-coverage-smoke.ts`).
 - A gitleaks allowlist is bound to named files, never a whole path or a bare pattern
   (`tests/suppression-inventory-smoke.ts`).

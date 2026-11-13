@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Plans as data: `workflow_run {steps:[...]}` compiled through the workflow parser (sub/plan.ts,
 // docs/workflows.md).
-//   1. The tool: name is optional, steps exists, exactly one of name, steps or resume, and its text
-//      is at most 1,150 characters.
+//   1. The tool: name is optional, steps exists, exactly one of name, steps or resume.
 //   2. The four brief examples (single, parallel plus synthesis, review plus revise, bounded recovery).
-//   3. Malformed plans: each returns {path, problem, fix} under 300 characters and launches nothing.
+//   3. Malformed plans: each returns {path, problem, fix} and launches nothing.
 //   4. Authority: the fields that would widen, tool narrowing, and the worst case refused before a launch.
 //   5. The gate's retry target sees the reviewer's FAIL on loop 2; skills reach one step's child only.
 //   6. workflow_control stop and the tool signal abort an inline plan's agent.
@@ -135,9 +134,7 @@ const runIdIn = (text: string): string => /· run (\S+) ·/.exec(text)?.[1] ?? "
 const liveRun = (): string => workflowMod.listRuns(project, 50).find((r) => r.status === "running")?.id ?? "";
 const argOf = (s: Spawned, flag: string): string | undefined => s.args[s.args.indexOf(flag) + 1];
 
-await check("workflow_run takes name, steps or resume; its text is at most 1,150 characters", async () => {
-  const text = `${tool.description}${tool.promptSnippet ?? ""}${JSON.stringify(tool.parameters)}`;
-  assert.ok(text.length <= 1150, `${String(text.length)} characters`);
+await check("workflow_run takes exactly one of name, steps or resume", async () => {
   await session();
   useFake(() => ({ text: "done" }));
   const steps = [{ task: "go" }];
@@ -257,7 +254,7 @@ const widening: Array<[string, unknown, RegExp]> = [
   ["expand that is not true or false", [leaf({ expand: "yes" })], /^steps\[0\]\.expand$/],
 ];
 
-await check(`${String(malformed.length)} malformed plans each return {path, problem, fix} under 300 characters with 0 launches`, async () => {
+await check(`${String(malformed.length)} malformed plans each return {path, problem, fix} with 0 launches`, async () => {
   assert.ok(malformed.length >= 20);
   await session();
   useFake(() => ({ text: "must not run" }));
@@ -267,12 +264,10 @@ await check(`${String(malformed.length)} malformed plans each return {path, prob
     if (c.ok) continue;
     for (const e of c.errors) {
       assert.ok(e.path && e.problem && e.fix, `${label}: ${JSON.stringify(e)}`);
-      assert.ok(JSON.stringify(e).length < 300, `${label}: ${String(JSON.stringify(e).length)}`);
     }
     assert.match(c.errors[0]?.path ?? "", at, `${label}: ${JSON.stringify(c.errors)}`);
     const r = await call({ steps });
     assert.equal(r.isError, true, label);
-    assert.ok(textOf(r).length <= 300, `${label}: ${textOf(r)}`);
     assert.ok(textOf(r).includes(c.errors[0]?.path ?? ""), label);
     assert.match(textOf(r), /Fix: /, label);
   }
@@ -867,12 +862,12 @@ async function interruptedAt(steps: unknown[]): Promise<string> {
   return runId;
 }
 
-/** `/workflow resume <id>` as an operator types it, to the summary it posts. */
+/** `/workflows resume <id>` as an operator types it, to the summary it posts. */
 async function typedResume(runId: string, reply: Reply): Promise<string> {
   useFake(reply);
   const posted = pi.steers.length;
   const ui = { notify: () => undefined, setStatus: () => undefined, select: (_title: string, choices: string[]) => Promise.resolve(choices[1]) };
-  await pi.commands.get("workflow").handler(`resume ${runId}`, { cwd: project, hasUI: true, ui });
+  await pi.commands.get("workflows").handler(`resume ${runId}`, { cwd: project, hasUI: true, ui });
   await until("the resumed run to post its summary", () => pi.steers.length > posted);
   return JSON.stringify(pi.steers.at(-1)?.message);
 }

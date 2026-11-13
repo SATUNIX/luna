@@ -199,26 +199,16 @@ function informationalPage(page: string, title: string, lines: Array<{ label: st
   });
 }
 
-function securityRows(deps: HubDeps, page: string): HubRow[] {
-  const values = deps.values;
-  const note = values.securityMissing ? "the tool-firewall extension is not loaded" : "the tool firewall (pi-kit.security)";
-  return informationalPage(page, "Security", [
-    { label: "Effective", value: values.securityEffective ?? "unknown" },
-    { label: "Requested", value: values.securityRequested ?? "same as effective" },
-    { label: "Source", value: note, command: "/security status" },
-  ]);
-}
-
 function helpRows(page: string, hubKey = "alt+m"): HubRow[] {
   return informationalPage(page, "Help & keys", [
-    { label: "Open", value: `/menu, /kit, /helpers, or the ${hubKey} key` },
+    { label: "Open", value: `/menu or the ${hubKey} key` },
     { label: "Navigate", value: "Enter opens or cycles, Esc goes back, type to search" },
     { label: "Typed", value: "every row shows its typed command; every old command still works" },
     { label: "Weakening", value: "a change that lowers oversight needs a confirmation the terminal alone can answer" },
   ]);
 }
 
-/** Rows for a page: a generated page (Doctor, All commands, Security, Help) or the model's rows. */
+/** Rows for a page: a generated page (Doctor, All commands, Help) or the model's rows. */
 export function rowsForPage(page: string, deps: HubDeps): HubRow[] {
   if (page === "doctor") {
     return informationalPage(
@@ -239,19 +229,24 @@ export function rowsForPage(page: string, deps: HubDeps): HubRow[] {
       available: true,
     }));
   }
-  if (page === "security") return securityRows(deps, page);
   if (page === "help") return helpRows(page, deps.hubKey);
   return pageRows(deps.model, page);
 }
 
-/** The header strip: profile · effort · thinking · security · approvals. */
+/** Strict pins approvals to the operator, so the stored mode is not shown there. */
+function approvalPart(values: HubValues): string {
+  if (!values.approvals) return "";
+  if (values.security?.startsWith("strict")) return " · operator";
+  return ` · ${values.approvals.split("/")[0]}`;
+}
+
+/** The header strip: profile · effort · thinking · security (with its approval mode). */
 export function headerLine(values: HubValues): string {
   const parts = [
     values.profile ? `profile ${values.profile}` : undefined,
     values.effort,
     values.thinking ? `think ${values.thinking}` : undefined,
-    values.security ? `sec ${values.security}` : undefined,
-    values.approvals ? `approvals ${values.approvals}` : undefined,
+    values.security ? `sec ${values.security}${approvalPart(values)}` : undefined,
   ];
   return parts
     .filter((part): part is string => Boolean(part))

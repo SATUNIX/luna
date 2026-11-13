@@ -19,17 +19,15 @@ import { readSources } from "./lib/sources.ts";
 const ROOT = WORKSPACE_ROOT;
 const DOC_PATH = path.join(ROOT, "docs", "capability-matrix.md");
 
-const PROFILE_ORDER = ["lite", "quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"];
+const PROFILE_ORDER = ["lite", "balanced", "long-horizon", "self-improving", "engagement"];
 
 // Profile-level metadata (task class + tier band). Fixed, documented set of shipped profiles.
 const PROFILE_META: Readonly<Record<string, { taskClass: string; tiers: string }>> = {
-  lite: { taskClass: "Low-context / small local models", tiers: "T0–T1" },
-  quick: { taskClass: "Quick fix", tiers: "T0–T1" },
+  lite: { taskClass: "Quick fixes / small local models", tiers: "T0–T1" },
   balanced: { taskClass: "Daily coding", tiers: "T0–T2" },
-  "long-horizon": { taskClass: "Multi-hour / multi-day", tiers: "T0–T3" },
-  autonomous: { taskClass: "Set-and-walk-away", tiers: "T0–T3" },
+  "long-horizon": { taskClass: "Multi-hour / multi-day / set-and-walk-away", tiers: "T0–T3" },
   "self-improving": { taskClass: "Full / self-improving (experimental)", tiers: "T0–T4" },
-  pentest: { taskClass: "Security engagement (strict)", tiers: "T0–T3+" },
+  engagement: { taskClass: "Security engagement (strict)", tiers: "T0–T3+" },
 };
 
 type ProfileDef = ReturnType<typeof loadProfileDef>;

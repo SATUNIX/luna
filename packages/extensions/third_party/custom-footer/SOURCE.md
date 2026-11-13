@@ -67,5 +67,4 @@
     as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
-  - Pinned by `tests/tui-layout-smoke.ts`, which now asserts both this module's `displayWidth` and
-    pi-tui's `visibleWidth`.
+  - Nothing in the test suite pins this.

@@ -2,6 +2,8 @@
 name: memory
 category: memory
 description: Save, recall, correct and forget long-term memories in the vault. Use when the user says "remember", "don't forget", "forget that", "what do you know about", states a lasting preference, or a non-obvious decision or gotcha should outlive this session.
+disable-model-invocation: true
+triggers: ["remember that", "remember this", "don't forget", "do not forget", "forget that", "what do you know about"]
 ---
 
 # Memory

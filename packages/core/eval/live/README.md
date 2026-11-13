@@ -12,7 +12,7 @@ image (Pi 0.76.0 was used for the recorded cycle evidence; the image now install
 From the kit checkout:
 
 ```sh
-node packages/core/eval/live/run.ts --provider pentest --cases hello,clarification,coding,cyber-guided,verify-failure --timeout 300
+node packages/core/eval/live/run.ts --provider engagement --cases hello,clarification,coding,cyber-guided,verify-failure --timeout 300
 node packages/core/eval/live/run.ts --variant lite --cases hello,clarification,coding,cyber --timeout 300
 node packages/core/eval/live/run.ts --kit /path/to/unchanged-checkout --cases hello,clarification --timeout 120
 ```

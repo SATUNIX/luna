@@ -31,6 +31,13 @@ export interface PlainModelEntry {
   cost?: ModelCost;
 }
 
+/**
+ * The most output tokens one worker request may ask for. A model's own maximum can be near its
+ * whole context window (943,718 for one run); providers reserve the cost of the full request up
+ * front, so a huge maximum turns a low balance into HTTP 402 on every call.
+ */
+export const WORKER_MAX_OUTPUT_TOKENS = 32768;
+
 const perMillion = (v: unknown): number => (Number.isFinite(Number(v)) ? +(Number(v) * 1e6).toFixed(6) : 0);
 
 /** `o[key]` when `o` is an object, else undefined. OpenRouter's list is outside data: nothing in it is trusted to have a shape. */
@@ -61,7 +68,7 @@ export function modelEntries(list: unknown, ids: readonly string[]): ModelEntry[
       reasoning: params.has("reasoning"),
       input: (Array.isArray(modalities) ? (modalities as unknown[]) : ["text"]).includes("image") ? ["text", "image"] : ["text"],
       contextWindow: numberOr(128000, field(top, "context_length"), field(m, "context_length")),
-      maxTokens: numberOr(16384, field(top, "max_completion_tokens")),
+      maxTokens: Math.min(WORKER_MAX_OUTPUT_TOKENS, numberOr(16384, field(top, "max_completion_tokens"))),
       cost: {
         input: perMillion(field(pricing, "prompt")),
         output: perMillion(field(pricing, "completion")),

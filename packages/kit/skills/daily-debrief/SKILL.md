@@ -55,7 +55,7 @@ back into the hypotheses, evidence and findings — ending with items organised 
 ## Done
 The day's work is reconciled with the records, new evidence is logged with IDs, coverage is
 updated, finding-ready items are rendered via `finding-report`, and the tester has a short summary
-with clear next steps. Applies to the pentest reporting workflow.
+with clear next steps. Applies to the engagement reporting workflow.
 
 ## References
 - `references/interview-themes.md` — the question bank, what to infer vs ask, and the

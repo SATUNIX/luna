@@ -180,7 +180,7 @@ The attended session's console applies these rules to tagged requests, separatel
 - Once more than 10 distinct actions have been approved in a run, the console pauses the run (no new
   agents start; running ones go on) and asks "No, keep the run paused" / "Yes, resume the run". No,
   a dismissal or a timeout keep it paused. That pause is held for the operator: only Yes or the
-  operator's `/workflow resume <id>` lifts it, and the agent's
+  operator's `/workflows resume <id>` lifts it, and the agent's
   `workflow_control` resume is refused ("paused by the operator's safety stop … only the operator
   can resume it"); a pause the agent or operator sets themselves is not held
   (`tests/workflow-control-smoke.ts`). No approval prompt for the run opens while that question is
@@ -384,7 +384,7 @@ that the skill covers the built-ins and the Luna notes.
   session that started it; see [The /workflows panel](workflows.md#the-workflows-panel).
 - Completion turns chained one after another are capped (5, then a question) only while ultracode
   standing mode is on ([Ultracode](effort.md#ultracode)).
-- `workflow_status` and `/workflows` list script runs; `/workflow run` does not start them.
+- `workflow_status` and `/workflows` list script runs; `/workflows run` does not start them.
 - The checkout fingerprint is taken after each writer; changes made meanwhile by agents that do not
   take the writer lock (a `bash`-capable role) are attributed to whichever writer finished last.
 - The run-scoped approval rules apply only to requests that reach the console. A medium action the

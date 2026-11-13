@@ -35,7 +35,7 @@ services:
         source: ${PI_AGENT_DATA_ROOT:-/srv/data/pi-system}
         target: /srv/data/pi-system
       # Engagement authority (scope, rules of engagement, tool policy) comes from a host-owned
-      # directory outside the data root, read-only, at the path pentest-governance-domain reads
+      # directory outside the data root, read-only, at the path engagement-governance reads
       # (<cwd>/engagement). An empty directory means "no engagement".
       - type: bind
         source: ${PI_ENGAGEMENT_DIR:-/srv/data/pi-system-engagement}

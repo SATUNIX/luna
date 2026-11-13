@@ -20,16 +20,16 @@ with balanced as the migration default and off locked pending a verified contain
 | Universal firewall and autonomy gate | `tool-firewall` | every profile | Parses shell commands into effects, tiers every call (low, medium, high, critical) with session history, auto-allows routine work, judges medium actions in auto mode, denies critical ones, and audits every decision. See [Autonomy gate](autonomy-gate.md). |
 | Protected paths | `protected-paths` | every profile | Blocks writes to agent-control files, including the firewall's policy, approvals and audit files and the unattended-run contract. |
 | Delegation governance | `delegation-guard`, `effort` | every profile | Every child agent is started only with the protections its parent has loaded, and verifies them itself before running a tool, failing closed. See [Agent orchestration](agent-orchestration.md). |
-| Secrets guard | `secret-guard` | `balanced` and `autonomous`; the other profiles record an exemption (`tests/profile-protections-smoke.ts`) | A name- and pattern-based backstop: blocks writes to secret files and secret *content*, and shell commands that read, copy, encode or exfiltrate them. It also blocks every write to a path containing `secret` or `credentials`, which is why the other profiles go without it. Add it to another profile with `extensions.add` in `overrides.json`. |
+| Secrets guard | `secret-guard` | `balanced` and `long-horizon`; the other profiles record an exemption (`tests/profile-protections-smoke.ts`) | A name- and pattern-based backstop: blocks writes to secret files and secret *content*, and shell commands that read, copy, encode or exfiltrate them. It also blocks every write to a path containing `secret` or `credentials`, which is why the other profiles go without it. Add it to another profile with `extensions.add` in `overrides.json`. |
 | Tool I/O capture | `tool-capture` | every profile | Lossless, rotating JSONL of every tool call and output, joined to the firewall audit by action hash; secrets flagged. See [Tool I/O capture](tool-capture.md). |
-| Domain governance | `pentest-governance-domain` | `pentest` | Scope and rules-of-engagement enforcement, MCP-only mode, action-card approval, hash-chained audit for authorised engagements. |
+| Domain governance | `engagement-governance` | `engagement` | Scope and rules-of-engagement enforcement, MCP-only mode, action-card approval, hash-chained audit for authorised engagements. |
 | Web console | `web-console` and `packages/web-ui` | most profiles | Token authentication, host and origin checks, an RPC allow-list. See [Web console](web-console.md). |
 | Remote control | `remote-control` and `packages/web-ui/server/remote-host.ts` | most profiles | Phones linked by a one-time code plus approval at the terminal, keystore keys, a pinned TLS certificate, short-lived tokens. See [Remote control](remote-control.md). |
 
-`tool-firewall` loads **before** `pentest-governance-domain` in the pentest profile (enforced by
-`tests/epic1-smoke.ts`), so the general gate runs first. Coding profiles carry no pentest gate;
-the firewall runs there with the `coding` policy, and the pentest profile switches it to the
-strict `pentest` policy (see [Autonomy gate](autonomy-gate.md#policies-and-profiles)). The
+`tool-firewall` loads **before** `engagement-governance` in the engagement profile (enforced by
+`packages/core/profile-check.ts`, which `tests/docs-smoke.ts` runs for the engagement profile), so the general gate runs first. Coding profiles carry no engagement gate;
+the firewall runs there with the `coding` policy, and the engagement profile switches it to the
+strict `engagement` policy (see [Autonomy gate](autonomy-gate.md#policies-and-profiles)). The
 firewall loads first in every profile and in every child, and pi hands it the very object that
 will execute, after argument preparation and validation, with parallel calls executed only after
 all are decided (`tests/firewall-preauth-smoke.ts`).
@@ -75,8 +75,8 @@ allow the call or save an operator grant. These cases are pinned by
 
 ### MCP-only mode and `PI_ALLOW_DIRECT_TOOLS`
 
-`pentest-governance-domain`'s MCP-only mode forces target-touching direct tools
-(`write`, `edit`, `bash`) through the audited governance MCP path. It loads only in the `pentest`
+`engagement-governance`'s MCP-only mode forces target-touching direct tools
+(`write`, `edit`, `bash`) through the audited governance MCP path. It loads only in the `engagement`
 profile, and even there it is not unconditionally on: by default it activates only once a real
 engagement is configured (both `engagement/scope.yaml` and `engagement/roe.yaml` present and
 complete). Set `PI_ALLOW_DIRECT_TOOLS=1` to force-allow direct tools mid-engagement (operator
@@ -85,20 +85,35 @@ override, still audited), or `=0` to force MCP-only lockdown without a configure
 Luna's own first-party bookkeeping tools (`todo`, `subagent`, `dual_review`, the `task_*`,
 `record_verdict`, `verdict_status`, `memory_*`, `mem0_*`, `skill_*` and `branch_*` tools, plus
 `workflow_status` and the `pause` and `stop` actions of `workflow_control`) are exempt from MCP-only
-mode: they do not touch a pentest target and are already gated by `tool-firewall`. The `resume` and
+mode: they do not touch an engagement target and are already gated by `tool-firewall`. The `resume` and
 `skip` actions let a run go on, so they stay blocked.
 
-### Pentest commands
+### Engagement commands
 
-`pentest-governance-domain` registers three operator commands, none of which takes arguments:
+Two extensions register engagement commands. `conductor` registers `/engagement`, which manages the
+engagement's lifecycle:
 
 | Command | What it does |
 |---|---|
-| `/pentest:status` | Creates the data directories if they are missing, then prints the pentest data root (`PENTEST_DATA_ROOT`, default `.pi/pentest` in the working directory) and any scope or rules-of-engagement errors (`scope_errors=none` when both files are valid). |
-| `/pentest:actions` | Prints the path of the audit log that records every action-card approval (`<data root>/audit/audit.jsonl`). |
-| `/pentest:reload-policy` | Clears the cached policy metadata and scope and rules of engagement, so the next action reads `engagement/scope.yaml`, `engagement/roe.yaml` and the tool policy from disk again: an edited engagement takes effect without a restart. |
+| `/engagement start` | Starts the engagement at phase `intake`; refuses when one is already started. |
+| `/engagement status` | Prints the lifecycle phase, when it started, the history length, the recursion budget and whether verification gates the next phase. |
+| `/engagement phase <name>` | Moves the phase forward (never back) when verification allows it. |
 
-Nothing tests these three commands directly; the scope and rules-of-engagement checks they report
+`/engagement status` is the lifecycle; `/engagement:status` below is the governance gate's data root and
+scope check. They report different things and neither replaces the other
+(`tests/conductor-engagement-smoke.ts` pins `/engagement`).
+
+`engagement-governance` registers three more operator commands, none of which takes arguments:
+
+| Command | What it does |
+|---|---|
+| `/engagement:status` | Creates the data directories if they are missing, then prints the engagement data root (`PENTEST_DATA_ROOT`, default `.pi/engagement` in the working directory) and any scope or rules-of-engagement errors (`scope_errors=none` when both files are valid). |
+| `/engagement:actions` | Prints the path of the audit log that records every action-card approval (`<data root>/audit/audit.jsonl`). |
+| `/engagement:reload-policy` | Clears the cached policy metadata and scope and rules of engagement, so the next action reads `engagement/scope.yaml`, `engagement/roe.yaml` and the tool policy from disk again: an edited engagement takes effect without a restart. |
+
+An engagement whose audit chain is still under the old `.pi/pentest` data root keeps using it (with a
+notice at session start) until that directory is moved to `.pi/engagement`; both roots are protected paths
+(`tests/governance-smoke.ts`). Nothing tests these three commands directly; the scope and rules-of-engagement checks they report
 are pinned by `tests/governance-smoke.ts`.
 
 ## What the boundary guarantees
@@ -143,7 +158,7 @@ are pinned by `tests/governance-smoke.ts`.
    have timeouts (15 minutes, 15 minutes and 15 seconds by default); an unanswered wait ends as
    `UNCERTAIN` and nothing runs. While an overlay you opened (the hub or the workflow panel) is
    open, every prompt an agent can raise on its own waits for you to close it, with one notice: a
-   firewall approval, session or brokered; a pentest action approval; an `ask_human` question; the
+   firewall approval, session or brokered; an engagement action approval; an `ask_human` question; the
    trust prompts for project-local agents, specialists and project workflows; the resume prompt for
    interrupted writer steps; the reduced-sandbox prompt; the wake-chain question; and the question
    that resumes a paused workflow run. The wait and the card share one timeout, so an overlay left
@@ -156,7 +171,7 @@ are pinned by `tests/governance-smoke.ts`.
    still wait behind those open run cards. The resume question and an attended `ask_human` question
    also wait for every open run card to close, within their own timeout: a run card still open at
    the deadline leaves the run paused, or the question timed out, and an aborted turn ends the wait.
-   An `ask_human` question then holds input while its own card is open. Aborting a turn ends that turn's wait, and a pentest action asks
+   An `ask_human` question then holds input while its own card is open. Aborting a turn ends that turn's wait, and an engagement action asks
    scope and RoE again after the wait and after your Yes. A reload or the
    end of a session drops the hold, because pi removes an overlay without settling it
    (`tests/firewall-overlay-queue-smoke.ts`, `tests/firewall-workflow-approvals-smoke.ts`,
@@ -374,7 +389,7 @@ are pinned by `tests/governance-smoke.ts`.
   implementation-binding or in-process isolation boundary.
 - **It does not police network egress by itself.** A network send is medium (judged in auto mode,
   asked in manual) and becomes high or critical after a secret read. Destination allow-listing is
-  the pentest governance layer's job (scope and rules of engagement), and in unattended runs the
+  the engagement governance layer's job (scope and rules of engagement), and in unattended runs the
   container's network is the stop, because package-manager and opaque-tool traffic cannot be
   attributed to a host.
 - **Luna's own sources are ordinary files in a kit checkout.** When the workspace is a source
@@ -436,12 +451,12 @@ link to a directory, drives those writers through their real entry points, and c
 outside the workspace changed; it also checks the helper's refusals and modes directly. ESLint
 (`eslint.config.ts`) rejects a raw `writeFileSync`, `appendFileSync`, `createWriteStream` or
 write-mode `openSync` in an extension unless the file is on a reviewed allowlist with its reason.
-The pentest governance extension also files human-console approval requests through the helper;
+The engagement governance extension also files human-console approval requests through the helper;
 `tests/governance-smoke.ts` checks that a linked console directory cannot redirect a request and
 that a signed answer still approves a request filed inside the workspace. Its data directories and
 audit ledger are bounded by the data root: an operator-set `PENTEST_DATA_ROOT` is trusted as given
 (it may itself be a link the operator made), but a link below it is refused, as is one below the
-default `.pi/pentest` (`tests/governance-smoke.ts`). An operator-set `PI_KIT_HUMAN_CONSOLE_DIR` is
+default `.pi/engagement` (`tests/governance-smoke.ts`). An operator-set `PI_KIT_HUMAN_CONSOLE_DIR` is
 trusted as given in the same way, and nothing pins what happens when it is itself a committed link
 (see [Future work](future-work.md)).
 
@@ -539,7 +554,7 @@ is recorded with its risk and the controls that compensate for it.
 ## Overriding and tightening
 
 - `PI_KIT_FIREWALL_POLICY=/path/to/policy.json` replaces the shipped policy.
-- `/profile pentest` or `PI_KIT_FIREWALL_PROFILE=pentest` selects the strict policy. Profiles set
+- `/profile engagement` or `PI_KIT_FIREWALL_PROFILE=engagement` selects the strict policy. Profiles set
   the firewall mode and policy only; they never turn on unattended mode.
 - `/auto off` or `PI_KIT_AUTO_MODE=0` asks for every medium and high action; `/auto learn off`
   stops applying learned precedents.
@@ -553,5 +568,5 @@ is recorded with its risk and the controls that compensate for it.
 `npm run test:security` runs the firewall, shell parser, approvals, outcomes, no-side-effect,
 pre-authorisation, unattended-mode, protections-registry, delegation-guard, web-console and
 remote-control suites, plus `secret-guard`. `verify.ts` fails the build if the shipped policy stops being default-deny or
-its destructive patterns stop being a superset of `pentest-governance-domain`'s. As with any
+its destructive patterns stop being a superset of `engagement-governance`'s. As with any
 pattern-based boundary, this is the current state of an ongoing effort, not a permanent guarantee.

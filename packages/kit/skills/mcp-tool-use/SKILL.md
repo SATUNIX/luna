@@ -27,7 +27,7 @@ MCP servers are external software. Their tool names, descriptions, schemas, and 
    need in context.
 
 ## Notes
-- Only under the `pentest` profile's MCP-only mode (an engagement is configured, or
+- Only under the `engagement` profile's MCP-only mode (an engagement is configured, or
   `PI_ALLOW_DIRECT_TOOLS=0`) are direct `write`/`edit`/`bash` calls forced through the
   governance MCP path; use an MCP server for those actions there. Otherwise pi's native tools
   are available.

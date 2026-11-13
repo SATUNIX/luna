@@ -117,7 +117,7 @@ try {
     const { workflow } = W.parseWorkflow(wf(def), path.join(ws, "w.md"), "user");
     assert.ok(workflow, "the definition parses");
     const state = extra.state ?? W.newRunState(workflow, {});
-    // "user" launches (a typed /workflow) are bounded by platform ceilings, not the effort tier's
+    // "user" launches (a typed /workflows) are bounded by platform ceilings, not the effort tier's
     // per-request scout count, so the many fake runs here are not refused.
     const final = await W.executeWorkflow(workflow, state, { cwd: ws, agents, spawnChild: fakeSpawner(behave, extra.onSpawn), signal: extra.signal, registry, launchKind: "user" });
     off();

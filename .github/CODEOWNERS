@@ -61,7 +61,7 @@
 /packages/extensions/src/tool-firewall/          @SATUNIX
 /packages/extensions/src/secret-guard/           @SATUNIX
 /packages/extensions/src/delegation-guard/       @SATUNIX
-/packages/extensions/src/pentest-governance-domain/ @SATUNIX
+/packages/extensions/src/engagement-governance/ @SATUNIX
 /packages/extensions/src/effort/                 @SATUNIX
 /packages/extensions/src/kit-update/             @SATUNIX
 /packages/extensions/third_party/protected-paths/ @SATUNIX

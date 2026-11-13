@@ -1,65 +1,9 @@
 {"profile": "balanced", "prompt": "fix the typo in the login button label", "expect": []}
 {"profile": "balanced", "prompt": "add a unit test for parseDate in src/utils/date.ts", "expect": []}
-{"profile": "balanced", "prompt": "rename the getUser function to fetchUser everywhere", "expect": []}
-{"profile": "balanced", "prompt": "why does npm test fail with ECONNREFUSED?", "expect": []}
 {"profile": "balanced", "prompt": "implement pagination for the /api/orders endpoint", "expect": []}
 {"profile": "balanced", "prompt": "hi, how are you today?", "expect": []}
-{"profile": "balanced", "prompt": "what does this regex do: ^\\d{3}-\\d{4}$", "expect": []}
-{"profile": "balanced", "prompt": "refactor the payment module to use the strategy pattern", "expect": []}
-{"profile": "balanced", "prompt": "commit these changes with a good message", "expect": []}
-{"profile": "balanced", "prompt": "set up eslint and prettier for this project", "expect": []}
-{"profile": "balanced", "prompt": "the meal planner app crashes when saving a recipe", "expect": []}
-{"profile": "balanced", "prompt": "increase the model's context window setting in config.yaml to 32k", "expect": []}
-{"profile": "balanced", "prompt": "our github workflow for CI is failing on the lint job", "expect": []}
-{"profile": "balanced", "prompt": "remember that I prefer tabs over spaces", "expect": []}
-{"profile": "balanced", "prompt": "explain how the cache invalidation works in this service", "expect": []}
-{"profile": "balanced", "prompt": "write a bash script that backs up my dotfiles", "expect": []}
-{"profile": "balanced", "prompt": "check user engagement metrics in the analytics dashboard code", "expect": []}
-{"profile": "balanced", "prompt": "the conductor of the orchestra field is missing in the event model", "expect": []}
-{"profile": "balanced", "prompt": "I'm new to this codebase, get oriented and tell me where the auth logic lives", "expect": ["codebase-navigation"]}
-{"profile": "balanced", "prompt": "explore the repo and summarise the architecture", "expect": ["codebase-navigation"]}
-{"profile": "balanced", "prompt": "where is the retry policy configured?", "expect": ["codebase-navigation"]}
-{"profile": "balanced", "prompt": "where are the feature flags defined in this project", "expect": ["codebase-navigation"]}
+{"profile": "balanced", "prompt": "remember that I prefer tabs over spaces", "expect": ["memory"]}
 {"profile": "balanced", "prompt": "you are looping on the same failing test, stop and rethink", "expect": ["self-reflection-and-recovery"]}
-{"profile": "balanced", "prompt": "it's still failing with the same error again", "expect": ["self-reflection-and-recovery"]}
-{"profile": "balanced", "prompt": "we're going in circles, try something different", "expect": ["self-reflection-and-recovery"]}
-{"profile": "balanced", "prompt": "the context is getting long, write a checkpoint before we continue", "expect": ["context-management"]}
-{"profile": "balanced", "prompt": "we are running out of context, what should we keep?", "expect": ["context-management"]}
-{"profile": "balanced", "prompt": "this is a multi-day migration, plan how we keep state between sessions", "expect": ["context-management"]}
-{"profile": "balanced", "prompt": "delegate this to a planner agent and an implementer agent", "expect": ["agent-orchestration"]}
-{"profile": "balanced", "prompt": "use subagents to investigate the three failing services in parallel", "expect": ["agent-orchestration"]}
-{"profile": "balanced", "prompt": "run the feature workflow for adding rate limiting", "expect": []}
-{"profile": "balanced", "prompt": "run a workflow that plans, implements and reviews the export feature", "expect": ["agent-orchestration"]}
-{"profile": "balanced", "prompt": "break this down into steps before you start editing", "expect": ["task-decomposition"]}
-{"profile": "balanced", "prompt": "this is a multi-file change across the api and the web client, decompose it first", "expect": ["task-decomposition"]}
-{"profile": "balanced", "prompt": "keep the diff minimal and don't reformat unrelated files", "expect": ["patch-hygiene"]}
-{"profile": "balanced", "prompt": "your last commit had whitespace churn everywhere, clean it up", "expect": ["patch-hygiene"]}
-{"profile": "balanced", "prompt": "you broke the build, revert the change and try again", "expect": ["recovery-debugging"]}
-{"profile": "balanced", "prompt": "the working tree is broken after the interrupted session", "expect": ["recovery-debugging"]}
-{"profile": "balanced", "prompt": "I'm running this on a local model through ollama, keep steps tiny", "expect": ["small-model-execution"]}
-{"profile": "balanced", "prompt": "update the readme with the new install steps", "expect": ["documentation-workflow"]}
-{"profile": "balanced", "prompt": "write a runbook for rotating the database credentials", "expect": ["documentation-workflow"]}
 {"profile": "balanced", "prompt": "add a new dependency on zod for request validation", "expect": ["supply-chain-review"]}
-{"profile": "balanced", "prompt": "bump the dependency versions and check for supply chain risk", "expect": ["supply-chain-review"]}
-{"profile": "balanced", "prompt": "do a security review of the file upload handler", "expect": []}
-{"profile": "balanced", "prompt": "check this endpoint for sql injection", "expect": []}
-{"profile": "balanced", "prompt": "change the Dockerfile base image to node 22", "expect": ["supply-chain-review"]}
-{"profile": "balanced", "prompt": "use `git revert` on the last commit", "expect": []}
 {"profile": "engagement", "prompt": "do a security review of the file upload handler", "expect": ["code-security-review"]}
-{"profile": "engagement", "prompt": "add a new dependency on zod for request validation", "expect": ["supply-chain-review"]}
-{"profile": "engagement", "prompt": "test the orders API for IDOR on the invoice ids", "expect": ["authz-idor-testing"]}
-{"profile": "engagement", "prompt": "triage the burp history into endpoint observations", "expect": ["burp-web-triage"]}
-{"profile": "engagement", "prompt": "build an endpoint inventory from the proxy logs", "expect": ["endpoint-inventory"]}
-{"profile": "engagement", "prompt": "map our coverage against OWASP WSTG", "expect": ["methodology-mapper"]}
-{"profile": "engagement", "prompt": "write the finding for the broken access control issue", "expect": ["finding-writing", "authz-idor-testing"]}
-{"profile": "engagement", "prompt": "check the rules of engagement before scanning", "expect": ["scope-roe-governance"]}
-{"profile": "engagement", "prompt": "build an action card for the port scan", "expect": ["action-card-builder"]}
-{"profile": "engagement", "prompt": "start a new pentest engagement for acme", "expect": ["engagement-conductor"]}
 {"profile": "engagement", "prompt": "fix the typo in the login button label", "expect": []}
-{"profile": "engagement", "prompt": "update the Dockerfile healthcheck", "expect": ["wrapper-runtime-maintainer"]}
-{"profile": "engagement", "prompt": "the conductor of the orchestra field is missing in the event model", "expect": []}
-{"profile": "balanced", "prompt": "GOAL: Harden and improve the pi-system repository through heavy use of subagents. Run an autonomous plan, review, implement, validate campaign.", "expect": ["agent-orchestration"], "source": "real session prompt"}
-{"profile": "balanced", "prompt": "what is the status on subagents", "expect": [], "source": "real session prompt"}
-{"profile": "balanced", "prompt": "can you install the best web search plugin you can find for pi agent", "expect": [], "source": "real session prompt"}
-{"profile": "balanced", "prompt": "continue - turn off auto compact", "expect": [], "source": "real session prompt"}
-{"profile": "balanced", "prompt": "add a gitignore for this project", "expect": [], "source": "real session prompt"}

@@ -55,6 +55,10 @@ await check("risk: R2 for recovery, concurrency, persistence, shared-interface a
 await check("risk: R3 for permissions, budgets, credentials, gate policy and release; the highest tier wins", () => {
   for (const f of [".github/workflows/ci.yml", "packages/autonomy/relay.ts", "packages/autonomy/lib/boundary.ts", "packages/core/check-all.ts", "packages/core/distribution.json", "docs/releasing.md", "src/credentials.ts", ".npmrc", "tsconfig.json"]) assert.equal(tier(f), "R3", f);
   assert.equal(tier("docs/a.md", "src/recovery.ts", ".github/x.yml"), "R3");
+  // The host's own merge gate, risk machinery, run wiring and the charter seed are R3: an unattended cycle cannot lower the bar for later ones.
+  for (const f of ["risk", "review", "acceptance", "attempts", "triggers", "manager", "runtime", "rpc", "engine", "board", "hostrepo", "templates/self-improve", "contract", "worker-env"]) assert.equal(tier(`packages/autonomy/lib/${f}.ts`), "R3", f);
+  for (const f of ["packages/autonomy/cli.ts", "packages/autonomy/supervisor.ts", "packages/autonomy/seed/CHARTER.md", "packages/autonomy/prompts/cycle.md", "packages/autonomy/image/entrypoint.sh"]) assert.equal(tier(f), "R3", f);
+  assert.equal(tier("docs/prompts/x.md"), "R1", "a docs page named prompts is ordinary, not the autonomy prompts");
   assert.equal(classifyRisk({ files: ["lib/custom/policy.txt"], controlPaths: [/^lib\/custom\//] }).tier, "R3", "an operator control path is R3");
 });
 
@@ -82,6 +86,12 @@ await check("review: the specialist answer is required when asked; CONCERN rejec
   });
   assert.equal(calls, 1);
   assert.equal(review.verdict, "MERGE");
+});
+
+await check("attempts: only claimed items are charged; with no claim only a merge-level REJECT charges the assigned ones (pinned end to end in tests/autonomy-selfimprove-smoke.ts)", () => {
+  const src = fs.readFileSync(path.join(ROOT, "packages/autonomy/lib/templates/self-improve.ts"), "utf8");
+  assert.match(src, /claimed\.length \? claimed : current\.board && entry\.review === "REJECT"/);
+  assert.match(src, /withheldItems/);
 });
 
 await check("attempts: the ordinary attempt plus one repair, then the item is withheld with its reason; a merge clears it", () => {

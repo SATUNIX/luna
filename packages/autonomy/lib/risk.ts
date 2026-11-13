@@ -17,7 +17,7 @@
 //
 // A path the host cannot classify (empty, absolute, `..`, a control character) is R3, and a
 // change with no paths to classify is R1: unknown escalates, it never relaxes.
-// tests/autonomy-risk-smoke.ts pins each rule.
+// tests/autonomy-lean-smoke.ts pins each rule (a table of paths per tier).
 
 import { createHash } from "node:crypto";
 import { hasControlChar } from "./glob.ts";
@@ -45,7 +45,8 @@ const R3_RULES: readonly Rule[] = [
   { re: /^\.github\//, why: "repository, CI and release configuration" },
   { re: /(^|\/)(\.npmrc|\.yarnrc(\.ya?ml)?|bunfig\.toml|\.pnpmfile\.[cm]?js|pnpm-workspace\.yaml)$/, why: "package-manager configuration" },
   { re: /(^|\/)(gate\.sh|check-all[^/]*|prepush-scan[^/]*|wiring\.ts|check-map\.ts|leak-scan[^/]*|scan-suppressions\.json|\.semgrepignore|\.gitleaks\.toml|eslint\.config\.[a-z]+|tsconfig[^/]*\.json)$/, why: "gate policy" },
-  { re: /^packages\/autonomy\/(lib\/(boundary|contract|containment|egress-proxy|worker-env|runcfg|reconfigure|promotion)\.ts|relay\.ts|image\/)/, why: "autonomy permissions, budgets or boundary" },
+  { re: /^packages\/autonomy\/lib\/(boundary|contract|containment|egress-proxy|worker-env|runcfg|reconfigure|promotion)\.ts$|^packages\/autonomy\/(relay\.ts|image\/)/, why: "autonomy permissions, budgets or boundary" },
+  { re: /^packages\/autonomy\/lib\/(risk|review|acceptance|attempts|triggers|manager|runtime|rpc|engine|board|hostrepo|templates\/[^/]+)\.ts$|^packages\/autonomy\/(cli|supervisor)\.ts$|^packages\/autonomy\/(seed|prompts)\//, why: "the merge gate, risk and attempt policy, run wiring, charter seed or worker instructions" },
   { re: /^packages\/extensions\/src\/(tool-firewall|security-level|approval)[^/]*\//, why: "permissions (tool firewall, security level)" },
   { re: /(^|\/)(credentials?|secrets?)[^/]*\.([cm]?[jt]s|json|sh)$|(^|\/)\.env(\.|$)/, why: "credentials" },
   { re: /^docs\/(releasing|security-standard|repository-topology)\.md$|^packages\/core\/(distribution|sources)\.json$|(^|\/)release[^/]*\.(ts|sh|json|ya?ml)$/, why: "release and distribution policy" },

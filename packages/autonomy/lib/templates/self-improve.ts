@@ -58,6 +58,8 @@ export interface CycleEntry {
   mode: ReportMode | null;
   merged: boolean;
   mergeReason: string;
+  /** Board items this cycle's non-merge made the host stop offering (lib/attempts.ts); the steward re-files them under a new ID. */
+  withheldItems?: string[];
   /** True when the publish-blocked answer's rollback discarded this cycle's local-only history. */
   discarded?: boolean;
   review: CycleReview["verdict"] | null;
@@ -694,13 +696,19 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
     decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}),
     effective: { contractDigest: state.contractDigest, limits: { ...SELF_IMPROVE_LIMITS, budget: state.limits.budget } },
     ...(rt.meterSummary ? (() => { const m = rt.meterSummary(n); return { meter: { byRole: Object.fromEntries(Object.entries(m.byRole).map(([k, v]) => [k, +v.toFixed(4)])), rows: m.rows, unresolved: m.unresolved } }; })() : {}) };
-  writeJsonAtomic(path.join(engine.stepDir(n), "cycle.json"), entry);
-  // One ordinary attempt plus one repair per board item (lib/attempts.ts): the items this cycle worked on are the ones its report claims that are on its board, else the assigned ones.
-  const worked = current.board ? (board.some((c) => current.board?.items.some((i) => i.id === c.id)) ? board.filter((c) => current.board?.items.some((i) => i.id === c.id)).map((c) => c.id) : assignedItems(current.board).map((i) => i.id)) : [];
+  // One ordinary attempt plus one repair per board item (lib/attempts.ts). A cycle is charged only for
+  // the items its report claims that are on its board. With no such claim (a crash, an exhausted budget,
+  // a no-change cycle, a provider outage) nothing is charged, except for a merge-level review REJECT,
+  // which is a verdict on the assigned work; infrastructure and provider failures never withhold an item.
+  const claimed = current.board ? board.filter((c) => current.board?.items.some((i) => i.id === c.id)).map((c) => c.id) : [];
+  const worked = claimed.length ? claimed : current.board && entry.review === "REJECT" ? assignedItems(current.board).map((i) => i.id) : [];
   if (worked.length) {
     const withheld = recordAttempts(si.itemAttempts ??= {}, worked, { merged: entry.merged, reason: entry.mergeReason, at: entry.endedAt });
     for (const id of withheld) log(`board item ${id} is no longer offered: ${ATTEMPTS_PER_ITEM} attempt(s) did not merge (last: ${entry.mergeReason.slice(0, 200)})`);
+    // Surfaced in the cycle record the steward reads, not only in the log.
+    if (withheld.length) entry.withheldItems = withheld;
   }
+  writeJsonAtomic(path.join(engine.stepDir(n), "cycle.json"), entry);
   engine.flushUi();
   ctx.save((s) => {
     const record = siState(s);

@@ -3,7 +3,7 @@
 // repair) the host stops offering the item and records why, instead of letting later cycles pay
 // for the same failure again. A merge clears the item's count. The record is run state
 // (state.selfImprove.itemAttempts), so a restart keeps it. Re-filing the item under a new ID is
-// how the steward offers it again. tests/autonomy-attempts-smoke.ts pins the rule.
+// how the steward offers it again. tests/autonomy-lean-smoke.ts pins the rule.
 
 import type { StewardBoard } from "./board.ts";
 

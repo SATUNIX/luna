@@ -423,12 +423,12 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
 - **Thinking is low by default.** The worker session starts at `--thinking low` (`PI_THINKING`,
   set by `lib/worker-env.ts`), and the image entrypoint writes the same level as pi's
   `defaultThinkingLevel`, so a child starts low too. Medium for planning and implementation only is
-  not enforced: a role-level setting would make a `planner` and a `scout` run differently, which a
+  deliberately deferred, not enforced (implementation also runs at low): a role-level setting would make a `planner` and a `scout` run differently, which a
   nested workflow plan refuses (`tests/workflow-plan-smoke.ts`). The host's
   manager and review calls ask OpenRouter for low reasoning and cap their output at 2,048
   (manager) and 4,096 (review) tokens, which also bounds a reasoning model's thinking; a reply
   cut off by the cap has no verdict and is handled as an unusable review below
-  (`tests/autonomy-lean-smoke.ts`). The cap and reasoning effort are not configurable per run.
+  (`tests/autonomy-lean-smoke.ts`). The low-reasoning hint is sent only on the OpenRouter path; the openai-compatible path sends the cap alone, because a strict provider may reject an unknown field, so on that path the caps assume a non-reasoning or low-effort reviewer (a reasoning model can spend the whole cap thinking and the cycle is then parked as review-unavailable). The cap and reasoning effort are not configurable per run.
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
   Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
@@ -492,8 +492,10 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   outside the known prose shapes takes a cycle out of R0, so unknown never relaxes. Matching is
   case-insensitive. The path lists are in `lib/risk.ts`; they are a first cut and not every
   sensitive path is in them (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
-- **One ordinary attempt plus one repair per board item.** A cycle that was assigned a board item (or
-  claimed it in its report) and did not merge counts as an attempt against it; a merge clears the
+- **One ordinary attempt plus one repair per board item.** A cycle that claimed a board item in its report
+  and did not merge counts as an attempt against it. With no claim (a crash, an exhausted budget, a
+  no-change cycle, a provider outage) nothing is charged, unless the merge review itself rejected the
+  assigned work; the items a cycle caused to be withheld are named in its `cycle.json` (`withheldItems`); a merge clears the
   count. After two the host stops offering the item, logs why, and keeps the count and the last
   reason in `selfImprove.itemAttempts` in the run state; the steward offers it again by filing it
   under a new ID. The allowance is fixed at two. An item the host withheld still stays on the board

@@ -389,7 +389,7 @@ leak scan, fast-forward push the integration branch to the remote, then recreate
 ## The `self-improve` template
 
 The original behaviour of this package, now one template: repeated cycles on a repository, each a
-fresh pi session that reviews, plans, improves and verifies, and every cycle with commits that passes
+fresh pi session that does one piece of work directly, and every cycle with commits that passes
 the acceptance checks and passes a merge review is fast-forwarded into one integration branch
 (`pi-autonomy/integration` by default, never `main`), from which the next cycle starts. Nothing is
 force-pushed, and by default nothing leaves the machine: promotion is `local-branch` unless you choose
@@ -407,20 +407,28 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
 - **The cycle prompt** gives the worker the cycle start sha, the review's diff budget and the exact
   command that measures it (`git diff <start>..HEAD` without the lockfile and this run's record
   directories, piped to `wc -c`), tells it never to run `npm test` or `npm run check:all` (the host
-  gate runs the full suite) and to repeat that rule in every subagent task, and asks it to keep
-  `report.md` and `verify.md` under 5,000 characters each, because the review keeps only the
-  first and last 3,000. Assigned board items come right after the budget, and the precedence is
-  stated once (`tests/autonomy-selfimprove-smoke.ts`).
-- **The worker delegates through plans.** The cycle prompt sends each item through an inline
-  `workflow_run {steps}` plan: an `implementer`, then a `reviewer` gated with `max_loops: 1`, a
-  worst case of 4 agents. Review may send scouts as one parallel plan. At the default contract
-  effort, `standard`, one request's plans may launch 8 agents, so two items, or a scouts plan and
-  one item; the rest, and any plan the tool refuses, go through the `subagent` tool, and a refusal
-  adds a `Workflow: refused <reason>` line to the report. The prompt's item plan compiles through
-  the same compiler `workflow_run` uses (`tests/autonomy-selfimprove-smoke.ts`). Unattended, an
-  inline plan and `subagent` run without a prompt while `workflow` scripts stay denied, because
-  the policy asks a person for them (`tests/firewall-unattended-smoke.ts`). Whether the model
-  follows the prompt is not tested.
+  gate runs the full suite, about four minutes on the reference host) and to repeat that rule in
+  every subagent task, and asks it to keep `report.md` under 5,000 characters, because the review
+  keeps only the first and last 3,000. Assigned board items come right after the budget, and the
+  precedence is stated once (`tests/autonomy-selfimprove-smoke.ts`).
+- **The worker brief is lean.** The worker does the work directly. It delegates only an isolated
+  question or an independent package, to one `subagent`, whose spend and permissions are the
+  worker's; there are no compulsory scouts, no per-item reviewer and no whole-diff reviewer, since
+  the host reviews the finished diff once. It does not search for unrelated work: with nothing
+  assigned, nothing failing and nothing carried over it records `Outcome: nothing found` and stops,
+  and it ends its session by submitting the head and a short note. It writes no `plan.md`,
+  `review.md` or `verify.md`; it records the checks it ran in `report.md`
+  (`tests/autonomy-selfimprove-smoke.ts`; `tests/autonomy-boundary-smoke.ts` for the environment).
+  Whether the model follows the brief is not tested.
+- **Thinking is low by default.** The worker session starts at `--thinking low` (`PI_THINKING`,
+  set by `lib/worker-env.ts`), and the image entrypoint writes the same level as pi's
+  `defaultThinkingLevel`, so a child starts low too. Medium for planning and implementation only is
+  not enforced: a role-level setting would make a `planner` and a `scout` run differently, which a
+  nested workflow plan refuses (`tests/workflow-plan-smoke.ts`). The host's
+  manager and review calls ask OpenRouter for low reasoning and cap their output at 2,048
+  (manager) and 4,096 (review) tokens, which also bounds a reasoning model's thinking; a reply
+  cut off by the cap has no verdict and is handled as an unusable review below
+  (`tests/autonomy-lean-smoke.ts`). The cap and reasoning effort are not configurable per run.
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
   Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
@@ -465,6 +473,31 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   pause, stop and cancel. A snapshot that cannot be fetched at all (the bundle fails) is not kept
   anywhere else (`tests/autonomy-run-smoke.ts` pins the write-area case; the diverged case is not
   pinned).
+- **Risk tiers decide how much review a cycle gets.** The host classifies a cycle from the paths it
+  actually changed (`lib/risk.ts`), never from the report, and records the tier in `cycle.json` and
+  `review.json`. **R0**, prose and static files only (`docs/`, top-level documents, images, this
+  run's own records; not `AGENTS.md`, skills, prompts or agent definitions), needs the acceptance
+  checks but no model review once the operator opts in with `templateOptions.integration.r0Review`
+  (the share of R0 cycles still reviewed, from 0 to 1, chosen deterministically from the head).
+  The default is 1: every R0 cycle is reviewed until the operator lowers it. **R1**, anything else,
+  gets one review. **R2**, recovery, concurrency, persistence, shared-interface or authorisation
+  paths, gets the same single review with one specialist question about the topics the paths touch
+  added to it: the reply must answer `"specialist": "OK"` or `"CONCERN"`, a `CONCERN` is a `REJECT`
+  and a reply without the answer is unusable, so it is retried and then parks like any unusable review.
+  **R3**, permissions, budgets, credentials, the charter, gate policy and release files, is the
+  owner/steward route: refused with no model call and proposed in the proposals file, unless
+  `allowControlChanges` is on, when it gets the one ordinary review (the operator's opt-in already
+  says the review is the only control). A path the host cannot classify (empty,
+  absolute, `..`, control characters) is R3, a cycle with no paths to classify is R1, and any path
+  outside the known prose shapes takes a cycle out of R0, so unknown never relaxes. Matching is
+  case-insensitive. The path lists are in `lib/risk.ts`; they are a first cut and not every
+  sensitive path is in them (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **One ordinary attempt plus one repair per board item.** A cycle that was assigned a board item (or
+  claimed it in its report) and did not merge counts as an attempt against it; a merge clears the
+  count. After two the host stops offering the item, logs why, and keeps the count and the last
+  reason in `selfImprove.itemAttempts` in the run state; the steward offers it again by filing it
+  under a new ID. The allowance is fixed at two. An item the host withheld still stays on the board
+  file (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
   charter, the report, the commits and the diff. Its input starts with a host ledger: the cycle's
   `git log --format="%h %s"` and the `git diff --shortstat` without the lockfile and this run's
@@ -640,7 +673,8 @@ metadata validation and the shared `board --file` lock are pinned by
 `tests/autonomy-dispatch-smoke.ts`.
 
 The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `review.md` and
-`verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
+`verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. (The worker brief now asks for only
+`report.md`; the cap still applies to a repository whose runs keep the older files.) Run
 `node packages/core/paperwork-budget.ts <cycle-dir>` (add `--journal=autonomy/JOURNAL.md
 --run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
 exits non-zero on an overrun or a missing or duplicate journal line. It is a manual check run by

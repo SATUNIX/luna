@@ -24,7 +24,7 @@ import { parseProxyConfig, proxyConfigFromContract, type ProxyConfig } from "./e
 import { readJson, writeJsonAtomic } from "./fsutil.ts";
 import { HostRepo } from "./hostrepo.ts";
 import type { RunState } from "./lifecycle.ts";
-import { openRouterComplete, type Complete } from "./manager.ts";
+import { MANAGER_MAX_OUTPUT_TOKENS, REVIEW_MAX_OUTPUT_TOKENS, openRouterComplete, type Complete } from "./manager.ts";
 import { BARE_REPO_CONFIG } from "./mirror.ts";
 import { agentModelsJson, modelEntries, plainModelEntries, type ModelEntry, type PlainModelEntry } from "./models.ts";
 import type { RunPaths } from "./paths.ts";
@@ -629,7 +629,7 @@ export class DockerRuntime implements Runtime {
     const append = (row: unknown): void => { fs.mkdirSync(p.meter, { recursive: true }); fs.appendFileSync(meterFile, `${JSON.stringify(row)}\n`); };
     const who = (): Attribution => ({ run: cfg.run, cycle: this.attr.cycle, role });
     return openRouterComplete({
-      apiKey: this.key(), model, upstream: cfg.upstream, timeoutMs, usageInclude: PROVIDERS[contract.model.provider]?.reportsCost ?? false,
+      apiKey: this.key(), model, upstream: cfg.upstream, timeoutMs, usageInclude: PROVIDERS[contract.model.provider]?.reportsCost ?? false, maxTokens: role === "review" ? REVIEW_MAX_OUTPUT_TOKENS : MANAGER_MAX_OUTPUT_TOKENS,
       onUsage: (u) => {
         const computed = pricing ? ((u.prompt_tokens ?? 0) * pricing.inputPerMTok + (u.completion_tokens ?? 0) * pricing.outputPerMTok) / 1e6 : null;
         const costUsd = u.cost ?? computed;

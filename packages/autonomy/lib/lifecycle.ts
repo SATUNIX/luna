@@ -11,6 +11,7 @@
 //   budget_exhausted  money, steps or active minutes ran out (reason total_usd | max_steps | max_minutes)
 //   blocked           NOT terminal: a genuinely external blocker or an approval/answer is needed
 import { clone, isPlainObject } from "./fsutil.ts";
+import type { ItemAttempts } from "./attempts.ts";
 import type { CycleEntry } from "./templates/self-improve.ts";
 import type { CycleOutcome } from "./cycle.ts";
 import type { StewardBoard } from "./board.ts";
@@ -238,6 +239,8 @@ export interface SelfImproveState {
   /** Merged cycles whose close-out publication the leak scan refused, incremented once per such cycle and left unchanged by a non-merged cycle; cleared only by a successful publish. */
   publishBlockedCycles?: number;
   lastSyncError?: string | null;
+  /** Failed attempts per board item (lib/attempts.ts): an item with its allowance used is no longer offered. */
+  itemAttempts?: ItemAttempts;
 }
 
 /** state.json: the one authoritative record of a run. */

@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AcceptanceEvaluation, type CheckEvidence, runAcceptance, summariseEvaluation } from "../acceptance.ts";
 import { type BoardItem, type BoardReport, WORK_PRECEDENCE, assignedItems, boardPrompt, parseBoardReport, readBoard } from "../board.ts";
+import { ATTEMPTS_PER_ITEM, recordAttempts, withoutWithheld } from "../attempts.ts";
 import { bookkeepingPaths } from "../bookkeeping.ts";
 import type { Budget, ContractDraft, ProblemSink, RunContract } from "../contract.ts";
 import { type CycleDecision, type CycleOutcome, type CycleResult, type CycleRuntime, runCycle } from "../cycle.ts";
@@ -26,7 +27,8 @@ import { reviewBlocker } from "../rpc.ts";
 import { promotionTargets } from "../promotion.ts";
 import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, REVIEW_REPORT_BUDGET, controlChanges, isReviewRecord, reviewCriticalPaths, reviewCycle, reviewRecordDirectories, scriptTargets, upstreamMergeScope } from "../review.ts";
 import { isNewReport, ledgerCommits, uncoveredCommits, unknownShas } from "../ledger.ts";
-import { globProblem } from "../glob.ts";
+import { globProblem, globToRegExp } from "../glob.ts";
+import { type RiskClassification, classifyRisk, r0Reviewed, specialistQuestion } from "../risk.ts";
 import type { RunConfig } from "../runcfg.ts";
 import { type ReportMode, type ReportOutcome, nothingFoundInARow, reportOutcome } from "../triggers.ts";
 import { isPlainObject, readJson, writeJsonAtomic } from "../fsutil.ts";
@@ -59,6 +61,8 @@ export interface CycleEntry {
   /** True when the publish-blocked answer's rollback discarded this cycle's local-only history. */
   discarded?: boolean;
   review: CycleReview["verdict"] | null;
+  /** The host's risk tier for the cycle, from the paths it changed (lib/risk.ts), and why. */
+  risk?: Pick<RiskClassification, "tier" | "reasons">;
   costUsd: number;
   decisions: Array<Pick<CycleDecision, "decision" | "reason" | "triggers">>;
   startedAt: string;
@@ -85,6 +89,7 @@ interface MergeDecision {
   merge: boolean;
   reason: string;
   review?: CycleReview["verdict"];
+  risk?: RiskClassification;
   /** No reviewer gave a usable reply: the cycle is parked (review-pending), not recorded as rejected. */
   reviewUnavailable?: string;
   merged?: boolean;
@@ -154,6 +159,9 @@ function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
   }
   const allowControl = integration["allowControlChanges"];
   if (allowControl !== undefined && typeof allowControl !== "boolean") err("templateOptions.integration.allowControlChanges", "must be true or false");
+  const r0 = integration["r0Review"];
+  if (r0 !== undefined && !(typeof r0 === "number" && r0 >= 0 && r0 <= 1)) err("templateOptions.integration.r0Review", "must be a number from 0 to 1: the share of prose-only (R0) cycles that still get the model review (1, the default, reviews all of them)");
+  if (typeof r0 === "number" && r0 < 1) warn("templateOptions.integration.r0Review", "prose-only cycles are merged without a model review for the share that is not sampled; the acceptance checks still run");
   if (allowControl === true) warn("templateOptions.integration.allowControlChanges", `cycles may change ${CHARTER_PATH}, the controlPaths and package.json scripts; the merge review is then the only check on them`);
   if (typeof ib !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$/.test(ib) || ib.includes("..") || ib.endsWith("/") || ib.endsWith(".lock")) err("templateOptions.integration.branch", "must be a valid branch name");
   else if (["main", "master", "head", "trunk", "develop", "development", "production", "prod", "stable"].includes(ib.toLowerCase()) || /^(release|releases|hotfix|refs)(\/|$)/i.test(ib) || ib === repo?.ref) err("templateOptions.integration.branch", `"${ib}" is a protected name or the base ref; the integration branch is a separate branch a person reviews and merges from`);
@@ -339,10 +347,12 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const dir = (k: number): string => cycleDir(cfg, k);
   // One board snapshot per cycle: a resumed cycle keeps the board it started with, so its claims
   // are judged against the assignments it was given, whatever the steward has written since.
-  const board = si.current?.board ?? readBoard(ctx.store.p.control);
+  // An item whose ordinary attempt and repair are used up (lib/attempts.ts) is not offered again.
+  const offered = readBoard(ctx.store.p.control);
+  const board = si.current?.board ?? withoutWithheld(offered, si.itemAttempts);
   ctx.save(() => { if (si.current && !si.current.board) si.current.board = board; });
   // Streams and runs with a steward board take improvements from the board; other runs choose their own.
-  const stewarded = Boolean(cfg.integrationUpstream) || board.items.length > 0;
+  const stewarded = Boolean(cfg.integrationUpstream) || offered.items.length > 0;
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
@@ -351,7 +361,7 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     } else if (last.merged) {
       previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
-      if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its review.md says what it checked), and consider ${stewarded ? "any assigned improvements" : "improve mode"}.`;
+      if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}; look where it did not (its report says what it checked), and consider ${stewarded ? "any assigned improvements" : "improve mode"}.`;
     } else if (last.gate === "skipped") previous += last.outcome === "reset" ? `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(last.n)}).` : "it made no commits.";
     else if (last.mergeReason.startsWith("the diff without lockfiles")) previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: carry over only a reviewable subset (measure it as below; well under ${REVIEW_DIFF_BUDGET} characters), and list the rest in ${paths.handoff} for later cycles.`;
     else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits, report and handoff are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: read its ${dir(last.n)}/report.md and ${paths.handoff} there and bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
@@ -367,7 +377,7 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const conflict = upstream?.outcome === "conflict" ? `\n\n## P0: upstream merge conflict\nThe host could not merge ${upstream.upstream} (${upstream.head}) cleanly. Before any assigned work, run \`git merge refs/upstream/trunk\`, resolve the conflicts preserving both sides' intent, and re-verify. Repair any red gate / broken branch first. The ref is supplied offline; no network is needed.` : "";
   const focus = `${contract.objective.title}${contract.objective.spec ? `: ${contract.objective.spec}` : ""}`;
   // The plan the cycle derives from its own diff, so a check the host gate runs is run here too.
-  const verifyPlan = `Derive this diff's checks with \`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"\`, run every planned check, and in \`verify.md\` record one line per check saying whether it RAN or was SKIPPED.`;
+  const verifyPlan = `Derive this diff's checks with \`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"\`, run every planned check, and in the report record one line per check saying whether it RAN or was SKIPPED.`;
   const vars: Record<string, unknown> = { NN: pad(n), CYCLE: n, CYCLES: b.maxSteps, RUN: cfg.run, BRANCH: cfg.branch, INTEGRATION: cfg.integrationBranch, CYCLE_DIR: dir(n), BASE_REF: cfg.baseRef, HANDOFF_PATH: paths.handoff, PROPOSALS_PATH: paths.proposals,
     START: start, DIFF_BUDGET: REVIEW_DIFF_BUDGET, HALF_DIFF_BUDGET: REVIEW_DIFF_BUDGET / 2, DIFF_MEASURE: `git diff --no-renames ${start}..HEAD -- . ${excludes} | wc -c`, RECORD_DIRS: reviewRecordDirectories(cfg).join(" and "),
     REPORT_LIMIT: REVIEW_REPORT_BUDGET - 1000, REPORT_HALF: REVIEW_REPORT_BUDGET / 2, PRECEDENCE: WORK_PRECEDENCE,
@@ -377,7 +387,7 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     IMPROVE_MODE: stewarded ? "is for assigned improvements; board items outrank cleanup. Make the assigned system" : "is for when the review finds nothing worth fixing. Make an existing system",
     OWN_IDEAS: stewarded ? ` Own new ideas go into \`${paths.proposals}\` as proposals, not into this cycle, unless they block an assigned item.` : "",
     BOARD_RECORD: board.items.length ? " For each board item worked on, add exactly one line `Board: <ID> done|progress|blocked - <one sentence>`, using only the IDs under \"Assigned work\"." : "",
-    REVIEW_BOOKKEEPING: cfg.integrationUpstream ? `These stream bookkeeping paths take precedence over older shared charter references. Your assigned board items are listed under "Assigned work" near the top of this prompt (there is no board file to read). Read this run's proposals under autonomy/proposals/${cfg.run}-*.md and ${paths.handoff}. Do not edit the shared autonomy/BACKLOG.md.` : "Read `autonomy/BACKLOG.md`, `autonomy/HANDOFF.md`.",
+    REVIEW_BOOKKEEPING: cfg.integrationUpstream ? `These stream bookkeeping paths take precedence over older shared charter references. Your assigned board items are listed under "Assigned work" near the top of this prompt (there is no board file to read). Read this run's proposals under autonomy/proposals/${cfg.run}-*.md and ${paths.handoff}. Do not edit the shared autonomy/BACKLOG.md.` : "Read `autonomy/BACKLOG.md` and `autonomy/HANDOFF.md`.",
     RECORD_BOOKKEEPING: cfg.integrationUpstream ? `Write each new proposal to its own new file at ${paths.proposals}, choosing a short descriptive slug; never edit the shared autonomy/BACKLOG.md. Update ${paths.handoff} (the current state in a few lines).` : "Update `autonomy/BACKLOG.md` (statuses, new items with evidence) and `autonomy/HANDOFF.md` (the current state in a few lines).",
     BUDGET_USD: b.perStepUsd, HARD_BUDGET_USD: contract.templateOptions["perStepHardUsd"] ?? 2 * b.perStepUsd, VERIFY_PLAN: verifyPlan, SOFT_HOURS: +(cfg.limits.softMinutes / 60).toFixed(1), HARD_HOURS: +(cfg.limits.hardMinutes / 60).toFixed(1), PREVIOUS: previous,
     NETWORK_NOTE: egress.length ? ` and the hosts the run lists (${egress.join(", ")}, through a proxy)` : "" };
@@ -680,11 +690,17 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   // leaves the count unchanged. Only a successful publish (in publishNow) clears it.
   if (merge.merged && si.publishBlocker) si.publishBlockedCycles = (si.publishBlockedCycles ?? 0) + 1;
   const entry: CycleEntry = { n, outcome: result.outcome, reason: result.reason, attempts: result.attempts, start, head: sha, gate: gate.skipped ? "skipped" : gate.green ? "green" : "red", gateFailing: failing,
-    reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, costUsd: +result.costUsd.toFixed(4),
+    reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, ...(merge.risk ? { risk: { tier: merge.risk.tier, reasons: merge.risk.reasons } } : {}), costUsd: +result.costUsd.toFixed(4),
     decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}),
     effective: { contractDigest: state.contractDigest, limits: { ...SELF_IMPROVE_LIMITS, budget: state.limits.budget } },
     ...(rt.meterSummary ? (() => { const m = rt.meterSummary(n); return { meter: { byRole: Object.fromEntries(Object.entries(m.byRole).map(([k, v]) => [k, +v.toFixed(4)])), rows: m.rows, unresolved: m.unresolved } }; })() : {}) };
   writeJsonAtomic(path.join(engine.stepDir(n), "cycle.json"), entry);
+  // One ordinary attempt plus one repair per board item (lib/attempts.ts): the items this cycle worked on are the ones its report claims that are on its board, else the assigned ones.
+  const worked = current.board ? (board.some((c) => current.board?.items.some((i) => i.id === c.id)) ? board.filter((c) => current.board?.items.some((i) => i.id === c.id)).map((c) => c.id) : assignedItems(current.board).map((i) => i.id)) : [];
+  if (worked.length) {
+    const withheld = recordAttempts(si.itemAttempts ??= {}, worked, { merged: entry.merged, reason: entry.mergeReason, at: entry.endedAt });
+    for (const id of withheld) log(`board item ${id} is no longer offered: ${ATTEMPTS_PER_ITEM} attempt(s) did not merge (last: ${entry.mergeReason.slice(0, 200)})`);
+  }
   engine.flushUi();
   ctx.save((s) => {
     const record = siState(s);
@@ -700,13 +716,14 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
 }
 
 /** templateOptions.integration's review-input options (validated in validate()). */
-function integrationOptions(contract: RunContract): { controlPaths: string[]; allowControlChanges: boolean } {
+function integrationOptions(contract: RunContract): { controlPaths: string[]; allowControlChanges: boolean; r0Review: number } {
   const integration = contract.templateOptions["integration"];
   const o = isPlainObject(integration) ? integration : {};
   const paths = o["controlPaths"];
   return {
     controlPaths: Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [],
     allowControlChanges: o["allowControlChanges"] === true,
+    r0Review: typeof o["r0Review"] === "number" ? o["r0Review"] : 1,
   };
 }
 
@@ -756,6 +773,11 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
     return hits.every((h) => h.length) ? hits[0] ?? [] : [];
   });
   if (control.length && !options.allowControlChanges) return { merge: false, reason: `changes a control path the cycle may not merge (templateOptions.integration.allowControlChanges is off): ${control.slice(0, 10).join("; ")}` };
+  // The host's risk tier, from the paths the cycle changed. R3 is the owner/steward route: refused
+  // here unless the operator opted in to control changes, and then it gets the one ordinary review (and no specialist question).
+  const risk = classifyRisk({ files, isRecord: (f) => isReviewRecord(f, cfg), controlPaths: options.controlPaths.map((glob) => globToRegExp(glob)) });
+  log(`cycle ${pad(n)} risk ${risk.tier}: ${risk.reasons.slice(0, 3).join("; ")}`);
+  if (risk.tier === "R3" && !options.allowControlChanges) return { merge: false, reason: `R3 change (permissions, budgets, credentials, charter, gate policy or release) is for the owner/steward route, not an unattended merge: ${risk.r3.slice(0, 6).join("; ")}. Propose it in ${bookkeepingPaths(cfg, n).proposals}`, risk };
   // Read whole or not at all: an over-budget or unreadable diff (git failure, timeout, output cap)
   // is a REJECT, never an empty or clipped diff that looks under budget.
   const read = resolves ? repo.reviewDiff(resolves, sha, REVIEW_DIFF_BUDGET, cfg, { files, restrict: true }) : repo.reviewDiff(start, sha, REVIEW_DIFF_BUDGET, cfg, { files });
@@ -777,10 +799,14 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   if (!salvage) {
     const inRange = g(["log", "--format=%H", `--max-count=5000`, sha, `^${start}`, ...(resolves ? [`^${resolves}`] : [])], { allowFail: true }) ?? "";
     const phantom = unknownShas(at(`${dir}/report.md`), inRange.split("\n").map((l) => l.trim()).filter(Boolean));
-    if (phantom.length) return { merge: false, reason: `${dir}/report.md names commit(s) that are not in this cycle's diff: ${phantom.slice(0, 8).join(", ")}`, ...extra };
+    if (phantom.length) return { merge: false, reason: `${dir}/report.md names commit(s) that are not in this cycle's diff: ${phantom.slice(0, 8).join(", ")}`, risk, ...extra };
+  }
+  // R0 (prose and static files only) starts fully reviewed; only the documented r0Review switch skips the model, never the acceptance checks.
+  if (risk.tier === "R0" && !r0Reviewed(options.r0Review, sha)) {
+    return gateGreen ? { merge: true, reason: `R0 (prose and static files only): checks passed, no model review (templateOptions.integration.r0Review ${options.r0Review})`, risk, ...extra } : { merge: false, reason: failingNote, risk, ...extra };
   }
   if (!cfg.integration.review && !salvage && result.outcome !== "partial") {
-    return gateGreen ? { merge: true, reason: "checks passed (review disabled)", ...extra } : { merge: false, reason: failingNote, ...extra };
+    return gateGreen ? { merge: true, reason: "checks passed (review disabled)", risk, ...extra } : { merge: false, reason: failingNote, risk, ...extra };
   }
   ctx.state.phase = "review";
   ctx.engine.tick();
@@ -809,12 +835,14 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
     // The charter is the host-held integration head's (the cycle's start), never the cycle's own.
     charter: cfg.integrationUpstream ? streamCharter(cfg, ctx.contract, start, rt.now()) : repo.fileAt(start, CHARTER_PATH), report: reviewReport, verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha, resolves ? [resolves] : []), diff, recordStat: read.recordStat,
     ledger, shortstat, uncovered, context, claimsFromReport: known.length > 0,
+    risk: { tier: risk.tier, reasons: risk.reasons },
+    ...(risk.tier === "R2" ? { specialist: specialistQuestion(risk.topics) } : {}),
     criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
   }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000, role: "review" }), { sleep: (ms) => rt.sleep(ms), fallback: rt.complete(cfg.managerModel, { timeoutMs: 300_000, role: "review" }) });
   await ctx.engine.refreshUsage();
-  writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: review.fallbackUsed ? cfg.managerModel : cfg.reviewModel, ...review });
+  writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: review.fallbackUsed ? cfg.managerModel : cfg.reviewModel, risk: { tier: risk.tier, reasons: risk.reasons }, ...review });
   const reason = `${gateGreen ? "" : `${failingNote}; `}review${review.fallbackUsed ? " (by the fallback reviewer, the manager model)" : ""} ${review.verdict}: ${review.reason}${review.concerns.length ? ` Concerns: ${review.concerns.join("; ")}` : ""}`;
-  return { merge: gateGreen && review.verdict === "MERGE", reason, review: review.verdict, ...(review.unavailable ? { reviewUnavailable: review.reason } : {}), ...extra };
+  return { merge: gateGreen && review.verdict === "MERGE", reason, review: review.verdict, ...(review.unavailable ? { reviewUnavailable: review.reason } : {}), risk, ...extra };
 }
 
 /** The end of a non-finite run: cycles done, nothing left to find, or an operator stop after blocked publication. Evidence is a green acceptance run on the integration head. */

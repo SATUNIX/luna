@@ -143,7 +143,7 @@ export function buildBundle(b: ManagerBundle): string {
 
 export function systemPrompt(): string {
   return [
-    "You manage an unattended run in which a coding agent improves a repository in cycles (review, plan, improve, verify).",
+    "You manage an unattended run in which a coding agent improves a repository in cycles, each one a direct piece of work that ends in a commit and a short report.",
     "You are called only when something needs a decision. Choose exactly one decision:",
     ...Object.entries(DECISIONS).map(([k, v]) => `- ${k}: ${v}`),
     "Prefer the least disruptive decision that the evidence supports. Commits and passing gates are progress; repeated identical tool calls, the same error recurring, or long silence are not.",
@@ -152,6 +152,15 @@ export function systemPrompt(): string {
     "A NUDGE or RESTART_SESSION message is read by the agent as coming from the operator: be specific and actionable.",
   ].join("\n");
 }
+
+/**
+ * Output caps for the host's own calls (the reply is one small JSON object; max_tokens counts a
+ * reasoning model's thinking too, so the cap also bounds that), and the thinking effort they ask
+ * OpenRouter for: low. The manager decides from a bounded bundle and the review judges a bounded
+ * diff; neither needs open-ended output.
+ */
+export const MANAGER_MAX_OUTPUT_TOKENS = 2_048;
+export const REVIEW_MAX_OUTPUT_TOKENS = 4_096;
 
 /** One host-side model call: `complete(system, user)` resolves to the reply text. */
 export type Complete = (system: string, user: string) => Promise<string>;
@@ -167,7 +176,7 @@ export async function decide(bundle: ManagerBundle, complete: Complete): Promise
  * Named for OpenRouter, which reports cost with `usage: {include: true}`; with usageInclude false it
  * sends a plain OpenAI-compatible request and the caller prices the tokens (onUsage gets the usage object).
  */
-export function openRouterComplete({ apiKey, model, upstream, fetchImpl = fetch, timeoutMs = 120_000, onUsage = () => {}, onFailure = () => {}, usageInclude = true }: OpenRouterOptions): Complete {
+export function openRouterComplete({ apiKey, model, upstream, fetchImpl = fetch, timeoutMs = 120_000, onUsage = () => {}, onFailure = () => {}, usageInclude = true, maxTokens = MANAGER_MAX_OUTPUT_TOKENS }: OpenRouterOptions): Complete {
   return async (system, user) => {
     let res: Response;
     let text: string;
@@ -175,7 +184,7 @@ export function openRouterComplete({ apiKey, model, upstream, fetchImpl = fetch,
       res = await fetchImpl(`${upstream.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ model, temperature: 0, ...(usageInclude ? { usage: { include: true } } : {}), messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+        body: JSON.stringify({ model, temperature: 0, max_tokens: maxTokens, ...(usageInclude ? { usage: { include: true }, reasoning: { effort: "low" } } : {}), messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
         signal: AbortSignal.timeout(timeoutMs),
       });
       text = await res.text();
@@ -222,6 +231,8 @@ export interface OpenRouterOptions {
   timeoutMs?: number | undefined;
   onUsage?: (usage: ChatUsage) => void;
   usageInclude?: boolean;
+  /** Output cap (max_tokens) of each call; the manager's by default. */
+  maxTokens?: number;
   /** A call that ended without usage (a non-200 reply, a timeout, a network error): the caller records it as an unresolved liability. */
   onFailure?: (failure: { status: number | null; outcome: "non-200" | "aborted" | "error"; detail: string }) => void;
 }

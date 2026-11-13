@@ -305,7 +305,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       if (wrapUpAt === null && !dead && agent) {
         wrapUpAt = now;
         rt.log(`cycle ${NN} manager calls exhausted; wrap-up steer sent`);
-        say(`Stop new work now. Commit what works, write ${DIR}/report.md and ${DIR}/verify.md describing exactly the committed diff, and \`git push origin HEAD\` within 15 minutes.`);
+        say(`Stop new work now. Commit what works, write ${DIR}/report.md describing exactly the committed diff, and \`git push origin HEAD\` within 15 minutes.`);
         settled = false;
         continue;
       }

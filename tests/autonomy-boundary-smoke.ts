@@ -190,7 +190,7 @@ await check("worker environment: ONE function, exact names, unattended only when
   const env = workerEnv(base, { branch: "pi/todo-api-1", reset: true });
   assert.deepEqual(env, {
     RUN_ID: "todo-api-1", RUN_BRANCH: "pi/todo-api-1", PI_MODEL: "deepseek/deepseek-v4.1-flash", PI_PROVIDER: "openrouter", CYCLE_RESET: "1", GIT_NAME: "pi autonomy", GIT_EMAIL: "pi-autonomy@localhost",
-    PI_KIT_EFFORT: "standard", PI_KIT_EFFORT_CAP: "standard",
+    PI_KIT_EFFORT: "standard", PI_KIT_EFFORT_CAP: "standard", PI_THINKING: "low",
     PI_KIT_UNATTENDED: "1", PI_KIT_UNATTENDED_BOUNDARY: "container", PI_KIT_UNATTENDED_CONTRACT: "/run/contract.json",
     AUTONOMY_EGRESS: "1", HTTPS_PROXY: "http://egress-proxy:3128", HTTP_PROXY: "http://egress-proxy:3128", https_proxy: "http://egress-proxy:3128", http_proxy: "http://egress-proxy:3128",
     NO_PROXY: "inference,egress-proxy,localhost,127.0.0.1", no_proxy: "inference,egress-proxy,localhost,127.0.0.1",

@@ -706,7 +706,7 @@ await check("merge review: only MERGE or REJECT with a reason; retried, then fai
   const bundle = { run: "r", cycle: 3, outcome: "completed", integrationBranch: "experimental/main", charter: "C", report: "R", verify: null, gitLog: "L", diff: "x".repeat(200_000) };
   const text = buildReviewBundle(bundle);
   assert.ok(text.length < 100_000, "the diff is clipped");
-  assert.match(text, /## Verification record\n\(missing\)/);
+  assert.match(text, /## Verification record\n\(none written: the host ran the acceptance checks itself/);
   let calls = 0;
   const huge = await reviewCycle(bundle, async () => { calls++; return '{"verdict":"MERGE","reason":"x"}'; });
   assert.deepEqual([huge.verdict, huge.failed, calls], ["REJECT", true, 0], "an over-budget diff is refused before any model call");
@@ -977,7 +977,7 @@ await check("cycle: CONTINUE decisions do not spend the per-cycle cap; the cap r
   assert.equal(nudge.rt.managerCalls.length, 3);
   assert.deepEqual([r2.outcome, r2.reason], ["completed", "report recorded"]);
   assert.equal(nudge.sent.filter((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now.")).length, 1);
-  assert.match(nudge.sent.find((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))?.message ?? "", /report\.md and autonomy\/cycles\/02\/verify\.md describing exactly the committed diff/);
+  assert.match(nudge.sent.find((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))?.message ?? "", /report\.md describing exactly the committed diff/);
   // Without a report within the grace window the cycle closes as before.
   const silent = fakeRuntime({ manager: { decision: "NUDGE", reason: "looping", message: "Carry on." }, script: ({ minute, emit }) => {
     if (minute % 3 === 0) emit({ type: "extension_ui_request", method: "notify", message: "progress-guard: loop detected" });

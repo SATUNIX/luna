@@ -23,8 +23,6 @@ import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
-import { compilePlan } from "../packages/extensions/third_party/subagent/plan.ts";
-import { discoverAgents } from "../packages/extensions/third_party/subagent/agents.ts";
 import { ALWAYS_CHECKS, CHANGED_PATH_CHECKS, checksForChangedPaths, verifyPlan } from "../packages/core/lib/check-map.ts";
 
 const { check, done } = makeChecker("autonomy-selfimprove-smoke");
@@ -1286,7 +1284,7 @@ await check("a conflict-resolving cycle is judged on what it adds over both pare
   }), {
     manager: manager(calls),
     script: async (t) => {
-      assert.match(nth(t.prompts, 0), /\*\*Improve mode\*\* is for assigned improvements/, "streams take improvements from the steward");
+      assert.match(nth(t.prompts, 0), /`Mode: improve` \(it is for assigned improvements/, "streams take improvements from the steward");
       if (t.step === 1) {
         t.write("README.md", "stream intent\n"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("stream edit");
         heavyTrunk(src);
@@ -1355,38 +1353,25 @@ await check("a conflict resolution that keeps the integration side of an upstrea
   assert.match(entry?.mergeReason ?? "", /drops upstream changes .*README\.md/);
 });
 
-await check("the cycle prompt sends items through workflow_run {steps}, its example compiles at worst case 4, and it names the subagent fallback", async () => {
+await check("the cycle prompt is the lean worker brief: direct work, delegation only for an isolated package, one host review, submit and stop", async () => {
   let message = "";
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
     manager: manager([]),
     script: async (t) => { message = t.message; t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("prompt seen"); },
   });
   await runOnce(h);
-  assert.match(message, /`workflow_run \{steps\}`/, "the prompt directs items through an inline plan");
-  assert.match(message, /"parallel"/, "phase 1 may send scouts as a parallel plan");
-  assert.match(message, /"max_loops":1/, "the item plan sets max_loops 1");
-  assert.match(message, /worst case of 4/);
-  assert.match(message, /`standard`.*8 agents/s, "the prompt states the request allowance");
-  assert.match(message, /two items, or one scouts plan and one item/);
-  assert.match(message, /fall back to the `subagent` tool/, "a refusal names the fallback");
-  assert.match(message, /`Workflow: refused <reason>`/, "and the report line it adds");
-  assert.match(message, /`subagent` for one-off tasks/, "the subagent rule stays for one-off tasks");
+  assert.match(message, /Do the work directly/, "direct work is the default");
+  assert.match(message, /Delegate only when it pays for itself: one isolated question, or one independent package/, "delegation is the exception");
+  assert.match(message, /Do not start scouts, a planner, a reviewer for each item or a reviewer for the whole diff/, "no compulsory scouts or per-item reviewers");
+  assert.match(message, /the host reviews the finished diff once/, "one review, by the host");
+  assert.match(message, /Do not search for unrelated work/, "no scouting for work");
+  assert.match(message, /stop: submitting the head and the note ends your session/, "submit and stop");
+  assert.doesNotMatch(message, /workflow_run|"parallel"|worst case|`Workflow: refused/, "the compulsory workflow plans are gone");
+  assert.doesNotMatch(message, /10 minutes or more/, "the stale timing claim is gone");
+  assert.match(message, /about four minutes/, "the suite timing is the measured one");
+  assert.doesNotMatch(message, /plan\.md|review\.md|verify\.md/, "no model-written plan, review or verify file is asked for");
+  assert.ok(message.length < 7000, `the brief stays short (${message.length} characters)`);
   assert.doesNotMatch(message, /\{\{[A-Z_]+\}\}/, "every placeholder is filled");
-  // The item plan the prompt shows compiles through the same compiler workflow_run uses, against the kit's roles.
-  const example = /^\s*\{"steps".*"max_loops".*$/m.exec(message)?.[0];
-  assert.ok(example, "the prompt shows the item plan on one line");
-  const parsed: unknown = JSON.parse(example);
-  const steps: unknown = typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "steps") : undefined;
-  const compiled = compilePlan(steps, discoverAgents(scratch(), "project").agents);
-  assert.ok(compiled.ok, `the example compiles: ${compiled.ok ? "" : JSON.stringify(compiled.errors)}`);
-  assert.equal(compiled.worstCaseAgents, 4, "an item costs 4 of the 8 a standard request gets");
-  const scouts = /^\s*\{"steps":\[\{"parallel".*$/m.exec(message)?.[0];
-  assert.ok(scouts, "the prompt shows the scouts plan on one line");
-  const scoutsParsed: unknown = JSON.parse(scouts);
-  const scoutSteps: unknown = typeof scoutsParsed === "object" && scoutsParsed !== null ? Reflect.get(scoutsParsed, "steps") : undefined;
-  const scoutPlan = compilePlan(scoutSteps, discoverAgents(scratch(), "project").agents);
-  assert.ok(scoutPlan.ok, `the scouts example compiles: ${scoutPlan.ok ? "" : JSON.stringify(scoutPlan.errors)}`);
-  assert.ok(scoutPlan.worstCaseAgents + compiled.worstCaseAgents <= 8, "scouts plus one item fit the standard allowance");
 });
 
 await check("an upstream fetch failure is logged and the cycle still runs and merges", async () => {
@@ -1425,10 +1410,10 @@ await check("board prompt ranks two nonblocked items, refreshes each cycle, and 
         assert.match(t.message, /Never run `npm test` or `npm run check:all`/);
         assert.match(t.message, /Put this rule in every subagent task you send/);
         assert.match(t.message, /Own new ideas go into `autonomy\/BACKLOG.md` as proposals/);
-        // One copy each of the precedence and the own-ideas rule, and the items before the ground rules.
+        // One copy each of the precedence and the own-ideas rule, and the items before the rules.
         assert.equal(t.message.split(WORK_PRECEDENCE).length, 2, "the precedence is stated once");
         assert.equal(t.message.split("Own new ideas go into").length, 2, "the own-ideas rule is stated once");
-        assert.ok(t.message.indexOf("## Assigned work") < t.message.indexOf("Ground rules"), "assigned items come right after the budget");
+        assert.ok(t.message.indexOf("## Assigned work") < t.message.indexOf("Rules:"), "assigned items come right after the budget");
         assert.doesNotMatch(t.message, /Read the steward board/);
         fs.writeFileSync(path.join(t.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-05", title: "next cycle assignment", priority: "P0", acceptance: "Next acceptance" }] }));
       } else {
@@ -1500,7 +1485,7 @@ await check("without a board, Board: lines are recorded but never refuse the mer
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
     manager: manager(calls),
     script: async (t) => {
-      assert.match(t.message, /\*\*Improve mode\*\* is for when the review finds nothing worth fixing\. Make an existing system/);
+      assert.match(t.message, /`Mode: improve` \(it is for when the review finds nothing worth fixing\. Make an existing system/);
       assert.doesNotMatch(t.message, /Board: <ID>|## Assigned work|steward to assign|Own new ideas go into/);
       t.write("AUDIT_OK", "1"); report(t, "successful", "fix", "Board: B-003 done - Worked a backlog item."); t.commit("backlog work");
     },
@@ -1555,9 +1540,8 @@ await check("the cycle prompt names the start sha, the review budget with its me
       assert.match(t.message, /this prompt wins: the merge review judges streams against the current stream charter/);
       assert.ok(t.message.includes(`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"`), "the verify plan derives its checks from the diff");
       assert.match(t.message, /one line per check saying whether it RAN or was SKIPPED/);
-      assert.match(t.message, /\(a\) run the targeted smokes[\s\S]*\(d\) write `verify\.md`[\s\S]*Then go to step 5/);
       assert.match(t.message, /Item: <title> - <commit shas> - <test that proves it>/);
-      assert.match(t.message, /under 5000 characters each/);
+      assert.match(t.message, /keep it under 5000 characters/);
       t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("focus");
     },
   });
@@ -1810,8 +1794,97 @@ await check("check-map: a changed-path diff implies the host gate's checks, and 
   for (const name of plan.run) assert.ok(!plan.skipped.includes(name), `${name} is both run and skipped`);
 
   const template = fs.readFileSync(path.join(REPO_ROOT, "packages", "autonomy", "prompts", "cycle.md"), "utf8");
-  assert.match(template, /--for-changed/, "cycle.md derives the plan from the diff");
-  assert.match(template, /RAN or SKIPPED/, "cycle.md records each check as RAN or SKIPPED");
+  assert.match(template, /\{\{VERIFY_PLAN\}\}/, "cycle.md carries the plan the host derives from the diff (--for-changed, RAN or SKIPPED: asserted on the built prompt above)");
+});
+
+
+// --- risk tiers, the single review and the repair round (lib/risk.ts, lib/attempts.ts) -----------------------
+const noGate = { checks: [{ id: "gate", run: NODE_EXIT("true"), timeoutMinutes: 1, required: true }], review: true };
+const reviewCount = (calls: readonly ManagerCall[]): number => calls.filter((c) => /You review one cycle/.test(c.system)).length;
+const riskRun = (over: RawContract, files: Record<string, string>, reply?: (system: string) => string): { calls: ManagerCall[]; h: Harness; parked: { state: ReturnType<Harness["state"]> | null } } => {
+  const calls: ManagerCall[] = [];
+  const parked: { state: ReturnType<Harness["state"]> | null } = { state: null };
+  const base = manager(calls);
+  const h: Harness = harness(improveRaw(sourceRepo(), { acceptance: noGate, budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, ...over }), {
+    manager: async (system, user, model) => (reply && /You review one cycle/.test(system) ? (calls.push({ system, user, model }), reply(system)) : base(system, user, model)),
+    // A parked run (an unusable review) waits for a person: capture it and end the test run.
+    hooks: { onSleep: () => { const s = h.state(); if (s.status === "blocked" && !parked.state) { parked.state = structuredClone(s); h.store.enqueue("cancel", { reason: "test done" }); } } },
+    script: async (t) => { for (const [file, body] of Object.entries(files)) t.write(file, body); report(t, "successful"); t.commit("change"); },
+  });
+  return { calls, h, parked };
+};
+
+await check("R0: a prose-only cycle starts fully reviewed (one review), and the host records the tier", async () => {
+  const { calls, h } = riskRun({}, { "README.md": "words\n" });
+  const { state } = await runOnce(h);
+  assert.equal(reviewCount(calls), 1, "the single review still runs by default");
+  assert.equal(state.selfImprove?.history[0]?.risk?.tier, "R0");
+  assert.equal(state.selfImprove?.history[0]?.merged, true);
+});
+
+await check("R0: behind the r0Review switch a prose-only cycle merges on green checks with no model review; code still gets one", async () => {
+  const off = { templateOptions: { integration: { branch: "pi-autonomy/integration", review: true, r0Review: 0 }, limits: { nothingFoundToStop: 2 } } };
+  const prose = riskRun(off, { "README.md": "words\n", "docs/guide.md": "more words\n" });
+  const { state } = await runOnce(prose.h);
+  assert.equal(reviewCount(prose.calls), 0, "no review call for a prose-only cycle");
+  assert.equal(state.selfImprove?.history[0]?.merged, true);
+  assert.match(state.selfImprove?.history[0]?.mergeReason ?? "", /R0 .*no model review/);
+  const code = riskRun(off, { "README.md": "words\n", "src/app.js": "1\n" });
+  assert.equal((await runOnce(code.h)).state.selfImprove?.history[0]?.risk?.tier, "R1");
+  assert.equal(reviewCount(code.calls), 1, "any path the host cannot call prose escalates out of R0");
+  const invalid = resolveContract(improveRaw(sourceRepo(), { templateOptions: { integration: { r0Review: 2 } } }), { effort: testEffort });
+  assert.ok(invalid.problems.some((p) => p.path === "templateOptions.integration.r0Review" && p.level === "error"), "the switch is validated");
+});
+
+await check("R3: a change to gate policy or release machinery is not merged by an unattended cycle and no model is asked", async () => {
+  const { calls, h } = riskRun({}, { ".github/workflows/release.yml": "name: x\n" });
+  const { state } = await runOnce(h);
+  assert.equal(reviewCount(calls), 0);
+  assert.equal(state.selfImprove?.history[0]?.merged, false);
+  assert.equal(state.selfImprove?.history[0]?.risk?.tier, "R3");
+  assert.match(state.selfImprove?.history[0]?.mergeReason ?? "", /R3 change .*owner\/steward route/);
+});
+
+await check("R2: one review carries one specialist question; a CONCERN rejects, an OK merges, a reply without the answer fails closed", async () => {
+  const ask = (answer: string | null) => riskRun({}, { "src/recovery.js": "1\n" }, () => JSON.stringify({ verdict: "MERGE", ...(answer ? { specialist: answer } : {}), reason: "looked", concerns: [] }));
+  const concern = ask("CONCERN");
+  const rejected = (await runOnce(concern.h)).state.selfImprove?.history[0];
+  assert.equal(reviewCount(concern.calls), 1, "one review call, not a second reviewer");
+  assert.match(nth(concern.calls, 0).system, /Specialist question .*recover/i);
+  assert.equal(rejected?.risk?.tier, "R2");
+  assert.equal(rejected?.merged, false);
+  assert.match(rejected?.mergeReason ?? "", /specialist concern/);
+  const ok = ask("OK");
+  assert.equal((await runOnce(ok.h)).state.selfImprove?.history[0]?.merged, true);
+  assert.equal(reviewCount(ok.calls), 1);
+  const silent = ask(null);
+  await runOnce(silent.h);
+  assert.equal(silent.parked.state?.selfImprove?.history.length, 0, "an unanswered specialist question is no verdict: parked, not merged");
+  assert.equal(silent.parked.state?.pendingQuestions?.at(-1)?.id, "review-pending");
+});
+
+await check("one ordinary attempt plus one repair per board item: after two unmerged cycles the item is no longer offered, and why is recorded", async () => {
+  const calls: ManagerCall[] = [];
+  const prompts: string[] = [];
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
+    manager: manager(calls, { review: "REJECT" }),
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1"); t.write(`attempt-${t.step}.js`, "1\n"); report(t, "partial", "fix", "Board: V-02 progress - tried.");
+      t.commit(`attempt ${t.step}`);
+    },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-02", title: "the item", priority: "P1", acceptance: "Do it" }] }));
+  const { state } = await runOnce(h);
+  assert.equal(prompts.length, 3);
+  assert.match(nth(prompts, 0), /V-02 \[P1\]/, "the ordinary attempt");
+  assert.match(nth(prompts, 1), /V-02 \[P1\]/, "the one repair");
+  assert.doesNotMatch(nth(prompts, 2), /V-02 \[P1\]/, "then the item is not offered again");
+  assert.match(nth(prompts, 2), /No assigned items/);
+  const record = state.selfImprove?.itemAttempts?.["V-02"];
+  assert.deepEqual([record?.attempts, record?.withheld], [2, true]);
+  assert.match(record?.lastReason ?? "", /review REJECT/, "the reason it stopped is recorded");
+  assert.match(fs.readFileSync(h.store.p.log, "utf8"), /board item V-02 is no longer offered: 2 attempt/);
 });
 
 cleanup();

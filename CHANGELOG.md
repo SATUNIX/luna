@@ -61,6 +61,28 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
   (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
   Luna builds no trust prompt of its own.
+- **A lean worker brief, risk-tiered review and one repair round for autonomous cycles.** The
+  worker prompt (`packages/autonomy/prompts/cycle.md`) is a task brief: work directly, delegate only
+  an isolated question or independent package, no compulsory scouts or per-item and whole-diff
+  reviewers, never search for unrelated work, submit the head and a short note and stop. It no
+  longer asks for `plan.md`, `review.md` or `verify.md`, and its claim that the full suite takes ten
+  minutes or more is replaced by the measured four. The host classifies each cycle R0 to R3 from the
+  paths it actually changed (`lib/risk.ts`): R0 (prose and static files) is reviewed in full by
+  default and skips the model only behind the new `templateOptions.integration.r0Review` switch; R1
+  gets the one review; R2 (recovery, concurrency, persistence, shared-interface, authorisation) gets
+  the same review plus one specialist question it must answer; R3 (permissions, budgets, credentials,
+  the charter, gate policy, release) is refused for the owner/steward route unless
+  `allowControlChanges` is on. Unknown or unclassifiable paths escalate. A board item that was
+  assigned and did not merge twice (the ordinary attempt and one repair) is no longer offered, and
+  the reason is recorded in `selfImprove.itemAttempts`. The worker session runs at low thinking
+  (`PI_THINKING`, also pi's `defaultThinkingLevel` in the run's agent state, so children start low;
+  medium for planning and implementation only is not enforced), and the host's manager and review
+  calls ask for low reasoning with a 2,048 and 4,096 token output cap. Breaking for operators who lean on the old cycle files: the merge review now sees no
+  `verify.md` unless a worker still writes one, and a cycle that edits release, gate-policy,
+  permission or budget files is refused where the review alone used to judge it; list such work in
+  proposals or set `allowControlChanges`. No migration for run state: the new fields are optional.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
 - Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` resumes after the budget is raised; a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
 
 - **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and

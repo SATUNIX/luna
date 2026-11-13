@@ -17,7 +17,7 @@ buildscript {
 }
 
 plugins {
-    id("com.android.application") version "9.5.0" apply false
+    id("com.android.application") version "9.5.1" apply false
     // AGP 9 compiles Kotlin itself (built-in Kotlin), so the app module does not apply this plugin.
     // Declaring it here raises the Kotlin Gradle plugin AGP runs from its bundled default to this
     // version.

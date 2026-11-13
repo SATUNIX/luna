@@ -83,6 +83,25 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   proposals or set `allowControlChanges`. No migration for run state: the new fields are optional.
   `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
 
+- **Autonomous cycles never start on a red base, stop paying for oversize diffs, and idle for free.**
+  Finding: the audit put about $11 of cycle spend on cycles started on a red base, $4 on diffs over the
+  review budget (found only after the full gate), and every empty look at an exhausted backlog cost a whole
+  worker session. Cause: nothing gated the base, the diff cap was checked only at the merge decision, and
+  the never-idle fallback sent a worker to scout. Fix: before a fresh cycle the host gates the base unless
+  that head already passed (`lib/preflight.ts`) and classifies a failure from its output: provider or host
+  trouble backs off with no model call and parks as `waiting_provider`, a check that cannot run asks a
+  person, a red product base gets at most two host-built repair cycles (no board work) and then asks a person
+  (`base-red`), and only a failure the operator lists in `templateOptions.knownFlakes` is confirmed with one
+  more run that keeps the first failure. An over-budget diff is refused before the acceptance gate and
+  the review; a cycle whose diff holds only this run's records merges on `Outcome: nothing found` and is
+  refused for any other claim, without a model call. An empty queue (no offered board item, no
+  failing gate, nothing carried over) sleeps `templateOptions.emptyQueueSleepMinutes` (default 15) with no model
+  call, and the prompt no longer tells a worker to look for work. Breaking: a run whose base fails its
+  checks now stops after two repair cycles instead of cycling on, and a run without a board ends as
+  `backlog_exhausted` once its `autonomy/BACKLOG.md` has no open rows. Migration: none for run state (new fields
+  are optional); list known flaky checks in `templateOptions.knownFlakes`. Not covered: the failure
+  classes are patterns on the check output, so an unusual infrastructure failure is treated as product. `tests/autonomy-preflight-smoke.ts`.
+
 - Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` resumes after the budget is raised; a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
 
 - **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and

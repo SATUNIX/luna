@@ -91,6 +91,14 @@ const improveRaw = (src: string, over: RawContract = {}): RawContract => ({
   ...over,
 });
 
+/** A source repository whose base already passes the gate: a cycle on it starts without a repair, and its `AUDIT_OK` edit is a real change. */
+function greenSourceRepo(): string {
+  const src = sourceRepo();
+  fs.writeFileSync(path.join(src, "AUDIT_OK"), "base\n");
+  sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "base passes the gate");
+  return src;
+}
+
 /** The item at `i`, failing when the test expected more items than there are. */
 const nth = <T>(items: readonly T[], i: number): T => {
   const item = items[i];
@@ -444,7 +452,8 @@ await check("v0 behaviour through the engine: seeded from the contract, cycles m
   assert.equal(sh(src, "rev-parse", "refs/heads/main"), baseSha);
   assert.equal(sh(src, "tag", "--list"), "", "no tags are published by a local-branch promotion");
   assert.deepEqual(sh(src, "for-each-ref", "--format=%(refname)", "refs/heads").split("\n").sort(), ["refs/heads/main", "refs/heads/pi-autonomy/integration"], "the working branch never leaves the run");
-  assert.ok(calls.filter((c) => /You review one cycle/.test(c.system)).length === 3, "each merged cycle was reviewed");
+  assert.equal(calls.filter((c) => /You review one cycle/.test(c.system)).length, 1, "the cycle with code was reviewed; the two records-only `nothing found` cycles merged on the checks with no model call");
+  assert.match(si.history[1]?.mergeReason ?? "", /nothing found: the diff holds only this run's records/);
   assert.equal(calls.filter((c) => !/You review one cycle/.test(c.system)).length, 0, "the manager was never asked: no trigger fired");
   assert.deepEqual(fakeAlive(h.fakeEngine), []);
   assert.ok(state.usage.usd >= 0.3 && state.usage.steps === 3);
@@ -1398,7 +1407,7 @@ await check("board prompt ranks two nonblocked items, refreshes each cycle, and 
     { id: "V-03", title: "urgent blocked", priority: "P0", status: "blocked" },
     { id: "V-04", title: "second assigned", priority: "P1", acceptance: "Second acceptance" },
   ] };
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
     manager: manager(calls),
     script: async (t) => {
       assert.match(t.message, /## Assigned work \(steward board\)/);
@@ -1420,7 +1429,7 @@ await check("board prompt ranks two nonblocked items, refreshes each cycle, and 
         assert.match(t.message, /V-05 \[P0\]/);
         assert.doesNotMatch(t.message, /V-02|V-04/);
       }
-      t.write("AUDIT_OK", "1"); report(t, "successful", "fix", t.step === 1 ? "Board: V-04 progress - Added the tested first part." : "No explicit claim; review assigned item."); t.commit("board progress");
+      t.write("AUDIT_OK", `step ${t.step}\n`); report(t, "successful", "fix", t.step === 1 ? "Board: V-04 progress - Added the tested first part." : "No explicit claim; review assigned item."); t.commit("board progress");
     },
   });
   fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify(board));
@@ -1465,7 +1474,7 @@ await check("partial green committed work goes through independent review; red a
 
 await check("a resumed cycle keeps its board snapshot: claims against the board it started with still reach review", async () => {
   const calls: ManagerCall[] = [];
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
     manager: manager(calls),
     script: async (t) => { t.write("partial.txt", "1"); t.commit("checkpoint"); fs.writeFileSync(path.join(t.store.p.root, "STOP"), ""); t.hang(); },
   });
@@ -1514,7 +1523,7 @@ await check("an existing paused cycle with no board or upstream fields loads and
   h.store.writeState(old);
   assert.equal(h.store.readState()?.selfImprove?.history.length, 1);
   fs.rmSync(path.join(h.store.p.root, "STOP")); h.store.enqueue("unpause");
-  const resumed = await runOnce(h, { rt: h.runtime(async (t) => { report(t, "successful"); t.commit("finish old cycle"); }) });
+  const resumed = await runOnce(h, { rt: h.runtime(async (t) => { t.write("finished.txt", "1\n"); report(t, "successful"); t.commit("finish old cycle"); }) });
   assert.equal(resumed.state.selfImprove?.history[1]?.merged, true);
 });
 
@@ -1581,7 +1590,7 @@ await check("a report that leaves a code commit out of its Item lines gets one f
 
 await check("an unknown Board: claim never discards green work: it is judged on the known claims, flagged to the reviewer and to the next cycle", async () => {
   const calls: ManagerCall[] = [];
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
     manager: manager(calls),
     script: async (t) => {
       if (t.step === 2) assert.match(t.message, /claimed board items that were not assigned to it \(V-09\)/);
@@ -1660,7 +1669,7 @@ await check("an over-budget cycle is caught pre-report: the live worker is steer
   const calls: ManagerCall[] = [];
   const messages: Array<{ step: number; kind: string; message: string }> = [];
   const probe = "The diff this cycle would submit is";
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
     manager: manager(calls),
     script: async (t) => {
       messages.push({ step: t.step, kind: t.kind, message: t.message });
@@ -1866,8 +1875,9 @@ await check("R2: one review carries one specialist question; a CONCERN rejects, 
 await check("one ordinary attempt plus one repair per board item: after two unmerged cycles the item is no longer offered, and why is recorded", async () => {
   const calls: ManagerCall[] = [];
   const prompts: string[] = [];
-  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 } }), {
     manager: manager(calls, { review: "REJECT" }),
+    hooks: { onSleep: () => { if (h.state().selfImprove?.idle) h.store.enqueue("cancel"); } },
     script: async (t) => {
       prompts.push(t.message);
       t.write("AUDIT_OK", "1"); t.write(`attempt-${t.step}.js`, "1\n"); report(t, "partial", "fix", "Board: V-02 progress - tried.");
@@ -1876,11 +1886,11 @@ await check("one ordinary attempt plus one repair per board item: after two unme
   });
   fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "V-02", title: "the item", priority: "P1", acceptance: "Do it" }] }));
   const { state } = await runOnce(h);
-  assert.equal(prompts.length, 3);
+  assert.equal(prompts.length, 2, "the ordinary attempt and one repair; the withheld item leaves an empty queue, so no third session starts");
   assert.match(nth(prompts, 0), /V-02 \[P1\]/, "the ordinary attempt");
   assert.match(nth(prompts, 1), /V-02 \[P1\]/, "the one repair");
-  assert.doesNotMatch(nth(prompts, 2), /V-02 \[P1\]/, "then the item is not offered again");
-  assert.match(nth(prompts, 2), /No assigned items/);
+  assert.ok(state.selfImprove?.idle, "then the host sleeps instead of offering the item again or scouting for other work");
+  assert.equal(calls.filter((c) => !/You review one cycle/.test(c.system)).length, 0, "no manager call while idle");
   const record = state.selfImprove?.itemAttempts?.["V-02"];
   assert.deepEqual([record?.attempts, record?.withheld], [2, true]);
   assert.match(record?.lastReason ?? "", /review REJECT/, "the reason it stopped is recorded");

@@ -155,6 +155,7 @@
     "smoke:autonomy-meter": "node tests/autonomy-meter-smoke.ts",
     "smoke:autonomy-review-inputs": "node tests/autonomy-review-inputs-smoke.ts",
     "smoke:autonomy-lean": "node tests/autonomy-lean-smoke.ts",
+    "smoke:autonomy-preflight": "node tests/autonomy-preflight-smoke.ts",
     "smoke:autonomy-cli": "node tests/autonomy-cli-smoke.ts",
     "smoke:autonomy-inbox": "node tests/autonomy-inbox-smoke.ts",
     "smoke:autonomy-container": "node tests/autonomy-container-smoke.ts",

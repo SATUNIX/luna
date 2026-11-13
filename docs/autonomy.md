@@ -500,6 +500,41 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   reason in `selfImprove.itemAttempts` in the run state; the steward offers it again by filing it
   under a new ID. The allowance is fixed at two. An item the host withheld still stays on the board
   file (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **The host gates the base before any work starts.** Before a fresh cycle the host runs the acceptance
+  gate on the integration head the cycle would start from, unless that exact head already passed (a
+  merged cycle's head did) (`lib/preflight.ts`). It classifies a failure from the gate's own output before
+  anyone is paid to work on it: provider, network, disk or timeout trouble (**infra**) backs off five,
+  ten, twenty, forty and sixty minutes with no worker and no model call, then parks with
+  `waiting_provider` and the question id `base-infra`; a check that cannot run here (command not found,
+  permission denied; **deterministic**) asks a person with `base-red` and is not rerun; a **product**
+  failure gets a host-built repair cycle whose prompt carries the failing checks and no board items, twice
+  at most for one head (the ordinary attempt and one repair), then asks a person with `base-red`. Only a
+  failure the operator lists in `templateOptions.knownFlakes` (check ids or `id/step` names) is ever
+  confirmed: one more run, with the first failure kept next to it under `steps/NN/preflight/first`
+  and `confirm`; passing on the confirmation is recorded as a flake and work starts, failing again is a
+  product failure. Nothing is rerun until it passes. The classification reads the check's output
+  with patterns (`lib/preflight.ts`), so an unusual infrastructure failure reads as product and gets
+  a repair cycle; the answer to either question (`Fixed; look again`) clears the verdict and looks again.
+  `tests/autonomy-preflight-smoke.ts`.
+- **The diff cap is enforced before the gate and the review, in code.** When a cycle ends, the host
+  measures the diff the merge review would read (same exclusions and upstream scope as the live
+  budget probe). One over the budget is refused before the acceptance gate runs and before any model is
+  asked, and its commits stay on the attempts branch for the next cycle to carry as a reviewable subset;
+  the merge decision still refuses an over-budget or unreadable diff as the fail-closed backstop.
+  Claims are also checked deterministically before the review: a report that names a commit that is not
+  in the cycle is refused, and a cycle whose diff holds only this run's records merges on the checks alone
+  when it reports `Outcome: nothing found` and is refused for any other claim, with no model call either way.
+  `tests/autonomy-preflight-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts`.
+- **An empty queue sleeps; nothing scouts.** When nothing is assigned or offered (a board run: no
+  unblocked board item left after withheld ones), nothing is failing, no steer is waiting and no
+  upstream conflict, publication blocker or refused commit is pending, the host starts no worker, manager or
+  review. It looks again every `templateOptions.emptyQueueSleepMinutes` (default 15), waking at once for
+  any of those. A run with a board waits for the steward for as long as it runs; a run without one (its
+  queue is the open and in-progress rows of `autonomy/BACKLOG.md`, a red previous cycle, a
+  `partial` report, and its first cycle always runs) ends as `backlog_exhausted` after
+  `limits.nothingFoundToStop` empty looks. Idle looks are not cycles and cost nothing; whether the idle time counts
+  against `maxMinutes` is not pinned by a test. The worker brief has no "never idle" fallback: a worker that
+  still finds nothing records `Outcome: nothing found`. `tests/autonomy-preflight-smoke.ts`.
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
   charter, the report, the commits and the diff. Its input starts with a host ledger: the cycle's
   `git log --format="%h %s"` and the `git diff --shortstat` without the lockfile and this run's

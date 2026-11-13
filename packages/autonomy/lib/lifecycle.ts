@@ -229,7 +229,7 @@ export interface SelfImproveState {
   merged: number;
   lastGoodSha: string;
   seedSha: string;
-  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard; /** Set while parked on review-pending: the cycle's close-out result, so the answer re-runs the review on the held head without a new worker session. */ reviewPending?: { outcome: Exclude<CycleOutcome, "blocked">; reason: string; attempts: number; costUsd: number; head: string } } | null;
+  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard; /** The checks the host's pre-flight found failing on the base: this cycle is the one bounded repair (lib/preflight.ts), with no board work. */ baseRed?: string[]; /** Set while parked on review-pending: the cycle's close-out result, so the answer re-runs the review on the held head without a new worker session. */ reviewPending?: { outcome: Exclude<CycleOutcome, "blocked">; reason: string; attempts: number; costUsd: number; head: string } } | null;
   /** Automatic reconciliations of a diverged integration branch, oldest first. */
   reconciliations?: ReconciliationRecord[];
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */
@@ -241,6 +241,14 @@ export interface SelfImproveState {
   lastSyncError?: string | null;
   /** Failed attempts per board item (lib/attempts.ts): an item with its allowance used is no longer offered. */
   itemAttempts?: ItemAttempts;
+  /** The host's last pre-flight of a base (lib/preflight.ts): the head gated, the verdict, the failing checks, and a backoff deadline (epoch ms) after provider trouble. */
+  preflight?: { sha: string; at: string; verdict: "green" | "flake" | "infra" | "deterministic" | "product"; failing: string[]; waitUntil?: number };
+  /** Repair cycles started per red base head: the ordinary attempt and one repair (lib/attempts.ts), then a person. */
+  baseRepairs?: Record<string, number>;
+  /** Consecutive pre-flights that failed on provider or host trouble. */
+  infraWaits?: number;
+  /** Set while the queue is empty: the host sleeps and starts no model call (lib/queue.ts). `until` is epoch ms. */
+  idle?: { since: string; until: number; polls: number };
 }
 
 /** state.json: the one authoritative record of a run. */

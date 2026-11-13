@@ -90,6 +90,9 @@ let checks = 0;
 export function makeChecker(label: string): Checker {
   return {
     async check(name: string, fn: () => unknown): Promise<void> {
+      // CHECK_ONLY=<text> runs just the checks whose name contains it, for working on one.
+      const only = process.env["CHECK_ONLY"];
+      if (only && !name.includes(only)) return;
       await fn();
       checks++;
       console.log(`  OK: ${name}`);

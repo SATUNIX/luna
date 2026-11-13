@@ -61,6 +61,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
   (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
   Luna builds no trust prompt of its own.
+- **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and
+  host-call meter row carries the run, cycle and role (worker, manager, review); an error, aborted,
+  non-200 or usage-less reply is an unresolved liability row instead of a gap; each `cycle.json`
+  records the contract digest, the limits in force and its spend by role. The relay counts the host's
+  manager and review spend toward its stop and starts from the ledgers on disk. A 402 (or the relay's
+  budget stop) parks the run as `waiting_budget`; a 403 or a persistent 429 as `waiting_provider`,
+  recorded on the blocker, in `outcome.md` and in the status listing. Not breaking: new fields only;
+  429 used to be an ordinary retry for ever and now parks on the second failure in a row. Child agents
+  share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
+
 - **One ceiling for unattended work, and `/away`.** Turns, money and wall time are one object, and
   the first limit reached parks the work (stopped, state kept, never a failure). An autonomous run's
   budget checks use it unchanged in behaviour; a headless run sets `PI_KIT_CEILING_TURNS`,

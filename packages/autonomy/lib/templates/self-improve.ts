@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { type AcceptanceEvaluation, type CheckEvidence, runAcceptance, summariseEvaluation } from "../acceptance.ts";
 import { type BoardItem, type BoardReport, WORK_PRECEDENCE, assignedItems, boardPrompt, parseBoardReport, readBoard } from "../board.ts";
 import { bookkeepingPaths } from "../bookkeeping.ts";
-import type { ContractDraft, ProblemSink, RunContract } from "../contract.ts";
+import type { Budget, ContractDraft, ProblemSink, RunContract } from "../contract.ts";
 import { type CycleDecision, type CycleOutcome, type CycleResult, type CycleRuntime, runCycle } from "../cycle.ts";
 import { isPositiveCpus, isPositiveSize } from "../containment.ts";
 import { LockLost } from "../errors.ts";
@@ -67,6 +67,10 @@ export interface CycleEntry {
   board?: BoardReport[];
   /** Board: IDs the report claimed that were not on the cycle's board snapshot (judged without them). */
   unknownClaims?: string[];
+  /** The contract digest and the limits this cycle ran under, so a change between cycles is visible. */
+  effective?: { contractDigest: string; limits: typeof SELF_IMPROVE_LIMITS & { budget: Budget } };
+  /** Metered spend by role (worker, manager, review) for this cycle, and the rows left unresolved (error, aborted, non-200, unmetered). */
+  meter?: { byRole: Record<string, number>; rows: number; unresolved: number };
 }
 
 /** The acceptance gate of one cycle: skipped when the cycle made no commits. */
@@ -677,7 +681,9 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   if (merge.merged && si.publishBlocker) si.publishBlockedCycles = (si.publishBlockedCycles ?? 0) + 1;
   const entry: CycleEntry = { n, outcome: result.outcome, reason: result.reason, attempts: result.attempts, start, head: sha, gate: gate.skipped ? "skipped" : gate.green ? "green" : "red", gateFailing: failing,
     reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, costUsd: +result.costUsd.toFixed(4),
-    decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}) };
+    decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}),
+    effective: { contractDigest: state.contractDigest, limits: { ...SELF_IMPROVE_LIMITS, budget: state.limits.budget } },
+    ...(rt.meterSummary ? (() => { const m = rt.meterSummary(n); return { meter: { byRole: Object.fromEntries(Object.entries(m.byRole).map(([k, v]) => [k, +v.toFixed(4)])), rows: m.rows, unresolved: m.unresolved } }; })() : {}) };
   writeJsonAtomic(path.join(engine.stepDir(n), "cycle.json"), entry);
   engine.flushUi();
   ctx.save((s) => {
@@ -804,7 +810,7 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
     charter: cfg.integrationUpstream ? streamCharter(cfg, ctx.contract, start, rt.now()) : repo.fileAt(start, CHARTER_PATH), report: reviewReport, verify: at(`${dir}/verify.md`), gitLog: repo.logSince(start, sha, resolves ? [resolves] : []), diff, recordStat: read.recordStat,
     ledger, shortstat, uncovered, context, claimsFromReport: known.length > 0,
     criticalPaths: reviewCriticalPaths(files, gateEntries(files, (f) => repo.fileAt(start, f), at)),
-  }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000 }), { sleep: (ms) => rt.sleep(ms), fallback: rt.complete(cfg.managerModel, { timeoutMs: 300_000 }) });
+  }, rt.complete(cfg.reviewModel, { timeoutMs: 300_000, role: "review" }), { sleep: (ms) => rt.sleep(ms), fallback: rt.complete(cfg.managerModel, { timeoutMs: 300_000, role: "review" }) });
   await ctx.engine.refreshUsage();
   writeJsonAtomic(path.join(ctx.engine.stepDir(n), "review.json"), { at: new Date(rt.now()).toISOString(), model: review.fallbackUsed ? cfg.managerModel : cfg.reviewModel, ...review });
   const reason = `${gateGreen ? "" : `${failingNote}; `}review${review.fallbackUsed ? " (by the fallback reviewer, the manager model)" : ""} ${review.verdict}: ${review.reason}${review.concerns.length ? ` Concerns: ${review.concerns.join("; ")}` : ""}`;

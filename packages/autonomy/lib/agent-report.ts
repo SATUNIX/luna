@@ -35,6 +35,7 @@ export function outcomeMarkdown(s: RunState): string {
     `# Run ${s.run}: ${s.status}`,
     "",
     ...(s.outcome ? [`Reason: ${s.outcome.reason}${s.outcome.detail ? ` (${s.outcome.detail})` : ""}`] : s.lastError ? [`Last error: ${s.lastError}`] : []),
+    ...(s.blocker?.waiting ? [`Waiting reason: ${s.blocker.waiting}`] : []),
     ...(s.blocker ? [`Waiting for: ${s.blocker.question}`] : []),
     `Spent: $${s.usage.usd.toFixed(2)}, ${s.usage.steps} steps, ${Math.round(s.usage.minutes)} minutes`,
     `Updated: ${s.updatedAt}`,

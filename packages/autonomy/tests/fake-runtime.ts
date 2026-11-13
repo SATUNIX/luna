@@ -26,7 +26,7 @@ import type { RunConfig } from "../lib/runcfg.ts";
 import type { BoundaryReport, Runtime, StartWorkerOptions, WorkerAgent, WorkerBundle, WorkerMessage } from "../lib/engine.ts";
 import type { CheckOutcome, HealthOutcome } from "../lib/runtime.ts";
 import type { RunStore } from "../lib/store.ts";
-import { meteredUsd } from "../relay.ts";
+import { meteredUsd, summariseMeter, type MeterSummary } from "../relay.ts";
 
 const GIT = ["-c", "core.hooksPath=/dev/null", "-c", "user.name=fake worker", "-c", "user.email=worker@example.invalid", "-c", "commit.gpgsign=false"];
 const git = (cwd: string, args: readonly string[]): SpawnSyncReturns<string> => spawnSync("git", [...GIT, ...args], { cwd, encoding: "utf8" });
@@ -284,7 +284,7 @@ export class FakeRuntime implements Runtime {
         if (push) { const r = git(this.p.work, ["push", "--quiet", "origin", `HEAD:refs/heads/${this.cfg.branch}`]); if (r.status !== 0) throw new Error(`fake worker push failed: ${r.stderr}`); }
       },
       git: (args) => git(this.p.work, args),
-      spend: (usd) => { fs.mkdirSync(this.p.meter, { recursive: true }); fs.appendFileSync(path.join(this.p.meter, "usage.jsonl"), `${JSON.stringify({ at: new Date(this.clock.now).toISOString(), costUsd: usd, model: this.contract.model.worker })}\n`); },
+      spend: (usd) => { fs.mkdirSync(this.p.meter, { recursive: true }); fs.appendFileSync(path.join(this.p.meter, "usage.jsonl"), `${JSON.stringify({ at: new Date(this.clock.now).toISOString(), run: this.cfg.run, cycle: agent.step, role: "worker", outcome: "ok", costUsd: usd, model: this.contract.model.worker })}\n`); },
       store: this.store,
       elapse: (minutes) => { this.clock.now += minutes * 60_000; },
       tool: (name, args = {}) => emit({ type: "tool_execution_start", toolName: name, args }),
@@ -390,6 +390,10 @@ export class FakeRuntime implements Runtime {
 
   usageUsd(): number {
     try { return meteredUsd(fs.readFileSync(path.join(this.p.meter, "usage.jsonl"), "utf8")); } catch { return 0; }
+  }
+
+  meterSummary(cycle?: number): MeterSummary {
+    try { return summariseMeter(fs.readFileSync(path.join(this.p.meter, "usage.jsonl"), "utf8"), cycle); } catch { return summariseMeter("", cycle); }
   }
 
   async review(bundle: TaskReviewBundle): Promise<TaskReview> {

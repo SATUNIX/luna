@@ -227,8 +227,9 @@ needs a person, and `resume --answer` (or `--approve`, `--deny`) continues it.
 
 A model provider's credit or key-limit refusal (HTTP 402, "requires more credits", "insufficient
 credits", a key or weekly limit) parks the run as **blocked** with the provider's message
-(blocker id `provider-limit`) instead of closing empty cycles; rate limits (429) are not matched
-and stay ordinary retries. Worker model entries cap `maxTokens` at 32,768, because a provider
+(blocker id `provider-limit`, `waiting_budget`) instead of closing empty cycles; a single rate limit
+(429) stays an ordinary retry, and a persistent one parks as `waiting_provider` (see "Parking on a
+provider refusal"). Worker model entries cap `maxTokens` at 32,768, because a provider
 reserves the cost of a request's full output maximum and a model advertising a near-context-sized
 one makes a low balance fail every call. In `self-improve`, a `report.md` that was already on the
 branch when the cycle began does not count as this cycle's report, and a merge is refused before
@@ -267,6 +268,31 @@ active-minute limit. `reconfigure` is the **only** way effort or limits change f
 it cannot touch permissions, network, credentials, promotion, the image or the acceptance definitions
 (those are the authorised boundary; changing them means a new run), it asks for confirmation, and it
 is logged in the run's state.
+
+**Attribution and the ledger.** Every row in `meter/usage.jsonl` (the relay) and
+`meter/manager.jsonl` (the host's own manager and review calls) carries the `run`, `cycle` and `role`
+(`worker`, `manager` or `review`) the supervisor named in `meter/attribution.json`, which it rewrites
+when a worker session starts; the relay reads it on every request, and a missing file is `unattributed`,
+never a guess. A request that ends without usable usage is still a row: `outcome` is `non-200`,
+`error`, `aborted` or `unmetered`, with `unresolved: true` and no cost, because cancellation does not
+prove the provider stopped billing. A request the relay itself refused is `refused` (not a
+liability). Unresolved rows are counted per cycle and are not priced, so they neither raise nor lower
+spend. `steps/NN/cycle.json` records the contract digest and limits in force (`effective`: manager calls
+per cycle, step allowances, budget) and the cycle's spend by role with its unresolved count (`meter`),
+so drift between cycles is visible. Spend only goes up: the supervisor takes the higher of its saved
+state and the meters, the relay starts from the ledgers on disk (so a restart resets nothing) and
+counts the host's own calls toward its stop, and an unreadable ledger row is counted, not dropped
+quietly. Not covered: the relay cannot tell a child agent's request from its parent's (they share the
+worker's key), so child spend is tagged `worker`; the unresolved rows are listed, not yet reconciled
+against the provider's own totals. `tests/autonomy-meter-smoke.ts` pins the rows, the restart and the
+host-spend stop; `tests/autonomy-selfimprove-smoke.ts` pins the cycle record.
+
+**Parking on a provider refusal.** A 402 (credit, key or weekly limit, or the relay's own "Run budget
+exhausted") parks the run as `blocked` with `waiting: waiting_budget`; a 403 from the provider or a
+429 that persists (the second in a row, or a retry that gave up) parks with `waiting: waiting_provider`.
+The reason is the first word of the blocker's question, a field of the recorded blocker, a line of
+`outcome.md` and the status listing. The relay's own refusals (a path or model it does not allow) are
+not the provider's and do not park the run. `tests/autonomy-meter-smoke.ts`.
 
 **One host, many runs: the gate slot bound.** The single-owner lock is per run, so several runs of
 one user on one host could otherwise each start an acceptance gate at once and compete for CPU and

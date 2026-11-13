@@ -53,6 +53,8 @@ export interface BlockerRecord {
   method: string;
   question: string;
   options?: string[];
+  /** Set on a provider or budget refusal: what the run is waiting for. */
+  waiting?: "waiting_budget" | "waiting_provider";
 }
 
 /** The blocker a blocked run waits on. */

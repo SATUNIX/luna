@@ -12,7 +12,7 @@
 // }
 import type { BookkeepingPaths } from "./bookkeeping.ts";
 import { type TriggerConfig, evaluate, managerCallsExhausted } from "./triggers.ts";
-import { type Blocker, providerBlocker, providerLimitError, type RpcFrame, type UiRequest, type UiResponse, type UnattendedPolicy, uiResponse, activityLine, isGuardEscalation, operatorDecision } from "./rpc.ts";
+import { type Blocker, providerBlocker, providerLimitError, type ProviderLimitWatch, type RpcFrame, type UiRequest, type UiResponse, type UnattendedPolicy, uiResponse, activityLine, isGuardEscalation, operatorDecision } from "./rpc.ts";
 import type { ManagerBundle, ManagerDecision } from "./manager.ts";
 
 /** What the supervisor sends a worker session over RPC. */
@@ -143,7 +143,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
   let followUps = 0;
   let pendingTrigger: string | null = null;
   let blocker: Blocker | null = null;
-  const limitWatch = { clamped: 0 };
+  const limitWatch: ProviderLimitWatch = { clamped: 0 };
   const blockerNow = (): Blocker | null => blocker; // read through a function: assignments in callbacks are invisible to narrowing
   let gapsChecked = false;
   const budgetWarnedHeads = new Set<string>();

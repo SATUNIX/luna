@@ -167,16 +167,24 @@ export async function decide(bundle: ManagerBundle, complete: Complete): Promise
  * Named for OpenRouter, which reports cost with `usage: {include: true}`; with usageInclude false it
  * sends a plain OpenAI-compatible request and the caller prices the tokens (onUsage gets the usage object).
  */
-export function openRouterComplete({ apiKey, model, upstream, fetchImpl = fetch, timeoutMs = 120_000, onUsage = () => {}, usageInclude = true }: OpenRouterOptions): Complete {
+export function openRouterComplete({ apiKey, model, upstream, fetchImpl = fetch, timeoutMs = 120_000, onUsage = () => {}, onFailure = () => {}, usageInclude = true }: OpenRouterOptions): Complete {
   return async (system, user) => {
-    const res = await fetchImpl(`${upstream.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model, temperature: 0, ...(usageInclude ? { usage: { include: true } } : {}), messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`manager model HTTP ${res.status}: ${text.slice(0, 300)}`);
+    let res: Response;
+    let text: string;
+    try {
+      res = await fetchImpl(`${upstream.replace(/\/$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ model, temperature: 0, ...(usageInclude ? { usage: { include: true } } : {}), messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      text = await res.text();
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      onFailure({ status: null, outcome: e instanceof Error && /abort|timeout/i.test(`${e.name} ${e.message}`) ? "aborted" : "error", detail });
+      throw e;
+    }
+    if (!res.ok) { onFailure({ status: res.status, outcome: "non-200", detail: text.slice(0, 200) }); throw new Error(`manager model HTTP ${res.status}: ${text.slice(0, 300)}`); }
     const parsed = parseJson(text);
     const json = isRecord(parsed) ? parsed : {};
     if (json["usage"]) onUsage(usageOf(json["usage"])); // the manager's spend counts toward the run budget too
@@ -214,4 +222,6 @@ export interface OpenRouterOptions {
   timeoutMs?: number | undefined;
   onUsage?: (usage: ChatUsage) => void;
   usageInclude?: boolean;
+  /** A call that ended without usage (a non-200 reply, a timeout, a network error): the caller records it as an unresolved liability. */
+  onFailure?: (failure: { status: number | null; outcome: "non-200" | "aborted" | "error"; detail: string }) => void;
 }

@@ -469,6 +469,10 @@ await check("a red cycle is not merged: it keeps its tag, and the next cycle is 
   const { state, rt } = await runOnce(h);
   const [c1, c2] = state.selfImprove?.history ?? [];
   assert.ok(c1 && c2, "two cycles are recorded");
+  // Each cycle records the contract digest and limits it ran under, and its metered rows by role (attribution).
+  assert.equal(c1.effective?.contractDigest, state.contractDigest, "the cycle records the contract digest in force");
+  assert.deepEqual([c1.effective?.limits.managerCallsPerCycle, c1.effective?.limits.budget.maxSteps, c1.effective?.limits.budget.perStepUsd], [3, 2, 5]);
+  assert.deepEqual([c1.meter?.unresolved, typeof c1.meter?.rows], [0, "number"], "no unresolved liabilities in a clean cycle");
   assert.deepEqual([c1.gate, c1.merged], ["red", false]);
   assert.match(c1.mergeReason, /^acceptance checks failed \(gate\); review MERGE: evidenced and tested/, c1.mergeReason);
   assert.equal(c1.review, "MERGE", "the red cycle is still reviewed; the verdict cannot waive the gate");

@@ -11,6 +11,7 @@ import path from "node:path";
 import { isRecord } from "../../core/lib/guard.ts";
 import { type AcceptanceEvaluation, type AcceptanceRuntime, type CheckEvidence, type RunAcceptanceOptions, runAcceptance, summariseEvaluation } from "./acceptance.ts";
 import { buildBriefing } from "./briefing.ts";
+import type { MeterSummary } from "../relay.ts";
 import { type Budget, type GenerationSettings, type RunContract, contractDigest, isStoredContract, workerContract } from "./contract.ts";
 import { type EffortApi, taskMementoAllowance } from "./effort.ts";
 import type { HostRepo } from "./hostrepo.ts";
@@ -18,7 +19,7 @@ import type { IngestResult } from "./gitmirror.ts";
 import { type BlockerRecord, type BudgetReason, type GenerationRecord, type MementoDecision, type PendingAnswer, type RunState, type RunStatus, type TransitionInfo, applyResultsToBoard, resumeAction, transition } from "./lifecycle.ts";
 import type { Complete } from "./manager.ts";
 import { type PromotionRun, type PromotionTarget, runPromotions } from "./promotion.ts";
-import { type Blocker, type RpcFrame, type UiResponse, activityLine, operatorDecision, providerBlocker, providerLimitError, reviewBlocker } from "./rpc.ts";
+import { type Blocker, type ProviderLimitWatch, type RpcFrame, type UiResponse, activityLine, operatorDecision, providerBlocker, providerLimitError, reviewBlocker } from "./rpc.ts";
 import type { RunConfig } from "./runcfg.ts";
 import type { RunLock } from "./runlock.ts";
 import type { RunStore } from "./store.ts";
@@ -112,7 +113,9 @@ export interface Runtime extends AcceptanceRuntime {
   /** The independent task review. Fail-closed: anything but an APPROVE verdict does not approve. */
   review(bundle: TaskReviewBundle): Promise<TaskReview>;
   /** A host-side model call whose spend is metered with the run's. */
-  complete(model: string, opts?: { timeoutMs?: number }): Complete;
+  complete(model: string, opts?: { timeoutMs?: number; role?: string }): Complete;
+  /** Spend, liabilities and unreadable rows from the meters, for one cycle or the run (optional: a runtime without meters has none). */
+  meterSummary?(cycle?: number): MeterSummary;
   /** Why the worker cannot be used (e.g. the kit harness did not load), or null. */
   workerProblem?(): string | null;
 }
@@ -661,7 +664,7 @@ export class Engine {
       say: (message) => { session.agent?.send(session.settled ? { type: "prompt", message } : { type: "steer", message }); },
     };
     const unattended = this.contract.permissions.unattended;
-    const limitWatch = { clamped: 0 };
+    const limitWatch: ProviderLimitWatch = { clamped: 0 };
     const onEvent = (ev: RpcFrame): void => {
       session.lastEventAt = this.rt.now();
       if (ev.type === "agent_start") session.settled = false;

@@ -1,20 +1,21 @@
 {
   "name": "balanced",
-  "description": "T0–T2 everyday driver: quick set (default-deny firewall) + context-sieve, guidelines, verification, loop support. Uses pi's own auto-compaction (no fixed-budget trigger).",
+  "description": "Everyday coding: a default-deny tool firewall, context-sieve, guidelines, verification and loop support. Uses pi's own auto-compaction (no fixed-budget trigger).",
   "securityLevel": "balanced",
   "firewall": { "mode": "manual", "policy": "coding" },
   "skills": {
-    "excludeCategories": ["pentest", "mcp-governance", "evidence-reporting", "maintainer"],
+    "excludeCategories": ["engagement", "mcp-governance", "evidence-reporting", "maintainer"],
     "exclude": ["engagement-conductor", "dynamic-agent-synthesis"]
   },
   "prompts": {
-    "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
+    "exclude": ["golden-path-engagement", "engagement-action-card", "engagement-compact", "engagement-plan", "engagement-report-finding", "engagement-triage-burp", "engagement-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
+    "herdr",
     "protected-paths", "tool-firewall", "secret-guard", "human-console", "git-checkpoint",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
-    "autonomous-loop", "custom-compaction", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control",
+    "autonomous-loop", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control",
     "handoff", "trace-ledger", "tool-capture", "progress-guard",
     "caveman", "pi-lens",
     "subagent", "orchestrator", "goal-core"

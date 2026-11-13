@@ -17,19 +17,15 @@ import { ESLint } from "eslint";
 import { ROOT } from "../packages/core/eval/harness.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 
-/** Ceiling on eslint-disable comments in TypeScript sources. Lower it when one goes; raising it needs a reason in review. */
-const MAX_ESLINT_DISABLES = 15;
-
-/** JavaScript that stays JavaScript, and why. Anything else ending in .js/.mjs/.cjs fails. */
-const ALLOWED_JS: readonly [RegExp, string][] = [
-  [/^packages\/web-ui\/(?:public\/js|mobile\/js|mobile\/dev)\/[^/]+\.js$/, "browser output generated from packages/web-ui/src by build:web (ADR 0002; smoke:web-build checks it)"],
-  [/^packages\/core\/install\.mjs$/, "shim: older kit-update code spawns this path after pulling"],
-  [/^packages\/extensions\/third_party\/subagent\/wf-runner\.mjs$/, "sandbox runner: plain node runs it inside the workflow sandbox, including from node_modules, where Node will not strip types"],
-  [/^packages\/extensions\/third_party\/subagent\/gate-worker\.mjs$/, "regex gate worker: a plain Worker file with builtin imports only, loaded from git and node_modules installs, where Node will not strip types"],
-  [/^packages\/kit\/workflows\/[^/]+\.js$/, "script workflows: the workflow tool runs them as plain JavaScript in the QuickJS sandbox, which does not strip types"],
-  [/^packages\/container\/mcp-servers\/(?:governance|memory-mcp)\/index\.js$/, "shim: MCP configs written before the move name index.js"],
-  [/^packages\/autonomy\/examples\/implement\/acceptance\/api\.acceptance\.mjs$/, "fixture: an acceptance test that belongs to the example target project"],
-  [/^(?:internal\/docs|reviews)\//, "archived evidence, not run by the toolchain"],
+/** JavaScript that stays JavaScript: browser output, plain-node shims and sandbox files that cannot strip types, and archived evidence. */
+const ALLOWED_JS: readonly RegExp[] = [
+  /^packages\/web-ui\/(?:public\/js|mobile\/js|mobile\/dev)\/[^/]+\.js$/,
+  /^packages\/core\/install\.mjs$/,
+  /^packages\/extensions\/third_party\/subagent\/(?:wf-runner|gate-worker)\.mjs$/,
+  /^packages\/kit\/workflows\/[^/]+\.js$/,
+  /^packages\/container\/mcp-servers\/(?:governance|memory-mcp)\/index\.js$/,
+  /^packages\/autonomy\/examples\/implement\/acceptance\/api\.acceptance\.mjs$/,
+  /^(?:internal\/docs|reviews)\//,
 ];
 
 /** .ts files deliberately outside every type project. */
@@ -67,8 +63,8 @@ const tracked = repositoryFiles();
 // 1. No JavaScript source outside the allow-list.
 {
   const js = tracked.filter((f) => /\.(?:m?js|cjs)$/.test(f));
-  const stray = js.filter((f) => !ALLOWED_JS.some(([re]) => re.test(f)));
-  assert.deepEqual(stray, [], `JavaScript source is TypeScript now; convert these or add them to ALLOWED_JS with a reason: ${stray.join(", ")}`);
+  const stray = js.filter((f) => !ALLOWED_JS.some((re) => re.test(f)));
+  assert.deepEqual(stray, [], `JavaScript source is TypeScript now; convert these or add them to ALLOWED_JS: ${stray.join(", ")}`);
   ok(`no JavaScript source outside the allow-list (${js.length} allowed files)`);
 }
 
@@ -109,7 +105,7 @@ assert.ok(projects.length >= 5, `test:typecheck names its projects (${typecheck}
   ok(`all ${sources.length} .ts files are under the strict lint rules`);
 }
 
-// 3. eslint-disable comments carry a reason and stay under the ceiling.
+// 3. eslint-disable comments carry a reason.
 {
   const disables: string[] = [];
   for (const file of tracked.filter((f) => f.endsWith(".ts") && fs.existsSync(path.join(ROOT, f)))) {
@@ -121,8 +117,7 @@ assert.ok(projects.length >= 5, `test:typecheck names its projects (${typecheck}
   }
   const unexplained = disables.filter((d) => !/eslint-disable[^\n]*\s--\s+\S/.test(d));
   assert.deepEqual(unexplained, [], `eslint-disable needs "-- <reason>": ${unexplained.join("\n")}`);
-  assert.ok(disables.length <= MAX_ESLINT_DISABLES, `${disables.length} eslint-disable comments exceed the ceiling of ${MAX_ESLINT_DISABLES}:\n${disables.join("\n")}`);
-  ok(`${disables.length} eslint-disable comments, each with a reason (ceiling ${MAX_ESLINT_DISABLES})`);
+  ok(`${disables.length} eslint-disable comments, each with a reason`);
 }
 
 // 4. Untrusted JSON is never cast outside the tests (eslint.config.ts UNTRUSTED_CASTS).

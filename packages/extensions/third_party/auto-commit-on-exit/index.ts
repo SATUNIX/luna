@@ -1,5 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+const SECRET_EXCLUDES = [
+  "**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx", "**/*credentials*",
+  "**/*secret*", "**/.ssh/**", "**/*id_rsa*", "**/*id_ed25519*", "**/.npmrc", "**/.netrc",
+].map((glob) => `:(exclude,glob,icase)${glob}`);
+
 export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (_event, ctx) => {
     if (process.env.PI_KIT_INTERNAL_CHILD === "1" || process.env.PI_SUBAGENT_CHILD === "1") return;
@@ -27,7 +32,8 @@ export default function (pi: ExtensionAPI) {
 
     // Kit artefacts (save snapshots, compaction copies, audit logs) live under <cwd>/.pi;
     // they are session data, never project changes, so they are excluded from staging.
-    await pi.exec("git", ["add", "-A", "--", ".", ":(exclude).pi"]);
+    // Credential-looking files are never staged either, even when not gitignored.
+    await pi.exec("git", ["add", "-A", "--", ".", ":(exclude).pi", ...SECRET_EXCLUDES]);
     const { code: commitCode } = await pi.exec("git", ["commit", "-m", commitMessage]);
     if (commitCode === 0 && ctx.hasUI) {
       ctx.ui.notify(`Auto-committed: ${commitMessage}`, "info");

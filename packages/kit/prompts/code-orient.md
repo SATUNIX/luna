@@ -1,4 +1,5 @@
 ---
+description: "Inspect the repository before a coding task"
 argument-hint: "[task]"
 ---
 

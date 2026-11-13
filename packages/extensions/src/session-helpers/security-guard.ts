@@ -9,8 +9,10 @@ import path from "node:path";
 // LEVELS, securityFilePath, atRootTerminal and promptTimeoutMs copy tool-firewall's
 // (security-level.ts, security-command.ts, index.ts): extensions do not import each other, so
 // tests/security-level-smoke.ts pins each copy equal to the firewall's.
-export const LEVELS = ["off", "relaxed", "balanced", "guarded", "strict"] as const;
+export const LEVELS = ["off", "balanced", "guarded", "strict"] as const;
 type Level = (typeof LEVELS)[number];
+// A stored `relaxed` (removed level) reads as balanced, as the firewall reads it.
+const migrate = (v: unknown): unknown => v === "relaxed" ? "balanced" : v;
 const isLevel = (v: unknown): v is Level => LEVELS.some((l) => l === v);
 const rank = (l: Level): number => LEVELS.indexOf(l);
 
@@ -23,12 +25,12 @@ export interface Lowering { from: Level; to: Level }
  */
 export function securityLowering(securityFile: string, currentDefault: unknown, targetLevel: unknown): Lowering | null {
   if (!isLevel(targetLevel)) return null; // runSwitch refuses unknown levels itself
-  let from: Level = isLevel(currentDefault) ? currentDefault : "balanced";
+  let from: Level = isLevel(migrate(currentDefault)) ? migrate(currentDefault) as Level : "balanced";
   try {
     const saved: unknown = JSON.parse(fs.readFileSync(securityFile, "utf8"));
     if (saved && typeof saved === "object") {
       if (Reflect.get(saved, "source") === "operator") return null;
-      const level: unknown = Reflect.get(saved, "level");
+      const level: unknown = migrate(Reflect.get(saved, "level"));
       if (isLevel(level)) from = level;
     }
   } catch { /* missing or unreadable: the firewall uses the profile default */ }

@@ -247,6 +247,23 @@ export function readPromptTemplateNames(dir: string = PROMPTS_DIR): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Prompt templates without a one-line `description:` front-matter field. pi falls back to the
+ * first line of the body, which is the heading, so an undescribed template shows as "# Code Plan"
+ * in the `/` menu. APPEND_SYSTEM.md is a system-prompt addition, not a template.
+ */
+export function promptDescriptionProblems(dir: string = PROMPTS_DIR): string[] {
+  const problems: string[] = [];
+  for (const name of readPromptTemplateNames(dir)) {
+    if (name === "APPEND_SYSTEM") continue;
+    const front = fs.readFileSync(path.join(dir, `${name}.md`), "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+    const description = front.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+    if (description === "") problems.push(`prompt template ${name} has no description: front-matter line`);
+    else if (description.length > 70) problems.push(`prompt template ${name} has a description over 70 characters`);
+  }
+  return problems;
+}
+
 /** Read the checkout and assemble the pure check's input. */
 export function buildCommandContractInput(): CommandContractInput {
   return {

@@ -13,11 +13,13 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   bareCommandName,
   buildCommandContractInput,
   commandContractProblems,
+  promptDescriptionProblems,
   registeredCommandsInSource,
   aliasDeclarationsInSource,
   type CommandContractInput,
@@ -28,6 +30,7 @@ import {
   PI_BUILTIN_TESTED_VERSION,
   piBuiltinCommandNames,
 } from "../packages/core/lib/pi-builtins.ts";
+import { PI_BUILTIN_SLASH_COMMANDS as HUB_BUILTINS } from "../packages/extensions/src/control-center/builtins.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 
 const ROOT = path.resolve(".");
@@ -269,6 +272,8 @@ function testBuiltinListMatchesInstalledPi() {
   const pinned = pinnedPiVersion();
   assert.equal(PI_BUILTIN_TESTED_VERSION, pinned, "PI_BUILTIN_TESTED_VERSION must name the pi version pinned in devDependencies");
   assert.ok(PI_BUILTIN_EXTENSION_COMMANDS.length > 0, "the built-in extension command list must not be empty");
+  // The control centre carries its own copy (an extension cannot import core); it must agree.
+  assert.deepEqual(sorted(HUB_BUILTINS), sorted(PI_BUILTIN_SLASH_COMMANDS), "control-center/builtins.ts must match packages/core/lib/pi-builtins.ts");
   const slash = installedSlashCommands();
   const ext = installedExtensionCommands();
   assert.ok(slash.length > 0, "no BUILTIN_SLASH_COMMANDS names parsed from the installed pi dist");
@@ -297,6 +302,19 @@ function testBuiltinListMatchesInstalledPi() {
   );
 }
 
+function testPromptDescriptions(): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-prompts-"));
+  try {
+    fs.writeFileSync(path.join(dir, "good.md"), '---\ndescription: "Plan a change"\n---\n\n# Good\n');
+    fs.writeFileSync(path.join(dir, "bare.md"), "---\nargument-hint: \"[x]\"\n---\n\n# Bare\n");
+    fs.writeFileSync(path.join(dir, "APPEND_SYSTEM.md"), "# not a template\n");
+    assert.deepEqual(promptDescriptionProblems(dir), ["prompt template bare has no description: front-matter line"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(promptDescriptionProblems(), [], "every shipped prompt template has a description");
+}
+
 const tests: Array<[name: string, fn: () => void]> = [
   ["a consistent input produces no problems", testCleanInputHasNoProblems],
   ["a leading '/' in a manifest is normalised", testLeadingSlashIsNormalised],
@@ -308,6 +326,7 @@ const tests: Array<[name: string, fn: () => void]> = [
   ["a non-alias description is not alias-checked", testNonAliasDescriptionIsNotFlagged],
   ["aliasDeclarationsInSource reads own descriptions only", testAliasDeclarationsInSource],
   ["registeredCommandsInSource collects literal names only", testRegisteredCommandsInSource],
+  ["every prompt template carries a description", testPromptDescriptions],
   ["the checkout satisfies the command contract", testCheckoutHasNoContractProblems],
   ["the built-in copy matches the pinned pi dist and covers any other installed pi", testBuiltinListMatchesInstalledPi],
 ];

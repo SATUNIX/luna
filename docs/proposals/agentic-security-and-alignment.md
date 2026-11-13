@@ -193,7 +193,7 @@ The supervisor retains enforced filesystem and network containment, protected co
 
 Bind off to a supervisor-authorised boundary digest covering run identity, image, mounts, network/relay destinations, credential exposure, budgets, output paths and contract revision. Verify the boundary externally, not through worker assertions alone. A changed digest requires a newly authorised run in the initial implementation. A read-only contract is useful evidence but not sufficient authentication against privileged or in-process attackers. The authentication/attestation mechanism and its threat model must be proved before off is enabled.
 
-Host environment variables, autonomous profile selection and `/auto on` cannot activate off. A pentest engagement requiring worker domain enforcement establishes a floor incompatible with off: reject the combination explicitly. An operator can instead launch guarded/strict container work under that engagement. Existing engagement constraints cannot silently disappear because the worker is containerised.
+Host environment variables, autonomous profile selection and `/auto on` cannot activate off. An engagement requiring worker domain enforcement establishes a floor incompatible with off: reject the combination explicitly. An operator can instead launch guarded/strict container work under that engagement. Existing engagement constraints cannot silently disappear because the worker is containerised.
 
 ```mermaid
 flowchart LR
@@ -286,7 +286,7 @@ Default logs contain metadata and admitted/redacted payloads. Raw forensic reten
 
 ### Isolated analysis
 
-Provide a tool-less analyst for legitimate injection research and pentest evidence. It receives suspect material as labelled data through its own permitted model destination and has no execution, credential, policy-control or memory-promotion tools. Admit only a constrained analytical response, such as categories, quoted evidence identifiers and suggested safe extraction fields. Validate fields, sizes, source references and output audience before returning to the parent.
+Provide a tool-less analyst for legitimate injection research and engagement evidence. It receives suspect material as labelled data through its own permitted model destination and has no execution, credential, policy-control or memory-promotion tools. Admit only a constrained analytical response, such as categories, quoted evidence identifiers and suggested safe extraction fields. Validate fields, sizes, source references and output audience before returning to the parent.
 
 Operator permission to analyse an attack is not permission to execute it. Structured output narrows the channel but cannot prove semantic correctness: a plausible finding can still manipulate the parent's next action. Preserve low trust and restrictive audience on analyst returns unless a specific validated transformation permits otherwise.
 
@@ -358,7 +358,7 @@ Pin and assess upstream API/preview instability, wire/schema migration and depen
 | Document embeds an upload instruction | Ingress screening quarantines suspect chunk; parent receives host omission metadata | Extract remaining facts where safe; document text cannot authorise credential transmission |
 | Injection research | Operator authorises analysis; analyst receives quarantined sample through permitted destination | Analytical evidence returns with low trust; executing the sample remains separately gated |
 | Internal issue to public report | Contract labels issue internal; public destination fails audience requirement | Policy-permitted sanitizer or exact operator remedy; summarising alone does not make it public |
-| Pentest multi-target batch | Domain evaluator resolves every target/method/window, then coordinator applies security checks | Mixed in/out-of-scope batch denied; keep existing engagement commands and evidence format |
+| Engagement multi-target batch | Domain evaluator resolves every target/method/window, then coordinator applies security checks | Mixed in/out-of-scope batch denied; keep existing engagement commands and evidence format |
 | Authorised disposable container build | Supervisor verifies contract/digest; worker runs off; outputs leave through supervisor admission | Broad worker autonomy inside boundary; acceptance and exact host promotion remain outside worker |
 | Approved push after remote changes | Revalidation detects changed destination digest before dispatch | Invalidate permit and resolve authority for the actual destination, even if command text matches |
 | Remote write times out | Persist unresolved occurrence/effect reservation, reconcile by safe read/idempotency evidence | Report indeterminate completion; never repeat a consequential write solely to obtain a success message |
@@ -366,7 +366,7 @@ Pin and assess upstream API/preview instability, wire/schema migration and depen
 
 ## Migration stages and acceptance gates
 
-Preserve pentest commands, engagement data and audit compatibility. Introduce generic security governance gradually behind adapters; retain `pentest` as a specialised engagement profile alongside a new generic `strict` profile. Avoid a naming-only overhaul that obscures changes in authority semantics.
+Preserve engagement commands, engagement data and audit compatibility. Introduce generic security governance gradually behind adapters; retain `engagement` as a specialised engagement profile alongside a new generic `strict` profile. Avoid a naming-only overhaul that obscures changes in authority semantics.
 
 | Stage | Work and dependencies | Acceptance gate before progression |
 |---|---|---|
@@ -388,12 +388,12 @@ These are migration defaults, not exact equivalence claims. Material behaviour c
 |---|---|---|
 | Manual / coding | Balanced + operator approval strategy | Retain deterministic prohibitions; explain changed content/capability checks |
 | Auto / coding | Balanced + automatic strategy | Existing learned records start advisory; migrate only explicit validated grants |
-| Existing pentest policy or pentest profile | Guarded domain floor + pentest scope; operator strategy unless explicitly chosen otherwise | Existing “strict” pentest flag is not generic strict; preserve ROE, commands and data |
+| Existing engagement policy or engagement profile | Guarded domain floor + engagement scope; operator strategy unless explicitly chosen otherwise | Existing “strict” engagement flag is not generic strict; preserve ROE, commands and data |
 | Quick / lite | Relaxed capability defaults | Smaller model/effort does not weaken an existing operator security choice |
 | Balanced / long-horizon / self-improving | Balanced defaults | Capability selection remains separate from security |
 | Autonomous profile on host | Balanced defaults | Cannot enable off or manufacture run authorisation |
 | Verified authorised container run | Off when no incompatible domain floor | Requires boundary proof, supervisor containment and newly authorised contract |
-| New generic strict profile | Strict initial pin | Keep pentest separately available; refuse missing required coverage |
+| New generic strict profile | Strict initial pin | Keep engagement separately available; refuse missing required coverage |
 
 ## Evaluation and acceptance test plan
 
@@ -440,7 +440,7 @@ Additional residual risks include compromised dependencies, authorised but harmf
 
 ## Prioritised implementation work
 
-First repair/reproduce P0 authority and bypass findings, and establish required pi 0.99.2 compatibility. Next implement shared policy and typed operator control, followed by host-owned content/provider admission and raw-capture handling. Then calibrate local detection and intent review in shadow mode, integrate the pinned Rust bridge, and prove lifecycle enforcement. Enable guarded/strict and verified off only after coverage gates pass. Domain/enterprise expansion comes last, preserving pentest compatibility throughout.
+First repair/reproduce P0 authority and bypass findings, and establish required pi 0.99.2 compatibility. Next implement shared policy and typed operator control, followed by host-owned content/provider admission and raw-capture handling. Then calibrate local detection and intent review in shadow mode, integrate the pinned Rust bridge, and prove lifecycle enforcement. Enable guarded/strict and verified off only after coverage gates pass. Domain/enterprise expansion comes last, preserving engagement compatibility throughout.
 
 The next implementation review should receive: reproduced cases and dispositions for F01–F16, a version/capability matrix, policy schema and transition design, host admission proof, bridge conformance results and held-out utility/security measurements. Open findings stay visible when reproduction disproves or narrows an assumption; update the proposal rather than preserving a stale audit claim.
 
@@ -459,7 +459,7 @@ Repository references S1–S14, S16 and S18 mean `555a577316b51af17f7941733201a7
 | S5 | `packages/extensions/src/tool-firewall/feedback.ts`: `precedentsFor` versus workspace-scoped authorising queries (now scoped by the caller in `index.ts`) |
 | S6 | `packages/extensions/src/tool-firewall/trajectory.ts`: `recordAction` and persisted decision state |
 | S7 | `packages/extensions/src/tool-firewall/approvals.ts`: action hashes, scopes and expiry; compare sealing in S2 |
-| S8 | `packages/extensions/src/pentest-governance-domain/index.ts`: `riskClassFor`, `targetScopeRequired`, `checkScopeRoe`, cache/data-root and chained writers |
+| S8 | `packages/extensions/src/engagement-governance/index.ts`: `riskClassFor`, `targetScopeRequired`, `checkScopeRoe`, cache/data-root and chained writers |
 | S9 | `packages/container/mcp-servers/governance/ledger.ts`: `PI_AGENT_DATA_ROOT` precedence and persisted ledger |
 | S10 | `packages/extensions/src/context-sieve/index.ts`: contribution admission and `channelOf` |
 | S11 | `packages/extensions/src/memory-vault/index.ts`: direct recap completer; compare firewall `profile.ts` distillation via S2 completer |

@@ -8,7 +8,7 @@ Compaction is triggered by pi itself (at the context window minus `reserveTokens
 
 ## Component and data flow
 
-Producers write JSON contribution files into `<cwd>/.pi/ctx-contributions/` (session-scoped at `<cwd>/.pi/ctx-contributions/sessions/<session-id>/` when the host exposes a session id, with the flat directory as the fallback). context-sieve is the only component that reads them and decides what becomes part of the system prompt and what becomes its one hidden message. It is not the only source of hidden messages: memory-vault injects its own (`memory-recall`) and skill-router adds a `skill-router` message listing matching skills (nothing pins either message), `effort` adds its standing-mode reminder (`tests/effort-standing-smoke.ts`), and progress-guard's `turn_end` returns its looping nudge as a hidden `custom_message` entry inside the run that is looping, besides writing it as a contribution for the next prompt (`tests/progress-guard-agsix-smoke.ts`). memory-vault and the compaction extensions write to disk independently of the assembly path.
+Producers write JSON contribution files into `<cwd>/.pi/ctx-contributions/` (session-scoped at `<cwd>/.pi/ctx-contributions/sessions/<session-id>/` when the host exposes a session id, with the flat directory as the fallback). context-sieve is the only component that reads them and decides what becomes part of the system prompt and what becomes its one hidden message. It is not the only source of hidden messages: memory-vault and skill-router do not return a message at all: each carries a note that pi's `context` event appends to the request after the real messages (`packages/core/shared/carried-notes.ts`, copied into each), so recall and skill hints are never stored in the session and never replayed from it (`tests/memory-vault-smoke.ts` pins the memory-vault side), `effort` adds its standing-mode reminder (`tests/effort-standing-smoke.ts`), and progress-guard's `turn_end` returns its looping nudge as a hidden `custom_message` entry inside the run that is looping, besides writing it as a contribution for the next prompt (`tests/progress-guard-agsix-smoke.ts`). memory-vault and the compaction extensions write to disk independently of the assembly path.
 
 ```mermaid
 flowchart LR
@@ -20,7 +20,7 @@ flowchart LR
     GK[("project .pi/GOAL.yaml")]
     MV["memory-vault"]
     V[("Vault directory: Memory, Projects/p/Memory, Projects/p/Recaps, MEMORY.md, .pi-index, .trash")]
-    RM["Hidden message: memory-recall"]
+    RM["Carried note: memory-recall"]
     PGT["progress-guard turn_end"]
     PGM["Hidden message: progress-guard, inside the run"]
     CP["compress"]
@@ -112,7 +112,7 @@ flowchart LR
     MO[("Memory/slug.md or Projects/p/Memory/slug.md")]
     QS["memory_search and /memory search: loadIndex plus BM25, no floor"]
     RCL["recall at before_agent_start: BM25 gated by passesFloor"]
-    RM["hidden message: memory-recall"]
+    RM["carried note: memory-recall"]
 
     T1 --> SM
     T2 --> SM
@@ -176,14 +176,14 @@ flowchart TD
 
 ## Compaction summaries
 
-Manual commands and automatic compaction all pass through `session_before_compact`, which decides who produces the summary, and then `session_compact`, where other extensions react to the new summary. context-sieve and `custom-compaction` return `undefined` from `session_before_compact`, because pi's hook can cancel or replace the summary but cannot amend the summariser's instructions. `/save` is separate: it runs pi's summariser over the current branch as a side call and writes the snapshot, and the session is not compacted.
+Manual commands and automatic compaction all pass through `session_before_compact`, which decides who produces the summary, and then `session_compact`, where other extensions react to the new summary. context-sieve returns `undefined` from `session_before_compact`, because pi's hook can cancel or replace the summary but cannot amend the summariser's instructions. After every compaction context-sieve also writes a one-prompt survivor record (`packages/extensions/src/context-sieve/survivor.ts`): the active goal, the session's open todo items, workflow runs still `running`, and the last files an `edit` or `write` call touched, rebuilt from the workspace rather than from the summary, injected on the next prompt and then removed (`tests/compaction-continuity-smoke.ts`). Standing constraints are not pinned: no store holds them. The kit trigger waits `PI_KIT_COMPACT_COOLDOWN_MS` (default 2 minutes) after a compaction ends, finished or failed, before it may fire again (`tests/trigger-compact-threshold-smoke.ts`); pi's own threshold compaction is not delayed. `/save` is separate: it runs pi's summariser over the current branch as a side call and writes the snapshot, and the session is not compacted.
 
 ```mermaid
 flowchart TD
     CMDS["/trigger-compact, /compact, /compress"]
     AUTO["kit trigger, or pi's own threshold and overflow recovery"]
     SBC["session_before_compact"]
-    NOOP["context-sieve and custom-compaction: no-op, return undefined"]
+    NOOP["context-sieve: no-op, returns undefined"]
     CMP{"instructions start with the compress marker?"}
     DET["compress: deterministic summary, active goal pinned"]
     NAT["pi native LLM summary"]
@@ -232,7 +232,7 @@ sequenceDiagram
     User->>Sieve: prompt
     Sieve->>Sieve: read contributions, split channels, budget to the model window
     Sieve-->>Model: system prompt plus a hidden context-sieve message
-    MV-->>Model: hidden memory-recall message, the first user prompt also gets recaps and pinned memories
+    MV-->>Model: carried memory-recall note, the first user prompt also gets recaps and pinned memories
     Model-->>User: answer
     MV->>MV: agent_end: digestTurn, then the recap model
     MV->>Vault: appendRecap and promote decision, preference and gotcha candidates
@@ -252,7 +252,7 @@ sequenceDiagram
 
 - `packages/extensions/src/context-sieve/index.ts` — assembly of `.pi/ctx-contributions/sessions/<id>/*.json` (or the flat directory), channels, budgets scaled to the context window, `sieve-budget.json`, no-op `session_before_compact`.
 - `packages/extensions/src/goal-core/index.ts` — `/goal`, `.pi/GOAL.yaml` and the re-materialised `goal-core.json` contribution.
-- `packages/extensions/src/memory-vault/index.ts` — memory tools, recaps, recall, the hidden `memory-recall` message.
+- `packages/extensions/src/memory-vault/index.ts` — memory tools, recaps, recall, the carried `memory-recall` note.
 - `packages/extensions/src/memory-vault/vault.ts` — vault disk layout, config, index, dedupe, index pages, migration.
 - `packages/extensions/src/memory-vault/recap.ts` — recap prompt, parse and promote.
 - `packages/extensions/src/memory-vault/search.ts` — BM25 search and the relevance floor.
@@ -261,7 +261,6 @@ sequenceDiagram
 - `packages/extensions/third_party/trigger-compact/index.ts` — threshold trigger, stand-down rules, `/trigger-compact` and `/compact-threshold`.
 - `packages/extensions/third_party/custom-footer/data.ts` — reads the published compaction state.
 - `packages/extensions/src/compress/index.ts` — `/compress`, the deterministic summary and the pinned goal.
-- `packages/extensions/src/custom-compaction/index.ts` — no-op `session_before_compact` and the unsupported-template notice.
 - `packages/extensions/src/save/index.ts` — `/save`, and the copy of each compaction summary to `Latest Compact.md`.
 - `packages/extensions/src/guidelines/index.ts` — an example contribution producer.
 - `packages/extensions/src/progress-guard/index.ts` — the loop nudge: a contribution for later prompts and the hidden `turn_end` `custom_message` inside the run.

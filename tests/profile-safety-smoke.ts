@@ -114,7 +114,7 @@ function testFirewallStrictness(): void {
   assert.throws(() => firewallConfigFor({ name: "typo", firewall: { policy: "pentset" } }, {}), /unknown firewall policy "pentset"/);
   assert.throws(() => firewallConfigFor({ name: "typo", firewall: { mode: "yolo" } }, {}), /unknown firewall mode "yolo"/);
   assert.throws(() => firewallConfigFor({ name: "typo", firewall: "strict" }, {}), /"firewall" must be an object/);
-  assert.throws(() => firewallConfigFor(coding, { policy: "pentest-strict" }), /unknown policy "pentest-strict"/);
+  assert.throws(() => firewallConfigFor(coding, { policy: "engagement-strict" }), /unknown policy "engagement-strict"/);
   assert.throws(() => firewallConfigFor(coding, { mode: "always" }), /unknown mode "always"/);
   // Unchanged behaviour for valid input.
   assert.deepEqual(firewallConfigFor({ name: "n" }, {}), { mode: "manual", policy: "coding", source: "profile" }, "a profile with no firewall block keeps the safe defaults");
@@ -179,7 +179,7 @@ const extensionsOf = (w: World): string[] => {
 function testStaleOverridesWarnAndSkip(): void {
   const w = world();
   try {
-    const first = install(w, "quick", ["--no-externals"]);
+    const first = install(w, "lite", ["--no-externals"]);
     assert.equal(first.status, 0, first.stderr);
     const baseline = extensionsOf(w);
     const overrides = { extensions: { add: ["renamed-away-ext", "verify-gate"], remove: ["old-removed-ext"] }, skills: { exclude: ["skill-that-was-deleted"] }, prompts: { include: ["prompt-that-was-deleted"] } };
@@ -203,7 +203,7 @@ function testStaleOverridesWarnAndSkip(): void {
 function testRequiredRemovalIgnoredByTheInstaller(): void {
   const w = world();
   try {
-    assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+    assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     fs.writeFileSync(path.join(w.agent, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { remove: ["session-helpers", "delegation-guard", "effort"] } }));
     const r = install(w, "balanced", ["--no-externals"]);
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
@@ -219,7 +219,7 @@ function testMandatoryRemovalStopsTheRun(): void {
   for (const name of ["tool-firewall", "protected-paths", "secret-guard"]) {
     const w = world();
     try {
-      assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+      assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
       fs.writeFileSync(path.join(w.agent, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { remove: [name] } }));
       const before = digest(w);
       const r = install(w, "balanced", ["--no-externals"]);
@@ -234,7 +234,7 @@ function testMandatoryRemovalStopsTheRun(): void {
 function testMalformedOverridesStopTheRun(): void {
   const w = world();
   try {
-    assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+    assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     fs.writeFileSync(path.join(w.agent, "pi-kit", "overrides.json"), '{"extensions": {"remove": ["tool-firewall"]');
     const before = digest(w);
     const r = install(w, "balanced", ["--no-externals"]);
@@ -246,7 +246,7 @@ function testMalformedOverridesStopTheRun(): void {
 
 function testFirewallFailuresStopTheRun(): void {
   const cases: Array<[string, string, RegExp]> = [
-    ["unknown policy in the existing file", JSON.stringify({ mode: "manual", policy: "pentest-strict", source: "user" }), /unknown policy "pentest-strict"/],
+    ["unknown policy in the existing file", JSON.stringify({ mode: "manual", policy: "engagement-strict", source: "user" }), /unknown policy "engagement-strict"/],
     ["unknown mode in the existing file", JSON.stringify({ mode: "always", policy: "coding" }), /unknown mode "always"/],
     ["unparseable existing file", "{ not json", /not valid JSON/],
     ["existing file that is not an object", "[]", /must be a JSON object/],
@@ -254,7 +254,7 @@ function testFirewallFailuresStopTheRun(): void {
   for (const [name, content, pattern] of cases) {
     const w = world();
     try {
-      assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+      assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
       fs.writeFileSync(path.join(w.agent, "pi-kit", "firewall.json"), content);
       const before = digest(w);
       const r = install(w, "balanced", ["--no-externals"]);
@@ -268,21 +268,21 @@ function testFirewallFailuresStopTheRun(): void {
 function testInstallerFailureLateInTheRunRollsBack(): void {
   const w = world();
   try {
-    assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+    assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     const before = digest(w);
     // balanced pulls the pi-lens companion; the stub fails that install AFTER settings.json was narrowed.
     const r = install(w, "balanced", [], { FAIL_COMPANION: "1" });
     assert.notEqual(r.status, 0, "the companion failure must fail the run");
     assert.match(r.stderr, /Rolled back \d+ configuration file\(s\), but NOT the package operations pi already ran: pi install npm:pi-lens@\S+ \(failed part-way\)\./);
     assert.deepEqual(digest(w), before, "settings.json, marker, firewall.json, overrides.json and .env are back as they were");
-    assert.equal(extensionsOf(w).includes("verify-gate"), false, "the narrowed extension list did not survive");
+    assert.equal(extensionsOf(w).includes("guidelines"), false, "the narrowed extension list did not survive");
   } finally { w.done(); }
 }
 
 function testRollbackNamesPackageChangesItCannotUndo(): void {
   const w = world();
   try {
-    assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+    assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     const before = digest(w);
     // long-horizon installs pi-lens (succeeds), then pi-readseek (fails): pi-lens stays installed.
     const r = install(w, "long-horizon", [], { FAIL_READSEEK: "1" });
@@ -297,7 +297,7 @@ function testRollbackNamesPackageChangesItCannotUndo(): void {
 function testNoPackageChangeStillSaysNothingChanged(): void {
   const w = world();
   try {
-    assert.equal(install(w, "quick", ["--no-externals"]).status, 0);
+    assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     fs.writeFileSync(path.join(w.agent, "pi-kit", "firewall.json"), "{ not json");
     const r = install(w, "balanced", ["--no-externals"]);
     assert.equal(r.status, 1);

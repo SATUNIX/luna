@@ -1,4 +1,5 @@
 ---
+description: "Plan a documentation change"
 argument-hint: "[change]"
 ---
 

@@ -18,7 +18,7 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/luna@v0.3.0-beta.3
+pi install git:github.com/SATUNIX/luna@v0.4.0-beta.0
 pi
 ```
 
@@ -53,6 +53,7 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--only a,b` / `--all` | Specific extensions only, or everything. `--only` always adds the required base (`requiredProfileExtensions` in `packages/core/distribution.json`: `tool-firewall`, `protected-paths`, `delegation-guard`, `effort`, `session-helpers`) and warns about each one it adds (`tests/install-marker-smoke.ts`). |
 | `--yes` | Accepted for scripts; the installer never prompts. |
 | `--dry-run` | Print what would change; change nothing. |
+| `--verify` | Run the repository's verify gate before registering a checkout. It runs by default only in a development checkout (`npm ci` done); in a plain clone it is skipped with a line saying so, because it needs the development dependencies (`tests/install-marker-smoke.ts`). |
 | `--no-externals` | Skip companion packages such as `pi-lens`. |
 | `--uninstall` | Remove Luna and the companions this installer registered. A companion you had already registered at Luna's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
 | `--help` / `-h` | Print the usage line to stdout and exit 0 before any install work (`tests/install-marker-smoke.ts`). |
@@ -96,9 +97,9 @@ Exact per-profile extension lists and counts are generated in the
 
 | Profile | Requirements |
 | --- | --- |
-| `quick`, `balanced`, `long-horizon`, `lite` | Node, git, pi |
-| `autonomous` | Node, git, pi. Unattended runs additionally need a container engine ([Autonomous runs](autonomy.md)) |
-| `pentest` | Node, git, pi. Container deployment: `packages/container/README.md` |
+| `balanced`, `lite` | Node, git, pi |
+| `long-horizon` | Node, git, pi. Unattended runs additionally need a container engine ([Autonomous runs](autonomy.md)) |
+| `engagement` | Node, git, pi. Container deployment: `packages/container/README.md` |
 | `self-improving` | Node, git, pi, Docker for memory services, optionally a second model (experimental) |
 
 ```sh

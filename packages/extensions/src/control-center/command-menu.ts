@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import { legacyCommandName, type HubModel, type HubRow } from "./model.ts";
+import { pinnedCommandsOfProfile } from "./profile-defs.ts";
 import { agentDir } from "./values.ts";
 
 /** A hidden command is offered again from this many typed characters after the slash. */
@@ -31,6 +32,8 @@ export const ALL_COMMANDS_LOCATION_ASCII = "moved -> /menu > All commands";
 /** The kit commands that stay in the `/` menu in every profile. */
 export const PINNED_KIT_COMMANDS: readonly string[] = [
   "menu",
+  "status",
+  "skills",
   "goal",
   "verify",
   "save",
@@ -40,13 +43,6 @@ export const PINNED_KIT_COMMANDS: readonly string[] = [
   "update",
   "security",
 ];
-
-/** Commands a profile adds to the pinned set because the profile is defined by them. */
-export const PROFILE_PINNED_COMMANDS: Readonly<Record<string, readonly string[]>> = {
-  autonomous: ["autonomy"],
-  pentest: ["engagement"],
-  "self-improving": ["engagement", "improve", "review"],
-};
 
 export type CommandMenuMode = "curated" | "all";
 
@@ -123,8 +119,7 @@ export function readCommandMenuSettings(): CommandMenuSettings {
 
 /** The pinned kit commands: the base set plus whatever the profile is defined by. */
 export function pinnedCommandsFor(profile?: string): string[] {
-  const extra = profile !== undefined ? PROFILE_PINNED_COMMANDS[profile] : undefined;
-  return [...PINNED_KIT_COMMANDS, ...(extra ?? [])];
+  return [...PINNED_KIT_COMMANDS, ...(profile !== undefined ? pinnedCommandsOfProfile(profile) : [])];
 }
 
 export interface CommandMenuCommand {
@@ -168,8 +163,10 @@ export function hiddenCommandNames(input: HiddenCommandInput): Set<string> {
     if (isExtension) hidden.add(name);
   };
 
+  // The /skills entry stands for the /skill:* commands, so they fold behind it while it exists.
+  const skillsEntry = input.commands.some((command) => command.name === "skills");
   for (const command of input.commands) {
-    decide(command.name, command.source === "extension" && !builtins.has(command.name));
+    decide(command.name, (command.source === "extension" && !builtins.has(command.name)) || (skillsEntry && command.source === "skill"));
   }
   for (const name of builtins) decide(name, false);
   // An explicit hide also covers a name that is not registered in this session yet.
@@ -222,7 +219,7 @@ export function hubLocationFor(name: string, model: HubModel, ascii = false): st
 }
 
 /** A lookup from command name to its hub location, built once from the model. */
-export function locationFor(model: HubModel, ascii = false): (name: string) => string {
+export function locationFor(model: HubModel, ascii = false, skillsEntry = true): (name: string) => string {
   const locations = new Map<string, string>();
   for (const row of model.rows) {
     if (row.legacy === undefined) continue;
@@ -233,7 +230,7 @@ export function locationFor(model: HubModel, ascii = false): (name: string) => s
     if (row.legacy.trim() === `/${name}`) locations.set(name, locationOfRow(model, row.page, row.label, ascii));
     else if (!locations.has(name)) locations.set(name, locationOfRow(model, row.page, row.label, ascii));
   }
-  return (name) => locations.get(name) ?? (ascii ? ALL_COMMANDS_LOCATION_ASCII : ALL_COMMANDS_LOCATION);
+  return (name) => locations.get(name) ?? (skillsEntry && name.startsWith("skill:") ? "see /skills" : undefined) ?? (ascii ? ALL_COMMANDS_LOCATION_ASCII : ALL_COMMANDS_LOCATION);
 }
 
 export interface CurationOptions {

@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "tool_execution_start", "tool_execution_end", "session_shutdown"],
   "registers": { "tools": [], "commands": ["capture"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {
@@ -19,6 +19,7 @@
     "models": []
   },
   "pulls": [],
+  "offSwitch": { "env": "PI_KIT_CAPTURE", "values": ["0"] },
   "env": ["PI_KIT_CAPTURE", "PI_KIT_CAPTURE_DIR", "PI_KIT_CAPTURE_REDACT", "PI_KIT_CAPTURE_MAX_BYTES", "PI_KIT_CAPTURE_MIN_FREE_BYTES", "PI_KIT_CAPTURE_SEGMENT_BYTES", "PI_KIT_CAPTURE_INLINE_BYTES", "PI_KIT_CAPTURE_MAX_BLOB_BYTES"],
   "provenance": { "origin": "custom" },
   "homeRepo": null,

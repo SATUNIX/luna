@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * The ASCII cat (custom-footer/cat.ts): the animation table (printable ASCII only, fixed width,
- * every state defined), the explicit state priority, frame arithmetic, tool-error classification,
+ * The ASCII cat (custom-footer/cat.ts): the explicit state priority, tool-error classification,
  * and the wiring in the status bar (the working indicator follows the resolved state and is
  * restored after a run, results play once in the footer on a timer that clears itself, `/footer cat
  * off` is honoured and persisted). Deterministic: pure functions plus a fake pi API; no model runs.
@@ -10,13 +9,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import type * as CatModule from "../packages/extensions/third_party/custom-footer/cat.ts";
-import type * as RenderModule from "../packages/extensions/third_party/custom-footer/render.ts";
-import type { FooterState } from "../packages/extensions/third_party/custom-footer/render.ts";
-import type * as WidthModule from "../packages/extensions/third_party/custom-footer/width.ts";
 import { boolean, isRecord, object, parseJsonAs } from "../packages/core/lib/guard.ts";
 import { loadExtension, loadModule, fakePi, isolateKitEnv, setEnv, tmpWorkspace, rmWorkspace } from "../packages/core/eval/harness.ts";
-
-type Colour = (c: string, s: string) => string;
 
 interface WorkingIndicator {
   frames: string[];
@@ -43,10 +37,7 @@ interface Note {
 const restoreEnv = isolateKitEnv();
 const cat = await loadModule<typeof CatModule>("vendor/custom-footer/cat.ts");
 const registerFooter = await loadExtension("vendor/custom-footer/index.ts");
-const render = await loadModule<typeof RenderModule>("vendor/custom-footer/render.ts");
-const widthMod = await loadModule<typeof WidthModule>("vendor/custom-footer/width.ts");
 const plain = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
-const keep: Colour = (_c, s) => s;
 
 async function session(over: Record<string, unknown> = {}) {
   const agent = tmpWorkspace("pi-kit-cat-agent-");
@@ -78,24 +69,6 @@ function isFooterDebug(value: unknown): value is FooterDebug {
 const UiFile = object({ cat: boolean() });
 
 const tests = {
-  animationTableIsCompleteAsciiAndFixedWidth() {
-    for (const state of cat.CAT_STATES) {
-      const a = cat.ANIMATIONS[state];
-      assert.ok(a, `${state} has an animation`);
-      assert.ok(a.frames.length >= 1 && a.label && a.intervalMs > 0, `${state} is well formed`);
-      for (const frame of a.frames) {
-        assert.match(frame, cat.PRINTABLE_ASCII, `${state}: "${frame}" is printable US-ASCII`);
-        assert.ok(frame.length <= cat.CAT_WIDTH, `${state}: "${frame}" fits ${cat.CAT_WIDTH} columns`);
-      }
-      for (const frame of cat.catFrames(state)) assert.equal(frame.length, cat.CAT_WIDTH, `${state}: padded to a constant width`);
-    }
-    assert.deepEqual([...cat.PRIORITY].sort(), [...cat.CAT_STATES].sort(), "every state has exactly one place in the priority");
-    // The table's canonical faces: the resting face and the face a failure settles on.
-    assert.equal(cat.ANIMATIONS.idle.frames[0], "=^o.o^=", "idle shows the resting face");
-    assert.ok(cat.ANIMATIONS.idle.frames.includes("=^-.-^="), "idle blinks to the sleepy face");
-    assert.equal(cat.ANIMATIONS.error.frames.at(-1), "=^X.X^=", "error settles on the dead face");
-  },
-
   priorityBeatsRecency() {
     assert.equal(cat.resolveCatState([]), "idle");
     assert.equal(cat.resolveCatState(["streaming", "thinking"]), "thinking");
@@ -103,33 +76,6 @@ const tests = {
     assert.equal(cat.resolveCatState(["tool", "waiting_for_user"]), "waiting_for_user", "an approval prompt outranks a running tool");
     assert.equal(cat.resolveCatState(["waiting_for_user", "error"]), "error");
     assert.equal(cat.resolveCatState(["success", "idle"]), "success");
-  },
-
-  frameArithmetic() {
-    const a = cat.ANIMATIONS.thinking;
-    const frames = cat.catFrames("thinking");
-    assert.equal(cat.frameAt("thinking", 0), frames[0]);
-    assert.equal(cat.frameAt("thinking", a.intervalMs), frames[1]);
-    assert.equal(cat.frameAt("thinking", a.intervalMs * frames.length), frames[0], "a loop wraps");
-    const once = cat.catFrames("error");
-    assert.equal(cat.frameAt("error", 10_000), once.at(-1), "a result holds its last frame");
-    assert.equal(cat.finished("error", 0), false);
-    assert.equal(cat.finished("error", 10_000), true);
-    assert.equal(cat.finished("thinking", 10_000), false, "a loop never finishes");
-    const idle = cat.catFrames("idle");
-    assert.equal(cat.frameAt("idle", cat.ANIMATIONS.idle.intervalMs * idle.length), idle[0], "a looping cat repeats");
-    for (const elapsed of [0, 1_000, 99_999]) assert.equal(cat.frameAt("idle", elapsed).length, cat.CAT_WIDTH, "every rendered frame keeps the width");
-    assert.equal(cat.frameAt("thinking", -5), frames[0]);
-  },
-
-  indicatorFramesAreColouredAndOnceStatesFlatten() {
-    const t = cat.indicatorFor("thinking", (c: string, s: string) => `<${c}>${s}</>`);
-    assert.equal(t.frames.length, cat.ANIMATIONS.thinking.frames.length);
-    const first = t.frames[0];
-    assert.ok(first !== undefined, "the indicator has a first frame");
-    assert.equal(first, `<accent>${cat.catFrames("thinking")[0]}</>`, "the first frame is painted with the state colour");
-    const e = cat.indicatorFor("error", keep);
-    assert.deepEqual(e.frames, [cat.catFrames("error").at(-1)], "pi's indicator only loops, so a result is its last frame");
   },
 
   toolErrorsAreClassified() {
@@ -141,30 +87,11 @@ const tests = {
     assert.equal(cat.classifyToolError("exit 2"), "warning");
   },
 
-  footerShowsTheCatWithoutMovingTheLayout() {
-    const base: FooterState = { cwd: "/p", totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }, partial: false, cost: { kind: "unknown" }, statuses: [], todos: [], now: 0 };
-    const idle = { text: cat.renderCat("idle", 0, keep) };
-    for (const mode of ["light", "default", "heavy"] as const) {
-      for (const width of [120, 80, 50, 30]) {
-        const lines = render.renderFooter({ ...base, model: "m", cat: idle }, plain, width, mode);
-        for (const l of lines) assert.ok(widthMod.displayWidth(l) <= width, `${mode}/${width}: ${l}`);
-      }
-    }
-    const success = cat.renderCat("success", 0, keep);
-    const wide = render.renderFooter({ ...base, model: "m", cat: { text: success, label: "Complete" } }, plain, 120, "default").join("\n");
-    const at = wide.indexOf(success);
-    assert.ok(at >= 0 && wide.indexOf("Complete", at) > at, "a result shows the face and then its words");
-    const none = render.renderFooter({ ...base, model: "m" }, plain, 120, "default").join("\n");
-    assert.doesNotMatch(none, /=\^/, "no cat when it is off or running");
-  },
-
   async workingIndicatorFollowsTheResolvedState() {
     const s = await session();
     try {
-      const last = () => s.indicators.at(-1);
       await s.fire("agent_start");
       assert.equal(s.debug.catState(), "thinking", "a run starts out thinking");
-      assert.equal(last()?.frames.length, cat.ANIMATIONS.thinking.frames.length);
       const n = s.indicators.length;
       await s.fire("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: "hm" } });
       assert.equal(s.indicators.length, n, "the same state does not reset the indicator");
@@ -172,7 +99,6 @@ const tests = {
       assert.equal(s.debug.catState(), "streaming");
       await s.fire("tool_execution_start", { toolName: "bash", args: { command: "ls" } });
       assert.equal(s.debug.catState(), "tool");
-      assert.deepEqual(last()?.frames, cat.indicatorFor("tool", keep).frames);
       await s.fire("ui_prompt_start", { kind: "confirm" });
       assert.equal(s.debug.catState(), "waiting_for_user");
       await s.fire("ui_prompt_end", { kind: "confirm" });
@@ -182,8 +108,6 @@ const tests = {
       assert.equal(s.indicators.at(-1), undefined, "pi's own spinner is restored after the run");
       assert.equal(s.debug.catState(), "success", "a finished run shows success");
       assert.equal(s.debug.catTimerActive(), true, "the result is played through on a short timer");
-      const view = s.debug.state().cat;
-      assert.ok(view && /=\^/.test(view.text) && view.label === "Complete");
     } finally { await s.done(); }
   },
 

@@ -1,6 +1,6 @@
 ---
 name: endpoint-inventory
-category: pentest
+category: engagement
 description: Build an endpoint inventory from normalized evidence during an API/web assessment. Use when cataloguing observed endpoints with method, auth state, source evidence, and scope status — without expanding scope.
 disable-model-invocation: true
 triggers: ["endpoint inventory", "enumerate endpoints", "list the endpoints", "catalogue endpoints", "catalog endpoints"]

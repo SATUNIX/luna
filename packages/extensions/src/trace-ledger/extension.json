@@ -1,14 +1,14 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "trace-ledger",
-  "summary": "Structured action ledger. Records every tool call and result to .pi/trace.jsonl, warns on repeated reads, and exposes /trace. The facts layer for efficiency and anti-loop tooling.",
+  "summary": "Structured action ledger. Records every tool call and result to .pi/trace.jsonl, warns on repeated reads, records each model request's tokens, cache split and cost, and exposes /trace and /usage (where the tokens and money went; warns when the cache hit rate drops). The facts layer for efficiency and anti-loop tooling.",
   "category": "execution",
   "tier": "T1-T4",
   "layer": 6,
   "entry": "index.ts",
-  "hooks": ["session_start", "tool_call", "tool_result", "turn_end"],
-  "registers": { "tools": [], "commands": ["trace"] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "hooks": ["session_start", "tool_call", "tool_result", "turn_end", "message_end"],
+  "registers": { "tools": [], "commands": ["trace", "usage"] },
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

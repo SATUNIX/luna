@@ -23,8 +23,7 @@ revocable entry in `firewall-approvals.json` (`/firewall list`, `/firewall revok
 keeps the configured behaviour described above; guarded disables learned and similarity
 authority and high judgement; strict pins the operator, disables reusable approvals and denies
 unknown external tools. Low-tier actions still run and critical findings always deny. Weakening
-is confirmed at the terminal only. Off is locked pending supervisor attestation, and relaxed
-currently equals balanced (no safely reviewed medium routine effects). The proposal's content,
+is confirmed at the terminal only. Off is locked pending supervisor attestation. The proposal's content,
 flow, intent and detector checks are unavailable. See `docs/security-level.md` and
 `tests/security-level-smoke.ts`.
 
@@ -61,7 +60,7 @@ The full description is in `docs/autonomy-gate.md`.
 - the tool table (`tools.<name>.decision`: allow / ask / deny);
 - the unknown-tool default;
 - operator regex rules: `command_rules` applies to every policy, and
-  `policies.pentest.command_rules` applies to the pentest policy only.
+  `policies.engagement.command_rules` applies to the engagement policy only.
 
 Tool `deny` and `ask` entries compose with every adapter's effects. Identity matching is exact
 and case-sensitive: pi 1.3's core `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`,
@@ -211,10 +210,8 @@ resolve. Keep `audit()` non-throwing and `finish()` unconditional when editing t
 
 - `/firewall [status|list|revoke <id>…|session|workspace|all|host:<name>|reload|help]`:
   inspect what the firewall remembers and revoke it (effective on the next tool call; invalid
-  arguments change nothing; a headless session gets the text on stderr). `/firewall:status` and
-  `/firewall:reload` remain as aliases.
-- `/auto [status|on|off|learn on|off|learned|forget <sig>|stats|explain [n]|check <cmd>]`,
-  with `/auto-mode` as an alias.
+  arguments change nothing; a headless session gets the text on stderr).
+- `/auto [status|on|off|learn on|off|learned|forget <sig>|stats|explain [n]|check <cmd>]`.
 
 ## Environment
 

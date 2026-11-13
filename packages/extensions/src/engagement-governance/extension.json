@@ -1,0 +1,27 @@
+{
+  "$schema": "../../../core/schema/extension.schema.json",
+  "name": "engagement-governance",
+  "summary": "Engagement-specific governance layer. Composes tool-firewall with scope/ROE enforcement, action-card approval, and evidence chain of custody.",
+  "category": "safety",
+  "tier": "T0",
+  "layer": 2,
+  "entry": "index.ts",
+  "hooks": ["tool_call", "session_start"],
+  "registers": { "tools": [], "commands": ["engagement:status", "engagement:actions", "engagement:reload-policy"] },
+  "profiles": ["engagement"],
+  "enabledByDefault": true,
+  "platforms": ["windows", "linux", "darwin"],
+  "runtime": {
+    "nodeBuiltins": ["node:crypto", "node:fs", "node:os", "node:path"],
+    "npm": [],
+    "piPeers": [],
+    "services": [],
+    "models": []
+  },
+  "pulls": [],
+  "env": ["PI_KIT_HUMAN_CONSOLE_DIR", "PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS"],
+  "provenance": { "origin": "custom" },
+  "homeRepo": null,
+  "status": "beta",
+  "childGovernance": true
+}

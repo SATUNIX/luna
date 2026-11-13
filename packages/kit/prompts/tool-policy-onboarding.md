@@ -1,4 +1,5 @@
 ---
+description: "Onboard a new tool or server into the firewall policy"
 argument-hint: "[server or tool]"
 ---
 

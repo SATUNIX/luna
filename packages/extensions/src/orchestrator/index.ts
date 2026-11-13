@@ -395,7 +395,7 @@ export default function (pi: ExtensionAPI) {
       }
     } catch { /* retain the precise missing/corrupt-board reason */ }
     const message =
-      `[orchestrator verification diagnostic] Check result: ${results}. ` +
+      `Orchestrator verification: check result: ${results}. ` +
       `This is an automatic extension diagnostic, not a new user request. ` +
       `The user's requested outcome still governs: an intentionally failing test or an accurately reported blocker does not need to become PASS. ` +
       `If you already reported this failure accurately, finish concisely without further tools. ` +

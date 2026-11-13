@@ -30,7 +30,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { evalCacheDir, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { evalCacheDir, loadModule, fakePi, startRun, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as Vault from "../packages/extensions/src/memory-vault/vault.ts";
 import type * as Search from "../packages/extensions/src/memory-vault/search.ts";
 import type { MemoryVaultDeps } from "../packages/extensions/src/memory-vault/index.ts";
@@ -140,15 +140,29 @@ try {
     ext.createMemoryVault(pi2.api, { complete: async () => reply });
     await pi2.handlers.get("session_start")({}, ctx);
     // A run started by an extension custom message must not consume the first-user-prompt recall.
-    const custom = await pi2.handlers.get("before_agent_start")({ messageType: "custom", message: { customType: "x", content: "hi" }, systemPrompt: "SYS" }, ctx);
+    const custom = await startRun(pi2, { messageType: "custom", message: { customType: "x", content: "hi" }, systemPrompt: "SYS" }, ctx);
     assert.equal(custom, undefined, "a custom-message run recalls nothing and keeps the first-user-prompt flag");
-    const first = (await pi2.handlers.get("before_agent_start")({ prompt: "continue with the auth redirects work", systemPrompt: "SYS" }, ctx)) as Recall;
+    const first = (await startRun(pi2, { prompt: "continue with the auth redirects work", systemPrompt: "SYS" }, ctx)) as Recall;
     assert.equal(first.systemPrompt, undefined, "memory never rewrites the system prompt");
     assert.equal(first.message.display, false);
     assert.match(first.message.content, /Earlier sessions \(beta\) - history only/);
     assert.match(first.message.content, /Redirects stay server-side/);
-    const second = await pi2.handlers.get("before_agent_start")({ prompt: "more on the auth redirects server-side please", systemPrompt: "SYS" }, ctx);
+    const second = await startRun(pi2, { prompt: "more on the auth redirects server-side please", systemPrompt: "SYS" }, ctx);
     assert.equal(second, undefined, "an already-injected memory is not injected again");
+    // Recall rides the request through `context`; nothing is returned for pi to store in the session.
+    assert.equal(await pi2.handlers.get("before_agent_start")({ prompt: "auth redirects", systemPrompt: "SYS" }, ctx), undefined, "recall is never a stored message");
+    const carried = (await pi2.handlers.get("context")({ messages: [{ role: "user", content: "hi" }] }, ctx)) as { messages: Array<{ role: string }> };
+    assert.equal(carried.messages[0]?.role, "user", "the real messages come first");
+    assert.ok(carried.messages.length > 1, "the recalled note is appended after them");
+    const notes = carried.messages.slice(1) as unknown as Array<{ role: string; customType: string; content: string; display: boolean }>;
+    assert.ok(notes.every((n) => n.role === "custom" && n.customType === "memory-recall" && !n.display), "carried notes are hidden custom messages");
+    assert.match(notes.map((n) => n.content).join("\n"), /Redirects stay server-side/, "the recall text is what is carried");
+    // The note serves the run it was recalled for: the end of the run drops it, so it is not re-sent
+    // (uncached, at the tail) on every later request.
+    await pi2.handlers.get("agent_end")({ messages: [{ role: "user", content: "hi" }, { role: "assistant", content: [{ type: "text", text: "Hello!" }] }] }, ctx);
+    assert.equal(await pi2.handlers.get("context")({ messages: [] }, ctx), undefined, "the end of a run drops what was carried");
+    await pi2.handlers.get("session_compact")({}, ctx);
+    assert.equal(await pi2.handlers.get("context")({ messages: [] }, ctx), undefined, "compaction drops what was carried");
 
     // Children neither recap nor recall.
     const restoreChild = setEnv("PI_KIT_INTERNAL_CHILD", "1");
@@ -157,7 +171,7 @@ try {
       const childCalls: number[] = [];
       ext.createMemoryVault(pi3.api, { complete: async () => { childCalls.push(1); return reply; } });
       await pi3.handlers.get("session_start")({}, ctx);
-      assert.equal(await pi3.handlers.get("before_agent_start")({ prompt: "auth redirects server-side", systemPrompt: "S" }, ctx), undefined);
+      assert.equal(await startRun(pi3, { prompt: "auth redirects server-side", systemPrompt: "S" }, ctx), undefined);
       await pi3.handlers.get("agent_end")({ messages: turn }, ctx);
       await pi3.handlers.get("session_shutdown")({}, ctx);
       assert.equal(childCalls.length, 0);
@@ -184,10 +198,10 @@ try {
       // Resolve the key the extension recorded rather than guessing the folder basename.
       const project = vault.resolveProject(updateRoot, repo);
       vault.saveMemory(updateRoot, { title: "Deploy target selection", body: "Deploy to the amber cluster by default.", project });
-      const first = (await pi.handlers.get("before_agent_start")({ prompt: "which cluster do we deploy to", systemPrompt: "SYS" }, ctx)) as Recall;
+      const first = (await startRun(pi, { prompt: "which cluster do we deploy to", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.match(first.message.content, /amber cluster/);
       vault.saveMemory(updateRoot, { title: "Deploy target selection", body: "Deploy to the birch cluster now; the amber cluster is retired.", project });
-      const second = (await pi.handlers.get("before_agent_start")({ prompt: "which cluster do we deploy to now", systemPrompt: "SYS" }, ctx)) as Recall;
+      const second = (await startRun(pi, { prompt: "which cluster do we deploy to now", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.ok(second, "an updated memory is offered again in the same session");
       assert.match(second.message.content, /birch cluster now/);
       assert.doesNotMatch(second.message.content, /amber cluster by default/);
@@ -329,7 +343,7 @@ try {
         ext.createMemoryVault(p.api, { complete: async () => "{}" });
         const c = { cwd, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-keys" } };
         await p.handlers.get("session_start")({}, c);
-        return p.handlers.get("before_agent_start")({ prompt: "continue the acme deploy pipeline via the staging bastion", systemPrompt: "SYS" }, c);
+        return startRun(p, { prompt: "continue the acme deploy pipeline via the staging bastion", systemPrompt: "SYS" }, c);
       };
       assert.equal(await say(other), undefined, "nothing from the first root is injected into the same-named repository");
       const back = (await say(mine)) as Recall;
@@ -415,12 +429,11 @@ try {
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello, continue the auth migration", systemPrompt: "SYS" }, ctx)) as Recall;
+      const result = (await startRun(pi, { prompt: "hello, continue the auth migration", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.equal(result.message.display, false);
       assert.equal(result.systemPrompt, undefined);
-      assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the recall starts with the history header");
-      assert.match(result.message.content, /background history/i);
-      assert.match(result.message.content, /not instructions/i);
+      assert.ok(result.message.content.startsWith("<memory source=\"vault\""), "the recall starts with the history header");
+      assert.match(result.message.content, /background from earlier sessions/i);
       assert.match(result.message.content, /current message/i);
       assert.doesNotMatch(result.message.content, /Where we left off/);
       assert.doesNotMatch(result.message.content, /\*\*Next:\*\*/);
@@ -428,7 +441,7 @@ try {
       assert.match(result.message.content, /Pinned anchor memory/, "the pinned memory survives the cap");
       assert.match(result.message.content, /### Relevant memories/, "the relevant block survives the oversized recaps");
       assert.match(result.message.content, /Auth migration checkpoint/, "the relevant memory survives the cap");
-      assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
+      assert.match(result.message.content, /<\/memory>$/);
       assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
       assert.deepEqual(fs.readFileSync(recapFile), before, "the on-disk recap is unchanged");
       ok("a greeting gets background history, not a resume prompt; oversized recaps leave room for pinned and relevant memories");
@@ -453,11 +466,11 @@ try {
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-trunc-solo" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const result = (await pi.handlers.get("before_agent_start")({ prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
-      assert.ok(result.message.content.startsWith("[Memory vault: background history"), "the header survives a recap-only truncation");
+      const result = (await startRun(pi, { prompt: "hello", systemPrompt: "SYS" }, ctx)) as Recall;
+      assert.ok(result.message.content.startsWith("<memory source=\"vault\""), "the header survives a recap-only truncation");
       assert.match(result.message.content, /### Earlier sessions/, "an oversized recap is still shown");
       assert.match(result.message.content, /truncated; use memory_search for more/, "the recap is truncated, not dropped");
-      assert.match(result.message.content, /\[End of background history\. Reply to the user's current message\.\]$/);
+      assert.match(result.message.content, /<\/memory>$/);
       assert.ok(result.message.content.length <= 2400, "recall stays within the budget");
       ok("oversized recaps alone are truncated, not dropped");
     } finally {
@@ -486,7 +499,7 @@ try {
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-pinned-recall" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const result = (await pi.handlers.get("before_agent_start")({ prompt: "kestrel migration rollout", systemPrompt: "SYS" }, ctx)) as Recall;
+      const result = (await startRun(pi, { prompt: "kestrel migration rollout", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.match(result.message.content, /### Pinned memories/, "the pinned block is shown");
       assert.match(result.message.content, /### Relevant memories/, "a relevant memory still appears when pinned memories rank above it");
       assert.match(result.message.content, /Kestrel migration rollback/, "the non-pinned relevant memory survives the pinned block");
@@ -546,9 +559,9 @@ try {
       ext.createMemoryVault(pi.api, { complete: async () => "{}" });
       const ctx = { cwd: repo, hasUI: false, ui: { notify() {}, setStatus() {} }, sessionManager: { getSessionId: () => "sess-recall-throw" } };
       await pi.handlers.get("session_start")({}, ctx);
-      const thrown = await pi.handlers.get("before_agent_start")({ prompt: 123, systemPrompt: "SYS" }, ctx);
+      const thrown = await startRun(pi, { prompt: 123, systemPrompt: "SYS" }, ctx);
       assert.equal(thrown, undefined, "a malformed prompt is caught, not thrown");
-      const recalled = (await pi.handlers.get("before_agent_start")({ prompt: "continue where we left off", systemPrompt: "SYS" }, ctx)) as Recall;
+      const recalled = (await startRun(pi, { prompt: "continue where we left off", systemPrompt: "SYS" }, ctx)) as Recall;
       assert.match(recalled.message.content, /Earlier sessions \(/, "the recap is still offered after the throw");
       assert.match(recalled.message.content, /Guard the recall throw/);
     } finally {

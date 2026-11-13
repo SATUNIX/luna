@@ -6,7 +6,7 @@
  *
  * The allowance for a task is the tier's memento.maxGenerations (effort.json), lowered by the
  * model's own `maxGenerations` when it sets one (never raised: clamped like the user's limit
- * overrides), and 0 outside the long-horizon and autonomous profiles or for a model not opted in.
+ * overrides), and 0 outside the long-horizon profile or for a model not opted in.
  *
  * Self-contained: node:* builtins only. The file is outside data: every field is checked here and
  * nothing in it is cast.
@@ -19,9 +19,29 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { migrateStoredProfile } from "./shared/profile-names.ts";
 
-/** The profiles in which Memento mode may be used at all. */
-export const MEMENTO_PROFILES: readonly string[] = ["long-horizon", "autonomous"];
+/**
+ * The shipped profiles whose definition says `"memento": true` (packages/kit/profiles/<name>.json):
+ * the profiles in which Memento mode may be used at all. Read from the profile files, so a new or
+ * renamed profile needs no edit here.
+ */
+export function mementoProfiles(): string[] {
+  try {
+    const dir = fileURLToPath(new URL("../../../kit/profiles/", import.meta.url));
+    return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().flatMap((f) => {
+      try {
+        const def: unknown = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+        return isRecord(def) && def.memento === true ? [f.slice(0, -".json".length)] : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
+}
 
 /** `<provider>/<model id>`: a provider name, a slash, then the model id (which may hold slashes). */
 const MODEL_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}\/[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,199}$/;
@@ -139,7 +159,7 @@ export function installedProfile(cwd: string): string | null {
   try {
     const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
     const profile = isRecord(raw) ? raw.profile : undefined;
-    return typeof profile === "string" && profile.trim() ? profile.trim() : null;
+    return typeof profile === "string" && profile.trim() ? migrateStoredProfile(profile.trim()) : null;
   } catch {
     return null;
   }
@@ -155,7 +175,8 @@ export interface Allowance {
 /** The Memento allowance for `model` at a tier allowing `tierMax` generations, in `profile`. */
 export function mementoAllowance(input: { tierMax: number; profile: string | null; model: string | null; optIn: OptIn }): Allowance {
   const { tierMax, profile, model, optIn } = input;
-  if (!profile || !MEMENTO_PROFILES.includes(profile)) return { maxGenerations: 0, reason: `the ${profile ? `"${profile}"` : "installed"} profile does not allow Memento mode (only ${MEMENTO_PROFILES.join(" and ")} do)` };
+  const allowed = mementoProfiles();
+  if (!profile || !allowed.includes(profile)) return { maxGenerations: 0, reason: `the ${profile ? `"${profile}"` : "installed"} profile does not allow Memento mode (only ${allowed.join(" and ")} do)` };
   if (!model) return { maxGenerations: 0, reason: "no model is selected" };
   const entry = optIn.models.get(model);
   if (!entry) return { maxGenerations: 0, reason: `${model} is not opted in` };

@@ -128,7 +128,7 @@ async function run() {
     fs.rmSync(path.join(stateDir, "auto-mode.json"));
     assert.equal(fs.existsSync(configFile) ? readJsonObject(configFile).mode : "manual", "manual", "a project auto-mode.json must not skip the /auto on gate");
     assert.match(lastNotice(view.notices).message, /needs a choice at the terminal/);
-    await pi.commands.get("auto-mode").handler("on", view.ctx);
+    await pi.commands.get("auto").handler("on", view.ctx);
     assert.equal(readJsonObject(configFile).mode, "auto");
     assert.equal(readJsonObject(configFile).source, "user");
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(stateDir, "auto-mode.json"), "utf8")), { enabled: true });

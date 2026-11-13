@@ -302,7 +302,7 @@ export function evaluateUnattended(o: LoadOptions): UnattendedState {
     const kind = typeof named === "string" ? named : isObj(named) && typeof named.kind === "string" ? named.kind : null;
     if (kind !== boundary) return fail(`the contract names the boundary ${JSON.stringify(kind)} but PI_KIT_UNATTENDED_BOUNDARY says ${JSON.stringify(boundary)}`);
   }
-  if (o.policy === "pentest") return fail("the pentest policy needs an interactive operator and cannot run unattended");
+  if (o.policy === "engagement") return fail("the engagement policy needs an interactive operator and cannot run unattended");
   const perms = contract.permissions === undefined ? {} : contract.permissions;
   if (!isObj(perms)) return fail("permissions is not an object");
   const egress = normaliseEgress(perms.egress ?? (isObj(perms.network) ? perms.network.egress : undefined), warnings);
@@ -376,8 +376,8 @@ export function createUnattended(o: LoadOptions): Unattended {
         latchOff("the contract can no longer be read: unattended mode is off for the rest of this process");
         return null;
       }
-      // The pentest policy needs an operator: it only ever narrows what unattended mode allows.
-      return policy === "pentest" ? null : state;
+      // The engagement policy needs an operator: it only ever narrows what unattended mode allows.
+      return policy === "engagement" ? null : state;
     },
     publish,
   };

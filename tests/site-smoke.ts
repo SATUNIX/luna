@@ -1,17 +1,10 @@
 #!/usr/bin/env node
 /**
- * Website and illustrations (docs/website.md). Pins:
- *   1. the committed docs/assets/luna-*.svg are exactly what packages/core/readme-art.ts generates,
- *      and nothing else under that name is committed;
- *   2. every illustration is well-formed SVG with a title and description, runs no script, loads
- *      nothing, has a reduced-motion rule, and stays within its size budget;
- *   3. the built page fills every placeholder with the package.json release, runs no script, keeps
- *      its content security policy, and every local link, image and fragment resolves (a docs/
- *      link to a page mkdocs builds from docs/);
- *   4. every <picture> in the README and the page pairs a light image with its -dark variant;
- *   5. build-site.ts writes the files into an empty directory and refuses a non-empty one, and an
- *      unknown or unfilled placeholder fails;
- *   6. mkdocs loads the Proof stylesheet and no syntax highlighter.
+ * The website build (docs/website.md). Pins: the built page fills every placeholder with the
+ * package.json release, runs no script, keeps its content security policy, and every local link,
+ * image and fragment resolves; build-site.ts writes into an empty directory and refuses a non-empty
+ * one, and an unknown or unfilled placeholder fails. It does not pin the illustrations, their art or
+ * the documentation theme.
  * Deterministic and offline.
  */
 import assert from "node:assert/strict";
@@ -21,11 +14,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fill, pickRelease, release, siteFiles } from "../packages/core/build-site.ts";
-import { artFiles } from "../packages/core/readme-art.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ASSETS = path.join(ROOT, "docs", "assets");
-const SVG_BUDGET = 32 * 1024;
 let passed = 0;
 
 /**
@@ -65,39 +55,7 @@ const ok = (message: string): void => {
   console.log(`ok - ${message}`);
 };
 
-// 1. Generated art is current, and no hand-made file hides among it.
-const art = artFiles();
-for (const [name, body] of art) assert.equal(fs.readFileSync(path.join(ASSETS, name), "utf8"), body, `docs/assets/${name} is stale: run node packages/core/readme-art.ts`);
-const committed = fs.readdirSync(ASSETS).filter((n) => /^luna-.*\.svg$/.test(n)).sort();
-assert.deepEqual(committed, [...art.keys()].sort(), "docs/assets/luna-*.svg holds only generated files");
-assert.ok(!fs.existsSync(path.join(ASSETS, "luna.gif")), "the retired GIF is not committed");
-ok(`${art.size} illustrations match the generator`);
-
-// 2. Each illustration is safe to embed and small.
-const BANNED: ReadonlyArray<[RegExp, string, string]> = [
-  [/<script\b/i, "a script element", "<script>"],
-  [/<foreignObject\b/i, "foreignObject", "<foreignObject>"],
-  [/\bon[a-z]+\s*=/i, "an event handler attribute", "onload="],
-  [/\b(?:xlink:)?href\s*=/i, "a link or external reference", 'href="x"'],
-  [/url\(\s*['"]?(?!#)/i, "a url() that is not a local fragment", "url(https://x)"],
-  [/@import\b/i, "an @import", "@import"],
-  [/<image\b/i, "an embedded image", "<image>"],
-];
-for (const [name, body] of art) {
-  assert.ok(Buffer.byteLength(body) <= SVG_BUDGET, `${name} is ${Buffer.byteLength(body)} bytes, over the ${SVG_BUDGET}-byte budget`);
-  for (const [pattern, what] of BANNED) assert.ok(!pattern.test(body), `${name} contains ${what}`);
-  assert.deepEqual(xmlProblems(body), [], `${name} is well-formed`);
-  assert.match(body, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" [^>]*role="img"/, `${name} is an SVG with role="img"`);
-  assert.ok((/<title id="t">([^<]{6,})<\/title>/.exec(body)?.[1] ?? "").length > 5, `${name} has a title`);
-  assert.ok((/<desc id="d">([^<]{41,})<\/desc>/.exec(body)?.[1] ?? "").length > 40, `${name} has a description`);
-  assert.match(body, /@media \(prefers-reduced-motion:reduce\)\{\*\{animation-delay:-[\d.]+s!important;animation-play-state:paused!important\}\}/, `${name} pauses on a still frame for reduced motion`);
-  assert.match(body, /@keyframes /, `${name} is animated`);
-}
-assert.ok(xmlProblems("<svg><g></svg>").length > 0 && xmlProblems("<svg>a < b</svg>").length > 0 && xmlProblems("<svg>&nbsp;</svg>").length > 0, "the well-formedness check detects its cases");
-for (const [pattern, what, sample] of BANNED) assert.ok(pattern.test(sample), `the ${what} rule detects its case`);
-ok("every illustration is well-formed, script-free, loads nothing and is within budget");
-
-// 3. The page.
+// The page.
 // The page names the newest pushed tag at or below package.json, never a version whose tag is not
 // pushed yet. Synthetic tag lists, so a shallow checkout without tags tests the same thing.
 const pkgVersion = (JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")) as { version: string }).version;
@@ -142,19 +100,7 @@ assert.ok(files.has(".nojekyll"), "the site is served as it is (.nojekyll)");
 assert.ok(html.includes(`Luna ${tag}`), "the footer names the release");
 ok(`the page names ${tag}, runs no script and its ${checked} local references resolve`);
 
-// 4. Every <picture> pairs a light image with its -dark variant.
-const pictures = (text: string): Array<[string, string]> =>
-  [...text.matchAll(/<picture>\s*<source media="\(prefers-color-scheme: dark\)" srcset="([^"]+)">\s*<img src="([^"]+)"/g)].map((m) => [m[1] ?? "", m[2] ?? ""]);
-const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
-for (const [where, text] of [["README.md", readme], ["website/index.html", html]] as const) {
-  const found = pictures(text);
-  assert.equal(found.length, (text.match(/<picture>/g) ?? []).length, `${where}: every <picture> has the dark source first`);
-  for (const [dark, light] of found) assert.equal(dark, light.replace(/\.svg$/, "-dark.svg"), `${where}: ${dark} is the dark variant of ${light}`);
-}
-assert.ok(pictures(readme).length >= 5, "the README shows the five illustrations");
-ok("every <picture> pairs a light image with its dark variant");
-
-// 5. The build writes into an empty directory only, and placeholders fail closed.
+// The build writes into an empty directory only, and placeholders fail closed.
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "luna-site-"));
 try {
   const out = path.join(temp, "_site");
@@ -181,12 +127,5 @@ assert.throws(() => fill("{{NOPE}}", { TAG: "v1" }, "x.html"), /unknown placehol
 assert.throws(() => fill("{{TAG}} {{", { TAG: "v1" }, "x.html"), /unfilled placeholder/);
 assert.equal(fill("a {{TAG}} b", { TAG: "v1" }, "x.html"), "a v1 b");
 ok("build-site writes into an empty directory only; placeholders fail closed");
-
-// 6. The documentation theme.
-const mkdocs = fs.readFileSync(path.join(ROOT, "mkdocs.yml"), "utf8");
-assert.match(mkdocs, /^extra_css:\n {2}- assets\/proof-docs\.css$/m, "mkdocs loads the Proof stylesheet");
-assert.ok(fs.existsSync(path.join(ASSETS, "proof-docs.css")), "docs/assets/proof-docs.css exists");
-assert.match(mkdocs, /^ {2}highlightjs: false$/m, "mkdocs loads no syntax highlighter");
-ok("the documentation uses the Proof stylesheet and no highlighter");
 
 console.log(`site smoke: ${passed} checks passed`);

@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_shutdown"],
   "registers": { "tools": [], "commands": ["handoff"] },
-  "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

@@ -175,15 +175,15 @@ const fakeExit = (exits: ExitCode[]) => ((code?: ExitCode) => { exits.push(code)
 
 const tests: Record<string, () => unknown> = {
   "a child loads the guard first, every governance extension the parent runs, and nothing the parent lacks": async () => {
-    const w = world({ registered: ["tool-firewall", "protected-paths", "pentest-governance-domain", "delegation-guard", "effort"], fixture: { "delegation-guard": { childGovernance: true }, effort: { childGovernance: true }, "tool-firewall": { childGovernance: true }, "protected-paths": { childGovernance: true, avenue: "third_party" }, "secret-guard": { childGovernance: true }, "pentest-governance-domain": { childGovernance: true }, todo: {}, "finish-reason-retry": {} } });
+    const w = world({ registered: ["tool-firewall", "protected-paths", "engagement-governance", "delegation-guard", "effort"], fixture: { "delegation-guard": { childGovernance: true }, effort: { childGovernance: true }, "tool-firewall": { childGovernance: true }, "protected-paths": { childGovernance: true, avenue: "third_party" }, "secret-guard": { childGovernance: true }, "engagement-governance": { childGovernance: true }, todo: {}, "finish-reason-retry": {} } });
     const e = await withEffort();
     try {
       const p = granted(prepareChild({ cwd: process.cwd(), kind: "discretionary", role: "implementer" }));
       assert.equal(p.args[0], "--no-extensions");
       assert.equal(argsOf(p)[0], "delegation-guard", "the guard is loaded first so its blocking hook runs first");
-      for (const name of ["tool-firewall", "protected-paths", "pentest-governance-domain", "effort", "todo", "finish-reason-retry"]) assert.ok(argsOf(p).includes(name), `${name} is loaded in the child`);
+      for (const name of ["tool-firewall", "protected-paths", "engagement-governance", "effort", "todo", "finish-reason-retry"]) assert.ok(argsOf(p).includes(name), `${name} is loaded in the child`);
       assert.ok(!argsOf(p).includes("secret-guard"), "secret-guard is required only when the parent actually runs it");
-      assert.equal(envOf(p, "PI_KIT_CHILD_REQUIRE").split(",").sort().join(), ["delegation-guard", "effort", "pentest-governance-domain", "protected-paths", "tool-firewall"].join());
+      assert.equal(envOf(p, "PI_KIT_CHILD_REQUIRE").split(",").sort().join(), ["delegation-guard", "effort", "engagement-governance", "protected-paths", "tool-firewall"].join());
       assert.equal(p.env.PI_KIT_INTERNAL_CHILD, "1");
       // secret-guard enabled in the parent -> the child must have it too
       protectionsRegistry().add("secret-guard");

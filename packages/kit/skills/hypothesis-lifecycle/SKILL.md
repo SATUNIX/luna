@@ -1,6 +1,6 @@
 ---
 name: hypothesis-lifecycle
-category: pentest
+category: engagement
 description: Track assessment observations from candidate hypothesis to finding-ready. Use during security assessment reasoning to keep claims disciplined — every state change needs evidence, a limitation, or an operator decision.
 disable-model-invocation: true
 triggers: ["hypothesis", "finding-ready"]

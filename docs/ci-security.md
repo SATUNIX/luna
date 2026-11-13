@@ -243,7 +243,7 @@ configuration and `.github/zizmor.yml` to the owner.
 |---|---|---|
 | `// nosemgrep: <rule-id>` | One line of shipped code that a rule misreads, with the full rule ID as Semgrep reports it (a shortened name suppresses nothing) and a comment saying why the code is safe | A bare `nosemgrep`; suppressing a true finding |
 | `.semgrepignore` | Whole trees that are not shipped code (`docs/`, `tests/`, build output) | Any shipped source file |
-| `eslint-disable-next-line <rule> -- <reason>` | One line, with a reason; counts against a ceiling (`tests/typescript-coverage-smoke.ts`) | File-wide disables; disabling the security bans to ship code |
+| `eslint-disable-next-line <rule> -- <reason>` | One line, with a reason | File-wide disables; disabling the security bans to ship code |
 | The TypeScript expect-error directive | Tests only, proving a runtime check refuses a wrong type | `@ts-ignore` anywhere |
 | CodeQL `paths-ignore` and query filters | Test trees and generated output; a query switched off names its one known site | Ignoring a shipped path |
 | gitleaks `[[allowlists]]` | Synthetic fixture lines, bound to named files with `condition = "AND"` | A path-only or pattern-only allowlist |

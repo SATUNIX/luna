@@ -32,7 +32,7 @@ In rough priority order:
 5. **Firewall and approvals.** Extend [Security level](security-level.md) with authenticated
    operator events and verified off-boundary attestation; implement content screening, the
    OpenAPPA flow engine, intent ledger and detector before advertising their protection.
-   Review any additional relaxed admissions against narrower classifier effects.
+   Review any additional deterministic medium admissions against narrower classifier effects.
    Decide whether `secret-guard` should load in the remaining profiles; teach the
    classifier the names of reviewed companion tools; tighten manual-mode reads if the prompt
    volume proves acceptable.

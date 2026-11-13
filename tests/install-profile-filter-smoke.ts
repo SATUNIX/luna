@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { resolveProfile, type ResolvedExtension } from "../packages/core/lib/resolve.ts";
 import { type PackageEntry, type PackageObject, mergePackageBlock, removeOtherKitEntries, findPackageEntry, leanCtxBinaryAvailable, readSettings, globalAgentDir, globalSettingsPath, updateSettings } from "../packages/core/lib/settings.ts";
 import { object, optional, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
-import { applyExtensionOverrides, captureDrift, excludedPrompts, excludedSkills, kitSkills, normalizeOverrides, parseProfile, skillFilterPatterns, canonicalProfileName, loadProfileDef, firewallConfigFor, writeFirewallConfig } from "../packages/core/lib/profiles.ts";
+import { applyExtensionOverrides, captureDrift, excludedPrompts, excludedSkills, kitSkills, normalizeOverrides, parseProfile, skillFilterPatterns, loadProfileDef, firewallConfigFor, writeFirewallConfig } from "../packages/core/lib/profiles.ts";
 
 import { isolateKitEnv } from "../packages/core/eval/harness.ts";
 
@@ -46,14 +46,14 @@ function withTempSettings<T>(fn: (settingsPath: string, dir: string) => T): T {
   }
 }
 
-// 1. quick.json must resolve every included name (no dangling references) and must
+// 1. lite.json must resolve every included name (no dangling references) and must
 //    resolve to a strict subset of the full extension/vendor set - proving the
 //    profile is actually narrower than "everything", not just a differently-named
 //    alias for it.
-function testQuickProfileResolvesToSubset() {
-  const quick = JSON.parse(fs.readFileSync(path.join(ROOT, "packages", "kit", "profiles", "quick.json"), "utf8")) as ProfileFile;
-  const resolved: ResolvedExtension[] = resolveProfile(quick.include);
-  assert.equal(resolved.length, quick.include.length);
+function testLiteProfileResolvesToSubset() {
+  const lite = JSON.parse(fs.readFileSync(path.join(ROOT, "packages", "kit", "profiles", "lite.json"), "utf8")) as ProfileFile;
+  const resolved: ResolvedExtension[] = resolveProfile(lite.include);
+  assert.equal(resolved.length, lite.include.length);
 
   const allInRepoCount =
     fs.readdirSync(path.join(ROOT, "packages", "extensions", "src")).filter(n => !n.startsWith("_")).length +
@@ -61,11 +61,11 @@ function testQuickProfileResolvesToSubset() {
   const inRepoSelected = resolved.filter(r => r.avenue !== "external").length;
   assert.ok(
     inRepoSelected < allInRepoCount,
-    `quick profile should select fewer in-repo extensions (${inRepoSelected}) than the full set (${allInRepoCount})`,
+    `lite profile should select fewer in-repo extensions (${inRepoSelected}) than the full set (${allInRepoCount})`,
   );
 
   // A quarantined/experimental extension must not appear in the safe-baseline profile.
-  assert.ok(!quick.include.includes("mcp-router"), "mcp-router (status: stub) must not be in quick.json");
+  assert.ok(!lite.include.includes("mcp-router"), "mcp-router (status: stub) must not be in lite.json");
 }
 
 // 2. mergePackageBlock must rewrite a plain-string local-path entry (what `pi install`
@@ -203,7 +203,7 @@ function testLiteProfileAllowlists() {
   for (const name of only) assert.ok(!hidden.includes(name), `lite must keep ${name}`);
   assert.equal(hidden.length, kitSkills().length - only.length, "every other skill is hidden");
   assert.ok(!excludedPrompts(lite, none).includes("code-plan"));
-  assert.ok(excludedPrompts(lite, none).includes("pentest-plan"));
+  assert.ok(excludedPrompts(lite, none).includes("engagement-plan"));
   const withOverride = excludedSkills(lite, normalizeOverrides({ skills: { include: ["finding-writing"] } }));
   assert.ok(!withOverride.includes("finding-writing"), "overrides.skills.include beats the allowlist");
 }
@@ -287,14 +287,14 @@ function testUpdateSettingsRefusesInvalidJson() {
 
 function testProfileSkillAndOverrideResolution() {
   const balanced = parseProfile(parseJson(fs.readFileSync(path.join(ROOT, "packages", "kit", "profiles", "balanced.json"), "utf8")), "balanced.json");
-  const pentest = parseProfile(parseJson(fs.readFileSync(path.join(ROOT, "packages", "kit", "profiles", "pentest.json"), "utf8")), "pentest.json");
+  const engagement = parseProfile(parseJson(fs.readFileSync(path.join(ROOT, "packages", "kit", "profiles", "engagement.json"), "utf8")), "engagement.json");
   const none = normalizeOverrides({});
   const hidden = excludedSkills(balanced, none);
   const categoryOf = Object.fromEntries(kitSkills().map((s) => [s.name, s.category]));
-  assert.ok(hidden.length > 0 && hidden.every((n) => ["pentest", "mcp-governance", "evidence-reporting", "maintainer"].includes(categoryOf[n] ?? "") || ["engagement-conductor", "dynamic-agent-synthesis"].includes(n)));
+  assert.ok(hidden.length > 0 && hidden.every((n) => ["engagement", "mcp-governance", "evidence-reporting", "maintainer"].includes(categoryOf[n] ?? "") || ["engagement-conductor", "dynamic-agent-synthesis"].includes(n)));
   assert.ok(!hidden.includes("verification-loop"), "coding skills stay visible");
-  assert.deepEqual(excludedSkills(pentest, none), [], "the pentest profile shows every skill");
-  assert.ok(excludedPrompts(balanced, none).includes("pentest-plan"));
+  assert.deepEqual(excludedSkills(engagement, none), [], "the engagement profile shows every skill");
+  assert.ok(excludedPrompts(balanced, none).includes("engagement-plan"));
   const o = normalizeOverrides({ skills: { include: ["api-testing"], exclude: ["patch-hygiene"] }, extensions: { add: ["task-graph"], remove: ["notify"] } });
   const withO = excludedSkills(balanced, o);
   assert.ok(!withO.includes("api-testing") && withO.includes("patch-hygiene"));
@@ -304,7 +304,7 @@ function testProfileSkillAndOverrideResolution() {
 }
 
 function testCaptureDrift() {
-  const profile = { include: ["todo", "notify", "pi-lens"], skills: { excludeCategories: ["pentest"] } };
+  const profile = { include: ["todo", "notify", "pi-lens"], skills: { excludeCategories: ["engagement"] } };
   const entry = {
     extensions: ["packages/extensions/third_party/todo/index.ts", "packages/extensions/src/task-graph/index.ts"],
     skills: ["!packages/kit/skills/api-testing/SKILL.md", "!packages/kit/skills/patch-hygiene/SKILL.md"],
@@ -316,17 +316,15 @@ function testCaptureDrift() {
 
 // The installer writes <agent dir>/pi-kit/firewall.json from the profile's `firewall` field.
 function testFirewallConfigFromProfile() {
-  assert.equal(canonicalProfileName("engagement"), "pentest", "the old profile name is an alias");
-  assert.equal(loadProfileDef("engagement").name, "pentest");
   const lh = loadProfileDef("long-horizon");
   const bal = loadProfileDef("balanced");
-  const pt = loadProfileDef("pentest");
+  const pt = loadProfileDef("engagement");
   assert.deepEqual(firewallConfigFor(lh, {}), { mode: "auto", policy: "coding", source: "profile" });
   // A mode the operator chose with /auto survives a switch within the same policy, with their other settings.
   assert.deepEqual(firewallConfigFor(bal, { mode: "auto", policy: "coding", source: "user", judgeModel: "x/y", knownHosts: ["a"] }), { mode: "auto", policy: "coding", source: "user", judgeModel: "x/y", knownHosts: ["a"] });
   // The policy always follows the profile, and a policy change resets the mode to the profile's.
-  assert.deepEqual(firewallConfigFor(pt, { mode: "auto", policy: "coding", source: "user" }), { mode: "manual", policy: "pentest", source: "profile" });
-  assert.deepEqual(firewallConfigFor(lh, { mode: "manual", policy: "pentest", source: "user" }), { mode: "auto", policy: "coding", source: "profile" });
+  assert.deepEqual(firewallConfigFor(pt, { mode: "auto", policy: "coding", source: "user" }), { mode: "manual", policy: "engagement", source: "profile" });
+  assert.deepEqual(firewallConfigFor(lh, { mode: "manual", policy: "engagement", source: "user" }), { mode: "auto", policy: "coding", source: "profile" });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-fwcfg-"));
   try {
     const file = path.join(dir, "pi-kit", "firewall.json");
@@ -337,8 +335,8 @@ function testFirewallConfigFromProfile() {
     assert.throws(() => writeFirewallConfig(pt, file), /not valid JSON/, "an unreadable config is not overwritten");
     assert.equal(fs.readFileSync(file, "utf8"), "{broken");
     fs.rmSync(file);
-    assert.deepEqual(writeFirewallConfig(pt, file), { mode: "manual", policy: "pentest", source: "profile" }, "an absent config is created from the profile");
-    assert.equal(parseJsonAs(object({ policy: optional(string()) }), fs.readFileSync(file, "utf8")).policy, "pentest");
+    assert.deepEqual(writeFirewallConfig(pt, file), { mode: "manual", policy: "engagement", source: "profile" }, "an absent config is created from the profile");
+    assert.equal(parseJsonAs(object({ policy: optional(string()) }), fs.readFileSync(file, "utf8")).policy, "engagement");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -390,7 +388,7 @@ function testIdentityBridgeCleanup() {
 
 const tests: Array<[name: string, fn: () => void]> = [
   ["installer derives firewall.json from the profile", testFirewallConfigFromProfile],
-  ["quick profile resolves to a proper subset, no stubs", testQuickProfileResolvesToSubset],
+  ["lite profile resolves to a proper subset, no stubs", testLiteProfileResolvesToSubset],
   ["mergePackageBlock narrows a local-mode entry in place", testMergePackageBlockNarrowsLocalEntry],
   ["mergePackageBlock narrows a git-mode entry in place", testMergePackageBlockNarrowsGitEntry],
   ["external companion names excluded from the package filter", testExternalNamesExcludedFromFilter],

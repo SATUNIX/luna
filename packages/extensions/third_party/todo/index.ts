@@ -29,15 +29,15 @@ export default function (pi: ExtensionAPI) {
     name: "todo",
     label: "Todo",
     description:
-      "Manage the task todo list for this session (stored in a per-session file, so parallel sessions in the same workspace don't share lists). Actions: list; add (text, or items for several at once); start (id) marks one item in progress; done (id) marks it complete; toggle (id) flips done/open; remove (id); clear. Add the plan before you start work. Mark an item in progress when you start it and done when you finish it. Every action returns the whole list.",
+      "The session's todo list. Actions: list, add (text or items), start, done, toggle, remove (id), clear. Add the plan first, then start and finish items. Returns the whole list.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"), Type.Literal("add"), Type.Literal("start"), Type.Literal("done"),
         Type.Literal("toggle"), Type.Literal("remove"), Type.Literal("clear"),
       ]),
-      text: Type.Optional(Type.String({ description: "Todo text (for add)" })),
-      items: Type.Optional(Type.Array(Type.String(), { description: "Several todo texts to add at once (for add)" })),
-      id: Type.Optional(Type.Number({ description: "Todo ID (for start, done, toggle, remove)" })),
+      text: Type.Optional(Type.String({ description: "For add" })),
+      items: Type.Optional(Type.Array(Type.String(), { description: "Several texts, for add" })),
+      id: Type.Optional(Type.Number({ description: "For start, done, toggle, remove" })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const todoFile = currentFile(ctx);

@@ -21,7 +21,7 @@ assert.ok(have("python3"), "python3 is required for the container validators");
 
 const run = spawnSync("sh", ["scripts/preflight.sh"], { cwd: dir, encoding: "utf8", env: { ...process.env, PI_AGENT_DATA_ROOT: path.join(dir, ".no-data-root") } });
 assert.equal(run.status, 0, `preflight failed:\n${run.stdout}\n${run.stderr}`);
-assert.match(run.stdout, /Pentest environment checks passed/);
+assert.match(run.stdout, /Engagement environment checks passed/);
 assert.match(run.stdout, /Runtime readiness passed/);
 assert.match(run.stdout, /\[validate-compose\] All checks passed\./);
 
@@ -33,10 +33,10 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-container-static-"
 try {
   const copy = (rel: string): void => fs.cpSync(path.join(ROOT, rel), path.join(scratch, rel), { recursive: true, filter: (src) => !src.includes("node_modules") });
   copy("packages/container");
-  copy("packages/extensions/src/pentest-governance-domain");
+  copy("packages/extensions/src/engagement-governance");
   copy("packages/kit/prompts");
   const cdir = path.join(scratch, "packages", "container");
-  const validate = () => spawnSync("sh", ["scripts/validate-pentest-env.sh"], { cwd: cdir, encoding: "utf8", env: { ...process.env, PI_AGENT_DATA_ROOT: path.join(cdir, ".no-data-root") } });
+  const validate = () => spawnSync("sh", ["scripts/validate-engagement-env.sh"], { cwd: cdir, encoding: "utf8", env: { ...process.env, PI_AGENT_DATA_ROOT: path.join(cdir, ".no-data-root") } });
   const clean = validate();
   assert.equal(clean.status, 0, `the copy must validate before it is broken:\n${clean.stdout}\n${clean.stderr}`);
 

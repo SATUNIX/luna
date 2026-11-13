@@ -244,20 +244,30 @@ export function reviewCriticalPaths(files: readonly string[], gateEntries: reado
   return files.filter((f) => critical.test(f) || entries.has(f) || config.some((re) => re.test(f)));
 }
 
-/** A merge review's verdict. `failed` marks the fail-closed REJECT when no review could be had. */
+/**
+ * A merge review's verdict. `failed` marks a fail-closed REJECT the host made without a verdict.
+ * `unavailable` marks the one kind of those that is infrastructure (no usable reply from any
+ * reviewer): the work was never judged, so it is parked for a person, not counted as rejected.
+ */
 export interface CycleReview {
   verdict: "MERGE" | "REJECT";
   reason: string;
   concerns: string[];
   failed?: true;
+  unavailable?: true;
+  /** The second reviewer (the manager model) answered, not the configured review model. */
+  fallbackUsed?: true;
 }
 
-/** A task review's verdict. `failed` marks the fail-closed REJECT when no review could be had. */
+/** A task review's verdict; `failed` and `unavailable` mean what they do on a CycleReview. */
 export interface TaskReview {
   verdict: "APPROVE" | "REJECT";
   reason: string;
   concerns: string[];
   failed?: true;
+  unavailable?: true;
+  /** The second reviewer (the manager model) answered, not the configured review model. */
+  fallbackUsed?: true;
 }
 
 /** What the merge reviewer sees of one cycle (lib/templates/self-improve.ts assembles it). */
@@ -309,6 +319,8 @@ export interface TaskReviewBundle {
 }
 
 export interface ReviewRetryOptions {
+  /** A second reviewer, asked once after the first has given no usable reply on every attempt. */
+  fallback?: Complete;
   attempts?: number;
   pauseMs?: number;
   sleep?: (ms: number) => Promise<unknown>;
@@ -412,18 +424,23 @@ export function parseReview(text: string | null | undefined): CycleReview {
  * Review a cycle. `complete(system, user)` returns the reply text (lib/manager.ts
  * openRouterComplete, or a fake in tests). Upstream stalls happen (a live run saw two 120 s
  * timeouts in a row on a call that normally takes 15 s), so it tries three times with a pause
- * between; then a REJECT that says the review failed.
+ * between, then once with the second reviewer. A reply that never yields a verdict (an error, a
+ * timeout, no JSON object) is infrastructure failure, not a REJECT: it comes back `unavailable`
+ * so the caller parks the cycle with its work intact. Only a parsed REJECT rejects.
  */
-export async function reviewCycle(bundle: CycleReviewBundle, complete: Complete, { attempts = 3, pauseMs = 30_000, sleep = defaultSleep }: ReviewRetryOptions = {}): Promise<CycleReview> {
+export async function reviewCycle(bundle: CycleReviewBundle, complete: Complete, { attempts = 3, pauseMs = 30_000, sleep = defaultSleep, fallback }: ReviewRetryOptions = {}): Promise<CycleReview> {
   if ((bundle.diff?.length ?? 0) > REVIEW_DIFF_BUDGET) return { verdict: "REJECT", reason: `diff exceeds the merge review's budget of ${REVIEW_DIFF_BUDGET} characters; not merged`, concerns: [], failed: true };
+  const system = reviewSystemPrompt(bundle.integrationBranch, bundle.bookkeeping?.proposals, bundle.gateGreen !== false, bundle.gateFailing);
+  const user = buildReviewBundle(bundle);
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
     if (i) await sleep(pauseMs * i);
-    try {
-      return await complete(reviewSystemPrompt(bundle.integrationBranch, bundle.bookkeeping?.proposals, bundle.gateGreen !== false, bundle.gateFailing), buildReviewBundle(bundle)).then(parseReview);
-    } catch (error) { last = error; }
+    try { return parseReview(await complete(system, user)); } catch (error) { last = error; }
   }
-  return { verdict: "REJECT", reason: `review unavailable (${failure(last)}); not merged`, concerns: [], failed: true };
+  if (fallback) {
+    try { return { ...parseReview(await fallback(system, user)), fallbackUsed: true }; } catch (error) { last = error; }
+  }
+  return { verdict: "REJECT", reason: `review unavailable (${failure(last)}); not judged`, concerns: [], failed: true, unavailable: true };
 }
 
 
@@ -471,12 +488,17 @@ export function parseTaskReview(text: string | null | undefined): TaskReview {
   return parseVerdict(text, ["APPROVE", "REJECT"]);
 }
 
-/** Review a finished task; retried like the merge review, then a REJECT that says the review failed. */
-export async function reviewTask(bundle: TaskReviewBundle, complete: Complete, { attempts = 3, pauseMs = 30_000, sleep = defaultSleep }: ReviewRetryOptions = {}): Promise<TaskReview> {
+/** Review a finished task; retried and unavailable-on-no-reply like the merge review. */
+export async function reviewTask(bundle: TaskReviewBundle, complete: Complete, { attempts = 3, pauseMs = 30_000, sleep = defaultSleep, fallback }: ReviewRetryOptions = {}): Promise<TaskReview> {
+  const system = taskReviewSystemPrompt();
+  const user = buildTaskReviewBundle(bundle);
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
     if (i) await sleep(pauseMs * i);
-    try { return await complete(taskReviewSystemPrompt(), buildTaskReviewBundle(bundle)).then(parseTaskReview); } catch (error) { last = error; }
+    try { return parseTaskReview(await complete(system, user)); } catch (error) { last = error; }
   }
-  return { verdict: "REJECT", reason: `review unavailable (${failure(last)}); not approved`, concerns: [], failed: true };
+  if (fallback) {
+    try { return { ...parseTaskReview(await fallback(system, user)), fallbackUsed: true }; } catch (error) { last = error; }
+  }
+  return { verdict: "REJECT", reason: `review unavailable (${failure(last)}); not judged`, concerns: [], failed: true, unavailable: true };
 }

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
+import { carryNotes } from "./shared/carried-notes.ts";
 import { hintText, matchTriggers, parseSkillFile, searchSkills, type SkillEntry } from "./match.ts";
 
 // skill-router: progressive disclosure for skills.
@@ -41,6 +42,8 @@ function text(content: string) {
 }
 
 export default function (pi: ExtensionAPI) {
+  const hints = carryNotes(pi, "skill-router");
+  pi.on("agent_end", async () => hints.clear());
   let catalog: SkillEntry[] | null = null;
   const seen = new Set<string>(); // hinted or read this session
   const getCatalog = () => (catalog ??= loadCatalog(pi));
@@ -78,13 +81,10 @@ export default function (pi: ExtensionAPI) {
       if (!s) throw new Error(`skill-router: matched skill missing from the catalogue: ${h.name}`);
       return `- ${s.name}: ${hintText(s.description)} → read ${s.path}`;
     });
-    return {
-      message: {
-        customType: "skill-router",
-        content: `[Skills matching this request — read the SKILL.md before acting if it applies; ignore it if not]\n${lines.join("\n")}`,
-        display: false,
-      },
-    };
+    // Carried for this run's requests only: a hint the model has seen needs no place in the session.
+    hints.clear();
+    hints.add(`<skills matched="this request" use="read the SKILL.md before acting if it applies; ignore it if not">\n${lines.join("\n")}\n</skills>`);
+    return undefined;
   });
 
   pi.registerTool({

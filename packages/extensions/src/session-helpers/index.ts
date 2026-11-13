@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { completeSimple, type Api, type Model } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,10 +15,16 @@ import {
   warnOnce,
   type CompactionState,
 } from "./compaction-state.ts";
+import { isLocalBaseUrl } from "./model-fit.ts";
+import { PROBE_TOOL_NAME, probeFile, probeToolCalls, readProbes, withProbe } from "./tool-probe.ts";
 import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
 import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
 import { KIT_PACKAGE_NAMES, isKitLocalPackageName, trustedMarkerKitRoot, type MarkerKitRoot } from "./shared/kit-source.ts";
+import { say, usageError } from "./shared/say.ts";
+import { appendFileSafe } from "./shared/safe-fs.ts";
+import { redact } from "./shared/redact.ts";
 import { nodeRuntime } from "./shared/node-runtime.ts";
+import { RENAMED_EXTENSIONS, migrateStoredExtension, migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
 
 // Self-containment rule: import only node:* builtins and typebox peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -27,57 +35,29 @@ import { nodeRuntime } from "./shared/node-runtime.ts";
 // pi-lean-ctx extension is loaded but its external `lean-ctx` CLI is missing, which
 // would otherwise surface only as an opaque `spawn ENOENT` (plan Sprint 1.1).
 
-const CLEAR_GUIDE = [
-  "pi has no /clear command, so nothing was cleared. Pick the reset you actually want:",
-  "",
-  "  /compact   Summarise and shrink the current context. Keeps the session, goal and thread.",
-  "             This is the usual 'clear' for a long session that has grown heavy.",
-  "  /compress  Instant /compact with no model call: keeps asks and replies, drops tool output.",
-  "  /save      Write a snapshot of the session to disk or a vault project. Does not compact.",
-  "  /new       Start a fresh session. Drops the current context entirely.",
-  "             Run /handoff first if you want a clean way to resume the thread later.",
-  "  /fork      Branch from an earlier message to try a different path (original is kept).",
-  "",
-  "Compaction is also automatic (pi's own auto-compaction; see /compaction to view or change it),",
-  "so you rarely need to do it by hand.",
-].join("\n");
-
-
-type Level = "info" | "warning" | "error";
-
-// Operator-facing output. ctx.ui.notify is the kit's standard fire-and-forget path (see
-// custom-footer), but it is a no-op in print/JSON runs, where a command used to print nothing at
-// all. Without a UI the message goes to stderr (stdout stays reserved for the run's own output);
-// notify is still called best-effort so a UI-less host that does implement it keeps working.
-function report(ctx: ExtensionContext, content: string, level: Level = "info"): void {
-  let hasUI: boolean;
-  try {
-    hasUI = ctx.hasUI;
-  } catch {
-    return; // pi throws on any use of a ctx that a reload replaced: nothing left to tell
-  }
-  if (hasUI) {
-    try {
-      ctx.ui.notify(content, level);
-    } catch {
-      /* stale ctx after a reload: nothing left to tell */
-    }
-    return;
-  }
-  try {
-    process.stderr.write(`[pi-kit] ${content}\n`);
-  } catch {
-    /* no stderr */
-  }
-  try {
-    ctx.ui?.notify?.(content, level);
-  } catch {
-    /* no-op UI */
-  }
+/** HANDOFF.md, where /handoff writes it (PI_KIT_HANDOFF_FILE overrides the location). */
+function handoffFile(cwd: string): string {
+  return process.env.PI_KIT_HANDOFF_FILE ?? path.join(cwd, "HANDOFF.md");
 }
 
-function show(ctx: ExtensionContext, content: string): void {
-  report(ctx, content, "info");
+/** A resumable note for /clear --handoff: the session's last few user asks and the tools it last ran. */
+function handoffNote(ctx: ExtensionCommandContext): string {
+  const asks: string[] = [];
+  const tools: string[] = [];
+  for (const entry of ctx.sessionManager.getEntries()) {
+    if (entry.type !== "message") continue;
+    const message = entry.message;
+    if (message.role === "user") {
+      const text = typeof message.content === "string" ? message.content : message.content.map((part) => (part.type === "text" ? part.text : "")).join(" ");
+      if (text.trim() !== "") asks.push(redact(text.trim().replace(/\s+/g, " ").slice(0, 200)));
+    } else if (message.role === "toolResult") {
+      tools.push(message.toolName);
+    }
+  }
+  const lines = [`\n## ${new Date().toISOString()} (cleared)\n`];
+  lines.push(asks.length > 0 ? `Recent asks:\n${asks.slice(-3).map((ask) => `- ${ask}`).join("\n")}` : "No user asks recorded.");
+  if (tools.length > 0) lines.push(`\nRecent tools: ${[...new Set(tools.slice(-8))].join(", ")}.`);
+  return `${lines.join("\n")}\n`;
 }
 
 // --- profile switching -------------------------------------------------------
@@ -158,7 +138,7 @@ function toMarker(raw: Record<string, unknown>): Marker {
   const marker: Marker = {};
   for (const key of ["kitSource", "profile", "scope", "mode", "installedAt"] as const) {
     const v = raw[key];
-    if (typeof v === "string") marker[key] = v;
+    if (typeof v === "string") marker[key] = key === "profile" ? migrateStoredProfile(v) : v;
   }
   for (const key of ["ref", "channel"] as const) {
     const v = raw[key];
@@ -376,6 +356,29 @@ export function loadedKitExtensions(settingsFile: string, kitRoot: string): stri
   return null;
 }
 
+// Renamed extensions that a settings file's package filters still name by their old path. pi
+// resolves these paths itself, so after an in-place package update the old path is dangling and the
+// replacement does not load until the installer rewrites the filter.
+export function staleExtensionFilters(settingsFile: string): string[] {
+  const stale = new Set<string>();
+  for (const pkg of kitPackages(readJsonFile(settingsFile))) {
+    const extensions = prop(pkg, "extensions");
+    if (!Array.isArray(extensions)) continue;
+    for (const e of extensions) {
+      const name = typeof e === "string" ? e.match(/(?:src|third_party)\/([^/]+)\/index\.ts$/)?.[1] : undefined;
+      if (name !== undefined && Object.hasOwn(RENAMED_EXTENSIONS, name)) stale.add(name);
+    }
+  }
+  return [...stale];
+}
+
+function staleFilterWarning(settingsFile: string): string | null {
+  const stale = staleExtensionFilters(settingsFile);
+  if (stale.length === 0) return null;
+  const names = stale.map((n) => `${n} (now ${migrateStoredExtension(n)})`).join(", ");
+  return `Luna: ${settingsFile} still names the renamed extension ${names}, so it is not loaded and its protection is off. Run /update, or re-run the installer, to rewrite the filter.`;
+}
+
 // Whether a settings file has a kit package entry at all, filtered or not. `loadedKitExtensions`
 // treats an unfiltered entry as "the whole package" and returns null, so it cannot tell an absent
 // entry from an unfiltered one; scope detection needs the latter (the project settings entry is
@@ -398,7 +401,7 @@ function readOverrides(): { add: string[]; remove: string[] } {
   const raw = readJsonFile(path.join(agentDir(), "pi-kit", "overrides.json"));
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   const extensions = prop(raw, "extensions");
-  return { add: list(prop(extensions, "add")), remove: list(prop(extensions, "remove")) };
+  return { add: list(prop(extensions, "add")).map(migrateStoredExtension), remove: list(prop(extensions, "remove")).map(migrateStoredExtension) };
 }
 
 export function hasOverridesFile(): boolean {
@@ -422,7 +425,7 @@ export function diffSets(from: string[], to: string[]): { add: string[]; remove:
 }
 
 // Which profile the loaded set matches: exact, or the closest by symmetric difference. Profiles can
-// have identical extension sets (long-horizon and autonomous do): `prefer` (the marker's profile) wins
+// have identical extension sets: `prefer` (the marker's profile) wins
 // such a tie, otherwise the alphabetically first twin would be reported for both.
 export function matchProfile(kitRoot: string, loaded: string[], profiles: string[], prefer?: string): { exact?: string; closest?: string | undefined; distance: number } {
   let best: { name?: string; distance: number } = { distance: Number.POSITIVE_INFINITY };
@@ -456,9 +459,12 @@ function nodeBinary(): string {
 export function currentCompactionState(pi: ExtensionAPI, ctx: ExtensionContext): CompactionState {
   let contextWindow: number | null | undefined;
   try {
-    // A model with no window is reported as 0 (unknown), no model at all as undefined.
+    // A model with no window is reported as 0 (unknown), no model at all as undefined. With nothing
+    // configured pi hands out a placeholder (provider and id both "unknown", window 0): that is no
+    // model, and there is nothing to warn about until the operator picks one.
     const model: unknown = ctx.model;
-    contextWindow = model ? Number((isRecord(model) ? model.contextWindow : undefined) ?? 0) : undefined;
+    const placeholder = isRecord(model) && model.provider === "unknown" && model.id === "unknown";
+    contextWindow = model && !placeholder ? Number((isRecord(model) ? model.contextWindow : undefined) ?? 0) : undefined;
   } catch {
     contextWindow = undefined;
   }
@@ -487,6 +493,45 @@ function refreshCompaction(pi: ExtensionAPI, ctx: ExtensionContext, opts: { warn
   } catch {
     publishCompaction(null);
     return null;
+  }
+}
+
+// An optional tool-call probe (PI_KIT_TOOL_PROBE=1): one request per new local model, so the Doctor page (/menu) can say
+// whether it calls tools at all. Off by default: it sends a real request with the provider's auth headers,
+// and "local" is judged from the address alone (a private gateway to a hosted model also looks local).
+const probing = new Set<string>();
+function announceModel(ctx: ExtensionContext): void {
+  try {
+    if (process.env.PI_KIT_TOOL_PROBE !== "1") return;
+    const model: Model<Api> | undefined = ctx.model;
+    if (!model) return;
+    const local = isLocalBaseUrl(model.baseUrl);
+    const key = `${model.provider}/${model.id}`;
+    const file = probeFile(agentDir());
+    const registry = ctx.modelRegistry;
+    if (!local || !registry || probing.has(key) || readProbes(file).some((r) => r.model === key)) return;
+    probing.add(key);
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 90_000);
+    void (async () => {
+      const record = await probeToolCalls(key, async (request, signal) => {
+        const auth = await registry.getApiKeyAndHeaders(model);
+        if (!auth?.ok) throw new Error(`no request auth for ${model.provider}`);
+        const headers = auth.headers ? Object.fromEntries(Object.entries(auth.headers).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
+        const reply = await completeSimple(model, {
+          systemPrompt: request.system,
+          messages: [{ role: "user", content: [{ type: "text", text: request.prompt }], timestamp: Date.now() }],
+          tools: [{ name: PROBE_TOOL_NAME, description: "Repeat a word back.", parameters: Type.Object({ word: Type.String() }) }],
+        }, { ...(auth.apiKey !== undefined ? { apiKey: auth.apiKey } : {}), ...(headers ? { headers } : {}), signal: signal ?? ac.signal, maxTokens: 200 });
+        return reply.content;
+      }, ac.signal);
+      if (record) writeJsonAtomic(file, withProbe(readProbes(file), record));
+    })().catch(() => undefined).finally(() => {
+      clearTimeout(timer);
+      probing.delete(key);
+    });
+  } catch {
+    /* a probe is never worth breaking a model switch */
   }
 }
 
@@ -590,9 +635,6 @@ export function unfilteredKitEntry(settingsFile: string): boolean {
   return false;
 }
 
-/** @deprecated use unfilteredKitEntry (also matches git installs). */
-export const unfilteredNpmKitEntry = unfilteredKitEntry;
-
 // --- transactional switch orchestration ---------------------------------------
 // The mechanics (snapshot, verify, rollback) live in ./profile-switch.ts; this part decides which
 // files a switch can touch and what the requested profile expects, then drives the installer.
@@ -602,7 +644,7 @@ export const unfilteredNpmKitEntry = unfilteredKitEntry;
 // distribution.json requiredProfileExtensions.
 export const MANDATORY_PROTECTION: readonly string[] = ["tool-firewall", "protected-paths"];
 const NOTABLE_EXTENSIONS = [
-  "tool-firewall", "protected-paths", "verify-gate", "verifier-board", "trigger-compact", "custom-compaction", "context-sieve",
+  "tool-firewall", "protected-paths", "verify-gate", "verifier-board", "trigger-compact", "context-sieve",
   "finish-reason-retry", "autonomous-loop", "autonomy-run", "conductor", "subagent", "delegation-guard", "effort", "memory-vault", "goal-core",
 ];
 
@@ -615,14 +657,14 @@ export function firewallConfigFile(): string {
  * not know. Mirrors firewallConfigFor() in packages/core/lib/profiles.ts; an unknown value must
  * stop the switch rather than quietly become the default.
  */
-export function firewallExpectation(def: unknown): { policy: "coding" | "pentest"; mode: "auto" | "manual" } | null {
+export function firewallExpectation(def: unknown): { policy: "coding" | "engagement"; mode: "auto" | "manual" } | null {
   const fw = prop(def, "firewall");
   if (fw === undefined || fw === null) return { policy: "coding", mode: "manual" };
   if (!isRecord(fw)) return null;
   const { policy, mode } = fw;
-  if (policy !== undefined && policy !== "coding" && policy !== "pentest") return null;
+  if (policy !== undefined && policy !== "coding" && policy !== "engagement") return null;
   if (mode !== undefined && mode !== "auto" && mode !== "manual") return null;
-  return { policy: policy === "pentest" ? "pentest" : "coding", mode: mode === "auto" ? "auto" : "manual" };
+  return { policy: policy === "engagement" ? "engagement" : "coding", mode: mode === "auto" ? "auto" : "manual" };
 }
 
 /** Every file a switch can change, for both scopes (a global switch must not disturb the project, and vice versa). */
@@ -656,13 +698,13 @@ async function runSwitch(pi: ExtensionAPI, c: ExtensionContext, req: SwitchReque
   const def = readJsonFile(path.join(req.layout.profilesDir, `${req.target}.json`));
   const fw = firewallExpectation(def);
   const rawSecurityLevel = prop(def, "securityLevel");
-  const securityLevel = rawSecurityLevel === undefined ? (req.target === "pentest" ? "guarded" : "balanced") : rawSecurityLevel;
-  if (!fw || typeof securityLevel !== "string" || !["relaxed", "balanced", "guarded", "strict"].includes(securityLevel)) {
+  const securityLevel = rawSecurityLevel === undefined ? (req.target === "engagement" ? "guarded" : "balanced") : rawSecurityLevel;
+  if (!fw || typeof securityLevel !== "string" || !["balanced", "guarded", "strict"].includes(securityLevel)) {
     return {
       ok: false,
       stage: "install",
       message: !fw
-        ? `profile: refusing to switch to "${req.target}": its firewall block names an unknown policy or mode (${JSON.stringify(prop(def, "firewall"))}). Known policies: coding, pentest; modes: auto, manual. Nothing was changed.`
+        ? `profile: refusing to switch to "${req.target}": its firewall block names an unknown policy or mode (${JSON.stringify(prop(def, "firewall"))}). Known policies: coding, engagement; modes: auto, manual. Nothing was changed.`
         : `profile: refusing to switch to "${req.target}": unknown or unavailable securityLevel ${JSON.stringify(securityLevel)}. Nothing was changed.`,
       warnings: [],
       rolledBack: false,
@@ -772,7 +814,7 @@ export function effectiveConfigLines(input: StatusInput): string[] {
     const policy = prop(fw, "policy");
     const mode = prop(fw, "mode");
     const source = prop(fw, "source");
-    const known = (policy === "coding" || policy === "pentest") && (mode === "auto" || mode === "manual");
+    const known = (policy === "coding" || policy === "engagement") && (mode === "auto" || mode === "manual");
     lines.push(`Firewall: policy ${shown(policy ?? "?")} · mode ${shown(mode ?? "?")}${source ? ` (${source === "user" ? "set with /auto" : "from the profile"})` : ""}${known ? "" : "  WARNING: unknown policy or mode - the firewall treats this as invalid, run /profile <name> to rewrite it"}`);
   }
   if (compaction) {
@@ -833,8 +875,16 @@ export default function (pi: ExtensionAPI) {
       // Never break session start.
     }
     try {
+      for (const file of [path.join(agentDir(), "settings.json"), path.join(ctx.cwd ?? process.cwd(), ".pi", "settings.json")]) {
+        const warning = staleFilterWarning(file);
+        if (warning) say(ctx, warning);
+      }
+    } catch {
+      // Preflight must never break session start.
+    }
+    try {
       if (isExpectedLeanCtx() && !leanCtxBinaryPresent()) {
-        show(
+        say(
           ctx,
           [
             "session-helpers: pi-lean-ctx is loaded but the external `lean-ctx` CLI was not found on PATH.",
@@ -853,6 +903,7 @@ export default function (pi: ExtensionAPI) {
   // published state current (cheap: two small JSON reads). The warning stays once per session.
   pi.on("model_select", async (_event: unknown, ctx: ExtensionContext) => {
     refreshCompaction(pi, ctx);
+    announceModel(ctx);
   });
   pi.on("before_agent_start", async (_event: unknown, ctx: ExtensionContext) => {
     if (ctx) refreshCompaction(pi, ctx);
@@ -863,12 +914,34 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("clear", {
-    description: "How to reset context (pi has no native /clear). Non-destructive: prints guidance only.",
-    handler: async (_args, ctx) => {
-      show(ctx, CLEAR_GUIDE);
+    description: "Start a new session (asks first). --handoff writes HANDOFF.md before leaving.",
+    handler: async (args, ctx) => {
+      const words = args.trim().split(/\s+/).filter((word) => word !== "");
+      const handoff = words.includes("--handoff");
+      const unknown = words.filter((word) => word !== "--handoff");
+      if (unknown.length > 0) {
+        usageError(ctx, "clear", "[--handoff]", unknown.join(" "));
+        return;
+      }
+      if (!ctx.hasUI) {
+        say(ctx, "/clear needs an interactive session to confirm; nothing was cleared.", "warning");
+        return;
+      }
+      if (!(await ctx.ui.confirm("Start a new session?", handoff ? "The current context is dropped; HANDOFF.md is written first." : "The current context is dropped. Use /clear --handoff to keep a note."))) {
+        return;
+      }
+      if (handoff) {
+        try {
+          appendFileSafe(handoffFile(ctx.cwd), handoffNote(ctx));
+        } catch (error) {
+          say(ctx, `/clear: could not write the handoff note (${error instanceof Error ? error.message : String(error)}). Nothing was cleared.`, "error");
+          return;
+        }
+      }
+      const result = await ctx.newSession();
+      if (result.cancelled) say(ctx, "/clear: the new session was cancelled; the current one is unchanged.", "warning");
     },
   });
-
 
   pi.registerCommand("compaction", {
     description: "Show or change auto-compaction: /compaction [status|on|off|trigger on|trigger off]",
@@ -892,7 +965,7 @@ export default function (pi: ExtensionAPI) {
       if (!arg || arg === "status") {
         const state = currentCompactionState(pi, c);
         publishCompaction(state);
-        report(c, describeCompaction(state), state.reason ? "warning" : "info");
+        say(c, describeCompaction(state), state.reason ? "warning" : "info");
         if (state.reason) markWarned(c);
         return;
       }
@@ -903,7 +976,7 @@ export default function (pi: ExtensionAPI) {
           publishCompaction(state);
           const projectNote = state.source === "project" && state.enabled !== (arg === "on") ? `\nNote: ${path.join(c.cwd ?? process.cwd(), ".pi", "settings.json")} sets compaction.enabled=${state.enabled} and overrides the global setting for this project.` : "";
           const offNote = arg === "off" ? "\nWARNING: with auto-compaction off pi also stops recovering from a context overflow, so a run ends when the window fills. Subagents and other child sessions inherit this. /compaction on restores it." : "";
-          report(c, `Auto-compaction ${arg === "on" ? "enabled" : "disabled"} (global settings). Reloading so pi picks it up...${offNote}${projectNote}`, arg === "off" ? "warning" : "info");
+          say(c, `Auto-compaction ${arg === "on" ? "enabled" : "disabled"} (global settings). Reloading so pi picks it up...${offNote}${projectNote}`, arg === "off" ? "warning" : "info");
           markWarned(c); // said above; the session_start that follows the reload must not repeat it
           // pi keeps settings in memory; reload so its own threshold/overflow checks see the change.
           await c.waitForIdle?.();
@@ -914,14 +987,14 @@ export default function (pi: ExtensionAPI) {
           setKitTriggerEnabled(arg === "trigger on");
           const state = currentCompactionState(pi, c);
           publishCompaction(state);
-          report(c, `Kit fixed-budget trigger ${arg === "trigger on" ? "enabled" : "disabled"}.${kitLoaded ? "" : " (trigger-compact is not loaded in this profile, so this has no effect until it is.)"}`);
+          say(c, `Kit fixed-budget trigger ${arg === "trigger on" ? "enabled" : "disabled"}.${kitLoaded ? "" : " (trigger-compact is not loaded in this profile, so this has no effect until it is.)"}`);
           return;
         }
       } catch (error) {
-        report(c, `compaction: ${error instanceof Error ? error.message : String(error)}`, "error");
+        say(c, `compaction: ${error instanceof Error ? error.message : String(error)}`, "error");
         return;
       }
-      report(c, `compaction: unknown option "${arg}". Use status, on, off, trigger on, trigger off.`, "error");
+      say(c, `compaction: unknown option "${arg}". Use status, on, off, trigger on, trigger off.`, "error");
     },
   });
 
@@ -935,16 +1008,16 @@ export default function (pi: ExtensionAPI) {
     },
     handler: async (args, ctx) => {
       const c = ctx;
-      const kitRoot = findKitRoot(c.cwd ?? process.cwd(), (message) => report(c, message, "warning"));
+      const kitRoot = findKitRoot(c.cwd ?? process.cwd(), (message) => say(c, message, "warning"));
       const layout = kitRoot ? resolveKitLayout(kitRoot) : null;
       if (!kitRoot || !layout) {
-        report(c, "profile: could not locate the kit (needs its installer and a profiles directory). Set PI_KIT_ROOT to the kit path, or reinstall it (docs/INSTALL.md)", "error");
+        say(c, "profile: could not locate the kit (needs its installer and a profiles directory). Set PI_KIT_ROOT to the kit path, or reinstall it (docs/INSTALL.md)", "error");
         return;
       }
 
       const profiles = listProfiles(kitRoot);
       if (profiles.length === 0) {
-        report(c, "profile: no profiles found in the kit checkout.", "error");
+        say(c, "profile: no profiles found in the kit checkout.", "error");
         return;
       }
       const projectCwd = c.cwd ?? process.cwd();
@@ -974,7 +1047,7 @@ export default function (pi: ExtensionAPI) {
       // Arguments are validated before anything can change: one word, or nothing.
       const words = requested.split(/\s+/).filter(Boolean);
       if (words.length > 1) {
-        report(c, `profile: expected one argument, got ${words.length}: "${requested}". Usage: /profile [status|list|<${profiles.map((p) => p.name).join("|")}>]. Nothing was changed.`, "error");
+        say(c, `profile: expected one argument, got ${words.length}: "${requested}". Usage: /profile [status|list|<${profiles.map((p) => p.name).join("|")}>]. Nothing was changed.`, "error");
         return;
       }
 
@@ -991,14 +1064,14 @@ export default function (pi: ExtensionAPI) {
         }
         lines.push("Profiles:", ...profiles.map((p) => `  ${p.name === current ? "*" : " "} ${p.name}${diffLabel(p.name)} - ${p.description}`), "", "Switch with: /profile <name>");
         if (hasOverridesFile() && requested !== "status") lines.push(`Overrides applied to every profile: ${path.join(agentDir(), "pi-kit", "overrides.json")}`);
-        show(c, lines.join("\n"));
+        say(c, lines.join("\n"));
         return;
       }
 
       let target = requested;
       if (!target) {
         if (!c.hasUI) {
-          report(c, `profile: usage: /profile <${profiles.map((p) => p.name).join("|")}> (or /profile status)`, "error");
+          say(c, `profile: usage: /profile <${profiles.map((p) => p.name).join("|")}> (or /profile status)`, "error");
           return;
         }
         const labels = profiles.map((p) => `${p.name}${p.name === current ? " (current)" : ""}${diffLabel(p.name)} - ${p.description}`);
@@ -1007,14 +1080,13 @@ export default function (pi: ExtensionAPI) {
         target = profiles[labels.indexOf(choice)]?.name ?? "";
       }
 
-      // Renamed profiles (mirrors PROFILE_ALIASES in packages/core/lib/profiles.ts).
-      if (target === "engagement") target = "pentest";
       if (!profiles.some((p) => p.name === target)) {
-        report(c, `profile: unknown profile "${target}". Known: ${profiles.map((p) => p.name).join(", ")}. Nothing was changed.`, "error");
+        const renamed = renamedProfileMessage(target);
+        say(c, `profile: ${renamed ?? `unknown profile "${target}". Known: ${profiles.map((p) => p.name).join(", ")}`}. Nothing was changed.`, "error");
         return;
       }
       if (target === current) {
-        report(c, `profile: already on "${target}" - nothing to do.`, "info");
+        say(c, `profile: already on "${target}" - nothing to do.`, "info");
         return;
       }
 
@@ -1024,7 +1096,7 @@ export default function (pi: ExtensionAPI) {
       if (lowering) {
         const answer = await confirmLowering(c, target, lowering);
         if (answer !== "confirmed") {
-          report(c, answer === "refused"
+          say(c, answer === "refused"
             ? `profile: switching to "${target}" lowers security from ${lowering.from} to ${lowering.to}, which needs a choice at the terminal of an interactive root session; refused in headless, RPC and delegated/child sessions. Nothing was changed.`
             : `profile: kept security at ${lowering.from}; nothing was changed. /security sets the level on its own.`, answer === "refused" ? "warning" : "info");
           return;
@@ -1068,7 +1140,7 @@ export default function (pi: ExtensionAPI) {
           announce: (warnings) => {
             if (c.hasUI) c.ui.setStatus("profile", undefined);
             const extra = warnings.length ? `\nWarnings:\n${warnings.map((w) => `  ${w}`).join("\n")}` : "";
-            report(c, `profile: switched to "${target}"${capture ? " (customisations saved to overrides.json)" : ""}. Verified: marker, extension list and firewall match the profile.${extra}\nReloading...`, "info");
+            say(c, `profile: switched to "${target}"${capture ? " (customisations saved to overrides.json)" : ""}. Verified: marker, extension list and firewall match the profile.${extra}\nReloading...`, "info");
           },
         });
       } catch (error) {
@@ -1081,7 +1153,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         /* stale ctx */
       }
-      if (!outcome.ok) report(c, outcome.message + (outcome.warnings.length ? `\nWarnings:\n${outcome.warnings.map((w) => `  ${w}`).join("\n")}` : ""), "error");
+      if (!outcome.ok) say(c, outcome.message + (outcome.warnings.length ? `\nWarnings:\n${outcome.warnings.map((w) => `  ${w}`).join("\n")}` : ""), "error");
       // On success the reload has already replaced this instance: the announcement was made before it.
     },
   });

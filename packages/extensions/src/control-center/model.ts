@@ -10,6 +10,7 @@
  * Self-containment rule: imports of `./controls.ts` and `./values.ts` stay inside the extension.
  */
 import type { ControlGroup, ControlRisk, KitControl } from "./controls.ts";
+import { autoDefaultProfiles } from "./profile-defs.ts";
 import type { HubValues } from "./values.ts";
 
 export type RowKind = "value" | "action" | "page";
@@ -101,8 +102,8 @@ export const PAGES: HubPage[] = [
   { id: "help", title: "Help & keys", parent: "system" },
 ];
 
-/** The manual profiles whose firewall default is auto (report E, §5.4): switching to them weakens. */
-export const AUTO_DEFAULT_PROFILES = ["long-horizon", "autonomous", "self-improving"];
+/** The profiles whose firewall default is auto (read from the profile files): switching to them weakens. */
+export const AUTO_DEFAULT_PROFILES = autoDefaultProfiles();
 
 const THINKING_VALUES = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -124,7 +125,6 @@ export const ROWS: RowDef[] = [
   { id: "effort", label: "Effort", page: "main", kind: "action", valueKey: "effort", legacy: "/effort" },
   { id: "thinking", label: "Thinking", page: "main", kind: "value", special: "thinking", values: THINKING_VALUES, valueKey: "thinking", description: "This session only" },
   { id: "security", label: "Security", page: "main", kind: "page", targetPage: "security", valueKey: "security" },
-  { id: "security.level", label: "Security level", page: "main", kind: "action", legacy: "/security", valueKey: "security", unavailableReason: "the tool-firewall extension is not loaded" },
   { id: "page.autonomy", label: "Autonomy", page: "main", kind: "page", targetPage: "autonomy" },
   { id: "page.work", label: "Work", page: "main", kind: "page", targetPage: "work" },
   { id: "page.session", label: "Session", page: "main", kind: "page", targetPage: "session" },
@@ -133,21 +133,23 @@ export const ROWS: RowDef[] = [
   { id: "page.settings", label: "Settings", page: "main", kind: "page", targetPage: "settings" },
 
   // --- profiles ---
-  profileRow("quick", "quick"),
   profileRow("balanced", "balanced"),
   profileRow("lite", "lite"),
   profileRow("long-horizon", "long-horizon (auto approvals)"),
-  profileRow("autonomous", "autonomous (auto approvals)"),
   profileRow("self-improving", "self-improving (auto approvals)"),
-  profileRow("pentest", "pentest"),
+  profileRow("engagement", "engagement"),
+
+  // --- security: one control (level), with the approval mode inside it ---
+  { id: "security.level", label: "Security level", page: "security", kind: "action", legacy: "/security", valueKey: "security", unavailableReason: "the tool-firewall extension is not loaded" },
+  { id: "approvals", label: "Approval mode", page: "security", kind: "action", valueKey: "approvals", legacy: "/auto", description: "How tool prompts are answered: manual, or auto with a model judge" },
+  { id: "approvals.auto", label: "Approval mode → auto", page: "security", kind: "action", legacy: "/auto on", risk: "weakening", asksItself: true, description: "Switches approvals to automatic (a model judge decides)" },
+  { id: "security.status", label: "Details", page: "security", kind: "action", legacy: "/security status", description: "Level, approval mode, policy, floors and the environment pin" },
 
   // --- autonomy ---
-  { id: "approvals", label: "Approvals", page: "autonomy", kind: "action", valueKey: "approvals", legacy: "/auto" },
-  { id: "approvals.auto", label: "Approvals → auto", page: "autonomy", kind: "action", legacy: "/auto on", risk: "weakening", asksItself: true, description: "Switches approvals to automatic (a model judge decides)" },
   { id: "firewall", label: "Remembered approvals", page: "autonomy", kind: "action", legacy: "/firewall" },
-  { id: "loop", label: "Loop", page: "autonomy", kind: "action", legacy: "/loop", unavailableReason: "loaded only in the long-horizon and autonomous profiles" },
+  { id: "loop", label: "Loop", page: "autonomy", kind: "action", legacy: "/loop", unavailableReason: "loaded only in the long-horizon profile" },
   { id: "boost", label: "Auto-boost", page: "autonomy", kind: "action", legacy: "/boost status" },
-  { id: "autonomy", label: "Container runs", page: "autonomy", kind: "action", legacy: "/autonomy", unavailableReason: "loaded only in the autonomous profile" },
+  { id: "autonomy", label: "Container runs", page: "autonomy", kind: "action", legacy: "/autonomy", unavailableReason: "loaded only in the long-horizon profile" },
 
   // --- work ---
   { id: "goal", label: "Goal", page: "work", kind: "action", legacy: "/goal" },
@@ -156,7 +158,7 @@ export const ROWS: RowDef[] = [
   { id: "page.delegation", label: "Delegation", page: "work", kind: "page", targetPage: "delegation" },
   { id: "page.recovery", label: "Recovery", page: "work", kind: "page", targetPage: "recovery" },
   { id: "page.memory", label: "Memory", page: "work", kind: "page", targetPage: "memory" },
-  { id: "engagement", label: "Engagement", page: "work", kind: "action", legacy: "/engagement", unavailableReason: "loaded only in the pentest and self-improving profiles" },
+  { id: "engagement", label: "Engagement", page: "work", kind: "action", legacy: "/engagement", unavailableReason: "loaded only in the engagement and self-improving profiles" },
   { id: "page.lab", label: "Lab", page: "work", kind: "page", targetPage: "lab" },
 
   // --- delegation ---
@@ -164,7 +166,6 @@ export const ROWS: RowDef[] = [
   { id: "orchestrate.plan", label: "Plan only", page: "delegation", kind: "action", legacy: "/orchestrate-plan" },
   { id: "orchestrate.implement-review", label: "Plan → implement → review", page: "delegation", kind: "action", legacy: "/orchestrate-implement-review" },
   { id: "subagents", label: "Subagents", page: "delegation", kind: "action", valueKey: "subagents", legacy: "/workflows" },
-  { id: "workflow", label: "Workflows", page: "delegation", kind: "action", legacy: "/workflow" },
   { id: "plan", label: "Plan mode", page: "delegation", kind: "action", legacy: "/plan", unavailableReason: "loaded only in the self-improving profile" },
 
   // --- recovery ---
@@ -186,7 +187,6 @@ export const ROWS: RowDef[] = [
   { id: "compact", label: "Compact now", page: "session", kind: "action", prefill: "/compact " },
   { id: "compress", label: "Compress (no model call)", page: "session", kind: "action", legacy: "/compress" },
   { id: "compaction", label: "Auto-compaction", page: "session", kind: "action", valueKey: "compaction", legacy: "/compaction" },
-  { id: "session.new", label: "New session", page: "session", kind: "action", prefill: "/new " },
   { id: "session.fork", label: "Fork", page: "session", kind: "action", prefill: "/fork " },
   { id: "session.clone", label: "Clone", page: "session", kind: "action", prefill: "/clone " },
   { id: "session.tree", label: "Session tree", page: "session", kind: "action", prefill: "/tree " },

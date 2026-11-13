@@ -3,7 +3,7 @@ name: agent-orchestration
 category: orchestration-recovery
 description: Delegate non-trivial work to scout/planner/implementer/reviewer subagents with exactly the context each needs, or run a saved workflow. Use when a task is large, multi-file or unfamiliar enough to warrant isolated specialists, or when the orchestrator flags a task for delegation.
 disable-model-invocation: true
-triggers: ["delegate this", "delegate to", "use subagents", "use sub-agents", "spin up agents", "spawn agents", "in parallel with agents", "planner agent", "implementer agent", "reviewer agent", "scout agent", "/workflow", "run a workflow", "run the workflow", "pi workflow", "use of subagents", "leverage subagents", "using subagents", "heavy use of subagents"]
+triggers: ["delegate this", "delegate to", "use subagents", "use sub-agents", "spin up agents", "spawn agents", "in parallel with agents", "planner agent", "implementer agent", "reviewer agent", "scout agent", "/workflows", "run a workflow", "run the workflow", "pi workflow", "use of subagents", "leverage subagents", "using subagents", "heavy use of subagents"]
 ---
 
 # Agent Orchestration
@@ -50,7 +50,8 @@ output.
   you're notified when it finishes.
 - `/workflows` shows every run in the workspace, live or finished; `workflow_status` lists a
   run's steps or shows a step's log; `workflow_control` pauses, resumes, stops or skips a live
-  run, and stops a background subagent by id.
+  run, and stops a background subagent by id. Both tools are inactive until a run starts or a live
+  or blocked autonomous run exists; `/workflows` always works.
 
 ## When NOT to delegate
 Trivial, single-file or read-only questions: answer directly. Delegation has overhead. Use it

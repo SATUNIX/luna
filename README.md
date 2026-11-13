@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/SATUNIX/luna/actions/workflows/ci.yml"><img src="https://github.com/SATUNIX/luna/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.bestpractices.dev/projects/15949"><img src="https://www.bestpractices.dev/projects/15949/badge" alt="OpenSSF Best Practices"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.3.0--beta.3-blue" alt="version 0.3.0-beta.3"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.4.0--beta.0-blue" alt="version 0.4.0-beta.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
   <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a> <br>
@@ -46,7 +46,7 @@ Requirements: Node.js 22.19 or newer, git, and pi.
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent
-pi install git:github.com/SATUNIX/luna@v0.3.0-beta.3
+pi install git:github.com/SATUNIX/luna@v0.4.0-beta.0
 pi
 ```
 
@@ -87,7 +87,7 @@ starts (and refuses one over budget), and checks inside the child that its prote
 **Nothing counts as done unverified.** `/verify` and the agent's `verify_completion` tool run the
 project's check command and an isolated, read-only reviewer against the definition of done, and
 record the verdict. A failure goes back for a fix, and a review that did not run never reads as a
-pass (`verify-gate`, in every profile but `quick`; [Concepts](docs/concepts.md)).
+pass (`verify-gate`, in every profile; [Concepts](docs/concepts.md)).
 
 <p align="center">
   <picture>
@@ -100,7 +100,7 @@ pass (`verify-gate`, in every profile but `quick`; [Concepts](docs/concepts.md))
 
 | Want to | Do |
 |---|---|
-| Open the control centre | `/menu`, `/kit`, `/helpers` or `alt+m` ([Control centre](docs/control-center.md)) |
+| Open the control centre | `/menu` or `alt+m` ([Control centre](docs/control-center.md)) |
 | Switch profile | `/profile` (picker) or `/profile lite` |
 | Choose how hard the agent works and how much it delegates | `/effort` or `/effort thorough` ([Effort](docs/effort.md)) |
 | See what pi, Luna and packages can update to | `/update` ([Updates](docs/updates.md)) |
@@ -118,19 +118,17 @@ generated in the [capability matrix](docs/capability-matrix.md).
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/luna-profiles-dark.svg">
-    <img src="docs/assets/luna-profiles.svg" alt="The seven profiles highlighted in turn: quick, balanced, long-horizon, autonomous, self-improving, pentest and lite" width="100%">
+    <img src="docs/assets/luna-profiles.svg" alt="The five profiles highlighted in turn: balanced, long-horizon, self-improving, engagement and lite" width="100%">
   </picture>
 </p>
 
 | Profile | For |
 |---|---|
-| `quick` | Fast edits with the safety guards and checkpoints, no ceremony. |
 | `balanced` | Everyday work with verification and context helpers (the default). |
-| `long-horizon` | Multi-hour work: goals, task graph, branches, delegation. |
-| `autonomous` | Long-running sessions, including unattended runs ([Autonomous runs](docs/autonomy.md)). |
+| `long-horizon` | Multi-hour work and unattended runs: goals, task graph, branches, delegation ([Autonomous runs](docs/autonomy.md)). |
 | `self-improving` | Research use: adds memory services, dual review and skill mining (experimental). |
-| `pentest` | Authorised security engagements: strict firewall policy, scope and rules of engagement. |
-| `lite` | Small local models and short contexts. |
+| `engagement` | Authorised security engagements: strict firewall policy, scope and rules of engagement. |
+| `lite` | Quick tasks, small local models and short contexts. |
 
 ## Autonomous runs
 
@@ -149,7 +147,7 @@ The workspace layout is for development; users install Luna as one pi package.
 | [`packages/kit/`](packages/kit) | Skills, prompts, profiles, themes, agent definitions, workflows. |
 | [`packages/web-ui/`](packages/web-ui) | The local web console (token-authenticated, loopback by default). |
 | [`packages/autonomy/`](packages/autonomy) | The autonomous run engine and its container boundary (private, not published). |
-| [`packages/container/`](packages/container) | Container image, compose files and MCP servers for the pentest deployment. |
+| [`packages/container/`](packages/container) | Container image, compose files and MCP servers for the engagement deployment. |
 
 ## Develop
 

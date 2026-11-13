@@ -30,19 +30,17 @@ const INTENSITY: Record<Exclude<Level, "off">, string> = {
 
 // Always-on scope guard: caveman only shapes conversation, never artifacts.
 const CONTENT_GUARD =
-  "Scope: this applies ONLY to your conversational replies to the human and to messages you send " +
-  "to sub-agents. NEVER compress or abbreviate file contents, code you write, commit messages, " +
-  "security findings, reports, or any document artifact — those stay complete and verbose.";
+  "Applies only to chat replies and messages to sub-agents. Code, file contents, commit messages, " +
+  "findings, reports and documents stay complete.";
 
 const SAFETY =
-  "Auto-clarity: drop compression for security warnings, irreversible-action confirmations, or " +
-  "when the user seems confused; resume after.";
+  "Drop compression for security warnings, irreversible-action confirmations, or a confused user.";
 
 const DEFAULT_DETAIL_TRIGGERS = [
   "/skill:finding-writing",
   "/skill:report-export-review",
   "/skill:documentation-workflow",
-  "/pentest-report-finding",
+  "/engagement-report-finding",
   "/report-export-review",
   "/docs-*",
 ];

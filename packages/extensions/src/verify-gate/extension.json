@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "input", "tool_result", "turn_end"],
   "registers": { "tools": ["verify_completion"], "commands": ["verify"] },
-  "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

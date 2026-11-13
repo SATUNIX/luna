@@ -13,6 +13,7 @@
 // A blocked run stops its worker session; the answer reaches the next session's briefing.
 
 import { isRecord, parseJson } from "../../core/lib/guard.ts";
+import { classifyProviderError, redactProviderError } from "../../extensions/src/finish-reason-retry/provider-errors.ts";
 
 /**
  * One JSON line from `pi --mode rpc`: an object with a string `type`. Every other key is pi's and
@@ -48,9 +49,9 @@ export interface UnattendedPolicy {
 
 /** A dialog the run cannot answer by itself: recorded for the operator, and the run blocks. */
 export interface Blocker {
-  kind: "approval" | "question";
+  kind: "approval" | "question" | "external";
   id: string;
-  method: DialogMethod;
+  method: DialogMethod | "provider" | "review";
   question: string;
   options: string[];
 }
@@ -188,6 +189,47 @@ export function activityLine(ev: RpcFrame & { readonly at?: number }): string | 
   }
 }
 
+/** The count of clampable credit failures in a row for one worker session, kept by the caller. */
+export interface ProviderLimitWatch {
+  clamped: number;
+}
+
+/**
+ * The provider's message when a frame reports a terminal credit or limit failure (an assistant
+ * message that ended in error, or retries that gave up; a retry still under way may recover, so it does not count), else null. Such a session cannot make
+ * progress, so the run parks as blocked with this reason instead of closing empty cycles.
+ */
+export function providerLimitError(ev: RpcFrame, watch: ProviderLimitWatch = { clamped: 0 }): string | null {
+  let message: unknown;
+  if (ev.type === "message_end" || ev.type === "message_update") {
+    const m = ev["message"];
+    if (isRecord(m) && m["role"] === "assistant" && m["stopReason"] === "error") message = m["errorMessage"];
+  } else if (ev.type === "auto_retry_end" && ev["success"] === false) message = ev["finalError"];
+  if (ev.type === "message_end" && isRecord(ev["message"]) && ev["message"]["role"] === "assistant" && ev["message"]["stopReason"] !== "error") watch.clamped = 0;
+  if (typeof message !== "string") return null;
+  const failure = classifyProviderError(message);
+  if (failure.kind !== "credit") return null;
+  // A 402 that names what the account can afford is retried by the worker with a smaller output maximum
+  // (finish-reason-retry), once. The retry may not happen (no output maximum in the request to lower, the
+  // same figure again) so the decision is not left to it: the second such failure in a row parks the run,
+  // as does a retry that gave up. A reply that succeeds in between starts the count again.
+  if (failure.clampTo !== undefined && ev.type !== "auto_retry_end") {
+    watch.clamped += 1;
+    if (watch.clamped < 2) return null;
+  }
+  return redactProviderError(message, 300);
+}
+
+/** The blocker a provider limit failure parks the run with. */
+export function providerBlocker(reason: string): Blocker {
+  return { kind: "external", id: "provider-limit", method: "provider", question: `The model provider refused requests for credit or key limits: ${reason}. Top up or raise the key's limit, then resume with --answer "continue".`, options: [] };
+}
+
+/** The blocker an unavailable reviewer parks a run with: the work is intact and was never judged. */
+export function reviewBlocker(reason: string, sha: string): Blocker {
+  return { kind: "external", id: "review-pending", method: "review", question: `No reviewer gave a usable verdict for the work at ${sha.slice(0, 12)} (${reason}). The work is kept and was not rejected. Check the review model and the provider, then resume with --answer "continue" to review it again.`, options: [] };
+}
+
 /** `String(value ?? fallback)` for a field pi sent unchecked (activity lines and blockers are display text). */
 function text(value: unknown, fallback = ""): string {
   const shown: unknown = value ?? fallback;
@@ -213,7 +255,7 @@ export function isGuardEscalation(ev: RpcFrame): boolean {
  * session and stops the run rather than cycle without the harness. The check fails closed: a
  * missing command, a malformed reply or no reply at all is a failure.
  */
-export const HARNESS_COMMANDS: readonly string[] = ["goal", "handoff", "verify", "firewall:status", "orchestrate", "trace"];
+export const HARNESS_COMMANDS: readonly string[] = ["goal", "handoff", "verify", "firewall", "orchestrate", "trace"];
 
 /** How long a worker session is given to answer the start-up get_commands check before it fails closed. */
 export const HARNESS_CHECK_TIMEOUT_MS = 30_000;

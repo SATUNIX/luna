@@ -1,0 +1,21 @@
+---
+description: "Decide whether evidence validates a hypothesis"
+argument-hint: "[evidence IDs]"
+---
+
+# Verify Evidence
+
+Review the supplied evidence IDs and decide whether the hypothesis is validated, rejected, inconclusive, or blocked.
+
+Evidence: ${@:-the evidence IDs already in context}
+
+Check:
+
+- Scope alignment
+- Reproducibility
+- Control/comparison evidence
+- Sensitivity and redaction needs
+- False-positive conditions
+- Confidence and limitations
+
+Do not invent missing evidence.

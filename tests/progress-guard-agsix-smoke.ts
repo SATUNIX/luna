@@ -431,7 +431,52 @@ async function testInRunDeliveryOnBothTurnEndShapes() {
   }
 }
 
+async function testBashReadsCountAndSteerToRead() {
+  const restoreMode = setEnv("PI_KIT_GUARD_MODE", "auto");
+  const ws = tmpWorkspace("pi-kit-guard-bashread-");
+  try {
+    const guard = await loadModule<typeof ProgressGuard>("extensions/progress-guard/index.ts");
+    assert.ok(guard.isBashRead("cat src/a.ts | head -40"), "cat through a pipe is a read");
+    assert.ok(guard.isBashRead("cd pkg && sed -n '1,80p' a.ts 2>&1"), "sed -n after cd, with stderr merged, is a read");
+    assert.ok(!guard.isBashRead("sed -i s/a/b/ a.ts"), "an in-place edit is not a read");
+    assert.ok(!guard.isBashRead("cat a > b"), "a redirect is not a read");
+    assert.ok(!guard.isBashRead("sed 'w out.txt' a.ts"), "a sed write command is not a read");
+    assert.ok(!guard.isBashRead("awk 'BEGIN{system(\"rm x\")}'"), "awk can run commands, so it is not a read");
+    assert.ok(!guard.isBashRead("find . -fprint out.txt"), "find -fprint writes");
+    assert.ok(!guard.isBashRead("grep -l x . | xargs rm"), "xargs is not a read");
+    assert.ok(guard.isBashRead("grep -rn foo src") && !guard.isBashView("grep -rn foo src"), "grep counts as a read but read cannot replace it");
+    assert.ok(guard.isBashView("sed -n '1,80p' a.ts") && guard.isBashView("cat a.ts | head -5"), "cat and sed -n are file views");
+    assert.ok(!guard.isBashRead("npm test"), "a build or test is not a read");
+
+    const pi = await loadGuard();
+    const ctx = { cwd: ws, hasUI: false, ui: { notify() {} } };
+    await pi.handlers.get("session_start")({}, ctx);
+    let last: unknown;
+    for (let i = 0; i < 12; i++) {
+      await pi.handlers.get("tool_call")({ toolName: "bash", input: { command: `cat src/file${i}.ts` } }, ctx);
+      last = await pi.handlers.get("turn_end")({ entries: [] }, ctx);
+      if (last !== undefined) break;
+    }
+    assert.match(JSON.stringify(last), /Read files with the read tool/, "a stall made of bash reads steers to read");
+    // Searching and listing stall the run without earning the read-tool hint.
+    const searching = await loadGuard();
+    await searching.handlers.get("session_start")({}, ctx);
+    let found: unknown;
+    for (let i = 0; i < 12; i++) {
+      await searching.handlers.get("tool_call")({ toolName: "bash", input: { command: `grep -rn needle${i} src` } }, ctx);
+      found = await searching.handlers.get("turn_end")({ entries: [] }, ctx);
+      if (found !== undefined) break;
+    }
+    assert.notEqual(found, undefined, "a stall made of greps is still detected");
+    assert.doesNotMatch(JSON.stringify(found), /Read files with the read tool/, "grep is not a file view, so no read-tool hint");
+  } finally {
+    rmWorkspace(ws);
+    restoreMode();
+  }
+}
+
 const tests: Array<[string, SmokeTest]> = [
+  ["bash cat/sed/head count as reads and the nudge says to use read", testBashReadsCountAndSteerToRead],
   ["repeated read-stalls eventually escalate (stable signature)", testRepeatedStallEscalates],
   ["the policy's words reach the run, its none stays silent, and a broken policy is a one-line fallback", testStallFollowsThePolicy],
   ["PI_KIT_GUARD_ESCALATE still sets the threshold without the policy", testEscalateEnvWithoutPolicy],

@@ -29,9 +29,7 @@ type SessionHelpersView = Omit<typeof SessionHelpersModule, "default"> & { defau
 
 const restoreKitEnv = isolateKitEnv();
 const mod = await loadModule<SessionHelpersView>("extensions/session-helpers/index.ts");
-// The npm test below pins the deprecated unfilteredNpmKitEntry alias, which stays exported for older callers.
-// eslint-disable-next-line @typescript-eslint/no-deprecated -- the alias is under test on purpose
-const { default: sessionHelpers, findKitRoot, listProfiles, resolveKitLayout, loadedKitExtensions, unfilteredNpmKitEntry, unfilteredKitEntry } = mod;
+const { default: sessionHelpers, findKitRoot, listProfiles, resolveKitLayout, loadedKitExtensions, unfilteredKitEntry } = mod;
 
 /** A notification raised through ctx.ui.notify. */
 interface Note {
@@ -106,8 +104,8 @@ function firstCall(calls: ExecCall[]): ExecCall {
 function writeProfiles(profilesDir: string): void {
   fs.mkdirSync(profilesDir, { recursive: true });
   fs.writeFileSync(
-    path.join(profilesDir, "autonomous.json"),
-    JSON.stringify({ name: "autonomous", description: "set-and-walk-away" }),
+    path.join(profilesDir, "long-horizon.json"),
+    JSON.stringify({ name: "long-horizon", description: "set-and-walk-away" }),
   );
   fs.writeFileSync(
     path.join(profilesDir, "balanced.json"),
@@ -195,7 +193,7 @@ function simulateInstall(args: string[], options: ExecOptions): string {
 function securityOf(file: string, profile: string | undefined): string {
   const raw: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
   const level = isRecord(raw) ? raw.securityLevel : undefined;
-  return typeof level === "string" ? level : profile === "pentest" ? "guarded" : "balanced";
+  return typeof level === "string" ? level : profile === "engagement" ? "guarded" : "balanced";
 }
 
 // Wires the real command into a fake pi, and captures every pi.exec invocation.
@@ -260,7 +258,7 @@ function lastNote(notes: Note[]): Note {
 const tests = {
   "a switch that lowers security asks at the terminal, starts on No, and refuses without a UI": async () => {
     const root = makeMonorepoRoot();
-    fs.writeFileSync(path.join(root, "packages", "kit", "profiles", "light.json"), JSON.stringify({ name: "light", description: "lightweight", securityLevel: "relaxed" }));
+    fs.writeFileSync(path.join(root, "packages", "kit", "profiles", "light.json"), JSON.stringify({ name: "light", description: "lightweight", securityLevel: "balanced" }));
     const agent = makeAgentDir("balanced");
     const securityFile = path.join(agent, "pi-kit", "security.json");
     const saved = (level: string, source: string) => {
@@ -271,12 +269,12 @@ const tests = {
     const restores = [setEnv("PI_KIT_ROOT", root), setEnv("PI_CODING_AGENT_DIR", agent), setEnv("PI_KIT_SECURITY_CONFIG", undefined)];
     try {
       // Headless: refused, the installer never runs.
-      saved("balanced", "profile");
+      saved("guarded", "profile");
       let run = loadCommand();
       const headless = fakeCtx({ hasUI: false });
       await run.handler("light", headless);
       assert.equal(run.calls.length, 0);
-      assert.match(lastNote(headless.notes).message, /lowers security from balanced to relaxed.*refused in headless/s);
+      assert.match(lastNote(headless.notes).message, /lowers security from guarded to balanced.*refused in headless/s);
       // The terminal choice lists "No" first; choosing it (or dismissing) changes nothing.
       const offered: string[][] = [];
       for (const answer of [(o: string[]) => o[0], () => undefined]) {
@@ -284,16 +282,16 @@ const tests = {
         const ctx = fakeCtx({ hasUI: true, select: async (_title: string, options: string[]) => { offered.push(options); return answer(options); } });
         await run.handler("light", ctx);
         assert.equal(run.calls.length, 0);
-        assert.equal(level(), "balanced");
-        assert.match(lastNote(ctx.notes).message, /kept security at balanced/);
+        assert.equal(level(), "guarded");
+        assert.match(lastNote(ctx.notes).message, /kept security at guarded/);
       }
       assert.match(offered[0]?.[0] ?? "", /^No, keep/);
-      // Choosing "Yes" switches and the installer writes the profile's relaxed level.
+      // Choosing "Yes" switches and the installer writes the profile's balanced level.
       run = loadCommand();
       const yes = fakeCtx({ hasUI: true, select: async (_title: string, options: string[]) => options.find((o) => o.startsWith("Yes")) });
       await run.handler("light", yes);
       assert.equal(run.calls.length, 1, yes.notes.map((n) => n.message).join("\n"));
-      assert.equal(level(), "relaxed");
+      assert.equal(level(), "balanced");
       // Raising security never asks.
       run = loadCommand();
       const up = fakeCtx({ hasUI: false });
@@ -315,7 +313,7 @@ const tests = {
 
   "profile recognises both scoped identities and canonical Luna URLs": async () => {
     const root = makeMonorepoRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-profile-identity-"));
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
@@ -374,10 +372,10 @@ const tests = {
     try {
       fs.writeFileSync(settings, JSON.stringify({ packages: ["npm:pi-lens@3.8.63", { source: "npm:@satunix/pi-system@next", extensions: ["packages/extensions/third_party/todo/index.ts", "packages/extensions/src/save/index.ts"] }] }));
       assert.deepEqual(loadedKitExtensions(settings, root), ["todo", "save"]);
-      assert.equal(unfilteredNpmKitEntry(settings), false);
+      assert.equal(unfilteredKitEntry(settings), false);
       fs.writeFileSync(settings, JSON.stringify({ packages: ["npm:@satunix/pi-system"] }));
       assert.equal(loadedKitExtensions(settings, root), null, "a bare npm entry is unfiltered");
-      assert.equal(unfilteredNpmKitEntry(settings), true);
+      assert.equal(unfilteredKitEntry(settings), true);
     } finally {
       rmWorkspace(root);
       rmWorkspace(dir);
@@ -568,7 +566,7 @@ const tests = {
     try {
       assert.deepEqual(
         listProfiles(root).map((p: { name: string }) => p.name),
-        ["autonomous", "balanced", "self-improving"],
+        ["balanced", "long-horizon", "self-improving"],
       );
     } finally {
       rmWorkspace(root);
@@ -580,7 +578,7 @@ const tests = {
     try {
       assert.deepEqual(
         listProfiles(root).map((p: { name: string }) => p.name),
-        ["autonomous", "balanced", "self-improving"],
+        ["balanced", "long-horizon", "self-improving"],
       );
     } finally {
       rmWorkspace(root);
@@ -597,7 +595,7 @@ const tests = {
       const ctx = fakeCtx({ hasUI: true });
       await handler("list", ctx);
       const text = ctx.notes.map((n) => n.message).join("\n");
-      assert.match(text, /autonomous/);
+      assert.match(text, /long-horizon/);
       assert.match(text, /self-improving/);
       assert.match(text, /\*\s+balanced/);
     } finally {
@@ -627,15 +625,34 @@ const tests = {
     }
   },
 
-  "switching to the current profile is a no-op": async () => {
+  "a renamed profile typed to /profile reports the rename and runs nothing": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("balanced");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
       const { handler, calls } = loadCommand();
       const ctx = fakeCtx({ hasUI: true });
-      await handler("autonomous", ctx);
+      await handler("quick", ctx);
+      assert.equal(calls.length, 0, "installer must not run for a renamed profile");
+      assert.match(lastNote(ctx.notes).message, /profile "quick" was renamed to "lite"/);
+    } finally {
+      restoreRoot();
+      restoreAgent();
+      rmWorkspace(root);
+      rmWorkspace(agent);
+    }
+  },
+
+  "switching to the current profile is a no-op": async () => {
+    const root = makeKitRoot();
+    const agent = makeAgentDir("long-horizon");
+    const restoreRoot = setEnv("PI_KIT_ROOT", root);
+    const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
+    try {
+      const { handler, calls } = loadCommand();
+      const ctx = fakeCtx({ hasUI: true });
+      await handler("long-horizon", ctx);
       assert.equal(calls.length, 0, "installer must not run when the profile is unchanged");
       assert.equal(ctx.reloaded, 0);
       assert.match(lastNote(ctx.notes).message, /already on/);
@@ -649,7 +666,7 @@ const tests = {
 
   "direct switch runs the documented install argv and reloads": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -679,7 +696,7 @@ const tests = {
 
   "a switch never uses the ctx its reload replaced (pi 1.3 throws on a stale ctx)": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -699,7 +716,7 @@ const tests = {
 
   "monorepo switch drives packages/core/install.ts": async () => {
     const root = makeMonorepoRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -727,7 +744,7 @@ const tests = {
 
   "installer failure surfaces the error and does not reload": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -750,7 +767,7 @@ const tests = {
 
   "picker selection switches to the chosen profile": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -774,7 +791,7 @@ const tests = {
 
   "cancelling the picker does nothing": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -793,7 +810,7 @@ const tests = {
 
   "non-UI with no argument prints usage and does not install": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous");
+    const agent = makeAgentDir("long-horizon");
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -830,7 +847,7 @@ const tests = {
 
   "passes the recorded install scope back to the installer": async () => {
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous", { scope: "project" });
+    const agent = makeAgentDir("long-horizon", { scope: "project" });
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -857,10 +874,10 @@ const tests = {
   "a project marker in the cwd forwards --scope project and uses the project settings path": async () => {
     const root = makeKitRoot();
     // A global marker that must be ignored in favour of the project one.
-    const agent = makeAgentDir("autonomous", { scope: "global" });
+    const agent = makeAgentDir("long-horizon", { scope: "global" });
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-profile-project-"));
     fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
-    fs.writeFileSync(path.join(project, ".pi", ".pi-kit.json"), JSON.stringify({ profile: "autonomous", scope: "project" }));
+    fs.writeFileSync(path.join(project, ".pi", ".pi-kit.json"), JSON.stringify({ profile: "long-horizon", scope: "project" }));
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
     try {
@@ -870,7 +887,7 @@ const tests = {
       await handler("status", ctx);
       const settingsPath = path.join(project, ".pi", "settings.json");
       assert.ok(lastNote(ctx.notes).message.includes(`Settings: ${settingsPath}`), "status must read the project settings file");
-      assert.match(lastNote(ctx.notes).message, /Current: autonomous/);
+      assert.match(lastNote(ctx.notes).message, /Current: long-horizon/);
       await handler("self-improving", ctx);
       assert.equal(calls.length, 1);
       assert.deepEqual(firstCall(calls).args.slice(1), ["--profile", "self-improving", "--yes", "--settings-only", "--scope", "project", "--no-migrate"]);
@@ -891,7 +908,7 @@ const tests = {
     // global marker. The settings entry is authoritative for scope, so /profile must
     // still pass --scope project and run install.ts in the project.
     const root = makeKitRoot();
-    const agent = makeAgentDir("autonomous", { scope: "global" });
+    const agent = makeAgentDir("long-horizon", { scope: "global" });
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-profile-project-entry-"));
     fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
     fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ packages: [root] }));
@@ -923,7 +940,7 @@ const tests = {
     // without a project marker the settings entry is still authoritative for scope.
     const root = makeMonorepoRoot();
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "pi-system", version: "0.2.1-beta.0" }));
-    const agent = makeAgentDir("autonomous", { scope: "global" });
+    const agent = makeAgentDir("long-horizon", { scope: "global" });
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-profile-legacy-"));
     fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
     fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:@satunix/pi-system"] }));
@@ -957,8 +974,8 @@ const tests = {
     }
     const profiles = path.join(root, "packages", "kit", "profiles");
     fs.writeFileSync(path.join(profiles, "balanced.json"), JSON.stringify({ name: "balanced", description: "d", include: ["alpha", "beta", "pi-lens"] }));
-    fs.writeFileSync(path.join(profiles, "autonomous.json"), JSON.stringify({ name: "autonomous", description: "d", include: ["alpha", "beta", "gamma"] }));
-    const agent = makeAgentDir("autonomous", { kitSource: root });
+    fs.writeFileSync(path.join(profiles, "long-horizon.json"), JSON.stringify({ name: "long-horizon", description: "d", include: ["alpha", "beta", "gamma"] }));
+    const agent = makeAgentDir("long-horizon", { kitSource: root });
     fs.writeFileSync(path.join(agent, "settings.json"), JSON.stringify({ packages: [{ source: root, extensions: ["packages/extensions/src/alpha/index.ts", "packages/extensions/src/beta/index.ts"] }] }));
     const restoreRoot = setEnv("PI_KIT_ROOT", root);
     const restoreAgent = setEnv("PI_CODING_AGENT_DIR", agent);
@@ -966,7 +983,7 @@ const tests = {
       const { handler, calls } = loadCommand();
       const ctx = fakeCtx({ hasUI: true });
       await handler("status", ctx);
-      assert.match(lastNote(ctx.notes).message, /Current: balanced/, "the loaded set matches balanced even though the marker says autonomous");
+      assert.match(lastNote(ctx.notes).message, /Current: balanced/, "the loaded set matches balanced even though the marker says long-horizon");
       await handler("balanced", ctx);
       assert.equal(calls.length, 0, "re-selecting the profile that is really in effect is a no-op");
       // Drift: drop beta by hand -> custom, and the picker offers to keep the edit.
@@ -975,7 +992,7 @@ const tests = {
       await handler("status", ctx2);
       assert.match(lastNote(ctx2.notes).message, /custom \(closest: balanced/);
       assert.match(lastNote(ctx2.notes).message, /missing vs balanced: beta/);
-      await handler("autonomous", ctx2);
+      await handler("long-horizon", ctx2);
       assert.ok(calls.at(-1)?.args.includes("--capture-overrides"), "hand edits are captured on the first switch when the operator agrees");
     } finally {
       restoreRoot();

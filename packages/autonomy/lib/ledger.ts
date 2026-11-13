@@ -18,6 +18,11 @@ export function isRecordCommit(c: LedgerCommit): boolean {
   return c.files.length > 0 && c.files.every((f) => RECORD.test(f));
 }
 
+/** True when the branch's report is this cycle's: present, and not the one already there at the cycle start (a reused cycle directory). */
+export function isNewReport(onBranch: string | null, atStart: string | null): boolean {
+  return onBranch !== null && onBranch !== atStart;
+}
+
 /** The commit-id prefixes (7 to 40 hex characters) named by `Item:` lines of a report. */
 export function itemShas(report: string | null | undefined): string[] {
   const out: string[] = [];
@@ -26,6 +31,12 @@ export function itemShas(report: string | null | undefined): string[] {
     for (const m of line.matchAll(/\b[0-9a-f]{7,40}\b/gi)) out.push(m[0].toLowerCase());
   }
   return out;
+}
+
+/** The `Item:` commit ids of a report that match no commit in `range` (full ids of the cycle's own commits). */
+export function unknownShas(report: string | null | undefined, range: readonly string[]): string[] {
+  // Only hash-shaped tokens (a digit and a letter a-f) count: a title word or a plain number is not a commit id, and this check blocks a merge.
+  return [...new Set(itemShas(report))].filter((p) => /\d/.test(p) && /[a-f]/.test(p)).filter((p) => !range.some((sha) => sha.toLowerCase().startsWith(p)));
 }
 
 /**

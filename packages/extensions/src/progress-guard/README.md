@@ -39,7 +39,7 @@ detection on every attempt, before the result was even known
   steering message, which pi adds before the next model request; the smoke test drives both
   `turn_end` shapes on whatever pi is installed. It is also written as a `context-sieve`
   contribution for the next prompt.
-  The autonomous profile should set `PI_KIT_GUARD_MODE=auto`.
+  The long-horizon profile should set `PI_KIT_GUARD_MODE=auto`.
 - **`suggest`** (default) — notify a suggestion only for the first firings; never inject the
   light nudge.
 

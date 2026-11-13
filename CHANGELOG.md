@@ -8,6 +8,418 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.4.0-beta.0]
+
+### Added
+
+- **`/status`, and `/clear` that clears.** `/status` prints the Doctor checks as one line each,
+  ending in the command for detail. `/clear` used to print a lecture saying nothing was cleared; it
+  now starts a new session after a confirm, and `/clear --handoff` appends the last asks (secrets redacted) and tools
+  to `HANDOFF.md` first. The guide text is deleted. Slash-command output and bad-argument errors go
+  through one `say`/`usageError` helper (`packages/core/shared/say.ts`), adopted in session-helpers
+  and control-center only; other commands move as they are touched. `tests/session-commands-smoke.ts`.
+- **Every prompt template has a one-line description.** pi fell back to the heading ("# Code Plan"),
+  so the `/` menu showed no usable description for any of the 23 templates. `npm run verify` now
+  fails a template without a `description:` of 70 characters or fewer. The `/skill:*` commands fold
+  behind the existing `/skills` entry in the curated menu (`commandMenu: "all"` shows them again).
+- **A first-run card on the launch screen.** Until the first prompt is sent, the launch screen shows
+  how to get a model (`/login` or an API key, `/llama` for a local one) and one prompt to try; the
+  first prompt writes `pi-kit/first-run.json` and the card never returns. `tests/control-center-smoke.ts`.
+- **`/update undo`.** Before its first step `/update` now writes an update journal (kit delivery,
+  source, version, commit and channel; pi version; profile; a copy of the configuration files it can
+  change, never `.env`), and refuses to start without it. `/update undo` reinstalls the recorded Luna
+  version and restores those files byte for byte, and is offered when a step fails. pi itself and
+  linked packages are not rolled back. After an update, one line names stored settings migrated from
+  an old name (profile, firewall policy, extension, security level `relaxed`); it goes at 0.5.0.
+  `tests/kit-update-smoke.ts`.
+- **`luna --bare` and `luna exec`.** A new `luna` command (installed by the npm package; a checkout
+  runs `node packages/core/luna.ts`). `luna --bare` starts pi with no Luna extensions, skills, prompt
+  templates or themes, to tell whether a misbehaving session is Luna's doing. `luna exec <prompt | ->`
+  is one headless run: the final answer on stdout, progress on stderr, `--json` for pi's event stream,
+  `--ephemeral`, and `--max-turns`, `--max-cost` and `--timeout` as the ceiling `/away` uses (exit
+  code 13 when parked). An extension removed in `overrides.json` (`extensions.remove`) is now applied
+  when you start with `luna`, and `/doctor` lists it and flags one still loaded. Not covered:
+  `--output-schema` and a per-run `--profile` (see `docs/headless.md`). `tests/luna-cli-smoke.ts`.
+- **Project trust is pinned by a test.** `tests/project-trust-smoke.ts` proves, for every
+  profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
+  (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
+  Luna builds no trust prompt of its own.
+- **One ceiling for unattended work, and `/away`.** Turns, money and wall time are one object, and
+  the first limit reached parks the work (stopped, state kept, never a failure). An autonomous run's
+  budget checks use it unchanged in behaviour; a headless run sets `PI_KIT_CEILING_TURNS`,
+  `PI_KIT_CEILING_USD` and `PI_KIT_CEILING_SECONDS` and exits with code 13 when parked;
+  `/away [--for 2h] [--budget 5]` is automatic approvals plus that ceiling, refusing (with the
+  reason, recorded) anything that would need an approval card, and needing the terminal of an
+  interactive session. A terminal bell and OSC 9 notification ring for a card open 60 seconds, a long
+  run ending and a park. No webhook, queue or approve-and-retry. Subagent spend is not counted
+  against a session ceiling (`/away` says so when you confirm). An environment ceiling is a floor:
+  `/away` can only tighten it and `/away off` never drops it. The agent-state tail is redacted, and
+  the herdr extension writes it only inside a herdr pane. `tests/away-ceiling-smoke.ts`.
+- **One agent-state file schema, written by one writer.** Each agent writes `<id>.json`
+  (`working`, `blocked`, `done`, `failed`, `stopped` or `parked`, what a blocked agent waits for, a
+  capped tail, worktree and cost) to `~/.local/state/luna/agents` (`LUNA_AGENT_STATE_DIR`). The
+  `herdr` extension writes its pane's file, including `blocked` with the pending approval, and an
+  autonomous run writes `autonomy-<run>` plus an `outcome.md` in its run directory whenever it stops
+  working. The web console does not read the files yet and there is no `luna agents` command.
+  `tests/agent-state-smoke.ts`, `tests/herdr-smoke.ts`.
+- **`/usage`: where the tokens and money went.** `trace-ledger` now records each model request
+  (tokens, cache split, cost with whether it was priced, tool-result characters by tool, which kit
+  child sent it) and `/usage` reports by model, child and tool, with the cache hit rate, the
+  tokens in aborted requests and the five largest results. The status bar warns when the cache hit
+  rate collapses. `/trace` ignores the new records. `tests/eval-footprint-smoke.ts` now checks every
+  profile's prompt prefix and tool text are stable between turns, not only `balanced`'s;
+  `tests/usage-ledger-smoke.ts` pins the ledger and the report.
+- **`pi-autonomy doctor --setup`, and an honest unattended status.** Reports the container engine, whether
+  it is rootless, whether unattended mode is enforced on it, the image's kit-ref label against this
+  checkout, and whether an inference key resolves (never its value). The firewall's unattended mode cannot
+  activate under a rootless engine (the default Podman), so `plan` now prints `unattended: NOT enforced on
+  this engine` for a contract that asks for it instead of leaving that to the documentation. A canary run,
+  a Podman CI job and a cycle scorecard are not done. Pinned by `tests/autonomy-cli-smoke.ts`.
+- **Optional herdr integration (`herdr` extension).** Inside a herdr pane Luna now tells herdr when it
+  is waiting on you: a tool-firewall approval, an `ask_human` question, a failed verify check, and a
+  run longer than 30 seconds finishing each raise a `herdr notification`, and an approval or question
+  also marks the pane blocked through the `herdr:blocked` event that herdr's own pi integration
+  (`herdr integration install pi`) listens for. Outside herdr, in a subagent child, or with
+  `PI_KIT_HERDR=off` it loads and does nothing. Other extensions announce themselves on one bus
+  channel, `luna:attention`, and never import the herdr extension, so it can be removed without
+  touching them. It registers no tools or commands (no model-visible text). It is in the `lite`,
+  `balanced`, `long-horizon`, `self-improving` and `engagement` profiles. The installer's next steps
+  mention `herdr integration install pi`. See `docs/herdr.md`. Not covered: autonomous runs do not
+  emit attention events yet. Pinned by `tests/herdr-smoke.ts`.
+
+### Changed
+
+- **Fewer tests, and the ones that stay pin behaviour.** Removed the tests that checked
+  presentation (the logo and illustrations, banner, menu, help and footer text, row counts, colours,
+  column widths and documentation wording), tests that repeated another check (the generated
+  catalogue and capability matrix, which `npm run verify` already compares, and the web console
+  authority cases), and tests that restated a constant (tool-text character ceilings, the footprint
+  baseline, the 36-hook count, the eslint-disable ceiling). Security, install and update, migration and
+  public command-line tests are unchanged. The `smoke:brand`, `smoke:capability-matrix`,
+  `smoke:extensions-catalogue`, `smoke:menu-settings`, `smoke:paperwork-budget`, `smoke:tui-layout` and
+  `smoke:consolidation` scripts are gone, `smoke:epic1` is now `smoke:branch-lifecycle`, and
+  `tests/timing-load-check.ts` (a manual runner) is deleted. The skill-routing fixtures shrank to a
+  few rows that prove the mechanism.
+- **A profile's `include` list is the only place an extension joins a profile.** `npm run catalog` now
+  runs `packages/core/sync-manifest-profiles.ts` first, which derives every `extension.json`
+  `profiles` array from `packages/kit/profiles/*.json`; `npm run verify` still fails if the two differ.
+  The hand-written `Included in:` lines in two extension READMEs point at the generated catalogue instead.
+- **`lite` is genuinely small, and the footprint meter counts companions.** `lite` no longer loads
+  `subagent` (and with it the workflow tools) or `orchestrator`, nor lists the `agent-orchestration`
+  skill: kit tool text falls from 5,780 to 2,331 characters. `goal-core` stays (no tool text, and
+  it provides `/goal` and the unattended ceiling). The `todo` and `record_verdict` descriptions are
+  shorter (about 130 and 230 characters). The meter now prices companion packages from a reviewed
+  record measured in a real pi against the pinned release: `pi-readseek` adds 6,472 characters
+  (all of `lite`'s companion cost) and `pi-lens` adds 18,800 to every other profile, which the old
+  figures left out. `lite` has a hard ceiling of 9,000 characters for kit plus companions (8,803
+  measured); a companion version bump fails until it is measured again.
+- **Approval cards say what the action does, and can remember it.** Each card gains one plain
+  sentence naming the tier and the effect ("Changes things... It installs software."), and the
+  mode, policy and action hash moved from the card to `/auto explain`. Low and medium cards offer
+  *Always allow this exact command in this project* (30 days, this workspace and directory,
+  listed and revoked through `/firewall`); high and critical tiers, guarded and strict levels,
+  the engagement policy and explicit ask rules never offer or honour it. Nothing else about the
+  tiers, judge or protected paths changed.
+- **Checkpoints now live on a shadow ref, with `/checkpoints` and `/undo`.** `git-checkpoint` used
+  `git stash create` each turn: tracked files only, held in memory, and unusable after a restart.
+  It now writes a snapshot of the working tree (tracked changes and new, unignored files) as a commit
+  under `refs/luna/checkpoints/<session>/<n>`, built in a private index, so the branch, index and stash
+  are never touched; credential-looking paths (the secret-guard signatures) and `.pi/` are left out;
+  a turn that found nothing changed adds none; 20 are kept per session (`PI_KIT_CHECKPOINT_MAX`) and
+  other sessions' refs expire after 14 days. `/checkpoints` lists them and `/undo [n]` shows the files it
+  would delete, restore or recreate before it acts (the replaced state is kept at
+  `refs/luna/undone/<session>`); `/fork` restores through the same path. `auto-commit-on-exit` was
+  already opt-in (in no profile, `enabledByDefault: false`), so there is nothing to migrate; it now also
+  keeps credential-looking paths out of its `git add -A`. Pinned by `tests/git-checkpoint-smoke.ts`
+  against a real temporary repository; it does not cover changes outside the repository.
+- **Compaction keeps the state a long task depends on, and `custom-compaction` is gone.** The
+  `custom-compaction` extension only returned `undefined` and warned about an unsupported template
+  variable; it is deleted (removed from the `balanced` profile; `PI_KIT_COMPACT_TEMPLATE` no longer
+  exists, and an override that adds `custom-compaction` by name should drop it). In its place
+  context-sieve writes a survivor record after each compaction and injects it on the next prompt, once:
+  the active goal, the open items of the session's todo list, workflow runs still running, and the last
+  files edited, all rebuilt from the workspace so they survive whatever the summary kept. There is no
+  store of standing constraints, so none are pinned. The kit's auto-compact trigger now waits two
+  minutes (`PI_KIT_COMPACT_COOLDOWN_MS`) after a compaction ends, done or failed, so a summary that
+  lands just under the threshold or a failing compaction cannot start another a turn later; pi's own
+  threshold compaction and manual `/compact` are not delayed. Pinned by
+  `tests/compaction-continuity-smoke.ts` and `tests/trigger-compact-threshold-smoke.ts`.
+- **A 402 that says what the account can afford is retried instead of failing.** `finish-reason-retry`
+  now classifies provider failures once (credit, rate limit, server) in `provider-errors.ts`, which
+  the autonomy runner imports too. "can only afford N" holds the model's output maximum at 90% of N
+  for the session and lets pi retry once more (each retry needs a lower figure, so it cannot loop);
+  surfaced provider text no longer carries links or key parameters. `provider-router` takes an
+  ordered `fallback` list (up to three models, five-minute cooldown, return afterwards) in its policy
+  file; the retry is released only after the switch finishes. Autonomy parks a clampable 402 that
+  comes back a second time in a row, and any other credit failure at once. See
+  [Provider failures and model fit](docs/model-resilience.md). Limit: no per-role chains.
+- **Turn doctor.** An empty model turn gets one short steer (at most two per user message), and a
+  tool-argument error now names the bad fields and the tool's required keys instead of echoing the
+  rejected arguments back. Limit: the "count steers in the effort ledger" idea was dropped (that ledger
+  budgets delegation, not turns), and text tool-call repair is not built (no recorded case yet).
+- **Local-model awareness.** A model whose base URL is loopback or private: the auto-mode judge waits
+  90 s (was 15), with no second attempt, and reads fenced, `<think>`-wrapped or single-quoted JSON (the last verdict object wins, `allow` must be exact lowercase); subagent and
+  workflow children run one at a time unless `maxConcurrentRequests` in `models.json` (or
+  `PI_KIT_SUBAGENT_CONCURRENCY`) says otherwise; and, with `PI_KIT_TOOL_PROBE=1`, the first selection of a local model runs one
+  tool-call round trip, cached, shown in `/doctor`. `PI_KIT_LOCAL_MODELS=off|on` overrides the address
+  guess (a private gateway to a hosted model looks local). Limits: price is not used to decide "local"; the
+  port scan and text-path fallback were left out; script workflows are not limited.
+- **Model-fit tiers** (`session-helpers/model-fit.ts`): one pure function from context window to the
+  compaction reserve and keep the compaction advice suggests; for windows too small for any setting to
+  work (about 5.8k or less) the advice says so instead of suggesting values that do not clear the warning.
+- **Less text up front, more on demand.** `workflow_status` and `workflow_control` are
+  registered inactive and wake when a run starts or a live or blocked autonomous run is found when a prompt is sent (pi 1.x honours `defaultActive: false`; an older
+  pi leaves them active). Only `coding-agent-workflow` and `verification-loop` are listed in the
+  system prompt: `general-agent-workflow` and `memory` now have `skill-router` triggers and are
+  found by `skill_search` (a fixture that expected no hint for "remember that I prefer tabs"
+  now expects `memory`). The effort block, caveman style, `todo` and `memory_save` text are
+  shorter. Measured by the footprint meter: `balanced` 11,091 to 8,735 characters in all
+  (-21%), `lite` 9,674 to 7,348 (-24%), delegation tools 4,725 to 3,089 up front; the ceilings
+  in `footprint-baseline.json` drop to 7,500 and 3,200. Pinned by
+  `tests/lazy-run-tools-smoke.ts`, `tests/skill-routing-smoke.ts`, `tests/eval-footprint-smoke.ts`.
+- **Governed children skip discovery they never use.** They start with `--no-skills
+  --no-prompt-templates --no-themes` (their skills come from the role's `skills` preload), and a
+  scout or read-only role also gets `--no-context-files`; a role that writes keeps its context
+  files. `PI_KIT_SUBAGENT_DISCOVERY=1` restores all of it. Pinned by
+  `tests/subagent-roles-isolation-smoke.ts`.
+- **The footprint meter counts everything the kit adds, and every profile is pinned.**
+  `packages/core/eval/footprint.ts` measured tool names, descriptions and parameter schemas only;
+  it now also counts the snippets and guideline rules tools add to pi's system prompt and the
+  system-prompt additions of a first turn (effort block, caveman style), and reports `totalChars`.
+  Every profile has a baseline row; before, only `balanced` and `lite` did (balanced 11,091 chars
+  in all, lite 9,674, then, under the names the profiles carried at the time, quick 10,317,
+  long-horizon and autonomous 14,788, pentest 15,657 and self-improving 17,503). Pinned by `tests/eval-footprint-smoke.ts`.
+- **Memory recall and skill hints no longer persist as stored user-role messages, and the
+  per-turn wording no longer reads like an injection.** 91% of worker requests carried a hidden
+  user-role message (memory recall 86, skill hints 17, context-sieve 11 of 122) that stayed in the
+  session until compaction, framed as "Not instructions" or "injected automatically, not written by
+  the user", which matches provider prompt-injection filters (DE-110). `memory-vault` and
+  `skill-router` now return no message: they carry a note that pi's `context` event appends to each
+  request (new `packages/core/shared/carried-notes.ts`, generated into both), dropped at compaction
+  and at the end of the run (`memory-vault` clears at `agent_end` too, so a recall is not re-sent, uncached
+  at the tail, on every later request). The context-sieve, orchestrator and verify-gate messages keep their
+  stored channel (their content is one-shot or de-duplicated state, and a diagnostic has to start a
+  turn) but are reworded: `Working notes for this request, from Luna extensions:`, `Verify gate:`
+  and `Orchestrator verification:`. Whether providers still flag the carried notes is unmeasured.
+  Pinned by `tests/memory-vault-smoke.ts`.
+- **`progress-guard` counts `bash` file reads and steers to the `read` tool.** In 56 worker
+  sessions 1,055 of 2,660 `bash` calls were `cat`/`sed`/`head`/`tail` of a file against 191 uses
+  of `read`, and the reads-since-edit stall counter never saw them. A read-only `bash` command
+  now counts, and once three of the reads since the last edit went through `bash` the nudge says
+  to use `read`. Only file viewers (`cat`, `head`, `tail`, `less`, `nl`, `bat`, `sed -n 'N,Mp'`) earn
+  that hint; `grep`, `find` and `ls` count toward the stall without it, and `awk`, `sed` write
+  commands, `find -fprint` and `xargs` are not read-only. Pinned by `tests/progress-guard-agsix-smoke.ts`.
+- **`workflow_status` and the workflow-finished notice are byte-capped.** A real autonomy run
+  returned a 1.79M-character `workflow_status` result (a background subagent's log tail is JSON
+  events holding whole partial results, and the 1,000-line tail had no character bound); 48
+  results over 20k characters held 35% of all tool-result characters. Results are now cut to
+  12,000 characters (head and tail kept, the middle replaced by a marker that names the amount
+  dropped and the directory holding the full text), and a tailed log line is cut at 600
+  characters. `PI_KIT_TOOL_RESULT_MAX_CHARS` changes the cap. Pinned by `tests/run-query-smoke.ts`.
+- **The launch screen is the logo and a short `[ OK ]` status list, not a dump.** pi's startup
+  listing printed every skill, prompt and extension by full path, which pushed Luna's wordmark off
+  the screen. The installer now sets pi's `quietStartup` to `"header"` on every install path including
+  `--all` (only when you have not set it; an install made earlier gets it on the next `/update` or
+  installer run; `uninstall` removes it again when Luna set it), and Luna's header
+  shows the wordmark, one summary line (profile, security, approvals, loaded and failed counts) and
+  boot-log style cells: `[ OK ] effort`, `[FAIL] name: reason`, one clipped `[ -- ] N off:` line.
+  Names only; detail is in `/menu`. The reveal is ten 70 ms frames that stop themselves; it is cosmetic, not a loading
+  indicator, and no startup progress is shown before pi's first frame. An extension switched off by
+  its own environment variable shows as `[ -- ] name (idle)` rather than `[FAIL]`. `NO_COLOR` also
+  draws the screen uncoloured, and
+  `PI_KIT_REDUCED_MOTION`, `NO_COLOR`, `CI`, `TERM=dumb` and `reducedMotion` in `ui.json` draw the
+  finished screen with no timer. The `tool-firewall: loaded` notice no longer prints the policy
+  file path. `tests/launch-screen-smoke.ts` shrank from 16 checks (552 lines) that pinned the art and text to
+  four behaviour checks (241 lines: classification, fit and printable output, opt-outs, wiring).
+- **Startup time is measured and documented, not guessed.** With pi 1.5.1, `balanced`, 34
+  extensions and a warm cache a start is about 370 ms (pi alone 160 ms); Luna adds about 210 ms,
+  of which about 65 ms is `typebox` and about 40 ms is `subagent` plus `tool-firewall`, and the
+  other extensions are 2 to 6 ms each. No Luna extension does network or scan work before the first
+  paint, so there was no single large offender to fix. `docs/control-center.md` records the numbers
+  and how to read your own (`PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`); the blank time before pi's
+  first frame is pi's, and `docs/future-work.md` records what would close it.
+- **BREAKING: security is one control, with three levels.** The `relaxed` level is removed: its
+  reviewed routine-effect set is empty, so it behaved exactly like `balanced`. The levels are
+  `balanced` (default), `guarded` and `strict`; `lite` now installs `balanced`. A stored `relaxed`
+  in `security.json` is read as `balanced` and rewritten on the next save (a migration, not an
+  alias); `/security relaxed` and `PI_KIT_SECURITY_LEVEL=relaxed` are now rejected like any
+  unknown level. The control centre has one **Security** row (the duplicate `security.level` row
+  on the main page is gone) and the footer one `sec` chip. The approval mode (`/auto`) now lives on
+  the Security page as **Approval mode** (it moved from the Autonomy page; `/auto` is unchanged),
+  and `/security status` shows level, approval mode, policy, floors with reasons and the
+  environment pin in one place. Tests: `tests/security-level-smoke.ts`,
+  `tests/control-center-smoke.ts`, `tests/profile-command-smoke.ts`.
+- **BREAKING: five profiles remain. `quick` is now `lite` and `autonomous` is now `long-horizon`.**
+  `lite` is the lean, low-context profile for quick tasks and small local models; it gains the
+  two zero-tool-text robustness extensions `quick` carried (`finish-reason-retry`, `notify`) and
+  nothing that registers model-visible tools. An install that was on `quick` therefore loses
+  `memory-vault` (the memory tools), `human-console` (the `ask_human` tool) and `tool-capture` on
+  its next reinstall, `/profile` switch or `/update`; restore any of them with `extensions.add` in
+  `overrides.json`. `long-horizon` gains `autonomy-run` (`/autonomy`, container runs) and
+  `secret-guard` (the union with `autonomous`, so an `autonomous` install keeps its protection),
+  and so is the one profile for long and unattended work. `secret-guard` blocks writes to any path
+  containing `secret` or `credentials`; if that gets in the way of a repository the autonomy worker
+  edits, remove it with `extensions.remove` in `overrides.json` (the autonomy image bakes
+  `long-horizon`).
+  **Migration:** an installed marker that records `quick` or `autonomous` is read as `lite` or
+  `long-horizon` and rewritten by the next install, `/profile` switch or `/update`; nothing to do.
+  A name you type (`--profile quick`, `/profile autonomous`, `PI_KIT_PROFILE=quick` in the
+  container) is no longer accepted: it exits with `profile "quick" was renamed to "lite"; use
+  "lite" instead`. The one exception is the installer's own re-apply during an update: the
+  `/update` of a 0.3.0-beta.3 install passes the stored name (`--profile quick --yes --settings-only`),
+  and the installer accepts a retired name, with a one-line notice, when `--yes` is given and its
+  replacement is the profile the install marker already records. The one table is `RENAMED_PROFILES` in `packages/core/shared/profile-names.ts`
+  (generated copies in the extensions that read the marker); the old `PROFILE_ALIASES` /
+  `canonicalProfileName` pair, and the hand copy in `/profile`, are gone. Pinned by
+  `tests/profile-rename-smoke.ts`.
+- **BREAKING: `pentest` is now `engagement`, and "pentest governance" is "engagement governance".**
+  The profile (`engagement`), the firewall policy value (`policies.engagement` in the starter
+  policy; `PI_KIT_FIREWALL_PROFILE` accepts `coding|engagement`), the extension
+  (`engagement-governance`, was `pentest-governance-domain`, with its `/engagement:status`,
+  `/engagement:actions` and `/engagement:reload-policy` commands), the `engagement` skill category,
+  the kit prompts (`engagement-plan`, `engagement-compact`, `engagement-action-card`,
+  `engagement-report-finding`, `engagement-triage-burp`, `engagement-verify-evidence`,
+  `golden-path-engagement`), the container validator (`validate-engagement-env.sh`), CODEOWNERS, the
+  lint config and the leak-scan exceptions all follow. Kept on purpose, because they name data and
+  deployments rather than the mode: `PENTEST_DATA_ROOT` and `PENTEST_HEALTH_*`. The default data
+  directory is now `.pi/engagement/`; an engagement whose audit chain is still under `.pi/pentest/`
+  (and has no `.pi/engagement/`) keeps appending to it, with a notice at session start on how to move it,
+  and both roots are protected paths.
+  **Migration:** a stored install marker (`profile: pentest`) and a stored `firewall.json`
+  (`policy: pentest`) are read as `engagement` and rewritten by the next install, `/profile` switch,
+  `/auto` or `/update`; nothing to do. A stored `overrides.json` or marker naming
+  `pentest-governance-domain` is read as `engagement-governance`. A `settings.json` package filter
+  that still lists the old extension path is not migrated (pi resolves it): after an in-place
+  package update, run `/update` or the installer, and session start warns until you do. A
+  `firewall.json` that exists but is truncated or not an object now selects the strict policy with an
+  error, where it used to fall back to `coding`. A name you type (`--profile pentest`, `/profile pentest`,
+  `PI_KIT_FIREWALL_PROFILE=pentest`, `PI_KIT_PROFILE=pentest`) is not accepted: the profile commands
+  exit with `profile "pentest" was renamed to "engagement"`, and the firewall variable selects the
+  strict policy with a loud warning. Operator policy files that carry `policies.pentest` must be
+  renamed to `policies.engagement`. Update any scripts that call `scripts/validate-pentest-env.sh` or
+  the `pentest-*` prompts. Pinned by `tests/profile-rename-smoke.ts`.
+- **Profile facts live in the profile files, not in code.** `memento: true` (Memento mode may be
+  opted into) and `pinnedCommands` (commands the `/` menu pins) are properties of
+  `packages/kit/profiles/<name>.json`; the set of profiles whose approvals default to auto is
+  derived from `firewall.mode`. `MEMENTO_PROFILES`, `PROFILE_PINNED_COMMANDS` and the hand list
+  `AUTO_DEFAULT_PROFILES` are removed, so a later rename needs no edit in the extensions. Extension
+  manifests' `profiles`, the CI profile matrix, the installer helper menus (`lite` is now first,
+  `balanced` still the default), the README, website and profile art follow the five profiles.
+
+### Removed
+
+- **BREAKING: the old alias commands, flags and parameters are removed.** `/kit` and `/helpers`
+  (use `/menu`), `/webui` (use `/console`), `/firewall:status` and `/firewall:reload` (use
+  `/firewall status` and `/firewall reload`), `/auto-mode` (use `/auto`) and `/workflow` (use
+  `/workflows`) no longer exist, and the installer no longer accepts `--surface` (use `--profile`).
+  The `branch_create`, `branch_switch`, `branch_discard` and `branch_merge` tools drop the `name`
+  parameter that duplicated `taskId`. The never-used `unfilteredNpmKitEntry` and `isVerifyPending`
+  exports are gone (use `unfilteredKitEntry` and `isVerifyPendingActive`). The autonomy harness
+  check now requires `/firewall` instead of `/firewall:status`, so a worker must run this release
+  or later; the `alias-target-missing` rule in the command contract stays, so a new "Alias of /x"
+  command is still checked. Tests: `tests/control-center-smoke.ts`, `tests/web-console-smoke.ts`,
+  `tests/run-query-smoke.ts`, `tests/workflow-panel-smoke.ts`, `tests/firewall-approvals-smoke.ts`,
+  `tests/autonomy-smoke.ts`.
+
+### Fixed
+
+- **The first `/update` from 0.3.0-beta.3 keeps a renamed profile.** That release's update code re-applies the
+  stored profile by name, and the installer refused the retired names (`quick`, `autonomous`, `pentest`),
+  leaving the new kit on the old settings. The installer now accepts the stored name with a notice (see the
+  profile rename entry); `tests/profile-rename-smoke.ts` replays the 0.3.0-beta.3 call.
+- **`/update undo` returns to the version just before the latest update.** The journal of a finished update is
+  replaced by the next update's; only an unfinished update keeps its journal across a retry.
+  `tests/kit-update-smoke.ts` updates twice and undoes once.
+- **`/undo` handles any file name.** Paths with non-ASCII characters, tabs, quotes or newlines were quoted by git
+  and never matched, so restores failed and new files were not deleted. Checkpoints also leave out
+  `prod.env` and `a.env.bak`, which secret-guard treats as credentials. `tests/git-checkpoint-smoke.ts`.
+- **A run that finishes on its last allowed turn is not parked,** and a malformed `PI_KIT_CEILING_*` value is no
+  longer read as no limit: a headless run parks at once with the reason, a person is warned, and seconds take
+  durations such as `90m`. `/away` refuses when `goal-core` is switched off, because nothing would enforce its
+  limit. `tests/away-ceiling-smoke.ts`.
+- **`luna exec` starts on Windows.** It starts pi's node entry named in the npm `.cmd` shim instead of the shim,
+  so a prompt stays one argument. `tests/luna-cli-smoke.ts` (not run on Windows).
+- **A provider fallback counts only when the switch worked.** `pi.setModel` returns false without
+  credentials; the next fallback is tried and a failure no fallback could take is not retried on the same
+  model. `tests/provider-resilience-smoke.ts`.
+- **herdr reports an idle session as `done`, not `working`, and writes `parked`** when a ceiling parks the run.
+  `tests/herdr-smoke.ts`.
+- **The launch screen never shows a failed safety protection as switched off.** An extension is idle only
+  through its own `offSwitch` in `extension.json` (`tool-capture` with `PI_KIT_CAPTURE=0`), not any
+  environment variable it reads. `tests/launch-screen-smoke.ts`.
+
+- **Undo journal, first-run card and `luna exec`.** A retry of an unfinished `/update` no longer overwrites that update's journal; the undo card warns that later edits to the configuration files are lost; a headless or child session no longer consumes the first-run card; `luna exec` applies the `overrides.json` disable list and refuses a ceiling when `goal-core` is switched off. `tests/luna-cli-smoke.ts`.
+- **No compaction warning before a model is chosen.** With nothing configured pi hands out a
+  placeholder model (provider and id both `unknown`, window 0), which Luna read as a real model
+  with no context window and warned about on every first start. It is now no model; a real model
+  that reports no window still warns. `tests/compaction-state-smoke.ts`, `tests/clean-install-smoke.ts`.
+- **A plain clone installs.** The installer ran the repository's verify gate for any checkout, and the
+  gate cannot run without the development dependencies, so `node packages/core/install.ts` in a fresh
+  clone failed. The gate now runs by default only in a development checkout (`node_modules` present)
+  and `--verify` opts in elsewhere. `tests/install-marker-smoke.ts`.
+- **A failed workflow gate says why, and a run killed mid-way no longer stays "running".** A gate
+  that did not pass reported only "did not pass after N loop(s)", which read "after 0 loop(s)" for a
+  gate with no retry, and gave the model nothing to act on. The run's error now carries the first 400
+  characters of what the gate read (redacted like all run text), says "after N retry loop(s)" only
+  when it did loop, and `workflow_run` ends a failed run with the resume line it already gave an
+  interrupted one. A SIGKILL, closed terminal or crash left a script or YAML run's state file at
+  `running` for ever; at session start an owner-less run (not live in this process, no file touched
+  for 5 minutes) is marked `interrupted` and announced once with how to resume it. A live run in
+  another session that is quiet for more than 5 minutes can be marked too; it writes its real status
+  back at its next save. Autonomous runs have their own supervisor lock and are not touched. Pinned
+  by `tests/workflow-recovery-smoke.ts` and `tests/workflow-smoke.ts`; the session-start notice wiring
+  is not pinned.
+- **Autonomy keeps work it refuses to accept, and an unusable review no longer rejects.** Worker commits
+  that diverge from the accepted head or touch paths outside `permissions.writeAreas` were overwritten by
+  the next fetch and by the next cycle's workspace reset. They are now kept under `refs/wip/<run>/` in the
+  run's `mirror.git` (local, never published, newest five per run kept) and named, with their diffstat, in the next briefing or cycle
+  prompt. A reviewer reply with no verdict (error, timeout, no JSON object) used to count as a REJECT, so
+  an outage discarded good cycles; a lone JSON verdict object is now accepted inside surrounding prose (several objects, a stray brace or
+  an object without the verdict key stay malformed, so an object quoted from the diff is never a verdict),
+  the manager model is asked once as a second reviewer (review.json names the model that answered), and if nobody answers the cycle stays current and the run blocks as
+  `review-pending` (answer `continue` to review the held head again; no new worker session starts). Only a parsed REJECT rejects. Task reviews in the
+  `implement` template behave the same and no longer spend a recovery attempt on an outage. `pi-autonomy doctor --setup` now shows the engine's own complaint when its info cannot be read. Pinned by
+  `tests/autonomy-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-run-smoke.ts`,
+  `tests/autonomy-cli-smoke.ts`.
+- **The first `pi` start after an install, an update or a reboot no longer looks hung.** The
+  owner-reported slow, silent start was real and had one cause that the earlier measurement missed:
+  pi's loader compiles every extension on a cold cache (kept in the temporary directory, so a
+  reboot empties it, and every update invalidates it). In a full install with the `pi-lens` and
+  `pi-readseek` companions that is 8 to 13 s with a blank terminal, against 0.7 to 1.0 s warm (the
+  earlier 370 ms figure had no companions and a warm cache). Nothing waits on the network before
+  the first frame. Two changes: an interactive install now loads every extension once at its end
+  (offline, with a message), so the first `pi` starts warm (measured 1.3 s on a busy machine
+  instead of 7.8 to 9 s); and when a start is cold anyway, one line is printed at about 1.4 s and
+  erased at pi's first write, leaving nothing in scrollback. Pinned by `tests/startup-notice-smoke.ts`.
+  Numbers and what is still pi's: `docs/control-center.md`, "Startup time".
+- **Autonomous runs no longer burn empty cycles when the provider refuses on credit.** The `luna-ux-01`
+  run closed cycles 10 to 15 in about 35 s each at $0: every request returned HTTP 402 ("requires
+  more credits, or fewer max_tokens"), the session ended without a report, and a report left from an
+  earlier cycle made the cycle look complete. Now: worker `maxTokens` is clamped to 32,768 (the
+  model asked for up to 943,718, so a low balance failed every call); a provider credit or key-limit
+  error parks the run as `blocked` with the provider's message (`provider-limit`); `reportExists`
+  ignores a report identical to the one on the branch at cycle start; and the host refuses a merge
+  before the review model when the report's `Item:` lines name commits that are not in the cycle's
+  diff (only hash-shaped tokens count, so a number or word in a title never blocks a merge). Limit
+  detection (402 in a status position only; 429 and rate-limit wording and in-flight retries are
+  ignored), the clamp, the commit check and the stale-report predicate are pinned by
+  `tests/autonomy-smoke.ts`; the wiring of the report check into a live cycle is not pinned.
+
+### Security
+
+- **`engagement-governance` protects its own data root.** `.pi/engagement/` (audit chain, evidence, findings and
+  the rest) is in the gate's own protected paths for write, edit and bash, beside the old `.pi/pentest/`.
+  `tests/governance-smoke.ts`.
+- **The firewall policy reader fails closed.** `tool-firewall/config.ts` mapped any policy value it
+  did not know (a typo in `firewall.json`, a bad `PI_KIT_FIREWALL_PROFILE`) to the weaker `coding`
+  policy without a word. An unknown value now selects the strict `engagement` policy, and the
+  session start notice and `/firewall` show a warning naming the value; `protected-paths` mirrors
+  this. The policy list is one table in `packages/core/shared/profile-names.ts`, shared with the
+  installer. `npm run verify` now fails, instead of printing SKIP, when the sources of the
+  security-pattern parity check (the governance extension, `secret-guard`, the starter policy) are
+  missing, so a rename cannot silently switch the check off. Pinned by
+  `tests/profile-rename-smoke.ts`.
+
 ## [0.3.0-beta.3]
 
 ### Changed

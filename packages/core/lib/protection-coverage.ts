@@ -19,11 +19,9 @@ const SECRET_GUARD_OPT_IN =
 
 /** The recorded exemptions: profile name -> extension name -> reason. */
 export const PROTECTION_EXEMPTIONS: ProtectionExemptions = {
-  quick: { "secret-guard": SECRET_GUARD_OPT_IN },
   lite: { "secret-guard": SECRET_GUARD_OPT_IN },
-  "long-horizon": { "secret-guard": `${SECRET_GUARD_OPT_IN} The autonomy image bakes this profile and runs it on repositories whose own paths contain those words.` },
   "self-improving": { "secret-guard": `${SECRET_GUARD_OPT_IN} Self-improvement cycles edit the kit itself, including secret-guard's own source.` },
-  pentest: { "secret-guard": `${SECRET_GUARD_OPT_IN} pentest-governance-domain enforces the same protected-path list (parity checked by packages/core/verify.ts).` },
+  engagement: { "secret-guard": `${SECRET_GUARD_OPT_IN} engagement-governance enforces the same protected-path list (parity checked by packages/core/verify.ts).` },
 };
 
 /**

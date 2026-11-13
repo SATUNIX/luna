@@ -1,4 +1,5 @@
 ---
+description: "Summarise coding task state for continuation"
 argument-hint: "[focus]"
 mode: compact
 token_budget: small

@@ -26,7 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { array, isRecord, object, optional, parseJson, parseJsonAs, string, type Infer } from "../packages/core/lib/guard.ts";
+import { array, boolean, isRecord, object, optional, parseJson, parseJsonAs, string, type Infer } from "../packages/core/lib/guard.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INSTALL = path.join(ROOT, "packages", "core", "install.ts");
@@ -39,7 +39,7 @@ const SOURCES = path.join(ROOT, "packages", "core", "sources.json");
 const Sources = object({ external: array(object({ name: string(), source: string(), mode: string() })) });
 
 /** The fields of the install marker (.pi-kit.json) these checks read. */
-const InstallMarker = object({ scope: optional(string()), profile: optional(string()), companions: array(string()) });
+const InstallMarker = object({ scope: optional(string()), profile: optional(string()), companions: array(string()), setQuietStartup: optional(boolean()) });
 const readMarker = (file: string): Infer<typeof InstallMarker> => parseJsonAs(InstallMarker, fs.readFileSync(file, "utf8"), path.basename(file));
 
 /** An agent/project settings.json, whole (so it can be rewritten), and its `packages` list. */
@@ -147,6 +147,48 @@ function testProjectScopeMarkerAndUninstall() {
   }
 }
 
+// Luna sets pi's `quietStartup` on every install path, `--all` included, records that it did, and
+// uninstall hands it back only while it is still Luna's value. An operator's own value is never touched.
+function testQuietStartupLifecycle() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-quiet-"));
+  const projectDir = path.join(dir, "project");
+  const agentDir = path.join(dir, "agent");
+  const binDir = path.join(dir, "bin");
+  const logPath = path.join(dir, "pi-calls.log");
+  try {
+    for (const d of [path.join(projectDir, ".pi"), agentDir, binDir, path.join(dir, "home")]) fs.mkdirSync(d, { recursive: true });
+    const fakePiPath = path.join(binDir, "pi");
+    fs.writeFileSync(fakePiPath, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PI_FAKE_LOG"\nexit 0\n`);
+    fs.chmodSync(fakePiPath, 0o755);
+    const env = { ...baseEnv(agentDir, binDir, logPath), HOME: path.join(dir, "home") };
+    const settingsPath = path.join(projectDir, ".pi", "settings.json");
+    const markerPath = path.join(projectDir, ".pi", ".pi-kit.json");
+    const install = () => run(process.execPath, [INSTALL, "--all", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project"], env, projectDir);
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ packages: [ROOT] }, null, 2));
+    const first = install();
+    assert.equal(first.status, 0, `--all install succeeds: ${first.stderr}`);
+    assert.equal(readSettings(settingsPath).settings.quietStartup, "header", "an --all install hides pi's resource listing");
+    assert.equal(readMarker(markerPath).setQuietStartup, true, "the marker records that Luna set it");
+    assert.equal(install().status, 0, "a reinstall succeeds");
+    assert.equal(readMarker(markerPath).setQuietStartup, true, "a reinstall keeps the record although the value is already there");
+
+    const gone = run(process.execPath, [UNINSTALL, "--scope", "project", "--yes"], env, projectDir);
+    assert.equal(gone.status, 0, `uninstall succeeds: ${gone.stderr}`);
+    assert.equal(readSettings(settingsPath).settings.quietStartup, undefined, "uninstall removes the value Luna set");
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ packages: [ROOT], quietStartup: "verbose" }, null, 2));
+    assert.equal(install().status, 0);
+    assert.equal(readSettings(settingsPath).settings.quietStartup, "verbose", "an operator's own value wins");
+    assert.notEqual(readMarker(markerPath).setQuietStartup, true, "and is not recorded as Luna's");
+    assert.equal(run(process.execPath, [UNINSTALL, "--scope", "project", "--yes"], env, projectDir).status, 0);
+    assert.equal(readSettings(settingsPath).settings.quietStartup, "verbose", "uninstall leaves an operator's value");
+    console.log("  OK: quietStartup is set on --all installs, recorded in the marker, and removed on uninstall only when Luna set it");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // TOO-1: firewall.json and security.json live in the global agent dir and gate every session on
 // the machine, so a --scope project profile install (what a project /profile drives) must leave
 // both byte-identical, and must warn, naming the global file, when the profile wants another gate.
@@ -175,7 +217,7 @@ function testProjectScopeKeepsGlobalGate() {
 
     const result = run(
       process.execPath,
-      [INSTALL, "--profile", "autonomous", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project"],
+      [INSTALL, "--profile", "long-horizon", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project"],
       env,
       projectDir,
     );
@@ -189,7 +231,8 @@ function testProjectScopeKeepsGlobalGate() {
       projectPackages.some((entry) => entry === ROOT || (isRecord(entry) && entry.source === ROOT)),
       "the project settings still register the kit",
     );
-    assert.equal(readMarker(projectMarkerPath).profile, "autonomous", "the project install still records its profile");
+    assert.equal(readMarker(projectMarkerPath).profile, "long-horizon", "the project install still records its profile");
+    assert.equal(readSettings(projectSettingsPath).settings.quietStartup, "header", "the install hides pi's resource listing so the launch screen is visible");
     assert.ok(!fs.existsSync(globalEnvPath), "a project-scope install must not create the global .env");
     const out = `${result.stdout}\n${result.stderr}`;
     assert.match(out, /WARN[^\n]*firewall[^\n]*auto[^\n]*firewall\.json/, "a differing firewall mode must be warned about, naming the global firewall.json");
@@ -200,7 +243,7 @@ function testProjectScopeKeepsGlobalGate() {
     // The dry-run promise is the same: no global .env is created or reported.
     const dryRun = run(
       process.execPath,
-      [INSTALL, "--profile", "autonomous", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project", "--dry-run"],
+      [INSTALL, "--profile", "long-horizon", "--no-externals", "--settings-only", "--mode", "local", "--scope", "project", "--dry-run"],
       env,
       projectDir,
     );
@@ -416,7 +459,7 @@ function testNoExternalsRecordsNoCompanions() {
 
 // B-028: switching to a profile that no longer selects a companion must not drop it
 // from the marker, otherwise a later uninstall orphans the still-registered package.
-// `quick` does not include pi-lens, and its only own companion (pi-lean-ctx) is dropped
+// `lite` does not include pi-lens, and its only own companion (pi-lean-ctx) is dropped
 // by the absent-CLI gate, so the fresh selection is empty while the prior marker holds
 // pi-lens. The marker must retain it and uninstall must still remove it.
 function testPreviousCompanionsRetained() {
@@ -446,10 +489,10 @@ function testPreviousCompanionsRetained() {
     );
     fs.writeFileSync(
       path.join(agentDir, ".pi-kit.json"),
-      JSON.stringify({ kitSource: ROOT, scope: "global", profile: "autonomous", companions: [staleVersion, priorCompanion, goneCompanion] }, null, 2),
+      JSON.stringify({ kitSource: ROOT, scope: "global", profile: "long-horizon", companions: [staleVersion, priorCompanion, goneCompanion] }, null, 2),
     );
 
-    run(process.execPath, [INSTALL, "--profile", "quick", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(agentDir, binDir, logPath));
+    run(process.execPath, [INSTALL, "--profile", "lite", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(agentDir, binDir, logPath));
 
     const marker = readMarker(path.join(agentDir, ".pi-kit.json"));
     assert.ok(
@@ -610,6 +653,38 @@ function testDryRunSkipsVerifyGate() {
   }
 }
 
+// A plain clone has no development dependencies, so the repository verify gate cannot run there:
+// installing it must not fail on the gate, and --verify opts back in. Runs the real installer from
+// a copy of the tree without node_modules (and a .git directory, which makes it a checkout).
+function testVerifyGateIsOptInOutsideADevelopmentCheckout() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-plainclone-"));
+  const copy = path.join(dir, "clone");
+  const agentDir = path.join(dir, "agent");
+  const binDir = path.join(dir, "bin");
+  try {
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.cpSync(ROOT, copy, { recursive: true, filter: (source) => !/(?:^|[\\/])(?:node_modules|\.git|website|docs|apps|autonomy|tests)(?:[\\/]|$)/.test(path.relative(ROOT, source)) });
+    fs.mkdirSync(path.join(copy, ".git"));
+    const fakePi = path.join(binDir, "pi");
+    fs.writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PI_FAKE_LOG"\nexit 0\n`);
+    fs.chmodSync(fakePi, 0o755);
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [copy] })); // what the real `pi install` would have registered
+    const env = baseEnv(agentDir, binDir, path.join(dir, "pi-calls.log"));
+    const full = [path.join(copy, "packages", "core", "install.ts"), "--mode", "local", "--profile", "lite", "--yes", "--no-externals"];
+    const skipped = spawnSync(process.execPath, full, { cwd: copy, env, encoding: "utf8" });
+    assert.equal(skipped.status, 0, `a plain clone installs: ${skipped.stdout}${skipped.stderr}`);
+    assert.match(skipped.stdout, /not a development checkout/);
+    assert.ok(!/Running verify gate/.test(skipped.stdout), "the gate did not run");
+    const forced = spawnSync(process.execPath, [...full, "--verify"], { cwd: copy, env, encoding: "utf8" });
+    assert.notEqual(forced.status, 0, "--verify runs the gate, which needs the development dependencies");
+    assert.match(forced.stdout, /Running verify gate/);
+    console.log("  OK: the verify gate is opt-in outside a development checkout");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // B-031: a --dry-run preview must not require `pi` or `git` on PATH. The installer is
 // launched by absolute process.execPath, so PATH can be an empty dir; resolveCommand
 // for both tools returns null, and the dry-run check must warn and continue instead of
@@ -717,7 +792,7 @@ function testUnknownFlagsRejected() {
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(binDir, { recursive: true });
     for (const [argv, message] of [
-      [["--profle", "pentest"], /unknown argument "--profle"/],
+      [["--profle", "engagement"], /unknown argument "--profle"/],
       [["--profile"], /--profile needs a value/],
       [["--profile", "--mode", "local"], /--profile needs a value/],
       [["--channel", ""], /--channel needs a value/],
@@ -1064,6 +1139,7 @@ try {
   testEnvScaffoldIsPrivate();
   testProjectScopeMarkerAndUninstall();
   testProjectScopeKeepsGlobalGate();
+  testQuietStartupLifecycle();
   testGlobalScopeAutoDetect();
   testFailedUninstallPreservesMarker();
   testRealPiPartialUninstallRetry();
@@ -1071,6 +1147,7 @@ try {
   testNullSettingsFile();
   testCaptureOverridesCustomProfile();
   testDryRunSkipsVerifyGate();
+  testVerifyGateIsOptInOutsideADevelopmentCheckout();
   testDryRunWithoutRequiredTools();
   testInvalidScopeRejected();
   testHelpFlag();

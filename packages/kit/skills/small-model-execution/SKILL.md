@@ -30,7 +30,7 @@ brevity.
 ## Continuation / state
 - Keep continuation state in a **stable, labelled block** (not narrative prose) so it's
   cheap to re-parse after compaction.
-- If the pentest-governance domain is loaded, use `pi_system_governance.state_summary`
+- If the engagement-governance domain is loaded, use `pi_system_governance.state_summary`
   (`max_items` ≤ 5) as the durable-state index before asking for more context. Without
   that domain, use a plain checkpoint block (see `context-management`).
 

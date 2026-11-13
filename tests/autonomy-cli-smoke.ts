@@ -33,6 +33,9 @@ interface CliJson {
   error: string;
   refusal: string;
   text?: string;
+  rootless?: boolean | null;
+  unattendedEnforced?: boolean | null;
+  findings?: Array<{ id: string; status: string; detail: string }>;
   templates: Array<{ id: string; title: string; summary: string; requires: string[]; finite: boolean; defaults: { permissions: { unattended: { authorised: boolean } } } }>;
   valid: boolean;
   next: string[];
@@ -101,6 +104,7 @@ interface WorldOptions {
   isTTY?: boolean;
   confirm?: (q: string) => Promise<boolean>;
   review?: ReviewFn;
+  engineCli?: RealCliDeps["engineCli"];
 }
 
 /** One CLI "world" (see world()). */
@@ -125,7 +129,7 @@ const dirs: string[] = [];
 const scratch = (): string => { const d = tempDir("autonomy-cli-"); dirs.push(d); return d; };
 
 /** One CLI "world": a state home, a virtual clock, captured output and the fake runtime. */
-function world({ script = async () => {}, isTTY = false, confirm = async () => true, review }: WorldOptions = {}): World {
+function world({ script = async () => {}, isTTY = false, confirm = async () => true, review, engineCli = () => ({ code: 1, stdout: "" }) }: WorldOptions = {}): World {
   const home = scratch();
   const clock = { now: Date.parse("2026-09-30T00:00:00Z") };
   const fakeEngine = new FakeEngine();
@@ -139,6 +143,7 @@ function world({ script = async () => {}, isTTY = false, confirm = async () => t
       lockOptions: { host: "test-host", now: () => clock.now, isAlive: (p) => !w.dead?.has(p), startTimeOf: (p) => `start-${p}`, staleMs: 120_000, heartbeatMs: 3_600_000 },
       confirm: async (q) => { w.confirmations.push(q); return confirm(q); },
       ask: async (_q, d = "") => d,
+      engineCli,
       spawnSupervisor: (run) => { w.spawned.push(run); return 4242; },
       runtimeFactory: ({ contract, cfg, store }) => new FakeRuntime({ store, cfg, contract, script: w.script, engine: fakeEngine, clock, review }),
     }),
@@ -818,6 +823,65 @@ await check("PG-56: doctor exits non-zero while ahead and zero when equal", asyn
   const equal = await uCli(f, "doctor");
   assert.equal(equal.code, 0, equal.err);
   assert.doesNotMatch(equal.out, /unpublished/);
+});
+
+/** A scripted engine: `podman info` (rootless or not), a version, and an image with the given kit-ref label. */
+const scriptedEngine = ({ rootless, kitRef, up = true }: { rootless: boolean; kitRef: string | null; up?: boolean }): RealCliDeps["engineCli"] => (_engine, args) => {
+  if (!up) return { code: 1, stdout: "" };
+  if (args[0] === "version") return { code: 0, stdout: "x" };
+  if (args[0] === "info") return { code: 0, stdout: JSON.stringify({ host: { security: { rootless } } }) };
+  if (args[0] === "image") return kitRef === null ? { code: 0, stdout: "{}" } : { code: 0, stdout: JSON.stringify({ "pi-autonomy.kit-ref": kitRef }) };
+  return { code: 1, stdout: "" };
+};
+
+await check("doctor --setup: says plainly when unattended is NOT enforced (rootless engine), flags a stale image, and never prints a key", async () => {
+  const version = (parseJson(fs.readFileSync(path.join(HERE, "..", "packages", "autonomy", "package.json"), "utf8")) as { version: string }).version;
+  const file = taskFile(scratch(), { permissions: { unattended: { authorised: true, autoApprove: true } } });
+  const secret = "synthetic-key-value-0123456789";
+  const rootless = world({ engineCli: scriptedEngine({ rootless: true, kitRef: `v${version}` }) });
+  const r = await rootless.run("doctor", "--setup", "--config", file, "--json");
+  assert.equal(r.json().unattendedEnforced, false);
+  assert.equal(r.json().rootless, true);
+  const unattended = r.json().findings?.find((f) => f.id === "unattended");
+  assert.match(unattended?.detail ?? "", /NOT enforced on this engine/);
+  assert.equal(unattended?.status, "warn", "a requested but unenforced unattended run is a warning, never a silent ok");
+  assert.doesNotMatch(r.stdout, new RegExp(secret));
+  const rootful = world({ engineCli: scriptedEngine({ rootless: false, kitRef: "v0.0.1" }) });
+  const f = (await rootful.run("doctor", "--setup", "--config", file, "--json")).json();
+  assert.equal(f.unattendedEnforced, true);
+  assert.equal(f.findings?.find((x) => x.id === "image")?.status, "warn", "an image built from another kit version is flagged");
+  const down = await world({ engineCli: scriptedEngine({ rootless: true, kitRef: null, up: false }) }).run("doctor", "--setup", "--json");
+  assert.equal(down.code, 3, "no reachable engine: not ready");
+  assert.equal(down.json().unattendedEnforced, null, "unknown is reported as unknown, not as enforced");
+});
+
+await check("doctor --setup: the rootless decision holds for both engines' info shapes, and a failing info names the engine's complaint", async () => {
+  const file = taskFile(scratch(), { permissions: { unattended: { authorised: true, autoApprove: true } } });
+  const engineWith = (info: unknown, fail?: string): RealCliDeps["engineCli"] => (_e, args) => {
+    if (args[0] === "version") return { code: 0, stdout: "x" };
+    if (args[0] === "info") return fail ? { code: 125, stdout: "", stderr: `${fail}\nsecond line` } : { code: 0, stdout: JSON.stringify(info) };
+    return { code: 0, stdout: "{}" };
+  };
+  const enforced = async (engine: string, info: unknown): Promise<boolean | null | undefined> => (await world({ engineCli: engineWith(info) }).run("doctor", "--setup", "--engine", engine, "--config", file, "--json")).json().unattendedEnforced;
+  assert.equal(await enforced("podman", { host: { security: { rootless: true } } }), false, "rootless podman");
+  assert.equal(await enforced("podman", { host: { security: { rootless: false } } }), true, "rootful podman");
+  assert.equal(await enforced("docker", { SecurityOptions: ["name=seccomp,profile=builtin", "name=rootless"] }), false, "rootless docker");
+  assert.equal(await enforced("docker", { SecurityOptions: ["name=seccomp,profile=builtin"] }), true, "rootful docker");
+  const broken = (await world({ engineCli: engineWith(null, "cannot connect to the podman socket") }).run("doctor", "--setup", "--config", file, "--json")).json();
+  const rootless = broken.findings?.find((f) => f.id === "rootless");
+  assert.match(rootless?.detail ?? "", /cannot connect to the podman socket/, "the engine's first stderr line is surfaced");
+  assert.doesNotMatch(rootless?.detail ?? "", /second line/);
+  assert.equal(broken.unattendedEnforced, null);
+});
+
+await check("plan: a run that asks for unattended operation is told whether the engine enforces it", async () => {
+  const file = taskFile(scratch(), { permissions: { unattended: { authorised: true, autoApprove: true } } });
+  const text = (await world({ engineCli: scriptedEngine({ rootless: true, kitRef: null }) }).run("plan", "--config", file)).stdout;
+  assert.match(text, /unattended: NOT enforced on this engine/);
+  const open = (await world({ engineCli: scriptedEngine({ rootless: false, kitRef: null }) }).run("plan", "--config", file)).stdout;
+  assert.match(open, /unattended: enforced/);
+  const closed = (await world().run("plan", "--config", taskFile(scratch(), { permissions: { unattended: { authorised: false, autoApprove: false } } }))).stdout;
+  assert.doesNotMatch(closed, /unattended:/, "a closed contract has nothing to enforce, so no engine is asked");
 });
 
 for (const d of dirs) rm(d);

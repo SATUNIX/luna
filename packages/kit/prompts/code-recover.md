@@ -1,4 +1,5 @@
 ---
+description: "Recover a coding task after a failure or interruption"
 argument-hint: "[failure or context]"
 ---
 

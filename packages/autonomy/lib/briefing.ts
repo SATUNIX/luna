@@ -31,9 +31,11 @@ export interface BriefingInput {
   steers?: readonly string[];
   /** The previous generation's notebook, already rendered inside its untrusted fence (notebook.ts renderNotebook). */
   notebook?: string | null | undefined;
+  /** Worker commits the host refused to accept and kept (RunState.unaccepted). */
+  unaccepted?: RunState["unaccepted"];
 }
 
-export function buildBriefing({ contract, state, why, head, log = "", changed = [], activity = [], answer, steers = [], notebook }: BriefingInput): string {
+export function buildBriefing({ contract, state, why, head, log = "", changed = [], activity = [], answer, steers = [], notebook, unaccepted }: BriefingInput): string {
   const b = state.limits.budget;
   const latest = state.acceptance.latest;
   const lines = [
@@ -45,6 +47,7 @@ export function buildBriefing({ contract, state, why, head, log = "", changed = 
   if (latest) lines.push(`- Latest trusted acceptance evaluation (step ${latest.step}, commit ${latest.sha.slice(0, 12)}):`, ...resultLines(latest.results).map((l: string) => `  ${l}`));
   else lines.push("- No acceptance evaluation has run yet.");
   if (contract.objective.backlog.length) lines.push("- Task board (the supervisor's; your own todo list is private):", ...backlogLines(contract, state.tasks).map((l: string) => `  ${l}`));
+  if (unaccepted) lines.push(`- Earlier work was kept but NOT accepted (${unaccepted.why}${unaccepted.stat ? `; ${unaccepted.stat}` : ""}): ref ${unaccepted.ref} (${unaccepted.sha.slice(0, 12)}). The supervisor holds it for the operator; it is not on your branch or part of the verified head.`);
   if (notebook) lines.push("", "## The previous generation's notebook (its claims are hypotheses; the verified state above wins)", notebook);
   if (answer) {
     lines.push("", "## The operator's answer (authoritative)");

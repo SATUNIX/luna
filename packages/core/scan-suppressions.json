@@ -128,12 +128,6 @@
       "reason": "the expected value: this test pins the win32 npm.cmd shim that needs a shell"
     },
     {
-      "file": "tests/guard-smoke.ts",
-      "marker": "@ts-expect-error",
-      "lineSha256": "0cc66ece9efa705f01aa288b51152341b34c9c9cfe112fa4eafe489fd8d6aa82",
-      "reason": "`context: undefined` is not a Model"
-    },
-    {
       "file": "tests/observability-contracts-smoke.ts",
       "marker": "eslint-disable-next-line",
       "lineSha256": "94b784d06ea365e0429b45a394a3594eac4bf49b38d41e391cd9f7b49b11c550",
@@ -144,12 +138,6 @@
       "marker": "@ts-expect-error",
       "lineSha256": "279d0972b1aa13051c5179837304694349c353ce052936ba6c0f16dd308d50a0",
       "reason": "deliberately the wrong type, to prove runPi checks it at run time"
-    },
-    {
-      "file": "tests/profile-command-smoke.ts",
-      "marker": "eslint-disable-next-line",
-      "lineSha256": "cbf7e0275757d7038ac9a7b9375ea4ead75768f6ea2cbbd866a1c16981db4759",
-      "reason": "the alias is under test on purpose"
     },
     {
       "file": "tests/workflow-smoke.ts",

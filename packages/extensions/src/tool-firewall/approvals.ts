@@ -8,7 +8,9 @@
 //     under the policy it was given in;
 //   - "session" approvals are bound to the root session (shared with the subagents it spawns) and
 //     expire after SESSION_APPROVAL_TTL_MS; "persistent" ones are actions the operator approved
-//     repeatedly (learned exact actions) and expire after LEARNED_APPROVAL_TTL_MS;
+//     repeatedly (learned exact actions) or chose to always allow in this project (the card's
+//     "Always allow this exact command in this project", low and medium tiers only, stored as medium),
+//     and expire after LEARNED_APPROVAL_TTL_MS;
 //   - each records who or what granted it (operator via the card or the console, or the learning
 //     rule), when, and why it is tiered as it is, so `/firewall list` can show it and
 //     `/firewall revoke` can withdraw it.
@@ -117,7 +119,7 @@ export function validateApproval(raw: unknown): Approval | string {
   if (!isStr(g.session, 300) || !isStr(g.mode, 40) || !isStr(g.policy, 40)) return "bad grantedBy";
   if ((g.choice !== undefined && !isStr(g.choice, 300)) || (g.detail !== undefined && !isStr(g.detail, 400))) return "bad grantedBy";
   if (raw.context === "session" && g.actor !== "operator") return "a session approval must be given by the operator";
-  if (raw.context === "persistent" && g.actor !== "learned") return "a persistent approval must come from the learning rule";
+  if (raw.context === "persistent" && g.actor !== "learned" && raw.tier !== "medium") return "an operator's persistent approval is for the medium tier only";
   const a = raw.action;
   if (!isObj(a)) return "action missing";
   const aExtra = unknownKey(a, ACTION_KEYS);

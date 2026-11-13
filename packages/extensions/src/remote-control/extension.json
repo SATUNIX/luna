@@ -27,7 +27,7 @@
     "ui_prompt_start"
   ],
   "registers": { "tools": [], "commands": ["remote"] },
-  "profiles": ["balanced", "long-horizon", "autonomous", "self-improving"],
+  "profiles": ["balanced", "long-horizon", "self-improving"],
   "enabledByDefault": true,
   "platforms": ["linux", "darwin"],
   "runtime": {

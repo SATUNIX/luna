@@ -12,8 +12,6 @@ below).
 | How | What happens |
 | --- | --- |
 | `/menu` | Opens the hub on the main page. |
-| `/kit` | Alias of `/menu`. |
-| `/helpers` | Alias of `/menu`. |
 | `alt+m` | Opens the hub from anywhere. |
 | `/menu <page>` | Opens a named page directly (argument completion lists the page ids). |
 
@@ -27,22 +25,89 @@ The hub reads only that key and never rewrites the other settings in the file, s
 own settings there are untouched.
 
 The hub is not registered in an internal child session (`PI_KIT_INTERNAL_CHILD=1`), the same rule
-`/workflow` follows, so a subagent never advertises a terminal hub.
+`/workflows` follows, so a subagent never advertises a terminal hub.
 
 ## Launch screen
 
-At the top of a new terminal session Luna shows a launch screen: its wordmark, the running pi
-version and five first actions — `/menu` or `/kit`, the configured hub key (`alt+m` by default),
-`/profile`, `/model` and `/resume`. The menu action follows the command that is registered:
-`/menu` when it exists, otherwise `/kit`.
+At the top of a new terminal session Luna shows its wordmark, one summary line (profile, security
+level, approval mode, how many extensions loaded and how many failed) and a short status list in
+the style of a boot log:
 
-The content is revealed over at most twelve frames, about 90 ms apart. Reduced motion shows the
-final content at once and starts no timer. It is on when `PI_KIT_REDUCED_MOTION=1`, when
-`reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`, when `TERM=dumb`, or when `CI` is set.
-A terminal narrower than 60 columns drops the art for one compact line, and `PI_KIT_ASCII=1` uses
-printable ASCII only. The launch screen also follows the automatic ASCII choice for the `iso`,
-`ansi`, `tty` and `ascii` theme names, like the footer. Put `"launchScreen": "off"` in
-`<agent dir>/pi-kit/ui.json` to turn the launch screen off (`tests/launch-screen-smoke.ts`).
+```text
+[ OK ] effort          [ OK ] tool-firewall     [ OK ] verify-gate
+[FAIL] web-console: registered nothing
+[ -- ] 18 off: branch-lab conductor dual-review ...
+```
+
+The list shows names only, never paths. `OK` is an extension the install marker enables; `--` is a
+shipped extension that is not enabled; `FAIL` is an enabled extension whose `extension.json` says it
+registers commands or tools but which has none in pi (pi reports the load error itself under
+`[Extension issues]`). An enabled extension that registers nothing because you switched it off with
+a variable its manifest declares (for example the off switch of `tool-capture`) is listed as `[ -- ] name (idle)`,
+not as a failure. Detail is on demand: `/menu` opens the Doctor page. The installer also sets
+pi's `quietStartup` to `"header"` on every install path (profile, `--only` and `--all`) when you
+have not set it, and records that in the install marker so `uninstall` removes it again (only while
+it is still `"header"`), which hides pi's own resource listing
+(every skill, prompt and extension by path) while keeping its warnings; set `quietStartup`
+yourself to choose otherwise. An install made before this setting existed gets it on the next
+`/update` or installer run.
+
+The reveal is cosmetic: the state of every extension is already known when the header is drawn, and
+the `[ .. ]` cells are replayed, not waited on. It is not a loading indicator. The list is revealed over ten short frames (about 70 ms apart) and the timer stops itself. There is
+no animation, and no timer, when `PI_KIT_REDUCED_MOTION=1`, `NO_COLOR` or `CI` is set (`NO_COLOR`
+also draws the screen without colour),
+`TERM=dumb`, or `reducedMotion` is `true` in `<agent dir>/pi-kit/ui.json`. A terminal narrower than
+60 columns gets the summary and failures only, one shorter than 28 rows drops the wordmark, and
+`PI_KIT_ASCII=1` (or an `iso`, `ansi`, `tty` or `ascii` theme, like the footer) uses printable ASCII
+only. Put `"launchScreen": "off"` in `<agent dir>/pi-kit/ui.json` to turn it off.
+`tests/launch-screen-smoke.ts` pins the on/off/failed classification, that every line fits the
+width, the opt-outs and the wiring; it does not pin the art or the wording, so the screen can be
+redesigned freely (`launch-screen.ts` draws, `boot-status.ts` decides what is on).
+
+### Startup time
+
+Measured with pi 1.5.1 in a scratch home and agent directory, installed the way a user installs
+(the installer, with the `pi-lens` and `pi-readseek` companions), `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`
+in a pty. Read your own the same way; the "Startup Timings: extensions" table lists every extension.
+
+| State | Time to pi's first frame |
+| --- | --- |
+| Warm: pi alone | about 0.16 s |
+| Warm: Luna, 36 extensions, no companions | about 0.4 s |
+| Warm: Luna plus `pi-lens` and `pi-readseek` | 0.7 to 1.0 s on an idle machine |
+| Cold: the first start after an install, an update or a reboot | 8 to 13 s |
+
+Warm, Luna's own extensions are about 170 ms of the load; `pi-lens` is about 230 ms and
+`pi-readseek` about 190 ms, so companions are most of it. Cold, almost all of the time is pi's
+loader compiling every extension's TypeScript or JavaScript (`pi-lens` 3.8 s, Luna's extensions
+2.2 s, `pi-readseek` 0.7 s) into a cache in the operating system's temporary directory. A reboot
+empties that directory on systems where it is a memory filesystem (the Debian default), and every
+update changes the files, so the slow start returns each time. Precompiling Luna's extensions would
+not remove it: pi's loader transforms plain JavaScript too, as the `pi-lens` figure shows.
+
+Nothing Luna runs does network work or directory scans before the first paint: a start with the
+network namespace removed takes the same time. pi's own first-run download of `fd` and `ripgrep`
+happens after the first frame. Luna's update check runs in the background, at most once a day.
+
+What Luna does about the slow start:
+
+- The installer loads every extension once at the end of an interactive install (`pi --mode rpc`,
+  offline), so the compile happens there, with a message, and not on the first `pi`. A scripted
+  install (no terminal) skips it, and a plain `pi install git:...` never runs the installer, so
+  that route relies on the notice below. `tests/startup-notice-smoke.ts` pins the command it runs.
+- When a start is cold anyway, `delegation-guard` (the first Luna extension pi loads) prints one
+  line, `Luna: first start since an update or reboot, compiling, one time only`, and erases it at pi's
+  first write to the terminal, so nothing is left in scrollback. It shows only on an interactive
+  terminal, never in CI, `TERM=dumb`, print or rpc mode, a child pi or after `/reload`. "Cold" is
+  a stamp file in the temporary directory next to pi's cache, named for this kit's version. The installer writes it after a successful pre-load, and the notice writes it only
+  when pi's first write shows the start finished (an exit mid-compile leaves it unwritten);
+  `tests/startup-notice-smoke.ts` pins both. A companion updated on its own, or a cache emptied
+  while the stamp survives, does not reset it, so such a start is silent.
+
+The line cannot appear before pi has loaded the extensions that sort before `delegation-guard`
+(about 0.4 s cold; the rest of pi's own start comes first), and pi still draws nothing else until
+every extension has loaded. The profile and the on/off list are read when the header is drawn, so
+a `/profile` change shows from the next session ([Future work](future-work.md#startup)).
 
 ## Pages
 
@@ -53,7 +118,8 @@ at any time.
 | Page | Holds | Typed equivalents |
 | --- | --- | --- |
 | Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect, System and Settings | `/profile`, `/effort`, `/thinking`, `/security` |
-| Autonomy | Approvals, remembered approvals, loop, auto-boost, container runs | `/auto`, `/firewall`, `/loop`, `/boost`, `/autonomy` |
+| Security | Security level, approval mode, approval mode to auto, details | `/security`, `/auto`, `/security status` |
+| Autonomy | Remembered approvals, loop, auto-boost, container runs | `/firewall`, `/loop`, `/boost`, `/autonomy` |
 | Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
 | Session | Save, handoff, compact, compress, auto-compaction, new/fork/clone/tree/resume/name, clear | `/save`, `/handoff`, `/compact`, `/compress`, `/compaction`, `/clear` |
 | Connect | Remote control, web console | `/remote`, `/console` |
@@ -92,7 +158,7 @@ imports another extension to get it:
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
 The header strip, page titles (including the text renderer's page titles) and the informational
-rows (Doctor, Security, Help) pass what they display through one display filter: pi-tui's terminal
+rows (Doctor, Help) pass what they display through one display filter: pi-tui's terminal
 sequence strip first, then removal of every control and format code point (Unicode `Cc`, `Cf` and
 `Default_Ignorable_Code_Point`, which covers alternate-screen sequences, resets, C1 CSI and
 bidirectional overrides), then a trim, then a bound of 500 characters. The Unicode class and the
@@ -125,7 +191,7 @@ import another extension for the filter. Other rows are not sanitised
   to stderr.
 
 Every renderer shows a row's typed command as `[command]` after its label: a legacy command, an
-editor pre-fill, or the command an informational row names (the Doctor lines and the Security
+editor pre-fill, or the command an informational row names (the Doctor lines and the
 page's Source row). The row name comes first, so a narrow terminal truncates the `[command]` suffix
 before the name. The All commands page is already labelled with the command it runs and does not
 repeat it. Choosing an informational row only shows information and keeps the hub open.
@@ -140,25 +206,26 @@ opened directly, rather than reached from another page, falls back to the page's
 ## The curated `/` menu
 
 In the TUI, typing `/` offers only the pinned commands plus pi's own built-ins, the prompt templates
-and the skill commands. Every other Luna extension command, and every companion-package command, is
+and the skill commands (the `/skill:*` commands fold behind one `/skills` entry while the skill-router
+extension provides it; they stay runnable and appear again from four typed characters). Every other Luna extension command, and every companion-package command, is
 hidden from the list. Nothing is unregistered: a hidden command runs exactly as before when it is
 typed in full, and it appears again once at least four characters of its name have been typed, so
 muscle memory still completes. A name shorter than four characters appears once its full name is
-typed, so the hidden `/kit` alias completes at `/kit` (`tests/command-menu-smoke.ts`).
+typed, so a hidden three-character command completes at its full name (`tests/command-menu-smoke.ts`).
 The curated menu and the launch screen are installed for every session, so they still work after
 `/new`, `/resume`, `/fork` or a `/tree` switch replaces the session (`tests/command-menu-smoke.ts`).
 
 Hidden suggestions say where the command lives, for example
-`moved → /menu ▸ Autonomy ▸ Approvals`, derived from the hub model's pages and rows; a command with
+`moved → /menu ▸ Security ▸ Approval mode`, derived from the hub model's pages and rows; a command with
 no row points at `moved → /menu ▸ All commands` (`tests/command-menu-smoke.ts`). With
-`PI_KIT_ASCII=1` the hint's own glyphs are printable ASCII: `moved -> /menu > Autonomy >
-Approvals` (or `moved -> /menu > All commands`), a page or row label's arrow is folded (`Plan ->
+`PI_KIT_ASCII=1` the hint's own glyphs are printable ASCII: `moved -> /menu > Security >
+Approval mode` (or `moved -> /menu > All commands`), a page or row label's arrow is folded (`Plan ->
 implement -> review`), and the description separator is ` - ` instead of ` — `. A command's own
 description after the hint is shown unchanged.
 
 The pinned commands are `/menu`, `/goal`, `/verify`, `/save`, `/remember`, `/effort`, `/profile`,
-`/update` and `/security`. A profile adds the commands that define it: `/autonomy` in autonomous,
-`/engagement` in pentest and self-improving, and `/improve` and `/review` in self-improving
+`/update` and `/security`. A profile adds the commands that define it: `/autonomy` in long-horizon,
+`/engagement` in engagement and self-improving, and `/improve` and `/review` in self-improving
 (`tests/command-menu-smoke.ts`).
 
 Three keys in `<agent dir>/pi-kit/ui.json` change this (`tests/command-menu-smoke.ts`):
@@ -179,27 +246,29 @@ file completion is passed through, and accepting a suggestion still delegates to
 json mode it never runs - and, like the hub, it is not registered in an internal child session
 (`PI_KIT_INTERNAL_CHILD=1`) (`tests/command-menu-smoke.ts`).
 
-## The Security rows
+## The Security page
 
-The **Security** row shows the effective [security level](security-level.md), which the tool
-firewall publishes on `globalThis[Symbol.for("pi-kit.security")]`. When a floor raises the level
-above the one requested, the row shows both, for example `guarded (requested balanced)`. Opening
-the row shows the effective and requested levels: the **Effective** row shows the effective level
-alone, and the requested level appears on its own **Requested** row. The hub reads the registry
-without importing the firewall. When the firewall is not loaded there is no registry, the main row
-says `not enforced (tool-firewall not loaded)`, and the opened page's Effective row says `unknown`.
+Security is one control. The main page has a single **Security** row showing the effective
+[security level](security-level.md) (`balanced`, `guarded` or `strict`), which the tool firewall
+publishes on `globalThis[Symbol.for("pi-kit.security")]`; when a floor raises the level above the
+one requested it shows both, for example `guarded (requested balanced)`. The footer carries the
+same single `sec` chip. The hub reads the registry without importing the firewall; when the
+firewall is not loaded the row says `not enforced (tool-firewall not loaded)`.
 
-The **Security level** row runs `/security`, which opens the level picker. The picker applies a
-stronger level at once and asks for a confirmation at the terminal before a weaker one. When
-`/security` is not registered, because the firewall is not loaded, the row is disabled and never
-runs an unregistered command.
+Opening the row shows the Security page: **Security level** runs `/security` (the picker, which
+applies a stronger level at once and asks for a confirmation at the terminal before a weaker one),
+**Approval mode** runs `/auto` (how tool prompts are answered: manual, or auto with a model judge),
+**Approval mode → auto** is the weakening shortcut, and **Details** runs `/security status`, which
+prints the level, approval mode, policy, floors with their reasons and the environment pin. The
+header strip shows the level and the approval mode together. When a typed command is not
+registered, because the firewall is not loaded, its row is disabled and never runs it.
 
 ## Weakening
 
 A fallback row that lowers oversight is marked `weakening`:
 
 - switching approvals to auto (`/auto on`);
-- switching to a profile whose firewall default is auto (long-horizon, autonomous, self-improving);
+- switching to a profile whose firewall default is auto (long-horizon, self-improving);
 - starting the web console (`/console start`);
 - arming self-improvement (`/improve arm`).
 
@@ -207,11 +276,18 @@ The hub runs such a row only after a question the terminal alone can answer. It 
 choice whose first, highlighted option is "No, keep things as they are", because pi's own confirm
 dialog starts on "Yes". Outside the TUI, and in a child session, the row is refused with "change
 this at the terminal". The question bypasses any remote mirror, the same mechanism `/remote` uses
-so a pairing approval never reaches a phone. The Approvals → auto row hands over to `/auto on`
+so a pairing approval never reaches a phone. The Approval mode → auto row hands over to `/auto on`
 without asking, because the typed command asks the same question itself
 ([Autonomy gate](autonomy-gate.md)); it is still refused outside the TUI.
 `tests/control-center-smoke.ts` pins these cases, and checks that the hub's profile rows and their
 weakening set match `packages/kit/profiles/*.json` (`firewall.mode` is `auto`).
+
+## Session commands
+
+`/clear` starts a new session after a confirm; `/clear --handoff` first appends the last asks (redacted for
+secrets, so the file still holds prompt text) and tools to `HANDOFF.md`. Without a UI it refuses, as there is nobody to confirm. `/status` prints the Doctor checks below as one line each, ending in the command
+that gives more detail (`tests/session-commands-smoke.ts`). Neither compacts: `/compact` shrinks the
+current context and keeps the thread.
 
 ## Doctor
 
@@ -238,9 +314,8 @@ A line that reports drift starts with `! ` (for example `! Protections: 0 record
 
 ## What is not covered
 
-- No command is removed or unregistered. `/kit` and `/helpers` forward to `/menu`, and the curated
-  `/` menu only removes autocomplete suggestions; every name still runs, and no alias is pruned yet
-  (pruning is a later phase).
+- No command is removed or unregistered. The curated
+  `/` menu only removes autocomplete suggestions; every name still runs.
 - The Security level row runs the typed `/security` picker. The level is not yet a registered
   control that the hub can cycle in place.
 - In a terminal session the hub is drawn with `ctx.ui.custom()`. Remote control mirrors only

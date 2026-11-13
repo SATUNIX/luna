@@ -39,7 +39,7 @@ Every extension and profile follows these. `npm run verify` enforces the mechani
 8. **Scale the machinery to the task.** A quick fix must not pay long-horizon overhead; that is what
    [profiles](profiles.md) and [effort](effort.md) are for.
 9. **General capability lives in Luna; domain rules compose on top.** A domain extension (for
-   example pentest scope and rules of engagement) composes a general one and never reimplements it.
+   example engagement scope and rules of engagement) composes a general one and never reimplements it.
    Per-engagement values live in the engagement configuration, not in the capability layer.
 10. **Extensions are self-contained.** No extension imports another; cross-extension contracts go
     through small registries on `globalThis` (`Symbol.for("pi-kit.*")`), so any one extension can be

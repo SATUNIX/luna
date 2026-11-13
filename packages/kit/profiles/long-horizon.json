@@ -1,23 +1,26 @@
 {
   "name": "long-horizon",
-  "description": "T0–T3 multi-hour/day tasks: balanced set + orchestration layer, with a fixed-budget compaction trigger (trigger-compact) for cost control.",
+  "description": "Multi-hour and set-and-walk-away work: everything in balanced plus orchestration layer, a fixed-budget compaction trigger (trigger-compact), the armed autonomous loop and container runs (autonomy-run). Default-deny tool-firewall; headless approvals fail closed.",
   "securityLevel": "balanced",
+  "memento": true,
+  "pinnedCommands": ["autonomy"],
   "firewall": { "mode": "auto", "policy": "coding" },
   "skills": {
-    "excludeCategories": ["pentest", "mcp-governance", "evidence-reporting", "maintainer"],
+    "excludeCategories": ["engagement", "mcp-governance", "evidence-reporting", "maintainer"],
     "exclude": ["engagement-conductor", "dynamic-agent-synthesis"]
   },
   "prompts": {
-    "exclude": ["golden-path-pentest", "pentest-action-card", "pentest-compact", "pentest-plan", "pentest-report-finding", "pentest-triage-burp", "pentest-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
+    "exclude": ["golden-path-engagement", "engagement-action-card", "engagement-compact", "engagement-plan", "engagement-report-finding", "engagement-triage-burp", "engagement-verify-evidence", "mcp-action-review", "report-export-review", "tool-policy-onboarding", "hypothesis-lifecycle"]
   },
   "include": [
-    "protected-paths", "tool-firewall", "human-console", "git-checkpoint",
+    "herdr",
+    "protected-paths", "tool-firewall", "secret-guard", "human-console", "git-checkpoint",
     "todo", "notify", "finish-reason-retry", "memory-vault", "skill-router",
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
     "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
     "goal-core", "task-graph", "subagent", "branch-lab",
     "verifier-board", "provider-router",
     "caveman", "pi-lens", "pi-readseek",
-    "orchestrator"
+    "orchestrator", "autonomy-run"
   ]
 }

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { trustedMarkerKitRoot } from "./shared/kit-source.ts";
 import { nodeRuntime } from "./shared/node-runtime.ts";
 
-// web-console adds `/console` (alias `/webui`): start, stop, and check the bundled
+// web-console adds `/console`: start, stop, and check the bundled
 // Pi Console web UI that ships in packages/web-ui of this repo.
 //
 // It does exactly one thing: launch the existing zero-dependency server
@@ -651,10 +651,6 @@ async function handleConsole(args: string, ctx: ExtensionCommandContext): Promis
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("console", {
     description: "Start/stop the bundled Pi Console web UI. Usage: /console [start|stop|status|open].",
-    handler: handleConsole,
-  });
-  pi.registerCommand("webui", {
-    description: "Alias of /console - start/stop the bundled Pi Console web UI.",
     handler: handleConsole,
   });
 }

@@ -10,9 +10,9 @@
 import assert from "node:assert/strict";
 import { resolveConfig } from "../packages/autonomy/lib/config.ts";
 import { evaluate, runStop, reportOutcome, nothingFoundInARow } from "../packages/autonomy/lib/triggers.ts";
-import { itemShas, uncoveredCommits } from "../packages/autonomy/lib/ledger.ts";
+import { isNewReport, itemShas, uncoveredCommits, unknownShas } from "../packages/autonomy/lib/ledger.ts";
 import { type ManagerBundle, type ManagerDecision, parseDecision, buildBundle, DECISIONS } from "../packages/autonomy/lib/manager.ts";
-import { uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
+import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
 import { registeredCommands } from "../packages/core/eval/footprint.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
@@ -22,7 +22,7 @@ import { runCycle } from "../packages/autonomy/lib/cycle.ts";
 import { HostRepo } from "../packages/autonomy/lib/hostrepo.ts";
 import * as gm from "../packages/autonomy/lib/gitmirror.ts";
 import * as dk from "../packages/autonomy/lib/docker.ts";
-import { modelEntries, agentModelsJson } from "../packages/autonomy/lib/models.ts";
+import { modelEntries, agentModelsJson, WORKER_MAX_OUTPUT_TOKENS } from "../packages/autonomy/lib/models.ts";
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { testEffort } from "./autonomy-helpers.ts";
@@ -724,6 +724,22 @@ await check("merge review: only MERGE or REJECT with a reason; retried, then fai
   assert.match(down.reason, /review unavailable/);
 });
 
+await check("merge review: a reply with prose around the object still parses; no usable reply from any reviewer is unavailable (parked), never a judged REJECT", async () => {
+  assert.equal(parseReview('Here is my verdict. {"verdict":"MERGE","reason":"tested {fix}","concerns":[]} Thanks!').verdict, "MERGE");
+  assert.throws(() => parseReview('Here is my verdict {see below}. {"verdict":"MERGE","reason":"tested","concerns":[]}'), /no JSON object/, "a stray brace beside the object means the reply is not a clean verdict");
+  const bundle = { run: "r", cycle: 3, outcome: "completed", integrationBranch: "experimental/main", charter: "C", report: "R", verify: null, gitLog: "L", diff: "x".repeat(2_000) };
+  const sleep = async (): Promise<void> => {};
+  let second = 0;
+  const viaSecond = await reviewCycle(bundle, async () => "I think it is fine", { sleep, fallback: async () => { second++; return '{"verdict":"MERGE","reason":"second opinion","concerns":[]}'; } });
+  assert.deepEqual([viaSecond.verdict, viaSecond.unavailable, second], ["MERGE", undefined, 1], "one retry with the second reviewer");
+  const none = await reviewCycle(bundle, async () => "no json", { sleep, fallback: async () => { throw new Error("HTTP 502"); } });
+  assert.equal(none.unavailable, true, "no reviewer produced a verdict");
+  const judged = await reviewCycle(bundle, async () => '{"verdict":"REJECT","reason":"no test"}', { sleep });
+  assert.deepEqual([judged.verdict, judged.unavailable], ["REJECT", undefined], "a parsed REJECT is a real one");
+  const huge = await reviewCycle({ ...bundle, diff: "x".repeat(200_000) }, async () => "", { sleep });
+  assert.deepEqual([huge.failed, huge.unavailable], [true, undefined], "an over-budget diff is the host's REJECT, not an outage");
+});
+
 await check("models: OpenRouter specs become pi model entries pointed at the relay", () => {
   const list = [{ id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", context_length: 1048576,
     pricing: { prompt: "0.00000014", completion: "0.00000042", input_cache_read: "0.0000000042" },
@@ -731,7 +747,7 @@ await check("models: OpenRouter specs become pi model entries pointed at the rel
   const [m, ...rest] = modelEntries(list, ["deepseek/deepseek-v4.1-flash", "missing/model"]);
   assert.equal(rest.length, 0, "unknown ids are left to pi's defaults");
   assert.ok(m, "the known id has an entry");
-  assert.deepEqual([m.contextWindow, m.maxTokens, m.reasoning, m.input], [1048576, 131072, true, ["text"]]);
+  assert.deepEqual([m.contextWindow, m.maxTokens, m.reasoning, m.input], [1048576, WORKER_MAX_OUTPUT_TOKENS, true, ["text"]], "a model's huge output maximum is clamped: providers reserve its cost, so it turns a low balance into 402");
   assert.deepEqual(m.cost, { input: 0.14, output: 0.42, cacheRead: 0.0042, cacheWrite: 0 });
   /** The openrouter provider entry (agentModelsJson's default provider). */
   const openrouterOf = (j: ReturnType<typeof agentModelsJson>) => { const o = j.providers.openrouter; assert.ok(o, "the openrouter provider"); return o; };
@@ -835,6 +851,40 @@ await check("cycle: a normal cycle completes when the report is on the branch", 
   assert.equal(rt.managerCalls.length, 0);
   assert.deepEqual(sent[0], { attempt: 1, type: "prompt", message: "do the cycle" });
   assert.ok(Math.abs(r.costUsd - 0.12) < 1e-9);
+});
+
+const creditFrame = { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: '402: {"message":"This request requires more credits, or fewer max_tokens. See https://openrouter.ai/settings/credits"}' } };
+
+await check("provider limit: a 402 assistant error is terminal, a 429 is not", () => {
+  assert.match(providerLimitError(creditFrame) ?? "", /requires more credits/);
+  assert.doesNotMatch(providerLimitError(creditFrame) ?? "", /https?:/, "links are not carried into the blocker");
+  assert.equal(providerLimitError({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "429: rate limited" } }), null);
+  assert.equal(providerLimitError({ type: "message_end", message: { role: "assistant", stopReason: "stop", errorMessage: "402" } }), null);
+  const err = (errorMessage: string) => providerLimitError({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage } });
+  assert.equal(err("429 rate limit: key limit per minute reached"), null, "429 wording with a limit phrase stays a retry");
+  assert.equal(err("Provider returned error: upstream 502 id req-402"), null, "a 402 inside an id is not a status");
+  assert.match(err("HTTP 402: key limit exceeded") ?? "", /402/);
+  assert.equal(providerLimitError({ type: "auto_retry_start", errorMessage: "402: requires more credits" }), null, "a retry under way may recover");
+  assert.match(providerLimitError({ type: "auto_retry_end", success: false, finalError: "Insufficient credits" }) ?? "", /Insufficient/);
+});
+
+await check("provider limit: a repeated clampable 402 parks even when no retry happened", () => {
+  const clampable = { type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "402 This request requires more credits, or fewer max_tokens. You requested up to 8000 tokens, but can only afford 3000" } };
+  const watch = { clamped: 0 };
+  assert.equal(providerLimitError(clampable, watch), null, "the first one is left to the clamp-and-retry");
+  assert.match(providerLimitError(clampable, watch) ?? "", /can only afford/, "the second in a row parks");
+  const again = { clamped: 0 };
+  providerLimitError(clampable, again);
+  providerLimitError({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } }, again);
+  assert.equal(providerLimitError(clampable, again), null, "a reply that worked starts the count again");
+});
+
+await check("cycle: a provider credit error parks the cycle as blocked instead of closing empty", async () => {
+  const { rt } = fakeRuntime({ manager: new Error("unused"), script: ({ minute, emit }) => { if (minute === 1) emit(creditFrame); } });
+  const r = await runCycle({ n: 4, cfg, rt, prompt: "p", restartBriefing: undefined, cycleDir: undefined });
+  assert.equal(r.outcome, "blocked");
+  assert.equal(r.blocker?.id, "provider-limit");
+  assert.match(r.blocker?.question ?? "", /requires more credits/);
 });
 
 await check("cycle: an idle agent triggers the manager once; its NUDGE is steered in", async () => {
@@ -954,6 +1004,14 @@ await check("cycle: a report that leaves commits out of its Item lines gets exac
   ];
   const report = "Outcome: successful\nMode: fix\nItem: x - aaaaaaa - smoke:x\nprose naming ddddddd is not an item line\n";
   assert.deepEqual(itemShas(report), ["aaaaaaa"]);
+  assert.equal(isNewReport("r", "r"), false, "a report already present at the cycle start is not this cycle's");
+  assert.equal(isNewReport("r2", "r"), true);
+  assert.equal(isNewReport("r", null), true);
+  assert.equal(isNewReport(null, null), false);
+  const hashed = "Item: x - a1a1a1a - smoke:x\n";
+  assert.deepEqual(unknownShas(hashed, ["a1a1a1a1".padEnd(40, "0")]), []);
+  assert.deepEqual(unknownShas(hashed, ["b2b2b2b2".padEnd(40, "0")]), ["a1a1a1a"], "a named commit outside the cycle's range is reported");
+  assert.deepEqual(unknownShas("Item: raise buffer to 1048576 bytes - defaced banner - smoke:x\n", ["b2b2b2b2".padEnd(40, "0")]), [], "a number or a word in a title is not a commit id");
   assert.deepEqual(uncoveredCommits(report, commits, "autonomy/cycles/r/01/report.md"), ["d".repeat(12)]);
   assert.deepEqual(uncoveredCommits(`${report}- **Item:** z - ddddddd, eeeeeee - smoke:z\n`, commits, "autonomy/cycles/r/01/report.md"), []);
 });

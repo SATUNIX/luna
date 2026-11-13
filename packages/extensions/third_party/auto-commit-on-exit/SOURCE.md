@@ -6,6 +6,7 @@
   - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `pi.exec("git", [...])`, which is cross-platform
   - Stages with `git add -A -- . ":(exclude).pi"` instead of `git add -A`, so kit artefacts under `<cwd>/.pi/` are never committed
+  - Also leaves credential-looking paths (the secret-guard signatures) out of the staged set, so `git add -A` cannot commit an ungitignored `.env` or key
   - In no profile and `enabledByDefault: false`: opt-in only
   - `provenance.origin` set to `"vendored"`
   - Typed for strict TypeScript (no behaviour change)

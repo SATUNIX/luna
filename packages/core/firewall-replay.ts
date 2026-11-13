@@ -5,7 +5,7 @@
 // (manual / auto without a judge / strict), counts per tier, and lists every call that would ask
 // or deny, so tuning is driven by real history instead of guesses. Nothing is executed.
 //
-//   node packages/core/firewall-replay.ts [--sessions DIR] [--mode auto|manual] [--policy coding|pentest]
+//   node packages/core/firewall-replay.ts [--sessions DIR] [--mode auto|manual] [--policy coding|engagement]
 //                                          [--show low|medium|high|critical] [--json] [--limit N]
 import fs from "node:fs";
 import os from "node:os";
@@ -44,8 +44,8 @@ const opt = (name: string, fallback: string): string | undefined => {
 const sessionsDir = opt("--sessions", path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "sessions"));
 const mode = opt("--mode", "auto");
 const policyArg = opt("--policy", "coding");
-if (policyArg !== "coding" && policyArg !== "pentest") {
-  console.error(`[firewall-replay] unknown --policy ${String(policyArg)} (expected coding or pentest)`);
+if (policyArg !== "coding" && policyArg !== "engagement") {
+  console.error(`[firewall-replay] unknown --policy ${String(policyArg)} (expected coding or engagement)`);
   process.exit(2);
 }
 const policyName: Classify.ClassifyEnv["policy"] = policyArg;
@@ -81,7 +81,7 @@ const tiers: Record<Tier, number> = { low: 0, medium: 0, high: 0, critical: 0 };
 const outcomes: Record<Outcome, number> = { allow: 0, judge: 0, ask: 0, deny: 0 };
 // Session allows modelled per session file: the operator picks "Allow for this session" on
 // every card, so later actions similar to an allowed one (a shared family or host/root scope)
-// go to the judge instead of asking (not under the pentest policy). The judge may still ask.
+// go to the judge instead of asking (not under the engagement policy). The judge may still ask.
 let askWithLeases = 0;
 const rows: ReplayRow[] = [];
 let calls = 0;
@@ -124,9 +124,9 @@ for (const file of walk(sessionsDir)) {
         const fams = C.familiesOf(a, mode === "auto");
         const scopes = [...new Set(a.findings.filter((f) => f.tier !== "low" && f.scope && f.scope !== "local").map((f) => f.scope ?? ""))];
         const similar = fams.some((f) => leased.has(f)) || scopes.some((x) => scoped.has(x));
-        if (policyName === "pentest" || !similar) {
+        if (policyName === "engagement" || !similar) {
           askWithLeases++;
-          if (policyName !== "pentest") {
+          if (policyName !== "engagement") {
             for (const f of fams) leased.add(f);
             for (const x of scopes) scoped.add(x);
           }

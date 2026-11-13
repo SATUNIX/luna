@@ -362,6 +362,8 @@ export const runsRoot = (cwd: string) => path.join(cwd, ".pi", "workflows", "run
 const MAX_OUTPUT_IN_STATE = 4000;
 const MAX_FILE_INCLUDE = 64 * 1024;
 const MAX_ANSWER_IN_STATE = MAX_FILE_INCLUDE; // state.json is read back with a limit (loadState)
+/** How much of a failed gate's output goes into the run's error. */
+const GATE_OUTPUT_EXCERPT_CHARS = 400;
 export const MAX_EXECUTIONS = 60; // hard ceiling on step executions per run (loops included)
 
 /** A run file that is not there: an optional template reads it as empty. */
@@ -456,9 +458,23 @@ function redactedState(state: RunState): RunState {
   return { ...state, inputs, steps, error: red(state.error), redacted: true, redactionPolicy: REDACTION_POLICY };
 }
 
-function saveState(dir: string, state: RunState): void {
+const claimedDirs = new Set<string>();
+
+/** Record this process as the owner of a run directory (owner.json), once per directory. Best effort. */
+export function claimRunDir(dir: string): void {
+  if (claimedDirs.has(dir)) return;
+  try {
+    writePrivate(path.join(dir, "owner.json"), `${JSON.stringify({ pid: process.pid })}\n`);
+    claimedDirs.add(dir);
+  } catch {
+    /* without it recovery falls back to the quiet-time heuristic */
+  }
+}
+
+export function saveState(dir: string, state: RunState): void {
   state.updatedAt = new Date().toISOString();
   ensurePrivateDir(dir);
+  claimRunDir(dir);
   // writeFileSafe replaces the file through its own exclusive temporary file and a rename.
   writePrivate(path.join(dir, "state.json"), JSON.stringify(redactedState(state), null, 2));
 }
@@ -1287,8 +1303,10 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
     const skipped = gate ? (step.parallel ? step.parallel.map((inner) => state.steps[inner.id]) : [gated]).some(skippedByControl) : false;
     if (gate && gated && (gated.status === "passed" || skipped)) {
       let passes: boolean;
+      let verdictText = "";
       try {
-        passes = !skipped && (await gatePasses(gate.pass, opts.answers.get(step.id) ?? readRunFile(runDir, `steps/${step.id}.md`, MAX_SCRIPT_BYTES, true)));
+        if (!skipped) verdictText = opts.answers.get(step.id) ?? readRunFile(runDir, `steps/${step.id}.md`, MAX_SCRIPT_BYTES, true);
+        passes = !skipped && (await gatePasses(gate.pass, verdictText));
       } catch (error) {
         // Not a verdict: the step may have passed, so neither a miss nor a pass is true.
         return finish({ error: `gate ${step.id} could not be tested: ${error instanceof Error ? error.message : String(error)}` });
@@ -1297,7 +1315,11 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
         const used = state.loops[step.id] ?? 0;
         gated.status = "failed";
         run.setPhaseStatus(step.id, "failed");
-        const why = skipped ? "was skipped before its verdict" : `did not pass after ${used} loop(s) (needs "${gate.pass}")`;
+        // Why it failed, in the run's own error: the first words of what the gate read (redacted, as
+        // all run text is), so the next turn does not have to open a file to learn the reason.
+        const looped = used > 0 ? ` after ${used} retry loop(s)` : "";
+        const seen = redactExecutionText(verdictText).replace(/\s+/g, " ").trim().slice(0, GATE_OUTPUT_EXCERPT_CHARS);
+        const why = skipped ? "was skipped before its verdict" : `did not pass${looped} (needs "${gate.pass}")${seen ? `; it read: ${seen}` : ""}`;
         if (!gate.retry || used >= gate.maxLoops) return finish({ error: `gate ${step.id} ${why}` });
         state.loops[step.id] = used + 1;
         const gateAt = state.cursor;

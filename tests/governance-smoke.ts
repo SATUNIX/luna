@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * F-02 regression coverage: pentest-governance-domain's MCP-only mode must not block
+ * F-02 regression coverage: engagement-governance's MCP-only mode must not block
  * this kit's own first-party tools, and must not lock down general coding profiles
  * (balanced/long-horizon/autonomous/self-improving) by default absent a configured
- * pentest engagement. Fully offline - no live pi, no network.
+ * engagement. Fully offline - no live pi, no network.
  */
 import type { ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
@@ -47,7 +47,7 @@ type FakePi = ReturnType<typeof fakePi>;
 type Decision = ToolCallEventResult & { reason: string };
 
 async function loadGovernance(_workspace: string): Promise<FakePi> {
-  const register = await loadExtension("extensions/pentest-governance-domain/index.ts");
+  const register = await loadExtension("extensions/engagement-governance/index.ts");
   const pi = fakePi();
   register(pi.api);
   await pi.handlers.get("session_start")({}, { ui: { notify() {} } });
@@ -59,7 +59,7 @@ async function callTool(pi: FakePi, toolName: string, input: Record<string, unkn
 }
 
 // 1. No engagement configured: write/edit/bash must NOT be blocked by MCP-only mode
-// by default - this is what broke "balanced" (an everyday driver, not pentest-only).
+// by default - this is what broke "balanced" (an everyday driver, not engagement-only).
 async function testNoEngagementAllowsDirectTools() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-noeng-"));
   await withCwd(workspace, async () => {
@@ -82,6 +82,40 @@ async function testFirstPartyToolsAlwaysExempt() {
       const result = await callTool(pi, toolName, { text: "x" });
       assert.equal(result, undefined, `${toolName} must be exempt from MCP-only mode`);
     }
+  });
+}
+
+// The default data root is `.pi/engagement`: its audit chain and evidence are protected from the
+// write/edit tools and from bash by the gate itself, not only by the other protections. The
+// pre-rename root stays protected, and an existing chain there keeps being used with a notice.
+async function testEngagementDataRootIsProtected() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-root-"));
+  await withCwd(workspace, async () => {
+    const pi = await loadGovernance(workspace);
+    for (const root of [".pi/engagement", ".pi/pentest"]) {
+      for (const sub of ["audit/audit.jsonl", "evidence/artifacts/x.txt", "findings/f.json"]) {
+        const file = `${root}/${sub}`;
+        for (const tool of ["write", "edit"]) {
+          const result = await callTool(pi, tool, { path: file, content: "x" });
+          assert.equal(result?.block, true, `${tool} to ${file} must be blocked`);
+        }
+        const bash = await callTool(pi, "bash", { command: `echo forged >> ${file}` });
+        assert.equal(bash?.block, true, `bash writing ${file} must be blocked`);
+      }
+    }
+  });
+  const existing = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-legacy-"));
+  fs.mkdirSync(path.join(existing, ".pi", "pentest", "audit"), { recursive: true });
+  fs.writeFileSync(path.join(existing, ".pi", "pentest", "audit", "audit.jsonl"), "");
+  await withCwd(existing, async () => {
+    const notes: string[] = [];
+    const register = await loadExtension("extensions/engagement-governance/index.ts");
+    const pi = fakePi();
+    register(pi.api);
+    await pi.handlers.get("session_start")({}, { ui: { notify(message: string) { notes.push(message); } } });
+    assert.ok(notes.some((n) => /continuing the existing audit chain under .*\.pi[\\/]pentest/.test(n)), `a notice names the old root: ${notes.join(" | ")}`);
+    assert.ok(fs.statSync(path.join(existing, ".pi", "pentest", "audit", "audit.jsonl")).size > 0, "the old chain is appended to");
+    assert.ok(!fs.existsSync(path.join(existing, ".pi", "engagement")), "no second chain is started");
   });
 }
 
@@ -147,7 +181,7 @@ async function testOutOfScopeNeverReachesBroker() {
   } finally { restoreConsole(); }
 }
 
-// A repository can commit a link under .pi. A headless pentest request must refuse that
+// A repository can commit a link under .pi. A headless engagement request must refuse that
 // path before waiting for an answer; a real console request must still accept a signed answer.
 async function testHumanConsoleRequestStaysInWorkspace() {
   const restoreKit = isolateKitEnv();
@@ -174,7 +208,7 @@ async function testHumanConsoleRequestStaysInWorkspace() {
         assert.deepEqual(fs.readdirSync(outside), [], "a linked console directory must not receive a request or subdirectories");
         const result = await call;
         assert.equal(result?.block, true, "an unfilable request must block the action");
-        const audit = fs.readFileSync(path.join(workspace, ".pi", "pentest", "audit", "audit.jsonl"), "utf8");
+        const audit = fs.readFileSync(path.join(workspace, ".pi", "engagement", "audit", "audit.jsonl"), "utf8");
         assert.match(audit, /human_console_request_unfilable/, "the refusal must be audited");
       } finally {
         abort.abort();
@@ -338,7 +372,7 @@ async function testBrokerResolvesWhenAuditFails() {
   }
 }
 
-// 7b. V-02: an open overlay owns the keyboard. The pentest card starts on Yes, so a key typed into the
+// 7b. V-02: an open overlay owns the keyboard. The engagement card starts on Yes, so a key typed into the
 // overlay must not reach it: the card waits for the hold to end, and an abort during the hold blocks.
 async function testApprovalWaitsForHeldInput() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-gov-held-input-"));
@@ -508,14 +542,15 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["no engagement configured allows direct tools by default", testNoEngagementAllowsDirectTools],
   ["first-party kit tools always exempt from MCP-only mode", testFirstPartyToolsAlwaysExempt],
   ["configured engagement locks down direct tools by default", testConfiguredEngagementLocksDownDirectTools],
+  ["the .pi/engagement data root is protected, and an existing .pi/pentest chain continues with a notice", testEngagementDataRootIsProtected],
   ["PI_ALLOW_DIRECT_TOOLS overrides in both directions", testOperatorOverrideBothDirections],
   ["out-of-scope target never reaches the broker", testOutOfScopeNeverReachesBroker],
-  ["pentest console request refuses a workspace link and accepts a signed normal answer", testHumanConsoleRequestStaysInWorkspace],
-  ["pentest data root: a link below an operator-set root is refused, the root itself is trusted", testOperatorDataRootRefusesLinkBelowIt],
+  ["engagement console request refuses a workspace link and accepts a signed normal answer", testHumanConsoleRequestStaysInWorkspace],
+  ["engagement data root: a link below an operator-set root is refused, the root itself is trusted", testOperatorDataRootRefusesLinkBelowIt],
   ["env templates are not protected paths", testEnvTemplatesAreNotProtectedPaths],
   ["broker settles, and blocks the action, when the audit chain is corrupt", testBrokerResolvesWhenAuditFails],
   ["an unauditable allow fails closed; read-only tools stay available", testUnauditableAllowFailsClosed],
-  ["a held overlay defers the pentest approval and an abort blocks it", testApprovalWaitsForHeldInput],
+  ["a held overlay defers the engagement approval and an abort blocks it", testApprovalWaitsForHeldInput],
   ["the scope and RoE answer is asked again after the hold and after the Yes", testScopeIsRecheckedAroundTheCard],
   ["workflow_status and workflow_control pass MCP-only mode; launching tools do not", testWorkflowControlToolsPassMcpOnly],
   ["null tool-policy.json falls back to the default empty policy", testNullPolicyFallsBackToEmptyPolicy],

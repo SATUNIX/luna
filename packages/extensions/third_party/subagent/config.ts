@@ -143,3 +143,59 @@ export function toText(value: unknown): string {
   if (typeof value === "object" && value !== null) return Object.prototype.toString.call(value);
   return String(value);
 }
+
+// A model served from this machine or this network is usually one GPU working through its queue one
+// request at a time, so children running at once only wait on each other (and compete for the same
+// memory). The base URL decides, never the price: hosted free tiers are not serial.
+function isLocalBaseUrl(baseUrl: string | undefined): boolean {
+  const forced = process.env.PI_KIT_LOCAL_MODELS?.trim().toLowerCase();
+  if (forced === "on" || forced === "1" || forced === "off" || forced === "0") return forced === "on" || forced === "1";
+  if (!baseUrl) return false;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".internal")) return true;
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  return /^f[cd][0-9a-f]{2}:/.test(host) || (!host.includes(".") && !host.includes(":"));
+}
+
+/** `maxConcurrentRequests` from models.json for a model (its own entry first, then its provider's). */
+function configuredConcurrency(model: { provider?: string; id?: string }, file = path.join(agentDir(), "models.json")): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    const provider = isRecord(parsed) && isRecord(parsed.providers) && model.provider ? parsed.providers[model.provider] : undefined;
+    if (!isRecord(provider)) return undefined;
+    const listed: unknown[] = Array.isArray(provider.models) ? provider.models : [];
+    const entry = listed.find((m: unknown) => isRecord(m) && m.id === model.id);
+    const candidates = [isRecord(entry) ? entry.maxConcurrentRequests : undefined, provider.maxConcurrentRequests];
+    const n = candidates.find((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 1);
+    return n === undefined ? undefined : Math.floor(n);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The most children to run at once on the parent's model: what models.json says
+ * (`maxConcurrentRequests`), else one for a local model, else no limit of its own (null). An explicit
+ * PI_KIT_SUBAGENT_CONCURRENCY is the operator's word and is applied by the callers instead.
+ */
+export function modelConcurrencyCap(model: { provider?: string; id?: string; baseUrl?: string } | undefined): number | null {
+  if (!model) return null;
+  return configuredConcurrency(model) ?? (isLocalBaseUrl(model.baseUrl) ? 1 : null);
+}
+
+/** `wanted`, lowered to the model's cap unless the operator set PI_KIT_SUBAGENT_CONCURRENCY. */
+export function capConcurrency(wanted: number, model: Parameters<typeof modelConcurrencyCap>[0]): number {
+  if ((process.env.PI_KIT_SUBAGENT_CONCURRENCY ?? "").trim() !== "") return wanted;
+  const cap = modelConcurrencyCap(model);
+  return cap === null ? wanted : Math.max(1, Math.min(wanted, cap));
+}

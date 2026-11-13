@@ -1,0 +1,207 @@
+#!/usr/bin/env sh
+# Static checks for the engagement container package. Run from packages/container (scripts/preflight.sh
+# does). Everything asserted here is a file or setting that exists in this package; the governance
+# extension and the prompts it refers to are the kit's own (../extensions, ../kit), which the image
+# installs.
+set -eu
+
+KIT_EXT="../extensions/src/engagement-governance/index.ts"
+KIT_PROMPTS="../kit/prompts"
+
+required_files="
+AGENTS.md
+README.md
+Dockerfile
+docker-compose.yml
+capability/compose/compose.yaml
+capability/env/defaults.env
+capability/security/policy.json
+overlays/pi/settings.json
+overlays/pi/models.json
+overlays/pi/mcp-adapter.json
+tools/package.json
+tools/package-lock.json
+mcp-servers/governance/index.ts
+mcp-servers/governance/package.json
+mcp-servers/governance/package-lock.json
+scripts/pi-agent
+scripts/validate-runtime-readiness.py
+scripts/validate-scope-roe.py
+scripts/validate-governance-mcp-server.sh
+engagement/scope.example.yaml
+engagement/roe.example.yaml
+engagement/tool-policy.example.json
+engagement/tool-policy.example.yaml
+engagement/tool-policy.json
+engagement/approval-classes.example.yaml
+engagement/mcp-servers.example.yaml
+engagement/model.example.json
+engagement/model.small.example.json
+capability/docs/BURP_MCP.md
+capability/docs/PI_AGENT_GOLDEN_PATH.md
+capability/docs/SECURITY_MODEL.md
+capability/docs/OPERATOR_GUIDE.md
+$KIT_EXT
+$KIT_PROMPTS/agent-checkpoint.md
+$KIT_PROMPTS/code-compact.md
+$KIT_PROMPTS/engagement-compact.md
+"
+
+for file in $required_files; do
+  [ -f "$file" ] || {
+    echo "Missing required engagement file: $file" >&2
+    exit 1
+  }
+done
+
+python3 -m json.tool overlays/pi/settings.json >/dev/null
+python3 -m json.tool overlays/pi/models.json >/dev/null
+python3 -m json.tool overlays/pi/mcp-adapter.json >/dev/null
+python3 -m json.tool engagement/tool-policy.json >/dev/null
+python3 -m json.tool engagement/tool-policy.example.json >/dev/null
+python3 -m json.tool engagement/model.example.json >/dev/null
+python3 -m json.tool engagement/model.small.example.json >/dev/null
+python3 -m json.tool capability/security/policy.json >/dev/null
+
+# Version pins are reviewed changes: see AGENTS.md in this package.
+# pi and pi-mcp-adapter are installed from tools/package-lock.json with npm ci; the adapter is
+# registered by its baked path, so pi never fetches it from npm at start.
+grep -Fq '"/opt/pi-agent/tools/node_modules/pi-mcp-adapter"' overlays/pi/settings.json || {
+  echo "overlays/pi/settings.json must register the image's pi-mcp-adapter (/opt/pi-agent/tools/node_modules/pi-mcp-adapter)" >&2
+  exit 1
+}
+if grep -Fq 'npm:pi-mcp-adapter' overlays/pi/settings.json; then
+  echo "overlays/pi/settings.json must not install pi-mcp-adapter from npm at start" >&2
+  exit 1
+fi
+python3 - <<'PY' || exit 1
+import json, re, sys
+pkg = json.load(open("tools/package.json"))
+lock = json.load(open("tools/package-lock.json"))
+dockerfile = open("Dockerfile").read()
+want = {"@earendil-works/pi-coding-agent": "PI_CODING_AGENT_VERSION", "pi-mcp-adapter": "PI_MCP_ADAPTER_VERSION"}
+for name, arg in want.items():
+    m = re.search(r"^ARG %s=(\S+)$" % arg, dockerfile, re.M)
+    pinned = pkg.get("dependencies", {}).get(name)
+    locked = lock.get("packages", {}).get("node_modules/" + name, {})
+    if not m or pinned != m.group(1) or locked.get("version") != pinned or not str(locked.get("integrity", "")).startswith("sha512-"):
+        print(f"tools/package.json, tools/package-lock.json and the Dockerfile's {arg} must pin {name} to one exact version with a sha512 integrity", file=sys.stderr)
+        sys.exit(1)
+root = lock.get("packages", {}).get("", {}).get("dependencies", {})
+if root != pkg.get("dependencies"):
+    print("tools/package-lock.json is out of date with tools/package.json (run npm install --package-lock-only there)", file=sys.stderr)
+    sys.exit(1)
+PY
+grep -Fq 'npm ci --omit=dev --ignore-scripts' Dockerfile || {
+  echo "Dockerfile must install the tools with npm ci --ignore-scripts" >&2
+  exit 1
+}
+if grep -Eq 'npm install -g[^"]*"?@earendil-works/pi-coding-agent' Dockerfile; then
+  echo "Dockerfile must not install pi globally without the lockfile" >&2
+  exit 1
+fi
+
+# The adapter replaces Pi's built-in MCP; the overlay turns the built-in off itself, so the adapter
+# does not rewrite settings.json on first start.
+grep -Fq '"-builtin:mcp"' overlays/pi/settings.json || {
+  echo "overlays/pi/settings.json must keep Pi's built-in MCP off (-builtin:mcp)" >&2
+  exit 1
+}
+
+grep -Fq "ARG PI_CODING_AGENT_VERSION=1.4.0" Dockerfile || {
+  echo "Dockerfile must pin PI_CODING_AGENT_VERSION to 1.4.0" >&2
+  exit 1
+}
+
+grep -Fq "ARG PI_MCP_ADAPTER_VERSION=6.0.0" Dockerfile || {
+  echo "Dockerfile must pin PI_MCP_ADAPTER_VERSION to 6.0.0" >&2
+  exit 1
+}
+
+grep -Fq "PI_MCP_ADAPTER_VERSION=6.0.0" capability/env/defaults.env || {
+  echo "capability/env/defaults.env must pin PI_MCP_ADAPTER_VERSION=6.0.0" >&2
+  exit 1
+}
+
+# Only mcp-adapter.json is read, and no mcp__* tools are registered beside the `mcp` proxy, which
+# engagement-governance's MCP-only mode and tool-policy keys depend on.
+for env_pin in 'PI_MCP_CONFIG_MODE=exclusive' 'MCP_DIRECT_TOOLS=__none__'; do
+  grep -Fq "$env_pin" Dockerfile || {
+    echo "Dockerfile must set $env_pin" >&2
+    exit 1
+  }
+done
+
+grep -Fq "host.docker.internal" capability/compose/compose.yaml || {
+  echo "canonical compose must include host.docker.internal wiring" >&2
+  exit 1
+}
+
+grep -Fq "/srv/data/pi-system" capability/compose/compose.yaml || {
+  echo "canonical compose must mount the Luna data root" >&2
+  exit 1
+}
+
+# MCP client hardening: no direct or namespace tools, no automatic sampling, auth or elicitation, no
+# agent-added servers or script tools, no remote semantic search.
+for setting in 'directTools": false' '"namespaceProxyTools": false' 'samplingAutoApprove": false' '"autoAuth": false' '"elicitation": false' '"elicitationAutoOpenUrls": false' '"allowInstall": false' '"allowScriptToolSave": false' '"jev": false' '"pi_system_governance"'; do
+  grep -Fq "$setting" overlays/pi/mcp-adapter.json || {
+    echo "overlays/pi/mcp-adapter.json must keep: $setting" >&2
+    exit 1
+  }
+done
+
+grep -Fq 'directTools: false' engagement/mcp-servers.example.yaml || {
+  echo "engagement/mcp-servers.example.yaml must keep directTools false" >&2
+  exit 1
+}
+
+grep -Fq 'samplingAutoApprove: false' engagement/mcp-servers.example.yaml || {
+  echo "engagement/mcp-servers.example.yaml must keep samplingAutoApprove false" >&2
+  exit 1
+}
+
+if grep -Eq '"(shell\.execute|file\.write|file\.edit)"' engagement/tool-policy.json; then
+  echo "engagement/tool-policy.json must not classify direct shell or file tools" >&2
+  exit 1
+fi
+
+# The governance extension the image installs: what it must keep doing.
+for marker in tool_call mcp_only_mode approval_envelope scope_roe_enforcement previous_hash; do
+  grep -Fq "$marker" "$KIT_EXT" || {
+    echo "the governance extension must keep: $marker" >&2
+    exit 1
+  }
+done
+
+grep -Fq "requires_mcp_tool: pi_system_governance.state_summary" "$KIT_PROMPTS/code-compact.md" || {
+  echo "code compact prompt must use compact pi_system_governance state summary" >&2
+  exit 1
+}
+
+grep -Fq "requires_mcp_tool: pi_system_governance.state_summary" "$KIT_PROMPTS/engagement-compact.md" || {
+  echo "engagement compact prompt must use compact pi_system_governance state summary" >&2
+  exit 1
+}
+
+grep -Fq "requires_mcp_tool: pi_system_governance.checkpoint_append" "$KIT_PROMPTS/agent-checkpoint.md" || {
+  echo "agent checkpoint prompt must append through pi_system_governance checkpoint tool" >&2
+  exit 1
+}
+
+grep -Fq "task_state:" "$KIT_PROMPTS/code-compact.md" || {
+  echo "code compact prompt must emit a stable task_state block" >&2
+  exit 1
+}
+
+grep -Fq "engagement_state:" "$KIT_PROMPTS/engagement-compact.md" || {
+  echo "engagement compact prompt must emit a stable engagement_state block" >&2
+  exit 1
+}
+
+python3 scripts/validate-engagement-overlays.py
+python3 scripts/validate-scope-roe.py
+python3 scripts/validate-ledgers.py --data-root "${PI_AGENT_DATA_ROOT:-${PENTEST_DATA_ROOT:-/srv/data/pi-system}}"
+python3 scripts/validate-runtime-readiness.py
+
+echo "Engagement environment checks passed"

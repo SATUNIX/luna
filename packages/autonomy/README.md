@@ -10,7 +10,7 @@ once (`PI_AUTONOMY_GATE_SLOTS`, `0` for unbounded), so several runs on one machi
 each other during the expensive part of a cycle. `tests/autonomy-lifecycle-smoke.ts` pins the bound.
 
 Operator documentation, including the boundary, the contract, the lifecycle and what has and has not
-been verified, is `docs/autonomy.md`. From inside pi, use `/autonomy` in the `autonomous` profile.
+been verified, is `docs/autonomy.md`. From inside pi, use `/autonomy` in the `long-horizon` profile.
 
 ```sh
 node packages/autonomy/cli.ts templates

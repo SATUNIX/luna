@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { modelFit } from "./model-fit.ts";
 
 // Effective auto-compaction state, computed from the REAL settings files with pi's own
 // semantics (node_modules/@earendil-works/pi-coding-agent/dist/core/settings-manager.js and
@@ -16,7 +17,8 @@ import path from "node:path";
 //     docs said overflow compaction "cannot be disabled"; in pi 0.85.1 it can, which is exactly why
 //     a disabled state has to be loud.
 //
-// Nothing here imports the toolchain lib (extensions are self-contained).
+// Nothing here imports the toolchain lib (extensions are self-contained); the one sibling import is the
+// pure model-fit table, which says what to set for a window this size.
 
 /** Shape other extensions read from `globalThis[Symbol.for("pi-kit.compaction")]`. */
 export interface PublishedCompaction {
@@ -183,9 +185,13 @@ export function computeCompactionState(input: CompactionInputs): CompactionState
       "would compact after every run. Set contextWindow for this model in models.json.";
   } else if (native !== null && native < keepRecentTokens + PI_CONTEXT_SAFETY_TOKENS) {
     code = "reserve-exceeds-window";
+    const fit = modelFit(window);
     reason =
       `compaction.reserveTokens (${formatK(reserveTokens)}) leaves a ${formatK(Math.max(native, 0))} trigger on a ${formatK(window)} window while ${formatK(keepRecentTokens)} recent tokens are kept, ` +
-      "so pi would compact almost every turn without getting below the threshold. Lower compaction.reserveTokens and keepRecentTokens in settings.json for this model.";
+      `so pi would compact almost every turn without getting below the threshold. ` +
+      (fit.compactionFits
+        ? `For this window set compaction.reserveTokens to ${formatK(fit.compaction.reserveTokens)} and keepRecentTokens to ${formatK(fit.compaction.keepRecentTokens)} in settings.json.`
+        : "No compaction setting fits a window this small (pi keeps 4k tokens spare); use a model with a larger context window, or start fresh sessions often.");
   }
 
   const candidates = [native !== null && native > 0 ? native : null, kitEffective ? kit.thresholdTokens : null].filter((n): n is number => n !== null);

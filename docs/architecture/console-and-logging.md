@@ -2,28 +2,28 @@
 
 This page covers how a headless session gets an answer from a person, and where Luna records what happened. It describes the human console (a filesystem rendezvous between a headless requester and an interactive operator session), the approvals the tool firewall remembers, every log and state file the extensions write, how `tool-capture` stores and prunes tool input and output, and how the join keys tie the logs together. The four diagrams show where state lives (split into two maps), how capture stores and prunes data, the broker round trip, and one tool call end to end.
 
-The human console is not a UI. A headless requester drops an approval or question request into a `pending` directory and an interactive operator session writes the answer into a `resolved` directory. The `ask_human` tool, the tool firewall and pentest governance all use this broker, so a headless subagent can ask a question or request an approval that a person sitting in another session answers.
+The human console is not a UI. A headless requester drops an approval or question request into a `pending` directory and an interactive operator session writes the answer into a `resolved` directory. The `ask_human` tool, the tool firewall and engagement governance all use this broker, so a headless subagent can ask a question or request an approval that a person sitting in another session answers.
 
 ## Retention and join keys
 
-Every subsystem writes its own log, most of it JSONL, and the retention rules differ. `tool-capture` self-prunes against a disk budget and rotates its segments. `firewall-judgements.jsonl` is rotated at 4 MiB with a single `.1` backup. The firewall audit, the human-console audit, the trace ledger and the pentest hash chain are append-only with no automatic rotation, so an operator manages them and they grow until someone trims them. `firewall-feedback.jsonl` is append-only too, apart from `/auto forget`, which rewrites it. The per-session `firewall-sessions/<id>.json` files and the approvals file are rewritten atomically on every save. The firewall creates its decision logs and state files (feedback, judgements, learned profile, session files and its audit log) with mode 0600, and the state directories it creates under the agent directory (`pi-kit/`, `firewall-sessions/`) with mode 0700. Existing files keep their mode until the firewall rewrites them atomically (`tests/tool-firewall-smoke.ts`).
+Every subsystem writes its own log, most of it JSONL, and the retention rules differ. `tool-capture` self-prunes against a disk budget and rotates its segments. `firewall-judgements.jsonl` is rotated at 4 MiB with a single `.1` backup. The firewall audit, the human-console audit, the trace ledger and the engagement hash chain are append-only with no automatic rotation, so an operator manages them and they grow until someone trims them. `firewall-feedback.jsonl` is append-only too, apart from `/auto forget`, which rewrites it. The per-session `firewall-sessions/<id>.json` files and the approvals file are rewritten atomically on every save. The firewall creates its decision logs and state files (feedback, judgements, learned profile, session files and its audit log) with mode 0600, and the state directories it creates under the agent directory (`pi-kit/`, `firewall-sessions/`) with mode 0700. Existing files keep their mode until the firewall rewrites them atomically (`tests/tool-firewall-smoke.ts`).
 
 Firewall decision records carry a `toolCallId` and an `actionHash`. Capture `call` records carry their own `actionHash` and `argsHash`, the trace ledger uses its own `argsHash` and `toolCallId`, and the learning-state `FeedbackRecord` carries a `hash` and a `sig` but no `toolCallId`. The keys let an operator correlate the logs; there is no single universal join key.
 
 ## Components and where state lives
 
-The firewall and the capture and trace extensions write into different trees. The firewall audit, the human-console files and the trace ledger sit in the project's `.pi/` directory, the firewall's learning state, approvals and the capture store sit under the agent directory's `pi-kit/`, and pentest governance writes under `PENTEST_DATA_ROOT`. Two console surfaces exist: the human-console file broker described here, and the optional **web UI** (`/console`, extension `web-console`). The web-console extension spawns `packages/web-ui/server/server.ts` and appends that server's stdout and stderr to `<webUiRoot>/.runtime/server.log`. The server reads pi session JSONL from the sessions directory (`PI_CODING_AGENT_SESSION_DIR`, default `<agentDir>/sessions`) and never reads or writes the human-console `pending` and `resolved` directories.
+The firewall and the capture and trace extensions write into different trees. The firewall audit, the human-console files and the trace ledger sit in the project's `.pi/` directory, the firewall's learning state, approvals and the capture store sit under the agent directory's `pi-kit/`, and engagement governance writes under `PENTEST_DATA_ROOT`. Two console surfaces exist: the human-console file broker described here, and the optional **web UI** (`/console`, extension `web-console`). The web-console extension spawns `packages/web-ui/server/server.ts` and appends that server's stdout and stderr to `<webUiRoot>/.runtime/server.log`. The server reads pi session JSONL from the sessions directory (`PI_CODING_AGENT_SESSION_DIR`, default `<agentDir>/sessions`) and never reads or writes the human-console `pending` and `resolved` directories.
 
 Every profile except `lite` loads `human-console` and `tool-capture`; `trace-ledger` is in all of them.
 
-The first map covers the firewall, the broker and the pentest audit. Solid arrows are writes and dotted arrows are reads.
+The first map covers the firewall, the broker and the engagement audit. Solid arrows are writes and dotted arrows are reads.
 
 ```mermaid
 flowchart LR
     A["pi agent process"]
     FW["tool-firewall"]
     HC["human-console"]
-    PG["pentest governance"]
+    PG["engagement governance"]
     A --> FW
     A --> HC
     A --> PG
@@ -115,7 +115,7 @@ The `.pi/trace.jsonl` `call` and `result` record kinds describe only trace-ledge
 | `<agentDir>/pi-kit/firewall-profile.json` (override `PI_KIT_FIREWALL_LEARNED_PROFILE`) | tool-firewall profile distiller | stats, principles, cautions | latest-only, rewritten in the background |
 | `<agentDir>/pi-kit/firewall-sessions/` (override `PI_KIT_FIREWALL_SESSIONS_DIR`) | tool-firewall trajectory | one `<id>.json` per session (recent actions, credential reads, downloads, judge cache, counters) | rewritten atomically on every save; files older than 14 days are swept |
 | `<agentDir>/pi-kit/capture/` (override `PI_KIT_CAPTURE_DIR`) | tool-capture store | `call`, `result`, `attachment`, `session`, `gap` records plus blobs and `retention.jsonl` | rotates at `PI_KIT_CAPTURE_SEGMENT_BYTES`, gzips rotated segments, prunes to budget |
-| `<PENTEST_DATA_ROOT>/audit/audit.jsonl` (default `.pi/pentest`) | pentest governance `audit` | `session_start`, `tool_allowed`, `tool_blocked`, `approval_requested`, `tool_approved`, `human_console_pending`, `human_console_resolved`, `human_console_timeout`, `policy_metadata_load_error` | hash-chained and append-only; no built-in rotation, operator-managed |
+| `<PENTEST_DATA_ROOT>/audit/audit.jsonl` (default `.pi/pentest`) | engagement governance `audit` | `session_start`, `tool_allowed`, `tool_blocked`, `approval_requested`, `tool_approved`, `human_console_pending`, `human_console_resolved`, `human_console_timeout`, `policy_metadata_load_error` | hash-chained and append-only; no built-in rotation, operator-managed |
 | `<webUiRoot>/.runtime/server.log` (`PI_KIT_WEBUI_ROOT` locates the root) | the web UI server process spawned by web-console `startServer` | plain text lines: the server's stdout and stderr | append-only; no built-in rotation, grows unbounded |
 
 ## Approvals, refusal labels and unattended mode
@@ -189,7 +189,7 @@ flowchart LR
 
 ## Broker round trip: headless requester to interactive operator
 
-A headless requester (the firewall, or pentest governance) writes `<id>.json` into the pending directory and polls the resolved directory once a second until its deadline. The deadline is `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` (15 minutes by default), or the end of the turn if it is aborted first. An interactive session's human-console watcher, which only runs in a session that has a UI, reads the pending directory every 1000 ms, shows the menu, writes `<id>.json` into the resolved directory and removes the pending file. If the operator answers after the request's deadline, the watcher only removes the pending file, so no orphan answer is left. The requester's audit gets `human_console_pending`, then `human_console_resolved` once it reads the answer, or `human_console_timeout` if nothing arrives by the deadline; pentest governance records the same three kinds in its hash-chained audit. The requester removes both files when it finishes.
+A headless requester (the firewall, or engagement governance) writes `<id>.json` into the pending directory and polls the resolved directory once a second until its deadline. The deadline is `PI_KIT_HUMAN_CONSOLE_TIMEOUT_MS` (15 minutes by default), or the end of the turn if it is aborted first. An interactive session's human-console watcher, which only runs in a session that has a UI, reads the pending directory every 1000 ms, shows the menu, writes `<id>.json` into the resolved directory and removes the pending file. If the operator answers after the request's deadline, the watcher only removes the pending file, so no orphan answer is left. The requester's audit gets `human_console_pending`, then `human_console_resolved` once it reads the answer, or `human_console_timeout` if nothing arrives by the deadline; engagement governance records the same three kinds in its hash-chained audit. The requester removes both files when it finishes.
 
 ```mermaid
 sequenceDiagram
@@ -221,7 +221,7 @@ sequenceDiagram
     R->>FS: remove pending/ID.json and resolved/ID.json
 ```
 
-The approval choices come from the firewall card: `Allow once`, `Deny`, and `Deny and tell the agent why…`. The session choice is offered in two forms: `Allow for this session (similar steps: judge checks them against this)` when the judge will check similar steps, and `Allow for this session (exact repeats only)` when only exact repeats are allowed. Under the pentest policy no session choice is offered. A request without `choices` (pentest governance's) is shown as a yes or no confirm. A question request instead shows the caller's `options` plus an `Other (type an answer)` entry. An operator's session allow is stored as a session approval and is also recorded with the `grant` source in the feedback log.
+The approval choices come from the firewall card: `Allow once`, `Deny`, and `Deny and tell the agent why…`. The session choice is offered in two forms: `Allow for this session (similar steps: judge checks them against this)` when the judge will check similar steps, and `Allow for this session (exact repeats only)` when only exact repeats are allowed. Under the engagement policy no session choice is offered. A request without `choices` (engagement governance's) is shown as a yes or no confirm. A question request instead shows the caller's `options` plus an `Other (type an answer)` entry. An operator's session allow is stored as a session approval and is also recorded with the `grant` source in the feedback log.
 
 ## A run end to end
 
@@ -300,5 +300,5 @@ sequenceDiagram
 - `packages/extensions/src/trace-ledger/index.ts` — subscribes to pi's `tool_call` / `tool_result` events and appends `call` / `result` entries to the shared `.pi/trace.jsonl` (conductor also appends there); sha256 `argsHash`; bounded `/trace` tail.
 - `packages/extensions/src/web-console/index.ts` — `/console` command; locates `packages/web-ui`, spawns the bundled server and appends its stdout and stderr to `<webUiRoot>/.runtime/server.log`.
 - `packages/web-ui/server/config.ts`, `packages/web-ui/server/sessions.ts`, `packages/web-ui/server/tailer.ts` — session directory (`PI_CODING_AGENT_SESSION_DIR`), discovery and tailing of pi session JSONL; none of them touch the human-console `pending` / `resolved` directories.
-- `packages/extensions/src/pentest-governance-domain/index.ts` — `dataRoot`, the hash-chained `audit/audit.jsonl`, and its own `human_console_*` pending / resolved round trip.
+- `packages/extensions/src/engagement-governance/index.ts` — `dataRoot`, the hash-chained `audit/audit.jsonl`, and its own `human_console_*` pending / resolved round trip.
 - `packages/extensions/third_party/protected-paths/index.ts` — refuses agent writes to the human-console files, the approvals file and the firewall state.

@@ -28,7 +28,7 @@ whose residual risk is "accepted" is a [non-goal](#non-goals).
 
 | ID | Attacker | What they control | Boundary | Controls | Residual risk |
 |---|---|---|---|---|---|
-| A-1 | A hostile repository | Files the agent opens, committed symbolic links, `.pi/` content, project skills and agents, regular expressions in skill triggers and workflow gates | B-1, B-2 | C-01, C-02, C-04, C-06, C-15, C-18, C-61 | A wrapper script the agent runs is judged by name; project skills still reach the model as text |
+| A-1 | A hostile repository | Files the agent opens, committed symbolic links, `.pi/` content, project skills and agents, regular expressions in skill triggers and workflow gates | B-1, B-2 | C-01, C-02, C-04, C-06, C-15, C-18, C-61, C-62 | A wrapper script the agent runs is judged by name; project skills still reach the model as text |
 | A-2 | Prompt-injected tool output | Text the model reads from web pages, files, MCP servers or tool results | B-1, B-3 | C-01, C-03, C-04, C-05, C-07, C-08, C-13 | Low-tier actions run unasked; an operator who approves a card without reading it approves the action |
 | A-3 | A malicious dependency, companion or MCP package | Code that runs inside pi or during install | B-7 | C-38, C-39, C-40, C-41, C-42, C-43, C-44 | In-process extension code is not isolated and can do I/O directly; a companion's own dependency tree is resolved at install time |
 | A-4 | Another local user | Shared temporary directories, world-readable files | B-2 | C-15, C-22, C-23, C-25 | On Windows the no-follow and owner checks do not run |
@@ -58,7 +58,7 @@ flowchart LR
 | ID | Boundary | What crosses it | Controls | Not covered |
 |---|---|---|---|---|
 | B-1 | Model to tool execution | Every tool call | C-01 to C-08, C-13, C-14 | Static classification sees command text, not what a script does when it runs |
-| B-2 | Workspace content to kit state | Files Luna writes under the workspace, patterns Luna compiles, the install marker a repository commits | C-06, C-15, C-18, C-34, C-61 | A local process racing the checks between `lstat` and `open` |
+| B-2 | Workspace content to kit state | Files Luna writes under the workspace, patterns Luna compiles, the install marker a repository commits | C-06, C-15, C-18, C-34, C-61, C-62 | A local process racing the checks between `lstat` and `open` |
 | B-3 | Agent session to operator authority | Approval answers, human-console answers, phone pairing decisions, unattended mode | C-04, C-08, C-09, C-10, C-28 | The person answering decides; a card is only as careful as its reader |
 | B-4 | Parent agent to child agent | Delegated tasks | C-11, C-12 | Effort budgets are accounting, not a boundary |
 | B-5 | Host to autonomy container | The run contract, mounts, network, the merge decision | C-31 to C-34 | The firewall's unattended mode trusts the supervisor's claim that the container exists |
@@ -66,6 +66,24 @@ flowchart LR
 | B-7 | Third-party code to Luna | npm packages, companions, images, actions | C-38 to C-46, C-54 | Native and WebAssembly components of companions are opaque |
 | B-8 | Pull request to `main` | Code, tests, workflows, scanner configuration | C-47 to C-56 | Review enforcement is a repository setting |
 | B-9 | `main` to a release | Tags, release notes, the npm package when enabled | C-45, C-57, C-58 | Tags are not signed; a tag is the release even if a later workflow fails |
+
+## Project trust
+
+A repository can carry a `.pi/` directory whose extensions pi would run with the operator's
+rights. pi decides this itself, before any Luna code runs: its project trust store
+(`trust-manager`) withholds a project's `.pi` extensions, skills, prompts, themes, settings and
+`mcp.json` until the folder is trusted, a headless start with nobody to ask answers no, and
+`--no-approve` forces no. Luna builds no trust prompt of its own and no profile changes this
+default. `tests/project-trust-smoke.ts` installs every profile into a scratch agent directory
+and starts real pi in a repository with a hostile extension, which must never run; a trusted
+control run (`--approve`) shows the fixture does load otherwise. CI runs it at the pi floor and
+at the newest release looked at. The autonomy worker starts pi with `--no-approve`, so a run
+never trusts the project it works on.
+
+Not covered: a folder the operator chose to trust (including "trust parent folder") is trusted
+with everything in it, and the setting `defaultProjectTrust: "always"` turns the protection off
+for every folder; Luna does not ship that setting and does not stop an operator adding it.
+Luna has no separate `exec` command: `pi -p` and RPC mode follow pi's rule above.
 
 ## Non-goals
 
@@ -81,7 +99,7 @@ flowchart LR
 - **Not a data-loss-prevention system.** Secret detection and redaction are heuristic; a novel
   secret shape, a split secret or an encoded one passes.
 - **Not a network policy.** The firewall rates network sends but does not enforce destinations;
-  the pentest governance layer and the container network do that.
+  the engagement governance layer and the container network do that.
 - **Not a judge of intent.** An operator who approves an action has authorised it.
 
 ## Related pages

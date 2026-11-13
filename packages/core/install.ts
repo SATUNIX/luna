@@ -4,7 +4,7 @@
  * Wraps pi's CLI: pi install, pi config. Idempotent / reconciling.
  *
  * Usage:
- *   node packages/core/install.ts [--profile <quick|balanced|long-horizon|autonomous|self-improving|pentest|lite>]
+ *   node packages/core/install.ts [--profile <balanced|long-horizon|self-improving|engagement|lite>]
  *                        [--only <names>] [--all] [--scope <global|project>] [--mode <local|git|npm>]
  *                        [--channel <latest|next|trunk|X.Y.Z>] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall]
  *                        [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate]
@@ -26,20 +26,25 @@
  *   --capture-overrides  Save hand edits in the current settings entry (vs the installed
  *                        profile) to <agent dir>/pi-kit/overrides.json so later profile
  *                        switches keep them. Alone: capture and exit.
+ *   --verify             Run the repository's verify gate before registering a checkout. It runs by
+ *                        default only in a development checkout (dependencies installed with
+ *                        `npm install`); a plain clone has none, and the gate cannot run there.
  *   --no-migrate         Stop, before any change, instead of moving the kit off a retired or
  *                        previous source (/profile passes it: its rollback restores files and
  *                        cannot bring back the clone `pi remove` deletes).
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { displayCommand, runPi } from "./lib/pi-cli.ts";
+import { stampCompiledKit } from "./lib/cold-stamp.ts";
+import { displayCommand, runPi, warmPiExtensions } from "./lib/pi-cli.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveProfile, type ResolvedExtension } from "./lib/resolve.ts";
 import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
-import { mergePackageBlock, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
+import { mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
-import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, canonicalProfileName, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
+import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
+import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, SOURCES_PATH, ENV_EXAMPLE, extensionRelPath } from "./lib/paths.ts";
@@ -90,11 +95,11 @@ const get = <D extends string | null>(flag: string, def: D): string | D | undefi
 const has = (flag: string): boolean => args.includes(flag);
 
 // Every argument must be a known flag, and a value flag needs a value that is not another flag:
-// a typo such as `--profle pentest` used to be ignored and run a default balanced install.
-const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "--git-ref", "--surface"];
-const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--help", "-h"];
+// a typo such as `--profle engagement` used to be ignored and run a default balanced install.
+const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "--git-ref"];
+const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--verify", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
-  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--help|-h]";
+  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--verify] [--help|-h]";
 
 // Help is recognized before any argument validation or install work: `--help --profile` must
 // print usage and exit 0, not fail because the next flag's value is missing.
@@ -116,15 +121,8 @@ for (let i = 0; i < args.length; i++) {
   i++;
 }
 
-// The split lite surface is now the lite profile of the single package.
-const legacySurface = get("--surface", null);
-if (legacySurface && legacySurface !== "lite") {
-  console.error(`[install] --surface was removed: Luna ships as one package. Use --profile <name> instead.`);
-  process.exit(1);
-}
-if (legacySurface) console.warn("[install] --surface lite is deprecated; installing the lite profile (--profile lite).");
-const explicitProfile = args.includes("--profile") || Boolean(legacySurface);
-const profile = canonicalProfileName(String(legacySurface ? "lite" : get("--profile", "balanced")));
+const explicitProfile = args.includes("--profile");
+const typedProfile = String(get("--profile", "balanced"));
 const onlyNames = get("--only", null)?.split(",").map((n) => n.trim());
 const all = has("--all");
 const scopeArg = get("--scope", "global");
@@ -174,6 +172,24 @@ const settingsPath = scope === "global"
 const markerPath = scope === "global"
   ? path.join(globalAgentDir(), ".pi-kit.json")
   : path.join(process.cwd(), ".pi", ".pi-kit.json");
+
+// A retired profile name is refused when a person types it. The one exception is the name the kit
+// itself stored: kit-update from 0.3.0-beta.3 is already loaded in memory during its first /update
+// and re-applies the profile by passing the raw marker name (`--profile quick --yes
+// --settings-only`), so a name whose replacement is the profile this install already records is
+// accepted, with a one-line notice. A name that does not match the stored profile still fails.
+let profile = typedProfile;
+const renamedTo = renamedProfileMessage(typedProfile);
+if (renamedTo) {
+  const replacement = migrateStoredProfile(typedProfile);
+  if (has("--yes") && readKitMarker(markerPath)?.profile === replacement) {
+    console.log(`[install] profile "${typedProfile}" was renamed to "${replacement}"; applying "${replacement}" because that is the installed profile`);
+    profile = replacement;
+  } else {
+    console.error(`[install] ${renamedTo}`);
+    process.exit(1);
+  }
+}
 
 // Whole-run rollback for the fast --settings-only path (what /profile drives). Each write below is
 // atomic, but the run writes several files in sequence; any exit that is not a clean finish (a
@@ -437,8 +453,8 @@ function resolveCommand(name: string): string | null {
 
 // --- Load profile from profiles/<name>.json ---
 function loadProfile(name: string): Profile {
-  const p = path.join(PROFILES_DIR, `${canonicalProfileName(name)}.json`);
-  if (!fs.existsSync(p)) throw new Error(`[install] Profile not found: ${p}`);
+  const p = path.join(PROFILES_DIR, `${name}.json`);
+  if (!fs.existsSync(p)) throw new Error(`[install] ${renamedProfileMessage(name) ?? `Profile not found: ${p}`}`);
   return loadProfileDef(name, PROFILES_DIR);
 }
 
@@ -633,7 +649,13 @@ console.log("");
 // load does not change any code, and the gate made every /profile switch slow and fallible).
 // Only a local checkout is gated: a release (git tag or npm) and main were checked in CI, and
 // the gate would check this copy, not the one being registered.
-if (!settingsOnly && !dryRun && mode === "local") {
+// The gate is the repository's own check and needs its development dependencies (ajv): a plain clone
+// has none, so there it is skipped (with a line saying so) unless --verify asks for it.
+const developmentCheckout = fs.existsSync(path.join(ROOT, "node_modules", "ajv"));
+if (!settingsOnly && !dryRun && mode === "local" && !developmentCheckout && !has("--verify")) {
+  console.log("[install] Skipping the repository verify gate: this is not a development checkout (no node_modules). Pass --verify to run it.");
+}
+if (!settingsOnly && !dryRun && mode === "local" && (developmentCheckout || has("--verify"))) {
   console.log("[install] Running verify gate...");
   try {
     execFileSync(process.execPath, ["packages/core/verify.ts"], { cwd: ROOT, stdio: "inherit" });
@@ -665,7 +687,7 @@ if (settingsOnly && isRegistered(kitSource)) {
 
 // 2b. Narrow the registered package to the profile/--only selection (F-01 fix).
 // `pi install` always registers the full wildcard package; without this step every
-// profile - including "quick" - would still load every extension, including
+// profile - including "lite" - would still load every extension, including
 // quarantined stubs and experimental extensions.
 if (resolvedResources && extensionPatterns) {
   if (dryRun) {
@@ -678,6 +700,17 @@ if (resolvedResources && extensionPatterns) {
       console.error(`[install] FAIL: ${errorMessage(error)} - install would silently load the full package.`);
       process.exit(1);
     }
+  }
+}
+
+// Hide pi's own resource listing on every install path (profile, --only, --all, settings-only) and
+// remember whether Luna set it, so uninstall can hand it back.
+let setQuietStartup = readMarkerFile()?.setQuietStartup === true;
+if (!dryRun) {
+  try {
+    if (ensureQuietStartup(settingsPath)) setQuietStartup = true;
+  } catch (error) {
+    console.warn(`[install] WARN: could not set quietStartup in ${settingsPath}: ${errorMessage(error)}`);
   }
 }
 
@@ -872,6 +905,7 @@ if (!dryRun) {
     ref: mode === "git" ? parseGitSource(kitSource)?.ref ?? null : null,
     channel: kit.channel,
     companions: [...new Set([...carriedCompanions, ...markerCompanions])],
+    ...(setQuietStartup ? { setQuietStartup: true } : {}),
     installedAt: new Date().toISOString(),
   };
   writeSettingsAtomic(markerPath, marker);
@@ -882,6 +916,16 @@ if (settingsOnly && sourceMigration && !dryRun) {
   removeOtherKitEntries(settingsPath, kitSource);
 }
 
+// pi compiles every extension on its first start and draws nothing meanwhile, which looks like a
+// hang. Do that once here, where the wait is visible. Only for an interactive install: a scripted
+// one (CI, the test suite) should not spend ten seconds or start pi.
+if (!dryRun && !settingsOnly && process.stdout.isTTY && process.stdin.isTTY) {
+  console.log("[install] Preparing pi's extensions (one-time) so your first start is quick...");
+  const warmed = warmPiExtensions(piBin);
+  if (warmed.ok) stampCompiledKit();
+  console.log(warmed.ok ? `[install] Extensions ready in ${(warmed.ms / 1000).toFixed(1)} s.` : "[install] Could not pre-load the extensions; your first pi start will take longer. This does not affect the install.");
+}
+
 const webConsoleSelected = selected.includes("web-console");
 console.log(`
 [install] Done.
@@ -890,4 +934,5 @@ Next steps:
   1. Start pi:      pi          (or /reload if pi is already running)
   2. Check loaded:  pi list
   3. Switch later:  /profile    Updates: /update
-${webConsoleSelected ? "\nWeb console: run /console in pi (alias /webui), or 'npm run install:web' for a standalone setup.\n" : ""}`);
+  4. Using herdr?   herdr integration install pi   (reports working/idle; see docs/herdr.md)
+${webConsoleSelected ? "\nWeb console: run /console in pi, or 'npm run install:web' for a standalone setup.\n" : ""}`);

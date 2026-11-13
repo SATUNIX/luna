@@ -1,4 +1,5 @@
 ---
+description: "Verify the current change with the project's checks"
 argument-hint: "[check or change]"
 ---
 

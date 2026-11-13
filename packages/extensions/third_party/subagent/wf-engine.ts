@@ -59,7 +59,7 @@ import type { SingleResult, SpawnChild } from "./types.ts";
 import { LINE_CAP, runWorkflowScript, type QuickjsLocation, type RefusedCall, type SandboxLimits, type SandboxMode, type SandboxSupport } from "./wf-sandbox.ts";
 import type { ScriptPhase } from "./wf-meta.ts";
 import { checkoutRoot, createWorkflowWorktree, finishWorkflowWorktree, withCheckoutLock, worktreeGitDir, SAFE_GIT, type WorktreeOutcome } from "./worktree.ts";
-import { delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
+import { claimRunDir, delay, ensurePrivateDir, runAgentWithSlot, runsRoot, writePrivate } from "./workflow.ts";
 import { workspaceFingerprint as checkoutFingerprint, usableFingerprint } from "./shared/fingerprint.ts";
 import { appendFileSafe, piWorkspaceOptions } from "./shared/safe-fs.ts";
 
@@ -685,6 +685,7 @@ export function startScriptRun(spec: ScriptSpec, args: unknown, opts: EngineOpti
   try {
     ensurePrivateDir(dir);
     writePrivate(path.join(dir, "script.js"), spec.source);
+    claimRunDir(dir);
     scriptPath = spec.file ?? path.join(dir, "script.js");
   } catch (error) {
     return { ok: false, error: `Cannot create the run directory ${dir}: ${error instanceof Error ? error.message : String(error)}` };

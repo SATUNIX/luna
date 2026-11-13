@@ -51,7 +51,7 @@ Run the full local preflight before committing or deploying runtime changes:
 sh scripts/preflight.sh
 ```
 
-Expected result: readiness, template, pentest environment, governance MCP static checks, overlay, compose parity, ledger integrity, and compose render checks pass.
+Expected result: readiness, template, engagement environment, governance MCP static checks, overlay, compose parity, ledger integrity, and compose render checks pass.
 
 ## Health Verification
 
@@ -152,7 +152,7 @@ python3 scripts/validate-runtime-readiness.py
 python3 scripts/validate-runtime-readiness.py --check-model-endpoint
 sh scripts/preflight.sh
 sh scripts/check_template_contract.sh
-sh scripts/validate-pentest-env.sh
+sh scripts/validate-engagement-env.sh
 python3 scripts/validate-scope-roe.py
 sh scripts/validate-governance-mcp-server.sh
 sh capability/tests/validate-compose.sh

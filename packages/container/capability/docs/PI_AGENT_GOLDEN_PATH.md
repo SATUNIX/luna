@@ -32,9 +32,9 @@ Implemented profile surfaces:
 - `.pi/settings.json`: default model, sessions, compaction, retry, MCP adapter package.
 - `.pi/mcp-adapter.json`: MCP proxy mode with direct tools disabled, sampling auto-approval disabled, and local `pi_system_governance` MCP server wiring.
 - `.pi/mcp-servers/governance/`: local MCP server for evidence, notes, checkpoints, task state, memory, verification, and compact state summaries.
-- `.pi/extensions/pentest-governance/index.ts`: tool-call governance, audit logging, and policy-bound approval decisions.
-- `.pi/skills/`: pentest, MCP, coding, documentation, checkpointing, and validation workflow skills.
-- `.pi/prompts/`: pentest, coding, documentation, MCP review, verification, recovery, and compaction prompts.
+- `.pi/extensions/engagement-governance/index.ts`: tool-call governance, audit logging, and policy-bound approval decisions.
+- `.pi/skills/`: engagement, MCP, coding, documentation, checkpointing, and validation workflow skills.
+- `.pi/prompts/`: engagement, coding, documentation, MCP review, verification, recovery, and compaction prompts.
 - `engagement/`: scope, ROE, MCP, model, approval, and tool-policy examples.
 - `scripts/pi-pentest`: MCP-only default tool profile with break-glass guard for direct tools.
 
@@ -75,9 +75,9 @@ Required MCP capabilities for strong coding performance:
 - Search over files.
 - Optional documentation search.
 
-## Pentest Path
+## Engagement Path
 
-Pentest work should stay hypothesis-led and evidence-first:
+Engagement work should stay hypothesis-led and evidence-first:
 
 1. Load scope and ROE.
 2. Triage read-only evidence sources such as Burp history.
@@ -121,8 +121,8 @@ Closed in this pass:
 - Engagement overlay examples have fail-closed validation for policy, MCP safety settings, required scope/ROE fields, and secret-looking values.
 - Approval audit records include immutable envelopes binding exact inputs to local policy, scope, ROE, MCP config, and tool-schema hashes.
 - Audit and evidence ledgers now include monotonic sequence numbers and hash-chain fields with validation.
-- A single preflight script runs readiness, template, pentest environment, governance MCP static checks, overlay, compose parity, ledger, and compose checks.
-- Compact prompts now include frontmatter and stable `task_state` / `pentest_state` blocks for small-context handoff.
+- A single preflight script runs readiness, template, engagement environment, governance MCP static checks, overlay, compose parity, ledger, and compose checks.
+- Compact prompts now include frontmatter and stable `task_state` / `engagement_state` blocks for small-context handoff.
 
 Still recommended:
 
@@ -200,7 +200,7 @@ sh scripts/preflight.sh
 python3 scripts/validate-runtime-readiness.py
 python3 scripts/validate-runtime-readiness.py --check-model-endpoint
 sh scripts/check_template_contract.sh
-sh scripts/validate-pentest-env.sh
+sh scripts/validate-engagement-env.sh
 python3 scripts/validate-scope-roe.py
 sh scripts/validate-governance-mcp-server.sh
 sh capability/tests/validate-compose.sh

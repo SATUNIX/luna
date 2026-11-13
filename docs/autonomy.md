@@ -101,7 +101,7 @@ supervisor's own code.
 
 ## Quick start
 
-From a shell, or from inside pi with `/autonomy` in the `autonomous` profile (below):
+From a shell, or from inside pi with `/autonomy` in the `long-horizon` profile (below):
 
 ```sh
 node packages/autonomy/cli.ts templates                       # what kinds of run exist
@@ -124,7 +124,7 @@ Working examples are in `packages/autonomy/examples/`.
 
 ### From inside pi
 
-The `autonomy-run` extension, in the `autonomous` profile, adds `/autonomy`:
+The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
 
 ```
 /autonomy templates | init <template> [flags] | plan <run.json> | start <run.json>
@@ -155,6 +155,10 @@ the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
 `PI_AUTONOMY_HOME` in pi's environment to see a non-default state home. This is a read-only view:
 starting, answering, resuming and cancelling a run stay with `/autonomy`
 (`tests/run-query-smoke.ts`).
+
+`workflow_status` is registered inactive; a session wakes it (and `workflow_control`) when it
+receives a prompt while an autonomous run has a live supervisor or is blocked
+(`tests/lazy-run-tools-smoke.ts`). `/workflows` works regardless.
 
 ## The run contract
 
@@ -221,6 +225,19 @@ evaluation and the required review approved), **failed** (with a reason such as
 active minutes ran out). **blocked** is not terminal: a genuinely external blocker or an approval
 needs a person, and `resume --answer` (or `--approve`, `--deny`) continues it.
 
+A model provider's credit or key-limit refusal (HTTP 402, "requires more credits", "insufficient
+credits", a key or weekly limit) parks the run as **blocked** with the provider's message
+(blocker id `provider-limit`) instead of closing empty cycles; rate limits (429) are not matched
+and stay ordinary retries. Worker model entries cap `maxTokens` at 32,768, because a provider
+reserves the cost of a request's full output maximum and a model advertising a near-context-sized
+one makes a low balance fail every call. In `self-improve`, a `report.md` that was already on the
+branch when the cycle began does not count as this cycle's report, and a merge is refused before
+the review model runs when an `Item:` line names a commit that is not in the cycle's diff
+(`tests/autonomy-smoke.ts` pins the limit detection, the clamp, the commit check and the
+stale-report predicate; `tests/autonomy-selfimprove-smoke.ts` pins the cycle flow). Only
+hash-shaped tokens (a digit and a letter a-f) in an `Item:` line count as commit ids. Nothing
+pins the use of the stale-report predicate inside a live cycle.
+
 Exactly one supervisor owns a run at a time. A lock file holds its pid, process start time, host and
 a heartbeat; a duplicate `start` refuses, and after a crash the next supervisor takes the stale lock
 over, removes the orphaned containers and continues. When several supervisors find the same stale
@@ -269,6 +286,40 @@ throwing gate restoring the previous phase.
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see
 [Effort](effort.md).
+
+## One ceiling, and `/away`
+
+Turns, money and wall time are one object (`packages/core/shared/ceiling.ts`), and the first limit
+reached ends the work as **parked**: stopped with its state kept, never reported as a failure. Three
+things use it:
+
+- **An autonomous run's budget** (`budget.totalUsd`, `budget.maxSteps`, `budget.maxMinutes`) is
+  checked through it; reaching one is `budget_exhausted`, which the agent-state file calls `parked`.
+- **A headless or scripted session** (`pi -p`, a cron job) sets `PI_KIT_CEILING_TURNS`,
+  `PI_KIT_CEILING_USD` and `PI_KIT_CEILING_SECONDS`. At the first limit the turn is aborted, further
+  tool calls are refused, and the process exits with code 13, the code `pi-autonomy` uses for a
+  parked run.
+- **`/away [--for 2h] [--budget 5]`** in an interactive session. It turns approvals automatic for
+  that time and budget (default two hours), and sets the same ceiling. A tool call that the
+  automatic checks cannot settle, and that would otherwise show an approval card, is refused with the
+  reason "the operator is away" and recorded; nothing waits for an answer nobody can give. `/away
+  off` returns, and a park ends it. Like `/auto on`, it needs a choice at the terminal of an
+  interactive root session, and strict security refuses it.
+
+A terminal bell and an OSC 9 desktop notification (only on a real terminal) ring when an approval
+card has been open for 60 seconds, when a run of 60 seconds or longer ends, and when a run parks.
+
+The environment ceiling is a floor: `/away` adds a limit measured from when it was sent, checked beside
+it, so it can tighten the run but never loosen or clear it, and a park by the environment ceiling
+ends only with the session. A park by `/away` ends with `/away off`. The workflow runner does not
+use this ceiling.
+
+Not covered: spend is what the provider reported for the session's own requests, so a subagent's or
+workflow agent's cost is not counted against a session ceiling (a workflow has no separate budget);
+wall time is checked at turn boundaries and by a timer, not inside a long tool call; there is no
+queue of refused actions to approve afterwards, no webhook and no retry. `tests/away-ceiling-smoke.ts`
+pins the ceiling, the park, the refusal and the bell rules; the autonomy budget path is exercised
+by `tests/autonomy-run-smoke.ts`.
 
 ## Promotion and results
 
@@ -369,6 +420,23 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   The full diff still passes control-path/size checks and an independent merge review, even if
   ordinary cycle review is disabled. Red or empty work is not salvaged and uses the bounded restart
   path (`tests/autonomy-selfimprove-smoke.ts`).
+- **An unusable review parks the cycle; it does not reject it.** A reviewer reply with no verdict
+  (an error, a timeout, prose with no JSON object) is retried three times, then asked once of the
+  manager model as a second reviewer (it has the same authority, and `review.json` records which model
+  answered); a lone JSON verdict object is found inside surrounding prose, but several objects or a
+  stray brace make the reply malformed. If no
+  reviewer produces a verdict the cycle stays current and the run blocks as `review-pending`; the work
+  is not recorded as rejected, and `resume --answer "continue"` reviews the held head again without starting a worker session. Only a parsed
+  `REJECT` rejects. The `implement` template's task review does the same (`tests/autonomy-smoke.ts`,
+  `tests/autonomy-selfimprove-smoke.ts`).
+- **Work the host refuses to accept is kept.** Worker commits that diverge from the accepted head, or
+  touch paths outside `permissions.writeAreas`, would be overwritten by the next fetch and by the next
+  cycle's workspace reset. The supervisor keeps each under `refs/wip/<run>/` in the run's `mirror.git`
+  (local only, never published) and names the ref and its diffstat in the next briefing or cycle
+  prompt. Uncommitted edits are already committed by the checkpoint snapshot before every close,
+  pause, stop and cancel. A snapshot that cannot be fetched at all (the bundle fails) is not kept
+  anywhere else (`tests/autonomy-run-smoke.ts` pins the write-area case; the diverged case is not
+  pinned).
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
   charter, the report, the commits and the diff. Its input starts with a host ledger: the cycle's
   `git log --format="%h %s"` and the `git diff --shortstat` without the lockfile and this run's
@@ -377,7 +445,7 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   change outside the records is covered by no report item. A **cycle context** section gives host
   facts the precedence depends on: the upstream sync outcome, whether the cycle resolves an
   upstream conflict, and the previous cycle's outcome, gate and merge reason. A malformed answer,
-  or none after three attempts, counts as `REJECT`. A cycle that is not merged is kept by its tag and shown to the next cycle so it
+  or none from any reviewer, parks the cycle instead (next item). A cycle that is not merged is kept by its tag and shown to the next cycle so it
   can salvage what is sound.
   A completed cycle with a **red** gate is still reviewed: the reviewer is told which checks failed, a
   `MERGE` verdict cannot waive the gate, and the reason plus the reviewer's concerns are carried into
@@ -549,8 +617,7 @@ The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `
 --run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
 exits non-zero on an overrun or a missing or duplicate journal line. It is a manual check run by
 the steward, not a gate that blocks a merge, and `--max-lines` only overrides the cap for an
-experiment. `smoke:paperwork-budget` pins the 120-line failure and the 40-line pass
-(`tests/paperwork-budget-smoke.ts`). The cap counts the cycle's record, not its work: commit
+experiment. Nothing in the test suite pins it. The cap counts the cycle's record, not its work: commit
 messages, code and tests are not counted.
 
 The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
@@ -791,6 +858,19 @@ self-improve-only rule.
    processes are reaped instead of filling `--pids-limit` (`tests/autonomy-smoke.ts`).
 4. Run the supervisor from a checkout of `main`, not from the branch a worker is changing.
 
+Check all of this at once with `pi-autonomy doctor --setup [--config run.json]`. It asks the engine
+about itself and reports, one line each: whether the engine answers; whether it is rootless; whether
+**unattended mode is enforced** on it (see below); whether the image's `pi-autonomy.kit-ref` label
+names this checkout's kit version; and, given a contract, whether an inference key resolves (the
+value is never printed). It exits 3 when something fails, and `plan` prints the same unattended line
+for a contract that asks for unattended operation. The firewall's unattended mode activates only
+when the worker sees the contract from the initial user namespace, so on the default rootless
+engine it is **not enforced**: the worker runs under the normal headless rules, and an approval it
+needs fails or blocks the run. `plan` says `unattended: NOT enforced on this engine` in that case;
+a rootful engine enforces it, at the cost of a root-equivalent daemon (see step 1).
+`tests/autonomy-cli-smoke.ts` pins the report against a scripted engine; nothing tests a real engine,
+and a canary run, a Podman job in CI and a per-cycle scorecard are not built yet.
+
 ## Generations
 
 With `generations.enabled`, a finite run (`implement` or `deploy`) works in time-boxed
@@ -816,7 +896,7 @@ allowed. At the first step, the engine reads the per-model opt-in in
 `/effort memento` shows ([Memento mode](effort.md#memento-mode)). It reads them for the worker
 model at the run's effort tier. The run then uses the lower of `maxGenerations` and that allowance.
 With the defaults, E1-E3 allow none, E4 allows 2 and E5 allows 4, and only for an opted-in model in
-the `long-horizon` or `autonomous` profile. An allowance of 0 runs the task as a single generation
+the `long-horizon` profile. An allowance of 0 runs the task as a single generation
 with no box, and no worker is asked for a notebook. The decision is recorded once in
 `state.memento` (`requested`, `allowance`, `maxGenerations`, `reason`, `model`, `profile`, `tier`),
 so a resume or a later change to the opt-in does not change it. It is also logged
@@ -959,6 +1039,14 @@ is written to `~/.pi`.
 | `egress/`, `meter/`, `boundary.json` | Proxy audit, spend records, the last boundary probe. |
 | `notebook.json` | The generations notebook (0600), when generations are on. |
 | `remote.git`, `work/`, `agent-state/` | The worker's side, written by the container. |
+| `outcome.md` | Written whenever the run stops working (succeeded, failed, cancelled, blocked, paused, budget exhausted): the status, the reason, what a blocked run waits for, what was spent and the next step. |
+
+The run also keeps one agent-state file, `autonomy-<run>.json`, in the shared agent-state directory
+(`~/.local/state/luna/agents`, or `LUNA_AGENT_STATE_DIR`), so herdr or a script can see it without
+opening the run. Status `blocked` maps to `blocked`, `paused` and `budget_exhausted` to `parked`,
+`succeeded` to `done`, `failed` to `failed` and `cancelled` to `stopped`; the schema is described in
+[herdr](herdr.md#the-agent-state-file). A run whose home is not the configured one reports beside it
+(`<home>/.agents`). `tests/agent-state-smoke.ts` pins the mapping and `outcome.md`.
 
 ## What has been verified
 

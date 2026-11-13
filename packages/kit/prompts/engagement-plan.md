@@ -1,0 +1,22 @@
+---
+description: "Load the scope and ROE, then plan the assessment"
+argument-hint: "[focus]"
+---
+
+# Engagement Plan
+
+Load the engagement scope and ROE, then produce a concise assessment plan.
+
+Focus: ${@:-the whole loaded engagement}
+
+Return:
+
+- In-scope assets and explicit exclusions
+- Assumptions and missing information
+- Initial observations
+- Hypotheses to test
+- Evidence needed for each hypothesis
+- Tool classes likely needed
+- Approval-sensitive actions
+
+Do not propose testing outside the loaded scope.

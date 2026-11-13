@@ -13,7 +13,12 @@ import type { FeedbackRecord } from "./feedback.ts";
 import type { SessionGrant } from "./trajectory.ts";
 import { isRecord } from "./config.ts";
 
-export type Completer = (system: string, prompt: string, signal?: AbortSignal) => Promise<string>;
+export type Completer = ((system: string, prompt: string, signal?: AbortSignal) => Promise<string>) & {
+  /** The model behind it runs on this machine or this network: slow to load and serial, so it is given longer. */
+  isLocal?: boolean;
+  /** Called once when the judge keeps timing out, so the operator learns why every action is being asked about. */
+  onSlow?: () => void;
+};
 export type Confidence = "high" | "medium" | "low";
 export type Verdict = { verdict: "allow" | "block"; reason: string; differs?: string; confidence?: Confidence };
 
@@ -21,11 +26,41 @@ export type Verdict = { verdict: "allow" | "block"; reason: string; differs?: st
 export const isUncertainBlock = (v: Pick<Verdict, "verdict" | "confidence"> | null | undefined): boolean => v?.verdict === "block" && (v.confidence === "medium" || v.confidence === "low");
 
 export const JUDGE_TIMEOUT_MS = 15_000;
+// A model on this machine or network is often a single GPU that must load the weights and then works
+// through its queue one request at a time: 15 seconds turns every call into a silent timeout.
+export const LOCAL_JUDGE_TIMEOUT_MS = 90_000;
 // PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS shortens (or lengthens) the wait for a verdict. A judge that times
 // out is UNCERTAIN: the action goes to the operator (or fails closed when nobody can be asked).
-export function judgeTimeoutMs(): number {
+export function judgeTimeoutMs(local = false): number {
   const n = Number(process.env.PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : JUDGE_TIMEOUT_MS;
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : local ? LOCAL_JUDGE_TIMEOUT_MS : JUDGE_TIMEOUT_MS;
+}
+
+/**
+ * Whether a provider's base URL points at this machine or a private network: loopback, RFC 1918
+ * ranges, link-local, `.local` / `.lan` names, or a bare hostname with no dots. Cost is deliberately
+ * not used: hosted free tiers also cost nothing and are neither slow to load nor serial. A private
+ * gateway in front of a hosted model looks local by address alone; PI_KIT_LOCAL_MODELS=off says it is not
+ * (and =on the reverse). The same rule is in session-helpers/model-fit.ts and subagent/config.ts.
+ */
+export function isLocalProvider(baseUrl: string | undefined): boolean {
+  const forced = process.env.PI_KIT_LOCAL_MODELS?.trim().toLowerCase();
+  if (forced === "on" || forced === "1" || forced === "off" || forced === "0") return forced === "on" || forced === "1";
+  if (!baseUrl) return false;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".internal")) return true;
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  return /^f[cd][0-9a-f]{2}:/.test(host) || (!host.includes(".") && !host.includes(":"));
 }
 
 export const JUDGE_SYSTEM = `You review one tool call that a coding agent wants to run on the operator's machine.
@@ -168,30 +203,74 @@ export function judgePrompt(input: JudgeInput): string {
   return lines.filter(Boolean).join("\n");
 }
 
+// Models that are small or local wrap the answer: a markdown fence, a <think> block, prose before and
+// after, single quotes or a trailing comma. The reason may also contain braces. The extractor reads every
+// balanced object in the text and takes the LAST one that parses to a verdict (a model states its
+// conclusion last; an example object echoed from the action comes earlier); it never guesses a verdict
+// from prose, so an answer it cannot read is still "no verdict". Only "allow" in exact lowercase counts
+// as allow; "block" is folded for case because a mis-cased block errs towards the operator.
+function jsonObjects(text: string): string[] {
+  const out: string[] = [];
+  for (let start = text.indexOf("{"); start >= 0 && out.length < 32; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString: string | null = null;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inString) {
+        if (c === "\\") i++;
+        else if (c === inString) inString = null;
+      } else if (c === '"' || c === "'") inString = c;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) {
+        out.push(text.slice(start, i + 1));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function parseLoosely(candidate: string): unknown {
+  const untrailed = candidate.replace(/,\s*([}\]])/g, "$1");
+  // The quote repair is only for an object written wholly in single quotes: a double quote anywhere means prose apostrophes.
+  const attempts = candidate.includes('"') ? [candidate, untrailed] : [candidate, untrailed, untrailed.replace(/'/g, '"')];
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt);
+    } catch {
+      /* try the next repair */
+    }
+  }
+  return undefined;
+}
+
 export function parseVerdict(text: string): Verdict | null {
-  const m = /\{[^{}]*"verdict"[^{}]*\}/s.exec(text);
-  if (!m) return null;
-  try {
+  const cleaned = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, " ").replace(/```(?:json)?/gi, " ");
+  for (const candidate of jsonObjects(cleaned).reverse()) {
+    if (!candidate.includes("verdict")) continue;
     // Model output is untrusted: only a closed set of verdicts and confidences gets through.
-    const v: unknown = JSON.parse(m[0]);
-    if (!isRecord(v)) return null;
+    const v = parseLoosely(candidate);
+    if (!isRecord(v)) continue;
     const { verdict, reason } = v;
-    if ((verdict === "allow" || verdict === "block") && typeof reason === "string") {
+    const word = typeof verdict === "string" ? verdict.trim() : "";
+    const verdictWord = word === "allow" ? "allow" : word.toLowerCase() === "block" ? "block" : "";
+    if ((verdictWord === "allow" || verdictWord === "block") && typeof reason === "string") {
       const differs = typeof v.differs === "string" && v.differs.trim() ? v.differs.trim().slice(0, 300) : undefined;
       const conf = typeof v.confidence === "string" ? v.confidence.trim().toLowerCase() : "";
       const confidence: Confidence | undefined = conf === "high" || conf === "medium" || conf === "low" ? conf : undefined;
-      return { verdict, reason: reason.trim().slice(0, 300) || "no reason given", ...(confidence ? { confidence } : {}), ...(differs && verdict === "block" ? { differs } : {}) };
+      return { verdict: verdictWord, reason: reason.trim().slice(0, 300) || "no reason given", ...(confidence ? { confidence } : {}), ...(differs && verdictWord === "block" ? { differs } : {}) };
     }
-  } catch {
-    /* malformed */
   }
   return null;
 }
 
-export async function runJudge(complete: Completer, input: JudgeInput, timeoutMs = judgeTimeoutMs(), outer?: AbortSignal): Promise<Verdict | null> {
+let consecutiveTimeouts = 0;
+
+async function judgeOnce(complete: Completer, input: JudgeInput, timeoutMs: number, outer?: AbortSignal): Promise<{ verdict: Verdict | null; timedOut: boolean }> {
   const ac = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settle: (v: null) => void = () => {};
+  let timedOut = false;
   // An aborted turn stops waiting at once instead of riding out the timeout.
   const onAbort = () => {
     ac.abort();
@@ -199,22 +278,40 @@ export async function runJudge(complete: Completer, input: JudgeInput, timeoutMs
   };
   outer?.addEventListener?.("abort", onAbort);
   try {
-    if (outer?.aborted) return null;
+    if (outer?.aborted) return { verdict: null, timedOut: false };
     const text = await Promise.race([
       complete(JUDGE_SYSTEM, judgePrompt(input), ac.signal),
       new Promise<null>((resolve) => {
         settle = resolve;
         timer = setTimeout(() => {
+          timedOut = true;
           ac.abort();
           resolve(null);
         }, timeoutMs);
       }),
     ]);
-    return typeof text === "string" ? parseVerdict(text) : null;
+    return { verdict: typeof text === "string" ? parseVerdict(text) : null, timedOut };
   } catch {
-    return null;
+    return { verdict: null, timedOut: false };
   } finally {
     if (timer) clearTimeout(timer);
     outer?.removeEventListener?.("abort", onAbort);
   }
+}
+
+// A local judge is given a longer wait (the first request often pays for loading the model) but no
+// second attempt: a retry would double the worst case. Two timeouts in a row on consecutive actions tell the operator why
+// actions keep being asked about, once.
+export async function runJudge(complete: Completer, input: JudgeInput, timeoutMs = judgeTimeoutMs(complete.isLocal === true), outer?: AbortSignal): Promise<Verdict | null> {
+  const result = await judgeOnce(complete, input, timeoutMs, outer);
+  if (result.verdict) {
+    consecutiveTimeouts = 0;
+  } else if (result.timedOut && ++consecutiveTimeouts === 2) {
+    try {
+      complete.onSlow?.();
+    } catch {
+      /* a notice only */
+    }
+  }
+  return result.verdict;
 }

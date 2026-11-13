@@ -1,6 +1,6 @@
 // console-auth.ts — authenticated human-console answers.
 //
-// A headless requester (tool-firewall, pentest-governance-domain, ask_human) files a request as
+// A headless requester (tool-firewall, engagement-governance, ask_human) files a request as
 // <console>/pending/<id>.json and waits for <console>/resolved/<id>.json. Both directories sit where
 // the agent works, so a file there proves nothing about who wrote it. An answer therefore counts only
 // when it carries an HMAC-SHA256, made with the console answer key, over the request id, the SHA-256
@@ -25,7 +25,7 @@
 // path at run time, which the firewall cannot see statically. Answers are bound to one request, so a captured
 // answer cannot be replayed onto another request.
 //
-// Extensions are self-contained, so tool-firewall, human-console and pentest-governance-domain each
+// Extensions are self-contained, so tool-firewall, human-console and engagement-governance each
 // carry this same file; tests/human-console-auth-smoke.ts fails when the copies differ.
 import crypto from "node:crypto";
 import fs from "node:fs";

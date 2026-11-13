@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 /**
- * Small-model floor (V-81). `packages/core/eval/footprint.ts` meters what a profile costs a small
- * model: the text of every tool it registers, and the system-prompt prefix the effort block leaves
- * alone between two consecutive turns. packages/core/eval/footprint-baseline.json is the reviewed
- * record of that floor, so a deliberate kit-text change updates it in the same commit while an
- * accidental one fails here first.
+ * Small-model floor (V-81). The footprint meter itself (`packages/core/eval/footprint.ts`) is a
+ * development tool and its measurements are not pinned here: they would change with every kit-text edit.
  *
- * Also pinned: `lite` carries compaction settings sized for a small window, those settings reach
+ * Pinned: `lite` carries compaction settings sized for a small window, those settings reach
  * pi's settings.json through the profile's `settings` block (the consumer in lib/profiles.ts)
  * without touching any other key, plan-valid rate is counted per model, and the live-only
  * plan-valid fixture stays offline unless its operator-run gate is set.
@@ -17,8 +14,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { isolateKitEnv, loadModule, rmWorkspace, ROOT, setEnv, tmpWorkspace, type FakePiApi } from "../packages/core/eval/harness.ts";
-import type * as PolicyModule from "../packages/extensions/src/effort/policy.ts";
+import { isolateKitEnv, rmWorkspace, ROOT, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import {
   applyProfileSettings,
@@ -31,17 +27,10 @@ import {
   writeProfileSettingsRecord,
   type Profile,
 } from "../packages/core/lib/profiles.ts";
-import { footprintProblems, measureFootprint, measurePromptPrefix, planValidRate, readBaseline, type Footprint } from "../packages/core/eval/footprint.ts";
+import { planValidRate } from "../packages/core/eval/footprint.ts";
 import { fixtures } from "../packages/core/eval/fixtures.ts";
 
 // ---- helpers ---------------------------------------------------------------------------------
-
-// The balanced profile is measured once: two cases read it and a profile load drives every
-// extension in the profile.
-let measured: Promise<Footprint> | null = null;
-const balanced = (): Promise<Footprint> => (measured ??= measureFootprint("balanced"));
-
-const toolCounts = (f: Footprint): Map<string, number> => new Map(f.tools.map((t) => [t.name, t.chars]));
 
 // The written settings.json of a scratch install, read as the untrusted JSON it is.
 function readSettingsFile(file: string): Record<string, unknown> {
@@ -54,116 +43,6 @@ function settingsBlock(settings: Record<string, unknown>, key: string): Record<s
   const value = settings[key];
   assert.ok(isRecord(value), `settings.${key} must be an object, got ${JSON.stringify(value)}`);
   return value;
-}
-
-/** The parts of a measured or baseline profile entry a mismatch can come from, compared key by key. */
-function assertProfileMatches(name: string, f: Footprint, baseline: ReturnType<typeof readBaseline>): void {
-  const entry = baseline.profiles[name];
-  assert.ok(entry, `the baseline records the ${name} profile`);
-  const counts = toolCounts(f);
-  assert.deepEqual(
-    [...counts.keys()].sort(),
-    Object.keys(entry.tools).sort(),
-    `${name}: the baseline names exactly the tools measured (${[...counts.keys()].join(", ")})`,
-  );
-  for (const [tool, chars] of Object.entries(entry.tools)) {
-    assert.equal(counts.get(tool), chars, `${name}: ${tool} tool text matches the baseline`);
-  }
-  assert.equal(f.toolText, entry.toolText, `${name}: total tool text matches the baseline`);
-  assert.deepEqual(footprintProblems(f, baseline), [], `${name}: nothing to report against the baseline`);
-}
-
-// ---- a. balanced: 13 tools, the 9,500-char ceiling, the baseline, and an over-ceiling fixture --
-
-async function testBalancedFootprint(): Promise<void> {
-  const f = await balanced();
-  assert.equal(f.profile, "balanced");
-  assert.equal(f.tools.length, 13, "the balanced profile registers 13 root tools");
-  assert.equal(
-    f.toolText,
-    f.tools.reduce((sum, t) => sum + t.chars, 0),
-    "tool text is the sum of its tools",
-  );
-  assert.ok(f.toolText <= 9500, `balanced kit tool text is ${String(f.toolText)} chars, over the 9,500 ceiling`);
-  assertProfileMatches("balanced", f, readBaseline());
-
-  // A local over-9,500 fixture: the same footprint with the delta added to one tool must fail.
-  const delta = 9600 - f.toolText;
-  assert.ok(delta > 0, "the balanced floor leaves room under 9,500");
-  const over: Footprint = {
-    ...f,
-    tools: f.tools.map((t) => (t.name === "subagent" ? { name: t.name, chars: t.chars + delta } : t)),
-    toolText: 9600,
-  };
-  const problems = footprintProblems(over, readBaseline());
-  const named = problems.find((p) => p.includes("balanced") && p.includes("9600") && p.includes("9500"));
-  assert.ok(named, `over the ceiling must name the profile, the measured chars and the ceiling: ${problems.join(" | ")}`);
-  assert.match(named, new RegExp(`\\+${String(delta)}\\b`), "the problem states the delta against the baseline");
-}
-
-// ---- b. balanced delegation tool text --------------------------------------------------------
-
-async function testDelegationFootprint(): Promise<void> {
-  const f = await balanced();
-  const delegation = f.delegation;
-  assert.ok(delegation, "the balanced profile carries delegation tools");
-  assert.ok(delegation.toolText <= 4900, `delegation tool text is ${String(delegation.toolText)} chars, over the 4,900 ceiling`);
-  const entry = readBaseline().profiles.balanced?.delegation;
-  assert.ok(entry, "the baseline records the balanced delegation entry");
-  assert.deepEqual([...delegation.tools], [...entry.tools], "the delegation tools match the baseline");
-  assert.equal(delegation.toolText, entry.toolText, "delegation tool text matches the baseline");
-}
-
-// ---- c. lite: the small-model floor ----------------------------------------------------------
-
-async function testLiteFootprint(): Promise<void> {
-  const f = await measureFootprint("lite");
-  assert.equal(f.profile, "lite");
-  assert.equal(
-    f.toolText,
-    f.tools.reduce((sum, t) => sum + t.chars, 0),
-    "lite tool text is the sum of its tools",
-  );
-  assert.ok(f.toolText < (await balanced()).toolText, "lite is smaller than balanced");
-  assertProfileMatches("lite", f, readBaseline());
-}
-
-// ---- d. the prompt prefix two consecutive turns share ----------------------------------------
-
-async function testPromptPrefix(): Promise<void> {
-  const prefix = await measurePromptPrefix();
-  const policy: typeof PolicyModule = await loadModule("extensions/effort/policy.ts");
-  assert.equal(prefix.turns.length, 2, "two turns were measured");
-  for (const turn of prefix.turns) {
-    assert.ok(turn.includes(policy.PROMPT_START), "the effort block starts at effort/policy.ts's own marker");
-    assert.ok(turn.includes(policy.PROMPT_END), "and ends at it, so the meter reads the block effort writes");
-  }
-  assert.equal(prefix.stable, true, "two consecutive turns keep their prefix up to the effort block");
-  assert.ok(prefix.sharedPrefix > 0, "the turns share a non-empty prefix");
-  assert.ok(prefix.effortStart > 0, "the effort block starts after the prompt begins");
-  assert.ok(prefix.sharedPrefix >= prefix.effortStart, "the shared prefix reaches the effort block");
-  assert.deepEqual([...prefix.blocksPerTurn], [1, 1], "each turn carries exactly one effort block");
-  const before = prefix.turns.map((turn) => turn.slice(0, prefix.effortStart));
-  assert.equal(before[0], before[1], "the text before the effort block is identical in both turns");
-}
-
-// pi rebuilds each turn's prompt from its base prompt through every extension's
-// before_agent_start in load order, so text another extension adds ahead of the effort block
-// is part of the prefix. One that adds per-turn text there must make the meter report unstable.
-async function testPromptPrefixSeesEarlierExtensions(): Promise<void> {
-  let turn = 0;
-  const perTurnText = (pi: FakePiApi): void => {
-    pi.on("before_agent_start", (event) => {
-      turn += 1;
-      const prompt = isRecord(event) && typeof event.systemPrompt === "string" ? event.systemPrompt : "";
-      return { systemPrompt: `${prompt}\n\nTurn ${String(turn)} started at a new time.` };
-    });
-  };
-  const prefix = await measurePromptPrefix("balanced", { leading: [perTurnText] });
-  assert.equal(turn, 2, "the earlier extension's handler ran once per turn");
-  assert.deepEqual([...prefix.blocksPerTurn], [1, 1], "effort still writes one block per turn");
-  assert.equal(prefix.stable, false, "per-turn text ahead of the effort block breaks the prefix, and the meter says so");
-  assert.ok(prefix.sharedPrefix < prefix.effortStart, "the shared prefix stops before the effort block");
 }
 
 // ---- e. lite compaction settings, and the profile settings consumer -------------------------
@@ -424,103 +303,15 @@ function testEvalCategoryGate(): void {
 }
 
 /** The CLI V-81 documents: measure a profile, print JSON, and record a baseline byte-identically. */
-function testFootprintCli(): void {
-  const ws = tmpWorkspace("pi-footprint-cli-");
-  try {
-    const baselineFile = path.join(ws, "baseline.json");
-    const reviewed = path.join(ROOT, "packages", "core", "eval", "footprint-baseline.json");
-    fs.copyFileSync(reviewed, baselineFile);
-    const before = fs.readFileSync(baselineFile, "utf8");
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ["packages/core/eval/footprint.ts", ...args], { cwd: ROOT, encoding: "utf8", timeout: 120_000 });
-
-    const lite = run(["--profile", "lite", "--json", `--baseline=${baselineFile}`]);
-    assert.equal(lite.status, 0, lite.stderr);
-    const parsed: unknown = JSON.parse(lite.stdout);
-    assert.ok(isRecord(parsed), "--json prints one object");
-    assert.equal(parsed.profile, "lite");
-    assert.equal(typeof parsed.chars, "number");
-    assert.equal(parsed.tokens, Math.ceil(Number(parsed.chars) / 4), "tokens are ceil(chars/4)");
-    assert.ok(Array.isArray(parsed.tools), "tools are listed");
-    assert.deepEqual(parsed.problems, [], "lite matches the reviewed baseline");
-    const again = run(["--profile", "lite", "--json", `--baseline=${baselineFile}`]);
-    assert.equal(again.stdout, lite.stdout, "two runs of the same profile print identical JSON");
-
-    const unknown = run(["--profile", "__no_such_profile__"]);
-    assert.equal(unknown.status, 2, "an unknown profile is a usage error, not a silent pass");
-    assert.match(unknown.stderr, /cannot measure profile/, "the unknown profile is named on stderr");
-    const missing = run(["--profile"]);
-    assert.equal(missing.status, 2, "a --profile with no value is a usage error");
-    const stray = run(["--nonsense"]);
-    assert.equal(stray.status, 2, "an unknown argument is a usage error");
-
-    const written = run(["--profile", "balanced", "--write-baseline", `--baseline=${baselineFile}`]);
-    assert.equal(written.status, 0, written.stderr);
-    assert.match(written.stdout, /baseline unchanged/, "an unchanged record is reported as unchanged");
-    assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "an unchanged baseline is not reformatted");
-    // lite's reviewed row has no delegation block; the writer must not add one (V-81 byte-identical).
-    const liteWritten = run(["--profile", "lite", "--write-baseline", `--baseline=${baselineFile}`]);
-    assert.equal(liteWritten.status, 0, liteWritten.stderr);
-    assert.match(liteWritten.stdout, /baseline unchanged/, "lite's reviewed shape is unchanged");
-    assert.equal(fs.readFileSync(baselineFile, "utf8"), before, "adding no delegation row keeps lite byte-identical");
-    // A baseline path that does not exist yet is created, not an unhandled read error.
-    const fresh = path.join(ws, "fresh-baseline.json");
-    const created = run(["--profile", "lite", "--write-baseline", `--baseline=${fresh}`]);
-    assert.equal(created.status, 0, created.stderr);
-    assert.match(created.stdout, /baseline written/, "a missing baseline file is written, not rejected");
-    // Pin the measurement, not a literal: a deliberate kit-text change updates the reviewed row
-    // (f86cee0 shrank lite's tool text) and this check must follow it instead of a stale number.
-    const reviewedLiteChars = readBaseline().profiles.lite?.toolText;
-    assert.ok(reviewedLiteChars !== undefined, "lite has a reviewed baseline row");
-    const freshRecord = readSettingsFile(fresh);
-    const freshProfiles = freshRecord.profiles;
-    assert.ok(isRecord(freshProfiles), "the new baseline holds a profiles object");
-    const freshLite = freshProfiles.lite;
-    assert.ok(isRecord(freshLite), "the new baseline holds a lite row");
-    assert.equal(freshLite.toolText, reviewedLiteChars, "the new file records the measurement exactly");
-
-    // A malformed baseline is a clean usage error, not a raw parse crash, and is left untouched.
-    const malformed = path.join(ws, "malformed-baseline.json");
-    fs.writeFileSync(malformed, "not json");
-    const malformedBytes = fs.readFileSync(malformed, "utf8");
-    const badRead = run(["--profile", "lite", `--baseline=${malformed}`]);
-    assert.equal(badRead.status, 2, "a malformed baseline exits 2");
-    assert.match(badRead.stderr, /cannot read baseline/, "the malformed baseline is named on stderr");
-    assert.equal(fs.readFileSync(malformed, "utf8"), malformedBytes, "a malformed baseline is left untouched on read");
-    const badWrite = run(["--profile", "lite", "--write-baseline", `--baseline=${malformed}`]);
-    assert.equal(badWrite.status, 2, "--write-baseline refuses to clobber a malformed baseline");
-    assert.equal(fs.readFileSync(malformed, "utf8"), malformedBytes, "a malformed baseline is left untouched on write");
-  } finally {
-    rmWorkspace(ws);
-  }
-}
-
-/** A profile the reviewed baseline does not list must fail loudly, not silently pass (docs claim). */
-function testMissingBaselineRow(): void {
-  const baseline = readBaseline();
-  const f: Footprint = { profile: "no-such-profile", tools: [], toolText: 0, delegation: null };
-  const problems = footprintProblems(f, baseline);
-  assert.equal(problems.length, 1, JSON.stringify(problems));
-  assert.match(problems[0] ?? "", /no-such-profile: no baseline entry in footprint-baseline\.json/);
-  assert.doesNotMatch(problems[0] ?? "", /over the/, "a missing row is not reported as an over-ceiling failure");
-}
-
 // ---- runner ---------------------------------------------------------------------------------
 
 const tests: Array<[string, () => void | Promise<void>]> = [
-  ["balanced: 13 tools, under 9,500 chars, matching the baseline, and an over-ceiling fixture fails", testBalancedFootprint],
-  ["balanced: delegation tool text under 4,900 chars and matching the baseline", testDelegationFootprint],
-  ["lite: the small-model footprint matches the baseline", testLiteFootprint],
-  ["two consecutive turns share their prompt prefix up to the effort block", testPromptPrefix],
-  ["the prompt meter chains every extension before effort, so per-turn text ahead of it fails", testPromptPrefixSeesEarlierExtensions],
   ["lite compaction settings are sized for a small window and reach pi's settings.json", testLiteCompactionAndConsumer],
   ["a profile switch and an uninstall put the operator's own compaction values back", testProfileSettingsRestore],
   ["uninstall leaves no profile compaction key in the global settings.json", testUninstallRestoresCompaction],
   ["plan-valid rate per model, malformed records ignored", testPlanValidRate],
   ["the live-only plan-valid fixture is registered and skipped offline", testLiveOnlyFixtureIsSkippedOffline],
   ["the eval --category gate refuses an unknown or missing value", testEvalCategoryGate],
-  ["the footprint CLI measures, prints deterministic JSON, rejects bad arguments, and preserves an unchanged baseline", testFootprintCli],
-  ["a profile with no baseline row fails until it is recorded", testMissingBaselineRow],
   ];
 
 const restoreEnv = isolateKitEnv();

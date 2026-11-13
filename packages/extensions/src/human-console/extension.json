@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "session_shutdown"],
   "registers": { "tools": ["ask_human"], "commands": [] },
-  "profiles": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": { "nodeBuiltins": ["node:crypto", "node:fs", "node:os", "node:path"], "npm": ["typebox"], "piPeers": [], "services": [], "models": [] },

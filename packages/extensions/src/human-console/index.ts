@@ -242,7 +242,7 @@ type Answer = { approved: boolean; answer: string | null; note?: string | null }
 // read loosely so this extension stays self-contained and works when that one is not loaded.
 const WORKFLOW_CONTROL_KEY = Symbol.for("pi-kit.workflow-control");
 // The pause is sent with origin "safety", so the run stays held for the operator: the agent's own
-// workflow_control resume is refused; only the operator's Yes here or /workflow resume lifts it.
+// workflow_control resume is refused; only the operator's Yes here or /workflows resume lifts it.
 function controlWorkflowRun(runId: string, action: "pause" | "resume"): { ok: boolean; message: string } {
   const registry: unknown = Reflect.get(globalThis, WORKFLOW_CONTROL_KEY);
   const control = prop(registry, "control");
@@ -297,6 +297,9 @@ function stickyNote(runId: string, note?: string | null): string {
 }
 
 export default function humanConsole(pi: ExtensionAPI) {
+  // `luna:attention` tells anything listening (the herdr extension) that Luna is blocked on the operator.
+  // A listener must never break a question, so a failing bus is ignored.
+  const attention = (active: boolean, label: string) => { try { pi.events?.emit("luna:attention", { kind: "question", active, label }); } catch { /* observers only */ } };
   const runBroker = new RunApprovalBroker();
   // Requests the operator has been told are waiting behind an overlay: one notice each, not one a poll.
   const heldNoticed = new Set<string>();
@@ -381,7 +384,7 @@ export default function humanConsole(pi: ExtensionAPI) {
           const runCards = await waitForRunCards(cards.signal, Math.max(1, deadline - Date.now()));
           if (runCards !== "free") break;
           // Keys meant for an open overlay must not answer this. A hold that outlasts it leaves the run
-          // paused, the same as No: /workflow resume still lifts it.
+          // paused, the same as No: /workflows resume still lifts it.
           const asked = await showWhenFree(async (card): Promise<{ shown: boolean; answer: string | null }> => {
             // Another card can take the keyboard between the wait and this callback. Do not stack a
             // second prompt on top of that card.
@@ -600,7 +603,12 @@ export default function humanConsole(pi: ExtensionAPI) {
         // rather than stack a second card on top of it.
         if (inputHeld() || runCardHolder()) return { outcome: "dismissed", answer: null };
         // Hold input for the question too, so a console card cannot open over it.
-        return withInputHold("the open question card", () => answerQuestion(ctx, { kind: "question", ...question }, signal, Math.max(1, deadline - Date.now())));
+        attention(true, params.question);
+        try {
+          return await withInputHold("the open question card", () => answerQuestion(ctx, { kind: "question", ...question }, signal, Math.max(1, deadline - Date.now())));
+        } finally {
+          attention(false, "");
+        }
       }, {
         signal,
         timeoutMs: requestedTimeout(params, cardTimeoutMs()),

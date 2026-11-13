@@ -137,9 +137,29 @@ commands that are loaded. The checklist above the editor is read from `TODO.md` 
 columns instead of wrapping onto extra rows. The checklist is mounted as a component and re-cut
 on every render at the width pi passes, so a terminal resize is handled rather than frozen at the
 width seen at mount. An ASCII theme ends the cut with `...`.
-`tests/tui-layout-smoke.ts` (`npm run smoke:tui-layout`) pins the cut at widths 20 to 120,
-including wide and emoji input; `tests/status-bar-smoke.ts` pins the component mount and a
+`tests/status-bar-smoke.ts` pins the component mount and a
 narrower render.
+
+## Where the tokens went: `/usage`
+
+`trace-ledger` records one line per model request in `.pi/trace.jsonl`: tokens in and out, the
+cache read and write split, the cost the provider's price table gave, and the characters of tool
+results that request carried, by tool. `/usage` summarises the current session and any kit children
+it started: requests and cost by model and by child, the cache hit rate, the tokens spent on
+aborted or failed requests, the tools whose results were largest, and the five largest single
+results.
+
+A request with no price in the model table is counted as **unpriced**, not as free; the report
+says how many. When a request reads under a quarter of its prompt from cache straight after one that
+read more than half, the status bar shows a cache warning: the system prompt or tool text changed
+between turns, or the provider's cache expired. Nothing in the test suite pins that the prefix is
+byte-stable.
+
+Not covered: `/usage` reads the last megabyte of the ledger, so a very long session loses its
+oldest requests; a child's records are attributed by time window, not by an explicit parent id, so
+two sessions sharing one workspace can see each other's children; cost for a provider that reports
+no price is not estimated. `tests/usage-ledger-smoke.ts` pins the recording, the report and the
+warning.
 
 ## Pricing Files
 
@@ -212,8 +232,7 @@ For `iso-dark`, `ansi-dark`, and `tty-dark`, Luna's footer, todo widget, working
 screen use ASCII keyboard characters such as `>`, `|`, `=`, `[x]`, and `...`; they do not emit
 box drawing, symbols, or emoji. The working line's tool phrase follows the same automatic
 choice and is cut in terminal columns, so a wide glyph at the cut is dropped whole rather than
-split. `tests/launch-screen-smoke.ts` and `tests/status-bar-smoke.ts` pin the launch screen and the
-footer making the same choice. Select a theme either way:
+split. Both read the same theme-name rule. Select a theme either way:
 
 - In Pi, run `/settings` and pick a theme name from the table, or
 - Add it to `~/.pi/agent/settings.json`:

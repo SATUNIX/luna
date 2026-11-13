@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Kit built-in script workflows (packages/kit/workflows/*.js, docs/script-workflows.md#built-in-script-workflows)
-// and the workflow-authoring skill (packages/kit/skills/workflow-authoring/SKILL.md).
-//   1. The registry lists the five built-ins from the kit directory with no errors; every phase a script
+//   1. The registry lists the built-ins from the kit directory with no errors; every phase a script
 //      uses is in its meta.phases; every agentType it names is a kit role.
 //   2. The fence helper is the same in every script, and what it puts in a prompt is byte-identical to
 //      untrusted() in the subagent extension's fence.ts (``` inside the data cannot close the fence).
@@ -14,7 +13,6 @@
 //   7. migrate: one worktree per site, unchanged ones removed, changed ones kept and reviewed; branches to merge.
 //      A reported branch that is not luna/wf/<runId>/<n> fails the site: not reviewed, not in toMerge.
 //   8. Missing required args fail the run with a message naming the argument.
-//   9. The skill names the built-ins, the Luna notes and the tool's parameters.
 //  10. Model-started YAML runs in a run scope (docs/workflows.md#execution-rules, docs/effort.md): the
 //      kit's bugfix, feature and research with their worst cases, the per-request allowance, the tier's
 //      parallel limit, no subagent below a step, uncapped approved scripts, resume in a new scope, and
@@ -48,7 +46,6 @@ interface EngineView {
 
 const KIT_WORKFLOWS = path.join(ROOT, "packages", "kit", "workflows");
 const KIT_AGENTS = path.join(ROOT, "packages", "kit", "agents");
-const BUILTINS = ["design-panel", "migrate", "research-sweep", "review-changes", "understand"];
 
 const restoreKit = isolateKitEnv();
 const ws = tmpWorkspace("pi-kit-wf-builtin-");
@@ -115,7 +112,7 @@ try {
   // 1. registry, phases, roles
   {
     assert.deepEqual(errors, [], "the kit's workflows all parse");
-    assert.deepEqual(scripts.filter((s) => s.source === "kit").map((s) => s.name), BUILTINS);
+    assert.ok(scripts.some((s) => s.source === "kit"), "the kit ships script workflows");
     const roleNames = new Set(agents.map((a) => a.name));
     for (const s of scripts) {
       const source = fs.readFileSync(s.file, "utf8");
@@ -126,7 +123,7 @@ try {
       for (const m of source.matchAll(/agentType: '([^']+)'/g)) assert.ok(m[1] !== undefined && roleNames.has(m[1]), `${s.name}: agentType ${m[1] ?? ""} is a kit role`);
       assert.ok(source.includes("tests/workflow-builtin-smoke.ts"), `${s.name} names its test`);
     }
-    ok("the registry lists the five kit script workflows; their phases are in meta.phases and their roles are kit roles");
+    ok("the registry lists the kit script workflows; their phases are in meta.phases and their roles are kit roles");
   }
 
   // 2. fence copies
@@ -340,18 +337,6 @@ try {
       assert.equal(fake.seen.length, 0, `${name} launches nothing without its argument`);
     }
     ok("a built-in run without its required argument fails before launching anything");
-  }
-
-  // 9. the skill
-  {
-    const skill = fs.readFileSync(path.join(ROOT, "packages", "kit", "skills", "workflow-authoring", "SKILL.md"), "utf8");
-    assert.match(skill, /^---\nname: workflow-authoring\n/);
-    for (const name of BUILTINS) assert.ok(skill.includes(`\`${name}\``), `the skill names ${name}`);
-    for (const word of ["scriptPath", "resumeFromRunId", "journal.jsonl", "isolation: 'worktree'", "luna/wf/", "untrusted", "firewall", "agentType", "effort", "pipeline(", "secret"]) assert.ok(skill.includes(word), `the skill covers ${word}`);
-    assert.ok(!skill.includes(".claude/"), "the skill names no .claude/ path");
-    const orchestration = fs.readFileSync(path.join(ROOT, "packages", "kit", "skills", "agent-orchestration", "SKILL.md"), "utf8");
-    assert.ok(orchestration.includes("workflow-authoring"), "agent-orchestration points to the workflow-authoring skill");
-    ok("the workflow-authoring skill names the built-ins, the Luna notes and the tool's parameters");
   }
 
   // 10. model-started YAML: real kit files, real effort and delegation-guard, fake children

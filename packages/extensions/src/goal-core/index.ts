@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileSafe } from "./shared/safe-fs.ts";
+import { guardCeiling } from "./ceiling-guard.ts";
 
 // goal-core: owns the mission goal. Persists it to .pi/GOAL.yaml and contributes it to the
 // model-visible prompt via a ctx-contribution (context-sieve is the single injection authority —
@@ -98,6 +99,9 @@ function clearGoal(cwd: string): void {
 
 export default function (pi: ExtensionAPI) {
   let cwd = "";
+
+  // The unattended ceiling (turns, money, wall time) and the away notification: ./ceiling-guard.ts.
+  guardCeiling(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd;

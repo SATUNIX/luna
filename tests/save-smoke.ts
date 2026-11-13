@@ -76,7 +76,7 @@ function fakeCtx(cwd: string, { hasUI = true, idle = true, select }: CtxOptions 
     cwd,
     hasUI,
     notes,
-    model: { provider: "pentest", id: "qwen3.8-27b" },
+    model: { provider: "engagement", id: "qwen3.8-27b" },
     isIdle: () => idle,
     getContextUsage: () => ({ tokens: 51234 }),
     sessionManager: { getSessionFile: () => path.join(cwd, "session.jsonl"), getEntries: () => [], getLeafId: () => null },
@@ -128,7 +128,7 @@ const testSaveToVaultProjectWithoutCompacting = withVault(async (ws, vault) => {
   const text = fs.readFileSync(latest, "utf8");
   assert.equal(text, fs.readFileSync(log, "utf8"));
   assert.match(text, /^---\nkind: save\nsaved: 2026-09-14T05:06:07.000Z\nproject: "Pi Agent Kit"\n/);
-  assert.match(text, /model: "pentest\/qwen3.8-27b"\ncontext_tokens: 51234\nnote: "halfway through tests"\n---/);
+  assert.match(text, /model: "engagement\/qwen3.8-27b"\ncontext_tokens: 51234\nnote: "halfway through tests"\n---/);
   assert.match(text, /The conversation was not compacted/);
   assert.match(text, /## Goal\nShip \/save\./);
   const [call] = calls;
@@ -184,7 +184,7 @@ const testLocalDefaultWithoutVault = withoutVault(async (ws) => {
 });
 
 const testSummarizerFailureWritesNothing = withoutVault(async (ws) => {
-  const { pi } = setup({ fail: "no request auth for pentest" });
+  const { pi } = setup({ fail: "no request auth for engagement" });
   const ctx = fakeCtx(ws);
   await pi.run("", ctx);
   assert.equal(fs.existsSync(path.join(ws, ".pi", "snapshots")), false);

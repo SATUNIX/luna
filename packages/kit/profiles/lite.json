@@ -1,23 +1,25 @@
 {
   "name": "lite",
-  "description": "Low-context set for small local models: default-deny firewall, checkpoints, todo, verification, context sieve, cheap readseek navigation, a trimmed skill/prompt list, and its own compaction settings sized for a small window.",
-  "securityLevel": "relaxed",
+  "description": "The lean, low-context profile for quick tasks and small local models: default-deny firewall, checkpoints, todo, verification, context sieve, cheap readseek navigation, a trimmed skill/prompt list (no delegation tools or skills), and its own compaction settings sized for a small window.",
+  "securityLevel": "balanced",
   "firewall": { "mode": "manual", "policy": "coding" },
   "settings": { "compaction": { "enabled": true, "reserveTokens": 4096, "keepRecentTokens": 6000 } },
   "skills": {
     "only": [
       "coding-agent-workflow", "codebase-navigation", "task-decomposition", "patch-hygiene",
       "verification-loop", "recovery-debugging", "mcp-tool-use", "small-model-execution",
-      "agent-orchestration", "self-reflection-and-recovery", "context-management"
+      "self-reflection-and-recovery", "context-management"
     ]
   },
   "prompts": {
     "only": ["code-orient", "code-plan", "code-verify", "code-compact"]
   },
   "include": [
+    "herdr",
     "protected-paths", "tool-firewall", "git-checkpoint", "custom-footer", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard",
     "compress", "save", "trace-ledger", "progress-guard", "todo", "verify-gate", "verifier-board",
     "context-sieve", "caveman", "pi-readseek", "skill-router",
-    "subagent", "orchestrator", "goal-core"
+    "goal-core",
+    "finish-reason-retry", "notify"
   ]
 }

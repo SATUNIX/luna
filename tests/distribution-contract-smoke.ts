@@ -16,7 +16,7 @@ import { buildDistributionContract, distributionContractProblems, readDistributi
 
 const contract = buildDistributionContract();
 assert.deepEqual(distributionContractProblems(contract), [], "every shipped profile must compose its declared contracts");
-assert.equal(contract.profiles.length, 7);
+assert.equal(contract.profiles.length, 5);
 assert.ok(isRecord(contract.distribution.git));
 assert.equal(contract.distribution.git.source, "git:github.com/SATUNIX/luna");
 assert.deepEqual(contract.distribution.git.previousSources, ["git:github.com/SATUNIX/pi-system"]);
@@ -53,10 +53,10 @@ for (const profile of contract.profiles) {
 }
 
 const missingReader = structuredClone(contract);
-const quick = missingReader.profiles.find((profile) => profile.name === "quick");
-assert.ok(quick, "quick is a shipped profile");
-quick.include = quick.include.filter((name) => name !== "context-sieve");
-assert.ok(distributionContractProblems(missingReader).some((problem) => problem === "quick: goal-core requires context-sieve"), "a profile may not silently discard goal instructions");
+const lean = missingReader.profiles.find((profile) => profile.name === "lite");
+assert.ok(lean, "lite is a shipped profile");
+lean.include = lean.include.filter((name) => name !== "context-sieve");
+assert.ok(distributionContractProblems(missingReader).some((problem) => problem === "lite: goal-core requires context-sieve"), "a profile may not silently discard goal instructions");
 
 // Two capabilities in one profile that declare the same tool name: pi keeps only one, silently.
 // memory-local is in no shipped profile, so adding it next to memory-vault must be reported.
@@ -81,4 +81,4 @@ const invalid = structuredClone(contract);
 delete invalid.distribution.requiredProfileExtensions;
 assert.match(distributionContractProblems(invalid)[0] ?? "", /nonempty set/);
 
-console.log("[distribution-contract-smoke] base protections, context-producer composition and unique tool names pass for all seven profiles");
+console.log("[distribution-contract-smoke] base protections, context-producer composition and unique tool names pass for every shipped profile");

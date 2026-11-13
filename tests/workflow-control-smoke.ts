@@ -12,9 +12,9 @@
 //   4b. skip never passes a review gate: a skipped gate step, or a skipped member of a gated group,
 //      fails the gate (retry loop, or the run ends failed), and so does "Skip" on resume.
 //   5. stop while an agent runs aborts it; the run ends interrupted.
-//   6. the workflow_control tool drives a live run through the same API; /workflow pause, skip,
+//   6. the workflow_control tool drives a live run through the same API; /workflows pause, skip,
 //      resume and stop do too. A pause held by the console's safety stop refuses the tool's resume
-//      and yields to /workflow resume.
+//      and yields to /workflows resume.
 //   7. resuming a run whose writer step was interrupted asks a No-first select (never confirm);
 //      headless is refused; "No" and Esc cancel; "Skip" marks it skipped and goes on; "Re-run"
 //      keeps it; read-only steps and steps that never launched ask nothing.
@@ -434,7 +434,7 @@ steps:
     ok("stop aborts the running agent and the run ends interrupted");
   }
 
-  // 6. The workflow_control tool and the /workflow command drive the same API.
+  // 6. The workflow_control tool and the /workflows command drive the same API.
   {
     const pi = fakePi();
     I.default(pi.api);
@@ -466,32 +466,32 @@ steps:
     assert.match(textOf(status), new RegExp(`${h.state.id}: running \\(active, paused\\)`), "workflow_status shows a paused live run");
     const notes: string[] = [];
     const cmdCtx = { cwd: ws, hasUI: true, ui: { notify: (m: string) => notes.push(m), setStatus: () => {} } };
-    const command = pi.commands.get("workflow");
+    const command = pi.commands.get("workflows");
     await command.handler(`resume ${h.state.id}`, cmdCtx);
-    assert.equal(h.control.paused, false, "/workflow resume unpauses a live run");
+    assert.equal(h.control.paused, false, "/workflows resume unpauses a live run");
     await command.handler(`pause ${h.state.id}`, cmdCtx);
-    assert.equal(h.control.paused, true, "/workflow pause");
+    assert.equal(h.control.paused, true, "/workflows pause");
     // A pause the console's safety stop sets is held for the operator: the agent's tool cannot lift it.
     assert.equal(I.controlRun(h.state.id, "pause", I.runControls, "safety").ok, true);
     assert.equal(h.control.held, true, "the safety stop's pause is held");
     const refused = await tool.execute("2b", { runId: h.state.id, action: "resume" }, undefined, undefined, { cwd: ws });
     assert.equal(refused.isError, true, "workflow_control resume is refused while the pause is held");
-    assert.match(textOf(refused), /paused by the operator's safety stop .*only the operator can resume it, with \/workflow resume/);
+    assert.match(textOf(refused), /paused by the operator's safety stop .*only the operator can resume it, with \/workflows resume/);
     assert.equal(h.control.paused, true, "the held run stays paused");
     await command.handler(`resume ${h.state.id}`, cmdCtx);
-    assert.equal(h.control.paused, false, "/workflow resume lifts a held pause");
+    assert.equal(h.control.paused, false, "/workflows resume lifts a held pause");
     assert.equal(h.control.held, false);
     await command.handler(`pause ${h.state.id}`, cmdCtx);
     assert.equal(h.control.held, false, "an operator pause is not held");
     await command.handler(`skip ${h.state.id}`, cmdCtx);
-    assert.match(notes.at(-1) ?? "", /Skipping a/, "/workflow skip");
+    assert.match(notes.at(-1) ?? "", /Skipping a/, "/workflows skip");
     await until(() => h.state.steps.a?.status === "skipped", "a to be skipped");
     await tool.execute("3", { runId: h.state.id, action: "resume" }, undefined, undefined, { cwd: ws });
     const final = await h.done;
     assert.equal(final.status, "passed");
     await command.handler(`stop ${h.state.id}`, cmdCtx);
     assert.match(notes.at(-1) ?? "", /No live run/, "a finished run can no longer be controlled");
-    ok("workflow_control and /workflow pause|resume|skip|stop use the same control API; a safety-stop pause yields only to the operator");
+    ok("workflow_control and /workflows pause|resume|skip|stop use the same control API; a safety-stop pause yields only to the operator");
 
     // 7. Resuming an interrupted writer step asks a No-first select.
     const userDir = path.join(ws, "agent", "workflows");

@@ -26,6 +26,7 @@ nav:
       - Security Level: security-level.md
       - Updates: updates.md
       - Migration: migration.md
+      - Headless and Safe Mode: headless.md
       - Troubleshooting: troubleshooting.md
       - Security Model: security.md
       - Threat Model: threat-model.md
@@ -34,10 +35,12 @@ nav:
       - Tool I/O Capture: tool-capture.md
       - Web Console: web-console.md
       - Remote Control: remote-control.md
+      - herdr: herdr.md
       - Autonomous Runs: autonomy.md
       - Status Bar and Costs: status-bar-and-costs.md
       - Control Centre: control-center.md
       - Efficiency and Loops: efficiency-and-loops.md
+      - Provider Failures and Model Fit: model-resilience.md
       - Agent Orchestration: agent-orchestration.md
       - Workflows: workflows.md
       - Script Workflows: script-workflows.md

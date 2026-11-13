@@ -2,13 +2,13 @@
 
 Workflows are declarative chains of subagent and skill steps: a Markdown file with YAML frontmatter that a deterministic executor, not a model, turns into an ordered run. Every run gets a blackboard directory under `.pi/workflows/runs/<id>` where `state.json` records progress and `steps/<id>.md` holds each step's final answer, so an interrupted run can resume from where it stopped. Workflow files are discovered from three locations in order (the shipped kit, the user's agent directory and the project), with a later location overriding an earlier one of the same name and project files requiring approval.
 
-Each step is a subagent launch like any other, so it goes through the delegation launch contract: `delegation-guard` decides which extensions the step's child loads and reserves a slot in the shared effort ledger. A `/workflow` command is launch kind `user`, because you typed it, and is bounded only by the platform ceilings. The `workflow_run` tool is launch kind `workflow`: it opens a run scope, is charged its worst case against the tier's plan allowance before anything starts, and is hidden at E1. `/workflow run` is not tier-limited. See [Subagents, orchestration and the task graph](subagents-and-orchestration.md) for the contract and [Effort](../effort.md) for the limits.
+Each step is a subagent launch like any other, so it goes through the delegation launch contract: `delegation-guard` decides which extensions the step's child loads and reserves a slot in the shared effort ledger. A `/workflows` command is launch kind `user`, because you typed it, and is bounded only by the platform ceilings. The `workflow_run` tool is launch kind `workflow`: it opens a run scope, is charged its worst case against the tier's plan allowance before anything starts, and is hidden at E1. `/workflows run` is not tier-limited. See [Subagents, orchestration and the task graph](subagents-and-orchestration.md) for the contract and [Effort](../effort.md) for the limits.
 
 Skills feed the same system from two directions. A workflow step (or a role) can preload named `SKILL.md` bodies into its child's system prompt, while the skill-router extension keeps most skills out of the system prompt and surfaces them progressively through BM25 search, automatic trigger hints and direct slash invocation. This page diagrams both mechanisms, and the separate completion gate in `verify-gate`, and shows where their state lives.
 
 ## Where workflows live and how they are discovered
 
-`discoverWorkflows` scans `*.md` (excluding `readme.md`) in `PI_KIT_WORKFLOWS_DIR` or the shipped kit directory, then the agent's `workflows` directory, then `<cwd>/.pi/workflows`, and a later source overrides an earlier one of the same name. Only project-sourced workflows are untrusted: they need an exact SHA-256 digest grant (listed in `PI_KIT_TRUSTED_WORKFLOWS`, or stored in `<agent dir>/pi-kit/trusted-workflows.json` by an earlier "Trust this digest") or the operator's answer to a No-first select ("No, don't run it" / "Run once" / "Trust this digest"), and the same check applies to a resumed run. A headless session has no select, so it is refused without a grant (`tests/workflow-smoke.ts`). `PI_KIT_INTERNAL_CHILD=1` means the workflow tools and the `/workflow` command are not registered inside a child at all. A step's role is resolved from the kit and user role directories only, so a project role cannot be used by a workflow.
+`discoverWorkflows` scans `*.md` (excluding `readme.md`) in `PI_KIT_WORKFLOWS_DIR` or the shipped kit directory, then the agent's `workflows` directory, then `<cwd>/.pi/workflows`, and a later source overrides an earlier one of the same name. Only project-sourced workflows are untrusted: they need an exact SHA-256 digest grant (listed in `PI_KIT_TRUSTED_WORKFLOWS`, or stored in `<agent dir>/pi-kit/trusted-workflows.json` by an earlier "Trust this digest") or the operator's answer to a No-first select ("No, don't run it" / "Run once" / "Trust this digest"), and the same check applies to a resumed run. A headless session has no select, so it is refused without a grant (`tests/workflow-smoke.ts`). `PI_KIT_INTERNAL_CHILD=1` means the workflow tools and the `/workflows` command are not registered inside a child at all. A step's role is resolved from the kit and user role directories only, so a project role cannot be used by a workflow.
 
 ```mermaid
 flowchart LR
@@ -19,7 +19,7 @@ flowchart LR
     DISC["discoverWorkflows"] --> PARSE["parseWorkflow: YAML frontmatter"]
     PARSE --> DEF["WorkflowDef: name, steps, inputs, vault"]
     DEF -->|"later source overrides the same name"| OVER["byName map"]
-    OVER --> RUN["workflow_run tool and /workflow command"]
+    OVER --> RUN["workflow_run tool and /workflows command"]
     ENVCHILD["PI_KIT_INTERNAL_CHILD=1"] -.->|"not registered in a child"| RUN
     RUN --> TRUST{"Project workflow?"}
     ENVTRUST["PI_KIT_TRUSTED_WORKFLOWS digest"] -.->|"grant"| TRUST
@@ -37,7 +37,7 @@ The executor walks top-level steps by a `cursor` index and keeps everything on d
 
 ```mermaid
 flowchart TD
-    START["workflow_run or /workflow"] --> LOAD["discoverWorkflows, trust check, resolveInputs"]
+    START["workflow_run or /workflows"] --> LOAD["discoverWorkflows, trust check, resolveInputs"]
     LOAD -->|"new run"| NEWSTATE["newRunState: status running, cursor 0"]
     LOAD -->|"resume"| RESUME["loadState: keep cursor, inputs and finished outputs"]
     NEWSTATE --> DIR
@@ -73,13 +73,13 @@ Steps render their task with `{{inputs.x}}`, `{{steps.<id>.output}}`, `{{steps.<
 
 ## A workflow run end to end
 
-The shipped `feature` workflow has four steps (`scout`, `plan`, `implement`, `review`) with the gate on `review`: the last non-blank line of its reply must be `VERDICT: PASS` (case is ignored), or the cursor goes back to `implement` with the review as feedback, at most twice. Invoked as a slash command, `/workflow` runs in the background as launch kind `user` and posts its summary into the session with `sendMessage` using `deliverAs: "followUp"`, while the `workflow_run` tool is launch kind `workflow`, charged its worst case against the tier's plan allowance before the first launch, and returns the summary plus the run directory. Aborting (Esc) cancels the active child and leaves the run `interrupted`, which can be resumed with `workflow_run {resume: id}` or `/workflow resume <id>`.
+The shipped `feature` workflow has four steps (`scout`, `plan`, `implement`, `review`) with the gate on `review`: the last non-blank line of its reply must be `VERDICT: PASS` (case is ignored), or the cursor goes back to `implement` with the review as feedback, at most twice. Invoked as a slash command, `/workflows` runs in the background as launch kind `user` and posts its summary into the session with `sendMessage` using `deliverAs: "followUp"`, while the `workflow_run` tool is launch kind `workflow`, charged its worst case against the tier's plan allowance before the first launch, and returns the summary plus the run directory. Aborting (Esc) cancels the active child and leaves the run `interrupted`, which can be resumed with `workflow_run {resume: id}` or `/workflows resume <id>`.
 
 ```mermaid
 sequenceDiagram
     actor U as User
     participant A as Agent
-    participant T as workflow_run or /workflow
+    participant T as workflow_run or /workflows
     participant E as Executor
     participant D as RunDir
     participant G as delegation-guard and effort ledger
@@ -89,7 +89,7 @@ sequenceDiagram
         A->>T: workflow_run name feature, inputs goal
         Note over T,E: launch kind workflow, worst case charged to the plan allowance
     else the user types the command
-        U->>T: /workflow run feature goal=...
+        U->>T: /workflows run feature goal=...
         Note over T,E: launch kind user, runs in the background
     end
     T->>E: discoverWorkflows, trust check, newRunState
@@ -194,7 +194,7 @@ flowchart LR
 ## Source files
 
 - `packages/extensions/third_party/subagent/workflow.ts`: workflow discovery, parsing, trust digest, executor, blackboard, step gates, resume and vault copy.
-- `packages/extensions/third_party/subagent/workflow-tools.ts`: `workflow_run`, `workflow_status`, `workflow_control`, the `/workflow` command, the project-workflow trust prompt, the resume prompt for interrupted writer steps and the launch kind (`user` for the command).
+- `packages/extensions/third_party/subagent/workflow-tools.ts`: `workflow_run`, `workflow_status`, `workflow_control`, the `/workflows` command, the project-workflow trust prompt, the resume prompt for interrupted writer steps and the launch kind (`user` for the command).
 - `packages/extensions/third_party/subagent/control.ts`: pause, resume, stop and skip for a live run (`controlRun`), checked by `tests/workflow-control-smoke.ts`.
 - `packages/extensions/third_party/subagent/wf-panel.ts`: the `/workflows` panel (overlay in the TUI, text elsewhere) and its narrator, checked by `tests/workflow-panel-smoke.ts`.
 - `packages/extensions/third_party/subagent/runner.ts`: `runAgent`, which every workflow step calls (per-attempt reservation, `launchKind`).

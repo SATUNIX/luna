@@ -1,0 +1,47 @@
+---
+description: "Summarise the engagement session for continuation"
+argument-hint: "[focus]"
+mode: compact
+token_budget: small
+requires_mcp_tool: pi_system_governance.state_summary
+output_block: engagement_state
+---
+
+# Engagement Compact
+
+Summarize the current session for continuation.
+
+Focus: ${@:-the whole current session}
+
+First read compact durable state through `pi_system_governance.state_summary` with `max_items` no higher than 5. Do not include raw target output unless it is already stored as evidence.
+
+Preserve:
+
+- Engagement ID and scope status
+- ROE constraints
+- Tool policy decisions
+- Pending actions
+- Approval decisions
+- Evidence IDs and hashes
+- Hypotheses and states
+- Findings and reviewer status
+- Open questions and limitations
+
+Do not include secrets or raw sensitive target data unless required and already stored as evidence.
+
+Return this stable block:
+
+```text
+engagement_state:
+  engagement_id:
+  scope_status:
+  roe_constraints:
+  active_hypotheses:
+  pending_actions:
+  approvals:
+  evidence_ids:
+  verification_ids:
+  findings_status:
+  limitations:
+  next_action:
+```

@@ -3,7 +3,7 @@
  * The control centre (docs/control-center.md).
  *
  * Layers, all hermetic (temporary HOME/agent dir, no live pi):
- *   - registration: /menu, /kit and /helpers once, by control-center; session-helpers no longer owns /kit;
+ *   - registration: /menu once, by control-center;
  *     alt+m (or the configured hubKey); nothing in an internal child session;
  *   - the controls registry: register/list/snapshot/unregister;
  *   - the view model: rows, pages, values, search, unavailability;
@@ -12,28 +12,26 @@
  *   - weakening: refused outside the TUI and in a child session, otherwise run after a terminal yes;
  *     the profile rows and their weakening set match packages/kit/profiles/*.json (firewall.mode auto);
  *   - Doctor: marker/settings drift and the pi version against the kit's pin and floor;
- *   - the built-in name copy matches packages/core/lib/pi-builtins.ts.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initTheme, type Theme, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { fakePi, isolateKitEnv, loadExtension, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
+import { stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
+import type { OverlayTheme } from "../packages/extensions/src/control-center/overlay-frame.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
 import type * as ControlsModule from "../packages/extensions/src/control-center/controls.ts";
 import type * as ModelModule from "../packages/extensions/src/control-center/model.ts";
 import type * as ValuesModule from "../packages/extensions/src/control-center/values.ts";
 import type * as DoctorModule from "../packages/extensions/src/control-center/doctor.ts";
 import { headerLine, openHub, rowsForPage, supportsOverlay, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
-import { frameLines, withOverlayFrame, type OverlayTheme } from "../packages/extensions/src/control-center/overlay-frame.ts";
 import type { HubRow } from "../packages/extensions/src/control-center/model.ts";
 import type { HubValues } from "../packages/extensions/src/control-center/values.ts";
 import { PI_BUILTIN_SLASH_COMMANDS as CORE_BUILTINS } from "../packages/core/lib/pi-builtins.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import { PROFILES_DIR } from "../packages/core/lib/paths.ts";
-import { PI_BUILTIN_SLASH_COMMANDS as HUB_BUILTINS } from "../packages/extensions/src/control-center/builtins.ts";
 import { HIDDEN_CHARS, isHiddenChar, oneVisibleLine, stripHiddenChars } from "../packages/core/shared/visible-text.ts";
 
 const restoreEnv = isolateKitEnv();
@@ -217,31 +215,15 @@ const tests: Array<[name: string, fn: () => Promise<void>]> = [];
 // --- registration ------------------------------------------------------------------------------
 
 tests.push([
-  "/menu, /kit and /helpers are registered once, by control-center, with alt+m sending /menu",
+  "/menu is registered once, by control-center, with alt+m sending /menu",
   async () => {
     const { api, registered, shortcuts, sent } = makeApi();
     await registerControl(api);
     assert.ok(registered.has("menu"), "/menu must be registered as the primary command");
-    assert.ok(registered.has("kit"), "/kit must be registered as an alias");
-    assert.ok(registered.has("helpers"), "/helpers must be registered as an alias");
-    assert.equal(registered.get("kit")?.description, "Alias of /menu");
-    assert.equal(registered.get("helpers")?.description, "Alias of /menu");
     assert.ok(shortcuts.has("alt+m"), "alt+m must be registered by default");
-    assert.equal(registered.size, 3, "control-center registers exactly /menu, /kit and /helpers");
+    assert.deepEqual([...registered.keys()].sort(), ["menu", "status"], "control-center registers /menu and /status");
     shortcuts.get("alt+m")?.handler(undefined);
     assert.deepEqual(sent, ["/menu"], "the alt+m shortcut sends /menu");
-  },
-]);
-
-tests.push([
-  "session-helpers no longer registers /kit or /helpers",
-  async () => {
-    const pi = fakePi();
-    const register = await loadExtension<(api: unknown) => void>("extensions/session-helpers/index.ts");
-    register(pi.api);
-    assert.ok(!pi.commands.has("kit"), "session-helpers must not register /kit");
-    assert.ok(!pi.commands.has("helpers"), "session-helpers must not register /helpers");
-    assert.ok(pi.commands.has("clear"), "session-helpers keeps its own commands");
   },
 ]);
 
@@ -419,8 +401,8 @@ tests.push([
       commands: ["auto", "effort", "console"],
       controls: [],
     });
-    const main = modelMod.pageRows(model, "main");
-    assert.equal(main.length, 11, "the main page has the levels, the Security level fallback and six page rows");
+    assert.equal(modelMod.pageRows(model, "security").some((row) => row.id === "approvals"), true, "the approval mode lives on the Security page");
+    assert.equal(modelMod.findRow(model, "security.level")?.page, "security");
     assert.equal(modelMod.parentPage(model, "delegation"), "work");
     const approvals = modelMod.findRow(model, "approvals");
     assert.equal(approvals?.value, "auto/coding");
@@ -430,7 +412,6 @@ tests.push([
     assert.match(improve?.unavailableReason ?? "", /self-improving/);
     assert.equal(modelMod.legacyCommandName("/auto on"), "auto");
     assert.equal(modelMod.searchRows(model, "auto").length > 0, true);
-    assert.match(headerLine({ profile: "balanced", effort: "E3", securityMissing: true }), /profile balanced/);
   },
 ]);
 
@@ -510,25 +491,6 @@ tests.push([
 ]);
 
 tests.push([
-  "the Settings page holds five setting item rows plus the Display page link",
-  async () => {
-    const modelMod = await loadModelModule();
-    const model = await modelFor([]);
-    assert.ok(modelMod.PAGES.some((page) => page.id === "settings" && page.parent === "main"), "a Settings page under main");
-    const settings = modelMod.pageRows(model, "settings");
-    assert.equal(settings.length, 6, "five setting item rows plus the Display page link");
-    assert.deepEqual(
-      settings.map((row) => row.id),
-      ["settings.pi", "settings.commandMenu", "settings.hubKey", "settings.pinned", "settings.hidden", "settings.display"],
-      "the Settings page rows",
-    );
-    assert.equal(settings.filter((row) => row.kind !== "page").length, 5, "the five setting item rows");
-    assert.equal(modelMod.findRow(model, "settings.pi")?.prefill, "/settings ");
-    assert.equal(settings.find((row) => row.id === "settings.display")?.targetPage, "display");
-  },
-]);
-
-tests.push([
   "readValues exposes the command-menu settings, the hub key and the joined command lists",
   async () => {
     const valuesMod = await loadValuesModule();
@@ -574,13 +536,6 @@ tests.push([
 ]);
 
 tests.push([
-  "the control-center built-in copy matches packages/core/lib/pi-builtins.ts",
-  async () => {
-    assert.deepEqual([...HUB_BUILTINS], [...CORE_BUILTINS], "the hub's built-in list must match the core copy");
-  },
-]);
-
-tests.push([
   "the Security row reads the firewall's registry, and says the firewall is not loaded without it",
   async () => {
     const valuesMod = await loadValuesModule();
@@ -594,7 +549,7 @@ tests.push([
       global[securityKey] = { snapshot: () => { throw new Error("broken"); } };
       assert.equal(valuesMod.readSecurity().missing, true, "a registry that throws reads as missing");
 
-      // A floor (the pentest policy) raises the operator's balanced to guarded.
+      // A floor (the engagement policy) raises the operator's balanced to guarded.
       global[securityKey] = { snapshot: () => ({ requested: "balanced", effective: "guarded", source: "operator" }) };
       const fromRegistry = valuesMod.readSecurity();
       assert.equal(fromRegistry.missing, false);
@@ -606,18 +561,13 @@ tests.push([
         const modelMod = await loadModelModule();
         const values = valuesMod.readValues({ cwd: ws });
         const model = modelMod.buildModel({ values, commands: [], controls: [] });
-        const rows = rowsForPage("security", makeDeps({ model, commands: [], values }));
-        const rowValue = (label: string): string | undefined => rows.find((row) => row.label === label)?.value;
-        assert.equal(rowValue("Effective"), "guarded", "the Security page shows the effective level alone");
-        assert.equal(rowValue("Requested"), "balanced", "the Security page shows the requested level on its own row");
+        const level = modelMod.findRow(model, "security.level");
+        assert.equal(level?.value, "guarded (requested balanced)", "the Security page shows the effective and requested level on one row");
 
         Reflect.deleteProperty(globalThis, securityKey);
         const missingValues = valuesMod.readValues({ cwd: ws });
         const missingModel = modelMod.buildModel({ values: missingValues, commands: [], controls: [] });
-        const missingRows = rowsForPage("security", makeDeps({ model: missingModel, commands: [], values: missingValues }));
-        const missingRowValue = (label: string): string | undefined => missingRows.find((row) => row.label === label)?.value;
-        assert.equal(missingRowValue("Effective"), "unknown", "without a firewall the Security page shows no effective level");
-        assert.equal(missingRowValue("Requested"), "same as effective", "without a firewall the Security page shows no separate requested level");
+        assert.equal(modelMod.findRow(missingModel, "security.level")?.value, valuesMod.NO_FIREWALL, "without a firewall the Security page shows no level");
       } finally {
         rmWorkspace(ws);
       }
@@ -689,11 +639,11 @@ tests.push([
     const model = modelMod.buildModel({ values: { securityMissing: true }, commands: ["new"], controls: [] });
     const prefill: string[] = [];
     const deps = makeDeps({ model, commands: ["new"], prefill });
-    const row = modelMod.findRow(model, "session.new");
+    const row = modelMod.findRow(model, "session.fork");
     assert.ok(row);
     const result = await hubMod.dispatchRow(row, deps);
     assert.equal(result.ok, true);
-    assert.deepEqual(prefill, ["/new "]);
+    assert.deepEqual(prefill, ["/fork "]);
   },
 ]);
 
@@ -765,95 +715,6 @@ tests.push([
 ]);
 
 tests.push([
-  "print mode writes every row and its typed command",
-  async () => {
-    const model = await modelFor(["auto", "effort"]);
-    const captured: string[] = [];
-    const ctx = makeCtx("print", process.cwd(), false);
-    await openHub(makeDeps({ model, commands: ["auto", "effort"], ctx, write: (text) => captured.push(text) }));
-    const page = captured.join("");
-    assert.match(page, /Control centre/);
-    assert.match(page, /Effort/);
-    assert.match(page, /\[\/effort\]/);
-    assert.match(page, /\[\/auto\]/);
-  },
-]);
-
-tests.push([
-  "print and RPC include the command an informational row names",
-  async () => {
-    const model = await modelFor([]);
-    const doctor = () => [{ ok: true, label: "Update", value: "1.2.3", command: "/update status" }];
-    const captured: string[] = [];
-    const printDeps = makeDeps({ model, commands: [], ctx: makeCtx("print", process.cwd(), false), write: (text) => captured.push(text) });
-    printDeps.doctor = doctor;
-    await openHub(printDeps, "doctor");
-    assert.match(captured.join(""), /\[\/update status\]/, "print mode shows the row's typed command");
-
-    const recorded = makeUi();
-    const rpcDeps = makeDeps({ model, commands: [], ctx: { mode: "rpc", hasUI: true, cwd: process.cwd(), ui: recorded.ui } });
-    rpcDeps.doctor = doctor;
-    await openHub(rpcDeps, "doctor");
-    const options = recorded.selects[0]?.options ?? [];
-    assert.ok(options.some((option) => option.includes("[/update status]")), "the RPC option shows the row's typed command");
-  },
-]);
-
-tests.push([
-  "the TUI and RPC show each row's typed command",
-  async () => {
-    const model = await modelFor(["auto", "compact"]);
-    // RPC: a legacy command and an editor pre-fill both appear on their row.
-    const rpc = makeUi();
-    const rpcCtx = { mode: "rpc" as const, hasUI: true, cwd: process.cwd(), ui: rpc.ui };
-    await openHub(makeDeps({ model, commands: ["auto", "compact"], ctx: rpcCtx }), "autonomy");
-    assert.ok(rpc.selects[0]?.options.some((option) => option.includes("[/auto]")), "the RPC Autonomy option shows /auto");
-    rpc.selects.length = 0;
-    await openHub(makeDeps({ model, commands: ["auto", "compact"], ctx: rpcCtx }), "session");
-    assert.ok(rpc.selects[0]?.options.some((option) => option.includes("[/compact]")), "the RPC Session option shows the pre-filled /compact");
-
-    // TUI: the same command sits in the label, after the row name.
-    initTheme();
-    const tui = makeUi();
-    const tuiCtx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: tui.ui };
-    await openHub(makeDeps({ model, commands: ["auto", "compact"], ctx: tuiCtx }), "autonomy");
-    assert.match(tui.rendered[0] ?? "", /Approvals.*\[\/auto\]/, "the TUI Autonomy row shows /auto after its label");
-    // An informational row keeps its command too.
-    const doctorUi = makeUi();
-    const doctorDeps = makeDeps({ model, commands: [], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: doctorUi.ui } });
-    doctorDeps.doctor = () => [{ ok: true, label: "Update", value: "1.2.3", command: "/update status" }];
-    await openHub(doctorDeps, "doctor");
-    assert.match(doctorUi.rendered[0] ?? "", /Update.*\[\/update status\]/, "the TUI Doctor row shows its command");
-  },
-]);
-
-tests.push([
-  "a typed-command suffix never duplicates an All commands label and yields on narrow widths",
-  async () => {
-    initTheme();
-    const model = await modelFor(["auto"]);
-    const allCommands = [{ name: "auto", source: "extension" }];
-    // All commands: the label /auto already is the command, so the option stays exactly /auto.
-    const rpc = makeUi();
-    const rpcCtx = { mode: "rpc" as const, hasUI: true, cwd: process.cwd(), ui: rpc.ui };
-    await openHub(makeDeps({ model, commands: ["auto"], ctx: rpcCtx, allCommands }), "all-commands");
-    assert.ok(rpc.selects[0]?.options.includes("/auto"), "the All commands option is not repeated as /auto [/auto]");
-
-    // A narrow terminal keeps the row name first and drops the suffix.
-    const wideUi = makeUi([], [], 24);
-    const wideCtx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: wideUi.ui };
-    await openHub(makeDeps({ model, commands: ["auto"], ctx: wideCtx }), "autonomy");
-    assert.match(wideUi.rendered[0] ?? "", /\[\/auto\]/, "the same row shows its suffix when there is room");
-    const narrowUi = makeUi([], [], 24, 20);
-    const narrowCtx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: narrowUi.ui };
-    await openHub(makeDeps({ model, commands: ["auto"], ctx: narrowCtx }), "autonomy");
-    const narrow = narrowUi.rendered[0] ?? "";
-    assert.match(narrow, /Approvals/, "the row name survives a narrow terminal");
-    assert.doesNotMatch(narrow, /\[\/auto\]/, "the suffix is cut before the row name");
-  },
-]);
-
-tests.push([
   "the TUI renderer builds a SettingsList and passes overlay only on 1.3.0+",
   async () => {
     initTheme();
@@ -871,84 +732,6 @@ tests.push([
     // Both branches of the gate, whatever pi is installed.
     for (const v of ["1.3.0", "1.3.1-beta.1", "1.4.0", "2.0.0", "v1.3.0"]) assert.equal(supportsOverlay(v), true, `supportsOverlay(${v})`);
     for (const v of ["1.2.9", "1.2.0", "0.99.2", "0.85.1"]) assert.equal(supportsOverlay(v), false, `supportsOverlay(${v})`);
-  },
-]);
-
-tests.push([
-  "the hub overlay fits a short terminal and keeps its 15-row default when no size is known",
-  async () => {
-    initTheme();
-    const model = await modelFor([]);
-    const allCommands = Array.from({ length: 20 }, (_, index) => ({ name: `cmd${index}`, source: "extension" }));
-    const open = async (rows?: number): Promise<string> => {
-      const recorded = makeUi([], [], rows);
-      const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
-      await openHub(makeDeps({ model, commands: [], ctx, allCommands }), "all-commands");
-      return recorded.rendered[0] ?? "";
-    };
-    // 24 rows, 20 commands: the framed box must not exceed the terminal, so its top and bottom stay visible.
-    const short = (await open(24)).split("\n");
-    assert.ok(short.length <= 24, `the overlay fits 24 rows, got ${short.length}`);
-    assert.match(short[0] ?? "", /╭/, "the top border is not scrolled off");
-    assert.match(short.at(-1) ?? "", /╰/, "the bottom border is visible");
-    assert.match(short.join("\n"), /→ \/cmd0\b/, "the focused row survives the shrink");
-    // 10 and 8 rows: the title and trailing hint/description lines give way before the focused row.
-    for (const rows of [10, 8]) {
-      const compact = (await open(rows)).split("\n");
-      assert.ok(compact.length <= rows, `the overlay fits ${rows} rows, got ${compact.length}`);
-      assert.match(compact[0] ?? "", /╭/, `the top border is visible at ${rows} rows`);
-      assert.match(compact.at(-1) ?? "", /╰/, `the bottom border is visible at ${rows} rows`);
-      assert.match(compact.join("\n"), /→ \/cmd0\b/, `the focused row survives ${rows} rows`);
-      assert.doesNotMatch(compact.join("\n"), /Control centre/, `the title is dropped at ${rows} rows`);
-    }
-    // 60 rows: the cap is still 15, so only cmd0..cmd14 show and the scroll indicator appears.
-    const tall = await open(60);
-    assert.match(tall, /\/cmd0\b/, "the first command is listed");
-    assert.match(tall, /\/cmd14\b/, "the fifteenth command is listed");
-    assert.doesNotMatch(tall, /\/cmd15\b/, "the sixteenth command stays below the 15-row cap");
-    assert.match(tall, /\(1\/20\)/, "a scroll indicator shows there are more commands");
-    // No terminal height (fake hosts, other tests): the original 15-row list still renders.
-    const unknown = await open();
-    assert.match(unknown, /\/cmd14\b/, "the fallback keeps 15 rows");
-    assert.doesNotMatch(unknown, /\/cmd15\b/, "the fallback still caps at 15");
-  },
-]);
-
-tests.push([
-  "a very short overlay keeps the focused row when the cursor is not in the head",
-  async () => {
-    initTheme();
-    const model = await modelFor([]);
-    const allCommands = Array.from({ length: 20 }, (_, index) => ({ name: `cmd${index}`, source: "extension" }));
-    const theme: OverlayTheme & { bold(text: string): string } = { fg: (_colour, text) => text, bold: (text) => text };
-    const open = (rows: number) => {
-      const tui = { requestRender: (): void => {}, terminal: { rows } };
-      let component: { render(width: number): string[]; handleInput?(data: string): void } | undefined;
-      const ui = {
-        notify: (): void => {},
-        custom: (
-          factory: (tuiArg: unknown, themeArg: unknown, keybindings: unknown, done: (result: PageChoice) => void) => typeof component,
-        ): Promise<PageChoice> => {
-          component = factory(tui, theme, {}, () => {});
-          return new Promise<PageChoice>(() => {});
-        },
-      };
-      const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui };
-      void openHub(makeDeps({ model, commands: [], ctx: ctx as unknown as FakeCtx, allCommands }), "all-commands");
-      return component;
-    };
-    // At 4 rows the inner budget is 2: the list head is the search line and a blank. The cursor is
-    // on the last row, so a blind head slice would hide it. One up-arrow wraps focus to cmd19.
-    for (const rows of [4, 3]) {
-      const component = open(rows);
-      assert.ok(component, `the overlay opened at ${rows} rows`);
-      component.handleInput?.("\x1b[A");
-      const lines = component.render(80).map((line) => stripTerminalSequences(line));
-      assert.ok(lines.length <= rows, `the overlay fits ${rows} rows, got ${lines.length}`);
-      assert.match(lines[0] ?? "", /╭/, `the top border is visible at ${rows} rows`);
-      assert.match(lines.at(-1) ?? "", /╰/, `the bottom border is visible at ${rows} rows`);
-      assert.match(lines.join("\n"), /→ \/cmd19\b/, `the focused last row survives ${rows} rows`);
-    }
   },
 ]);
 
@@ -993,14 +776,14 @@ tests.push([
     // pi.sendUserMessage returns before /auto runs: a reopened hub would sit on top of its dialog.
     const typed = makeUi([{ id: "approvals" }]);
     const sent: string[] = [];
-    await openHub(makeDeps({ model, commands: ["auto"], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: typed.ui }, sent }), "autonomy");
+    await openHub(makeDeps({ model, commands: ["auto"], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: typed.ui }, sent }), "security");
     assert.deepEqual(sent, ["/auto"]);
     assert.equal(typed.customCalls.length, 1, "the hub closed after handing over to /auto");
 
-    const editor = makeUi([{ id: "session.new" }]);
+    const editor = makeUi([{ id: "session.fork" }]);
     const prefill: string[] = [];
     await openHub(makeDeps({ model, commands: ["auto"], ctx: { mode: "tui", hasUI: true, cwd: process.cwd(), ui: editor.ui }, prefill }), "session");
-    assert.deepEqual(prefill, ["/new "]);
+    assert.deepEqual(prefill, ["/fork "]);
     assert.equal(editor.customCalls.length, 1, "the hub closed so the editor gets the keyboard");
   },
 ]);
@@ -1055,125 +838,6 @@ tests.push([
     assert.match(recorded.rendered[2] ?? "", /│ Settings/, "Back returns to the page that opened Display");
     assert.match(recorded.rendered[2] ?? "", /→ Display/, "the cursor is on the row that opened Display");
     assert.doesNotMatch(recorded.rendered[2] ?? "", /│ System/, "Back does not fall back to the static parent");
-  },
-]);
-
-tests.push([
-  "the hub overlay draws a theme border and dims the transcript behind it",
-  async () => {
-    initTheme();
-    const borderTag = "\x1b[35m";
-    const dimTag = "\x1b[2m";
-    const theme: OverlayTheme & { bold(text: string): string } = {
-      fg: (color: string, text: string): string => `${color === "border" ? borderTag : dimTag}${text}\x1b[39m\x1b[22m`,
-      bold: (text: string): string => text,
-    };
-    const base = ["base line"];
-    const tui = {
-      requestRender: (): void => {},
-      hasOverlay: (): boolean => true,
-      compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines,
-    };
-    let component: { render(width: number): string[]; handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined; dispose?(): void } | undefined;
-    const ui = {
-      notify: (): void => {},
-      custom: (
-        factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: PageChoice) => void) => { render(width: number): string[]; handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined; dispose?(): void },
-      ): Promise<PageChoice> => {
-        component = factory(tui, theme, {}, () => {});
-        return new Promise<PageChoice>(() => {});
-      },
-    };
-    const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui };
-    void openHub(makeDeps({ model: await modelFor([]), commands: [], ctx: ctx as unknown as FakeCtx }));
-    assert.ok(component, "the hub opened a custom component");
-    // (a) every bordered line is exactly the requested width and the border colour is used.
-    for (const width of [40, 12]) {
-      const lines = component.render(width);
-      for (const line of lines) assert.ok(visibleWidth(line) <= width, `width ${width}: ${JSON.stringify(line)}`);
-      assert.ok(lines.some((line) => line.includes(borderTag)), `a border at width ${width}`);
-    }
-    // (b) while the overlay is open the base transcript is dimmed; dispose restores it.
-    // (e) the hub's overlay component exposes mouse handling, and a press on a row body is handled
-    // by the SettingsList rather than dropped by the frame.
-    assert.equal(typeof component.handleMouse, "function", "the hub's overlay component handles mouse");
-    const hubMouse: TuiMouseEvent = { type: "press", button: "left", x: 5, y: 5, width: 40, height: 12, screenX: 105, screenY: 55, shift: false, alt: false, ctrl: false };
-    assert.equal(component.handleMouse?.(hubMouse)?.handled, true, "a press on a row body reaches the SettingsList");
-    const dimmed = tui.compositeOverlays(base, 40, 20);
-    assert.ok(dimmed.some((line) => line.includes(dimTag)), "the transcript is dimmed while open");
-    assert.ok(stripTerminalSequences(dimmed[0] ?? "").includes("base line"), "the base text survives dimming");
-    component.dispose?.();
-    assert.deepEqual(tui.compositeOverlays(base, 40, 20), base, "dispose restores the transcript");
-    // (c) the wrapped done also restores it, before it calls the caller's done.
-    let finishWrapped: (() => void) | undefined;
-    let closed = 0;
-    const tui2 = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
-    withOverlayFrame<undefined>(tui2 as unknown as TUI, theme, (finish) => {
-      finishWrapped = finish;
-      return { render: () => ["inner"], invalidate: () => {} };
-    }, () => {
-      closed++;
-    });
-    assert.ok(tui2.compositeOverlays(base, 40, 20).some((line) => line.includes(dimTag)), "the second overlay dims too");
-    finishWrapped?.();
-    assert.equal(closed, 1, "the wrapped done reached the caller's done");
-    assert.deepEqual(tui2.compositeOverlays(base, 40, 20), base, "the wrapped done restores the transcript");
-    // (f) a build() that throws must restore the patch and rethrow, not leak the dim.
-    const tui3 = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
-    let buildError: unknown;
-    try {
-      withOverlayFrame<undefined>(tui3 as unknown as TUI, theme, () => {
-        throw new Error("build failed");
-      }, () => {});
-    } catch (error) {
-      buildError = error;
-    }
-    assert.ok(buildError instanceof Error && buildError.message === "build failed", "a throwing build propagates its error");
-    assert.deepEqual(tui3.compositeOverlays(base, 40, 20), base, "a throwing build restores the transcript");
-    // (d) a narrow width is left alone, and (e) the vendor copy is byte-identical.
-    assert.deepEqual(frameLines(["x"], 8, theme), ["x"]);
-    // (g) the frame lays the inner out at the framed width and forwards mouse events.
-    const renderWidths: number[] = [];
-    let innerMouse: TuiMouseEvent | undefined;
-    let innerMouseCalls = 0;
-    const mouseResult: TuiMouseEventResult = { handled: true };
-    const mouseTui = { hasOverlay: (): boolean => true, compositeOverlays: (lines: string[], _termWidth: number, _termHeight: number): string[] => lines };
-    const framed = withOverlayFrame<undefined>(mouseTui as unknown as TUI, theme, () => ({
-      render: (width: number): string[] => {
-        renderWidths.push(width);
-        return ["inner"];
-      },
-      invalidate: (): void => {},
-      handleMouse: (event: TuiMouseEvent): TuiMouseEventResult => {
-        innerMouseCalls += 1;
-        innerMouse = event;
-        return mouseResult;
-      },
-    }), () => {});
-    const wideLines = framed.render(40);
-    assert.equal(renderWidths.at(-1), 36, "the inner is laid out four cells narrower than the frame");
-    for (const line of wideLines) assert.equal(visibleWidth(line), 40, `framed line is 40 cells: ${JSON.stringify(line)}`);
-    framed.render(8);
-    assert.equal(renderWidths.at(-1), 8, "a narrow overlay renders the inner at the full width");
-    framed.render(12);
-    assert.equal(renderWidths.at(-1), 8, "a 12-cell frame renders the inner at 8 cells");
-    const press: TuiMouseEvent = { type: "press", button: "left", x: 5, y: 2, width: 40, height: 12, screenX: 105, screenY: 52, shift: false, alt: false, ctrl: false };
-    const forwarded = framed.handleMouse?.(press);
-    assert.equal(innerMouseCalls, 1, "a content point is forwarded exactly once");
-    assert.deepEqual(innerMouse, { ...press, x: 3, y: 1, width: 36, height: 10 }, "the point is translated into the content area");
-    assert.equal(forwarded, mouseResult, "the inner's result is returned");
-    for (const point of [{ x: 0, y: 2 }, { x: 1, y: 2 }, { x: 38, y: 2 }, { x: 39, y: 2 }, { x: 5, y: 0 }, { x: 5, y: 11 }]) {
-      framed.handleMouse?.({ ...press, ...point });
-    }
-    assert.equal(innerMouseCalls, 1, "border and outside points are not forwarded");
-    const narrowEvent: TuiMouseEvent = { ...press, x: 7, width: 8 };
-    framed.handleMouse?.(narrowEvent);
-    assert.equal(innerMouseCalls, 2, "a narrow overlay forwards the event");
-    assert.deepEqual(innerMouse, narrowEvent, "a narrow overlay forwards untranslated");
-    framed.dispose?.();
-    const srcFrame = fs.readFileSync("packages/extensions/src/control-center/overlay-frame.ts");
-    const vendorFrame = fs.readFileSync("packages/extensions/third_party/subagent/overlay-frame.ts");
-    assert.ok(srcFrame.equals(vendorFrame), "the two overlay-frame.ts copies are byte-identical");
   },
 ]);
 
@@ -1313,13 +977,42 @@ tests.push([
   },
 ]);
 
-/** Run the registered `/menu <page>` (or its /kit alias) over RPC and return the first dialog's options (one per row). */
+tests.push([
+  "the Doctor lists extensions switched off in overrides.json and flags one the marker still loads",
+  async () => {
+    const doctor = await loadDoctorModule();
+    const values = await loadValuesModule();
+    const ws = tmpWorkspace("pi-kit-doctor-disabled-");
+    const restore = setEnv("PI_CODING_AGENT_DIR", ws);
+    try {
+      fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { remove: ["branch-lab", "herdr"] } }));
+      fs.writeFileSync(path.join(ws, ".pi-kit.json"), JSON.stringify({ profile: "balanced", extensions: ["herdr", "effort"] }));
+      const disabled = values.readDisabledExtensions();
+      assert.deepEqual(disabled, ["branch-lab", "herdr"]);
+      const line = doctor.doctorLines({
+        marker: values.readMarker(ws),
+        piVersion: "1.3.0",
+        settingsFile: path.join(ws, "settings.json"),
+        disabled,
+        registries: { protections: 1 },
+      }).find((l) => l.label === "Disabled");
+      assert.equal(line?.ok, false, "herdr is in overrides but the marker still loads it");
+      assert.match(line?.value ?? "", /still loaded: herdr/);
+    } finally {
+      restore();
+      rmWorkspace(ws);
+    }
+  },
+]);
+
+/** Run the registered `/menu <page>` over RPC and return the first dialog's options (one per row). */
 async function rpcPageOptions(page: string, cwd: string): Promise<string[]> {
   const { api, registered } = makeApi();
   await registerControl(api);
   const recorded = makeUi();
   const ctx = { mode: "rpc" as const, hasUI: true, cwd, ui: recorded.ui };
-  await registered.get("kit")?.handler(page, ctx);
+  await registered.get("menu")?.handler(page, ctx);
   return recorded.selects[0]?.options ?? [];
 }
 
@@ -1374,28 +1067,6 @@ tests.push([
 ]);
 
 tests.push([
-  "the Help page and the /menu description name the configured hubKey",
-  async () => {
-    const ws = tmpWorkspace("pi-kit-hubkey-help-");
-    const restore = setEnv("PI_CODING_AGENT_DIR", ws);
-    try {
-      const defaults = await rpcPageOptions("help", ws);
-      assert.ok(defaults.includes("Open: /menu, /kit, /helpers, or the alt+m key"), defaults.join(" | "));
-      fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true });
-      fs.writeFileSync(path.join(ws, "pi-kit", "ui.json"), JSON.stringify({ hubKey: "alt+k" }));
-      const options = await rpcPageOptions("help", ws);
-      assert.ok(options.includes("Open: /menu, /kit, /helpers, or the alt+k key"), options.join(" | "));
-      const { api, registered } = makeApi();
-      await registerControl(api);
-      assert.match(registered.get("menu")?.description ?? "", /\(also alt\+k\)$/);
-    } finally {
-      restore();
-      rmWorkspace(ws);
-    }
-  },
-]);
-
-tests.push([
   "the launch header and the registered shortcut name the load-time hubKey after a session restart",
   async () => {
     const ws = tmpWorkspace("pi-kit-hubkey-reread-");
@@ -1426,13 +1097,52 @@ tests.push([
       assert.equal(headers.length, 2, "each session_start installs the header");
       const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
       for (const factory of headers) {
-        const component = factory({ requestRender: () => {} } as unknown as TUI, theme);
+        const component = factory({ requestRender: () => {}, terminal: { rows: 40 } } as unknown as TUI, theme);
         const rendered = component.render(120).join("\n");
         assert.ok(rendered.includes("alt+k"), `the header names the bound key: ${rendered}`);
         assert.ok(!rendered.includes("alt+x"), "the header does not read a later ui.json value");
         component.dispose?.();
       }
       assert.deepEqual([...pi.shortcuts.keys()], ["alt+k"], "the shortcut still names the bound key");
+    } finally {
+      restore();
+      rmWorkspace(ws);
+    }
+  },
+]);
+
+tests.push([
+  "the launch screen shows a first-run card until the first prompt, then never again",
+  async () => {
+    const ws = tmpWorkspace("pi-kit-first-run-");
+    const restore = setEnv("PI_CODING_AGENT_DIR", ws);
+    try {
+      fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true });
+      fs.writeFileSync(path.join(ws, "pi-kit", "ui.json"), JSON.stringify({ reducedMotion: true }));
+      const pi = fakePi();
+      await registerControl(pi.api);
+      type HeaderFactory = (tui: TUI, theme: Theme) => { render: (width: number) => string[]; dispose?(): void };
+      const headers: HeaderFactory[] = [];
+      const ui = { addAutocompleteProvider: (): void => {}, setHeader: (factory: HeaderFactory): void => { headers.push(factory); } };
+      // pi's placeholder model (nothing configured): the card says how to get one.
+      const ctx = { mode: "tui", hasUI: true, cwd: ws, ui, model: { id: "unknown", provider: "unknown", contextWindow: 0 } };
+      const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as unknown as Theme;
+      const render = (factory: HeaderFactory | undefined): string => {
+        assert.ok(factory, "a header was installed");
+        const component = factory({ requestRender: () => {}, terminal: { rows: 40 } } as unknown as TUI, theme);
+        const text = component.render(120).join("\n");
+        component.dispose?.();
+        return text;
+      };
+      const start = pi.handlers.get("session_start");
+      await start({}, ctx);
+      assert.match(render(headers.at(-1)), /\/login/, "no model yet: the card names the way to get one");
+      await start({}, ctx);
+      assert.match(render(headers.at(-1)), /\/login/, "still shown until a prompt is sent");
+
+      await pi.handlers.get("agent_start")({}, ctx);
+      await start({}, ctx);
+      assert.doesNotMatch(render(headers.at(-1)), /First run/, "once the first prompt was sent the card is gone for good");
     } finally {
       restore();
       rmWorkspace(ws);

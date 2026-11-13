@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": [],
   "registers": { "tools": [], "commands": ["autonomy"] },
-  "profiles": ["autonomous"],
+  "profiles": ["long-horizon"],
   "enabledByDefault": true,
   "platforms": ["linux", "darwin"],
   "runtime": {

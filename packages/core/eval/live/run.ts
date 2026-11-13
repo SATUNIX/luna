@@ -32,7 +32,7 @@ const selected = option("--cases", "hello,clarification,coding,cyber").split(","
 const variant = option("--variant", "focused");
 if (!["focused", "lite"].includes(variant)) throw new Error("variant must be focused or lite");
 const image = option("--image", "pi-system:local");
-const providerName = option("--provider", "pentest");
+const providerName = option("--provider", "engagement");
 const modelsFile = option("--models", path.join(os.homedir(), ".pi/agent/models.json"));
 const provider = resolveProvider(modelsFile, providerName);
 // Credentials are copied as written or resolved from the environment; they must be strings.

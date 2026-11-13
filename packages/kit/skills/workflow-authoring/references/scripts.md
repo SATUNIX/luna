@@ -25,7 +25,7 @@ Every script starts with a literal `meta`:
 export const meta = {
   name: 'find-flaky-tests',
   description: 'Find flaky tests and propose fixes',   // shown when the operator is asked
-  whenToUse: 'CI shows retries',                       // optional, shown in /workflow list
+  whenToUse: 'CI shows retries',                       // optional, shown in /workflows list
   phases: [
     { title: 'Scan', detail: 'grep test logs for retries' },
     { title: 'Fix', detail: 'one agent per flaky test' },

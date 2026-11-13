@@ -22,10 +22,16 @@ import path from "node:path";
 // pre-inference decision point, not a notification.
 
 interface RoutingPolicy {
+  /** Both set, or both empty when the policy only names a fallback list. */
   hot_path_model: string;
   strong_model: string;
   trigger_task_types: string[];
+  /** Models to move to, in order, when the current one fails with a credit, rate-limit or server error. */
+  fallback: string[];
 }
+
+const MAX_FALLBACK = 3;
+const COOLDOWN_MS = 5 * 60_000;
 
 const DEFAULT_TRIGGER_TASK_TYPES = ["goal_decomposition", "cross_file_review", "done_triage", "complex"];
 
@@ -47,11 +53,17 @@ function readPolicy(): RoutingPolicy | null {
     const parsed: unknown = JSON.parse(fs.readFileSync(policyPath, "utf8"));
     if (!isRecord(parsed)) return null;
     const { hot_path_model: hot, strong_model: strong, trigger_task_types: triggers } = parsed;
-    // EFF-8: both model specs must be non-empty strings; anything else leaves routing off.
-    if (typeof hot !== "string" || typeof strong !== "string" || !hot || !strong) return null;
+    const fallback = Array.isArray(parsed.fallback)
+      ? parsed.fallback.filter((v): v is string => typeof v === "string" && v !== "").slice(0, MAX_FALLBACK)
+      : [];
+    // EFF-8: both model specs must be non-empty strings; anything else leaves routing off (a policy
+    // that only lists fallback models still works as a failover list).
+    const routes = typeof hot === "string" && typeof strong === "string" && hot !== "" && strong !== "";
+    if (!routes && fallback.length === 0) return null;
     return {
-      hot_path_model: hot,
-      strong_model: strong,
+      hot_path_model: routes ? hot : "",
+      strong_model: routes ? strong : "",
+      fallback,
       trigger_task_types: Array.isArray(triggers)
         ? triggers.filter((value): value is string => typeof value === "string")
         : DEFAULT_TRIGGER_TASK_TYPES,
@@ -116,27 +128,82 @@ function resolveModel(modelRegistry: Pick<ModelRegistry, "find" | "getAll">, val
   return all.find((m) => m.id === id) ?? null;
 }
 
+/** The model spec a registry model answers to: "provider/id". */
+const specOf = (m: { provider?: string; id?: string } | undefined): string => (m?.id ? `${m.provider ? `${m.provider}/` : ""}${m.id}` : "");
+
 export default function (pi: ExtensionAPI) {
   let policy: RoutingPolicy | null = null;
   let cwd = process.cwd();
+  // Specs that failed, with when they may be tried again, and the model to go back to afterwards.
+  const cooling = new Map<string, number>();
+  let primary: string | null = null;
+  let registry: ModelRegistry | undefined;
+
+  const isCooling = (spec: string): boolean => (cooling.get(spec) ?? 0) > Date.now();
 
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd ?? process.cwd();
     policy = readPolicy();
+    cooling.clear();
+    primary = null;
     if (policy) {
-      ctx.ui?.notify?.(`provider-router: hot=${policy.hot_path_model}, strong=${policy.strong_model}`, "info");
+      const route = policy.hot_path_model ? `hot=${policy.hot_path_model}, strong=${policy.strong_model}` : "failover only";
+      ctx.ui?.notify?.(`provider-router: ${route}${policy.fallback.length ? `, fallback=${policy.fallback.join(" > ")}` : ""}`, "info");
     }
+  });
+
+  // finish-reason-retry classifies every provider failure once and offers it here. Taking it means
+  // moving to the next fallback model that is not cooling down, which pi's retry then uses.
+  pi.events?.on("luna:provider-failure", (data: unknown) => {
+    if (!policy || policy.fallback.length === 0 || typeof data !== "object" || data === null) return;
+    if (Reflect.get(data, "kind") === "other" || !registry) return;
+    const failed = String(Reflect.get(data, "model") ?? "");
+    const failedProvider = String(Reflect.get(data, "provider") ?? "");
+    // Two providers can serve the same model id: match the provider too when the emitter gave it.
+    const current = [...registry.getAll?.() ?? []].find((m) => m.id === failed && (!failedProvider || m.provider === failedProvider));
+    const failedSpec = specOf(current) || (failedProvider && failed ? `${failedProvider}/${failed}` : failed);
+    primary ??= failedSpec;
+    cooling.set(failedSpec, Date.now() + COOLDOWN_MS);
+    cooling.set(failed, Date.now() + COOLDOWN_MS);
+    const candidates: Array<{ spec: string; model: NonNullable<ReturnType<typeof resolveModel>> }> = [];
+    for (const spec of policy.fallback) {
+      if (isCooling(spec) || spec === failedSpec) continue;
+      const next = resolveModel(registry, spec);
+      if (next) candidates.push({ spec, model: next });
+    }
+    if (candidates.length === 0) return;
+    Reflect.set(data, "handled", true);
+    // The emitter awaits this before it lets pi retry, so the retry runs on the new model. pi.setModel
+    // returns false (it does not throw) when the target has no usable credentials: try the next
+    // fallback, and resolve false when none took so the failure is not retried on the same model.
+    Reflect.set(data, "switching", (async (): Promise<boolean> => {
+      for (const { spec, model } of candidates) {
+        const switched = await pi.setModel(model).catch(() => false);
+        if (switched) return true;
+        cooling.set(spec, Date.now() + COOLDOWN_MS);
+      }
+      return false;
+    })());
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
     if (!policy) return undefined; // unconfigured - never touch the operator's own model choice
+    registry = ctx.modelRegistry;
+    if (!registry) return undefined; // no registry available (e.g. offline harness) - nothing to route
     const dir = ctx.cwd ?? cwd;
     const taskType = readTaskType(dir, resolveSessionId(ctx));
-    const targetSpec = taskType && policy.trigger_task_types.includes(taskType) ? policy.strong_model : policy.hot_path_model;
+    let targetSpec = "";
+    if (policy.hot_path_model) {
+      targetSpec = taskType && policy.trigger_task_types.includes(taskType) ? policy.strong_model : policy.hot_path_model;
+    } else if (primary && !isCooling(primary) && specOf(ctx.model) !== primary) {
+      targetSpec = primary; // failover only: go back to the model that failed once its cooldown is over
+    }
+    // A target that is cooling down after a failure gives way to the first fallback that is not.
+    if (targetSpec && isCooling(targetSpec)) targetSpec = policy.fallback.find((spec) => !isCooling(spec)) ?? targetSpec;
+    if (!targetSpec) return undefined;
+    if (primary && targetSpec === primary) primary = null;
+    if (specOf(ctx.model) === targetSpec) return undefined;
 
-    // Typed as always present, but an offline harness may omit it: keep the guard.
-    const registry: ModelRegistry | undefined = ctx.modelRegistry;
-    if (!registry) return undefined; // no registry available (e.g. offline harness) - nothing to route
     const model = resolveModel(registry, targetSpec);
     if (!model) {
       ctx.ui?.notify?.(`provider-router: target model '${targetSpec}' not found in the model registry — keeping current model`, "warning");

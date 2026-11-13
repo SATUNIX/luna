@@ -37,6 +37,7 @@ separate and may still appear.
 | `/update status` | Installed and available versions for every part |
 | `/update all` | Update Luna and linked packages, re-apply your profile, reload; then update pi, up to the tested version (below) |
 | `/update kit`, `/update pi`, `/update packages` | Update one part |
+| `/update undo` | Return Luna and its configuration files to how they were before the last update |
 | `/update channel latest` / `next` / `trunk` / `X.Y.Z` | Follow the other channel, or pin a release |
 
 Every update asks for confirmation first. A new pi version needs a restart of pi; everything
@@ -85,16 +86,30 @@ reports "up to date" for a lookup that did not happen.
 After Luna updates, your recorded profile is re-applied, so extensions a new release adds to
 your profile load, and companions move to Luna's newly reviewed pins.
 
-Verification stops a failed update; it does not undo successful earlier package installs or
-restore an updated checkout. When the run stops after Luna was replaced and before the profile
-was re-applied, the message says the new Luna is running with the previous profile's settings,
-names the version (and commit) Luna was at with the command that goes back to it where one
-exists (`/update channel <version>`, or `git -C <checkout> reset --keep <commit>` for a local
-checkout), and prints the exact installer command that re-applies the profile
-(`tests/kit-update-smoke.ts`). Save a copy of your agent directory before changing releases, keep
-the previous tag, and reinstall that tag and re-apply your profile if recovery is needed.
-`smoke:kit-update` checks the stop-on-failure behaviour; whole-update crash recovery is not
-covered. Avoid simultaneous updates or profile switches from multiple sessions.
+Verification stops a failed update; it does not by itself undo steps that already succeeded. Before the
+first step runs, `/update` writes `<agent dir>/pi-kit/update-journal.json` (mode 0600): how Luna was
+delivered, its source, version, commit and channel, the pi version, the recorded profile, and a copy of
+the configuration files an update can change (`settings.json`, the install markers, `firewall.json`,
+`security.json`, `overrides.json`, `profile-settings.json`; never `.env`). If the journal cannot be
+written, the update does not start. `/update undo` reinstalls the recorded Luna version (or commit, or
+resets a local checkout with `git reset --keep`) and then puts those files back byte for byte, removing
+one the update created. It offers itself when a step fails, and after a successful update. When the run
+stops after Luna was replaced and before the profile was re-applied, the message also names the exact
+installer command that finishes the job instead. Pinned by `tests/kit-update-smoke.ts` (the journal
+exists before the first step, the files and version come back, an unwritable journal stops the update).
+
+What `/update undo` does not undo: pi itself (`pi update --self` only moves forward; the journal records
+the version so you can see what it was) and linked packages a step updated. Changes made to those
+files after the update (a `/profile` switch, a new package, your default model or theme) are lost when they are
+restored; the confirm card says so. One journal is kept, for the last update: each update that finishes is replaced by the next one's journal, so
+`/update undo` returns to the version just before the latest update. An update that did not finish keeps its
+journal across a retry, so a retry after a partial failure still undoes to the original (pinned by
+`tests/kit-update-smoke.ts`, which updates twice and undoes once). A crash in the middle of an update that left no journal is not covered. Avoid simultaneous
+updates or profile switches from multiple sessions.
+
+After an update, one line names any stored setting that was read under an old name and rewritten under
+its new one (a renamed profile, firewall policy or extension, security level `relaxed`). That notice is
+temporary: it exists only while those migrations do.
 
 Uninstall uses the installation marker to identify managed companion packages. If any removal
 fails, it returns a nonzero exit status and keeps the marker so the same command can be retried

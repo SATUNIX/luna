@@ -32,13 +32,15 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/context-sieve/shared/safe-fs.ts",
     "packages/extensions/src/goal-core/shared/safe-fs.ts",
     "packages/extensions/src/guidelines/shared/safe-fs.ts",
+    "packages/extensions/src/herdr/shared/safe-fs.ts",
     "packages/extensions/src/human-console/shared/safe-fs.ts",
     "packages/extensions/src/memory-local/shared/safe-fs.ts",
     "packages/extensions/src/orchestrator/shared/safe-fs.ts",
-    "packages/extensions/src/pentest-governance-domain/shared/safe-fs.ts",
+    "packages/extensions/src/engagement-governance/shared/safe-fs.ts",
     "packages/extensions/src/progress-guard/shared/safe-fs.ts",
     "packages/extensions/src/recovery-orchestrator/shared/safe-fs.ts",
     "packages/extensions/src/save/shared/safe-fs.ts",
+    "packages/extensions/src/session-helpers/shared/safe-fs.ts",
     "packages/extensions/src/secret-guard/shared/safe-fs.ts",
     "packages/extensions/src/self-improvement/shared/safe-fs.ts",
     "packages/extensions/src/skill-forge/shared/safe-fs.ts",
@@ -52,14 +54,23 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/third_party/subagent/shared/safe-fs.ts",
     "packages/extensions/third_party/todo/shared/safe-fs.ts",
   ],
+  "agent-state.ts": [
+    "packages/extensions/src/herdr/shared/agent-state.ts",
+  ],
+  "ceiling.ts": [
+    "packages/extensions/src/goal-core/shared/ceiling.ts",
+    "packages/extensions/src/tool-firewall/shared/ceiling.ts",
+  ],
   "refusal-record.ts": [
     "packages/extensions/src/secret-guard/shared/refusal-record.ts",
     "packages/extensions/src/tool-firewall/shared/refusal-record.ts",
   ],
   "redact.ts": [
+    "packages/extensions/src/herdr/shared/redact.ts",
     "packages/extensions/src/memory-mem0/shared/redact.ts",
     "packages/extensions/src/memory-vault/shared/redact.ts",
     "packages/extensions/src/save/shared/redact.ts",
+    "packages/extensions/src/session-helpers/shared/redact.ts",
     "packages/extensions/src/tool-firewall/shared/redact.ts",
     "packages/extensions/third_party/subagent/shared/redact.ts",
     "packages/role-runner/src/shared/redact.ts",
@@ -86,13 +97,17 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/control-center/shared/input-owner.ts",
     "packages/extensions/src/effort/shared/input-owner.ts",
     "packages/extensions/src/human-console/shared/input-owner.ts",
-    "packages/extensions/src/pentest-governance-domain/shared/input-owner.ts",
+    "packages/extensions/src/engagement-governance/shared/input-owner.ts",
     "packages/extensions/src/tool-firewall/shared/input-owner.ts",
     "packages/extensions/third_party/subagent/shared/input-owner.ts",
   ],
   "open-tool-calls.ts": [
     "packages/extensions/src/conductor/shared/open-tool-calls.ts",
     "packages/extensions/third_party/subagent/shared/open-tool-calls.ts",
+  ],
+  "carried-notes.ts": [
+    "packages/extensions/src/memory-vault/shared/carried-notes.ts",
+    "packages/extensions/src/skill-router/shared/carried-notes.ts",
   ],
   "fingerprint.ts": [
     "packages/extensions/src/verify-gate/shared/fingerprint.ts",
@@ -101,6 +116,18 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   "safe-regex.ts": [
     "packages/extensions/src/skill-router/shared/safe-regex.ts",
     "packages/extensions/third_party/subagent/shared/safe-regex.ts",
+  ],
+  "profile-names.ts": [
+    "packages/extensions/src/control-center/shared/profile-names.ts",
+    "packages/extensions/src/effort/shared/profile-names.ts",
+    "packages/extensions/src/kit-update/shared/profile-names.ts",
+    "packages/extensions/src/session-helpers/shared/profile-names.ts",
+    "packages/extensions/src/tool-firewall/shared/profile-names.ts",
+    "packages/extensions/third_party/custom-footer/shared/profile-names.ts",
+  ],
+  "say.ts": [
+    "packages/extensions/src/control-center/shared/say.ts",
+    "packages/extensions/src/session-helpers/shared/say.ts",
   ],
   "visible-text.ts": [
     "packages/extensions/src/control-center/shared/visible-text.ts",

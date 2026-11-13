@@ -1,6 +1,6 @@
 ---
 name: burp-web-triage
-category: pentest
+category: engagement
 description: Triage Burp-derived web evidence into endpoint observations and hypotheses. Use when normalizing Burp MCP history/sitemap output into evidence records during a web/API assessment.
 disable-model-invocation: true
 triggers: ["burp"]

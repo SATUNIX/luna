@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["session_start", "session_shutdown", "input", "turn_end"],
   "registers": { "tools": [], "commands": [] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest"],
+  "profiles": ["long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

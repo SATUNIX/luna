@@ -1,14 +1,14 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "web-console",
-  "summary": "/console (and /webui): start, stop and check the bundled Pi Console web UI in packages/web-ui, launched as a detached local server.",
+  "summary": "/console: start, stop and check the bundled Pi Console web UI in packages/web-ui, launched as a detached local server.",
   "category": "ui",
   "tier": "T1",
   "layer": 6,
   "entry": "index.ts",
   "hooks": [],
-  "registers": { "tools": [], "commands": ["console", "webui"] },
-  "profiles": ["balanced", "long-horizon", "autonomous", "self-improving", "pentest"],
+  "registers": { "tools": [], "commands": ["console"] },
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement"],
   "enabledByDefault": true,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

@@ -1,0 +1,24 @@
+---
+description: "Propose an action card for one narrow test"
+argument-hint: "[test]"
+---
+
+# Action Card
+
+Create a proposed action card for one narrow test.
+
+Test: ${@:-the next narrow test under discussion}
+
+Include:
+
+- Target asset
+- Capability/tool requested
+- Exact inputs
+- Purpose
+- Scope and ROE rationale
+- Expected impact
+- Risk class
+- Evidence expected
+- Rollback or stopping condition
+
+Do not execute the action.

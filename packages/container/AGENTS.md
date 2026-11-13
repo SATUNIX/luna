@@ -12,8 +12,8 @@ upstream Pi with the Luna kit. Use the `wrapper-runtime-maintainer` skill when w
   `ARG` defaults in `Dockerfile` **and** `capability/env/defaults.env` in the same change, and keep
   the two values identical. Compose reads them from `capability/env/defaults.env`.
 - `mcp-servers/governance/` is the local `pi_system_governance` MCP server. Changes here also affect
-  the standalone `pentest-governance-domain` extension in
-  `packages/extensions/src/pentest-governance-domain/`, which installs from the same kit; keep the
+  the standalone `engagement-governance` extension in
+  `packages/extensions/src/engagement-governance/`, which installs from the same kit; keep the
   two in step.
 - Keep the canonical compose (`capability/compose/compose.yaml`) and the root compatibility compose
   (`docker-compose.yml`) behaviourally aligned. `python3 scripts/validate-compose-parity.py` and
@@ -31,7 +31,7 @@ upstream Pi with the Luna kit. Use the `wrapper-runtime-maintainer` skill when w
 - Keep MCP direct and namespace tools, sampling auto-approval, auto-auth, URL auto-open
   elicitation, agent-added servers and script tools, and Jev semantic search disabled in
   `overlays/pi/mcp-adapter.json`, and keep `PI_MCP_CONFIG_MODE=exclusive` and
-  `MCP_DIRECT_TOOLS=__none__` in the `Dockerfile`; `scripts/validate-pentest-env.sh` fails if one
+  `MCP_DIRECT_TOOLS=__none__` in the `Dockerfile`; `scripts/validate-engagement-env.sh` fails if one
   is turned on or removed.
 - Deny unknown MCP tools by default; require a human to approve non-read-only or target-impacting
   actions.

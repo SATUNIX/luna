@@ -208,11 +208,6 @@ function isFreshPendingFile(file: string): boolean {
 	}
 }
 
-/** Back-compat alias; prefer isVerifyPendingActive. */
-export function isVerifyPending(cwd: string): boolean {
-	return isVerifyPendingActive(cwd);
-}
-
 /** Writes this run's own pending marker and returns its path, for clearVerifyPending. */
 function setVerifyPending(cwd: string): string {
 	const file = path.join(
@@ -1455,13 +1450,15 @@ export default function (pi: ExtensionAPI) {
 			const steer = stale ? null : noteResult(ok, revision);
 			const split = steer !== null && !splitSent ? steer : null;
 			if (split) splitSent = true;
+			// `luna:attention` is heard by the herdr extension when running inside herdr.
+			if (!ok && !stale) try { pi.events?.emit("luna:attention", { kind: "failed", label: `${label} failed` }); } catch { /* observers only */ }
 			if (!ok && !correctionSent) {
 				correctionSent = true;
 				pi.sendMessage(
 					{
 						customType: "verify-gate-result",
 						display: true,
-						content: `[verify-gate diagnostic] ${label} failed after your edits:\n${output.slice(0, 1500)}\nFix the reported failure if possible; otherwise report the blocker. Do not fabricate verification results.${split ? `\n${split}` : ""}`,
+						content: `Verify gate: ${label} failed after your edits:\n${output.slice(0, 1500)}\nFix the reported failure if possible; otherwise report the blocker. Do not fabricate verification results.${split ? `\n${split}` : ""}`,
 					},
 					{ triggerTurn: true, deliverAs: "followUp" },
 				);

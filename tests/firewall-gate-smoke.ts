@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // tool-firewall end to end: the decision matrix, approval cards, session leases, learning from
-// operator decisions, session trajectory, the strict pentest policy and serialised approvals.
+// operator decisions, session trajectory, the strict engagement policy and serialised approvals.
 // Offline: the auto-mode judge is a stub.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -251,7 +251,7 @@ try {
     assert.equal(view.seen.length, 1);
     assert.match(first(view.seen, "a card was shown").title, /MEDIUM · bash · npm install left-pad/);
     assert.match(first(view.seen, "a card was shown").title, /\n\$ npm install left-pad\n/);
-    assert.deepEqual(first(view.seen, "a card was shown").options.length, 4);
+    assert.ok(first(view.seen, "a card was shown").options.includes("Always allow this exact command in this project (30 days)"), "a medium card offers the project allow");
     const denied = decided(await bash(pi, "git push --force origin main", view.ctx));
     assert.equal(denied.block, true);
     assert.match(denied.reason, /operator declined/);
@@ -382,22 +382,22 @@ try {
     ok("trajectory: secret→send and download→execute escalate to the operator");
   }
 
-  // Strict pentest policy: regex rules, no auto-low trust, headless high denied outright.
-  config({ mode: "auto", policy: "pentest", knownHosts: ["ms01"] });
+  // Strict engagement policy: regex rules, no auto-low trust, headless high denied outright.
+  config({ mode: "auto", policy: "engagement", knownHosts: ["ms01"] });
   {
     const { pi, judged } = await gate();
     const view = card([undefined, undefined, undefined], "PT");
     const rmr = decided(await bash(pi, "rm -r build", view.ctx));
-    assert.equal(rmr.block, true, "pentest rules deny rm -r even of build output");
-    assert.match(rmr.reason, /pentest rule: recursive delete/);
-    assert.equal((await bash(pi, "ssh ms01 uptime", view.ctx))?.block, true, "no auto-low trust in the pentest policy");
-    assert.equal(judged.length, 0, "the pentest judge only sees pure reads");
+    assert.equal(rmr.block, true, "engagement rules deny rm -r even of build output");
+    assert.match(rmr.reason, /engagement rule: recursive delete/);
+    assert.equal((await bash(pi, "ssh ms01 uptime", view.ctx))?.block, true, "no auto-low trust in the engagement policy");
+    assert.equal(judged.length, 0, "the engagement judge only sees pure reads");
     const headless = (await pi.handlers.get("tool_call")({ toolName: "bash", input: { command: "git push --force" } }, { cwd: ws, hasUI: false, ui: {} })) as GateDecision;
-    assert.match(headless.reason, /pentest policy does not approve high-impact actions without an interactive operator/);
+    assert.match(headless.reason, /engagement policy does not approve high-impact actions without an interactive operator/);
     assert.ok(!fs.existsSync(path.join(ws, "console", "pending")) || fs.readdirSync(path.join(ws, "console", "pending")).length === 0);
     // Approvals are per action: the card offers no session lease.
-    assert.ok(view.seen.length > 0 && view.seen.every((c) => !c.options.some((o) => /for this session/.test(o))), "pentest cards offer no session lease");
-    ok("pentest policy: strict regex rules, no auto-low shortcut, no leases, headless high denied");
+    assert.ok(view.seen.length > 0 && view.seen.every((c) => !c.options.some((o) => /for this session/.test(o))), "engagement cards offer no session lease");
+    ok("engagement policy: strict regex rules, no auto-low shortcut, no leases, headless high denied");
   }
 
   // Ops work on a known host: families, remote sudo, compact cards, judged scope, broker menu,

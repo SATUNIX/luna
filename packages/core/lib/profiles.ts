@@ -23,6 +23,9 @@ import { isDeepStrictEqual } from "node:util";
 import { array, boolean, isRecord, literal, object, optional, parseJson, parseJsonAs, record, string, unknownValue, ValidationError, type Infer } from "./guard.ts";
 import { globalAgentDir, readSettings, updateSettings, writeSettingsAtomic, type PackageObject } from "./settings.ts";
 import { PROFILES_DIR, WORKSPACE_ROOT } from "./paths.ts";
+import { FIREWALL_POLICIES, isFirewallPolicy, migrateStoredExtension, migrateStoredPolicy, renamedProfileMessage, type FirewallPolicy } from "../shared/profile-names.ts";
+
+export { FIREWALL_POLICIES, type FirewallPolicy };
 
 export const SKILLS_DIR = path.join(WORKSPACE_ROOT, "packages", "kit", "skills");
 export const PROMPTS_DIR = path.join(WORKSPACE_ROOT, "packages", "kit", "prompts");
@@ -50,7 +53,7 @@ export function normalizeOverrides(raw: unknown): Overrides {
   const s = field(raw, "skills");
   const p = field(raw, "prompts");
   return {
-    extensions: { add: list(field(o, "add")), remove: list(field(o, "remove")) },
+    extensions: { add: list(field(o, "add")).map(migrateStoredExtension), remove: list(field(o, "remove")).map(migrateStoredExtension) },
     skills: { exclude: list(field(s, "exclude")), include: list(field(s, "include")) },
     prompts: { exclude: list(field(p, "exclude")), include: list(field(p, "include")) },
   };
@@ -173,22 +176,11 @@ export function isEmptyOverrides(o: Overrides): boolean {
   return [o.extensions.add, o.extensions.remove, o.skills.exclude, o.skills.include, o.prompts.exclude, o.prompts.include].every((a) => a.length === 0);
 }
 
-// Renamed profiles keep working under their old name.
-export const PROFILE_ALIASES: Readonly<Record<string, string>> = { engagement: "pentest" };
-
-export function canonicalProfileName(name: string): string {
-  // Own keys only: "constructor" or "__proto__" must not resolve to Object.prototype members.
-  return (Object.hasOwn(PROFILE_ALIASES, name) ? PROFILE_ALIASES[name] : undefined) ?? name;
-}
-
 // --- profile definitions (packages/kit/profiles/<name>.json) ----------------------------------
 
-export const FIREWALL_POLICIES = ["coding", "pentest"] as const;
 export const FIREWALL_MODES = ["auto", "manual"] as const;
-export type FirewallPolicy = (typeof FIREWALL_POLICIES)[number];
 export type FirewallMode = (typeof FIREWALL_MODES)[number];
 
-const isFirewallPolicy = (value: unknown): value is FirewallPolicy => FIREWALL_POLICIES.some((p) => p === value);
 const isFirewallMode = (value: unknown): value is FirewallMode => FIREWALL_MODES.some((m) => m === value);
 
 /** A profile's `firewall` block: the policy and default mode it installs. */
@@ -220,6 +212,10 @@ const ProfileFileSchema = object({
   name: optional(string()),
   description: optional(string()),
   experimental: optional(boolean()),
+  /** Memento mode (effort extension) may be opted into under this profile. */
+  memento: optional(boolean()),
+  /** Slash commands the control-center command menu pins because this profile is defined by them. */
+  pinnedCommands: names,
   firewall: optional(unknownValue()),
   securityLevel: optional(unknownValue()),
   settings: optional(unknownValue()),
@@ -294,8 +290,11 @@ export function profileSettings(profileDef: unknown): ProfileSettings | undefine
 }
 
 export function loadProfileDef(name: string, dir: string = PROFILES_DIR): Profile {
-  const file = path.join(dir, `${canonicalProfileName(name)}.json`);
-  if (!fs.existsSync(file)) throw new Error(`Profile not found: ${file}`);
+  const file = path.join(dir, `${name}.json`);
+  if (!fs.existsSync(file)) {
+    const renamed = renamedProfileMessage(name);
+    throw new Error(renamed ?? `Profile not found: ${file}`);
+  }
   const raw = fs.readFileSync(file, "utf8");
   let parsed: unknown;
   try {
@@ -424,8 +423,8 @@ export function writeOverrides(overrides: unknown, file: string = overridesPath(
 export { readSettings };
 
 // --- tool-firewall config (<agent dir>/pi-kit/firewall.json) ---
-// A profile's `firewall` field sets the firewall policy (coding | pentest) and default mode
-// (auto | manual). The policy always follows the profile: switching to or from pentest must
+// A profile's `firewall` field sets the firewall policy (coding | engagement) and default mode
+// (auto | manual). The policy always follows the profile: switching to or from engagement must
 // never keep the other profile's gate. The mode follows the profile too, unless the operator
 // chose it with /auto (source "user") and the policy is unchanged. judgeModel, learn and
 // knownHosts are the operator's and are always kept.
@@ -461,7 +460,7 @@ function assertKnownFirewall(profileDef: unknown, existing: unknown, file?: stri
   const fw = profileFirewall(profileDef);
   if (isRecord(existing)) {
     const at = file ? ` in ${file}` : "";
-    if (existing.policy !== undefined && !isFirewallPolicy(existing.policy)) {
+    if (existing.policy !== undefined && !isFirewallPolicy(migrateStoredPolicy(existing.policy))) {
       throw new Error(`the existing firewall config${at} names an unknown policy ${JSON.stringify(existing.policy)} (known: ${FIREWALL_POLICIES.join(", ")}). Fix it or delete the file, then retry; it is not overwritten automatically because that could loosen the gate.`);
     }
     if (existing.mode !== undefined && !isFirewallMode(existing.mode)) {
@@ -515,9 +514,9 @@ export function checkFirewallConfig(profileDef: unknown, file: string = firewall
 export function firewallConfigFor(profileDef: unknown, existing: unknown): FirewallConfig {
   const fw = assertKnownFirewall(profileDef, existing);
   const prev: Record<string, unknown> = isRecord(existing) ? existing : {};
-  const policy: FirewallPolicy = fw?.policy === "pentest" ? "pentest" : "coding";
+  const policy: FirewallPolicy = fw?.policy === "engagement" ? "engagement" : "coding";
   const profileMode: FirewallMode = fw?.mode === "auto" ? "auto" : "manual";
-  const userMode = prev.source === "user" && prev.policy === policy && isFirewallMode(prev.mode) ? prev.mode : undefined;
+  const userMode = prev.source === "user" && migrateStoredPolicy(prev.policy) === policy && isFirewallMode(prev.mode) ? prev.mode : undefined;
   const keepUserMode = userMode !== undefined;
   return {
     ...prev,
@@ -529,12 +528,12 @@ export function firewallConfigFor(profileDef: unknown, existing: unknown): Firew
 
 // Installer-side validation mirrors the self-contained firewall runtime schema. Extensions
 // never import core or another extension. off remains unavailable without attestation.
-export const SECURITY_LEVELS = ["relaxed", "balanced", "guarded", "strict"] as const;
+export const SECURITY_LEVELS = ["balanced", "guarded", "strict"] as const;
 export type SecurityLevel = (typeof SECURITY_LEVELS)[number];
 const isSecurityLevel = (value: unknown): value is SecurityLevel => SECURITY_LEVELS.some((l) => l === value);
 export function profileSecurityLevel(def: unknown): SecurityLevel {
   const value = field(def, "securityLevel");
-  if (value === undefined) return field(def, "name") === "pentest" ? "guarded" : "balanced";
+  if (value === undefined) return field(def, "name") === "engagement" ? "guarded" : "balanced";
   if (!isSecurityLevel(value)) throw new Error(`profile "${String(field(def, "name"))}" names an unknown or unavailable securityLevel ${JSON.stringify(value)} (known: ${SECURITY_LEVELS.join(", ")}).`);
   return value;
 }
@@ -548,6 +547,8 @@ function readSecurityConfigChecked(file: string): Record<string, unknown> | unde
     if (errorCode(error) === "ENOENT") return undefined;
     throw new Error(`cannot read security config ${file}: ${errorMessage(error)}`, { cause: error });
   }
+  // A stored `relaxed` (removed level) reads as balanced and is rewritten on the next write.
+  if (isRecord(value) && value.level === "relaxed") value = { ...value, level: "balanced" };
   if (!isRecord(value) || value.schemaVersion !== 1 || !isSecurityLevel(value.level)
     || (value.source !== "operator" && value.source !== "profile")
     || typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 0
@@ -769,7 +770,9 @@ export function globalGateDrift(profileDef: unknown, firewallFile: string = fire
   const existing = readFirewallConfigChecked(firewallFile);
   const want = firewallConfigFor(profileDef, existing);
   const haveMode = existing.mode === "auto" ? "auto" : "manual";
-  const havePolicy = existing.policy === "pentest" ? "pentest" : "coding";
+  // Show the stored value as the reader sees it: an unknown one is not "coding", the gate runs strict.
+  const storedPolicy = migrateStoredPolicy(existing.policy);
+  const havePolicy = storedPolicy === undefined ? "coding" : isFirewallPolicy(storedPolicy) ? storedPolicy : `${JSON.stringify(storedPolicy)} (unknown, so the strict engagement policy)`;
   if (want.mode !== haveMode || want.policy !== havePolicy) {
     out.push(`profile "${name}" wants firewall ${want.mode}/${want.policy}, but the machine-global ${firewallFile} stays ${haveMode}/${havePolicy}: a --scope project install does not change it. ${apply}`);
   }

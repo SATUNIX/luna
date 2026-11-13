@@ -49,9 +49,9 @@ console.log("Regenerated the catalogue (npm run catalog).");
 const manifest = "internal/public-release/manifest.json";
 const steps = [
   `implement ${rel}/index.ts and fill ${rel}/extension.json;`,
-  `to ship it in a profile, add "${name}" to packages/kit/profiles/<profile>.json "include" and to the "profiles" field of extension.json;`,
+  `to ship it in a profile, add "${name}" to packages/kit/profiles/<profile>.json "include" (npm run catalog fills the "profiles" field of extension.json);`,
   ...(fs.existsSync(path.join(WORKSPACE_ROOT, manifest)) ? [`add the new files to the sorted "public" list of ${manifest}:\n${created.map((file) => `       ${file}`).join("\n")}`] : []),
-  "after editing extension.json, run: npm run catalog",
+  "after editing a profile or extension.json, run: npm run catalog",
   "run: npm run verify",
 ];
 console.log(`Next:\n${steps.map((step, i) => `  ${i + 1}. ${step}`).join("\n")}`);

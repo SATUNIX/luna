@@ -29,8 +29,9 @@ Keep the extension self-contained. Runtime code may import Node built-ins and de
 
 The template declares `"profiles": []`, so a new extension ships in no profile. To include it in
 a profile (for example `lite`), add its stable extension name to the profile's `include` list in
-`packages/kit/profiles/<profile>.json` and to the `profiles` field of its `extension.json`; the
-two must match or `npm run verify` fails. Then check:
+`packages/kit/profiles/<profile>.json`, then run `npm run catalog`: it derives the `profiles` field
+of every `extension.json` from the profile files, so that one edit is the whole change (and
+`npm run verify` fails if the two ever differ). Then check:
 
 ```sh
 npm run profile:check -- --profile lite

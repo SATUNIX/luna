@@ -5,7 +5,7 @@
  * Why it exists: pi's `ctx.ui.select()` pushes a dialog and calls `tui.setFocus()`, so a card shown
  * while `ctx.ui.custom()` has an overlay open takes the keyboard away from that overlay. Keys the
  * operator is typing into the box then answer the card, and Enter picks its first choice. The
- * firewall, the human console, the pentest gate and every other prompt an agent can raise on its own
+ * firewall, the human console, the engagement gate and every other prompt an agent can raise on its own
  * (the list is in docs/security.md) ask this registry before they prompt, and the two overlays in the
  * kit (control-center's hub and the subagent workflow panel) hold input while they are open, through
  * `withInputHold`. A holder also calls `releaseInputHolds` on `session_shutdown`: pi's reload removes an
@@ -178,7 +178,7 @@ export interface ShowWhenFreeOptions {
   onHeld?: ((holder: string) => void) | undefined;
   /**
    * Give the card the time left as it stands, not bounded for setTimeout. The firewall, console and
-   * pentest prompts take this: a configured value past the timer's range ends their card at once,
+   * engagement prompts take this: a configured value past the timer's range ends their card at once,
    * which refuses, and bounding it would turn that refusal into an open card.
    */
   rawTimeout?: boolean | undefined;

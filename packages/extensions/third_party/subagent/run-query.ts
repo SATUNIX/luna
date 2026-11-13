@@ -26,6 +26,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "./config.ts";
 import { subagentStateDir } from "./logging.ts";
+import { capLines, capText } from "./cap.ts";
 import { runControls } from "./control.ts";
 import { runRegistry, type RunKind, type RunRegistry, type RunSnapshot } from "./run-model.ts";
 import { collectRuns, isValidRunId, type RunRow } from "./status.ts";
@@ -484,6 +485,8 @@ export function formatRunList(runs: readonly QueriedRun[], limit = 20): string {
 
 const TAIL_LINES = 40;
 const MAX_TAIL_LINES = 1000;
+/** A tailed log line is cut here: the lines are JSON events whose partial results can be megabytes. */
+const MAX_TAIL_LINE_CHARS = 600;
 
 function describeSubagent(cwd: string, run: QueriedRun, tail: number): string {
   const logPath = path.join(subagentStateDir(cwd), `${run.id}.log`);
@@ -491,7 +494,9 @@ function describeSubagent(cwd: string, run: QueriedRun, tail: number): string {
   const header = `Format: subagent · run ${run.id}\nsubagent ${run.name} · ${run.status} · started ${run.startedAt || "?"} · log: ${run.log || logPath}`;
   try {
     const body = fs.readFileSync(logPath, "utf8").split(/\r?\n/);
-    return `${header}\n\n\`\`\`\n${body.slice(-lines).join("\n")}\n\`\`\``;
+    // The tail is JSON events that can hold whole partial results: bound each line, then the lot.
+    const tail = capLines(body.slice(-lines).join("\n"), MAX_TAIL_LINE_CHARS);
+    return `${header}\n\n\`\`\`\n${capText(tail, `in ${logPath}`)}\n\`\`\``;
   } catch {
     return `${header}\n\nNo log for run "${run.id}" under ${path.dirname(logPath)}.`;
   }

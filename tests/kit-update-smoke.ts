@@ -707,6 +707,137 @@ const tests: Record<string, () => void | Promise<void>> = {
     }
   },
 
+  "/update journals the state first and /update undo returns the kit and the configuration files to it": async () => {
+    const w = makeWorld({ marker: { profile: "pentest", scope: "global" } });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fakeRegistry(TAGS).fetchImpl as typeof fetch;
+    try {
+      const pi = fakePi();
+      kitUpdate(pi.api);
+      const settingsFile = path.join(w.agent, "settings.json");
+      const markerFile = path.join(w.agent, ".pi-kit.json");
+      const overridesFile = path.join(w.agent, "pi-kit", "overrides.json");
+      const journalFile = path.join(w.agent, "pi-kit", "update-journal.json");
+      const settingsBefore = fs.readFileSync(settingsFile, "utf8");
+      const markerBefore = fs.readFileSync(markerFile, "utf8");
+      const kitVersion = (): string => {
+        const pkg: unknown = JSON.parse(fs.readFileSync(path.join(w.kitRoot, "package.json"), "utf8"));
+        return typeof pkg === "object" && pkg !== null && "version" in pkg ? String(pkg.version) : "";
+      };
+      const calls: string[] = [];
+      pi.api.exec = async (_command: string, args: string[]) => {
+        calls.push(args.join(" "));
+        assert.ok(fs.existsSync(journalFile), "the journal exists before the first step runs");
+        if (args[0] === "update") writeJson(path.join(w.kitRoot, "package.json"), { name: "@satunix/pi-system", version: TAGS["@satunix/pi-system"].latest });
+        if (args[0] === "install") writeJson(path.join(w.kitRoot, "package.json"), { name: "@satunix/pi-system", version: "0.2.1-beta.0" });
+        // The installer's re-apply rewrites the settings and the marker and creates an overrides file.
+        if ((args[0] ?? "").endsWith("install.ts")) {
+          writeJson(settingsFile, { packages: ["npm:somewhere-else"] });
+          writeJson(markerFile, { profile: "engagement", scope: "global", installedAt: new Date().toISOString() });
+          writeJson(overridesFile, { extensions: { add: [], remove: [] } });
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
+      const notes: Note[] = [];
+      let reloaded = 0;
+      const ctx = {
+        hasUI: true,
+        cwd: w.cwd,
+        ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {}, confirm: async () => true, select: async () => undefined },
+        reload: async () => { reloaded++; },
+      };
+      const handler = pi.commands.get("update").handler;
+      await handler("undo", ctx);
+      assert.match(nth(notes, 0).m, /nothing to undo/, "no journal, nothing to undo");
+
+      await handler("kit", ctx);
+      assert.equal(kitVersion(), TAGS["@satunix/pi-system"].latest);
+      assert.match(notes.map((n) => n.m).join("\n"), /profile "pentest" is now "engagement"/, "a renamed stored setting is named once, after the update");
+      assert.notEqual(fs.readFileSync(settingsFile, "utf8"), settingsBefore);
+
+      calls.length = 0;
+      await handler("undo", ctx);
+      assert.deepEqual(calls, ["install npm:@satunix/pi-system@0.2.1-beta.0"], "undo reinstalls the recorded version and nothing else");
+      assert.equal(kitVersion(), "0.2.1-beta.0");
+      assert.equal(fs.readFileSync(settingsFile, "utf8"), settingsBefore, "settings.json is back byte for byte");
+      assert.equal(fs.readFileSync(markerFile, "utf8"), markerBefore, "the install marker is back byte for byte");
+      assert.equal(fs.existsSync(overridesFile), false, "a file the update created is removed");
+      assert.equal(fs.existsSync(journalFile), false, "a finished undo consumes the journal");
+      assert.equal(reloaded, 2, "the update and the undo each reload");
+      assert.ok(notes.some((n) => /pi is not rolled back/.test(n.m)), "the undo says what it does not undo");
+    } finally {
+      globalThis.fetch = realFetch;
+      w.cleanup();
+    }
+  },
+
+  "/update undo after two successive updates returns to the version just before the second one": async () => {
+    const w = makeWorld({ marker: { profile: "balanced", scope: "global" } });
+    const realFetch = globalThis.fetch;
+    let latest = TAGS["@satunix/pi-system"].latest;
+    const pkgFile = path.join(w.kitRoot, "package.json");
+    const kitVersion = (): string => {
+      const pkg: unknown = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+      return typeof pkg === "object" && pkg !== null && "version" in pkg ? String(pkg.version) : "";
+    };
+    try {
+      globalThis.fetch = ((url: string) => fakeRegistry({ ...TAGS, "@satunix/pi-system": { latest, next: latest } }).fetchImpl(url)) as unknown as typeof fetch;
+      const pi = fakePi();
+      kitUpdate(pi.api);
+      const settingsFile = path.join(w.agent, "settings.json");
+      const calls: string[] = [];
+      pi.api.exec = async (_command: string, args: string[]) => {
+        calls.push(args.join(" "));
+        if (args[0] === "update") writeJson(pkgFile, { name: "@satunix/pi-system", version: latest });
+        if (args[0] === "install") writeJson(pkgFile, { name: "@satunix/pi-system", version: (/@([^@]+)$/.exec(args[1] ?? "") ?? [])[1] ?? "" });
+        if ((args[0] ?? "").endsWith("install.ts")) writeJson(path.join(w.agent, ".pi-kit.json"), { profile: "balanced", scope: "global", installedAt: new Date().toISOString() });
+        return { stdout: "", stderr: "", code: 0 };
+      };
+      const notes: Note[] = [];
+      const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {}, confirm: async () => true, select: async () => undefined }, reload: async () => undefined };
+      const handler = pi.commands.get("update").handler;
+      const first = kitVersion();
+      await handler("kit", ctx); // first -> second
+      const second = kitVersion();
+      assert.notEqual(second, first);
+      const registered: unknown = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+      const betweenSettings = JSON.stringify({ ...(typeof registered === "object" && registered !== null ? registered : {}), note: "changed between updates" });
+      fs.writeFileSync(settingsFile, betweenSettings); // a change made after the first update
+      latest = "9.9.9";
+      await handler("kit", ctx); // second -> third
+      assert.equal(kitVersion(), "9.9.9");
+      calls.length = 0;
+      await handler("undo", ctx);
+      assert.deepEqual(calls, [`install npm:@satunix/pi-system@${second}`], "undo goes back to the version before the second update, not the original");
+      assert.equal(kitVersion(), second);
+      assert.equal(fs.readFileSync(settingsFile, "utf8"), betweenSettings, "and the configuration as it was just before the second update");
+    } finally {
+      globalThis.fetch = realFetch;
+      w.cleanup();
+    }
+  },
+
+  "an update does not start when its undo journal cannot be written": async () => {
+    const w = makeWorld();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fakeRegistry(TAGS).fetchImpl as typeof fetch;
+    try {
+      fs.writeFileSync(path.join(w.agent, "pi-kit"), "a file where the state directory should be");
+      const pi = fakePi();
+      kitUpdate(pi.api);
+      const calls: string[] = [];
+      pi.api.exec = async (_command: string, args: string[]) => { calls.push(args.join(" ")); return { stdout: "", stderr: "", code: 0 }; };
+      const notes: Note[] = [];
+      const ctx = { hasUI: true, cwd: w.cwd, ui: { notify: (m: string, l?: string) => notes.push({ m, l }), setStatus() {}, confirm: async () => true, select: async () => undefined }, reload: async () => {} };
+      await pi.commands.get("update").handler("kit", ctx);
+      assert.deepEqual(calls, [], "no step ran");
+      assert.ok(notes.some((n) => n.l === "error" && /undo journal/.test(n.m)));
+    } finally {
+      globalThis.fetch = realFetch;
+      w.cleanup();
+    }
+  },
+
   "parses git sources the way pi identifies them": () => {
     assert.deepEqual(parseGitSource("git:github.com/SATUNIX/luna@v0.2.1-beta.0"), { repo: "https://github.com/SATUNIX/luna", host: "github.com", path: "SATUNIX/luna", ref: "v0.2.1-beta.0" });
     assert.deepEqual(parseGitSource("git:git@github.com:SATUNIX/luna"), { repo: "git@github.com:SATUNIX/luna", host: "github.com", path: "SATUNIX/luna", ref: null });
@@ -764,7 +895,8 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(reloaded, 0);
       const error = notes.find((n) => n.l === "error")?.m ?? "";
       assert.match(error, /"re-apply the balanced profile" failed/);
-      assert.match(error, /does not undo "update Luna to 0\.2\.1-beta\.1": the new kit is installed, but the profile was not re-applied/);
+      assert.match(error, /"update Luna to 0\.2\.1-beta\.1" installed the new kit, but the profile was not re-applied/);
+      assert.match(error, /\/update undo returns to that/, "the way back is named");
       assert.match(error, /Before the update it was Luna 0\.2\.1-beta\.0 on latest; \/update channel 0\.2\.1-beta\.0 goes back to it\./);
       assert.match(error, /re-apply the profile with: \(cd "[^"]+" && \S*node\S* \S*install\.ts --profile balanced --yes --settings-only --scope global\)$/);
       assert.doesNotMatch(error, /run \/update again/, "a second /update sees no kit update and would not re-apply the profile");

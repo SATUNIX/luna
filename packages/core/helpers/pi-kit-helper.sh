@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
-PROFILES=(quick balanced long-horizon autonomous pentest self-improving lite)
+PROFILES=(lite balanced long-horizon engagement self-improving)
 AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 
 c_bold() { printf '\033[1m%s\033[0m\n' "$1"; }

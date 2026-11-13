@@ -1,9 +1,12 @@
 # Security level
 
 `/security` chooses how much of the firewall's existing automatic approval machinery may
-operate. The order is `off`, `relaxed`, `balanced`, `guarded`, `strict`. It grants no new
+operate. The order is `off`, `balanced`, `guarded`, `strict`; `off` cannot be selected. It grants no new
 authority and is independent of [effort](effort.md), the model's thinking level,
-[profiles](profiles.md) and `/auto` ([Autonomy gate](autonomy-gate.md)).
+[profiles](profiles.md) and `/auto` ([Autonomy gate](autonomy-gate.md)). `/auto` sets the *approval mode*, which the
+Security page and `/security status` show beside the level, so there is one place to look.
+
+A stored `relaxed` value is read as `balanced` and rewritten the next time the level is saved.
 
 Open `/security` for a picker, or use:
 
@@ -28,43 +31,39 @@ refusal cases are pinned by `tests/security-level-smoke.ts`.
 
 ## Implemented mechanisms
 
-| Mechanism | relaxed | balanced | guarded | strict |
-|---|---|---|---|---|
-| Low-tier actions | Run | Run | Run | Run |
-| Critical findings / invalid firewall policy | Deny | Deny | Deny | Deny |
-| Unknown external tools under the default ask policy | Operator | Operator | Operator | Deny |
-| Exact scoped operator session grants | Honour/create | Honour/create | Honour/create | Neither honour nor create |
-| Learned exact approvals | Configured behaviour | Configured behaviour | Advisory only | Advisory only |
-| Similar-grant / precedent-backed high judge | Configured behaviour | Configured behaviour | Cannot authorise | Cannot authorise |
-| Medium-tier judge | With `/auto on` | With `/auto on` | With `/auto on`, except opaque/unsure | Disabled |
-| Opaque or classifier-unsure actions | Existing escalation | Existing escalation | Operator | Operator (unknown external tools deny) |
-| Approval strategy | Configured `/auto` | Configured `/auto` | Configured `/auto` | Pinned to operator; `/auto on` refuses |
-| Additional deterministic medium admissions | None | None | None | None |
+| Mechanism | balanced | guarded | strict |
+|---|---|---|---|
+| Low-tier actions | Run | Run | Run |
+| Critical findings / invalid firewall policy | Deny | Deny | Deny |
+| Unknown external tools under the default ask policy | Operator | Operator | Deny |
+| Exact scoped operator session grants | Honour/create | Honour/create | Neither honour nor create |
+| Learned exact approvals | Configured behaviour | Advisory only | Advisory only |
+| Similar-grant / precedent-backed high judge | Configured behaviour | Cannot authorise | Cannot authorise |
+| Medium-tier judge | With `/auto on` | With `/auto on`, except opaque/unsure | Disabled |
+| Opaque or classifier-unsure actions | Existing escalation | Operator | Operator (unknown external tools deny) |
+| Approval strategy | Configured `/auto` | Configured `/auto` | Pinned to operator; `/auto on` refuses |
+| Additional deterministic medium admissions | None | None | None |
 
-`tests/security-level-smoke.ts` pins all four selectable levels, learned authority, high
+`tests/security-level-smoke.ts` pins all three selectable levels, learned authority, high
 precedents, medium judgement, opaque actions, grant creation/honouring, pending changes and the
 registry. `tests/firewall-gate-smoke.ts`, `tests/firewall-shell-smoke.ts` and
 `tests/firewall-policy-warnings-smoke.ts` pin the underlying classification and invalid-policy
 denials. Exact policy entries and trusted pi identities keep their existing meaning: strict
 changes the unknown-tool default to deny, without rewriting those entries.
 
-Protected paths, credential-disclosure checks, unattended hard denials, the pentest engagement
-and domain gates, and unknown-tool escalation remain in force at every level. Pentest still
+Protected paths, credential-disclosure checks, unattended hard denials, the engagement
+and domain gates, and unknown-tool escalation remain in force at every level. Engagement still
 requires once-only approvals and never learns; its `guarded` floor does not replace its
 engagement rules. Supervisor-authorised unattended runs retain their existing contract-based
 decision path ([Autonomous runs](autonomy.md)); selecting a level does not enter unattended mode.
 These mechanisms have their own evidence in [Security model](security.md).
 
-### Why relaxed currently equals balanced
+### Admission between off and balanced
 
-The reviewed routine effect set is empty. Ordinary build/test/dev tooling is already low tier.
-At medium tier, `code_exec` also covers generated code and transient services;
-`workspace_write` covers ownership and git remote changes; `process_control` can affect unrelated
-processes; and read effects include sensitive or remote operations. None of those broad effect
-names proves workspace confinement or lack of credential/network effects. Every other effect
-carries explicit authority or uncertainty. There is no additional deterministic admission without
-a narrower, reviewed classifier contract. Status says this plainly; the empty set and medium
-actions that still ask are pinned by `tests/security-level-smoke.ts`.
+The reviewed routine effect set is empty, so no level sits between `off` and `balanced`. Ordinary build/test/dev tooling is already low tier; at medium tier the broad effect
+names (`code_exec`, `workspace_write`, `process_control`, reads) prove neither workspace confinement
+nor absence of credential or network effects. There is no additional deterministic admission
+without a narrower, reviewed classifier contract. The empty set is pinned by `tests/security-level-smoke.ts`.
 
 ### Unavailable checks and off
 
@@ -97,9 +96,7 @@ The canonical setting is `securityLevel`. The firewall stores it in
 Writes use a mode-0600 temporary file and atomic rename. Each saved selection increments the
 revision. A profile installs `source: "profile"`; an operator choice survives ordinary profile
 switches. `/security reset` writes the installed profile default with `source: "profile"`.
-The lightweight profiles `quick` and `lite` default to relaxed, `pentest` to guarded, and every
-other profile to balanced. Relaxed currently behaves exactly like balanced (see below), so the
-lightweight default weakens nothing today.
+`engagement` defaults to guarded and every other profile to balanced.
 
 A `/profile` switch whose profile default is lower than the level in force is a weakening, like
 `/security <lower>`. It asks at the terminal of an interactive root session, with "No, keep the
@@ -107,16 +104,16 @@ current security level" as the first choice, and refuses in headless, RPC and de
 sessions. Choosing No, dismissing or a timeout changes nothing. An operator-chosen level survives
 profile switches, so such a switch lowers nothing and does not ask. Raising never asks.
 `tests/profile-command-smoke.ts` pins these cases, and `tests/profile-transaction-smoke.ts` runs
-the real installer through all seven profiles. The switch's check lives in session-helpers, which
+the real installer through all five profiles. The switch's check lives in session-helpers, which
 cannot import the firewall, so it keeps its own copy of the level list, the security file path,
 the root-terminal check and the prompt timeout; `tests/security-level-smoke.ts` pins each copy
 equal to the firewall's.
 
-Effective security is the strongest of the request and all floors. The pentest policy floors it
+Effective security is the strongest of the request and all floors. The engagement policy floors it
 at guarded. `PI_KIT_SECURITY_LEVEL` may only strengthen, never select off or weaken the saved
 request. Invalid environment values warn and are ignored. A malformed, unknown or unreadable
 saved configuration fails closed to the stronger of the profile default and balanced, with a
-visible warning; it never falls back to relaxed or off. A missing file uses the profile default.
+visible warning; it never falls back to a weaker level or off. A missing file uses the profile default.
 Resolution reads current file bytes, caches parsing by content and takes one immutable snapshot
 per decision. `tests/security-level-smoke.ts` pins these rules, same-mtime edits, profile
 preservation, revisions and permissions.

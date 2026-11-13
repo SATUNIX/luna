@@ -34,13 +34,14 @@ export function atRootTerminal(ctx: ExtensionContext): boolean {
   return !child && atTerminal(ctx);
 }
 
-export function registerSecurityCommand(pi: ExtensionAPI, current: (ctx?: ExtensionContext) => SecuritySnapshot, defaultLevel: (ctx: ExtensionContext) => SecurityLevel, changed: (ctx: ExtensionContext) => void, say: (ctx: ExtensionContext, text: string, level?: "info" | "warning" | "error") => void, timeoutMs: () => number): void {
-  const help = "/security [off|relaxed|balanced|guarded|strict] | status | explain [level] | reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable.";
+export function registerSecurityCommand(pi: ExtensionAPI, current: (ctx?: ExtensionContext) => SecuritySnapshot, defaultLevel: (ctx: ExtensionContext) => SecurityLevel, changed: (ctx: ExtensionContext) => void, say: (ctx: ExtensionContext, text: string, level?: "info" | "warning" | "error") => void, timeoutMs: () => number, approval: (ctx: ExtensionContext) => string): void {
+  const help = "/security [off|balanced|guarded|strict] | status | explain [level] | reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable.";
   const status = (ctx: ExtensionContext): string => {
     const s = current(ctx);
     return [`Security: ${s.effective} (requested ${s.requested}; ${s.source}; revision ${s.revision})`,
-      DESCRIPTIONS[s.effective], ...s.floors.map((f) => `floor: ${f.level} — ${f.reason}`),
-      ...(s.effective === "strict" ? ["approval strategy pinned to operator by strict"] : []),
+      DESCRIPTIONS[s.effective], `approval mode: ${approval(ctx)} (change with /auto)`,
+      ...s.floors.map((f) => `floor: ${f.level} — ${f.reason}${f.reason === "PI_KIT_SECURITY_LEVEL" ? " (environment pin)" : ""}`),
+      ...(s.effective === "strict" ? ["approval mode pinned to operator by strict"] : []),
       ...s.warnings.map((w) => `WARNING: ${w}`), `unavailable: ${s.unavailable.join("; ")}`, help].join("\n");
   };
   pi.registerCommand("security", {
@@ -53,7 +54,7 @@ export function registerSecurityCommand(pi: ExtensionAPI, current: (ctx?: Extens
       if (arg === "explain") {
         const level = words[1] ?? current(ctx).effective;
         if (!isLevel(level)) { say(ctx, help, "error"); return; }
-        say(ctx, `${level}: ${DESCRIPTIONS[level]}\nAlways enforced: critical denials, protected paths, credential disclosure, unattended hard denials, pentest engagement/domain gates and unknown-tool escalation.\nUnavailable: ${current(ctx).unavailable.join("; ")}\nLocal confirmation is not an authenticated operator event.`);
+        say(ctx, `${level}: ${DESCRIPTIONS[level]}\nAlways enforced: critical denials, protected paths, credential disclosure, unattended hard denials, engagement/domain gates and unknown-tool escalation.\nUnavailable: ${current(ctx).unavailable.join("; ")}\nLocal confirmation is not an authenticated operator event.`);
         return;
       }
       if (!arg) {

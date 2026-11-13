@@ -34,7 +34,7 @@
     ]
   },
   "memento": {
-    "$comment": "Memento mode (generations): a long task worked in time-boxed generations that hand over a notebook. Each tier's memento.maxGenerations is the most generations a task at that tier may use (0 means none); it is an allowance, not a target, and it applies only to a model the operator opted in to in <agent dir>/pi-kit/autonomy.json, in the long-horizon and autonomous profiles. A tier never exceeds maxGenerationsCeiling and never falls below the tier before it.",
+    "$comment": "Memento mode (generations): a long task worked in time-boxed generations that hand over a notebook. Each tier's memento.maxGenerations is the most generations a task at that tier may use (0 means none); it is an allowance, not a target, and it applies only to a model the operator opted in to in <agent dir>/pi-kit/autonomy.json, in the long-horizon profile. A tier never exceeds maxGenerationsCeiling and never falls below the tier before it.",
     "maxGenerationsCeiling": 8
   },
   "tiers": [

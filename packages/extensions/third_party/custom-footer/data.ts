@@ -6,6 +6,7 @@
  * Nothing here runs per render: callers refresh at events and the renderer reads the cache.
  */
 import fs from "node:fs";
+import { migrateStoredProfile } from "./shared/profile-names.ts";
 import os from "node:os";
 import path from "node:path";
 
@@ -217,7 +218,7 @@ export function readProfile(cwd: string): string | undefined {
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
       const profile = isRecord(parsed) ? parsed.profile : undefined;
-      if (typeof profile === "string" && profile) return profile;
+      if (typeof profile === "string" && profile) return migrateStoredProfile(profile);
     } catch {
       /* try the next marker */
     }

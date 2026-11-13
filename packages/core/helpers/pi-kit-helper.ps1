@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$Profiles = @("quick", "balanced", "long-horizon", "autonomous", "pentest", "self-improving", "lite")
+$Profiles = @("lite", "balanced", "long-horizon", "engagement", "self-improving")
 $AgentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $HOME ".pi\agent" }
 
 function Write-Heading($text) { Write-Host $text -ForegroundColor Cyan }

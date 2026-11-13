@@ -9,7 +9,7 @@
 //      leave the whole pi-kit/ state subtree unchanged under an isolated fallback HOME;
 //   3. `npm run eval` leaves the whole pi-kit/ state subtree unchanged under the ambient
 //      PI_CODING_AGENT_DIR;
-//   4. tests/epic1-smoke.ts leaves the whole pi-kit/ state subtree unchanged under an isolated HOME.
+//   4. tests/tool-firewall-smoke.ts leaves the whole pi-kit/ state subtree unchanged under an isolated HOME.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -353,23 +353,23 @@ try {
     `eval must not change the pi-kit/ state dir under PI_CODING_AGENT_DIR (${evalPiKitDir})`,
   );
 
-  // 4. Smoke isolation: epic1-smoke.ts must not change the pi-kit/ state subtree under HOME.
+  // 4. Smoke isolation: tool-firewall-smoke.ts must not change the pi-kit/ state subtree under HOME.
   const homeEnv: NodeJS.ProcessEnv = { ...process.env, HOME: homeProbe };
   delete homeEnv.PI_CODING_AGENT_DIR;
   delete homeEnv.PI_KIT_FIREWALL_SESSIONS_DIR;
   const homePiKitDir = path.join(homeProbe, ".pi", "agent", "pi-kit");
   const homeBefore = snapshotDir(homePiKitDir);
-  const smokeResult = spawnSync(process.execPath, ["tests/epic1-smoke.ts"], {
+  const smokeResult = spawnSync(process.execPath, ["tests/tool-firewall-smoke.ts"], {
     cwd: ROOT,
     env: homeEnv,
     encoding: "utf8",
     timeout: 180000,
   });
-  assert.equal(smokeResult.status, 0, `epic1-smoke.ts must pass with ambient HOME: status=${smokeResult.status}\n${smokeResult.stdout ?? ""}\n${smokeResult.stderr ?? ""}`);
+  assert.equal(smokeResult.status, 0, `tool-firewall-smoke.ts must pass with ambient HOME: status=${smokeResult.status}\n${smokeResult.stdout ?? ""}\n${smokeResult.stderr ?? ""}`);
   assert.deepEqual(
     snapshotDir(homePiKitDir),
     homeBefore,
-    `epic1-smoke.ts must not change the pi-kit/ state dir under HOME (${homePiKitDir})`,
+    `tool-firewall-smoke.ts must not change the pi-kit/ state dir under HOME (${homePiKitDir})`,
   );
 
   console.log("[env-isolation-smoke] OK");

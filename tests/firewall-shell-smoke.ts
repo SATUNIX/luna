@@ -4,7 +4,7 @@
 // Each row is [command, tier in manual mode, tier in auto mode (defaults to the manual tier)].
 // Rows cover routine development (must stay low: this is the autonomy half), wrappers and
 // evasions (quotes, backslashes, $'…', bash -c, eval, $(…), heredocs, find -exec, xargs),
-// destructive classes that pentest-governance-domain's DESTRUCTIVE_COMMANDS names (the safety
+// destructive classes that engagement-governance's DESTRUCTIVE_COMMANDS names (the safety
 // half: they must not fall to low), remote/sudo trust, secrets and exfiltration.
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -553,7 +553,7 @@ console.log(`  OK: ${rows.length - 1} commands classified as expected (manual/au
   assert.equal(C.classifyToolCall("fetch_content", { url: "https://x" }, env, { decision: "allow", risk_class: "network_read" }, "ask").untrusted, true);
   assert.equal(t("run_shell", { cmd: "rm -rf ./important" }, undefined), "high", "inferred shell effects cannot authorise an external API");
   assert.equal(t("run_shell", { cmd: "rm -rf ./important" }, { decision: "allow", risk_class: "shell" }), "medium", "explicit trust still analyses shell effects");
-  for (const policy of ["coding", "pentest"] as const) {
+  for (const policy of ["coding", "engagement"] as const) {
     const e = { ...env, policy };
     for (const tool of ["codemode", "tool_search", "powershell", "bash", "read", "view", "cat", "read_file", "read_symbol", "write", "edit", "multiedit", "notebookedit", "apply_patch", "str_replace_editor", "create_file", "grep", "find", "glob", "ls", "list_directory", "search_files", "web_search", "browser_execute", "mcp__vendor__search_and_delete", "vendor_get_secret", "vendor_mutate"]) {
       for (const input of [{}, { path: "src/a.ts" }, { command: "pwd", payload: "opaque effect" }]) {

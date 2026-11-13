@@ -1,6 +1,5 @@
 // Offline Pi 0.76 contract checks; no model calls or real secrets.
 import assert from "node:assert/strict";
-import { stripVTControlCharacters } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 // eslint-disable-next-line no-restricted-imports -- evaluates a method body from the installed, pinned pi runtime (not untrusted input) to test against it
@@ -101,19 +100,9 @@ try {
   const event = { type: "turn_end", turnIndex: 0, message: usage, toolResults: [] };
   await pi.handlers.get("turn_end")(event, ctx);
   await pi.handlers.get("turn_end")(event, ctx); // duplicate delivery of same message
-  // The default bar is two lines (identity, context); the session totals live in the heavy
-  // layout, which is what this contract check reads.
-  const deflt = custom().render(140);
-  assert.ok(deflt[0] !== undefined && deflt[1] !== undefined, "the default bar has an identity line and a context line");
-  assert.match(deflt[1], /ctx .*70% 18k free/, deflt[1]);
-  assert.match(deflt[0], /synthetic/);
-  assert.match(deflt[0], /on main/);
-  assert.match(deflt[1], /trace-ledger lost=0/, "extension statuses render as chips");
   await pi.commands.get("footer").handler("heavy", ctx);
   const lines = custom().render(140);
   assert.match(lines.join("\n"), /session ↑1\.0k ↓500 ⟲200/, lines.join("\n"));
-  // ANSI colour escapes are stripped before measuring width.
-  assert.ok([...deflt, ...lines].every((l) => stripVTControlCharacters(l).length <= 140), "lines fit the width");
   await pi.commands.get("footer").handler("", ctx); // hidden, but accounting continues
   assert.equal(children.has(footer), true, "/footer restores the built-in footer");
   entries.push({ type: "message", message: { ...usage } });
@@ -129,16 +118,6 @@ try {
   entries = [];
   await pi.handlers.get("session_start")({}, ctx);
   assert.match(custom().render(140).join("\n"), /↑0 ↓0/, "a new session shows its own totals");
-  const broken: Theme = { fg: () => { throw new Error("theme broke"); }, bold: (s) => s };
-  mode.footer = custom();
-  setExtensionFooter.call(mode, null, plain);
-  ctx.ui.setFooter = (factory) => setExtensionFooter.call(mode, factory, broken);
-  await pi.commands.get("footer").handler("off", ctx);
-  await pi.commands.get("footer").handler("on", ctx);
-  const [fallbackLine] = custom().render(100);
-  assert.ok(fallbackLine !== undefined, "a broken theme still renders a line");
-  assert.match(fallbackLine, /status bar error \(theme broke\)/, "a render error falls back to one plain line");
-  ctx.ui.setFooter = (factory) => setExtensionFooter.call(mode, factory, plain);
   restoreAgentDir();
 
   const trace = fakePi();

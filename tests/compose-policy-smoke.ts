@@ -11,11 +11,11 @@
  *   - drops every capability and sets no-new-privileges; is never privileged, never on the host
  *     network or PID namespace, and never mounts the container-engine socket.
  * Override files (services with neither image nor build) are checked for the same port, privilege
- * and socket rules. The pentest-capable `pi-agent` service mounts its engagement directory
+ * and socket rules. The engagement-capable `pi-agent` service mounts its engagement directory
  * read-only at /workspace/engagement from outside its data root.
  *
  * Each rule is shown to fail on a fixture. Not covered here: an internal network with a
- * scope-enforcing egress proxy for the pentest container (the container still has ordinary
+ * scope-enforcing egress proxy for the engagement container (the container still has ordinary
  * egress; packages/container/README.md says so). Parses YAML with `yaml`, which pi itself depends on.
  */
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ import { isRecord } from "../packages/core/lib/guard.ts";
 const CREDENTIAL_EXEMPT: Readonly<Record<string, string>> = {
   "pi-agent": "publishes only the read-only health endpoint (scripts/healthcheck.py), on loopback",
 };
-/** Services that run the pentest capability and so must take their engagement scope read-only. */
+/** Services that run the engagement capability and so must take their engagement scope read-only. */
 const ENGAGEMENT_SERVICES = ["pi-agent"];
 const ENGAGEMENT_TARGET = "/workspace/engagement";
 const LOOPBACK = new Set(["127.0.0.1", "::1", "[::1]"]);

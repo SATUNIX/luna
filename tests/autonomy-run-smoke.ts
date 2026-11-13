@@ -19,7 +19,8 @@ import path from "node:path";
 import { assert, implementRaw, makeChecker, testEffort } from "./autonomy-helpers.ts";
 import * as H from "./autonomy-harness.ts";
 import { createRun } from "../packages/autonomy/lib/rundir.ts";
-import { Engine } from "../packages/autonomy/lib/engine.ts";
+import { Engine, WIP_REFS_KEPT, pruneWip } from "../packages/autonomy/lib/engine.ts";
+import { buildBriefing } from "../packages/autonomy/lib/briefing.ts";
 import { TEMPLATES } from "../packages/autonomy/lib/templates/index.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { classifyDialog, operatorDecision } from "../packages/autonomy/lib/rpc.ts";
@@ -341,6 +342,19 @@ await check("the effort tier is a snapshot: workers get it from state; a reconfi
   assert.match(state.reconfigurations[0].refused?.[0] ?? "", /above its cap/, "a bare tier above the run's cap is refused; raising the cap is an explicit part of the change");
 });
 
+await check("kept unaccepted work: the briefing names the ref, and a run keeps only the newest refs/wip entries", async () => {
+  const unaccepted = { ref: "refs/wip/r/step-01-abcdef123456", sha: "abcdef1234567890", why: "touches paths outside the write areas", stat: "1 file changed", at: "2026-01-01T00:00:00Z" };
+  const h = H.harness(simpleRaw());
+  const text = buildBriefing({ contract: h.contract, state: h.state(), why: "it ended", head: "0".repeat(40), unaccepted });
+  assert.match(text, /kept but NOT accepted \(touches paths outside the write areas; 1 file changed\): ref refs\/wip\/r\/step-01-abcdef123456/);
+  assert.doesNotMatch(buildBriefing({ contract: h.contract, state: h.state(), why: "it ended", head: "0".repeat(40) }), /NOT accepted/);
+  const refs = Array.from({ length: WIP_REFS_KEPT + 3 }, (_, i) => `refs/wip/r/step-${String(i + 1).padStart(2, "0")}-aaa`);
+  const deleted: string[] = [];
+  const g = (args: readonly string[]): string | null => { if (args[0] === "for-each-ref") return refs.join("\n"); if (args[0] === "update-ref" && args[1] === "-d") deleted.push(args[2] ?? ""); return ""; };
+  pruneWip(g, "r", refs.at(-1) ?? "");
+  assert.deepEqual(deleted, refs.slice(0, 3), "the oldest refs beyond the cap are deleted, the newest stay");
+});
+
 await check("write areas: changes outside permissions.writeAreas are not accepted; reverting them is; a second consecutive violation ends the run as boundary_violation", async () => {
   const raw = () => simpleRaw({ permissions: { writeAreas: ["answer.txt", "src/**"], unattended: { authorised: true, autoApprove: true } } });
   // Corrected after one violation.
@@ -355,6 +369,8 @@ await check("write areas: changes outside permissions.writeAreas are not accepte
   assert.equal(state.recovery.violations, 0, "the violation counter resets once a step is clean");
   assert.ok(rt.calls.checks.length >= 2);
   assert.equal(rt.repo.fileAt(rt.repo.head(), "package.json"), null, "the refused file is not in the accepted history's tree");
+  const kept = rt.repo.git()(["for-each-ref", "--format=%(refname)", "refs/wip/"]);
+  assert.ok(kept.split("\n").some((r) => r.includes("/step-")), "the refused commits are kept under refs/wip/, not left to be overwritten");
   assert.ok(h.state().history.length > 0);
   // Not corrected: refused twice in a row.
   const h2 = harness(raw(), { script: async (t) => { t.write("answer.txt", "42\n"); t.write(`elsewhere-${t.turn}.txt`, "x"); t.commit("still outside"); } });
@@ -507,11 +523,16 @@ await check("independent review: required before success; a rejection goes back 
   const bad = await runOnce(h2);
   assert.deepEqual([bad.state.status, bad.state.outcome?.reason], ["failed", "review_rejected"]);
   assert.equal(bad.state.acceptance.latest?.allRequiredPass, true, "the checks passed; the run still did not succeed");
-  // A review that cannot be obtained is a rejection (fail closed).
-  const h3 = harness(simpleRaw({ acceptance: { checks: [{ id: "unit", run: NODE_EXIT(`${ANSWER}.trim() === '42'`), timeoutMinutes: 1, required: true }], review: true }, recovery: { softNudges: 1, hardRestarts: 0, maxAttemptsPerStep: 1 } }), { script: async (t) => solve(t), review: () => { throw new Error("provider down"); } });
-  const down = await runOnce(h3);
-  assert.equal(down.state.status, "failed");
-  assert.match(down.state.acceptance.review.reason ?? "", /review unavailable \(provider down\)/);
+  // A review that cannot be obtained is infrastructure failure: the run parks with the head held, no attempt is spent.
+  const seen: { parked: ReturnType<Harness["state"]> | null } = { parked: null };
+  const h3: Harness = harness(simpleRaw({ acceptance: { checks: [{ id: "unit", run: NODE_EXIT(`${ANSWER}.trim() === '42'`), timeoutMinutes: 1, required: true }], review: true }, recovery: { softNudges: 1, hardRestarts: 0, maxAttemptsPerStep: 1 } }), {
+    script: async (t) => solve(t), review: () => { throw new Error("provider down"); },
+    hooks: { onSleep: () => { const s = h3.state(); if (s.status === "blocked" && !seen.parked) { seen.parked = structuredClone(s); h3.store.enqueue("cancel", { reason: "test done" }); } } },
+  });
+  await runOnce(h3);
+  assert.equal(seen.parked?.pendingQuestions?.at(-1)?.id, "review-pending");
+  assert.match(seen.parked?.pendingQuestions?.at(-1)?.question ?? "", /provider down/);
+  assert.ok((seen.parked?.acceptance.review.attempts ?? 0) === 0, "an outage is not a rejection and spends no attempt");
 });
 
 await check("deploy in the zone: services are refreshed from the accepted head and health-checked; nothing is promoted without a destination and approval", async () => {

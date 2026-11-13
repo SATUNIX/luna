@@ -1,4 +1,5 @@
 ---
+description: "Write a concise implementation plan for a task"
 argument-hint: "[task]"
 ---
 

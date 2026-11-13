@@ -2,13 +2,13 @@
 // The diagram gate must fail on a broken diagram, not just pass on good ones. This drives the
 // checker (packages/core/check-mermaid.ts) on fixtures: valid flowchart, sequence and state
 // diagrams parse; a syntax error, an empty block and an unclosed fence are each reported with
-// the file and line of the diagram. It then applies the checker to the repository's own docs.
+// the file and line of the diagram.
+// (`npm run docs:mermaid` applies it to the repository's own docs.)
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ROOT } from "../packages/core/eval/harness.ts";
-import { checkFiles, extractDiagrams, listMarkdown } from "../packages/core/check-mermaid.ts";
+import { checkFiles, extractDiagrams } from "../packages/core/check-mermaid.ts";
 
 let checks = 0;
 const ok = (name: string): void => { checks += 1; console.log(`  ok  ${name}`); };
@@ -52,17 +52,6 @@ try {
       assert.match(problem, pattern);
     }
     ok("a syntax error, an empty block and an unclosed fence are each reported with file and line");
-  }
-
-  // the repository itself
-  {
-    const files = listMarkdown(ROOT);
-    assert.ok(files.includes("docs/index.md"), "the Markdown walk finds docs/");
-    assert.ok(!files.some((f) => f.startsWith("node_modules/")), "node_modules is skipped");
-    const r = await checkFiles(files, ROOT);
-    assert.deepEqual(r.problems, [], `the repository has broken diagrams:\n${r.problems.join("\n")}`);
-    assert.ok(r.checked >= 5, `expected the docs to contain diagrams, found ${r.checked}`);
-    ok(`the repository's ${r.checked} diagrams all parse`);
   }
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

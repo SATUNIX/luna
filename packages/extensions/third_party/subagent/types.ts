@@ -117,7 +117,7 @@ export interface ToolContext {
     // (agent, elapsed, last action, run id) for human oversight and debugging.
     setStatus?(key: string, text: string | undefined): void;
   };
-  model?: { provider?: string; id?: string } | undefined;
+  model?: { provider?: string; id?: string; baseUrl?: string } | undefined;
   // Present on the real pi tool context; optional here so the eval harness (fakePi) and
   // older contexts keep working.
   signal?: AbortSignal | undefined;

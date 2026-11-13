@@ -1,4 +1,5 @@
 ---
+description: "Summarise the task so a fresh session can continue it"
 argument-hint: "[focus]"
 mode: checkpoint
 token_budget: small

@@ -23,6 +23,10 @@ export interface DoctorInput {
   kitFloor?: string | undefined;
   /** The pi settings.json holding the registered packages. */
   settingsFile: string;
+  /** Extensions the operator switched off in overrides.json (`extensions.remove`). */
+  disabled?: readonly string[] | undefined;
+  /** Tool-call probe results for local models (session-helpers writes them); undefined when none were read. */
+  toolProbes?: ReadonlyArray<{ model: string; ok: boolean; detail?: string | undefined }> | undefined;
   registries: {
     effort?: string | undefined;
     protections: number;
@@ -142,6 +146,18 @@ export function doctorLines(input: DoctorInput): DoctorLine[] {
     lines.push({ label: "Companions", value: `${input.marker.companions.length} recorded and registered`, command: "/update status", ok: true });
   }
 
+  // A name in overrides that the marker still lists as loaded means the override has not been applied yet.
+  const disabled = input.disabled ?? [];
+  if (disabled.length > 0) {
+    const stillLoaded = disabled.filter((name) => input.marker.extensions.includes(name));
+    lines.push({
+      label: "Disabled",
+      value: stillLoaded.length > 0 ? `${disabled.join(", ")} (still loaded: ${stillLoaded.join(", ")}; start with luna or run /profile to apply)` : disabled.join(", "),
+      command: "/profile status",
+      ok: stillLoaded.length === 0,
+    });
+  }
+
   const r = input.registries;
   if (r.effort) lines.push({ label: "Effort", value: r.effort, command: "/effort status", ok: true });
   lines.push({ label: "Protections", value: `${r.protections} recorded`, command: "/firewall status", ok: r.protections > 0 });
@@ -151,5 +167,32 @@ export function doctorLines(input: DoctorInput): DoctorLine[] {
   if (r.subagents) lines.push({ label: "Subagents", value: r.subagents, command: "/workflows", ok: true });
   if (r.security) lines.push({ label: "Security", value: r.security, command: "/security status", ok: true });
 
+  for (const probe of input.toolProbes ?? []) {
+    lines.push({
+      label: "Tool calls",
+      value: probe.ok ? `${probe.model} calls tools` : `${probe.model} did not call a tool (${probe.detail ?? "no tool call"}); agent work will stall on it`,
+      command: "/model",
+      ok: probe.ok,
+    });
+  }
+
   return lines;
+}
+
+/** Cached tool-call probes (session-helpers/tool-probe.ts) from the agent directory. */
+export function readToolProbes(agentDir: string): NonNullable<DoctorInput["toolProbes"]> {
+  const parsed = readJsonArray(path.join(agentDir, "pi-kit", "tool-probe.json"));
+  return parsed.flatMap((r: unknown) => {
+    if (!isRecord(r) || typeof r.model !== "string" || typeof r.ok !== "boolean") return [];
+    return [{ model: r.model, ok: r.ok, detail: typeof r.detail === "string" ? r.detail : undefined }];
+  });
+}
+
+function readJsonArray(file: string): unknown[] {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }

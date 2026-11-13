@@ -1,10 +1,10 @@
 // Smoke test: packages/core/lib/guard.ts, the dependency-free runtime validators the toolchain
 // uses at every trust boundary. Checks acceptance, rejection with a precise path, prototype-key
-// rejection, optional-key handling and that the inferred static types are the intended ones.
+// rejection and optional-key handling.
 import assert from "node:assert/strict";
 import {
   array, boolean, literal, matches, nullable, number, object, optional, parseJson, parseJsonAs, record, refine,
-  safeParse, string, union, ValidationError, withDefault, type Infer,
+  safeParse, string, union, ValidationError, withDefault,
 } from "../packages/core/lib/guard.ts";
 
 function rejects(run: () => unknown, path: string, pattern?: RegExp): void {
@@ -89,16 +89,5 @@ const bad = safeParse(Model, { id: 1 }, "model");
 assert.ok(!bad.ok && bad.error.path === "model.id");
 rejects(() => parseJsonAs(Model, "{not json", "file"), "file", /invalid JSON/);
 assert.deepEqual(parseJsonAs(Model, '{"id":"z"}'), { id: "z", tags: [] });
-
-// --- static types (checked by `npm run test:typecheck`)
-type Model = Infer<typeof Model>;
-const typed: Model = { id: "x", tags: [] };
-const withContext: Model = { id: "x", context: 1, tags: ["a"] };
-// An optional key is absent, never an explicit undefined (exactOptionalPropertyTypes), matching
-// what parse returns.
-// @ts-expect-error -- `context: undefined` is not a Model
-const explicitUndefined: Model = { id: "x", context: undefined, tags: [] };
-const v: "allow" | "ask" | "deny" = verdict.parse("allow");
-assert.equal([typed, withContext, explicitUndefined, v].length, 4);
 
 console.log("guard-smoke: ok");

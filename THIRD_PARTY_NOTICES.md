@@ -48,6 +48,7 @@ SOFTWARE.
   - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
   - Upstream uses `pi.exec("git", [...])`, which is cross-platform
   - Stages with `git add -A -- . ":(exclude).pi"` instead of `git add -A`, so kit artefacts under `<cwd>/.pi/` are never committed
+  - Also leaves credential-looking paths (the secret-guard signatures) out of the staged set, so `git add -A` cannot commit an ungitignored `.env` or key
   - In no profile and `enabledByDefault: false`: opt-in only
   - `provenance.origin` set to `"vendored"`
   - Typed for strict TypeScript (no behaviour change)
@@ -158,8 +159,7 @@ SOFTWARE.
     as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
-  - Pinned by `tests/tui-layout-smoke.ts`, which now asserts both this module's `displayWidth` and
-    pi-tui's `visibleWidth`.
+  - Nothing in the test suite pins this.
 
 ### `dirty-repo-guard`
 
@@ -178,7 +178,7 @@ SOFTWARE.
 - Date: 2026-06-17
 - Changes:
   - **Vendored upstream (2026-06-17):** initial import of the upstream example; the changes below are Luna's.
-  - Verbatim from upstream; pi.exec handles cross-platform git
+  - **Rewritten (2026-11-13):** the upstream `git stash create` per turn (tracked files only, held in memory) is replaced by a working-tree snapshot built in a private index and stored as a commit under `refs/luna/checkpoints/<session>/<n>`, so the branch, index and stash are never touched. Credential paths (the secret-guard signatures) and `.pi/` are left out; a turn that finds the tree unchanged adds nothing; the set is bounded (`PI_KIT_CHECKPOINT_MAX`, default 20) and another session's refs expire after 14 days (the current session's never do). The snapshot is always of the whole repository, taken from its top directory, so a launch from a subdirectory cannot restore committed work outside it. Adds `/checkpoints` and `/undo` (diff first, the replaced state kept at `refs/luna/undone/<session>`); `/fork` restores through the same path. Uses `execFile` with an argument array (an environment is needed for the private index, which `pi.exec` cannot pass). Upstream's `session_before_fork` prompt is kept.
   - `provenance.origin` set to `"vendored"`
 
 ### `handoff`
@@ -386,7 +386,7 @@ SOFTWARE.
     protections first, then companions), reserves a slot in the shared effort ledger and verifies the
     protections inside the child, failing closed. `runner.ts` reserves a slot per attempt and settles
     it; `result.ts` treats a denied or misconfigured launch (exit 78) as fatal, not retryable; role
-    frontmatter gains `effort` and `scout`; `/workflow` launches are kind "user". The
+    frontmatter gains `effort` and `scout`; `/workflows` launches are kind "user". The
     `PI_KIT_SUBAGENT_ISOLATE` switch no longer disables isolation. See `docs/agent-orchestration.md`.
   - **Read-only means read tools only:** `isReadOnlyRole` (`launch.ts`) counts only `read`, `grep`,
     `find` and `ls` as read-only, so a role with `bash` is not. `readOnlyTools` gives such a role's
@@ -402,8 +402,8 @@ SOFTWARE.
   - **Workflow run control (E5 G4):** `control.ts` is new: one control per live run (an
     AbortController, a scheduler gate the executor awaits before each launch, and a child
     AbortController per running agent) behind `controlRun`. `workflow-tools.ts` adds the
-    `workflow_control {runId, action}` tool, `/workflow pause|skip`, routes `/workflow stop` and a
-    live `/workflow resume` through it, and asks a No-first select before a resume re-runs an
+    `workflow_control {runId, action}` tool, `/workflows pause|skip`, routes `/workflows stop` and a
+    live `/workflows resume` through it, and asks a No-first select before a resume re-runs an
     interrupted writer step. See `docs/workflows.md` ("Pausing, stopping and skipping").
   - **Run-scoped approvals (E5 S7):** `control.ts` also publishes `controlRun` as
     `globalThis[Symbol.for("pi-kit.workflow-control")]`, so the human console can pause a run; its
@@ -494,7 +494,7 @@ SOFTWARE.
     `workflow-tools.ts` to the same run scope, saved to `plan.json` and spliced after the parent with
     prefixed ids in `workflow.ts`, which also replays saved expansions on resume. `wf-engine.ts`
     gains the effort adapter's expansion charge. A typed resume refuses a new expansion, and
-    `registerWorkflowTools`' `spawnChild` seam reaches `/workflow` (`tests/workflow-plan-smoke.ts`).
+    `registerWorkflowTools`' `spawnChild` seam reaches `/workflows` (`tests/workflow-plan-smoke.ts`).
   - **Gate D1 fixes (2026-11-06):** `plan.ts` refuses prose in `outputs`, names a real step id after
     the last expand in a gate refusal, and says who fills `{previous}`. `workflow.ts` saves state as
     each parallel member settles, so a resume re-runs only what is left, and a missed output names
@@ -572,6 +572,7 @@ SOFTWARE.
     cut), so long text no longer pushes done/total, tokens, elapsed or status off the row and a wide
     glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
     stays. `tests/workflow-panel-smoke.ts` pins the alignment.
+  - **Orphan detection by owner:** `run-recovery.ts` marks a run interrupted only when the pid recorded in its `owner.json` (written by `claimRunDir` in `workflow.ts`) is gone; runs without that file fall back to 5 minutes of quiet.
 
 ### `todo`
 
@@ -588,6 +589,7 @@ SOFTWARE.
     The checklist widget lives in `custom-footer` (reads the same `TODO.md`).
   - 2026-10-15: typed for strict TypeScript (no behaviour change).
   - 2026-10-24: workspace state writes go through the generated `shared/safe-fs.ts`, which never follows a symbolic link under the workspace (`docs/security.md`, "Workspace file writes"; `tests/workspace-symlink-smoke.ts`).
+  - 2026-11-13: shorter tool and parameter descriptions (the lite profile footprint ceiling); no behaviour change.
 
 ### `trigger-compact`
 

@@ -12,7 +12,7 @@
  *   - agent-session.js getContextUsage: undefined for an unknown window, tokens:null after a
  *     compaction until the next response - unknown must stay unknown.
  *
- * The last section installs each of the seven profiles with the REAL installer (fake `pi` on PATH,
+ * The last section installs each shipped profile with the REAL installer (fake `pi` on PATH,
  * throwaway agent dir) and computes the effective state from the settings the installer left
  * behind: the per-profile compaction table in the release report is what this prints.
  */
@@ -31,7 +31,10 @@ import { loadProfileDef, profileSettings } from "../packages/core/lib/profiles.t
 
 type FakePi = ReturnType<typeof fakePi>;
 // The extension factory is typed for pi's ExtensionAPI; this smoke drives it with the fake pi.
-type SessionHelpersView = Omit<typeof SessionHelpers, "default"> & { default: (api: FakePi["api"]) => void };
+type SessionHelpersView = Omit<typeof SessionHelpers, "default" | "currentCompactionState"> & {
+  default: (api: FakePi["api"]) => void;
+  currentCompactionState: (api: FakePi["api"], ctx: { cwd: string; model?: unknown }) => SessionHelpers.CompactionState;
+};
 
 interface Note {
   m: string;
@@ -41,7 +44,6 @@ interface Note {
 interface ProfileRow {
   profile: string;
   trigger: boolean;
-  custom: boolean;
   sieve: boolean;
   compress: boolean;
   threshold: number | null;
@@ -155,6 +157,17 @@ const tests: Record<string, () => void | Promise<void>> = {
       const noModel = computeCompactionState({ cwd: s.cwd });
       assert.equal(noModel.code, null, "no model yet is not a degraded state");
       assert.equal(noModel.thresholdTokens, null);
+    } finally { s.done(); }
+  },
+
+  "pi's placeholder model (nothing configured) is no model, not a model without a window": () => {
+    const s = scene();
+    try {
+      const pi = fakePi();
+      const live = (model: unknown) => mod.currentCompactionState(pi.api, { cwd: s.cwd, model });
+      const placeholder = { id: "unknown", provider: "unknown", contextWindow: 0 };
+      assert.equal(live(placeholder).code, null, "no warning before a model is chosen");
+      assert.equal(live({ id: "local-7b", provider: "llama", contextWindow: 0 }).code, "window-unknown", "a real model with no window still warns");
     } finally { s.done(); }
   },
 
@@ -336,7 +349,7 @@ tests["subagent children: compaction is pi's native one, and finish-reason-retry
   const guard = await loadModule<typeof DelegationGuard>("extensions/delegation-guard/index.ts");
   const mandatory: readonly string[] = guard.MANDATORY_PROTECTIONS;
   assert.ok(guard.DEFAULT_COMPANIONS.includes("finish-reason-retry"));
-  for (const name of ["trigger-compact", "custom-compaction", "context-sieve", "compress", "session-helpers"]) {
+  for (const name of ["trigger-compact", "context-sieve", "compress", "session-helpers"]) {
     assert.ok(!guard.DEFAULT_COMPANIONS.includes(name), `${name} is not loaded in a child`);
     assert.ok(!mandatory.includes(name), `${name} is not a governance extension`);
   }
@@ -363,7 +376,7 @@ function installProfile(profile: string) {
   return { dir, agent, run };
 }
 
-const PROFILES = ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"];
+const PROFILES = ["balanced", "long-horizon", "self-improving", "engagement", "lite"];
 const rows: ProfileRow[] = [];
 for (const profile of PROFILES) {
   tests[`profile ${profile}: after install.ts --profile ${profile}, pi's auto-compaction is ON and healthy`] = () => {
@@ -388,7 +401,7 @@ for (const profile of PROFILES) {
         assert.equal(st.reason, null);
         assert.equal(st.reserveTokens, wanted?.reserveTokens ?? 16384);
         assert.equal(st.kitTrigger.loaded, loaded.includes("trigger-compact"));
-        rows.push({ profile, trigger: loaded.includes("trigger-compact"), custom: loaded.includes("custom-compaction"), sieve: loaded.includes("context-sieve"), compress: loaded.includes("compress"), threshold: st.thresholdTokens, native: st.nativeThresholdTokens });
+        rows.push({ profile, trigger: loaded.includes("trigger-compact"), sieve: loaded.includes("context-sieve"), compress: loaded.includes("compress"), threshold: st.thresholdTokens, native: st.nativeThresholdTokens });
       } finally { restore(); }
     } finally { rmWorkspace(dir); }
   };
@@ -406,8 +419,8 @@ for (const [name, fn] of Object.entries(tests)) {
 }
 restoreEnv();
 if (rows.length) {
-  console.log("\nprofile          native  kit-trigger  earliest@200k  custom-compaction  context-sieve  compress");
-  for (const r of rows) console.log(`${r.profile.padEnd(16)} ${String(r.native).padEnd(7)} ${String(r.trigger).padEnd(12)} ${String(r.threshold).padEnd(14)} ${String(r.custom).padEnd(18)} ${String(r.sieve).padEnd(14)} ${r.compress}`);
+  console.log("\nprofile          native  kit-trigger  earliest@200k  context-sieve  compress");
+  for (const r of rows) console.log(`${r.profile.padEnd(16)} ${String(r.native).padEnd(7)} ${String(r.trigger).padEnd(12)} ${String(r.threshold).padEnd(14)} ${String(r.sieve).padEnd(14)} ${r.compress}`);
 }
 const total = Object.keys(tests).length;
 if (failed) {

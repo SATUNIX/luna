@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": [],
   "registers": { "tools": ["record_verdict", "verdict_status"], "commands": ["verdicts"] },
-  "profiles": ["long-horizon", "autonomous", "self-improving", "pentest", "lite"],
+  "profiles": ["long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

@@ -32,7 +32,7 @@ const hubValues = await loadModule<typeof HubValues>("extensions/control-center/
 const register = await loadExtension("extensions/tool-firewall/index.ts");
 const file = security.securityPath();
 const reset = () => { fs.rmSync(agent, { recursive: true, force: true }); fs.mkdirSync(path.dirname(file), { recursive: true }); };
-const resolve = (policy = "coding", env: NodeJS.ProcessEnv = {}) => security.resolveSecurity(policy === "pentest" ? "guarded" : "balanced", policy, env);
+const resolve = (policy = "coding", env: NodeJS.ProcessEnv = {}) => security.resolveSecurity(policy === "engagement" ? "guarded" : "balanced", policy, env);
 function isSecurityRegistry(value: unknown): value is { snapshot(): SecuritySnapshot } {
   return value !== null && typeof value === "object" && "snapshot" in value && typeof value.snapshot === "function";
 }
@@ -93,23 +93,28 @@ try {
     assert.deepEqual(resolve().unavailable.slice(0, 4), ["content screening", "OpenAPPA flow engine", "intent ledger", "detector"]);
   }
   assert.throws(() => security.saveSecurity("off", "operator"), /attestation/);
-  for (const profile of ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"]) {
+  for (const profile of ["balanced", "long-horizon", "self-improving", "engagement", "lite"]) {
     const def = loadProfileDef(profile);
-    const expected = profile === "pentest" ? "guarded" : profile === "quick" || profile === "lite" ? "relaxed" : "balanced";
+    const expected = profile === "engagement" ? "guarded" : "balanced";
     assert.equal(profileSecurityLevel(def), expected);
     fs.rmSync(file); writeSecurityConfig(def, file);
-    assert.equal(resolve(profile === "pentest" ? "pentest" : "coding").effective, expected);
+    assert.equal(resolve(profile === "engagement" ? "engagement" : "coding").effective, expected);
     fs.writeFileSync(path.join(agent, ".pi-kit.json"), JSON.stringify({ profile }));
     assert.equal(security.profileDefault(cwd, "coding"), expected);
   }
   for (const bad of ["unknown", "off", 5, null]) assert.throws(() => parseProfile({ name: "bad", securityLevel: bad }), /securityLevel/);
-  security.saveSecurity("relaxed", "operator");
-  writeSecurityConfig(loadProfileDef("pentest"), file);
-  assert.equal(resolve("pentest").requested, "relaxed"); assert.equal(resolve("pentest").effective, "guarded");
+  security.saveSecurity("balanced", "operator");
+  writeSecurityConfig(loadProfileDef("engagement"), file);
+  assert.equal(resolve("engagement").requested, "balanced"); assert.equal(resolve("engagement").effective, "guarded");
   assert.equal(resolve("coding", { PI_KIT_SECURITY_LEVEL: "strict" }).effective, "strict");
   security.saveSecurity("strict", "operator");
   assert.equal(resolve("coding", { PI_KIT_SECURITY_LEVEL: "relaxed" }).effective, "strict");
   assert.equal(resolve("coding", { PI_KIT_SECURITY_LEVEL: "off" }).effective, "strict");
+  // The removed `relaxed` level is read as balanced and rewritten on the next save.
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, level: "relaxed", source: "operator", revision: 7, changedAt: new Date().toISOString() }));
+  assert.equal(resolve().requested, "balanced"); assert.deepEqual(resolve().warnings, []);
+  security.saveSecurity("balanced", "operator");
+  assert.equal((JSON.parse(fs.readFileSync(file, "utf8")) as { level: string }).level, "balanced");
   assert.match(resolve("coding", { PI_KIT_SECURITY_LEVEL: "invalid" }).warnings.join(), /ignored/);
   // Same mtime, different bytes: cached parsing must never keep the old strict request.
   const stat = fs.statSync(file);
@@ -117,26 +122,26 @@ try {
   assert.equal(resolve().effective, "balanced");
   for (const text of ["{", '{}', JSON.stringify({ schemaVersion: 1, level: "bogus", source: "operator", revision: 8, changedAt: new Date().toISOString() })]) {
     fs.writeFileSync(file, text); assert.equal(resolve().effective, "balanced"); assert.ok(resolve().warnings.length);
-    assert.equal(resolve("pentest").effective, "guarded");
+    assert.equal(resolve("engagement").effective, "guarded");
     assert.equal(security.resolveSecurity("strict", "coding").effective, "strict");
-    assert.throws(() => writeSecurityConfig(loadProfileDef("quick"), file), /security config/);
+    assert.throws(() => writeSecurityConfig(loadProfileDef("lite"), file), /security config/);
   }
   fs.rmSync(file); fs.mkdirSync(file); assert.equal(resolve().effective, "balanced"); assert.ok(resolve().warnings.length); fs.rmdirSync(file);
   ok("resolution: all defaults, schema, off lock, floors, env strength, content cache, fail closed, revision, mode 0600 and profile preservation");
 
   {
-    reset(); security.saveSecurity("relaxed", "operator"); config("manual", "pentest");
+    reset(); security.saveSecurity("balanced", "operator"); config("manual", "engagement");
     const markerFile = path.join(agent, ".pi-kit.json");
     const settingsFile = path.join(agent, "settings.json");
-    fs.writeFileSync(markerFile, JSON.stringify({ profile: "pentest", installedAt: new Date().toISOString(), extensions: [] }));
+    fs.writeFileSync(markerFile, JSON.stringify({ profile: "engagement", installedAt: new Date().toISOString(), extensions: [] }));
     fs.writeFileSync(settingsFile, "{}");
-    const expected: ProfileSwitch.Expectation = { profile: "pentest", scope: "global", kitRoot: cwd, markerFile, settingsFile,
-      firewallFile: path.join(agent, "pi-kit", "firewall.json"), firewall: { mode: "manual", policy: "pentest" },
+    const expected: ProfileSwitch.Expectation = { profile: "engagement", scope: "global", kitRoot: cwd, markerFile, settingsFile,
+      firewallFile: path.join(agent, "pi-kit", "firewall.json"), firewall: { mode: "manual", policy: "engagement" },
       security: { file, level: "guarded" }, extensions: [], startedAt: Date.now(), loadedExtensions: () => [], extensionExists: () => true };
-    assert.deepEqual(profileSwitch.verifySwitch(expected), [], "operator relaxed survives a switch while effective security is guarded");
+    assert.deepEqual(profileSwitch.verifySwitch(expected), [], "operator balanced survives a switch while effective security is guarded");
     const undoPin = setEnv("PI_KIT_SECURITY_LEVEL", "strict");
     assert.deepEqual(profileSwitch.verifySwitch(expected), [], "effective verification includes a stronger environment floor"); undoPin();
-    security.saveSecurity("relaxed", "profile");
+    security.saveSecurity("balanced", "profile");
     assert.match(profileSwitch.verifySwitch(expected).join(), /profile requires guarded/);
     security.saveSecurity("guarded", "profile");
     assert.deepEqual(profileSwitch.verifySwitch(expected), []);
@@ -145,7 +150,7 @@ try {
     ok("profile switch verification checks profile defaults, operator preservation, effective floors and malformed results");
   }
 
-  for (const level of ["relaxed", "balanced", "guarded", "strict"] as const) {
+  for (const level of ["balanced", "guarded", "strict"] as const) {
     const g = await gate(level);
     assert.equal((await g.bash("rm -rf /"))?.block, true, `${level}: critical denies`);
     assert.equal(await g.bash("pwd"), undefined, `${level}: low allows`);
@@ -226,8 +231,8 @@ try {
     await g.command("balanced"); assert.equal(snapshot().requested, "strict"); assert.equal(g.view.confirms.length, confirmations, "cannot save below a floor even when the current request is stronger than it"); undoLowerPin();
     await g.command("balanced"); assert.equal(snapshot().effective, "balanced");
     const undoPin = setEnv("PI_KIT_SECURITY_LEVEL", "strict");
-    await g.command("relaxed"); assert.equal(snapshot().effective, "strict"); assert.equal(snapshot().requested, "balanced"); undoPin();
-    config("manual", "pentest"); await g.command("balanced"); assert.equal(snapshot().effective, "guarded");
+    await g.command("guarded"); assert.equal(snapshot().effective, "strict"); assert.equal(snapshot().requested, "balanced"); undoPin();
+    config("manual", "engagement"); await g.command("balanced"); assert.equal(snapshot().effective, "guarded");
     config(); await g.command("reset"); assert.equal(snapshot().source, "profile"); assert.equal(snapshot().effective, "balanced");
     // Picker includes unavailable off, descriptions, and a current marker.
     const pick = context(); pick.ctx.ui.select = async (_title, options) => { pick.cards.push(options); return options.find((o) => o.startsWith("guarded")); };
@@ -313,25 +318,25 @@ try {
   {
     const g = await gate("guarded");
     assert.equal(security.ROUTINE_EFFECTS.size, 0);
-    config("manual"); await g.command("relaxed");
+    config("manual"); await g.command("balanced");
     assert.equal((await g.bash("npm install left-pad"))?.block, true); assert.equal(g.judged.length, 0);
     assert.equal((await g.bash("git remote add other https://example.invalid/repo"))?.block, true);
     const undo = setEnv("PI_KIT_SECURITY_LEVEL", "strict");
-    const view = data.readSecurity(); assert.equal(view?.requested, "relaxed"); assert.equal(view.effective, "strict");
+    const view = data.readSecurity(); assert.equal(view?.requested, "balanced"); assert.equal(view.effective, "strict");
     // The control centre reads the same registry, without importing the firewall.
-    const hub = hubValues.readSecurity(); assert.equal(hub.missing, false); assert.equal(hub.effective, "strict"); assert.equal(hub.requested, "relaxed");
+    const hub = hubValues.readSecurity(); assert.equal(hub.missing, false); assert.equal(hub.effective, "strict"); assert.equal(hub.requested, "balanced");
     const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
     const state: FooterRender.FooterState = { cwd, security: view, now: Date.now(), totals: data.emptyTotals(), partial: false, cost: { kind: "unknown" }, statuses: [], todos: [] };
-    assert.match(render.renderDetail(state, "default").join("\n"), /security.*strict.*requested relaxed/);
-    assert.match(render.renderFooter(state, theme, 200).join("\n"), /sec relaxed→strict/);
+    assert.match(render.renderDetail(state, "default").join("\n"), /security.*strict.*requested balanced/);
+    assert.match(render.renderFooter(state, theme, 200).join("\n"), /sec balanced→strict/);
     undo();
     const undoSecurityPath = setEnv("PI_KIT_SECURITY_CONFIG", path.join(root, "custom-security.json"));
-    security.saveSecurity("relaxed", "operator");
+    security.saveSecurity("balanced", "operator");
     assert.equal((await g.call("write", { path: security.securityPath(), content: "{}" }))?.block, true, "overridden security state is still a security-control path");
     undoSecurityPath();
     const undoPolicy = setEnv("PI_KIT_FIREWALL_POLICY", path.join(root, "invalid-policy"));
-    assert.equal((await g.bash("pwd"))?.block, true, "relaxed never weakens invalid-policy deny all"); undoPolicy();
-    ok("relaxed has no additional admissions; footer reads requested/effective; invalid policy still denies");
+    assert.equal((await g.bash("pwd"))?.block, true, "balanced never weakens invalid-policy deny all"); undoPolicy();
+    ok("balanced has no additional admissions; footer reads requested/effective; invalid policy still denies");
   }
   {
     // session-helpers/security-guard.ts copies the firewall's levels, security path, root-terminal

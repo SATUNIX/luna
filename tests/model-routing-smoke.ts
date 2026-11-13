@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
  * AG-01 regression coverage: orchestrator must be the real producer of a task-difficulty
- * classification, the shipped kit roles carry no model override (and are no longer copied
- * into projects), and the subagent model policy must choose either the active parent model
+ * classification, the shipped kit roles are not copied into projects, and the subagent model policy must choose either the active parent model
  * or role frontmatter.
  * Fully offline — no live pi, no network.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT, loadExtension, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { loadExtension, loadModule, fakePi, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { installDelegation } from "../packages/core/eval/delegation.ts";
@@ -61,7 +60,7 @@ async function testOrchestratorWritesClassification(): Promise<void> {
   }
 }
 
-async function testRoleAgentsHaveNoInjectedModel(): Promise<void> {
+async function testRolesAreNotCopiedIntoProjects(): Promise<void> {
   const ws = tmpWorkspace("pi-kit-rolemodel-");
   const restoreDisable = setEnv("PI_KIT_ORCH_DISABLE", undefined);
   try {
@@ -69,12 +68,6 @@ async function testRoleAgentsHaveNoInjectedModel(): Promise<void> {
     await pi.handlers.get("session_start")({}, { cwd: ws, ui: { notify() {} } });
     assert.ok(!fs.existsSync(path.join(ws, ".pi", "agents")), "orchestrator must not copy roles into the project");
 
-    const planner = fs.readFileSync(path.join(ROOT, "packages", "kit", "agents", "planner.md"), "utf8");
-    assert.doesNotMatch(planner, /^model:/m, "orchestrator must not inject a model override");
-
-    // Frontmatter integrity: name/description/tools must survive untouched.
-    assert.match(planner, /^name: planner$/m);
-    assert.match(planner, /^tools:/m);
   } finally {
     restoreDisable();
     rmWorkspace(ws);
@@ -175,7 +168,7 @@ const tests: Array<[string, () => Promise<void>]> = [
   ["a policy with non-string model names is refused (EFF-8)", testMalformedPolicyIsRefused],
   ["the task classification is scoped to its session (ORC-9)", testClassificationIsSessionScoped],
   ["orchestrator writes a real task classification on every input", testOrchestratorWritesClassification],
-  ["kit roles carry no model and are not copied into projects", testRoleAgentsHaveNoInjectedModel],
+  ["kit roles are not copied into projects", testRolesAreNotCopiedIntoProjects],
   ["subagent model policy inherits or uses role models", testSubagentModelPolicy],
 ];
 

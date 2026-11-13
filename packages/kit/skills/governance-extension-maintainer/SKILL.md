@@ -1,9 +1,9 @@
 ---
 name: governance-extension-maintainer
 category: maintainer
-description: Maintain the Pi pentest-governance extension and controlled evidence/approval tools. Use when editing .pi/extensions/pentest-governance or the governed tool surface — fail-closed defaults, append-only evidence, untrusted inputs.
+description: Maintain the Pi engagement-governance extension and controlled evidence/approval tools. Use when editing .pi/extensions/engagement-governance or the governed tool surface — fail-closed defaults, append-only evidence, untrusted inputs.
 disable-model-invocation: true
-triggers: ["pentest-governance", "governance extension"]
+triggers: ["engagement-governance", "governance extension"]
 ---
 
 # Governance Extension Maintainer
@@ -12,7 +12,7 @@ This extension is a safety boundary. Changes must preserve fail-closed behaviour
 integrity of evidence/approval — a regression here weakens every engagement.
 
 ## When to use
-- Editing `.pi/extensions/pentest-governance`, its policy handling, approval UI, or the
+- Editing `.pi/extensions/engagement-governance`, its policy handling, approval UI, or the
   governed evidence tools.
 
 ## Invariants to preserve

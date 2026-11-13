@@ -7,7 +7,7 @@ This capability does not bundle or run a Burp MCP server. It provides Pi MCP cli
 ```text
 Pi inside container
   -> pi-mcp-adapter proxy tool
-  -> pentest governance extension
+  -> engagement governance extension
   -> local pi_system_governance MCP server for evidence/state writes
   -> Burp MCP endpoint on host.docker.internal
   -> Burp Suite

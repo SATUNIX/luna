@@ -11,10 +11,10 @@
  * The tier's allowance comes from this package's effort policy loader (mementoGenerations), which
  * tests/effort-smoke.ts keeps in step with the extension's.
  */
-import { MEMENTO_PROFILES, installedProfile, mementoAllowance, modelKey, optInPath, readOptIn } from "../extensions/src/effort/memento.ts";
+import { mementoProfiles, installedProfile, mementoAllowance, modelKey, optInPath, readOptIn } from "../extensions/src/effort/memento.ts";
 import { type EffortPolicy, loadEffortPolicy, mementoGenerations } from "./lib/effort.ts";
 
-export { MEMENTO_PROFILES, installedProfile, mementoAllowance, modelKey, optInPath, readOptIn };
+export { mementoProfiles, installedProfile, mementoAllowance, modelKey, optInPath, readOptIn };
 
 /** A task's allowance, with what it was worked out from. */
 export interface TaskAllowance {

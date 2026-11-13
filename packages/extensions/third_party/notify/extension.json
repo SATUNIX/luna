@@ -14,14 +14,7 @@
     "tools": [],
     "commands": []
   },
-  "profiles": [
-    "quick",
-    "balanced",
-    "long-horizon",
-    "autonomous",
-    "self-improving",
-    "pentest"
-  ],
+  "profiles": ["balanced", "long-horizon", "self-improving", "engagement", "lite"],
   "enabledByDefault": true,
   "platforms": [
     "windows",

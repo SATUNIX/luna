@@ -1,44 +1,195 @@
 {
   "schemaVersion": 1,
+  "companions": {
+    "pi-lens": {
+      "source": "npm:pi-lens@4.4.4",
+      "toolText": 18800,
+      "promptText": 0,
+      "tools": {
+        "ast_grep_outline": 1665,
+        "ast_grep_replace": 1913,
+        "ast_grep_search": 1738,
+        "effective_config": 725,
+        "lens_diagnostic_mark": 1341,
+        "lens_diagnostics": 2241,
+        "lsp_navigation": 2616,
+        "module_report": 1813,
+        "pi_lens_activate_tools": 421,
+        "project_report": 879,
+        "read_enclosing": 1211,
+        "read_symbol": 864,
+        "symbol_search": 1373
+      }
+    },
+    "pi-readseek": {
+      "source": "npm:pi-readseek@0.4.26",
+      "toolText": 6472,
+      "promptText": 947,
+      "tools": {
+        "def": 624,
+        "edit": 1620,
+        "grep": 953,
+        "hover": 270,
+        "read": 680,
+        "refs": 867,
+        "rename": 608,
+        "search": 557,
+        "write": 293
+      }
+    }
+  },
   "profiles": {
     "balanced": {
-      "toolText": 8914,
-      "ceiling": 9500,
+      "toolText": 6924,
+      "promptText": 477,
+      "systemAdditions": 1203,
+      "ceiling": 7500,
       "delegation": {
-        "tools": ["subagent", "workflow", "workflow_control", "workflow_run", "workflow_status"],
-        "toolText": 4725,
-        "ceiling": 4900
+        "tools": ["subagent", "workflow", "workflow_run"],
+        "toolText": 3089,
+        "ceiling": 3200
       },
       "tools": {
         "ask_human": 264,
         "loop_complete": 268,
         "memory_forget": 228,
-        "memory_save": 1124,
+        "memory_save": 1094,
         "memory_search": 349,
         "skill_search": 427,
         "subagent": 1083,
-        "todo": 1023,
+        "todo": 699,
         "verify_completion": 506,
         "workflow": 908,
         "workflow_control": 1063,
         "workflow_run": 1098,
         "workflow_status": 573
-      }
+      },
+      "lazy": ["workflow_control", "workflow_status"]
     },
     "lite": {
-      "toolText": 7609,
+      "toolText": 2331,
+      "promptText": 262,
+      "systemAdditions": 1203,
+      "totalCeiling": 9000,
       "tools": {
-        "record_verdict": 700,
+        "record_verdict": 471,
+        "skill_search": 427,
+        "todo": 699,
+        "verdict_status": 228,
+        "verify_completion": 506
+      }
+    },
+    "long-horizon": {
+      "toolText": 10104,
+      "promptText": 477,
+      "systemAdditions": 1203,
+      "tools": {
+        "ask_human": 264,
+        "branch_create": 220,
+        "branch_discard": 340,
+        "branch_list": 67,
+        "branch_merge": 273,
+        "branch_switch": 152,
+        "loop_complete": 268,
+        "memory_forget": 228,
+        "memory_save": 1094,
+        "memory_search": 349,
+        "record_verdict": 471,
         "skill_search": 427,
         "subagent": 1083,
-        "todo": 1023,
+        "task_clear": 140,
+        "task_complete": 130,
+        "task_create": 360,
+        "task_list": 156,
+        "task_next": 325,
+        "task_update": 318,
+        "todo": 699,
         "verdict_status": 228,
         "verify_completion": 506,
         "workflow": 908,
         "workflow_control": 1063,
         "workflow_run": 1098,
         "workflow_status": 573
-      }
+      },
+      "lazy": ["workflow_control", "workflow_status"]
+    },
+    "self-improving": {
+      "toolText": 12819,
+      "promptText": 477,
+      "systemAdditions": 1203,
+      "tools": {
+        "ask_human": 264,
+        "branch_create": 220,
+        "branch_discard": 340,
+        "branch_list": 67,
+        "branch_merge": 273,
+        "branch_switch": 152,
+        "dispatch_specialist": 355,
+        "dispatch_validator": 514,
+        "dual_review": 266,
+        "loop_complete": 268,
+        "mem0_add": 214,
+        "mem0_search": 252,
+        "memory_forget": 228,
+        "memory_save": 1094,
+        "memory_search": 349,
+        "record_verdict": 471,
+        "skill_archive": 394,
+        "skill_score": 274,
+        "skill_search": 427,
+        "skill_synthesise": 446,
+        "subagent": 1083,
+        "task_clear": 140,
+        "task_complete": 130,
+        "task_create": 360,
+        "task_list": 156,
+        "task_next": 325,
+        "task_update": 318,
+        "todo": 699,
+        "verdict_status": 228,
+        "verify_completion": 506,
+        "workflow": 908,
+        "workflow_control": 1063,
+        "workflow_run": 1098,
+        "workflow_status": 573
+      },
+      "lazy": ["workflow_control", "workflow_status"]
+    },
+    "engagement": {
+      "toolText": 10973,
+      "promptText": 477,
+      "systemAdditions": 1203,
+      "tools": {
+        "ask_human": 264,
+        "branch_create": 220,
+        "branch_discard": 340,
+        "branch_list": 67,
+        "branch_merge": 273,
+        "branch_switch": 152,
+        "dispatch_specialist": 355,
+        "dispatch_validator": 514,
+        "loop_complete": 268,
+        "memory_forget": 228,
+        "memory_save": 1094,
+        "memory_search": 349,
+        "record_verdict": 471,
+        "skill_search": 427,
+        "subagent": 1083,
+        "task_clear": 140,
+        "task_complete": 130,
+        "task_create": 360,
+        "task_list": 156,
+        "task_next": 325,
+        "task_update": 318,
+        "todo": 699,
+        "verdict_status": 228,
+        "verify_completion": 506,
+        "workflow": 908,
+        "workflow_control": 1063,
+        "workflow_run": 1098,
+        "workflow_status": 573
+      },
+      "lazy": ["workflow_control", "workflow_status"]
     }
   }
 }

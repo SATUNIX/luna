@@ -84,7 +84,7 @@ written to `.runtime/console.token` (mode 0600) instead of the log; or set `PI_C
 
 ### From pi (recommended)
 
-The `web-console` extension registers the `/console` slash command (alias `/webui`). It launches
+The `web-console` extension registers the `/console` slash command. It launches
 this server as a detached process and prints the login link:
 
 ```
@@ -103,7 +103,7 @@ npm run install:web   # checks prerequisites, registers the extension, prints ho
 
 With a kit already installed, it reinstalls the installed profile only when that profile (with
 `<agent dir>/pi-kit/overrides.json` applied) includes `web-console`. For a profile that does not,
-such as `quick` or `lite`, it changes nothing, names the profiles that include it, suggests
+such as `lite`, it changes nothing, names the profiles that include it, suggests
 `--profile balanced`, and does not offer `/console`; if `overrides.json` also lists `web-console`
 in `extensions.remove`, it says that entry must be removed too. For a profile that includes
 `web-console` but whose `extensions.remove` drops it, it names that entry as the cause instead

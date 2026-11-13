@@ -62,10 +62,10 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["quick", "balanced", "long-horizon", "autonomous", "self-improving", "pentest", "lite"]
+        "enum": ["balanced", "long-horizon", "self-improving", "engagement", "lite"]
       },
       "minItems": 0,
-      "description": "Profiles the extension ships in (docs/profiles.md). quick=T0-T1, balanced=T0-T3 core, long-horizon=T0-T3 full, autonomous=T0-T3+loop, self-improving=T0-T4, pentest=security-engagement-optimised Conductor composition, lite=low-context set for small local models. Empty [] means quarantined (status stub) — kept in-repo but shipped in no profile. verify.ts cross-checks this list against profiles/*.json exactly."
+      "description": "Profiles the extension ships in (docs/profiles.md). lite=low-context set for quick tasks and small local models, balanced=T0-T3 core, long-horizon=T0-T3 full plus the autonomous loop, self-improving=T0-T4, engagement=security-engagement-optimised Conductor composition Empty [] means quarantined (status stub) — kept in-repo but shipped in no profile. Generated from profiles/*.json by `npm run catalog` (packages/core/sync-manifest-profiles.ts); verify.ts cross-checks it exactly."
     },
     "enabledByDefault": { "type": "boolean" },
     "childGovernance": {
@@ -96,6 +96,16 @@
       "description": "Companion capabilities required when this extension is selected by a curated profile. Does not create a runtime import or auto-install dependency."
     },
     "env": { "type": "array", "items": { "type": "string" } },
+    "offSwitch": {
+      "type": "object",
+      "description": "The one environment variable that deliberately turns this extension off so it registers nothing, and the values that mean off. Only such an extension may show as idle on the launch screen; a safety protection never declares one.",
+      "required": ["env", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "env": { "type": "string" },
+        "values": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
     "provenance": {
       "type": "object",
       "required": ["origin"],

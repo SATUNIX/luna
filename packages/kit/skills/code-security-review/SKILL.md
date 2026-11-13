@@ -1,6 +1,6 @@
 ---
 name: code-security-review
-category: pentest
+category: engagement
 description: Review source code for security issues on an authorized, source-assisted assessment. Use when auditing a repo for vulnerabilities — trace inputs to dangerous sinks, produce reproducible findings with file:line and evidence.
 disable-model-invocation: true
 triggers: ["security review", "security audit", "audit the code for", "vulnerability", "vulnerabilities", "sql injection", "command injection", "xss", "ssrf", "sast"]

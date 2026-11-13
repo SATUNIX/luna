@@ -22,7 +22,7 @@ Luna supports pi **0.85.1 and newer**; the version it is tested against is pinne
 ## 2. Install Luna
 
 ```sh
-pi install git:github.com/SATUNIX/luna@v0.3.0-beta.3
+pi install git:github.com/SATUNIX/luna@v0.4.0-beta.0
 ```
 
 pi clones the release into `~/.pi/agent/git/github.com/SATUNIX/luna` and runs
@@ -36,7 +36,9 @@ integration branch).
 
 ### Choosing the profile up front
 
-The first interactive start applies the `balanced` profile and asks for `/reload`. To pick another
+With a bare `pi install` the first interactive start applies the `balanced` profile and asks for
+`/reload`: pi lets only a command, not a start-up hook, reload itself, so that one reload stays. The
+installer below applies the profile before pi starts, so it needs none (`tests/clean-install-smoke.ts`). To pick another
 profile before starting, or to script the install, use the installer from a clone:
 
 ```sh
@@ -58,10 +60,14 @@ pi
 The first time pi starts in a folder it asks whether to trust it (pi's own prompt: trusting lets
 the project's `.pi/` settings and extensions load). If pi warns `No models available`, run
 `/login` to sign in to a provider or add an API key; Luna works with any provider pi supports.
+Until you send a first prompt, the launch screen carries a short first-run card (how to get a model,
+including `/llama` for a local one, and one prompt to try); it is shown until then and never again
+(`tests/control-center-smoke.ts`). With no model configured Luna stays quiet about the context
+window: it warns only for a model that reports none (`tests/compaction-state-smoke.ts`).
 
 Then:
 
-- `/menu` prints the command cheatsheet.
+- `/menu` opens the control centre.
 - `/footer status` confirms the status bar is active and shows every detail it drops when narrow.
 - `/effort` shows how hard the agent is set to work ([Effort](effort.md)). The default is
   E3 Standard.
@@ -71,13 +77,11 @@ Then:
 
 | Profile | Good for |
 |---|---|
-| `quick` | Basic safety, todo, checkpoints and memory |
 | `balanced` | Daily coding with verification and context helpers (the default) |
-| `long-horizon` | Multi-hour work with task graph, branches and delegation |
-| `autonomous` | Long-running sessions and [unattended runs](autonomy.md) |
-| `pentest` | Authorised security engagements: strict firewall, scope and rules of engagement |
+| `long-horizon` | Multi-hour work with task graph, branches and delegation, and [unattended runs](autonomy.md) |
+| `engagement` | Authorised security engagements: strict firewall, scope and rules of engagement |
 | `self-improving` | Research setup with Docker-backed memory (experimental) |
-| `lite` | Small local models and short contexts |
+| `lite` | Quick tasks, small local models and short contexts |
 
 Switch inside pi with `/profile` (a picker) or `/profile <name>`. The switch is verified and rolled
 back if anything fails; nothing is reinstalled. The exact contents are in the generated

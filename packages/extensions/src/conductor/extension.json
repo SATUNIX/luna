@@ -8,7 +8,7 @@
   "entry": "index.ts",
   "hooks": ["before_agent_start", "tool_call"],
   "registers": { "tools": ["dispatch_validator", "dispatch_specialist"], "commands": ["engagement"] },
-  "profiles": ["self-improving", "pentest"],
+  "profiles": ["self-improving", "engagement"],
   "enabledByDefault": false,
   "platforms": ["windows", "linux", "darwin"],
   "runtime": {

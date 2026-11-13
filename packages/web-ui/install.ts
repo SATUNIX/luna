@@ -4,7 +4,7 @@
  *
  * The UI is two things in this repo:
  *   - packages/web-ui/            the zero-dependency server + browser assets
- *   - the `web-console` extension the `/console` (alias `/webui`) slash command
+ *   - the `web-console` extension the `/console` slash command
  *
  * This script:
  *   1. checks prerequisites (Node >= 22.19, the pi CLI, the server files)
@@ -259,7 +259,7 @@ if (start) {
 }
 
 const inPi = consoleRegistered
-  ? "  In pi:   /console            (alias: /webui) - prints the login link"
+  ? "  In pi:   /console - prints the login link"
   : "  In pi:   not available - the web-console extension is not installed (see above)";
 console.log(`
 [web-ui] Done.

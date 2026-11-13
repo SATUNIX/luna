@@ -19,4 +19,4 @@ On `tool_call` for `write` or `edit` targeting a source file (`.ts`, `.py`, `.go
 
 ## Profiles
 
-Included in: `balanced`, `long-horizon`, `autonomous`, `self-improving`, `pentest`
+Profiles: see `docs/EXTENSIONS.md` (generated from `packages/kit/profiles/*.json`).

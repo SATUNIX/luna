@@ -38,7 +38,7 @@ part of this repository. Its ML models, separate daemon and sandboxing are defer
    History is kept per session under `~/.pi/agent/pi-kit/firewall-sessions/`.
 4. **Tier and decide:**
 
-   | Tier | manual | auto (coding policy) | pentest policy |
+   | Tier | manual | auto (coding policy) | engagement policy |
    |---|---|---|---|
    | low | allow | allow | allow |
    | medium | ask | judge: allow, block (high confidence) or ask you (unsure) | ask (the judge may only clear pure reads) |
@@ -122,7 +122,7 @@ and the audit log all say which:
 
 | Outcome | Meaning | What happens |
 |---|---|---|
-| **HARD DENY** | Policy says never: the critical tier, a policy `deny`, a pentest rule, and in an unattended run the hard classes below. | Never shown to you, never judged. No approval, session allow or judge can override it. The agent is told to leave it out or ask you to run it. |
+| **HARD DENY** | Policy says never: the critical tier, a policy `deny`, an engagement rule, and in an unattended run the hard classes below. | Never shown to you, never judged. No approval, session allow or judge can override it. The agent is told to leave it out or ask you to run it. |
 | **UNCERTAIN** | The automatic layers could not settle it: the judge is unsure of a block, unavailable, timed out or aborted, or the command cannot be read; or nobody could be asked. | With a UI or console it goes to you (the card is tagged `UNCERTAIN`). Without one it fails closed after a bounded wait, with a message the agent can relay. |
 | **OPERATOR DECISION** | You allowed or denied it (card or console). | Remembered only within the scope the card names (below). |
 
@@ -131,7 +131,7 @@ final, with the reason returned to the agent.
 
 ```mermaid
 flowchart TD
-    A[tool call] --> B{critical, policy deny,<br/>pentest rule?}
+    A[tool call] --> B{critical, policy deny,<br/>engagement rule?}
     B -- yes --> HD[HARD DENY]
     B -- no --> C{low tier?}
     C -- yes --> RUN[runs]
@@ -153,7 +153,7 @@ Nothing waits on a UI that is not there. The human-console broker honours
 turn's abort signal. An interactive card, confirm or note prompt is bounded by pi's own dialog
 timeout and abort signal and again by the firewall, with `PI_KIT_FIREWALL_PROMPT_TIMEOUT_MS`
 (15 minutes by default). The judge waits at most `PI_KIT_FIREWALL_JUDGE_TIMEOUT_MS` (15 seconds
-by default) and stops at once when the turn is aborted. A console that cannot even be written to
+by default, 90 for a local model with one retry; see [Provider failures and model fit](model-resilience.md)) and stops at once when the turn is aborted. A console that cannot even be written to
 is UNCERTAIN, not "the operator declined". An interactive `ask_human` question gives up at the
 console timeout too. While the hub or the workflow panel is open, a firewall card and an `ask_human`
 question first wait for it to close or for the turn to abort, and the wait and the card share one
@@ -220,19 +220,29 @@ A card is at most **10 lines** of at most 116 characters, so it fits a pane and 
 console. It contains:
 - the tier and summary (prefixed `UNCERTAIN` when the automatic layers could not settle it);
 - the command;
+- one plain sentence for the tier and what the action does ("Changes things: check it does what
+  you asked. It installs software.");
 - the reasons, highest first, then "+N more";
 - the session history;
 - the judge's note;
 - your past decisions on this kind;
 - what a session allow would cover, and how far it reaches.
 
-`/auto explain` shows the full analysis of the last card.
+The mode, policy and action id are not on the card. `/auto explain` shows them with the full
+analysis of the last card.
 
 The choices are:
 - *Allow once*;
 - *Allow for this session*: an exact repeat runs, and in auto mode similar steps go to the
   judge, checked against this action. It is not a blanket allow for "root on srv02". This
-  choice is not offered under the pentest policy;
+  choice is not offered under the engagement policy;
+- *Always allow this exact command in this project (30 days)*: offered for low and medium tiers only, and
+  not under the guarded or strict levels, the engagement policy, or for an action an explicit ask
+  rule or an unidentified API requires you to approve. It stores a persistent approval for this
+  exact action in this workspace and working directory, valid for 30 days, listed by
+  `/firewall list` and withdrawn by `/firewall revoke`. If the action later rates high, or the
+  level becomes guarded or strict, it is ignored (`tests/firewall-approvals-smoke.ts`). A low-tier
+  action is stored as medium, because the approval record holds only medium or high;
 - *Deny*;
 - *Deny and tell the agent why*.
 
@@ -250,9 +260,9 @@ person answered. Each answer carries an HMAC-SHA256 over the request id, the SHA
 request's exact pending bytes and the decision, made with a key at
 `<agent directory>/human-console/response.key` (64 hex characters, mode 0600 in a 0700
 directory, owned by the operator). Only the interactive console creates the key, when its session
-starts; a requester (the firewall, `pentest-governance-domain`, `ask_human`) never does, and one
+starts; a requester (the firewall, `engagement-governance`, `ask_human`) never does, and one
 that finds no key files nothing and reports that the console must start first. The tool
-firewall, `pentest-governance-domain` and `ask_human` accept only an answer whose MAC verifies
+firewall, `engagement-governance` and `ask_human` accept only an answer whose MAC verifies
 for the request they wrote; an unsigned, forged, rewritten or replayed answer is deleted,
 audited as `human_console_answer_rejected` and the wait goes on, so it ends in the usual timeout.
 A key that is missing, a symbolic link, open to other users, owned by another user or malformed,
@@ -277,13 +287,14 @@ An approval is never broader than the choice you made. Each one is an entry in
 - **one exact action** (tool and arguments, by hash);
 - **one workspace and working directory**: the same command in another workspace, or another
   directory of the same one, is asked again;
-- **the policy** it was given under (never the pentest policy, which offers no session allows);
+- **the policy** it was given under (never the engagement policy, which offers no session allows);
 - for a **session** approval, the **root session**, shared with the subagents it spawns (they
   inherit `PI_KIT_FIREWALL_ROOT_SESSION`); a `/new` session starts with none. It expires after
   24 hours.
 
-A **persistent** approval is a *learned exact action* (below). It is bound to the workspace it
-was learned in and expires after 30 days.
+A **persistent** approval is a *learned exact action* (below) or your *Always allow this exact
+command in this project* choice. It is bound to the workspace it was given in and expires after
+30 days.
 
 Each entry records who or what granted it (you, through the card or the console, or the
 learning rule), when, why the action needed approval, and its expiry:
@@ -414,9 +425,9 @@ The installer and `/profile` write it from the profile's `firewall` field:
 
 | Profile | mode | policy |
 |---|---|---|
-| quick, balanced | manual | coding |
-| long-horizon, autonomous, self-improving | auto | coding |
-| pentest (formerly `engagement`) | manual | pentest |
+| balanced, lite | manual | coding |
+| long-horizon, self-improving | auto | coding |
+| engagement | manual | engagement |
 
 - The policy always follows the profile.
 - The mode follows the profile, unless you set it with `/auto on|off` and the policy did not
@@ -434,13 +445,13 @@ The installer and `/profile` write it from the profile's `firewall` field:
   scripted run sets `PI_KIT_AUTO_MODE=1` instead. `/auto off` never asks
   (`tests/auto-mode-smoke.ts`).
 - Environment variables override the file: `PI_KIT_AUTO_MODE=1|0` and
-  `PI_KIT_FIREWALL_PROFILE=coding|pentest`.
+  `PI_KIT_FIREWALL_PROFILE=coding|engagement`.
 - A project `.pi/auto-mode.json` from the old per-directory auto mode can only downgrade:
   `{"enabled":false}` selects manual approvals, and `{"enabled":true}` is ignored, so a file a
   repository carries never turns automatic approvals on (`tests/firewall-gate-smoke.ts`).
 
-The **pentest** policy differs from coding in several ways:
-- it adds the operator regex rules in `policies.pentest.command_rules` of the shipped policy
+The **engagement** policy differs from coding in several ways:
+- it adds the operator regex rules in `policies.engagement.command_rules` of the shipped policy
   (for example, any recursive `rm` is denied);
 - it never trusts the auto-low shortcuts;
 - it does not learn, and it offers no session allows;
@@ -510,7 +521,7 @@ extension loads:
 - A missing, malformed or contradictory contract, an unknown boundary kind, a boundary named in
   the contract that differs from the environment, `authorised` other than `true`, a contract
   inside the workspace or agent directory (the agent could have written it), one a non-root
-  process could rewrite, or the pentest policy, means **not unattended**, with a loud warning
+  process could rewrite, or the engagement policy, means **not unattended**, with a loud warning
   (stderr at load, a notice at session start, `/firewall status`). The normal interactive or
   headless rules then apply: fail closed, never silently permissive.
 - A read-only mount or a foreign owner proves the contract came from outside only in the initial
@@ -542,11 +553,11 @@ follows the normal headless rules. A launcher may hand a child a narrower contra
 ## Commands
 
 - `/firewall [status]` shows the mode, policy, what runs without asking, the three outcomes,
-  unattended state, approvals, known hosts and the session. `/firewall:status` is an alias.
+  unattended state, approvals, known hosts and the session.
 - `/firewall list` and `/firewall revoke …` inspect and withdraw remembered approvals (above).
-- `/firewall reload` (alias `/firewall:reload`) reloads the policy file and re-baselines
+- `/firewall reload` reloads the policy file and re-baselines
   `~/.ssh/config`.
-- `/auto status|on|off` sets the mode globally (`/auto-mode` is an alias).
+- `/auto status|on|off` sets the mode globally.
 - `/auto learn on|off`, `/auto learned` and `/auto forget <sig>` (a trailing `*` matches a
   prefix) manage learning. `/auto learned` shows the precedents of this workspace.
 - `/auto stats` shows prompts per 100 actions, judge calls and blocks, learned hits, and

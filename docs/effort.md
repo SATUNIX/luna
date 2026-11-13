@@ -112,7 +112,7 @@ Three kinds of launch are accounted separately from the discretionary budget abo
 |---|---|---|
 | **Mandatory** verification (completion reviewer, validator) | up to 6 a request | Verification is a safety control, so a minimal effort setting must not switch it off. |
 | **Recovery** | 2 invocations, 1 at a time, read-only scout roles only (see below), and only while the trusted recovery extension has recovery active | So a session at E1 can still get help when stuck. The model cannot open this budget itself, and it never adds to the discretionary one. |
-| **User-directed** (`/workflow` and similar commands you run) | the platform ceilings only | You asked for it. |
+| **User-directed** (`/workflows` and similar commands you run) | the platform ceilings only | You asked for it. |
 
 If the policy or ledger cannot be read, delegation is **refused** rather than allowed without a
 budget; mandatory verification is the one exception, and runs unbudgeted rather than not at all.
@@ -149,7 +149,7 @@ the token is written to disk. The scope lives in the session's workflow ledger
 (`<agent dir>/pi-kit/effort/ledgers/<session>-workflows.json`), a separate file that the per-turn
 ledger rotation never replaces, so a run that keeps going across your messages keeps its count. A
 run id is opened once; child processes cannot open runs, and a tier with no delegation (E1, or any
-tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflow run` stays available there
+tier you set to `maxTotal` 0) refuses with code `tier`, while `/workflows run` stays available there
 as a user launch (`tests/effort-smoke.ts`). The workflow ledger is created only when
 no file exists there. An existing file that cannot be read, or that has no workflow section, is
 never replaced: opening a run and reserving both refuse with code `no-ledger`, so a corrupt or
@@ -200,7 +200,7 @@ still applies (`tests/effort-smoke.ts`).
 children of the `subagent` tool and 8 planned workflow agents. Those 8 run at E1, cannot delegate,
 and run at most the tier's `maxConcurrent` at once. E1 sets only what they may start. Their prompt
 reads at the session's tier, or lower when the step's role sets `effort:`, as the same workflow typed
-with `/workflow` would, with a line saying the step cannot start other agents (`tests/effort-smoke.ts`).
+with `/workflows` would, with a line saying the step cannot start other agents (`tests/effort-smoke.ts`).
 Their thinking level does not change (`tests/delegation-guard-smoke.ts`).
 
 A script is different: the `workflow` tool stays behind the firewall's ask, so an approved script
@@ -237,7 +237,7 @@ Memento mode is **off by default for every model**. You opt a model in per model
 
 `on` asks a select whose first, default answer is "No, keep Memento mode off for this model". The
 model is opted in only if you pick "Yes, allow Memento mode for <model>". `on` is refused with no
-screen to ask on, in a child process, and outside the `long-horizon` and `autonomous` profiles.
+screen to ask on, in a child process, and outside the profiles that allow it (`long-horizon`).
 The profile is read from the install marker: a project `.pi/.pi-kit.json` if there is one,
 otherwise `<agent dir>/.pi-kit.json`. The file is written atomically with mode 0600 and keeps its
 other keys. A file that cannot be parsed is never overwritten. protected-paths blocks the agent's
@@ -266,7 +266,7 @@ generation, the autonomy engine works out the allowance for the contract's worke
 `packages/core/memento.ts`, with the tier's allowance from `packages/core/lib/effort.ts`. The
 profile is looked up from the directory the supervisor runs in. The run uses the lower of
 `generations.maxGenerations` and the allowance. An allowance of 0 (the model is not opted in, the
-tier allows none, or the profile is neither `long-horizon` nor `autonomous`) runs the task as a
+tier allows none, or the profile does not allow Memento mode) runs the task as a
 single generation with no box. The decision and its reason go to `state.json` (`memento`), the run
 log, the step's event log and `pi-autonomy status`. The engine decides once per run, so opting a
 model out does not change a run that has already started. Tests: `tests/autonomy-generations-smoke.ts`
@@ -311,7 +311,7 @@ each `workflow` call is asked until you answer Yes to `/effort ultracode` again.
   on. Without `--budget` there is none, as when standing mode is off.
 - **Firewall.** A pre-authorised `workflow` call is allowed only when the policy's own `ask` for
   the tool is its only finding above low, in a root session with a screen. Strict security, the
-  pentest policy, headless sessions and children are decided as before, and any other finding
+  engagement policy, headless sessions and children are decided as before, and any other finding
   (a trajectory chain, a secret path) still asks.
 - **Wake chain.** A workflow's completion message starts a turn when the session is idle. More
   than 5 such turns in a row, with no message from you between them, ask a select whose first

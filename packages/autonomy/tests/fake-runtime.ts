@@ -81,6 +81,8 @@ export interface FakeScriptContext {
   agent: FakeAgent;
   emit(ev: RpcFrame): void;
   write(rel: string, content: string): void;
+  /** the worker's cycle note, written where the container sees /state (the run's agent-state directory) */
+  note(text: string): void;
   read(rel: string): string | null;
   remove(rel: string): void;
   /** commit everything and push it to the bare repository, as a diligent worker would */
@@ -274,6 +276,7 @@ export class FakeRuntime implements Runtime {
       turn: this.turnCount, step: agent.step, attempt: agent.attempt, kind: msg.type, message: msg.message, prompts: agent.prompts.map((p) => p.message), effort: agent.effort, workspace: this.p.work, runtime: this, agent,
       emit,
       write: (rel, content) => { const f = path.join(this.p.work, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, content); },
+      note: (text) => { fs.mkdirSync(this.p.agentState, { recursive: true }); fs.writeFileSync(path.join(this.p.agentState, "cycle-note.md"), text); },
       read: (rel) => { try { return fs.readFileSync(path.join(this.p.work, rel), "utf8"); } catch { return null; } },
       remove: (rel) => fs.rmSync(path.join(this.p.work, rel), { recursive: true, force: true }),
       /** commit everything and push it to the bare repository, as a diligent worker would */

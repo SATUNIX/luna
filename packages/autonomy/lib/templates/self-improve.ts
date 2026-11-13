@@ -16,6 +16,7 @@ import { type AcceptanceEvaluation, type CheckEvidence, runAcceptance, summarise
 import { type BoardItem, type BoardReport, WORK_PRECEDENCE, assignedItems, boardPrompt, parseBoardReport, readBoard } from "../board.ts";
 import { ATTEMPTS_PER_ITEM, recordAttempts, withoutWithheld } from "../attempts.ts";
 import { bookkeepingPaths } from "../bookkeeping.ts";
+import { NOTE_LIMIT as NOTE_CHARS, WORKER_NOTE, clearNote, previousRecord, readNote, writeReceipt } from "../receipt.ts";
 import { type BaseVerdict, preflight } from "../preflight.ts";
 import { queueWork } from "../queue.ts";
 import type { Budget, ContractDraft, ProblemSink, RunContract } from "../contract.ts";
@@ -27,7 +28,7 @@ import type { RunState, SelfImproveState } from "../lifecycle.ts";
 import { decide } from "../manager.ts";
 import { reviewBlocker } from "../rpc.ts";
 import { promotionTargets } from "../promotion.ts";
-import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, REVIEW_REPORT_BUDGET, controlChanges, isReviewRecord, reviewCriticalPaths, reviewCycle, reviewRecordDirectories, scriptTargets, upstreamMergeScope } from "../review.ts";
+import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, isReviewRecord, reviewCriticalPaths, reviewCycle, reviewRecordDirectories, scriptTargets, upstreamMergeScope } from "../review.ts";
 import { isNewReport, ledgerCommits, uncoveredCommits, unknownShas } from "../ledger.ts";
 import { globProblem, globToRegExp } from "../glob.ts";
 import { type RiskClassification, classifyRisk, r0Reviewed, specialistQuestion } from "../risk.ts";
@@ -199,10 +200,10 @@ function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
 // --- seeding ----------------------------------------------------------------------------------------
 const backlogRows = (contract: RunContract): string => contract.objective.backlog.map((i) => `| ${i.id} | open | P2 | ${(i.detail ? `**${i.title}.** ${i.detail}` : i.title).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ")} | Operator's brief |`).join("\n");
 
-/** The placeholders of the seed files (seed/CHARTER.md, HANDOFF.md, BACKLOG.md). */
+/** The placeholders of the seed files (seed/CHARTER.md, BACKLOG.md). */
 function seedVars(cfg: SelfImproveConfig, contract: RunContract, base: string, now: number): Record<string, string> {
   const paths = bookkeepingPaths(cfg, 0);
-  return { HANDOFF_PATH: cfg.integrationUpstream ? "autonomy/runs/<run>/HANDOFF.md" : paths.handoff, PROPOSALS_PATH: cfg.integrationUpstream ? "autonomy/proposals/<run>-<NN>-<slug>.md" : paths.proposals, SEED_BRIEF: cfg.integrationUpstream ? "the assigned items in the cycle prompt and this run's proposals under autonomy/proposals/" : "`autonomy/BACKLOG.md`", RUN: cfg.run, BRANCH: cfg.integrationBranch, BASE: base.slice(0, 12), BASE_REF: cfg.baseRef, DATE: new Date(now).toISOString().slice(0, 10), OBJECTIVE: contract.objective.spec, CHECKS: checkLines(contract).join("\n"), BACKLOG_ROWS: backlogRows(contract) };
+  return { PROPOSALS_PATH: cfg.integrationUpstream ? "autonomy/proposals/<run>-<NN>-<slug>.md" : paths.proposals, RUN: cfg.run, BRANCH: cfg.integrationBranch, BASE: base.slice(0, 12), BASE_REF: cfg.baseRef, DATE: new Date(now).toISOString().slice(0, 10), OBJECTIVE: contract.objective.spec, CHECKS: checkLines(contract).join("\n"), BACKLOG_ROWS: backlogRows(contract) };
 }
 
 /**
@@ -352,7 +353,6 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const si = siState(state);
   const last = si.history.at(-1);
   const paths = bookkeepingPaths(cfg, n);
-  const dir = (k: number): string => cycleDir(cfg, k);
   // One board snapshot per cycle: a resumed cycle keeps the board it started with, so its claims
   // are judged against the assignments it was given, whatever the steward has written since.
   // An item whose ordinary attempt and repair are used up (lib/attempts.ts) is not offered again.
@@ -362,19 +362,22 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   // Streams and runs with a steward board take improvements from the board; other runs choose their own.
   const stewarded = Boolean(cfg.integrationUpstream) || offered.items.length > 0;
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
+  const record = last ? previousRecord(ctx.engine.stepDir(last.n)) : null;
   if (last) {
     previous = `Cycle ${pad(last.n)} ended ${last.outcome} (${last.reason}); acceptance ${last.gate}${last.gate === "red" ? ` (failing: ${last.gateFailing?.join(", ") || "see the check output"})` : ""}; `;
     if (last.discarded) {
       previous += `its local work was discarded when the publish-blocked answer rolled ${cfg.integrationBranch} back to the last published head; redo it in this cycle instead of looking for its report on the branch.`;
     } else if (last.merged) {
-      previous += `merged into ${cfg.integrationBranch}. Its report is ${last.reason === "host close-out after session exit" ? "a host-synthesised close-out (see the supervisor step summary); inspect its commits" : `${dir(last.n)}/report.md`}.`;
+      previous += `merged into ${cfg.integrationBranch}.${last.reason === "host close-out after session exit" ? " The worker exited before writing a note, so the host closed it out from the committed work; inspect its commits." : ""}`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
       if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}. Work only on what is assigned, failing or carried over.`;
-    } else if (last.mergeReason.startsWith("the diff without lockfiles")) previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: carry over only a reviewable subset (measure it as below; well under ${REVIEW_DIFF_BUDGET} characters), and list the rest in ${paths.handoff} for later cycles.`;
+    } else if (last.mergeReason.startsWith("the diff without lockfiles")) previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: carry over only a reviewable subset (measure it as below; well under ${REVIEW_DIFF_BUDGET} characters); the rest stays on that branch for later cycles.`;
     else if (last.gate === "skipped") previous += last.outcome === "reset" ? `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(last.n)}).` : "it made no commits.";
-    else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits, report and handoff are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: read its ${dir(last.n)}/report.md and ${paths.handoff} there and bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
+    else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
+    if (last.reportOutcome === "nothing found" && !last.merged) previous += ` Its note found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}. Work only on what is assigned, failing or carried over.`;
     if (last.unknownClaims?.length) previous += ` Its report claimed board items that were not assigned to it (${last.unknownClaims.join(", ")}); name only the IDs listed under "Assigned work" in Board: lines.`;
   }
+  if (record) previous += `\n\n${record}`;
   const kept = state.unaccepted;
   if (kept) previous += ` Worker commits the host refused to accept (${kept.why}${kept.stat ? `; ${kept.stat}` : ""}) are kept at ${kept.ref} (${kept.sha.slice(0, 12)}) in the host mirror for the operator; they are not on your branch and not part of the verified head.`;
   const b = state.limits.budget;
@@ -383,21 +386,21 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   const excludes = [":(exclude)package-lock.json", ...reviewRecordDirectories(cfg).map((d) => `:(exclude)${d}`)].map((x) => `"${x}"`).join(" ");
   const upstream = si.current?.upstream;
   const conflict = upstream?.outcome === "conflict" ? `\n\n## P0: upstream merge conflict\nThe host could not merge ${upstream.upstream} (${upstream.head}) cleanly. Before any assigned work, run \`git merge refs/upstream/trunk\`, resolve the conflicts preserving both sides' intent, and re-verify. Repair any red gate / broken branch first. The ref is supplied offline; no network is needed.` : "";
-  const baseRed = si.current?.baseRed?.length ? `\n\n## P0: the base is red\nThe host's pre-flight gated ${start} before this cycle and these checks fail: ${si.current.baseRed.slice(0, 12).join(", ")}. This is a repair cycle: the host allows two for this head, then asks a person. Fix those failures and nothing else: no board items, no improvements. If you cannot, say what you found in the report and stop; a person is asked next.` : "";
+  const baseRed = si.current?.baseRed?.length ? `\n\n## P0: the base is red\nThe host's pre-flight gated ${start} before this cycle and these checks fail: ${si.current.baseRed.slice(0, 12).join(", ")}. This is a repair cycle: the host allows two for this head, then asks a person. Fix those failures and nothing else: no board items, no improvements. If you cannot, say what you found in the note and stop; a person is asked next.` : "";
   const focus = `${contract.objective.title}${contract.objective.spec ? `: ${contract.objective.spec}` : ""}`;
   // The plan the cycle derives from its own diff, so a check the host gate runs is run here too.
-  const verifyPlan = `Derive this diff's checks with \`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"\`, run every planned check, and in the report record one line per check saying whether it RAN or was SKIPPED.`;
-  const vars: Record<string, unknown> = { NN: pad(n), CYCLE: n, CYCLES: b.maxSteps, RUN: cfg.run, BRANCH: cfg.branch, INTEGRATION: cfg.integrationBranch, CYCLE_DIR: dir(n), BASE_REF: cfg.baseRef, HANDOFF_PATH: paths.handoff, PROPOSALS_PATH: paths.proposals,
+  const verifyPlan = `Derive this diff's checks with \`node packages/core/check-all.ts --for-changed="$(git diff --name-only ${start}..HEAD | tr '\\n' ',')"\`, run every planned check, and name any you skipped in the note.`;
+  const vars: Record<string, unknown> = { NN: pad(n), CYCLE: n, CYCLES: b.maxSteps, RUN: cfg.run, BRANCH: cfg.branch, INTEGRATION: cfg.integrationBranch, NOTE_PATH: WORKER_NOTE, BASE_REF: cfg.baseRef, PROPOSALS_PATH: paths.proposals,
     START: start, DIFF_BUDGET: REVIEW_DIFF_BUDGET, HALF_DIFF_BUDGET: REVIEW_DIFF_BUDGET / 2, DIFF_MEASURE: `git diff --no-renames ${start}..HEAD -- . ${excludes} | wc -c`, RECORD_DIRS: reviewRecordDirectories(cfg).join(" and "),
-    REPORT_LIMIT: REVIEW_REPORT_BUDGET - 1000, REPORT_HALF: REVIEW_REPORT_BUDGET / 2, PRECEDENCE: WORK_PRECEDENCE,
+    NOTE_LIMIT: NOTE_CHARS, PRECEDENCE: WORK_PRECEDENCE,
     STREAM: cfg.integrationUpstream ? `\n\nYour stream: ${focus}. Work only inside this stream's area. Problems you find elsewhere go into a proposal at \`${paths.proposals}\`, not this cycle.` : "",
     CHARTER_NOTE: cfg.integrationUpstream ? " Where its priorities or bookkeeping paths differ from this prompt, this prompt wins: the merge review judges streams against the current stream charter, which states the precedence below." : "",
     BOARD: `${baseRed}${conflict}${stewarded ? boardPrompt(board) : ""}`,
     IMPROVE_MODE: stewarded ? "is for assigned improvements; board items outrank cleanup. Make the assigned system" : "is for when the review finds nothing worth fixing. Make an existing system",
     OWN_IDEAS: stewarded ? ` Own new ideas go into \`${paths.proposals}\` as proposals, not into this cycle, unless they block an assigned item.` : "",
     BOARD_RECORD: board.items.length ? " For each board item worked on, add exactly one line `Board: <ID> done|progress|blocked - <one sentence>`, using only the IDs under \"Assigned work\"." : "",
-    REVIEW_BOOKKEEPING: cfg.integrationUpstream ? `These stream bookkeeping paths take precedence over older shared charter references. Your assigned board items are listed under "Assigned work" near the top of this prompt (there is no board file to read). Read this run's proposals under autonomy/proposals/${cfg.run}-*.md and ${paths.handoff}. Do not edit the shared autonomy/BACKLOG.md.` : "Read `autonomy/BACKLOG.md` and `autonomy/HANDOFF.md`.",
-    RECORD_BOOKKEEPING: cfg.integrationUpstream ? `Write each new proposal to its own new file at ${paths.proposals}, choosing a short descriptive slug; never edit the shared autonomy/BACKLOG.md. Update ${paths.handoff} (the current state in a few lines).` : "Update `autonomy/BACKLOG.md` (statuses, new items with evidence) and `autonomy/HANDOFF.md` (the current state in a few lines).",
+    REVIEW_BOOKKEEPING: cfg.integrationUpstream ? `Your assigned board items are listed under "Assigned work" near the top of this prompt (there is no board file to read). Read this run's proposals under autonomy/proposals/${cfg.run}-*.md. Do not edit the shared autonomy/BACKLOG.md.` : "Read `autonomy/BACKLOG.md`.",
+    RECORD_BOOKKEEPING: cfg.integrationUpstream ? `Write each new proposal to its own new file at ${paths.proposals}, choosing a short descriptive slug; never edit the shared autonomy/BACKLOG.md.` : "Update `autonomy/BACKLOG.md` (statuses, new items with evidence) if this run keeps one.",
     BUDGET_USD: b.perStepUsd, HARD_BUDGET_USD: contract.templateOptions["perStepHardUsd"] ?? 2 * b.perStepUsd, VERIFY_PLAN: verifyPlan, SOFT_HOURS: +(cfg.limits.softMinutes / 60).toFixed(1), HARD_HOURS: +(cfg.limits.hardMinutes / 60).toFixed(1), PREVIOUS: previous,
     NETWORK_NOTE: egress.length ? ` and the hosts the run lists (${egress.join(", ")}, through a proxy)` : "" };
   const text = fs.readFileSync(path.join(PKG, "prompts", "cycle.md"), "utf8").replace(/\{\{([A-Z_]+)\}\}/g, (m, k: string) => (Object.hasOwn(vars, k) ? String(vars[k]) : m));
@@ -483,13 +486,16 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
     },
     headSha: async () => repo.head(),
     // A report already on the branch when the cycle began (a reused cycle directory) is not this cycle's: only a new or rewritten one counts.
+    // The worker's note in the state home is the close-out. A worker that still commits a report.md (an older prompt on a resumed cycle) is honoured too.
     reportExists: async () => {
-      return isNewReport(repo.fileAt(branchRef, `${dir}/report.md`), repo.fileAt(startSha, `${dir}/report.md`));
+      return readNote(store.p.agentState) !== null || isNewReport(repo.fileAt(branchRef, `${dir}/report.md`), repo.fileAt(startSha, `${dir}/report.md`));
     },
     reportGaps: async () => {
+      const report = repo.fileAt(branchRef, `${dir}/report.md`);
+      if (report === null || report === repo.fileAt(startSha, `${dir}/report.md`)) return [];
       const upstream = si.current?.upstream;
       const also = upstream?.outcome === "conflict" ? [upstream.head] : [];
-      return uncoveredCommits(repo.fileAt(branchRef, `${dir}/report.md`), ledgerCommits(g, startSha, branchRef, also), `${dir}/report.md`);
+      return uncoveredCommits(report, ledgerCommits(g, startSha, branchRef, also), `${dir}/report.md`);
     },
     // The same start..head diff mergeDecision will judge, measured while the worker is still alive:
     // same exclusions (records and package-lock.json) and the same upstream-conflict scope. An
@@ -524,7 +530,7 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
       fs.appendFileSync(file, `${JSON.stringify({ at: new Date(rt.now()).toISOString(), triggers: bundle.triggers, ...d })}\n`);
       return d;
     },
-    extras: async () => ({ gitLog: gm.logSince(g, startSha, branchRef), plan: repo.fileAt(branchRef, `${dir}/plan.md`), handoffPath: bookkeepingPaths(cfg, n).handoff, handoff: repo.fileAt(branchRef, bookkeepingPaths(cfg, n).handoff) }),
+    extras: async () => ({ gitLog: gm.logSince(g, startSha, branchRef), note: readNote(store.p.agentState) }),
     gates: async () => si.history.map((h) => h.gate).filter((x) => x === "green" || x === "red"),
     resetToLastGood: async () => {
       await engine.syncFromWorker({ silent: true });
@@ -646,9 +652,10 @@ async function runStep(ctx: StepContext): Promise<void> {
   }
   await engine.applyControl({ only: ["backlog"] });
   if (!engine.active) return;
+  if (!resume) clearNote(ctx.store.p.agentState); // a note from an earlier cycle is not this one's
   const prompt = cyclePrompt(ctx, n);
   if (state.unaccepted) ctx.save((s) => { s.unaccepted = null; });
-  const restartBriefing = resume ? `The previous session of this cycle was interrupted. Re-read ${bookkeepingPaths(cfg, n).handoff} and this cycle's files under ${dir}/, check \`git status\` and \`git log\`, then continue the cycle from where it stopped.${state.pendingAnswer ? `\n\n${await engine.briefing("answer")}` : ""}` : undefined;
+  const restartBriefing = resume ? `The previous session of this cycle was interrupted. Read ${WORKER_NOTE} if it exists, check \`git status\` and \`git log\`, then continue the cycle from where it stopped.${state.pendingAnswer ? `\n\n${await engine.briefing("answer")}` : ""}` : undefined;
   const runCfg = { ...cfg, budget: { ...cfg.budget, totalUsd: state.limits.budget.totalUsd, perCycleUsd: state.limits.budget.perStepUsd }, cycles: state.limits.budget.maxSteps };
   let salvagedEvaluation: AcceptanceEvaluation | undefined;
   const result = await runCycle({ n, cfg: runCfg, rt: cycleRuntime(ctx, { n, resume, startSha, dir, onSalvage: (ev) => { salvagedEvaluation = ev; } }), prompt, cycleDir: dir, restartBriefing, autoRestartsUsed: si.current.autoRestarts ?? 0, bookkeeping: bookkeepingPaths(cfg, n) });
@@ -804,7 +811,9 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   if (engine.stopRequested) return;
   const failing = gate.results.flatMap((r) => (r.steps?.length ? r.steps.filter((x) => x.code !== 0).map((x) => x.name) : r.pass ? [] : [r.id]));
   const salvaged = result.reason === "host close-out after session exit";
-  const report = repo.fileAt(sha, `${cycleDir(cfg, n)}/report.md`);
+  // The worker's close-out is its note in the state home; a committed report.md still counts for a worker that writes one.
+  const note = readNote(ctx.store.p.agentState);
+  const report = note ?? repo.fileAt(sha, `${cycleDir(cfg, n)}/report.md`);
   const board = parseBoardReport(report);
   const declared = result.outcome === "completed" ? reportOutcome(report) : { outcome: null, mode: null };
   const current = si.current;
@@ -813,7 +822,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   const recovered = salvaged ? readJson(path.join(engine.stepDir(n), "salvaged-report.json")) : null;
   const salvage = isPlainObject(recovered) && recovered.sha === sha && typeof recovered.report === "string" ? recovered.report : undefined;
   if (salvaged && !salvage) throw new Error(`cycle ${pad(n)} host report is missing or does not match ${sha}`);
-  const merge: MergeDecision = tooBig ? { merge: false, reason: tooBig } : await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage, failing });
+  const merge: MergeDecision = tooBig ? { merge: false, reason: tooBig } : await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage, failing, note });
   if (engine.stopRequested) return;
   if (merge.reviewUnavailable !== undefined) {
     // The work was never judged: keep the cycle current (its commits stay on the branch and under
@@ -850,6 +859,19 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
     // Surfaced in the cycle record the steward reads, not only in the log.
     if (withheld.length) entry.withheldItems = withheld;
   }
+  // The host's receipt and the worker's note go to the run state home, not the branch: the next cycle's briefing reads them from there.
+  const previousCycle = si.history.at(-1);
+  let changedPaths: string[] = [];
+  if (changed) { try { changedPaths = repo.changedPaths(start, sha); } catch { changedPaths = []; } }
+  writeReceipt(engine.stepDir(n), {
+    run: cfg.run, cycle: n,
+    items: { assigned: current.board ? assignedItems(current.board).map((i) => i.id) : [], claimed },
+    start, head: sha, changedPaths, gate: entry.gate, gateFailing: failing,
+    review: { verdict: entry.review, tier: entry.risk?.tier ?? null, reasons: entry.risk?.reasons.slice(0, 5) ?? [] },
+    outcome: entry.outcome, merged: entry.merged, mergeReason: entry.mergeReason.slice(0, 600), costUsd: entry.costUsd, attempts: entry.attempts,
+    lineage: { previousCycle: previousCycle?.n ?? null, previousMerged: previousCycle ? previousCycle.merged : null, itemAttempts: Object.fromEntries(worked.map((id) => [id, si.itemAttempts?.[id]?.attempts ?? 0])) },
+    note: { outcome: declared.outcome, mode: declared.mode, present: note !== null }, at: entry.endedAt,
+  }, note);
   writeJsonAtomic(path.join(engine.stepDir(n), "cycle.json"), entry);
   engine.flushUi();
   ctx.save((s) => {
@@ -887,7 +909,7 @@ function gateEntries(files: readonly string[], before: (f: string) => string | n
 }
 
 /** Completed or partial work with commits and a green gate is eligible; review fails closed. */
-async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, changed, gate, salvage, failing }: { salvage?: string | undefined; result: CycleResult; sha: string; start: string; changed: boolean; gate: CycleGate; failing: readonly string[] }): Promise<MergeDecision> {
+async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, changed, gate, salvage, failing, note }: { note?: string | null | undefined; salvage?: string | undefined; result: CycleResult; sha: string; start: string; changed: boolean; gate: CycleGate; failing: readonly string[] }): Promise<MergeDecision> {
   const { rt, repo, log } = ctx;
   const cfg = siConfig(ctx.cfg);
   if (!changed) return { merge: false, reason: "no commits" };
@@ -937,7 +959,8 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   const at = (file: string): string | null => repo.fileAt(sha, file);
   const dir = cycleDir(cfg, n);
   const board = siState(ctx.state).current?.board ?? { items: [] };
-  const claims = parseBoardReport(at(`${dir}/report.md`));
+  const workerReport = note ?? at(`${dir}/report.md`);
+  const claims = parseBoardReport(workerReport);
   // Claims only choose which items the reviewer judges against: a stale or mistyped ID is a record
   // concern, never a reason to discard green work unreviewed. With no board, Board: lines are
   // recorded (closeCycle) and ignored here.
@@ -948,13 +971,13 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   // Commits the report names must be commits of this cycle's diff: checked by the host before any model reads the report.
   if (!salvage) {
     const inRange = g(["log", "--format=%H", `--max-count=5000`, sha, `^${start}`, ...(resolves ? [`^${resolves}`] : [])], { allowFail: true }) ?? "";
-    const phantom = unknownShas(at(`${dir}/report.md`), inRange.split("\n").map((l) => l.trim()).filter(Boolean));
-    if (phantom.length) return { merge: false, reason: `${dir}/report.md names commit(s) that are not in this cycle's diff: ${phantom.slice(0, 8).join(", ")}`, risk, ...extra };
+    const phantom = unknownShas(workerReport, inRange.split("\n").map((l) => l.trim()).filter(Boolean));
+    if (phantom.length) return { merge: false, reason: `${note === null || note === undefined ? `${dir}/report.md` : "the worker's note"} names commit(s) that are not in this cycle's diff: ${phantom.slice(0, 8).join(", ")}`, risk, ...extra };
   }
   // Deterministic claim check: a cycle whose diff holds nothing outside this run's own records has no work for a model
   // to judge. `Outcome: nothing found` merges on the checks alone; any other claim of work is refused unread.
   if (!files.some((f) => !isReviewRecord(f, cfg))) {
-    const claimed = reportOutcome(salvage ?? at(`${dir}/report.md`)).outcome;
+    const claimed = reportOutcome(salvage ?? workerReport).outcome;
     if (claimed === "nothing found") return gateGreen ? { merge: true, reason: "nothing found: the diff holds only this run's records; checks passed, no model review", risk, ...extra } : { merge: false, reason: failingNote, risk, ...extra };
     return { merge: false, reason: `the report says ${claimed ?? "it did the work"} but the cycle changed nothing outside this run's records; there is no work to review`, risk, ...extra };
   }
@@ -968,13 +991,15 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   ctx.state.phase = "review";
   ctx.engine.tick();
   log(`cycle ${pad(n)} merge review (${cfg.reviewModel})`);
-  const report = salvage ?? at(`${dir}/report.md`);
+  const report = salvage ?? workerReport;
   // The host's ledger: what was committed, from git. The review treats it, not the worker's prose, as authoritative.
   const from = resolves ?? start;
   const code = files.filter((f) => !isReviewRecord(f, cfg) && f !== "package-lock.json");
   const ledger = g(["log", "--format=%h %s", sha, `^${start}`, ...(resolves ? [`^${resolves}`] : [])], { allowFail: true }) ?? "";
   const shortstat = code.length ? (g(["diff", "--shortstat", "--no-renames", from, sha, "--", ...code.map((f) => `:(top,literal)${f}`)], { allowFail: true }) ?? "(unreadable)") : "(no changes outside this run's records)";
-  const uncovered = uncoveredCommits(at(`${dir}/report.md`), ledgerCommits(g, start, sha, resolves ? [resolves] : []), `${dir}/report.md`);
+  // Only a legacy committed report names commits; the host ledger is authoritative either way.
+  const legacyReport = at(`${dir}/report.md`);
+  const uncovered = legacyReport === null ? [] : uncoveredCommits(legacyReport, ledgerCommits(g, start, sha, resolves ? [resolves] : []), `${dir}/report.md`);
   const previousCycle = siState(ctx.state).history.at(-1);
   const context = [
     gateGreen ? null : `${failingNote}. The committed work was NOT merged; judge what is sound enough to carry forward and say so in your concerns.`,
@@ -986,7 +1011,7 @@ async function mergeDecision(ctx: StepContext, n: number, { result, sha, start, 
   const reviewReport = result.outcome === "partial" ? `Outcome: partial\n\nHost close-out: cycle stopped with ${result.reason}. ${gateGreen ? "Required checks passed on committed work; judge progress, not a claim of completion." : `${failingNote}; judge the committed work and what is sound enough to carry forward, not a claim of completion.`}\n\nWorker report:\n${report ?? "(missing)"}` : report;
   const review = await reviewCycle({
     run: cfg.run, cycle: n, outcome: result.outcome, integrationBranch: cfg.integrationBranch, gateSteps: gate.results.map((r) => ({ name: r.id })), gateGreen, gateFailing: failing,
-    bookkeeping: bookkeepingPaths(cfg, n), handoff: at(bookkeepingPaths(cfg, n).handoff),
+    bookkeeping: bookkeepingPaths(cfg, n),
     board: claimedItems,
     assignedBoard: assignedItems(board),
     // The charter is the host-held integration head's (the cycle's start), never the cycle's own.

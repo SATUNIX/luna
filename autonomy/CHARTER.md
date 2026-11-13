@@ -51,7 +51,7 @@ Work in this order, and prefer to finish an item rather than start a new one:
 0. Red gate / broken branch: repair a failing acceptance check or broken pushed state.
 1. An upstream merge conflict: merge `refs/upstream/trunk`, preserve both sides' intent and re-verify.
 2. The steward board items in order, with their acceptance criteria. These outrank cleanup and your own ideas.
-3. Unfinished items carried over in `autonomy/runs/<run>/HANDOFF.md`.
+3. Unfinished items carried over in the previous cycle's note (the cycle prompt quotes it).
 4. Defects you find: correctness and reliability bugs.
 5. Security hardening that keeps behaviour compatible.
 6. Tests for untested behaviour and documentation accuracy.
@@ -67,5 +67,5 @@ improvements after higher-priority gate, upstream conflict and board work.
 Run the targeted tests for what you changed. Never run `npm test` or `npm run check:all`
 yourself: the host gate runs the full suite on a clean checkout.
 
-A cycle whose honest review finds nothing to do records `Outcome: nothing found` instead of
+A cycle whose honest review finds nothing to do says `Outcome: nothing found` in its note instead of
 inventing work. Several of those in a row end the run.

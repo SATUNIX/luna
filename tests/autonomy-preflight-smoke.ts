@@ -42,8 +42,7 @@ const raw = (src: string, over: RawContract = {}): RawContract => ({
   templateOptions: { integration: { branch: "pi-autonomy/integration", review: true }, limits: { nothingFoundToStop: 2 } },
   ...over,
 });
-const cycleDirOf = (message: string): string | undefined => message.match(/`(autonomy\/cycles\/[^`/]+\/\d+)\//)?.[1];
-const report = (t: ScriptContext, outcome: string): void => t.write(`${cycleDirOf(t.prompts[0] ?? "")}/report.md`, `Outcome: ${outcome}\nMode: fix\n\nDone.\n`);
+const report = (t: ScriptContext, outcome: string): void => t.note(`Outcome: ${outcome}\nMode: fix\n\nDone.\n`);
 const reviews: string[] = [];
 const manager: ManagerFn = async (system: string, user: string): Promise<string> => {
   if (/You review one cycle/.test(system)) { reviews.push(user); return JSON.stringify({ verdict: "MERGE", reason: "evidenced and tested", concerns: [] }); }
@@ -226,7 +225,7 @@ await check("a cycle whose diff holds only this run's records merges on `nothing
     assert.equal(git(src, ["add", "."]).status, 0);
     assert.equal(git(src, ["commit", "--quiet", "-m", "base passes"]).status, 0);
     const h = harness(raw(src, { run: `records-${outcome.replace(" ", "-")}`, budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
-      manager, script: async (t) => { report(t, outcome); t.commit("records only"); },
+      manager, script: async (t) => { report(t, outcome); t.write(`autonomy/cycles/records-${outcome.replace(" ", "-")}/01/notes.txt`, "a record the host does not review\n"); t.commit("records only"); },
     });
     const { state } = await runOnce(h);
     const entry = state.selfImprove?.history[0];

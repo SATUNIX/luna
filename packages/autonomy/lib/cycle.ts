@@ -6,11 +6,12 @@
 //   now(), sleep(ms), tickMs,
 //   startAgent({ attempt, onEvent, say }) -> { send(msg), stop(): Promise, exited: Promise<{code}> },
 //   headSha(), reportExists(), reportGaps?(), meterUsd(), totalUsd(), stopRequested(),
-//   manager(bundle) -> decision, extras() -> { gitLog, plan, handoff }, gates() -> ["green"|"red"...],
+//   manager(bundle) -> decision, extras() -> { gitLog, note }, gates() -> ["green"|"red"...],
 //   resetToLastGood(abandonedSha) -> Promise, publish() -> Promise, log(line),
 //   uiPolicy? -> permissions.unattended: dialogs are then answered per the contract and a question ends the cycle as "blocked"
 // }
 import type { BookkeepingPaths } from "./bookkeeping.ts";
+import { WORKER_NOTE } from "./receipt.ts";
 import { type TriggerConfig, evaluate, managerCallsExhausted } from "./triggers.ts";
 import { type Blocker, providerBlocker, providerLimitError, type ProviderLimitWatch, type RpcFrame, type UiRequest, type UiResponse, type UnattendedPolicy, uiResponse, activityLine, isGuardEscalation, operatorDecision } from "./rpc.ts";
 import type { ManagerBundle, ManagerDecision } from "./manager.ts";
@@ -29,10 +30,9 @@ export interface CycleAgent {
 
 /** What extras() adds to the manager's bundle. */
 export interface CycleExtras {
-  handoffPath?: string;
   gitLog?: string | null | undefined;
-  plan?: string | null | undefined;
-  handoff?: string | null | undefined;
+  /** The worker's note so far (lib/receipt.ts), if it has written one. */
+  note?: string | null | undefined;
 }
 
 /** The runtime one cycle runs against (see the header). */
@@ -43,11 +43,12 @@ export interface CycleRuntime {
   /** `say` delivers an operator message to this session (a steer while busy, a prompt when settled). */
   startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void; say: (message: string) => void }): CycleAgent;
   headSha(): Promise<string>;
+  /** True when the cycle's close-out exists: the worker's note in the state home (lib/receipt.ts), or a report on the branch from a worker that still writes one. */
   reportExists(): Promise<boolean>;
   /**
-   * Commits since the cycle start that change more than records and that no `Item:` line of
-   * report.md names (lib/ledger.ts uncoveredCommits). Asked once the report exists, so a stale
-   * report is fixed while the session is still alive.
+   * Only for a worker that still commits a report.md: commits since the cycle start that change
+   * more than records and that no `Item:` line of that report names (lib/ledger.ts uncoveredCommits).
+   * Empty when there is no such report; the host's own ledger is authoritative either way.
    */
   reportGaps?(): Promise<readonly string[]>;
   /**
@@ -116,15 +117,14 @@ export const GUARD_EPISODE_MS = 120_000;
 export const WRAP_UP_MS = 15 * 60_000;
 
 const FOLLOW_UP = [
-  "You stopped before the cycle was recorded. Continue from where you are: finish the remaining phases (verify, then record {{DIR}}/report.md, {{BOOKKEEPING}}), commit and push.",
-  "The cycle report {{DIR}}/report.md is still missing on the branch. Write it now with the honest outcome (partial is fine), update {{HANDOFF}}, commit and `git push origin HEAD`.",
+  "You stopped before submitting. Finish the work, commit and `git push origin HEAD`, then write your short note to {{NOTE}} ({{BOOKKEEPING}}).",
+  "Your note {{NOTE}} is still missing. Write it now with the honest outcome (partial is fine): `Outcome:` and `Mode:` lines, any `Board:` lines, and what remains. Commit and `git push origin HEAD` any unpushed work.",
 ];
 
 export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, autoRestartsUsed = 0, bookkeeping }: RunCycleOptions): Promise<CycleResult> {
   const NN = String(n).padStart(2, "0");
   const DIR = cycleDir ?? `autonomy/cycles/${NN}`;
-  const handoff = bookkeeping?.handoff ?? "autonomy/HANDOFF.md";
-  const record = bookkeeping && bookkeeping.proposals !== "autonomy/BACKLOG.md" ? `write each proposal to a new file at ${bookkeeping.proposals} and update ${handoff}` : "update BACKLOG.md and HANDOFF.md";
+  const record = bookkeeping && bookkeeping.proposals !== "autonomy/BACKLOG.md" ? `write each proposal to a new file at ${bookkeeping.proposals}` : "update BACKLOG.md if the run keeps one";
   const startMeter = await rt.meterUsd();
   const s = {
     startedAt: rt.now(), lastEventAt: rt.now(), lastCommitAt: null as number | null, costUsd: 0, extendedMinutes: 0,
@@ -278,7 +278,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       rt.onAutoRestart?.(autoRestarts);
       rt.log(`cycle ${NN} automatic restart ${autoRestarts} after session exit (${s.exited?.code ?? "unknown"})`);
       await agent?.stop();
-      launch(`The previous worker process exited. Re-read ${handoff}, this cycle's files under ${DIR}/ and git status/log; continue the unfinished work, verify, record and push.\n\n${prompt}`);
+      launch(`The previous worker process exited. Check git status/log and ${WORKER_NOTE} if it exists; continue the unfinished work, verify, push and write your note.\n\n${prompt}`);
       continue;
     }
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
@@ -293,7 +293,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       const followUp = FOLLOW_UP[followUps];
       if (followUp !== undefined) {
         followUps++;
-        say(followUp.replaceAll("{{DIR}}", DIR).replaceAll("{{HANDOFF}}", bookkeeping?.handoff ?? "HANDOFF.md").replaceAll("{{BOOKKEEPING}}", record));
+        say(followUp.replaceAll("{{NOTE}}", WORKER_NOTE).replaceAll("{{BOOKKEEPING}}", record));
         settled = false;
         continue;
       }
@@ -305,7 +305,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       if (wrapUpAt === null && !dead && agent) {
         wrapUpAt = now;
         rt.log(`cycle ${NN} manager calls exhausted; wrap-up steer sent`);
-        say(`Stop new work now. Commit what works, write ${DIR}/report.md describing exactly the committed diff, and \`git push origin HEAD\` within 15 minutes.`);
+        say(`Stop new work now. Commit what works, \`git push origin HEAD\`, and write your short note to ${WORKER_NOTE} describing exactly the committed diff, within 15 minutes.`);
         settled = false;
         continue;
       }

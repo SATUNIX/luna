@@ -19,7 +19,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ensureDirSafe, writeFileSafe } from "../../core/shared/safe-fs.ts";
-import { bookkeepingPaths } from "./bookkeeping.ts";
 import { exceptionsAt, scanCommits } from "../../core/prepush-scan.ts";
 import { publishRefspecs, type PublishConfig } from "./mirror.ts";
 
@@ -264,8 +263,7 @@ export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDi
     const seeds: Record<string, string> = { ...files };
     for (const name of fs.readdirSync(seedDir)) {
       if (cfg.integrationUpstream && name === "BACKLOG.md") continue;
-      const file = name === "HANDOFF.md" ? bookkeepingPaths(cfg, 0).handoff : `autonomy/${name}`;
-      seeds[file] = fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars);
+      seeds[`autonomy/${name}`] = fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars);
     }
     seeds["autonomy/cycles/.gitkeep"] = "";
     for (const [file, content] of Object.entries(seeds)) {
@@ -279,7 +277,7 @@ export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDi
       g(["update-ref", `refs/heads/${cfg.integrationBranch}`, from, parent ?? ""]);
       return from;
     }
-    wg(["commit", "--quiet", "-m", `chore(autonomy): seed ${cfg.integrationBranch}\n\nCharter, backlog and handoff for autonomous improvement runs, first used by run\n${cfg.run} and cut from ${cfg.baseRef} at ${base.slice(0, 12)}. See docs/autonomy.md.`]);
+    wg(["commit", "--quiet", "-m", `chore(autonomy): seed ${cfg.integrationBranch}\n\nCharter and backlog for autonomous improvement runs, first used by run\n${cfg.run} and cut from ${cfg.baseRef} at ${base.slice(0, 12)}. See docs/autonomy.md.`]);
     const sha = wg(["rev-parse", "HEAD"]);
     g(["update-ref", `refs/heads/${cfg.integrationBranch}`, sha, parent ?? ""]);
     return sha;

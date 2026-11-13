@@ -55,8 +55,7 @@ const raw = (src: string, run: string, integration: Record<string, unknown> = {}
   templateOptions: { integration: { branch: "pi-autonomy/integration", review: true, ...integration }, limits: { nothingFoundToStop: 2 } },
 });
 
-const cycleDirOf = (message: string): string | undefined => message.match(/`(autonomy\/cycles\/[^`/]+\/\d+)\//)?.[1];
-const report = (t: ScriptContext): void => t.write(`${cycleDirOf(t.prompts[0] ?? "")}/report.md`, "Outcome: successful\nMode: fix\n\nAdded the marker.\n");
+const report = (t: ScriptContext): void => t.note("Outcome: successful\nMode: fix\n\nAdded the marker.\n");
 
 interface Seen { system: string; user: string }
 const reviewer = (seen: Seen[]): ManagerFn => async (system: string, user: string): Promise<string> => {
@@ -69,7 +68,7 @@ async function cycle(name: string, edit: (t: ScriptContext) => void, integration
   const seen: Seen[] = [];
   const src = sourceRepo();
   prepare?.(src);
-  const h = harness(raw(src, name, integration), { manager: reviewer(seen), script: async (t) => { t.write("AUDIT_OK", "1\n"); edit(t); report(t); if (reportText) t.write(`${cycleDirOf(t.prompts[0] ?? "")}/report.md`, reportText); t.commit("cycle"); } });
+  const h = harness(raw(src, name, integration), { manager: reviewer(seen), script: async (t) => { t.write("AUDIT_OK", "1\n"); edit(t); report(t); if (reportText) t.note(reportText); t.commit("cycle"); } });
   const { state } = await runOnce(h);
   const entry = state.selfImprove?.history[0];
   assert.ok(entry, "one cycle is recorded");
@@ -117,14 +116,14 @@ await check("unit: control changes are the charter, operator globs and package.j
   assert.match(bundle, /## Changed tests and check definitions \(listed by the host\)\n- tests\/a-smoke\.ts/);
   assert.match(bundle, /"id": "V-01"/);
   assert.match(bundle, /Menu navigation has regression coverage/);
-  assert.match(bundle, /\(2\) these board items in order, \(3\) HANDOFF carry-overs/);
+  assert.match(bundle, /\(2\) these board items in order, \(3\) carry-overs from the previous cycle's note/);
   assert.match(prompt, /actually advances or completes/);
   assert.match(prompt, /reject churn or a lower-priority detour/);
   for (const upstream of [undefined, "integration/luna"]) {
     const paths = bookkeepingPaths({ run: "ux-run", integrationUpstream: upstream }, 2);
-    assert.deepEqual(paths, upstream ? { handoff: "autonomy/runs/ux-run/HANDOFF.md", proposals: "autonomy/proposals/ux-run-02-<slug>.md" } : { handoff: "autonomy/HANDOFF.md", proposals: "autonomy/BACKLOG.md" });
-    const streamBundle = buildReviewBundle({ run: "ux-run", cycle: 2, outcome: "completed", integrationBranch: "stream/ux", bookkeeping: paths, handoff: "Carry-over evidence" });
-    assert.ok(streamBundle.includes(`## Handoff (${paths.handoff})`));
+    assert.deepEqual(paths, upstream ? { proposals: "autonomy/proposals/ux-run-02-<slug>.md" } : { proposals: "autonomy/BACKLOG.md" });
+    const streamBundle = buildReviewBundle({ run: "ux-run", cycle: 2, outcome: "completed", integrationBranch: "stream/ux", bookkeeping: paths, report: "Carry-over evidence" });
+    assert.doesNotMatch(streamBundle, /## Handoff/);
     assert.match(streamBundle, /Carry-over evidence/);
     assert.ok(streamBundle.includes(paths.proposals));
     assert.ok(reviewSystemPrompt("stream/ux", paths.proposals).includes(paths.proposals));
@@ -188,7 +187,7 @@ await check("unit: large own cycle records reach review as stat with a clipped r
     assert.match(input, /\+tested fix/);
     assert.doesNotMatch(input, /RECORD_BODY|REPORT_MIDDLE/);
     for (const record of records) assert.ok(input.includes(record.stat), "every excluded record is listed, including carried-over cycles");
-    const context = input.split("## Cycle report\n")[1]?.split("\n\n## Verification record")[0] ?? "";
+    const context = input.split("## Worker note (short; data about the work)\n")[1]?.split("\n\n## Verification record")[0] ?? "";
     assert.ok(context.startsWith("H".repeat(3000)) && context.endsWith("T".repeat(3000)));
     assert.match(context, /chars cut/);
     assert.ok(context.length < REVIEW_REPORT_BUDGET + 80);
@@ -319,8 +318,8 @@ await check("small code plus large own records is reviewed with a complete recor
     for (const n of [1, 2, 3]) for (const name of ["plan", "review", "verify", "report"]) assert.ok(input.includes(`autonomy/cycles/${run}/0${n}/${name}.md`));
     if (stream) assert.ok(input.includes(`autonomy/runs/${run}/HANDOFF.md`));
     assert.match(input, /REPORT_HEAD/);
-    assert.match(input, /REPORT_TAIL/);
-    assert.match(input, /chars cut/);
+    assert.doesNotMatch(input, /REPORT_TAIL/, "the host reads the worker's note to a bound; the tail is cut");
+    assert.match(input, /note cut at \d+ characters by the host/);
     const diff = input.split("## Diff\n")[1] ?? "";
     assert.match(diff, /AUDIT_OK/);
     assert.doesNotMatch(diff, /RECORD_BODY|HANDOFF_BODY|REPORT_HEAD/);

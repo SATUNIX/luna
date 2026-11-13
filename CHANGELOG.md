@@ -61,6 +61,26 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
   (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
   Luna builds no trust prompt of its own.
+- **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
+  in the audited release were routine cycle records (30%), and the five model-written files per cycle
+  (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
+  next cycle. Cause: the cycle's only record was committed prose on the product branch. Fix: the host
+  writes a receipt per cycle to the run state home (`steps/<NN>/receipt.json`: items, head and base,
+  changed paths, gate and review results, cost, attempt lineage) and the worker writes one short note to
+  `/state/cycle-note.md` (read to 4,000 characters, never through a link, cleared per cycle). The cycle
+  prompt no longer asks for a report, plan, verification record, review, handoff or journal line; the
+  merge review, the manager and the next cycle's briefing read the note and the receipt instead, and
+  the review's "report claims work the diff lacks" rule now reads the note. The charter (seed and
+  `autonomy/CHARTER.md`) and the prompt were migrated in the same change, and the journal check holds a
+  repository with no new reports valid while still holding old ones to their lines. Breaking: new
+  streams are no longer seeded with `HANDOFF.md`; `BookkeepingPaths` has no `handoff`; a cycle that
+  finds nothing commits nothing, so it is `completed`, gate skipped, not merged (`no commits`), and
+  still counts toward `nothingFoundToStop`. Migration: none for committed history or run state (new
+  files only); a worker that still commits a `report.md` on a resumed cycle is honoured. Not
+  covered: the receipt is not signed and a lost state home loses the records. The plan for durable
+  task state, leases, an outbox, event-driven integration and the flagship is in `docs/future-work.md`.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
 - **A lean worker brief, risk-tiered review and one repair round for autonomous cycles.** The
   worker prompt (`packages/autonomy/prompts/cycle.md`) is a task brief: work directly, delegate only
   an isolated question or independent package, no compulsory scouts or per-item and whole-diff

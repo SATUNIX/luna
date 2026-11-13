@@ -61,6 +61,9 @@ await check("classification: provider and host trouble, an environment that cann
   assert.equal(classifyFailure([result("gate", false, "the check could not run: spawn failed", { exitCode: 125 })]), "infra");
   assert.equal(classifyFailure([result("gate", false, "sh: 1: tsc: not found\ncommand not found", { exitCode: 127 })]), "deterministic");
   assert.equal(classifyFailure([result("gate", false, "1 test failed: expected 2 got 3")]), "product");
+  assert.equal(classifyFailure([result("gate", false, "AssertionError ... at (lib/foo.ts:503:11)")]), "product", "a line number is not an HTTP status");
+  assert.equal(classifyFailure([result("gate", false, "FAIL rate limiter should reject")]), "product", "a test about rate limits is a product failure");
+  assert.equal(classifyFailure([result("gate", false, "FAIL x\nAssertionError: expected 1 got 2", { timedOut: true })]), "product", "a timeout beside a test failure is not infra");
   assert.equal(classifyFailure([result("gate", false, "AssertionError", { steps: [{ name: "smoke:x", code: 1, seconds: 1 }, { name: "lint", code: 0, seconds: 1 }] })], ["gate/smoke:x"]), "flake-candidate");
   assert.equal(classifyFailure([result("gate", false, "AssertionError")], ["other"]), "product", "only listed names are flakes");
   assert.equal(classifyFailure([result("a", false, "x"), result("b", false, "ECONNRESET")], ["a"]), "product", "a mixed failure is not waved through as a flake");

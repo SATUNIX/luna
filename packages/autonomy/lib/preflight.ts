@@ -20,7 +20,9 @@ export type BaseVerdict =
 
 type Result = AcceptanceEvaluation["results"][number];
 
-const INFRA = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|rate.?limit|too many requests|\b429\b|\b50[234]\b|service unavailable|ENOSPC|no space left|network is unreachable|temporary failure in name resolution|cannot connect to the docker|could not run|toomanyrequests|registry.*(unavailable|timeout)/i;
+const INFRA = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|\bHTTP\/?[\d.]*\s+(?:429|50[234])\b|\bstatus(?: code)?[:= ]+(?:429|50[234])\b|\b(?:429|50[234])\s+(?:too many requests|bad gateway|service unavailable|gateway time-?out)|\b(?:api|registry|provider)\b.{0,20}rate.?limit|rate.?limit exceeded|too many requests|ENOSPC|no space left|network is unreachable|temporary failure in name resolution|cannot connect to the docker|could not run|toomanyrequests|registry.*(unavailable|timeout)/i;
+/** Output that shows the code ran and failed its own assertions: a timeout alongside it is not host trouble. */
+const PRODUCT_FAILURE = /AssertionError|\bFAIL\b|\bnot ok\b|\d+ (?:tests? )?failed|\bexpected\b.*\b(?:got|received|to)\b/i;
 const DETERMINISTIC = /command not found|not found in \$?PATH|EACCES|permission denied|exec format error|executable file not found|ENOENT.*spawn/i;
 
 /** The failing check names: `id` for a check without steps, `id/step` for each failed step. */
@@ -32,7 +34,7 @@ export function failingNames(results: readonly Result[]): string[] {
 export function classifyFailure(results: readonly Result[], knownFlakes: readonly string[] = []): FailureClass {
   const red = results.filter((r) => !r.pass);
   if (red.length === 0) return "product";
-  if (red.every((r) => r.timedOut || INFRA.test(r.tail))) return "infra";
+  if (red.every((r) => INFRA.test(r.tail) || (r.timedOut && !PRODUCT_FAILURE.test(r.tail)))) return "infra";
   if (red.every((r) => r.exitCode === 126 || r.exitCode === 127 || DETERMINISTIC.test(r.tail))) return "deterministic";
   const names = failingNames(results);
   if (names.length > 0 && names.every((name) => knownFlakes.some((k) => k === name || name.startsWith(`${k}/`)))) return "flake-candidate";

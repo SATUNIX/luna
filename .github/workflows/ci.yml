@@ -10,6 +10,11 @@ on:
   pull_request:
     branches: [main, "integration/**"]
   workflow_call:
+  # Lets a maintainer run the gate on the exact commit of a branch, such as the integration/luna head the
+  # autonomy harness runs from, which no push or pull_request event covers. No inputs: nothing from the
+  # dispatcher reaches a step. Chosen over `push: integration/**`, which would run the full gate on every
+  # automated push to the trunk.
+  workflow_dispatch:
 
 permissions:
   contents: read

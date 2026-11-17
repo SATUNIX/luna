@@ -24,6 +24,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `--uninstall` and `--capture-overrides`. Every other run stays non-interactive and prints as
   before. See `docs/INSTALL.md` (Guided install); pinned by `tests/install-guided-smoke.ts` and
   `tests/clean-install-smoke.ts`.
+- **The CI gate can be run by hand on the exact commit of a branch.** No push or pull request event
+  covers the `integration/luna` head that the autonomy harness runs from, so its CI evidence had to rest
+  on a pull request with the same tree. `ci.yml` now also takes `workflow_dispatch`, with no inputs. This
+  was chosen over a push trigger for `integration/**`, which would run the full gate on every automated
+  push. Permissions and concurrency are unchanged. `tests/release-workflow-smoke.ts` pins the trigger and
+  that it has no inputs.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the

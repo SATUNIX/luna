@@ -299,7 +299,6 @@
     "smoke:run-query": "node tests/run-query-smoke.ts",
     "smoke:workflow-recovery": "node tests/workflow-recovery-smoke.ts",
     "smoke:lazy-run-tools": "node tests/lazy-run-tools-smoke.ts",
-    "smoke:lazy-improve-tools": "node tests/lazy-improve-tools-smoke.ts",
     "smoke:workflow-strategy": "node tests/workflow-strategy-smoke.ts",
     "smoke:eval-footprint": "node tests/eval-footprint-smoke.ts",
     "smoke:eval-baseline": "node tests/eval-baseline-smoke.ts",

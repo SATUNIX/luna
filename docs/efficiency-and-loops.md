@@ -119,10 +119,6 @@ What a request carries up front is kept to what most sessions use; the rest is o
   an operator command starts. They were 1,636 characters of text in every request of a session that
   never started a run (`tests/lazy-run-tools-smoke.ts`). The script `workflow` tool stays active: it
   is how a run starts.
-- **Lazy review and skill-forge tools (`self-improving`).** `dual_review` and skill-forge's
-  `skill_synthesise`, `skill_score` and `skill_archive` register inactive and wake when the operator
-  runs `/review` or `/improve`, the same way. A session that never reviews or improves does not carry
-  their text in every request (`tests/lazy-improve-tools-smoke.ts`).
 - **Two skills listed, the rest searchable.** pi lists a skill in the system prompt unless it sets
   `disable-model-invocation`; only `coding-agent-workflow` and `verification-loop` are listed now.
   `general-agent-workflow` and `memory` are matched by `skill-router` triggers and found with

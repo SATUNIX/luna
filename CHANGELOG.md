@@ -96,6 +96,10 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   checks, `packages/kit/profiles/`, a Dockerfile, or the autonomy modules that build the worker's
   sandbox and read its output got a single review. They are now R3 (refused for the owner or steward
   route unless `allowControlChanges` is on). Stricter only. `tests/autonomy-lean-smoke.ts`.
+- **An effort policy whose `{{delegation}}` markers do not pair up is refused.** An unpaired marker was
+  never matched, so it reached the model as literal text and the wording it should have hidden stayed;
+  this matters for an operator-overridden policy. The policy loader now names the prompt file and the
+  problem, like any other invalid policy. Stricter only. `tests/effort-smoke.ts`.
 - **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
   blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
   no note and are cleared. `tests/autonomy-lean-smoke.ts`.

@@ -198,6 +198,26 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(normalizeTier("E7", corePolicy), null);
   },
 
+  "an effort policy whose {{delegation}} markers do not pair up is refused, naming the file": () => {
+    const shipped = policyMod.policyDir();
+    const policy: unknown = JSON.parse(fs.readFileSync(path.join(shipped, "effort.json"), "utf8"));
+    assert.deepEqual(policyMod.validatePolicy(policy, shipped).filter((p) => p.includes("delegation")), [], "the shipped prompts pair up");
+    assert.equal(policyMod.delegationMarkerProblem("a {{delegation}}b{{/delegation}} c {{delegation}}d{{/delegation}}"), null);
+    assert.match(policyMod.delegationMarkerProblem("a {{delegation}}b") ?? "", /without a closing/);
+    assert.match(policyMod.delegationMarkerProblem("a b{{/delegation}}") ?? "", /without an opening/);
+    assert.match(policyMod.delegationMarkerProblem("{{delegation}}a{{delegation}}b{{/delegation}}") ?? "", /again before/);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-markers-"));
+    try {
+      fs.cpSync(shipped, dir, { recursive: true });
+      const shared = typeof policy === "object" && policy !== null && "sharedPromptFile" in policy ? policy.sharedPromptFile : undefined;
+      if (typeof shared !== "string") throw new Error("shipped policy has no sharedPromptFile");
+      fs.appendFileSync(path.join(dir, shared), "\n{{delegation}}Start a subagent when the work splits.\n");
+      const problems = policyMod.validatePolicy(policy, dir);
+      assert.ok(problems.some((p) => p.startsWith("sharedPromptFile has {{delegation}} without a closing")), problems.join("; "));
+      assert.throws(() => policyMod.loadPolicy(dir), /without a closing/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  },
+
   // S5: the workflow launch kind's limits live in effort.json and both loaders read them alike.
   "the runtime and toolchain implementations agree on the workflow limits (16 / 1000 / 2000) and refuse the same bad blocks": () => {
     const expected = { workflowConcurrent: 16, workflowTotalPerRun: 1000, workflowSessionTotal: 2000 };

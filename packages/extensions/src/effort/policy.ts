@@ -196,6 +196,12 @@ function mementoOf(value: unknown): MementoAllowance | null {
  */
 function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy: EffortPolicy | null } {
   const problems: string[] = [];
+  const markerProblems = (where: string, file: string): void => {
+    let text: string;
+    try { text = fs.readFileSync(path.join(dir, file), "utf8"); } catch { return void problems.push(`${where} cannot be read`); }
+    const problem = delegationMarkerProblem(text);
+    if (problem) problems.push(`${where} ${problem}`);
+  };
   if (!isRecord(policy)) return { problems: ["effort policy is not an object"], policy: null };
   if (policy.schemaVersion !== 1) problems.push("schemaVersion must be 1");
   const rawTiers: unknown[] = Array.isArray(policy.tiers) ? policy.tiers : [];
@@ -214,6 +220,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
     if (aliases !== undefined && !isStringArray(aliases)) problems.push(`tiers[${index}].aliases must be an array of strings`);
     for (const key of LIMIT_KEYS) if (!isCount(limitOf(tier.limits, key))) problems.push(`tiers[${index}].limits.${key} must be a non-negative integer`);
     if (typeof promptFile !== "string" || !fs.existsSync(path.join(dir, promptFile))) problems.push(`tiers[${index}].promptFile is missing`);
+    else markerProblems(`tiers[${index}].promptFile`, promptFile);
     const limits = limitsOf(tier.limits);
     const memento = mementoOf(tier.memento);
     if (typeof id === "string" && typeof level === "number" && typeof code === "string" && typeof label === "string" && typeof promptFile === "string" && isCount(workflowAgents) && limits && memento) {
@@ -223,6 +230,7 @@ function checkPolicy(policy: unknown, dir: string): { problems: string[]; policy
   const { default: def, sharedPromptFile, recovery } = policy;
   if (typeof def !== "string" || !ids.has(def)) problems.push(`default "${String(def)}" is not a tier id`);
   if (typeof sharedPromptFile !== "string" || !fs.existsSync(path.join(dir, sharedPromptFile))) problems.push("sharedPromptFile is missing");
+  else markerProblems("sharedPromptFile", sharedPromptFile);
   for (const key of LIMIT_KEYS) {
     const ceiling = limitOf(policy.ceilings, key);
     if (!isCount(ceiling) || ceiling < 1) problems.push(`ceilings.${key} must be a positive integer`);
@@ -335,6 +343,21 @@ export function tierLabel(policy: EffortPolicy, id: string): string {
  * With a delegation tool registered the markers are dropped and the wording stays; without one
  * (the lite profile) the wording is dropped too, because nothing could ever act on it.
  */
+/**
+ * Why the `{{delegation}}` markers in a prompt file do not pair up, or null when they do. An unpaired
+ * marker is never matched by applyDelegation, so it would reach the model as literal text (and the
+ * wording it was meant to hide would stay), most likely in an operator-overridden policy.
+ */
+export function delegationMarkerProblem(text: string): string | null {
+  let open = false;
+  for (const m of text.matchAll(/\{\{(\/?)delegation\}\}/g)) {
+    const closing = m[1] === "/";
+    if (closing !== open) return closing ? "has {{/delegation}} without an opening {{delegation}}" : "opens {{delegation}} again before its {{/delegation}}";
+    open = !closing;
+  }
+  return open ? "has {{delegation}} without a closing {{/delegation}}" : null;
+}
+
 export function applyDelegation(text: string, delegation: boolean): string {
   return text.replace(/\{\{delegation\}\}([\s\S]*?)\{\{\/delegation\}\}/g, (_match, inner: string) => (delegation ? inner : ""));
 }

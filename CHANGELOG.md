@@ -8,6 +8,23 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+## [0.4.0-beta.1]
+
+### Fixed
+
+- **`smoke:auto-commit` passes on a machine with no git identity.** The test gave its own git
+  commands an author and committer, but the extension commits through its own git calls with the
+  process environment, which had none. A developer machine infers an identity from the user and
+  host name, so the test passed locally; a CI runner has no identity and git refused the commit,
+  which turned shard 2 of `verify`, `coverage` and both `pi-compat` lanes red on the 0.4.0-beta.0
+  release. The test now sets the identity in its environment as well. Reproduced and pinned by
+  running `tests/auto-commit-smoke.ts` with `user.useConfigOnly=true` and no global config.
+- **The first-run stamp is written without a check-then-write race.** The control centre checked
+  whether the stamp existed and then wrote it; CodeQL flagged the window between the two as a file
+  system race. The write already used the create-only `wx` flag, so the check is gone and an
+  existing stamp simply ends the first run (`EEXIST`). Behaviour is unchanged
+  (`tests/control-center-smoke.ts`).
+
 ## [0.4.0-beta.0]
 
 ### Added

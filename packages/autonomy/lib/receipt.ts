@@ -47,13 +47,12 @@ export interface Receipt {
 /**
  * Read the worker's note, bounded and without following a link; null when there is none. The worker
  * controls this directory, so anything but a regular file (a link, a directory, a FIFO that would block
- * the open for ever) is no note: check before opening, and open non-blocking in case it was swapped.
+ * the open for ever) is no note: open non-blocking, then accept only what fstat says is a regular file.
  */
 export function readNote(agentState: string): string | null {
   const file = path.join(agentState, NOTE_FILE);
   let fd: number | null = null;
   try {
-    if (!fs.lstatSync(file).isFile()) return null;
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     if (!fs.fstatSync(fd).isFile()) return null;
     const buf = Buffer.alloc(NOTE_LIMIT * 4 + 1);

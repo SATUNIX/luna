@@ -21,8 +21,8 @@ SERVER_DIR="mcp-servers/governance"
 python3 -m json.tool "$SERVER_DIR/package.json" >/dev/null
 python3 -m json.tool "$SERVER_DIR/package-lock.json" >/dev/null
 
-grep -Fq '"@modelcontextprotocol/sdk": "1.32.1"' "$SERVER_DIR/package.json" || {
-  echo "Governance MCP server must pin @modelcontextprotocol/sdk 1.32.1" >&2
+grep -Fq '"@modelcontextprotocol/sdk": "1.32.2"' "$SERVER_DIR/package.json" || {
+  echo "Governance MCP server must pin @modelcontextprotocol/sdk 1.32.2" >&2
   exit 1
 }
 

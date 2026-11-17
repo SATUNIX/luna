@@ -8,6 +8,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Changed
+
+- **The bundled MCP servers use @modelcontextprotocol/sdk 1.32.2.** The governance validator's pin and
+  the type mirror (`packages/container/mcp-servers/types/mcp-sdk.d.ts`) move with it; the only
+  declaration change in the mirrored surface is `| undefined` on the transport's optional handlers.
+
 ## [0.4.0-beta.1]
 
 ### Fixed

@@ -1,6 +1,6 @@
 // Minimal ambient types for @modelcontextprotocol/sdk.
 //
-// This file mirrors @modelcontextprotocol/sdk 1.32.1 (the version pinned in
+// This file mirrors @modelcontextprotocol/sdk 1.32.2 (the version pinned in
 // governance/package.json and memory-mcp/package.json) and MUST be updated when that pin
 // changes. The SDK is installed only inside the container image (/opt/pi-agent/mcp-servers),
 // not in the repo, so the type-check needs these declarations. They declare only the surface
@@ -18,9 +18,9 @@ declare module "@modelcontextprotocol/sdk/shared/transport.js" {
     start(): Promise<void>;
     send(message: JSONRPCMessage): Promise<void>;
     close(): Promise<void>;
-    onclose?: () => void;
-    onerror?: (error: Error) => void;
-    onmessage?: (message: JSONRPCMessage) => void;
+    onclose?: (() => void) | undefined;
+    onerror?: ((error: Error) => void) | undefined;
+    onmessage?: ((message: JSONRPCMessage) => void) | undefined;
   }
 }
 
@@ -108,7 +108,7 @@ declare module "@modelcontextprotocol/sdk/server/mcp.js" {
     constructor(serverInfo: Implementation, options?: ServerOptions);
     connect(transport: Transport): Promise<void>;
     close(): Promise<void>;
-    // 1.32.1 also has an OutputArgs type parameter for outputSchema; it is unused here.
+    // 1.32.2 also has an OutputArgs type parameter for outputSchema; it is unused here.
     registerTool<InputArgs extends undefined | ZodRawShapeCompat | AnySchema = undefined>(
       name: string,
       config: {

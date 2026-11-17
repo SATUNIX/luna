@@ -216,6 +216,40 @@ await check("an empty queue sleeps with no model call, then a run without a boar
   assert.equal(state.selfImprove?.idle?.polls, 2, "it looked twice (nothingFoundToStop) with a sleep between, and no model was called");
 });
 
+await check("an idle stewarded run retries a publication that failed after its last merge", async () => {
+  reviews.length = 0;
+  const src = sourceRepo();
+  const bare = scratch();
+  assert.equal(git(bare, ["init", "--quiet", "--bare"]).status, 0);
+  // The remote takes the run's seed, refuses the next push (the merged cycle), and takes pushes again once
+  // the idle run's sleep has dropped an `allow` file: a transient publication failure.
+  const hook = path.join(bare, "hooks", "pre-receive");
+  fs.writeFileSync(hook, `#!/bin/sh\n[ -e "${bare}/allow" ] && exit 0\n[ -e "${bare}/seeded" ] && { echo "transient refusal" >&2; exit 1; }\ntouch "${bare}/seeded"\nexit 0\n`);
+  fs.chmodSync(hook, 0o755);
+  const h = harness(raw(src, { promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: false }], requiresOperatorApproval: false } }), {
+    manager,
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    // First idle sleep: the remote recovers. Third: the operator stops the run (a stop skips publication, so only
+    // an idle-pass retry can have pushed the merged head).
+    hooks: { onSleep: (_rt, sleeps) => { fs.writeFileSync(path.join(bare, "allow"), ""); if (sleeps >= 3) fs.writeFileSync(path.join(h.store.p.root, "STOP"), ""); } },
+    script: async (t) => {
+      t.write("AUDIT_OK", "1\n");
+      report(t, "successful");
+      t.commit("add the marker");
+      // The steward settles the only board item, so the queue is empty after this cycle and the run idles.
+      fs.writeFileSync(path.join(t.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "H-01", title: "Add the marker", priority: "P2", status: "blocked", acceptance: "AUDIT_OK exists." }] }));
+    },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify({ items: [{ id: "H-01", title: "Add the marker", priority: "P2", acceptance: "AUDIT_OK exists." }] }));
+  const { state } = await runOnce(h);
+  assert.equal(state.selfImprove?.history.length, 1, "one cycle, then idle passes only");
+  const merged = state.selfImprove?.history[0];
+  assert.equal(merged?.merged, true, JSON.stringify(state.outcome));
+  assert.ok(fs.existsSync(path.join(bare, "seeded")), "the seed was pushed and the merged cycle's push was refused once");
+  assert.equal(state.selfImprove?.publishError ?? null, null, "the idle pass retried the publication and it recovered");
+  assert.equal(git(bare, ["rev-parse", "refs/heads/pi-autonomy/integration"]).stdout.trim(), merged?.head, "the merged head reached the remote while the queue was empty");
+});
+
 await check("a cycle whose diff holds only this run's records merges on `nothing found` without a review and is refused for any other claim", async () => {
   for (const outcome of ["nothing found", "successful"]) {
     reviews.length = 0;

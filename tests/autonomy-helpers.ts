@@ -124,7 +124,7 @@ export function sweepStaleScratchRoots(tmp: string = os.tmpdir(), now: number = 
     if (pid === process.pid || alive(pid)) continue;
     const dir = path.join(tmp, name);
     try { if (now - fs.statSync(dir).mtimeMs < STALE_ROOT_MS) continue; } catch { continue; }
-    fs.rmSync(dir, { recursive: true, force: true });
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; } // best effort: an unremovable root stays
     removed.push(dir);
   }
   return removed;

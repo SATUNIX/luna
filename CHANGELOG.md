@@ -71,7 +71,7 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   are optional); list known flaky checks in `templateOptions.knownFlakes`. Not covered: the failure
   classes are patterns on the check output, so an unusual infrastructure failure is treated as product. `tests/autonomy-preflight-smoke.ts`.
 
-- Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` resumes after the budget is raised; a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
+- Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` can continue once the budget is raised (`reconfigure` for the run budget, then `resume --answer`); a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
 
 - **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and
   host-call meter row carries the run, cycle and role (worker, manager, review); an error, aborted,
@@ -80,8 +80,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   manager and review spend toward its stop and starts from the ledgers on disk. A 402 (or the relay's
   budget stop) parks the run as `waiting_budget`; a 403 or a persistent 429 as `waiting_provider`,
   recorded on the blocker, in `outcome.md` and in the status listing. Not breaking: new fields only;
-  429 used to be an ordinary retry for ever and now parks on the second failure in a row. Child agents
+  429 used to be an ordinary retry for ever and now parks after five failed replies in a row (a 403 on the second). Child agents
   share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
+
+### Changed
+
+- **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
+  risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
+  delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish
+  checks, `packages/kit/profiles/`, a Dockerfile, or the autonomy modules that build the worker's
+  sandbox and read its output got a single review. They are now R3 (refused for the owner or steward
+  route unless `allowControlChanges` is on). Stricter only. `tests/autonomy-lean-smoke.ts`.
+- **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
+  blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
+  no note and are cleared. `tests/autonomy-lean-smoke.ts`.
 
 ### Fixed
 

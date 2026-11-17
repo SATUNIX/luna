@@ -48,6 +48,9 @@ const R3_RULES: readonly Rule[] = [
   { re: /^packages\/autonomy\/lib\/(boundary|contract|containment|egress-proxy|worker-env|runcfg|reconfigure|promotion)\.ts$|^packages\/autonomy\/(relay\.ts|image\/)/, why: "autonomy permissions, budgets or boundary" },
   { re: /^packages\/autonomy\/lib\/(risk|review|acceptance|attempts|triggers|manager|runtime|rpc|engine|board|hostrepo|templates\/[^/]+)\.ts$|^packages\/autonomy\/(cli|supervisor)\.ts$|^packages\/autonomy\/(seed|prompts)\//, why: "the merge gate, risk and attempt policy, run wiring, charter seed or worker instructions" },
   { re: /^packages\/extensions\/src\/(tool-firewall|security-level|approval)[^/]*\//, why: "permissions (tool firewall, security level)" },
+  { re: /^packages\/extensions\/src\/(secret-guard|delegation-guard)\/|^packages\/extensions\/third_party\/protected-paths\/|^packages\/extensions\/src\/goal-core\/(ceiling-guard|shared\/ceiling)\.ts$|^packages\/core\/shared\/ceiling\.ts$/, why: "a guard (secrets, protected paths, delegation, spend ceiling)" },
+  { re: /^packages\/core\/policies\/|^packages\/core\/(verify|pack-check|publish-plan|protection-coverage|lockfile-check|snapshot-version)\.ts$|^packages\/kit\/profiles\//, why: "the policy mirror, the verify and publish checks, or a profile's tool set" },
+  { re: /(^|\/)dockerfile[^/]*$|^packages\/autonomy\/lib\/(docker|netaddr|check-runner|glob|preflight|receipt|config)\.ts$/, why: "the worker's sandbox, its image or the host's reading of worker output" },
   { re: /(^|\/)(credentials?|secrets?)[^/]*\.([cm]?[jt]s|json|sh)$|(^|\/)\.env(\.|$)/, why: "credentials" },
   { re: /^docs\/(releasing|security-standard|repository-topology)\.md$|^packages\/core\/(distribution|sources)\.json$|(^|\/)release[^/]*\.(ts|sh|json|ya?ml)$/, why: "release and distribution policy" },
 ];

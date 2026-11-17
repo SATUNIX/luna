@@ -44,12 +44,17 @@ export interface Receipt {
   at: string;
 }
 
-/** Read the worker's note, bounded and without following a link; null when there is none. */
+/**
+ * Read the worker's note, bounded and without following a link; null when there is none. The worker
+ * controls this directory, so anything but a regular file (a link, a directory, a FIFO that would block
+ * the open for ever) is no note: check before opening, and open non-blocking in case it was swapped.
+ */
 export function readNote(agentState: string): string | null {
   const file = path.join(agentState, NOTE_FILE);
   let fd: number | null = null;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    if (!fs.lstatSync(file).isFile()) return null;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     if (!fs.fstatSync(fd).isFile()) return null;
     const buf = Buffer.alloc(NOTE_LIMIT * 4 + 1);
     const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
@@ -63,9 +68,17 @@ export function readNote(agentState: string): string | null {
   }
 }
 
-/** Start a fresh cycle with no note: a note from an earlier cycle is not this one's. */
+/**
+ * Start a fresh cycle with no note: a note from an earlier cycle is not this one's. Whatever the worker
+ * left under that name (a file, link, FIFO or directory) is removed without following a link, and an
+ * entry that cannot be removed is left for readNote, which accepts only a regular file.
+ */
 export function clearNote(agentState: string): void {
-  fs.rmSync(path.join(agentState, NOTE_FILE), { force: true });
+  try {
+    fs.rmSync(path.join(agentState, NOTE_FILE), { force: true, recursive: true });
+  } catch {
+    /* an entry that cannot be removed reads as no note (readNote accepts only a regular file) */
+  }
 }
 
 /** Where a cycle's receipt and the note copied beside it live, under the run's steps directory. */

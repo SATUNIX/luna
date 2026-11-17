@@ -1153,6 +1153,38 @@ close the fence, and it cannot open or close the `untrusted` tag.
 **Not covered:** redaction is pattern-based and best-effort, so a secret in a shape the patterns do
 not know is stored as written; the cap counts characters, not model tokens.
 
+## Reporting lines
+
+`pi-autonomy report` is the host's reporting line up the chain. Each call (from a timer or the
+integrator's tick) reads every run under the state home and does two things:
+
+- It writes one machine-readable status file (`--out status.json`, schema version 1). The file holds
+  each run's state, step, blocker and last cycle result; spend today and this month per inference
+  source (OpenRouter, or the host of a custom upstream), summed from the run meters in the
+  `--time-zone` calendar; each source's key limit; the open pull requests (with `--gh-repo`, `null`
+  when `gh` fails, so unknown is never reported as none); and the last alert.
+- It sends ntfy alerts (`--ntfy-url <topic URL>`). An alert goes out when a run stops (failed,
+  cancelled or succeeded), runs out of budget, or is blocked (a provider refusal, or a parked
+  question), when a key's remaining limit reaches zero, when CI is red on an autonomy pull request
+  (head `integrate/*`), and when a release pull request into `main` is green. Each condition is sent
+  once and again only after it has cleared. A run the operator paused raises nothing. One digest goes
+  out per day at or after `--digest-hour` (default 8). An alert that was not delivered is tried again
+  on the next tick. The sent state lives in `alerts.json` beside the status file.
+
+The token comes from `--ntfy-token-file`, is read at publish time and goes only into the
+`Authorization` header. It is never sent over plain `http://` to a host other than loopback. For a
+server with a certificate from the host's own store, run with `NODE_USE_SYSTEM_CA=1`.
+`--test-event <title>` sends that one event and nothing else.
+
+The key limit comes from the relay. For an OpenRouter run it calls `GET /key` at start and then
+hourly, and writes only `limit`, `limit_remaining` and `usage` to `meter/key.json`. The rest of that
+reply is dropped, because its label shows part of the key. `pi-autonomy key-limit --config run.json`
+asks the same question without a running relay. `tests/autonomy-reporting-smoke.ts` pins the status
+fields, the once-per-condition rule, the digest, the token handling and the key probe.
+
+Not covered: the status file and alerts are only as fresh as the last `report` call, and nothing
+here schedules that call. Other providers have no key-limit endpoint, so they report spend only.
+
 ## The run directory
 
 Everything is under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-autonomy/<run>`); nothing

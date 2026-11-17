@@ -42,6 +42,8 @@ import { readNotebook, redactSecrets, renderNotebook } from "./lib/notebook.ts";
 import { oneVisibleLine, stripHiddenChars } from "../core/shared/visible-text.ts";
 import { stateHome } from "./lib/paths.ts";
 import { planReconfigure } from "./lib/reconfigure.ts";
+import { type Alert, prsFromGh, publish, reportTick } from "./lib/reporting.ts";
+import { probeKeyLimit } from "./relay.ts";
 import { createRun } from "./lib/rundir.ts";
 import { type RunLock, type RunLockOptions, createRunLock } from "./lib/runlock.ts";
 import { type RunConfig, runtimeConfig } from "./lib/runcfg.ts";
@@ -830,6 +832,51 @@ const commands: Record<string, Command> = {
     return { data: { run: state.run, status: r.status, sha, targets: r.targets.map((t) => t.description), done: r.done }, text: `promotion ${r.status}: ${r.targets.map((t) => t.description).join("; ")}` };
   },
 
+  /**
+   * The reporting line: write the status file the boss pulls and send ntfy alerts for what changed
+   * (lib/reporting.ts). Meant for a timer or the integrator's tick. `--test-event <title>` sends that
+   * one labelled event and nothing else. The token is read from --ntfy-token-file at publish time.
+   */
+  async report(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["out", "ntfy-url", "ntfy-token-file", "time-zone", "digest-hour", "gh-repo", "prs-file", "alert-state", "test-event"], flags: ["json"] });
+    const ntfy = opts["ntfy-url"] ? { url: opts["ntfy-url"], tokenFile: opts["ntfy-token-file"] } : null;
+    if (opts["test-event"] !== undefined) {
+      if (!ntfy) throw new CliError("usage", "--test-event needs --ntfy-url");
+      const alert: Alert = { key: "test", title: oneVisibleLine(opts["test-event"]), message: `Test of the Luna reporting line from ${os.hostname()}. No action needed.`, priority: 3, tags: ["test_tube"] };
+      const r = await publish(ntfy, alert, { now: deps.now });
+      return { data: { sent: r }, text: `${r.delivered ? "sent" : "NOT sent"}: ${r.title}${r.httpStatus !== null ? ` (HTTP ${r.httpStatus})` : ""}${r.error ? `: ${r.error}` : ""}`, exit: r.delivered ? 0 : 1 };
+    }
+    if (!opts.out) throw new CliError("usage", "report needs --out <status.json>");
+    const digestHour = num(opts["digest-hour"], "digest-hour");
+    if (digestHour !== undefined && (!Number.isInteger(digestHour) || digestHour < 0 || digestHour > 23)) throw new CliError("usage", "--digest-hour must be 0-23");
+    const timeZone = opts["time-zone"] ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try { new Intl.DateTimeFormat("en", { timeZone }); } catch { throw new CliError("usage", `--time-zone ${JSON.stringify(timeZone)} is not a time zone`); }
+    let prs = null;
+    if (opts["prs-file"]) prs = prsFromGh(parseJson(fs.readFileSync(opts["prs-file"], "utf8")));
+    else if (opts["gh-repo"]) {
+      const r = spawnSync("gh", ["pr", "list", "--repo", opts["gh-repo"], "--state", "open", "--limit", "50", "--json", "number,title,headRefName,baseRefName,isDraft,url,statusCheckRollup"], { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: deps.env });
+      // Pull requests are one part of the status; when gh fails they are reported as unknown (null), never as none.
+      if (r.status === 0) { try { prs = prsFromGh(parseJson(r.stdout)); } catch { prs = null; } }
+      else deps.stderr.write(`[pi-autonomy] report: gh pr list failed (exit ${String(r.status)}); open PRs are unknown this tick\n`);
+    }
+    const lines: string[] = [];
+    const { status, sent } = await reportTick({ home: deps.home, now: deps.now(), timeZone, prs, out: opts.out, alertState: opts["alert-state"], ntfy, digestHour, log: (l) => { lines.push(l); } });
+    return { data: { out: opts.out, status, sent }, text: [`wrote ${opts.out}: ${status.runs.length} run(s)`, ...lines].join("\n"), exit: sent.some((s) => !s.delivered) ? 1 : 0 };
+  },
+
+  /** The provider key's own limit (OpenRouter), for a run contract: only limit, limit_remaining and usage are printed or written. */
+  async "key-limit"(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["config", "out"], flags: ["json"] });
+    if (!opts.config) throw new CliError("usage", "key-limit needs --config run.json");
+    const cfg = loadConfig(opts.config, deps);
+    if (!cfg.ok) throw new CliError("invalid", formatProblems(cfg.problems), { problems: cfg.problems });
+    const c = cfg.contract;
+    if (c.model.provider !== "openrouter") throw new CliError("refused", `provider ${c.model.provider} has no key-limit endpoint`);
+    const limit = await probeKeyLimit({ upstream: c.providerSettings.upstream, apiKey: providerKey(c, deps.env), provider: c.model.provider }, { keyFile: opts.out ?? null, now: deps.now });
+    if (!limit) throw new CliError("error", "the provider did not report the key's limit");
+    return { data: { key: limit }, text: `limit ${String(limit.limit)}, remaining ${String(limit.limit_remaining)}, usage ${String(limit.usage)} (at ${limit.at})` };
+  },
+
   async export(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["run", "out"], flags: ["json"] });
     const store = openStore(opts.run, deps);
@@ -924,6 +971,9 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   top [--run <id>]                       every run, and whether it has merged work not yet published
   inbox                                  runs waiting on you for over 30 minutes
   doctor                                 exit non-zero when merged work is unpublished
+  report --out status.json [--ntfy-url <topic-url> --ntfy-token-file <path>] [--gh-repo o/r] [--time-zone tz] [--digest-hour h]
+                                         write the status file and send ntfy alerts for what changed; --test-event <title> sends one
+  key-limit --config run.json [--out key.json]   the provider key's own limit (OpenRouter)
   doctor --setup [--config run.json] [--engine podman|docker] [--image <tag>]   engine, whether unattended is enforced, image vs kit, key present
   pause | steer --message <text> | backlog --message <text> | cancel --run <id>
   board --run <id> --file <path.json> | board --run <id> --json

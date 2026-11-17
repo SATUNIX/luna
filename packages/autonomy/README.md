@@ -28,6 +28,7 @@ node packages/autonomy/cli.ts start --config run.json       # confirm the bounda
 | `lib/runtime.ts`, `lib/egress-proxy.ts`, `relay.ts` | The container runtime, the allowlist egress proxy, and the inference relay. |
 | `lib/acceptance.ts`, `lib/check-runner.ts`, `lib/review.ts` | Trusted acceptance evaluation in clean, network-less containers, and the independent review. |
 | `lib/recovery.ts`, `lib/reconfigure.ts`, `lib/promotion.ts`, `lib/export.ts` | Bounded recovery, the only way limits change, promotion, and evidence export. |
+| `lib/reporting.ts` | The reporting line: the status file and the ntfy alerts (`pi-autonomy report`). |
 | `lib/board.ts`, `lib/inbox.ts` | The host-owned steward board and the owner decision inbox whose past-due cards settle into their default. |
 | `lib/templates/` | `implement`, `deploy` and `self-improve`. |
 | `image/`, `build-image.sh` | The image and the script that builds it from local git objects. |

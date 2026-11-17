@@ -277,6 +277,52 @@ export function createRelayHandler(config: RelayConfig): (req: http.IncomingMess
   };
 }
 
+/** A response body as text, or null when it is larger than `max` bytes (reading stops there). */
+async function readCapped(body: ReadableStream<Uint8Array> | null, max: number): Promise<string | null> {
+  if (!body) return "";
+  const chunks: Buffer[] = []; let size = 0;
+  for await (const chunk of body) {
+    size += chunk.byteLength;
+    if (size > max) { await body.cancel().catch(() => undefined); return null; }
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The key's own limit from OpenRouter's `GET /key` reply. Only `limit`, `limit_remaining` and `usage`
+ * are kept: the rest of the reply (its `label` shows part of the key) never leaves this function.
+ */
+export function keyLimitFromReply(value: unknown, at: string): { at: string; limit: number | null; limit_remaining: number | null; usage: number | null } | null {
+  const data = isObject(value) && isObject(value.data) ? value.data : null;
+  if (!data) return null;
+  return { at, limit: num(data.limit), limit_remaining: num(data.limit_remaining), usage: num(data.usage) };
+}
+
+/**
+ * Ask OpenRouter for the run key's own limit and write it to `keyFile` (default key.json beside the
+ * meter; null writes nothing), which the host's status report reads. Other providers have no such endpoint: nothing is
+ * written. Never throws; returns what it wrote, or null.
+ */
+export async function probeKeyLimit(config: RelayConfig, { keyFile, fetchImpl = fetch, now = () => new Date() }: { keyFile?: string | null | undefined; fetchImpl?: typeof fetch | undefined; now?: (() => Date) | undefined } = {}): Promise<ReturnType<typeof keyLimitFromReply>> {
+  if ((config.provider ?? "openrouter") !== "openrouter") return null;
+  const file = keyFile === null ? null : keyFile ?? path.join(path.dirname(config.meterFile ?? "/meter/usage.jsonl"), "key.json");
+  try {
+    const res = await fetchImpl(`${config.upstream.replace(/\/$/, "")}/key`, { headers: { authorization: `Bearer ${config.apiKey}` }, signal: AbortSignal.timeout(15_000) });
+    if (res.status !== 200) { await res.body?.cancel(); return null; }
+    const text = await readCapped(res.body, 64 * 1024);
+    if (text === null) return null;
+    const limit = keyLimitFromReply(JSON.parse(text), now().toISOString());
+    if (!limit) return null;
+    if (file) {
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(limit) + "\n");
+      fs.renameSync(tmp, file);
+    }
+    return limit;
+  } catch { return null; }
+}
+
 async function main(): Promise<void> {
   const configText = await new Promise<string>((resolve) => {
     let input = "";
@@ -289,6 +335,9 @@ async function main(): Promise<void> {
   const handle = createRelayHandler(config);
   const server = http.createServer((req, res) => { void handle(req, res); });
   server.listen(8081, "0.0.0.0", () => console.log("inference relay ready"));
+  // The key's own limit, at start and hourly, for the host's status report (OpenRouter only).
+  void probeKeyLimit(config);
+  setInterval(() => { void probeKeyLimit(config); }, 3_600_000).unref();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await main();

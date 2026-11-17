@@ -10,6 +10,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **Reporting lines from autonomy up the chain.** Finding: with no one watching, the operator learnt
+  of a stopped, parked or refused run, an exhausted budget or key, or a red autonomy pull request only
+  by reading the host. Fix: `pi-autonomy report` writes one status file (per-run state, last cycle,
+  spend today and this month per source, key limits, open pull requests, last alert) and sends ntfy
+  alerts once per condition, plus a daily digest. The relay records the OpenRouter key's own limit
+  (`limit`, `limit_remaining` and `usage` only) in `meter/key.json`, and `pi-autonomy key-limit` asks
+  for it on demand. Verified by `tests/autonomy-reporting-smoke.ts`.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the

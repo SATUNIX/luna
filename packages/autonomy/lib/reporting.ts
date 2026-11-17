@@ -9,8 +9,10 @@
 // meter files and key.json); nothing here changes a run. The ntfy token is read from its file at
 // publish time and never logged, returned or written anywhere.
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { isRecord, parseJson } from "../../core/lib/guard.ts";
+import { redactSecrets } from "./notebook.ts";
 import { readJson, writeJsonAtomic } from "./fsutil.ts";
 import { runPaths, stateHome } from "./paths.ts";
 
@@ -49,6 +51,8 @@ const finite = (v: unknown): number | null => (typeof v === "number" && Number.i
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 /** One visible ASCII line: what ntfy headers and a phone notification can carry. */
 const oneLine = (s: string, max = 200): string => s.replace(/[^\x20-\x7e]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+/** Model- or worker-written text bound for the status file or a phone: through the one redaction table, then one line. */
+const safeLine = (s: string, max = 200): string => oneLine(redactSecrets(s).text, max);
 
 /** The calendar day and month of an instant in a time zone, as YYYY-MM-DD and YYYY-MM. */
 export function dayIn(at: Date, timeZone: string): { day: string; month: string } {
@@ -89,7 +93,7 @@ export function spendFrom(meterText: string, now: Date, timeZone: string): Spend
 /** A key.json the relay wrote: only the three limit figures and the time are kept. */
 export function keyLimitOf(value: unknown): KeyLimit | null {
   if (!isRecord(value) || typeof value.at !== "string") return null;
-  return { at: value.at, limit: finite(value.limit), limit_remaining: finite(value.limit_remaining), usage: finite(value.usage) };
+  return { at: oneLine(value.at, 40), limit: finite(value.limit), limit_remaining: finite(value.limit_remaining), usage: finite(value.usage) };
 }
 
 const readText = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
@@ -99,7 +103,7 @@ function lastCycleOf(state: Record<string, unknown>): CycleSummary | null {
   const history = si && Array.isArray(si.history) ? si.history : [];
   const last: unknown = history[history.length - 1];
   if (!isRecord(last)) return null;
-  return { n: finite(last.n), outcome: str(last.outcome), reason: str(last.reason) && oneLine(String(last.reason), 300), gate: str(last.gate), merged: typeof last.merged === "boolean" ? last.merged : null };
+  return { n: finite(last.n), outcome: str(last.outcome), reason: str(last.reason) && safeLine(String(last.reason), 300), gate: str(last.gate), merged: typeof last.merged === "boolean" ? last.merged : null };
 }
 
 /** The status of every run under `home`, with the per-source spend and key limits. Read-only. */
@@ -128,8 +132,8 @@ export function buildStatus({ home = stateHome(), now = new Date(), timeZone = "
       run,
       status: str(state.status) ?? "unknown",
       step: finite(state.step),
-      reason: outcome ? str(outcome.reason) : null,
-      blocker: isRecord(b) && typeof b.kind === "string" ? { kind: oneLine(b.kind, 40), waiting: str(b.waiting), question: oneLine(str(b.question) ?? "", 300) } : null,
+      reason: outcome && str(outcome.reason) !== null ? safeLine(String(outcome.reason), 120) : null,
+      blocker: isRecord(b) && typeof b.kind === "string" ? { kind: oneLine(b.kind, 40), waiting: str(b.waiting), question: safeLine(str(b.question) ?? "", 300) } : null,
       lastCycle: lastCycleOf(state),
       source,
       spend: { ...window, totalUsd: finite(usage.usd), budgetUsd: finite(budget.totalUsd) },
@@ -218,8 +222,15 @@ export function digestOf(status: StatusReport): Alert {
 
 /** What has been sent: the conditions still active (so each is sent once), the last digest day and the last alert. */
 export interface AlertState { active: string[]; digestDay: string | null; lastAlert: AlertRecord | null }
-export function readAlertState(file: string): AlertState {
+/** How the alert state file was found: absent (first run), unreadable (corrupt), or read. */
+export type AlertStateSource = "absent" | "unreadable" | "read";
+export function readAlertStateFile(file: string): { state: AlertState; source: AlertStateSource } {
+  if (!fs.existsSync(file)) return { state: { active: [], digestDay: null, lastAlert: null }, source: "absent" };
   const v = readJson(file, null);
+  return isRecord(v) ? { state: readAlertState(file, v), source: "read" } : { state: { active: [], digestDay: null, lastAlert: null }, source: "unreadable" };
+}
+export function readAlertState(file: string, parsed: unknown = readJson(file, null)): AlertState {
+  const v = parsed;
   if (!isRecord(v)) return { active: [], digestDay: null, lastAlert: null };
   const la = isRecord(v.lastAlert) && typeof v.lastAlert.at === "string" && typeof v.lastAlert.title === "string" ? { at: v.lastAlert.at, title: v.lastAlert.title, delivered: v.lastAlert.delivered === true, httpStatus: finite(v.lastAlert.httpStatus) } : null;
   return { active: Array.isArray(v.active) ? v.active.filter((k): k is string => typeof k === "string") : [], digestDay: str(v.digestDay), lastAlert: la };
@@ -245,29 +256,33 @@ export function plan(state: AlertState, current: Alert[], status: StatusReport, 
 export interface NtfyTarget {
   /** The topic URL, e.g. https://ntfy.example/luna-status. */
   url: string;
-  /** A file holding a publish-only access token, read at publish time. Absent file: publish without one. */
+  /** A file holding a publish-only access token, read at publish time. Configured but unreadable or empty: nothing is sent. */
   tokenFile?: string | undefined;
 }
 export type Fetch = typeof fetch;
 
-const loopback = (host: string): boolean => host === "localhost" || host === "::1" || host === "[::1]" || /^127\./.test(host);
+/** A loopback host: "localhost", ::1, or an IPv4 address in 127.0.0.0/8 (a name that merely starts with "127." is not). */
+export const loopback = (host: string): boolean => {
+  const h = host.replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1") return true;
+  return net.isIPv4(h) && h.startsWith("127.");
+};
 
 /** Publish one alert. Never throws and never returns or logs the token; a network failure is `{ delivered: false, httpStatus: null }`. */
 export async function publish(target: NtfyTarget, alert: Alert, { fetchImpl = fetch, timeoutMs = 10_000, now = () => new Date() }: { fetchImpl?: Fetch | undefined; timeoutMs?: number | undefined; now?: (() => Date) | undefined } = {}): Promise<AlertRecord & { error?: string }> {
   const record = (delivered: boolean, httpStatus: number | null, error?: string): AlertRecord & { error?: string } => ({ at: now().toISOString(), title: alert.title, delivered, httpStatus, ...(error ? { error } : {}) });
   let url: URL;
   try { url = new URL(target.url); } catch { return record(false, null, "the ntfy URL is not a URL"); }
-  const headers: Record<string, string> = { Title: oneLine(alert.title, 120), Priority: String(alert.priority), Tags: alert.tags.join(","), "Content-Type": "text/plain; charset=utf-8" };
+  const headers: Record<string, string> = { Title: safeLine(alert.title, 120), Priority: String(alert.priority), Tags: alert.tags.join(","), "Content-Type": "text/plain; charset=utf-8" };
   if (target.tokenFile) {
-    let token = "";
-    try { token = fs.readFileSync(target.tokenFile, "utf8").trim(); } catch { /* absent: unauthenticated */ }
-    if (token) {
-      if (url.protocol !== "https:" && !loopback(url.hostname)) return record(false, null, "refusing to send the ntfy token over plain http to a non-loopback host");
-      headers.Authorization = `Bearer ${token}`;
-    }
+    let token: string;
+    try { token = fs.readFileSync(target.tokenFile, "utf8").trim(); } catch { return record(false, null, "the configured ntfy token file cannot be read"); }
+    if (!token) return record(false, null, "the configured ntfy token file is empty");
+    if (url.protocol !== "https:" && !loopback(url.hostname)) return record(false, null, "refusing to send the ntfy token over plain http to a non-loopback host");
+    headers.Authorization = `Bearer ${token}`;
   }
   try {
-    const res = await fetchImpl(url.href, { method: "POST", headers, body: alert.message.slice(0, 3000), signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchImpl(url.href, { method: "POST", headers, body: redactSecrets(alert.message).text.slice(0, 3000), redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
     await res.body?.cancel().catch(() => undefined); // the reply is not needed; never read it into memory
     return record(res.status >= 200 && res.status < 300, res.status);
   } catch (e) {
@@ -298,10 +313,16 @@ export interface TickOptions {
 export async function reportTick(o: TickOptions): Promise<{ status: StatusReport; sent: Array<AlertRecord & { error?: string }> }> {
   const log = o.log ?? (() => undefined);
   const stateFile = o.alertState ?? path.join(path.dirname(o.out), "alerts.json");
-  const state = readAlertState(stateFile);
+  const { state, source } = readAlertStateFile(stateFile);
   const now = o.now ?? new Date();
   let status = buildStatus({ home: o.home, now, timeZone: o.timeZone, prs: o.prs ?? null, lastAlert: state.lastAlert });
-  const { send, next } = plan(state, alertsFor(status, o.rules), status, { digestHour: o.digestHour });
+  const current = alertsFor(status, o.rules);
+  // First run (no state file): what is already true is recorded, not sent, so enabling the feature on a
+  // host with old finished runs does not page the owner once per run. Only the digest may go out.
+  if (source === "absent") { state.active = current.map((a) => a.key); if (current.length) log(`first run: ${current.length} existing condition(s) recorded without sending`); }
+  // A corrupt state file cannot say what was sent: everything active is sent again (a duplicate, never a loss).
+  if (source === "unreadable") log("alert state unreadable: every active condition is treated as new");
+  const { send, next } = plan(state, current, status, { digestHour: o.digestHour });
   const sent: Array<AlertRecord & { error?: string }> = [];
   if (o.ntfy) {
     const failed = new Set<string>();
@@ -319,8 +340,8 @@ export async function reportTick(o: TickOptions): Promise<{ status: StatusReport
     next.active = state.active.filter((k) => next.active.includes(k));
     next.digestDay = state.digestDay;
   }
-  writeJsonAtomic(stateFile, next);
+  writeJsonAtomic(stateFile, next, { mode: 0o600 });
   status = { ...status, lastAlert: next.lastAlert };
-  writeJsonAtomic(o.out, status);
+  writeJsonAtomic(o.out, status, { mode: 0o600 });
   return { status, sent };
 }

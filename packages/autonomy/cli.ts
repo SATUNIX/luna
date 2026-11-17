@@ -839,10 +839,11 @@ const commands: Record<string, Command> = {
    */
   async report(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["out", "ntfy-url", "ntfy-token-file", "time-zone", "digest-hour", "gh-repo", "prs-file", "alert-state", "test-event"], flags: ["json"] });
+    if (opts["ntfy-token-file"] && !opts["ntfy-url"]) throw new CliError("usage", "--ntfy-token-file needs --ntfy-url");
     const ntfy = opts["ntfy-url"] ? { url: opts["ntfy-url"], tokenFile: opts["ntfy-token-file"] } : null;
     if (opts["test-event"] !== undefined) {
       if (!ntfy) throw new CliError("usage", "--test-event needs --ntfy-url");
-      const alert: Alert = { key: "test", title: oneVisibleLine(opts["test-event"]), message: `Test of the Luna reporting line from ${os.hostname()}. No action needed.`, priority: 3, tags: ["test_tube"] };
+      const alert: Alert = { key: "test", title: oneVisibleLine(opts["test-event"]), message: "Test of the Luna reporting line. No action needed.", priority: 3, tags: ["test_tube"] };
       const r = await publish(ntfy, alert, { now: deps.now });
       return { data: { sent: r }, text: `${r.delivered ? "sent" : "NOT sent"}: ${r.title}${r.httpStatus !== null ? ` (HTTP ${r.httpStatus})` : ""}${r.error ? `: ${r.error}` : ""}`, exit: r.delivered ? 0 : 1 };
     }
@@ -854,7 +855,7 @@ const commands: Record<string, Command> = {
     let prs = null;
     if (opts["prs-file"]) prs = prsFromGh(parseJson(fs.readFileSync(opts["prs-file"], "utf8")));
     else if (opts["gh-repo"]) {
-      const r = spawnSync("gh", ["pr", "list", "--repo", opts["gh-repo"], "--state", "open", "--limit", "50", "--json", "number,title,headRefName,baseRefName,isDraft,url,statusCheckRollup"], { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: deps.env });
+      const r = spawnSync("gh", ["pr", "list", "--repo", opts["gh-repo"], "--state", "open", "--limit", "200", "--json", "number,title,headRefName,baseRefName,isDraft,url,statusCheckRollup"], { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: deps.env });
       // Pull requests are one part of the status; when gh fails they are reported as unknown (null), never as none.
       if (r.status === 0) { try { prs = prsFromGh(parseJson(r.stdout)); } catch { prs = null; } }
       else deps.stderr.write(`[pi-autonomy] report: gh pr list failed (exit ${String(r.status)}); open PRs are unknown this tick\n`);

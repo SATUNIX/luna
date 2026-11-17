@@ -7,6 +7,7 @@
 // model allowlist that also refuses OpenRouter's web-search features (screen()). The provider is
 // configuration, not code: OpenRouter reports cost in every response; any other
 // OpenAI-compatible provider is metered from token counts and the contract's price table.
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -308,16 +309,19 @@ export async function probeKeyLimit(config: RelayConfig, { keyFile, fetchImpl = 
   if ((config.provider ?? "openrouter") !== "openrouter") return null;
   const file = keyFile === null ? null : keyFile ?? path.join(path.dirname(config.meterFile ?? "/meter/usage.jsonl"), "key.json");
   try {
-    const res = await fetchImpl(`${config.upstream.replace(/\/$/, "")}/key`, { headers: { authorization: `Bearer ${config.apiKey}` }, signal: AbortSignal.timeout(15_000) });
+    const res = await fetchImpl(`${config.upstream.replace(/\/$/, "")}/key`, { headers: { authorization: `Bearer ${config.apiKey}` }, redirect: "error", signal: AbortSignal.timeout(15_000) });
     if (res.status !== 200) { await res.body?.cancel(); return null; }
     const text = await readCapped(res.body, 64 * 1024);
     if (text === null) return null;
     const limit = keyLimitFromReply(JSON.parse(text), now().toISOString());
     if (!limit) return null;
     if (file) {
-      const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(limit) + "\n");
-      fs.renameSync(tmp, file);
+      // An exclusive, unpredictable temp file with its mode set at creation, then an atomic rename (docs/security-standard.md).
+      const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(limit) + "\n", { flag: "wx", mode: 0o600 });
+        fs.renameSync(tmp, file);
+      } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
     }
     return limit;
   } catch { return null; }

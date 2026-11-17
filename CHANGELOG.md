@@ -85,10 +85,10 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
-- **Dependabot no longer proposes pi minor or major bumps for the image tool lockfiles.** The autonomy
+- **Dependabot no longer proposes pi bumps for the image tool lockfiles.** The autonomy
   and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
-  lockfile agrees, so such a bump could only be red; it is made by hand with the pin, as for the root
-  workspace. Patch updates still come through.
+  lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
+  pin, as for the root workspace.
 
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
   risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
@@ -99,20 +99,6 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 - **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
   blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
   no note and are cleared. `tests/autonomy-lean-smoke.ts`.
-
-### Fixed
-
-- **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
-  `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
-  dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only
-  set a flag; when the code under test spun without yielding, `timeout` and `kill` could not stop it
-  (three such runs used 75 CPU-minutes each on the development host). It now passes `signals: false`,
-  as the other in-process CLI tests do. The autonomy test helpers also put every scratch directory of
-  a test process under one root that is removed on exit, and the next test process removes the roots
-  of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
-  behind, and about 5,400 had built up. Tests only; no product change.
-### Changed
-
 - **The installer no longer loads pi-lens's four bundled skills, saving about 420 tokens in every
   first request.** pi lists each loaded skill's name and description in the system prompt, and
   `pi-lens` ships `pi-lens-ast-grep`, `pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule` and
@@ -162,6 +148,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after: `lite`
   3,596 to 3,564 (-32); the other four profiles are identical. `tests/effort-smoke.ts` covers every
   tier with and without a delegation tool.
+
+### Fixed
+
+- **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
+  `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
+  dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only
+  set a flag; when the code under test spun without yielding, `timeout` and `kill` could not stop it
+  (three such runs used 75 CPU-minutes each on the development host). It now passes `signals: false`,
+  as the other in-process CLI tests do. The autonomy test helpers also put every scratch directory of
+  a test process under one root that is removed on exit, and the next test process removes the roots
+  of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
+  behind, and about 5,400 had built up. Tests only; no product change.
 
 ## [0.4.0-beta.1]
 

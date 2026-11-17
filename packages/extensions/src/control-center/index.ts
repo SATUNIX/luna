@@ -329,11 +329,12 @@ export default function controlCenter(pi: ExtensionAPI): void {
     if (!ctx.hasUI || process.env.PI_KIT_INTERNAL_CHILD === "1") return;
     try {
       const stamp = firstRunStamp();
-      if (fs.existsSync(stamp)) return;
       fs.mkdirSync(path.dirname(stamp), { recursive: true });
+      // "wx" creates the stamp only if nothing exists there (no check-then-write race): an
+      // existing stamp throws EEXIST, which simply means the first run is already over.
       fs.writeFileSync(stamp, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: "wx" });
     } catch {
-      /* the card showing once more is harmless */
+      /* already stamped, or the card showing once more: both harmless */
     }
   });
 }

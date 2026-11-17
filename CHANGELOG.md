@@ -94,6 +94,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 - **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
   blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
   no note and are cleared. `tests/autonomy-lean-smoke.ts`.
+- **`self-improving` no longer carries `dual_review` and skill-forge's three tools until they are
+  used, 378 tokens off its first request.** They register inactive (`defaultActive: false`, honoured
+  by pi 1.x; an older pi leaves them active), following `workflow_status` and `workflow_control`:
+  `/review` wakes `dual_review`, and `/improve` wakes `skill_synthesise`, `skill_score` and
+  `skill_archive`. Only tools that are registered are ever added to the active set, and a pi without
+  tool control changes nothing. These four tools exist in no other profile, so no other profile
+  changes. Not included: `mem0_add`/`mem0_search` (the memory server is the default backend and no
+  event says when it is wanted) and the Conductor's `dispatch_specialist`/`dispatch_validator`
+  (`engagement` shares them, and its root agent needs them from its first turn). Measured on SRV02
+  with pi 1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `self-improving` 8,798 to 8,420 (-378, 50 to 46 tools); the other four profiles are identical.
+  `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
+  without tool control.
 
 ### Fixed
 

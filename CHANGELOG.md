@@ -8,59 +8,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
-## [0.4.0-beta.1]
-
-### Fixed
-
-- **`smoke:auto-commit` passes on a machine with no git identity.** The test gave its own git
-  commands an author and committer, but the extension commits through its own git calls with the
-  process environment, which had none. A developer machine infers an identity from the user and
-  host name, so the test passed locally; a CI runner has no identity and git refused the commit,
-  which turned shard 2 of `verify`, `coverage` and both `pi-compat` lanes red on the 0.4.0-beta.0
-  release. The test now sets the identity in its environment as well. Reproduced and pinned by
-  running `tests/auto-commit-smoke.ts` with `user.useConfigOnly=true` and no global config.
-- **The first-run stamp is written without a check-then-write race.** The control centre checked
-  whether the stamp existed and then wrote it; CodeQL flagged the window between the two as a file
-  system race. The write already used the create-only `wx` flag, so the check is gone and an
-  existing stamp simply ends the first run (`EEXIST`). Behaviour is unchanged
-  (`tests/control-center-smoke.ts`).
-
-## [0.4.0-beta.0]
-
 ### Added
 
-- **`/status`, and `/clear` that clears.** `/status` prints the Doctor checks as one line each,
-  ending in the command for detail. `/clear` used to print a lecture saying nothing was cleared; it
-  now starts a new session after a confirm, and `/clear --handoff` appends the last asks (secrets redacted) and tools
-  to `HANDOFF.md` first. The guide text is deleted. Slash-command output and bad-argument errors go
-  through one `say`/`usageError` helper (`packages/core/shared/say.ts`), adopted in session-helpers
-  and control-center only; other commands move as they are touched. `tests/session-commands-smoke.ts`.
-- **Every prompt template has a one-line description.** pi fell back to the heading ("# Code Plan"),
-  so the `/` menu showed no usable description for any of the 23 templates. `npm run verify` now
-  fails a template without a `description:` of 70 characters or fewer. The `/skill:*` commands fold
-  behind the existing `/skills` entry in the curated menu (`commandMenu: "all"` shows them again).
-- **A first-run card on the launch screen.** Until the first prompt is sent, the launch screen shows
-  how to get a model (`/login` or an API key, `/llama` for a local one) and one prompt to try; the
-  first prompt writes `pi-kit/first-run.json` and the card never returns. `tests/control-center-smoke.ts`.
-- **`/update undo`.** Before its first step `/update` now writes an update journal (kit delivery,
-  source, version, commit and channel; pi version; profile; a copy of the configuration files it can
-  change, never `.env`), and refuses to start without it. `/update undo` reinstalls the recorded Luna
-  version and restores those files byte for byte, and is offered when a step fails. pi itself and
-  linked packages are not rolled back. After an update, one line names stored settings migrated from
-  an old name (profile, firewall policy, extension, security level `relaxed`); it goes at 0.5.0.
-  `tests/kit-update-smoke.ts`.
-- **`luna --bare` and `luna exec`.** A new `luna` command (installed by the npm package; a checkout
-  runs `node packages/core/luna.ts`). `luna --bare` starts pi with no Luna extensions, skills, prompt
-  templates or themes, to tell whether a misbehaving session is Luna's doing. `luna exec <prompt | ->`
-  is one headless run: the final answer on stdout, progress on stderr, `--json` for pi's event stream,
-  `--ephemeral`, and `--max-turns`, `--max-cost` and `--timeout` as the ceiling `/away` uses (exit
-  code 13 when parked). An extension removed in `overrides.json` (`extensions.remove`) is now applied
-  when you start with `luna`, and `/doctor` lists it and flags one still loaded. Not covered:
-  `--output-schema` and a per-run `--profile` (see `docs/headless.md`). `tests/luna-cli-smoke.ts`.
-- **Project trust is pinned by a test.** `tests/project-trust-smoke.ts` proves, for every
-  profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
-  (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
-  Luna builds no trust prompt of its own.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
@@ -134,6 +83,71 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   429 used to be an ordinary retry for ever and now parks on the second failure in a row. Child agents
   share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
 
+### Fixed
+
+- **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
+  `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
+  dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only
+  set a flag; when the code under test spun without yielding, `timeout` and `kill` could not stop it
+  (three such runs used 75 CPU-minutes each on the development host). It now passes `signals: false`,
+  as the other in-process CLI tests do. The autonomy test helpers also put every scratch directory of
+  a test process under one root that is removed on exit, and the next test process removes the roots
+  of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
+  behind, and about 5,400 had built up. Tests only; no product change.
+
+## [0.4.0-beta.1]
+
+### Fixed
+
+- **`smoke:auto-commit` passes on a machine with no git identity.** The test gave its own git
+  commands an author and committer, but the extension commits through its own git calls with the
+  process environment, which had none. A developer machine infers an identity from the user and
+  host name, so the test passed locally; a CI runner has no identity and git refused the commit,
+  which turned shard 2 of `verify`, `coverage` and both `pi-compat` lanes red on the 0.4.0-beta.0
+  release. The test now sets the identity in its environment as well. Reproduced and pinned by
+  running `tests/auto-commit-smoke.ts` with `user.useConfigOnly=true` and no global config.
+- **The first-run stamp is written without a check-then-write race.** The control centre checked
+  whether the stamp existed and then wrote it; CodeQL flagged the window between the two as a file
+  system race. The write already used the create-only `wx` flag, so the check is gone and an
+  existing stamp simply ends the first run (`EEXIST`). Behaviour is unchanged
+  (`tests/control-center-smoke.ts`).
+
+## [0.4.0-beta.0]
+
+### Added
+
+- **`/status`, and `/clear` that clears.** `/status` prints the Doctor checks as one line each,
+  ending in the command for detail. `/clear` used to print a lecture saying nothing was cleared; it
+  now starts a new session after a confirm, and `/clear --handoff` appends the last asks (secrets redacted) and tools
+  to `HANDOFF.md` first. The guide text is deleted. Slash-command output and bad-argument errors go
+  through one `say`/`usageError` helper (`packages/core/shared/say.ts`), adopted in session-helpers
+  and control-center only; other commands move as they are touched. `tests/session-commands-smoke.ts`.
+- **Every prompt template has a one-line description.** pi fell back to the heading ("# Code Plan"),
+  so the `/` menu showed no usable description for any of the 23 templates. `npm run verify` now
+  fails a template without a `description:` of 70 characters or fewer. The `/skill:*` commands fold
+  behind the existing `/skills` entry in the curated menu (`commandMenu: "all"` shows them again).
+- **A first-run card on the launch screen.** Until the first prompt is sent, the launch screen shows
+  how to get a model (`/login` or an API key, `/llama` for a local one) and one prompt to try; the
+  first prompt writes `pi-kit/first-run.json` and the card never returns. `tests/control-center-smoke.ts`.
+- **`/update undo`.** Before its first step `/update` now writes an update journal (kit delivery,
+  source, version, commit and channel; pi version; profile; a copy of the configuration files it can
+  change, never `.env`), and refuses to start without it. `/update undo` reinstalls the recorded Luna
+  version and restores those files byte for byte, and is offered when a step fails. pi itself and
+  linked packages are not rolled back. After an update, one line names stored settings migrated from
+  an old name (profile, firewall policy, extension, security level `relaxed`); it goes at 0.5.0.
+  `tests/kit-update-smoke.ts`.
+- **`luna --bare` and `luna exec`.** A new `luna` command (installed by the npm package; a checkout
+  runs `node packages/core/luna.ts`). `luna --bare` starts pi with no Luna extensions, skills, prompt
+  templates or themes, to tell whether a misbehaving session is Luna's doing. `luna exec <prompt | ->`
+  is one headless run: the final answer on stdout, progress on stderr, `--json` for pi's event stream,
+  `--ephemeral`, and `--max-turns`, `--max-cost` and `--timeout` as the ceiling `/away` uses (exit
+  code 13 when parked). An extension removed in `overrides.json` (`extensions.remove`) is now applied
+  when you start with `luna`, and `/doctor` lists it and flags one still loaded. Not covered:
+  `--output-schema` and a per-run `--profile` (see `docs/headless.md`). `tests/luna-cli-smoke.ts`.
+- **Project trust is pinned by a test.** `tests/project-trust-smoke.ts` proves, for every
+  profile, that pi's own project trust keeps a hostile repository's `.pi` extension from loading
+  (with a trusted control run), and `docs/threat-model.md` says what it does and does not cover.
+  Luna builds no trust prompt of its own.
 - **One ceiling for unattended work, and `/away`.** Turns, money and wall time are one object, and
   the first limit reached parks the work (stopped, state kept, never a failure). An autonomous run's
   budget checks use it unchanged in behaviour; a headless run sets `PI_KIT_CEILING_TURNS`,

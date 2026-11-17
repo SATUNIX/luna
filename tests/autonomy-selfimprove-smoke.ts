@@ -60,6 +60,9 @@ const mirrorGit = (rt: HarnessRuntime): NonNullable<HarnessRuntime["repo"]["g"]>
 const cliRun = async (h: Harness, argv: readonly string[]): Promise<{ code: number; out: string; err: string }> => {
   const out: string[] = []; const err: string[] = [];
   const code = await main(argv, {
+    // In-process: never install process-wide SIGINT/SIGTERM handlers. A handler only sets a flag, so a test that
+    // spins on microtasks could then not be stopped by timeout(1) or kill (2026-11-13: three runs, 75+ CPU-minutes each).
+    signals: false,
     home: h.home,
     now: () => new Date(h.clock.now),
     stdout: { write: (s: string): number => out.push(s) },

@@ -144,6 +144,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `lite` 3,650 to 3,596 (-54), `balanced` 5,973 to 5,829 (-144), `long-horizon` 8,225 to 8,069
   (-156), `self-improving` 8,954 to 8,798 (-156), `engagement` 8,430 to 8,274 (-156).
 
+- **`lite` is no longer told how to delegate, 32 tokens off its first request.** The effort block
+  carried "Delegate only bounded work...", "delegate selectively" and the child and scout counts,
+  although `lite` registers no delegation tool. The policy files
+  (`packages/extensions/src/effort/policy/*.md`) now wrap that wording in
+  `{{delegation}}...{{/delegation}}`, and the `effort` extension keeps it only while one of
+  `subagent`, `workflow_run`, `workflow`, `dual_review` or `dispatch_specialist` is registered (a pi
+  that cannot list tools keeps the full text). The sentence that effort sets depth and breadth, not
+  reasoning or permissions, and the tier limits are unchanged, and `balanced`, `long-horizon`,
+  `self-improving` and `engagement` render the same prompt as before. Measured on SRV02 with pi
+  1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after: `lite`
+  3,596 to 3,564 (-32); the other four profiles are identical. `tests/effort-smoke.ts` covers every
+  tier with and without a delegation tool.
+
 ## [0.4.0-beta.1]
 
 ### Fixed

@@ -330,11 +330,20 @@ export function tierLabel(policy: EffortPolicy, id: string): string {
   return tier ? `${tier.code} ${tier.label}` : id;
 }
 
+/**
+ * The policy files wrap wording about starting child agents in `{{delegation}}...{{/delegation}}`.
+ * With a delegation tool registered the markers are dropped and the wording stays; without one
+ * (the lite profile) the wording is dropped too, because nothing could ever act on it.
+ */
+export function applyDelegation(text: string, delegation: boolean): string {
+  return text.replace(/\{\{delegation\}\}([\s\S]*?)\{\{\/delegation\}\}/g, (_match, inner: string) => (delegation ? inner : ""));
+}
+
 /** The text injected for a tier: the shared policy, then the tier's own contribution. */
-export function renderPrompt(policy: EffortPolicy, id: string, dir = policyDir()): string {
+export function renderPrompt(policy: EffortPolicy, id: string, dir = policyDir(), opts: { delegation?: boolean } = {}): string {
   const tier = tierOf(policy, id) ?? defaultTier(policy);
   const read = (file: string) => fs.readFileSync(path.join(dir, file), "utf8").trim();
-  return `${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`;
+  return applyDelegation(`${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`, opts.delegation ?? true);
 }
 
 /**

@@ -528,6 +528,20 @@ export default function (pi: ExtensionAPI) {
    * Whether the workflow tool is in the active tool set (the standing block is shown only then), or
    * is out of it only because this extension hid it at E1 and will restore it next turn.
    */
+  /**
+   * Whether any model-launchable delegation tool is registered (active or not: E1 hides them but
+   * they come back). A profile with none, such as lite, is not told how to delegate. Assumed true
+   * when the pi in use cannot list its tools, which keeps the full wording.
+   */
+  function delegationRegistered(): boolean {
+    try {
+      if (typeof pi.getAllTools !== "function") return true;
+      return pi.getAllTools().some((tool) => DELEGATION_TOOLS.includes(tool.name));
+    } catch {
+      return true;
+    }
+  }
+
   function workflowToolActive(): boolean {
     try {
       return pi.getActiveTools().includes(WORKFLOW_TOOL) || hidden.has(WORKFLOW_TOOL);
@@ -760,7 +774,7 @@ export default function (pi: ExtensionAPI) {
     syncDelegationTools();
     notify();
     const stepTier = isChildProcess() ? normalizeTier(policy, process.env[PROMPT_TIER_ENV]) : null;
-    let body = stepTier && stepTier !== active.tier ? renderStepPrompt(policy, stepTier) : renderPrompt(policy, active.tier);
+    let body = stepTier && stepTier !== active.tier ? renderStepPrompt(policy, stepTier) : renderPrompt(policy, active.tier, undefined, { delegation: delegationRegistered() });
     const standingShown = standing.on && workflowToolActive();
     if (standingShown) {
       try {

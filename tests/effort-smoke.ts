@@ -302,7 +302,7 @@ const tests: Record<string, () => void | Promise<void>> = {
   "each tier injects the shared policy once plus its own contribution, and nothing about permissions or models": async () => {
     const w = world();
     try {
-      const shared = fs.readFileSync(path.join(path.resolve("packages/extensions/src/effort/policy"), "shared.md"), "utf8").trim();
+      const shared = fs.readFileSync(path.join(path.resolve("packages/extensions/src/effort/policy"), "shared.md"), "utf8").trim().replace(/\{\{\/?delegation\}\}/g, "");
       for (const tier of corePolicy.tiers) {
         const b = boot();
         saveDefault(tier.id);
@@ -314,6 +314,32 @@ const tests: Record<string, () => void | Promise<void>> = {
         assert.ok(out.startsWith("BASE PROMPT"), "the base prompt is kept");
         assert.ok(!/thinking level|switch model|grant|bypass/i.test(out.replace(shared, "")), `${tier.id}: tier text says nothing about models or permissions`);
       }
+    } finally { w.cleanup(); }
+  },
+
+  "the delegation wording is emitted only when a delegation tool is registered": async () => {
+    const w = world();
+    try {
+      const wording = /Delegate only bounded|delegate selectively|children at once|Delegation is rare|workflow_run/;
+      for (const tier of corePolicy.tiers.filter((t) => t.id !== "minimal")) {
+        for (const [names, delegating] of [[["read", "bash", "edit"], false], [["read", "subagent"], true], [["read", "workflow_run"], true], [["dispatch_specialist"], true]] as const) {
+          const b = boot();
+          Object.assign(b.pi.api, { getAllTools: () => names.map((name) => ({ name })) });
+          saveDefault(tier.id);
+          await b.start();
+          const out = (await b.turn("BASE PROMPT")).systemPrompt;
+          assert.ok(!out.includes("{{") && !out.includes("}}"), `${tier.id}: no marker leaks into the prompt`);
+          assert.ok(out.includes(`Tier: ${tier.code} ${tier.label}.`) && out.includes("not reasoning or permissions") && out.includes("Never invent work"), `${tier.id}: the rest of the block is intact`);
+          assert.equal(wording.test(out), delegating, `${tier.id} with [${names.join(", ")}]: delegation wording ${delegating ? "kept" : "dropped"}`);
+          if (!delegating) assert.ok(!/child|scout|delegat/i.test(out.replace(/^BASE PROMPT/, "")), `${tier.id}: no word about children, scouts or delegating without a delegation tool`);
+        }
+      }
+      // A pi that cannot list its tools keeps the full wording, exactly as before.
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      const out = (await b.turn("BASE PROMPT")).systemPrompt;
+      assert.ok(wording.test(out) && out.includes("Up to two children at once and three in total, at most one of them a scout."), "no tool listing: the wording stays");
     } finally { w.cleanup(); }
   },
 

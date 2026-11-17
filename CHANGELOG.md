@@ -106,6 +106,29 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   a test process under one root that is removed on exit, and the next test process removes the roots
   of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
   behind, and about 5,400 had built up. Tests only; no product change.
+### Changed
+
+- **The installer no longer loads pi-lens's four bundled skills, saving about 420 tokens in every
+  first request.** pi lists each loaded skill's name and description in the system prompt, and
+  `pi-lens` ships `pi-lens-ast-grep`, `pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule` and
+  `pi-lens-write-tree-sitter-rule`, so `balanced`, `long-horizon`, `self-improving` and
+  `engagement` paid for them before the first word was typed. A companion in
+  `packages/core/sources.json` can now carry `skills`, pi package-filter patterns the installer
+  writes onto the companion's `settings.json` entry (`install.ts` step 3, `applyCompanionFilters`
+  in `packages/core/lib/settings.ts`); pi-lens declares `"skills": []`. Nothing is keyed on a
+  package name. The filter is also written for a companion registered before (a `/profile`
+  switch or `/update` adds it), and an entry that already has a `skills` key is never rewritten,
+  so setting your own filter on the entry (for example `"skills": ["+skills/pi-lens-ast-grep"]`)
+  brings the skills back and keeps them (`docs/supply-chain.md`, Companion installs). pi-lens's
+  13 tools and its diagnostics are unchanged. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `balanced` 6,392 to 5,973 (-419), `long-horizon` 8,652 to 8,225 (-427), `self-improving` 9,385
+  to 8,954 (-431), `engagement` 8,853 to 8,430 (-423); `lite` has no pi-lens and stays at 3,650;
+  tool definitions are identical, so the whole change is in the system prompt.
+  `tests/companion-integrity-smoke.ts` runs the real installer with a fake `pi` (a fresh
+  registration, one already registered, one with the operator's own filter) and
+  `tests/install-profile-filter-smoke.ts` covers `applyCompanionFilters`.
 
 ## [0.4.0-beta.1]
 

@@ -8,6 +8,9 @@
  *   - after the install, the integrity npm recorded in pi's npm-root package-lock.json must equal
  *     the pin: a different value removes the package again and fails the install; a matching one
  *     passes; a root without a lockfile entry is a warning.
+ *   - a skill filter declared for a companion in sources.json (`skills`, pi-lens's is `[]`) is written
+ *     onto its settings.json entry, whether the run registered the companion or it was registered
+ *     already, and an entry that has a filter of its own keeps it.
  * Hermetic: the real install.ts runs against a fake `pi` that logs its argv and environment and
  * copies a prepared lockfile into the npm root. No network, no real npm.
  */
@@ -85,7 +88,7 @@ try {
   assert.ok(!version.ok && /npm installed 1\.2\.4/.test(version.reason), "a different version fails");
 
   // --- the real installer -------------------------------------------------------------------------
-  const installRun = (label: string, lock: string | null): { result: SpawnSyncReturns<string>; log: string[]; agentDir: string } => {
+  const installRun = (label: string, lock: string | null, seed?: object): { result: SpawnSyncReturns<string>; log: string[]; agentDir: string } => {
     const dir = path.join(work, label);
     const agentDir = path.join(dir, "agent");
     const binDir = path.join(dir, "bin");
@@ -93,11 +96,15 @@ try {
     const logPath = path.join(dir, "pi-calls.log");
     const lockPath = path.join(dir, "prepared-lock.json");
     if (lock !== null) fs.writeFileSync(lockPath, lock);
-    // The fake pi logs "<argv> | ignore-scripts=<value>" and, for an install, copies the prepared lockfile into pi's npm root.
+    if (seed !== undefined) fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(seed));
+    // The fake pi logs "<argv> | ignore-scripts=<value>" and, for an install, copies the prepared lockfile into pi's npm root
+    // and registers an npm source as the bare string `pi install` writes (a source already listed is left as it is).
+    const register = `const fs=require("fs"),p=process.env.PI_CODING_AGENT_DIR+"/settings.json";let s={};try{s=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}s.packages=s.packages||[];if(!s.packages.some(e=>(e.source||e)===process.argv[1]))s.packages.push(process.argv[1]);fs.writeFileSync(p,JSON.stringify(s))`;
     fs.writeFileSync(path.join(binDir, "pi"), [
       "#!/bin/sh",
       `printf '%s | ignore-scripts=%s\\n' "$*" "\${npm_config_ignore_scripts:-unset}" >> "$PI_FAKE_LOG"`,
       `if [ "$1" = install ] && [ -f "$PI_FAKE_LOCK" ]; then mkdir -p "$PI_CODING_AGENT_DIR/npm" && cp "$PI_FAKE_LOCK" "$PI_CODING_AGENT_DIR/npm/package-lock.json"; fi`,
+      `if [ "$1" = install ]; then case "$2" in npm:*) '${process.execPath}' -e '${register}' "$2";; esac; fi`,
       "exit 0",
       "",
     ].join("\n"));
@@ -127,6 +134,32 @@ try {
   for (const l of companionInstalls) assert.match(l, /\| ignore-scripts=true$/, `a companion install runs with lifecycle scripts off: ${l}`);
   for (const l of good.log.filter((x) => !companionInstalls.includes(x))) assert.match(l, /\| ignore-scripts=unset$/, `only companion installs get the variable: ${l}`);
   assert.ok(!good.log.some((l) => l.startsWith("remove ")), "matching integrities remove nothing");
+
+  // The skill filter sources.json declares goes onto the registered entry: pi-lens loads none of its four
+  // bundled skills (they cost every first request about 420 tokens); a companion with no declared filter stays a bare source.
+  assert.deepEqual(external.find((e) => e.name === "pi-lens")?.skills, [], "sources.json declares pi-lens's skill filter as none");
+  const registeredIn = (agentDir: string): unknown[] => {
+    const settings: unknown = parseJson(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"));
+    return isRecord(settings) && Array.isArray(settings.packages) ? settings.packages : [];
+  };
+  const expectedEntry = (e: ExternalSource): unknown => (e.skills === undefined ? e.source : { source: e.source, skills: e.skills });
+  assert.deepEqual(registeredIn(good.agentDir).filter((p) => installed.some((e) => (isRecord(p) ? p.source : p) === e.source)), installed.map(expectedEntry), "each installed companion is registered with the filter sources.json declares for it");
+  assert.match(good.result.stdout, /pi-lens: skill filter applied/);
+
+  // Registered before this run (a kit update re-applying its profile): no reinstall, but the filter is added.
+  const lens = installed.find((e) => e.name === "pi-lens");
+  assert.ok(lens);
+  const upgraded = installRun("upgrade", lockFor(installed.map(pinned)), { packages: [lens.source] });
+  assert.equal(upgraded.result.status, 0, `${upgraded.result.stdout}\n${upgraded.result.stderr}`);
+  assert.ok(!upgraded.log.some((l) => l.startsWith(`install ${lens.source}`)), "a companion registered at its pin is not reinstalled");
+  assert.deepEqual(registeredIn(upgraded.agentDir).find((p) => isRecord(p) && p.source === lens.source), { source: lens.source, skills: [] }, "and still gets the filter");
+
+  // An entry that has a filter of its own keeps it: this is how an operator opts a companion's skills back in.
+  const optedIn = { source: lens.source, skills: ["+skills/pi-lens-ast-grep"] };
+  const kept = installRun("opted-in", lockFor(installed.map(pinned)), { packages: [optedIn] });
+  assert.equal(kept.result.status, 0, `${kept.result.stdout}\n${kept.result.stderr}`);
+  assert.deepEqual(registeredIn(kept.agentDir).find((p) => isRecord(p) && p.source === lens.source), optedIn, "an operator's own skills filter is left alone");
+  assert.doesNotMatch(kept.result.stdout, /pi-lens: skill filter applied/);
 
   const target = installed[0];
   assert.ok(target);

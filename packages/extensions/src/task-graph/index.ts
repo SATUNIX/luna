@@ -293,7 +293,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_next",
     label: "Task: next",
-    description: "Return the next actionable task: a pending task whose dependencies are all done. Claims it (marks in_progress) so a second call does not hand out the same task twice. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.",
+    description: "Claim the next actionable task (pending, dependencies done) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const result = withGraphLock(ctx.cwd, () => {

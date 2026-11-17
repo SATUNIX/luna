@@ -130,6 +130,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   registration, one already registered, one with the operator's own filter) and
   `tests/install-profile-filter-smoke.ts` covers `applyCompanionFilters`.
 
+- **Shorter tool descriptions for the memory, skill and verification tools, 54 to 156 tokens off
+  every first request.** `memory_save`, `memory_search`, `memory_forget`, `skill_search` (its
+  description, prompt snippet and guideline line), `verify_completion`, `verdict_status` and
+  `task_next` drop restatement and keep every instruction: when to call, what comes back, and the
+  trigger words a router or a model matches on. The `type` and `scope` parameters of the vault's
+  memory tools are now a single string `enum` instead of an `anyOf` of literals, which is also what
+  Google-style providers need; the reference generator (`packages/core/reference.ts`) reads the
+  `StringEnum` helper, so `docs/reference.md` still lists the allowed values. Nothing about the
+  safety text or the verdict rules changes. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `lite` 3,650 to 3,596 (-54), `balanced` 5,973 to 5,829 (-144), `long-horizon` 8,225 to 8,069
+  (-156), `self-improving` 8,954 to 8,798 (-156), `engagement` 8,430 to 8,274 (-156).
+
 ## [0.4.0-beta.1]
 
 ### Fixed

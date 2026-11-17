@@ -1348,12 +1348,12 @@ export default function (pi: ExtensionAPI) {
 			name: "verify_completion",
 			label: "Verify: completion review",
 			description:
-				"Run an independent check that the task is done. It runs the project check command if one exists, then a read-only reviewer that compares the repository against the goal, todo list, task graph, and recent user requests. Use it before you report that the work is complete. It records the result on the verifier board.",
+				"Independent check that the task is done: runs the project check command if any, then a read-only reviewer compares the repository against the goal, todos, task graph and recent requests. Use it before reporting the work complete. Records the result on the verifier board.",
 			parameters: Type.Object({
 				focus: Type.Optional(
 					Type.String({
 						description:
-							"The acceptance criteria or scope to check. Leave empty to use the goal, todos, and recent requests.",
+							"Acceptance criteria or scope to check; empty uses the goal, todos and recent requests.",
 					}),
 				),
 			}),

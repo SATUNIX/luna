@@ -170,8 +170,9 @@ function property(obj: TypeScript.ObjectLiteralExpression, key: string): TypeScr
 
 /** `Type.X(...)` -> a short type name and the options' description, unwrapping Optional. */
 function describeSchema(node: TypeScript.Expression, scope: ConstScope): { type: string; optional: boolean; description: string } {
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-    const kind = node.expression.name.text;
+  // `Type.X(...)`, or the local `StringEnum([...], { description })` helper (one "enum" array on the wire).
+  if (ts.isCallExpression(node) && (ts.isPropertyAccessExpression(node.expression) || (ts.isIdentifier(node.expression) && node.expression.text === "StringEnum"))) {
+    const kind = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : (node.expression as TypeScript.Identifier).text;
     const args = node.arguments;
     if (kind === "Optional" && args[0]) return { ...describeSchema(args[0], scope), optional: true };
     const options = [...args].reverse().find((a): a is TypeScript.ObjectLiteralExpression => ts.isObjectLiteralExpression(a));

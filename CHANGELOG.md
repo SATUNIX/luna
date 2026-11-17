@@ -8,6 +8,105 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Added
+
+- **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
+  in the audited release were routine cycle records (30%), and the five model-written files per cycle
+  (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
+  next cycle. Cause: the cycle's only record was committed prose on the product branch. Fix: the host
+  writes a receipt per cycle to the run state home (`steps/<NN>/receipt.json`: items, head and base,
+  changed paths, gate and review results, cost, attempt lineage) and the worker writes one short note to
+  `/state/cycle-note.md` (read to 4,000 characters, never through a link, cleared per cycle). The cycle
+  prompt no longer asks for a report, plan, verification record, review, handoff or journal line; the
+  merge review, the manager and the next cycle's briefing read the note and the receipt instead, and
+  the review's "report claims work the diff lacks" rule now reads the note. The charter (seed and
+  `autonomy/CHARTER.md`) and the prompt were migrated in the same change, and the journal check holds a
+  repository with no new reports valid while still holding old ones to their lines. Breaking: new
+  streams are no longer seeded with `HANDOFF.md`; `BookkeepingPaths` has no `handoff`; a cycle that
+  finds nothing commits nothing, so it is `completed`, gate skipped, not merged (`no commits`), and
+  still counts toward `nothingFoundToStop`. Migration: none for committed history or run state (new
+  files only); a worker that still commits a `report.md` on a resumed cycle is honoured. Not
+  covered: the receipt is not signed and a lost state home loses the records. The plan for durable
+  task state, leases, an outbox, event-driven integration and the flagship is in `docs/future-work.md`.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
+- **A lean worker brief, risk-tiered review and one repair round for autonomous cycles.** The
+  worker prompt (`packages/autonomy/prompts/cycle.md`) is a task brief: work directly, delegate only
+  an isolated question or independent package, no compulsory scouts or per-item and whole-diff
+  reviewers, never search for unrelated work, submit the head and a short note and stop. It no
+  longer asks for `plan.md`, `review.md` or `verify.md`, and its claim that the full suite takes ten
+  minutes or more is replaced by the measured four. The host classifies each cycle R0 to R3 from the
+  paths it actually changed (`lib/risk.ts`): R0 (prose and static files) is reviewed in full by
+  default and skips the model only behind the new `templateOptions.integration.r0Review` switch; R1
+  gets the one review; R2 (recovery, concurrency, persistence, shared-interface, authorisation) gets
+  the same review plus one specialist question it must answer; R3 (permissions, budgets, credentials,
+  the charter, gate policy, release) is refused for the owner/steward route unless
+  `allowControlChanges` is on. Unknown or unclassifiable paths escalate. A board item that was
+  assigned and did not merge twice (the ordinary attempt and one repair) is no longer offered, and
+  the reason is recorded in `selfImprove.itemAttempts`. The worker session runs at low thinking
+  (`PI_THINKING`, also pi's `defaultThinkingLevel` in the run's agent state, so children start low;
+  medium for planning and implementation only is not enforced), and the host's manager and review
+  calls ask for low reasoning with a 2,048 and 4,096 token output cap. Breaking for operators who lean on the old cycle files: the merge review now sees no
+  `verify.md` unless a worker still writes one, and a cycle that edits release, gate-policy,
+  permission or budget files is refused where the review alone used to judge it; list such work in
+  proposals or set `allowControlChanges`. No migration for run state: the new fields are optional.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
+- **Autonomous cycles never start on a red base, stop paying for oversize diffs, and idle for free.**
+  Finding: the audit put about $11 of cycle spend on cycles started on a red base, $4 on diffs over the
+  review budget (found only after the full gate), and every empty look at an exhausted backlog cost a whole
+  worker session. Cause: nothing gated the base, the diff cap was checked only at the merge decision, and
+  the never-idle fallback sent a worker to scout. Fix: before a fresh cycle the host gates the base unless
+  that head already passed (`lib/preflight.ts`) and classifies a failure from its output: provider or host
+  trouble backs off with no model call and parks as `waiting_provider`, a check that cannot run asks a
+  person, a red product base gets at most two host-built repair cycles (no board work) and then asks a person
+  (`base-red`), and only a failure the operator lists in `templateOptions.knownFlakes` is confirmed with one
+  more run that keeps the first failure. An over-budget diff is refused before the acceptance gate and
+  the review; a cycle whose diff holds only this run's records merges on `Outcome: nothing found` and is
+  refused for any other claim, without a model call. An empty queue (no offered board item, no
+  failing gate, nothing carried over) sleeps `templateOptions.emptyQueueSleepMinutes` (default 15) with no model
+  call, and the prompt no longer tells a worker to look for work. Breaking: a run whose base fails its
+  checks now stops after two repair cycles instead of cycling on, and a run without a board ends as
+  `backlog_exhausted` once its `autonomy/BACKLOG.md` has no open rows. Migration: none for run state (new fields
+  are optional); list known flaky checks in `templateOptions.knownFlakes`. Not covered: the failure
+  classes are patterns on the check output, so an unusual infrastructure failure is treated as product. `tests/autonomy-preflight-smoke.ts`.
+
+- Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` can continue once the budget is raised (`reconfigure` for the run budget, then `resume --answer`); a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
+
+- **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and
+  host-call meter row carries the run, cycle and role (worker, manager, review); an error, aborted,
+  non-200 or usage-less reply is an unresolved liability row instead of a gap; each `cycle.json`
+  records the contract digest, the limits in force and its spend by role. The relay counts the host's
+  manager and review spend toward its stop and starts from the ledgers on disk. A 402 (or the relay's
+  budget stop) parks the run as `waiting_budget`; a 403 or a persistent 429 as `waiting_provider`,
+  recorded on the blocker, in `outcome.md` and in the status listing. Not breaking: new fields only;
+  429 used to be an ordinary retry for ever and now parks after five failed replies in a row (a 403 on the second). Child agents
+  share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
+
+### Changed
+
+- **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
+  risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
+  delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish
+  checks, `packages/kit/profiles/`, a Dockerfile, or the autonomy modules that build the worker's
+  sandbox and read its output got a single review. They are now R3 (refused for the owner or steward
+  route unless `allowControlChanges` is on). Stricter only. `tests/autonomy-lean-smoke.ts`.
+- **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
+  blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
+  no note and are cleared. `tests/autonomy-lean-smoke.ts`.
+
+### Fixed
+
+- **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
+  `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
+  dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only
+  set a flag; when the code under test spun without yielding, `timeout` and `kill` could not stop it
+  (three such runs used 75 CPU-minutes each on the development host). It now passes `signals: false`,
+  as the other in-process CLI tests do. The autonomy test helpers also put every scratch directory of
+  a test process under one root that is removed on exit, and the next test process removes the roots
+  of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
+  behind, and about 5,400 had built up. Tests only; no product change.
+
 ## [0.4.0-beta.1]
 
 ### Fixed

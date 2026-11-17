@@ -54,7 +54,12 @@ export interface Blocker {
   method: DialogMethod | "provider" | "review";
   question: string;
   options: string[];
+  /** A provider or budget refusal: what the run is waiting for (set by providerBlocker). */
+  waiting?: WaitingReason;
 }
+
+/** Why a run parked on a provider refusal: the money (402, the key's or the run's budget) or the provider (403, persistent 429). */
+export type WaitingReason = "waiting_budget" | "waiting_provider";
 
 /** The reply sent back to pi for one extension_ui_request. */
 export type UiResponse =
@@ -189,15 +194,39 @@ export function activityLine(ev: RpcFrame & { readonly at?: number }): string | 
   }
 }
 
-/** The count of clampable credit failures in a row for one worker session, kept by the caller. */
+/** The counts of provider failures in a row for one worker session, kept by the caller. */
 export interface ProviderLimitWatch {
+  /** Clampable credit failures (a 402 naming what the account can afford) in a row. */
   clamped: number;
+  /** Rate-limit or forbidden replies (429, 403) in a row. */
+  refused?: number;
+}
+
+/** The relay's own refusals say what they are; a 403 from the relay is not the provider refusing the key. */
+const RELAY_REFUSAL = /only inference requests are allowed|not allowed for this run|online model variants are not allowed/i;
+const RELAY_BUDGET = /run budget exhausted/i;
+const FORBIDDEN = /(?<![a-z0-9])403(?![a-z0-9])|\bforbidden\b|key (?:is )?(?:disabled|revoked|invalid)|not authori[sz]ed for this (?:key|model)/i;
+
+/** Consecutive failed assistant messages with a rate limit before the run parks (a retry that gave up parks at once). */
+const RATE_LIMIT_RUN = 5;
+
+/** What a failure message means for parking: the reason to wait, and whether one occurrence is enough, or null when it is an ordinary failure. */
+export function limitKind(message: string): { waiting: WaitingReason; clampTo?: number | undefined; terminalAtOnce: boolean; consecutive?: number } | null {
+  if (RELAY_REFUSAL.test(message)) return null;
+  if (RELAY_BUDGET.test(message)) return { waiting: "waiting_budget", terminalAtOnce: true };
+  const failure = classifyProviderError(message);
+  if (failure.kind === "credit") return { waiting: "waiting_budget", clampTo: failure.clampTo, terminalAtOnce: true };
+  // A rate limit or a refused key may pass; the second in a row (or a retry that gave up) is a wait, not a failure to retry again.
+  // pi retries a throttled request itself and each attempt surfaces as a failed message, so a rate limit needs a long run of them (or a retry that gave up) before it parks; a refused key needs two.
+  if (failure.kind === "rate_limit") return { waiting: "waiting_provider", terminalAtOnce: false, consecutive: RATE_LIMIT_RUN };
+  if (FORBIDDEN.test(message)) return { waiting: "waiting_provider", terminalAtOnce: false };
+  return null;
 }
 
 /**
  * The provider's message when a frame reports a terminal credit or limit failure (an assistant
  * message that ended in error, or retries that gave up; a retry still under way may recover, so it does not count), else null. Such a session cannot make
- * progress, so the run parks as blocked with this reason instead of closing empty cycles.
+ * progress, so the run parks as blocked with this reason instead of closing empty cycles. `providerWaiting` says which wait it is.
  */
 export function providerLimitError(ev: RpcFrame, watch: ProviderLimitWatch = { clamped: 0 }): string | null {
   let message: unknown;
@@ -205,24 +234,37 @@ export function providerLimitError(ev: RpcFrame, watch: ProviderLimitWatch = { c
     const m = ev["message"];
     if (isRecord(m) && m["role"] === "assistant" && m["stopReason"] === "error") message = m["errorMessage"];
   } else if (ev.type === "auto_retry_end" && ev["success"] === false) message = ev["finalError"];
-  if (ev.type === "message_end" && isRecord(ev["message"]) && ev["message"]["role"] === "assistant" && ev["message"]["stopReason"] !== "error") watch.clamped = 0;
+  if (ev.type === "message_end" && isRecord(ev["message"]) && ev["message"]["role"] === "assistant" && ev["message"]["stopReason"] !== "error") { watch.clamped = 0; watch.refused = 0; }
   if (typeof message !== "string") return null;
-  const failure = classifyProviderError(message);
-  if (failure.kind !== "credit") return null;
+  const kind = limitKind(message);
+  if (!kind) return null;
   // A 402 that names what the account can afford is retried by the worker with a smaller output maximum
   // (finish-reason-retry), once. The retry may not happen (no output maximum in the request to lower, the
   // same figure again) so the decision is not left to it: the second such failure in a row parks the run,
   // as does a retry that gave up. A reply that succeeds in between starts the count again.
-  if (failure.clampTo !== undefined && ev.type !== "auto_retry_end") {
+  if (kind.clampTo !== undefined && ev.type !== "auto_retry_end") {
     watch.clamped += 1;
     if (watch.clamped < 2) return null;
+  }
+  if (!kind.terminalAtOnce && ev.type !== "auto_retry_end") {
+    if (ev.type !== "message_end") return null; // an update repeats the message its end settles: count each failure once
+    watch.refused = (watch.refused ?? 0) + 1;
+    if (watch.refused < (kind.consecutive ?? 2)) return null;
   }
   return redactProviderError(message, 300);
 }
 
-/** The blocker a provider limit failure parks the run with. */
+/** Which wait a provider failure message is (a message that is no limit failure counts as the provider). */
+export function providerWaiting(reason: string): WaitingReason {
+  return limitKind(reason)?.waiting ?? "waiting_provider";
+}
+
+/** The blocker a provider limit failure parks the run with: an explicit waiting reason, then the provider's message. */
 export function providerBlocker(reason: string): Blocker {
-  return { kind: "external", id: "provider-limit", method: "provider", question: `The model provider refused requests for credit or key limits: ${reason}. Top up or raise the key's limit, then resume with --answer "continue".`, options: [] };
+  const waiting = providerWaiting(reason);
+  const what = waiting === "waiting_budget" ? "credit or budget limits" : "rate or access limits";
+  const fix = waiting === "waiting_budget" ? "Top up or raise the key's or the run's limit (`reconfigure` for the run budget)" : "Wait for the provider or fix the key's access";
+  return { kind: "external", id: "provider-limit", method: "provider", waiting, question: `[${waiting}] The model provider refused requests for ${what}: ${reason}. ${fix}, then resume with --answer "continue".`, options: [] };
 }
 
 /** The blocker an unavailable reviewer parks a run with: the work is intact and was never judged. */

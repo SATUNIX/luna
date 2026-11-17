@@ -44,7 +44,7 @@ export interface ClaimBoardResult {
   board: StewardBoard;
 }
 
-export const WORK_PRECEDENCE = "(0) red gate / broken branch, (1) upstream merge conflict, (2) these board items in order, (3) HANDOFF carry-overs, (4) defects you find, (5) security, (6) tests/docs, (7) cleanup";
+export const WORK_PRECEDENCE = "(0) red gate / broken branch, (1) upstream merge conflict, (2) these board items in order, (3) carry-overs from the previous cycle's note, (4) defects you find, (5) security, (6) tests/docs, (7) cleanup";
 const ID = /^[A-Z]+-[0-9]{1,4}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -191,5 +191,5 @@ export function parseBoardReport(report: string | null): BoardReport[] {
  * budget). The precedence and the own-ideas rule are stated once in the prompt itself.
  */
 export function boardPrompt(board: StewardBoard): string {
-  return `\n\n## Assigned work (steward board)\n${assignedItems(board).map((i) => `- ${i.id} [${i.priority}] ${i.title}\n  ${i.detail ?? ""}\n  Acceptance: ${i.acceptance ?? "Demonstrate the item with tests and evidence."}`).join("\n") || "(No assigned items.)"}${board.items.length ? "\nPut one line per item worked on in report.md: `Board: <ID> done|progress|blocked - <one sentence>`." : ""}`;
+  return `\n\n## Assigned work (steward board)\n${assignedItems(board).map((i) => `- ${i.id} [${i.priority}] ${i.title}\n  ${i.detail ?? ""}\n  Acceptance: ${i.acceptance ?? "Demonstrate the item with tests and evidence."}`).join("\n") || "(No assigned items.)"}${board.items.length ? "\nPut one line per item worked on in your cycle note: `Board: <ID> done|progress|blocked - <one sentence>`." : ""}`;
 }

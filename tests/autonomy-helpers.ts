@@ -90,6 +90,9 @@ let checks = 0;
 export function makeChecker(label: string): Checker {
   return {
     async check(name: string, fn: () => unknown): Promise<void> {
+      // CHECK_ONLY=<text> runs just the checks whose name contains it, for working on one.
+      const only = process.env["CHECK_ONLY"];
+      if (only && !name.includes(only)) return;
       await fn();
       checks++;
       console.log(`  OK: ${name}`);
@@ -98,8 +101,46 @@ export function makeChecker(label: string): Checker {
   };
 }
 
+// Every scratch directory of one test process lives under a single root that is removed when the process exits.
+// A process killed by a signal never reaches its exit handler, so the next test process sweeps the roots of
+// processes that are no longer alive. Without this, each interrupted smoke left dozens of directories in /tmp.
+const SCRATCH_ROOT_PREFIX = "luna-autonomy-test-";
+const STALE_ROOT_MS = 10 * 60_000;
+let scratchRoot: string | undefined;
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** Remove the scratch roots of test processes that have ended (older than ten minutes and the pid is gone). */
+export function sweepStaleScratchRoots(tmp: string = os.tmpdir(), now: number = Date.now(), alive: (pid: number) => boolean = pidAlive): string[] {
+  const removed: string[] = [];
+  let names: string[];
+  try { names = fs.readdirSync(tmp); } catch { return removed; }
+  for (const name of names) {
+    const m = new RegExp(`^${SCRATCH_ROOT_PREFIX}(\\d+)-`).exec(name);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (pid === process.pid || alive(pid)) continue;
+    const dir = path.join(tmp, name);
+    try { if (now - fs.statSync(dir).mtimeMs < STALE_ROOT_MS) continue; } catch { continue; }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { continue; } // best effort: an unremovable root stays
+    removed.push(dir);
+  }
+  return removed;
+}
+
+function root(): string {
+  if (scratchRoot !== undefined && fs.existsSync(scratchRoot)) return scratchRoot;
+  sweepStaleScratchRoots();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${SCRATCH_ROOT_PREFIX}${process.pid}-`));
+  scratchRoot = dir;
+  process.on("exit", () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort at exit */ } });
+  return dir;
+}
+
 export function tempDir(prefix = "autonomy-test-"): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.mkdtempSync(path.join(root(), prefix));
 }
 
 export const rm = (dir: string): void => fs.rmSync(dir, { recursive: true, force: true });

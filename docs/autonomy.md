@@ -227,8 +227,9 @@ needs a person, and `resume --answer` (or `--approve`, `--deny`) continues it.
 
 A model provider's credit or key-limit refusal (HTTP 402, "requires more credits", "insufficient
 credits", a key or weekly limit) parks the run as **blocked** with the provider's message
-(blocker id `provider-limit`) instead of closing empty cycles; rate limits (429) are not matched
-and stay ordinary retries. Worker model entries cap `maxTokens` at 32,768, because a provider
+(blocker id `provider-limit`, `waiting_budget`) instead of closing empty cycles; a single rate limit
+(429) stays an ordinary retry, and a long run of them parks as `waiting_provider` (see "Parking on a
+provider refusal"). Worker model entries cap `maxTokens` at 32,768, because a provider
 reserves the cost of a request's full output maximum and a model advertising a near-context-sized
 one makes a low balance fail every call. In `self-improve`, a `report.md` that was already on the
 branch when the cycle began does not count as this cycle's report, and a merge is refused before
@@ -267,6 +268,33 @@ active-minute limit. `reconfigure` is the **only** way effort or limits change f
 it cannot touch permissions, network, credentials, promotion, the image or the acceptance definitions
 (those are the authorised boundary; changing them means a new run), it asks for confirmation, and it
 is logged in the run's state.
+
+**Attribution and the ledger.** Every row in `meter/usage.jsonl` (the relay) and
+`meter/manager.jsonl` (the host's own manager and review calls) carries the `run`, `cycle` and `role`
+(`worker`, `manager` or `review`) the supervisor named in `meter/attribution.json`, which it rewrites
+when a worker session starts; the relay reads it on every request, and a missing file is `unattributed`,
+never a guess. A request that ends without usable usage is still a row: `outcome` is `non-200`,
+`error`, `aborted` or `unmetered`, with `unresolved: true` and no cost, because cancellation does not
+prove the provider stopped billing. A request the relay itself refused is `refused` (not a
+liability). Unresolved rows are counted per cycle and are not priced, so they neither raise nor lower
+spend: they are reporting only, not budgeted, and no count of them stops or parks a run. `steps/NN/cycle.json` records the contract digest and limits in force (`effective`: manager calls
+per cycle, step allowances, budget) and the cycle's spend by role with its unresolved count (`meter`),
+so drift between cycles is visible. Spend only goes up: the supervisor takes the higher of its saved
+state and the meters, the relay starts from the ledgers on disk (so a restart resets nothing) and
+counts the host's own calls toward its stop, reads the cap from `meter/limit.json` on every request (so a
+`reconfigure` that raises or lowers the run budget is live without restarting the relay), and an unreadable ledger row is counted, not dropped
+quietly. Not covered: the relay cannot tell a child agent's request from its parent's (they share the
+worker's key), so child spend is tagged `worker` and overstates the parent's share (child roles are not
+separated); the unresolved rows are listed, not yet reconciled
+against the provider's own totals. `tests/autonomy-meter-smoke.ts` pins the rows, the restart and the
+host-spend stop and a raised cap; `tests/autonomy-selfimprove-smoke.ts` pins the cycle record.
+
+**Parking on a provider refusal.** A 402 (credit, key or weekly limit, or the relay's own "Run budget
+exhausted") parks the run as `blocked` with `waiting: waiting_budget`; a 403 from the provider or a
+429 that persists (five failed replies in a row, or a retry that gave up; a 403 parks on the second) parks with `waiting: waiting_provider`.
+The reason is the first word of the blocker's question, a field of the recorded blocker, a line of
+`outcome.md` and the status listing. The relay's own refusals (a path or model it does not allow) are
+not the provider's and do not park the run. `tests/autonomy-meter-smoke.ts`.
 
 **One host, many runs: the gate slot bound.** The single-owner lock is per run, so several runs of
 one user on one host could otherwise each start an acceptance gate at once and compete for CPU and
@@ -361,7 +389,7 @@ leak scan, fast-forward push the integration branch to the remote, then recreate
 ## The `self-improve` template
 
 The original behaviour of this package, now one template: repeated cycles on a repository, each a
-fresh pi session that reviews, plans, improves and verifies, and every cycle with commits that passes
+fresh pi session that does one piece of work directly, and every cycle with commits that passes
 the acceptance checks and passes a merge review is fast-forwarded into one integration branch
 (`pi-autonomy/integration` by default, never `main`), from which the next cycle starts. Nothing is
 force-pushed, and by default nothing leaves the machine: promotion is `local-branch` unless you choose
@@ -379,20 +407,28 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
 - **The cycle prompt** gives the worker the cycle start sha, the review's diff budget and the exact
   command that measures it (`git diff <start>..HEAD` without the lockfile and this run's record
   directories, piped to `wc -c`), tells it never to run `npm test` or `npm run check:all` (the host
-  gate runs the full suite) and to repeat that rule in every subagent task, and asks it to keep
-  `report.md` and `verify.md` under 5,000 characters each, because the review keeps only the
-  first and last 3,000. Assigned board items come right after the budget, and the precedence is
-  stated once (`tests/autonomy-selfimprove-smoke.ts`).
-- **The worker delegates through plans.** The cycle prompt sends each item through an inline
-  `workflow_run {steps}` plan: an `implementer`, then a `reviewer` gated with `max_loops: 1`, a
-  worst case of 4 agents. Review may send scouts as one parallel plan. At the default contract
-  effort, `standard`, one request's plans may launch 8 agents, so two items, or a scouts plan and
-  one item; the rest, and any plan the tool refuses, go through the `subagent` tool, and a refusal
-  adds a `Workflow: refused <reason>` line to the report. The prompt's item plan compiles through
-  the same compiler `workflow_run` uses (`tests/autonomy-selfimprove-smoke.ts`). Unattended, an
-  inline plan and `subagent` run without a prompt while `workflow` scripts stay denied, because
-  the policy asks a person for them (`tests/firewall-unattended-smoke.ts`). Whether the model
-  follows the prompt is not tested.
+  gate runs the full suite, about four minutes on the reference host) and to repeat that rule in
+  every subagent task, and asks it to keep its note under 4,000 characters, the most the host reads
+  (see "The cycle record"). Assigned board items come right after the budget, and the
+  precedence is stated once (`tests/autonomy-selfimprove-smoke.ts`).
+- **The worker brief is lean.** The worker does the work directly. It delegates only an isolated
+  question or an independent package, to one `subagent`, whose spend and permissions are the
+  worker's; there are no compulsory scouts, no per-item reviewer and no whole-diff reviewer, since
+  the host reviews the finished diff once. It does not search for unrelated work: with nothing
+  assigned and nothing failing it writes the note `Outcome: nothing found` and stops without
+  committing, and it ends its session by submitting the head and a short note. It commits no
+  `report.md`, `plan.md`, `review.md`, `verify.md`, `HANDOFF.md` or `JOURNAL.md` line: see "The cycle
+  record" (`tests/autonomy-selfimprove-smoke.ts`; `tests/autonomy-boundary-smoke.ts` for the environment).
+  Whether the model follows the brief is not tested.
+- **Thinking is low by default.** The worker session starts at `--thinking low` (`PI_THINKING`,
+  set by `lib/worker-env.ts`), and the image entrypoint writes the same level as pi's
+  `defaultThinkingLevel`, so a child starts low too. Medium for planning and implementation only is
+  deliberately deferred, not enforced (implementation also runs at low): a role-level setting would make a `planner` and a `scout` run differently, which a
+  nested workflow plan refuses (`tests/workflow-plan-smoke.ts`). The host's
+  manager and review calls ask OpenRouter for low reasoning and cap their output at 2,048
+  (manager) and 4,096 (review) tokens, which also bounds a reasoning model's thinking; a reply
+  cut off by the cap has no verdict and is handled as an unusable review below
+  (`tests/autonomy-lean-smoke.ts`). The low-reasoning hint is sent only on the OpenRouter path; the openai-compatible path sends the cap alone, because a strict provider may reject an unknown field, so on that path the caps assume a non-reasoning or low-effort reviewer (a reasoning model can spend the whole cap thinking and the cycle is then parked as review-unavailable). The cap and reasoning effort are not configurable per run.
 - **The gate container** for a self-improve run gets 8 CPUs and 8 GB by default
   (`templateOptions.gate.cpus` and `.memory`; a number or a string, `tests/autonomy-contract-smoke.ts`).
   Luna's reference gate, `packages/autonomy/image/gate.sh`, runs `check:all` with
@@ -437,6 +473,68 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
   pause, stop and cancel. A snapshot that cannot be fetched at all (the bundle fails) is not kept
   anywhere else (`tests/autonomy-run-smoke.ts` pins the write-area case; the diverged case is not
   pinned).
+- **Risk tiers decide how much review a cycle gets.** The host classifies a cycle from the paths it
+  actually changed (`lib/risk.ts`), never from the report, and records the tier in `cycle.json` and
+  `review.json`. **R0**, prose and static files only (`docs/`, top-level documents, images, this
+  run's own records; not `AGENTS.md`, skills, prompts or agent definitions), needs the acceptance
+  checks but no model review once the operator opts in with `templateOptions.integration.r0Review`
+  (the share of R0 cycles still reviewed, from 0 to 1, chosen deterministically from the head).
+  The default is 1: every R0 cycle is reviewed until the operator lowers it. **R1**, anything else,
+  gets one review. **R2**, recovery, concurrency, persistence, shared-interface or authorisation
+  paths, gets the same single review with one specialist question about the topics the paths touch
+  added to it: the reply must answer `"specialist": "OK"` or `"CONCERN"`, a `CONCERN` is a `REJECT`
+  and a reply without the answer is unusable, so it is retried and then parks like any unusable review.
+  **R3**, permissions, budgets, credentials, the charter, gate policy and release files, is the
+  owner/steward route: refused with no model call and proposed in the proposals file, unless
+  `allowControlChanges` is on, when it gets the one ordinary review (the operator's opt-in already
+  says the review is the only control). A path the host cannot classify (empty,
+  absolute, `..`, control characters) is R3, a cycle with no paths to classify is R1, and any path
+  outside the known prose shapes takes a cycle out of R0, so unknown never relaxes. Matching is
+  case-insensitive. The path lists are in `lib/risk.ts`; they are a first cut and not every
+  sensitive path is in them (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **One ordinary attempt plus one repair per board item.** A cycle that claimed a board item in its report
+  and did not merge counts as an attempt against it. With no claim (a crash, an exhausted budget, a
+  no-change cycle, a provider outage) nothing is charged, unless the merge review itself rejected the
+  assigned work; the items a cycle caused to be withheld are named in its `cycle.json` (`withheldItems`); a merge clears the
+  count. After two the host stops offering the item, logs why, and keeps the count and the last
+  reason in `selfImprove.itemAttempts` in the run state; the steward offers it again by filing it
+  under a new ID. The allowance is fixed at two. An item the host withheld still stays on the board
+  file (`tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **The host gates the base before any work starts.** Before a fresh cycle the host runs the acceptance
+  gate on the integration head the cycle would start from, unless that exact head already passed (a
+  merged cycle's head did) (`lib/preflight.ts`). It classifies a failure from the gate's own output before
+  anyone is paid to work on it: provider, network, disk or timeout trouble (**infra**) backs off five,
+  ten, twenty, forty and sixty minutes with no worker and no model call, then parks with
+  `waiting_provider` and the question id `base-infra`; a check that cannot run here (command not found,
+  permission denied; **deterministic**) asks a person with `base-red` and is not rerun; a **product**
+  failure gets a host-built repair cycle whose prompt carries the failing checks and no board items, twice
+  at most for one head (the ordinary attempt and one repair), then asks a person with `base-red`. Only a
+  failure the operator lists in `templateOptions.knownFlakes` (check ids or `id/step` names) is ever
+  confirmed: one more run, with the first failure kept next to it under `steps/NN/preflight/first`
+  and `confirm`; passing on the confirmation is recorded as a flake and work starts, failing again is a
+  product failure. Nothing is rerun until it passes. The classification reads the check's output
+  with patterns (`lib/preflight.ts`), so an unusual infrastructure failure reads as product and gets
+  a repair cycle; the answer to either question (`Fixed; look again`) clears the verdict and looks again.
+  `tests/autonomy-preflight-smoke.ts`.
+- **The diff cap is enforced before the gate and the review, in code.** When a cycle ends, the host
+  measures the diff the merge review would read (same exclusions and upstream scope as the live
+  budget probe). One over the budget is refused before the acceptance gate runs and before any model is
+  asked, and its commits stay on the attempts branch for the next cycle to carry as a reviewable subset;
+  the merge decision still refuses an over-budget or unreadable diff as the fail-closed backstop.
+  Claims are also checked deterministically before the review: a report that names a commit that is not
+  in the cycle is refused, and a cycle whose diff holds only this run's records merges on the checks alone
+  when it reports `Outcome: nothing found` and is refused for any other claim, with no model call either way.
+  `tests/autonomy-preflight-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts`.
+- **An empty queue sleeps; nothing scouts.** When nothing is assigned or offered (a board run: no
+  unblocked board item left after withheld ones), nothing is failing, no steer is waiting and no
+  upstream conflict, publication blocker or refused commit is pending, the host starts no worker, manager or
+  review. It looks again every `templateOptions.emptyQueueSleepMinutes` (default 15), waking at once for
+  any of those. A run with a board waits for the steward for as long as it runs; a run without one (its
+  queue is the open and in-progress rows of `autonomy/BACKLOG.md`, a red previous cycle, a
+  `partial` report, and its first cycle always runs) ends as `backlog_exhausted` after
+  `limits.nothingFoundToStop` empty looks. Idle looks are not cycles and cost nothing; whether the idle time counts
+  against `maxMinutes` is not pinned by a test. The worker brief has no "never idle" fallback: a worker that
+  still finds nothing records `Outcome: nothing found`. `tests/autonomy-preflight-smoke.ts`.
 - **The merge review** is a separate model call from the host that answers `MERGE` or `REJECT` from the
   charter, the report, the commits and the diff. Its input starts with a host ledger: the cycle's
   `git log --format="%h %s"` and the `git diff --shortstat` without the lockfile and this run's
@@ -611,8 +709,38 @@ The claim itself, its one-winner behaviour, the loser's owner report, idempotent
 metadata validation and the shared `board --file` lock are pinned by
 `tests/autonomy-dispatch-smoke.ts`.
 
-The cycle's own paperwork is capped at 60 lines across `plan.md`, `report.md`, `review.md` and
-`verify.md`, plus exactly one `JOURNAL.md` line naming the cycle. Run
+### The cycle record
+
+The cycle's record is kept out of the product branch, in the run state home. The host writes one
+**receipt** per cycle, `steps/<NN>/receipt.json`: run, cycle, the board items assigned and the ones
+the note claimed, start and head, the changed paths (the first 200, with the count left out), the
+gate result and failing checks, the review verdict and risk tier, the outcome, whether it merged and
+why not, cost, worker sessions and the previous cycle's lineage with each worked item's attempt
+count. It is built from git, the gate and the review, never from what the worker wrote. The worker
+writes one short **note** to `/state/cycle-note.md` (the run's `agent-state/` directory): `Outcome:`
+and `Mode:` lines, any `Board:` lines, and only what the diff and commit messages do not say. The
+host reads it to 4,000 characters through a no-follow read, stores a copy beside the receipt
+(`steps/<NN>/note.md`) and clears the file when a fresh cycle starts, so a note is never carried
+into the next cycle. The note is worker-authored data: the merge review reads it as the "Worker
+note" section, the manager as "The worker's cycle note", and the next cycle's prompt quotes it after
+the host receipt inside a fence that says it is data (`lib/receipt.ts`;
+`tests/autonomy-lean-smoke.ts` pins the bound, the link refusal, the clearing and the briefing;
+`tests/autonomy-selfimprove-smoke.ts` pins a cycle with no committed record, the receipt and the
+stale-note case). A worker that stops without a note is asked for it once or twice, then the
+existing close-out applies.
+
+A cycle that finds nothing now commits nothing, so it is recorded as `completed` with the gate
+skipped and not merged (`no commits`); it still counts toward `nothingFoundToStop`. Not covered: the
+receipt is not signed, and a run whose state home is lost loses its records; the repository keeps
+only the commits. The proposals a cycle files (`autonomy/proposals/`) are still committed, and a
+worker that still commits a `report.md` (an older prompt on a resumed cycle) is honoured: its report
+closes the cycle and is read as the note.
+
+History is kept: committed `autonomy/cycles/**`, `HANDOFF.md` and `JOURNAL.md` stay as they are,
+`checkJournal` still holds them to the journal rules, and it never asks for a line for a cycle that
+committed no report (`tests/autonomy-lean-smoke.ts`). New streams are no longer seeded with a
+`HANDOFF.md`. The earlier cap on a cycle's committed paperwork (below) applies only to a repository
+whose runs still commit those files. Run
 `node packages/core/paperwork-budget.ts <cycle-dir>` (add `--journal=autonomy/JOURNAL.md
 --run=<run> --cycle=<NN>` to check the journal line) and it prints the per-file breakdown; it
 exits non-zero on an overrun or a missing or duplicate journal line. It is a manual check run by
@@ -621,7 +749,7 @@ experiment. Nothing in the test suite pins it. The cap counts the cycle's record
 messages, code and tests are not counted.
 
 The precedence is (0) red gate / broken branch, (1) upstream merge conflict, (2) assigned board
-items in order, (3) HANDOFF carry-overs, (4) discovered defects, (5) security, (6) tests/docs,
+items in order, (3) carry-overs from the previous cycle's note, (4) discovered defects, (5) security, (6) tests/docs,
 (7) cleanup. New worker ideas belong in `autonomy/BACKLOG.md` as proposals (on streams, in the
 individual proposal files described below) unless they block an
 assigned item. The merge reviewer receives the claimed board items (or the two assigned items
@@ -638,7 +766,7 @@ improve mode, chosen by the worker when the review finds nothing to fix. Green p
 cycle review disabled; red gates and cycles without commits remain unmerged. Workers run tests
 for their changes and finish; the host runs the full gate (`tests/autonomy-selfimprove-smoke.ts`).
 A merge refused for an over-budget diff tells the next cycle to carry over only a reviewable
-subset and list the rest in its handoff, not to bring the whole attempt over again. The cycle's
+subset (the rest stays on the attempts branch), not to bring the whole attempt over again. The cycle's
 own pre-report check measures the diff while the worker is still alive and steers it once per
 measured head; if that same head is still over budget after the split steer, the cycle itself
 refuses with a `refused_budget:` reason naming the measured number when it is known, and closes
@@ -687,8 +815,9 @@ or schedule board updates; the tests above cover individual streams, not a live 
 
 When `templateOptions.integration.upstream` is set, bookkeeping is isolated by run:
 
-- Handoffs use `autonomy/runs/<run>/HANDOFF.md`, including supervisor resume briefings,
-  automatic worker restarts, manager inputs and merge review inputs.
+- Carry-over reaches the next cycle through the host receipt and the worker's note in the state home,
+  not a committed handoff; resume briefings, automatic worker restarts, manager inputs and merge
+  review inputs read the note.
 - Each new proposal uses a separate `autonomy/proposals/<run>-<NN>-<slug>.md` file. `NN` is the
   cycle number, padded to two digits; seeded operator brief items use `00`. Choose a different,
   descriptive slug for each proposal. The stream never seeds or is instructed to edit the shared
@@ -698,11 +827,11 @@ When `templateOptions.integration.upstream` is set, bookkeeping is isolated by r
   preserved. The cycle prompt supplies the current run's paths even when an older charter names
   the shared handoff or backlog. Cycle directories remain `autonomy/cycles/<run>/<NN>/`.
 
-Runs without upstream retain `autonomy/HANDOFF.md` and `autonomy/BACKLOG.md`. Paths are derived
+Runs without upstream retain `autonomy/BACKLOG.md`. Paths are derived
 from the contract; existing state files need no migration. These behaviours are pinned by
 `tests/autonomy-selfimprove-smoke.ts`, `tests/autonomy-review-inputs-smoke.ts` and the reminder and
 restart checks in `tests/autonomy-smoke.ts`. Enabling upstream on a previously shared-path run
-does not migrate its old handoff; start a new stream run or carry its context over explicitly.
+does not migrate its backlog; start a new stream run or carry its context over explicitly.
 
 The self-improve merge review's 60,000-character diff budget excludes only this run's
 record-shaped files (`.md`, `.txt`, `.log` and `.jsonl`) under `autonomy/cycles/<run>/` and,
@@ -711,7 +840,7 @@ file there (code, a test a runner's glob would pick up, JSON a program could imp
 reviewed patch. Other runs' records, proposals and other `autonomy/` files remain budgeted. The
 reviewer gets a separate host `git diff --stat` of the excluded records (a failed read or output
 over 256 KiB refuses merge), clipped to 4,000 characters of head and tail like the other
-worker-influenced sections, plus the current report clipped to 6,000 characters with a cut marker. The complete changed-path list still
+worker-influenced sections, plus the worker's note (cut at 4,000 characters by the host, then clipped to the review's report bound). The complete changed-path list still
 drives control-path checks. Real code over budget and unreadable diffs still refuse merge,
 including with review disabled (`tests/autonomy-review-inputs-smoke.ts`).
 
@@ -724,13 +853,13 @@ Cycle integration itself is a fast-forward and performs no content merge. The tw
 merge paths and the fast-forward are covered by `tests/autonomy-smoke.ts`. Union merging does
 not validate changelog wording, ordering or duplicates; review the resulting text.
 
-`autonomy/JOURNAL.md` is the one shared journal: a line per cycle report. The cycle prompt's
-Record step asks each cycle to run `node packages/core/journal.ts`, which derives the line from
-the report and appends it for any non-close-out report that lacks one. `npm run smoke:docs` runs
+`autonomy/JOURNAL.md` is the shared journal of the cycle reports committed so far: a line per
+report. New cycles commit no report, so the cycle prompt no longer asks for a line;
+`node packages/core/journal.ts` still derives and appends one for any non-close-out report that
+lacks one, for a repository whose runs keep committing them. `npm run smoke:docs` runs
 `checkJournal` (`packages/core/lib/journal.ts`; also `node packages/core/journal.ts --check`) and
 fails a report with no line, a line with no report and a line whose board IDs differ from the
-report's, and so reddens the acceptance gate (`tests/docs-smoke.ts`; the cycle prompt wording is
-pinned by `tests/autonomy-selfimprove-smoke.ts`). A host close-out report, which the worker never
+report's, and so reddens the acceptance gate (`tests/docs-smoke.ts`). A host close-out report, which the worker never
 finished, is reported as a warning instead. The journal is replaced through the safe write helper,
 so a symbolic link at `autonomy/JOURNAL.md` is refused instead of followed, and a cycle directory
 whose name could not be one journal key (whitespace, a line break) stops the run of the script

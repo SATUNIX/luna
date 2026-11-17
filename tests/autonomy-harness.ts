@@ -124,6 +124,11 @@ export function harness(raw: RawContract, { script, review, boundary, tickMs, ho
   const store = createRun({ contract: resolvedContract, authorisation: { boundaryDigest: digest, by: "test", at: "2026-09-30T00:00:00.000Z", via: "contract" }, home, now: () => new Date(clock.now), boundaryEffort: testEffort });
   const contract = JSON.parse(fs.readFileSync(store.p.contract, "utf8")) as RunContract;
   const cfg: RuntimeCfg = { ...runtimeConfig(contract, { namePrefix: "pi-autonomy-test-run" }), ...cfgOverride };
+  // A stream with an empty board is an empty queue, and the host then sleeps instead of starting a cycle
+  // (lib/queue.ts). Tests of stream mechanics need cycles, so they get one standing board item unless they bring a board.
+  const integration = contract.templateOptions["integration"];
+  const boardFile = path.join(store.p.control, "board.json");
+  if (typeof integration === "object" && integration !== null && "upstream" in integration && !fs.existsSync(boardFile)) fs.writeFileSync(boardFile, JSON.stringify({ items: [{ id: "H-00", title: "standing harness item", priority: "P2", acceptance: "Anything." }] }));
   const h: Harness = {
     home, store, contract, cfg, clock, fakeEngine, digest,
     runtime: (s = script) => new FakeRuntime({ store, cfg, contract, script: s, engine: fakeEngine, clock, review, boundary, tickMs, hooks, manager }),

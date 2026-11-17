@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { array, boolean, isRecord, object, parseJsonAs, string, type Schema } from "../../core/lib/guard.ts";
-import { meteredUsd, parseRelayConfig, type RelayConfig } from "../relay.ts";
+import { type Attribution, liabilityRow, meteredUsd, parseRelayConfig, summariseMeter, type MeterSummary, type RelayConfig } from "../relay.ts";
 import { PROVIDERS, type AcceptanceCheck, type RunContract, type ServiceSpec } from "./contract.ts";
 import { assertRunArgs, limitProblems, type RunFacts } from "./containment.ts";
 
@@ -24,7 +24,7 @@ import { parseProxyConfig, proxyConfigFromContract, type ProxyConfig } from "./e
 import { readJson, writeJsonAtomic } from "./fsutil.ts";
 import { HostRepo } from "./hostrepo.ts";
 import type { RunState } from "./lifecycle.ts";
-import { openRouterComplete, type Complete } from "./manager.ts";
+import { MANAGER_MAX_OUTPUT_TOKENS, REVIEW_MAX_OUTPUT_TOKENS, openRouterComplete, type Complete } from "./manager.ts";
 import { BARE_REPO_CONFIG } from "./mirror.ts";
 import { agentModelsJson, modelEntries, plainModelEntries, type ModelEntry, type PlainModelEntry } from "./models.ts";
 import type { RunPaths } from "./paths.ts";
@@ -160,6 +160,8 @@ export class DockerRuntime implements Runtime {
   /** The inference key, read by preflight(); held in memory only. */
   apiKey: string | null;
   relay: ChildProcess | null;
+  /** Who the metered spend belongs to right now (also written to meter/attribution.json for the relay). */
+  attr: Attribution;
   proxy: ChildProcess | null;
   /** This session's harness verdict: fail closed until a full get_commands reply verifies it. */
   readonly harness = new HarnessCheck();
@@ -178,6 +180,7 @@ export class DockerRuntime implements Runtime {
     this.tickMs = cfg.mirrorSeconds * 1000;
     this.apiKey = null;
     this.relay = null;
+    this.attr = { run: cfg.run, cycle: null, role: "unattributed" };
     this.proxy = null;
     this.roots = [this.p.root, PKG];
   }
@@ -374,6 +377,7 @@ export class DockerRuntime implements Runtime {
     fs.mkdirSync(p.meter, { recursive: true });
     const state = this.state();
     this.relay?.kill();
+    this.setBudgetCap(state.limits.budget.totalUsd);
     this.relay = await this.startServer({
       removeName: names.relay, runArgs: dk.relayRunArgs(cfg, p, path.join(PKG, "relay.ts")), connect: ["network", "connect", "--alias", dk.RELAY_HOST, names.net, names.relay], execArgs: dk.relayExecArgs(cfg),
       config: relayConfigFor({ contract, cfg, apiKey: this.key(), maxUsd: state.limits.budget.totalUsd }),
@@ -491,6 +495,7 @@ export class DockerRuntime implements Runtime {
   // --- the worker -------------------------------------------------------------------------------------
   startWorker({ step, attempt, resetWorkspace, effort, onEvent }: StartWorkerOptions): WorkerAgent {
     const { cfg, p, names } = this;
+    this.attribute(step, "worker");
     this.harness.reset();
     const dir = path.join(p.steps, pad(step));
     fs.mkdirSync(dir, { recursive: true });
@@ -592,22 +597,49 @@ export class DockerRuntime implements Runtime {
     return read("usage.jsonl") + read("manager.jsonl");
   }
 
-  /** A host-side chat-completions call (manager, merge review, task review); its spend is metered with the run's. */
-  complete(model: string, { timeoutMs }: { timeoutMs?: number } = {}): Complete {
+  /** Both ledgers (the relay's and the host's own calls) summarised for one cycle, or for the whole run without `cycle`. */
+  meterSummary(cycle?: number): MeterSummary {
+    const total: MeterSummary = { usd: 0, byRole: {}, rows: 0, unresolved: 0, unreadable: 0 };
+    for (const f of ["usage.jsonl", "manager.jsonl"]) {
+      let text = "";
+      try { text = fs.readFileSync(path.join(this.p.meter, f), "utf8"); } catch { /* no rows yet */ }
+      const m = summariseMeter(text, cycle);
+      total.usd += m.usd; total.rows += m.rows; total.unresolved += m.unresolved; total.unreadable += m.unreadable;
+      for (const [role, usd] of Object.entries(m.byRole)) total.byRole[role] = (total.byRole[role] ?? 0) + usd;
+    }
+    return total;
+  }
+
+  /** Make the run's spending cap live for the relay (it reads meter/limit.json on every request), so a reconfigure needs no relay restart. */
+  setBudgetCap(usd: number): void {
+    try { fs.mkdirSync(this.p.meter, { recursive: true }); writeJsonAtomic(path.join(this.p.meter, "limit.json"), { maxUsd: usd }); } catch { /* the relay then keeps the cap it started with */ }
+  }
+
+  /** Tell the relay, and the host's own calls, whose spend this is from now on: written for the relay to read on its next request. */
+  attribute(cycle: number | null, role = "worker"): void {
+    this.attr = { run: this.cfg.run, cycle, role };
+    try { fs.mkdirSync(this.p.meter, { recursive: true }); writeJsonAtomic(path.join(this.p.meter, "attribution.json"), this.attr); } catch { /* rows are then "unattributed", which is visible */ }
+  }
+
+  /** A host-side chat-completions call (manager, merge review, task review); its spend is metered with the run's, tagged with the run, cycle and `role`. */
+  complete(model: string, { timeoutMs, role = "manager" }: { timeoutMs?: number; role?: string } = {}): Complete {
     const { contract, cfg, p } = this;
     const meterFile = path.join(p.meter, "manager.jsonl");
     const pricing = contract.providerSettings.pricing[model];
+    const append = (row: unknown): void => { fs.mkdirSync(p.meter, { recursive: true }); fs.appendFileSync(meterFile, `${JSON.stringify(row)}\n`); };
+    const who = (): Attribution => ({ run: cfg.run, cycle: this.attr.cycle, role });
     return openRouterComplete({
-      apiKey: this.key(), model, upstream: cfg.upstream, timeoutMs, usageInclude: PROVIDERS[contract.model.provider]?.reportsCost ?? false,
+      apiKey: this.key(), model, upstream: cfg.upstream, timeoutMs, usageInclude: PROVIDERS[contract.model.provider]?.reportsCost ?? false, maxTokens: role === "review" ? REVIEW_MAX_OUTPUT_TOKENS : MANAGER_MAX_OUTPUT_TOKENS,
       onUsage: (u) => {
-        const computed = pricing ? ((u.prompt_tokens ?? 0) * pricing.inputPerMTok + (u.completion_tokens ?? 0) * pricing.outputPerMTok) / 1e6 : 0;
-        fs.mkdirSync(p.meter, { recursive: true });
-        fs.appendFileSync(meterFile, `${JSON.stringify({ at: new Date().toISOString(), model, costUsd: u.cost ?? computed })}\n`);
+        const computed = pricing ? ((u.prompt_tokens ?? 0) * pricing.inputPerMTok + (u.completion_tokens ?? 0) * pricing.outputPerMTok) / 1e6 : null;
+        const costUsd = u.cost ?? computed;
+        append({ at: new Date().toISOString(), ...who(), model, outcome: costUsd === null ? "unmetered" : "ok", costUsd, ...(costUsd === null ? { unresolved: true } : {}) });
       },
+      onFailure: (f) => append(liabilityRow(new Date().toISOString(), who(), model, f.status, f.outcome, f.detail)),
     });
   }
 
   review(bundle: TaskReviewBundle): Promise<TaskReview> {
-    return reviewTask(bundle, this.complete(this.contract.model.review, { timeoutMs: 300_000 }), { sleep: (ms) => this.sleep(ms), fallback: this.complete(this.contract.model.manager, { timeoutMs: 300_000 }) });
+    return reviewTask(bundle, this.complete(this.contract.model.review, { timeoutMs: 300_000, role: "review" }), { sleep: (ms) => this.sleep(ms), fallback: this.complete(this.contract.model.manager, { timeoutMs: 300_000, role: "review" }) });
   }
 }

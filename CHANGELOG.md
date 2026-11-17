@@ -85,6 +85,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **Dependabot no longer proposes pi minor or major bumps for the image tool lockfiles.** The autonomy
+  and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
+  lockfile agrees, so such a bump could only be red; it is made by hand with the pin, as for the root
+  workspace. Patch updates still come through.
+
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
   risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
   delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish

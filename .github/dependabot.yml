@@ -66,6 +66,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # The images pin pi in their Dockerfiles (PI_VERSION) and container-static checks the two agree, so a
+    # pi minor or major bump here is a reviewed change made by hand with the pin, as for the root workspace.
+    ignore:
+      - dependency-name: "@earendil-works/*"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       image-tools:
         patterns: ["*"]

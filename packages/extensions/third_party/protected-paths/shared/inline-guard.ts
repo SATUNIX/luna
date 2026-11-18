@@ -24,12 +24,16 @@
  *
  * This file also holds the shared reading of patch writers (`git apply`, `git am`, `patch`): the files they
  * change are named inside the patch, so both hooks read the patch headers and check each target as a direct
- * write. A patch that cannot be read or parsed is treated as touching a protected path.
+ * write. A patch that cannot be read or parsed is treated as touching a protected path. Commands are read with
+ * the firewall's parser (./shell.ts, `patchCallsInParse`) and, as a fail-closed backstop, the text walker at the
+ * end of this file (`patchCallsInText`); a writer either finds is checked. The resolver's own text scans
+ * (`patchShellDirs` for `cd` candidates, the git-tree and backup-suffix checks, `patchFileMayChange`) keep every
+ * candidate a command may produce rather than one reading of it.
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { basenameOf, type Parsed, type Segment } from "./shell.ts";
+import { basenameOf, isStdinPath, parseShell, type Parsed, type Segment } from "./shell.ts";
 
 /**
  * Interpreter basenames whose inline code this rule inspects: Python, PyPy, Node and its TypeScript and
@@ -902,91 +906,7 @@ export function resolvePatchCall(call: PatchCall, read: (source: string) => stri
   return { targets: [...targets], unreadable: null };
 }
 
-/** A patch invocation found in shell text, for a hook with no shell parser of its own. */
-export interface TextPatchCall {
-  call: PatchCall;
-  /** The `git -C` values, in order. */
-  chdirs: string[];
-  /** The text on standard input when a heredoc supplies it. */
-  stdinText: string | null;
-  /** A file redirected to standard input. */
-  stdinFile: string | null;
-  /** True when the arguments are not all visible: xargs and find -exec append their own. */
-  unseen: boolean;
-  /**
-   * True when no call was read and only the walk says a patch writer is here: the catch-all, or a shell reading
-   * its commands from a pipe. The firewall parses the line its own way and fails closed on these too.
-   */
-  guessed?: boolean;
-}
-
-const COMMAND_WRAPPERS = new Set(["sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "stdbuf", "timeout", "eval", "xargs", "parallel", "setsid", "flock", "taskset", "fakeroot", "chrt", "bash", "sh", "zsh", "dash", "ksh", "fish", "ash", "mksh", "pdksh", "yash", "busybox", "coproc", "doas", "unshare", "nsenter", "chroot", "watch", "setpriv", "strace", "su", "runuser", "systemd-run", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
-const WRAPPER_VALUED_SHORT = new Map([["sudo", "ugUhpCDTrtR"], ["env", "uC"], ["nice", "n"], ["ionice", "cnp"], ["stdbuf", "ioe"], ["timeout", "ks"], ["xargs", "IPLnsdEa"], ["parallel", "jIPLnsda"], ["time", "fo"], ["exec", "a"], ["flock", "wE"], ["fakeroot", "lsib"], ["chrt", "TPD"], ["sh", "oO"], ["bash", "oO"], ["dash", "oO"], ["zsh", "oO"], ["ksh", "oO"], ["doas", "uC"], ["unshare", "SGRw"], ["nsenter", "tSG"], ["watch", "n"], ["strace", "abeEIoOpPsSuUX"], ["su", "gGsw"], ["runuser", "ugGslw"], ["systemd-run", "upEMH"]]);
-const WRAPPER_VALUED_LONG = new Set(["--user", "--group", "--host", "--prompt", "--chdir", "--unset", "--signal", "--kill-after", "--adjustment", "--class", "--classdata", "--input", "--output", "--error", "--arg-file", "--delimiter", "--max-args", "--max-chars", "--max-lines", "--max-procs", "--replace", "--format", "--other-user", "--role", "--type", "--command-timeout", "--close-from", "--lib", "--faked", "--conflict-exit-code", "--sched-runtime", "--sched-period", "--sched-deadline", "--rcfile", "--init-file", "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps", "--bounding-set", "--securebits", "--selinux-label", "--apparmor-profile", "--userspec"]);
-// Wrappers whose first operand is not the command: a lock file, a CPU mask.
-const WRAPPER_FIRST_OPERAND = new Set(["flock", "taskset", "chroot"]);
-const PIPE_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "mksh", "pdksh", "yash"]);
-const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/;
 const GIT_GLOBAL_VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--attr-source"]);
-// `script -c <text>`, spelt as a cluster, a long option, or either with the text attached.
-const SCRIPT_COMMAND = /(?:^|\s)(?:-[a-zA-Z]*c|--c[a-z]*)(?:=|\s*)("[^"]*"|'[^']*'|\S+)/;
-const SHELL_DELIMITER = /\|\|?&?|&&|(?<!>)&(?!>)|;|\n|`|\$\(|(?<![<$])\(|\)/g;
-
-// The `$` of `$'git'` or `$"git"`. A segment holding an escape keeps it, so the word is still read as computed.
-const ANSI_QUOTE_DOLLAR = /\$(?='[^'\\]*'|"[^"\\]*")/g;
-
-function shellWords(piece: string): string[] {
-  // Quotes and backslashes inside a word are removed as the shell removes them; a wholly quoted word stays one word.
-  return (piece.match(/[A-Za-z_]\w*=(?:[^\s"']|"(?:[^"\\]|\\.)*"|'[^']*')*|"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) ?? []).map((w) => (/^["']/.test(w) ? w : w.replace(ANSI_QUOTE_DOLLAR, "").replace(/['"\\]/g, "")).replace(/^[\s"'(]+|[\s"')]+$/g, "")).filter(Boolean);
-}
-
-/** True when a wrapper's option takes the next word as its value, so that word is not the command. */
-function wrapperFlagTakesNext(wrapper: string, flag: string): boolean {
-  // One name, two meanings: flock's takes a value, setsid's does not.
-  if (flag === "--wait" || flag === "--timeout") return wrapper === "flock";
-  if (flag.startsWith("--")) return WRAPPER_VALUED_LONG.has(flag);
-  const valued = WRAPPER_VALUED_SHORT.get(wrapper) ?? "";
-  for (let k = 1; k < flag.length; k++) if (valued.includes(flag.charAt(k))) return k === flag.length - 1;
-  return false;
-}
-
-// A wrapper option that moves the command elsewhere or hides its words: `env -C`, `env -S<text>`, `sudo -D`.
-function wrapperFlagHidesCall(wrapper: string, flag: string): boolean {
-  if (wrapper === "env") return /^(?:-[a-zA-Z0]*C|--c|-[a-zA-Z0]*S.|--s[^=]*=)/.test(flag);
-  // These move the root or the working directory the targets would be read against.
-  if (wrapper === "unshare" || wrapper === "nsenter") return /^(?:-[a-zA-Z]*[Rw]|--root|--wd)/.test(flag);
-  return wrapper === "sudo" && /^(?:-[a-zA-Z]*D|--chd)/.test(flag);
-}
-
-/**
- * What a piece of shell text puts on standard input. Bash uses the last of several sources, and a later file beats
- * a heredoc, so a piece with more than one is reported as unknown, as is a heredoc whose body the shell expands.
- */
-function pieceStdin(command: string, text: string, from: number): { stdinText: string | null; stdinFile: string | null } {
-  const unknown = { stdinText: null, stdinFile: null };
-  if (text.includes("<<<")) return unknown;
-  const heredocs = text.match(/(?<!<)<<(?!<)/g)?.length ?? 0;
-  const files = text.match(/(?<!<)<(?!<)/g)?.length ?? 0;
-  if (heredocs + files !== 1) return unknown;
-  if (files === 1) {
-    const m = /(?<!\d)<\s*(?:"([^"]*)"|'([^']*)'|([^\s<>|;&()"'$`\\]+))(?=[\s;|&<>)]|$)/.exec(text);
-    return { stdinText: null, stdinFile: m?.[1] ?? m?.[2] ?? m?.[3] ?? null };
-  }
-  // Bodies follow in the order their operators appear on the line, so another heredoc on it owns the first body.
-  const lineEnd = command.indexOf("\n", from);
-  const line = command.slice(command.lastIndexOf("\n", from) + 1, lineEnd < 0 ? undefined : lineEnd);
-  if ((line.match(/(?<!<)<<(?!<)/g)?.length ?? 0) > 1) return unknown;
-  const m = /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))(?=[\s;|&<>)]|$)/.exec(text);
-  const delim = m?.[2] ?? m?.[3] ?? m?.[4];
-  if (delim === undefined) return unknown;
-  const stripTabs = m?.[1] === "-";
-  const rest = command.slice(from).split("\n").slice(1);
-  const end = rest.findIndex((l) => (stripTabs ? l.replace(/^\t+/, "") : l) === delim);
-  if (end < 0) return unknown;
-  const body = `${rest.slice(0, end).join("\n")}\n`;
-  if (m?.[4] !== undefined && /[$`]|\\\r?\n/.test(body)) return unknown;
-  return { stdinText: body, stdinFile: null };
-}
 
 /** The index of git's subcommand in `words`, past its global options from `start`. */
 function gitSubcommandIndex(words: readonly string[], start: number): number {
@@ -1127,14 +1047,52 @@ export type ParsedPatchCall = { call: PatchCall; chdirs: string[]; stdin: PatchS
 
 // Programs that run commands read from their standard input: shells, `source`, job schedulers and runners.
 // `make` only with a makefile on stdin, and `ssh` only as a bare session with no remote command.
-const STDIN_RUNNERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "yash", "fish", "busybox", "source", ".", "at", "batch", "parallel", "script"]);
+const STDIN_RUNNERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "pdksh", "ash", "yash", "fish", "busybox", "source", ".", "at", "batch", "parallel", "script"]);
+// Environment variables a program runs as a command (editors, pagers, ssh and proxy commands, compilers).
+const RUN_VAR = /^(?:[A-Z0-9_]*(?:EDITOR|PAGER|ASKPASS|_SSH|_SSH_COMMAND|_PROXY_COMMAND|_COMMAND|_CMD|_EXTERNAL_DIFF|HELPER)|VISUAL|BROWSER|BASH_ENV|ENV|PROMPT_COMMAND|SHELL|LESSOPEN|LESSCLOSE|CC|CXX|CPP|LD|AR|AS|FC|MAKE|MAKEFLAGS|GIT_CONFIG_VALUE_\d+)$/;
+// Build tools that read their build file from standard input (`-`, /dev/stdin, /dev/fd/N) or from a process
+// substitution. Long options count in any prefix getopt accepts (`--fil=-`, `--makef=-`).
+const BUILD_RUNNERS = new Set(["make", "gmake", "bmake", "pmake", "remake", "just", "ninja"]);
+const BUILD_FILE_OPTION = /^(?:--(?:fi(?:le?)?|ma(?:k(?:e(?:f(?:i(?:le?)?)?)?)?)?|ju(?:s(?:t(?:f(?:i(?:le?)?)?)?)?)?)(?:=(.*))?|-[A-Za-z]*f(.*))$/;
+const buildFileFromStdin = (argv: readonly string[]): boolean => argv.slice(1).some((a, k, rest) => {
+  const m = BUILD_FILE_OPTION.exec(a);
+  if (!m) return false;
+  const attached = m[1] ?? (m[2] === "" ? undefined : m[2]);
+  const value = attached ?? rest[k + 1];
+  return value !== undefined && (isStdinPath(value) || /^\/dev\/fd\/\d+$/.test(value) || value.startsWith("<("));
+});
 const readsStdinAsCommands = (seg: Segment, exe: string, parsed: Parsed): boolean =>
-  seg.interactiveShell === true || STDIN_RUNNERS.has(exe) || (exe === "make" && seg.argv.some((a, i) => a === "--file=-" || a === "-f-" || ((a === "-f" || a === "--file") && seg.argv[i + 1] === "-"))) ||
+  seg.interactiveShell === true || STDIN_RUNNERS.has(exe) || (BUILD_RUNNERS.has(exe) && buildFileFromStdin(seg.argv)) ||
   // ssh with no remote command runs a shell on its stdin: no segment of the command runs on that host.
   (exe === "ssh" && !parsed.segments.some((other) => other.remote !== undefined && other.remote === seg.ssh?.host));
 // Standard input from a pipe, a here-string, a `<` file or a duplicated descriptor; a heredoc fed to a shell is
 // already parsed as commands of its own.
-const stdinFed = (seg: Segment): boolean => seg.pipeIn || seg.redirects.some((r) => (r.fd === "" || r.fd === "0") && (r.op === "<<<" || r.op === "<" || r.op === "<&" || r.op === "<>"));
+const stdinFed = (seg: Segment): boolean => seg.pipeIn || seg.stdinBody !== undefined || seg.redirects.some((r) => (r.fd === "" || r.fd === "0") && (r.op === "<<<" || r.op === "<" || r.op === "<&" || r.op === "<>" || r.op === "<<" || r.op === "<<-"));
+// A shell or runner given no script or command words: it runs what reaches its standard input.
+const scriptless = (seg: Segment, exe: string): boolean => seg.interactiveShell === true || (STDIN_RUNNERS.has(exe) && seg.argv.slice(1).every((a) => a.startsWith("-")));
+const SCRIPT_READERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "pdksh", "ash", "yash", "fish", "busybox", "source", "."]);
+
+/**
+ * True when every patch writer named in these texts is a call the parser reads and that writes nothing
+ * (`patch --dry-run`, `git apply --check`), for an opaque runner such as `docker run … bash -c '…'`.
+ */
+function namedCallsOnlyRead(texts: readonly string[]): boolean {
+  let found = false;
+  for (const [k, text] of texts.entries()) {
+    const parsed = parseShell(text, { cwd: null, home: "" });
+    if (parsed.opaque.length > 0) return false;
+    // Each word read on its own must hold no writer and nothing fail-closed (the joined text, last, loses quoting).
+    if (k < texts.length - 1 && patchCallsInParse(parsed, text).length > 0) return false;
+    for (const seg of parsed.segments) {
+      const call = segmentPatchTool(seg);
+      if (call === "computed") return false;
+      if (call === null) continue;
+      if (parsePatchArgs(call.tool, call.args).writes) return false;
+      found = true;
+    }
+  }
+  return found;
+}
 
 /**
  * The text a segment itself runs, for deciding whether a part the parser cannot follow may be a patch writer:
@@ -1144,6 +1102,19 @@ function segmentText(seg: Segment): string {
   const words = seg.words.map((w) => w.raw);
   const used = Object.entries(seg.vars).filter(([name]) => words.some((w) => w.includes("$" + name) || w.includes("${" + name)));
   return [...words, ...used.map(([, value]) => value)].join(" ");
+}
+
+/** The patch tool a parsed segment runs and its arguments (read-only calls too), or "computed" for a git subcommand the shell computes. */
+function segmentPatchTool(seg: Segment): { tool: PatchTool; args: string[]; chdirs: string[] } | "computed" | null {
+  const exe = basenameOf(seg.argv[0] ?? "");
+  if (exe === "patch" || exe === "gpatch") return { tool: "patch", args: seg.argv.slice(1), chdirs: [] };
+  if (exe === "git-apply" || exe === "git-am") return { tool: exe, args: seg.argv.slice(1), chdirs: [] };
+  if (exe !== "git") return null;
+  const at = gitSubcommandIndex(seg.argv, 1);
+  const sub = seg.argv[at];
+  if (sub !== undefined && /[$`]/.test(sub)) return "computed";
+  if (sub !== "apply" && sub !== "am") return null;
+  return { tool: sub === "apply" ? "git-apply" : "git-am", args: seg.argv.slice(at + 1), chdirs: gitChdirs(seg.argv, 1) };
 }
 
 /**
@@ -1156,35 +1127,51 @@ export function patchCallsInParse(parsed: Parsed, command: string): ParsedPatchC
   const out: ParsedPatchCall[] = [];
   const named = mentionsPatchWriter(command);
   if (named && parsed.opaque.length > 0) out.push({ unseen: "part of the command cannot be read" });
+  const piped = parsed.segments.some((seg) => seg.pipeOut);
   for (const seg of parsed.segments) {
-    if (seg.remote || seg.argv.length === 0) continue;
     const exe = basenameOf(seg.argv[0] ?? "");
+    const own = segmentText(seg);
+    // A value a program may run as a shell command: the command's environment (`GIT_EDITOR=… git commit`,
+    // `PAGER`, `CC`) and `git -c` / `--config-env` values (`core.editor`, `core.pager`, `diff.external`).
+    const gitOptions = exe === "git" ? seg.argv.slice(1, gitSubcommandIndex(seg.argv, 1)) : [];
+    // `export GIT_EDITOR=…` / `declare` set the value for every later command, so it counts where it is set.
+    const declared = ["export", "declare", "typeset", "readonly", "local"].includes(exe) ? seg.argv.slice(1).filter((a) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) : [];
+    const runVars = [...seg.assigns, ...declared].filter((a) => BUILD_RUNNERS.has(exe) || RUN_VAR.test(a.slice(0, Math.max(0, a.indexOf("=")))));
+    const valued = [...runVars, ...gitOptions.filter((_, k) => k > 0 && (gitOptions[k - 1] === "-c" || gitOptions[k - 1] === "--config-env"))];
+    if (valued.some((a) => pieceNamesPatchWriter([a.slice(a.indexOf("=") + 1)], 0, false))) { out.push({ unseen: "a patch writer is named in a value a program may run" }); continue; }
+    // A bare assignment (`GIT_EDITOR=…;` exported later) is checked above; it runs nothing itself.
+    if (seg.argv.length === 0) continue;
     const computed = seg.dynamicName || seg.evalOf === true || (exe === "eval" && seg.words.slice(1).some((w) => w.dynamic));
-    if (computed && mentionsPatchWriter(segmentText(seg))) { out.push({ unseen: "a command name is computed at run time" }); continue; }
+    if (computed && mentionsPatchWriter(own)) { out.push({ unseen: "a command name is computed at run time" }); continue; }
     if (named && stdinFed(seg) && readsStdinAsCommands(seg, exe, parsed)) { out.push({ unseen: "commands arrive on standard input of a shell" }); continue; }
-    let tool: PatchTool | null = null;
-    let args: string[] = [];
-    let chdirs: string[] = [];
-    if (exe === "patch" || exe === "gpatch") { tool = "patch"; args = seg.argv.slice(1); }
-    else if (exe === "git-apply" || exe === "git-am") { tool = exe; args = seg.argv.slice(1); }
-    else if (exe === "git") {
-      const at = gitSubcommandIndex(seg.argv, 1);
-      const sub = seg.argv[at];
-      if (sub !== undefined && /[$`]/.test(sub)) { out.push({ unseen: "the git subcommand is computed at run time" }); continue; }
-      if (sub === "apply" || sub === "am") { tool = sub === "apply" ? "git-apply" : "git-am"; args = seg.argv.slice(at + 1); chdirs = gitChdirs(seg.argv, 1); }
+    // A build file read from a process substitution (`make -f <(…)`) is text the parser keeps as data.
+    if (named && BUILD_RUNNERS.has(exe) && seg.words.slice(1).some((w) => w.procSub) && buildFileFromStdin(seg.argv)) { out.push({ unseen: "a build file comes from a process substitution" }); continue; }
+    // The parser does not carry a pipe into a subshell, group or `if` (`| (cd x; sh)`): a shell there with no
+    // script, on a line with a pipe, may be reading the piped text.
+    if (named && piped && scriptless(seg, exe)) { out.push({ unseen: "commands arrive on standard input of a shell" }); continue; }
+    // A script read from a process substitution (`sh <(…)`, `source <(…)`) is text the parser keeps as data.
+    if ((SCRIPT_READERS.has(exe) || INTERPRETER.test(exe)) && seg.words.slice(1).some((w) => w.procSub && mentionsPatchWriter(w.raw))) { out.push({ unseen: "a script comes from a process substitution" }); continue; }
+    const found = segmentPatchTool(seg);
+    if (found === "computed") { out.push({ unseen: "the git subcommand is computed at run time" }); continue; }
+    const { tool, args, chdirs } = found ?? { tool: null, args: [], chdirs: [] };
+    // A command the parser does not know as a wrapper still names a patch writer where it may run (`mywrap git
+    // apply …`, `npm exec -- git apply …`, `git submodule foreach git apply …`, `git -c alias.x=apply x …`, and
+    // inline interpreter code such as `python3 -c 'os.system("git apply …")'` or awk's system()).
+    // Heredoc or here-string text counts with the words (`node <<'EOF'` … `execSync('git apply …')`); a command
+    // that reads its words as data, such as `cat`, still passes.
+    if (tool === null) {
+      const words = seg.stdinBody === undefined ? seg.argv : [...seg.argv, seg.stdinBody];
+      if (pieceNamesPatchWriter(words, 0, stdinFed(seg)) && !namedCallsOnlyRead([...seg.argv.slice(1), seg.argv.slice(1).join(" ")])) out.push({ unseen: "a patch writer is named where it may run" });
+      continue;
     }
-    if (tool === null) continue;
     const call = parsePatchArgs(tool, args);
     if (!call.writes) continue;
+    // A patch applied on another host is the firewall's remote-exec rule's, but `ssh localhost` is this host.
+    if (seg.remote !== undefined) { out.push({ unseen: "a patch writer runs through ssh" }); continue; }
     if (seg.unknownArgs) { out.push({ unseen: "the patch arrives through arguments that cannot be seen" }); continue; }
     out.push({ call, chdirs, stdin: patchStdinOf(seg), cwd: seg.cwd });
   }
   return out;
-}
-
-/** A call whose arguments and tool cannot be read from the text, so it fails closed in the hook. */
-function unseenPatchCall(guessed = false): TextPatchCall {
-  return { call: parsePatchArgs("git-apply", []), chdirs: [], stdinText: null, stdinFile: null, unseen: true, guessed };
 }
 
 // Commands whose words are data: a patch tool's name after one of these is an argument, not a program it runs.
@@ -1207,11 +1194,116 @@ function commandWordsAreData(words: readonly string[], command: number): boolean
 /** True when a walked piece that gave no call still names a patch writer somewhere it could execute. */
 function pieceNamesPatchWriter(words: readonly string[], command: number, fed: boolean): boolean {
   if ((words[command] ?? "").startsWith("#") || commandWordsAreData(words, command)) return false;
-  const tokens = words.flatMap((w) => w.split(/[\s"'`=(){};|&!]+/)).filter(Boolean).map((t) => t.split("/").pop() ?? t);
+  const tokens = words.flatMap((w) => w.split(/[\s"'`=(){};|&!,[\]]+/)).filter(Boolean).map((t) => t.split("/").pop() ?? t);
   // `patch` only counts with what a patch run takes next, so a bare word such as `cargo release patch` does not.
   const patchRun = (next: string | undefined): boolean => (next === undefined ? fed : /^[-<]|\.(?:patch|diff)$/.test(next));
   const applyWord = (t: string | undefined): boolean => t === "apply" || t === "am";
   return tokens.some((t, n) => t === "git-apply" || t === "git-am" || ((t === "patch" || t === "gpatch") && patchRun(tokens[n + 1])) || (t === "git" && (applyWord(tokens[gitSubcommandIndex(tokens, n + 1)]) || (words.some((w) => /alias\./i.test(w)) && tokens.slice(n + 1).some(applyWord)))));
+}
+
+// --- The text walker: a fail-closed backstop beside the parser reading -------------------------------------------
+//
+// Both hooks refuse a patch writer that either reading finds (protected-paths patchWriteTargets, tool-firewall
+// classifyCommand). The walker reads command text quote-blind, so it catches forms the parser does not model:
+// interpreter code that runs a patch tool with an argument list, ssh `-o ProxyCommand`, a variable exported in an
+// earlier command, abbreviated build-tool options and others found by two adversarial reviews of a parser-only
+// reading (board item A-90). It is kept until the parser covers what it covers; removing it would loosen both hooks.
+
+/** A patch invocation found in shell text, for a hook with no shell parser of its own. */
+export interface TextPatchCall {
+  call: PatchCall;
+  /** The `git -C` values, in order. */
+  chdirs: string[];
+  /** The text on standard input when a heredoc supplies it. */
+  stdinText: string | null;
+  /** A file redirected to standard input. */
+  stdinFile: string | null;
+  /** True when the arguments are not all visible: xargs and find -exec append their own. */
+  unseen: boolean;
+  /**
+   * True when no call was read and only the walk says a patch writer is here: the catch-all, or a shell reading
+   * its commands from a pipe. The firewall parses the line its own way and fails closed on these too.
+   */
+  guessed?: boolean;
+}
+
+const COMMAND_WRAPPERS = new Set(["sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "stdbuf", "timeout", "eval", "xargs", "parallel", "setsid", "flock", "taskset", "fakeroot", "chrt", "bash", "sh", "zsh", "dash", "ksh", "fish", "ash", "mksh", "pdksh", "yash", "busybox", "coproc", "doas", "unshare", "nsenter", "chroot", "watch", "setpriv", "strace", "su", "runuser", "systemd-run", "then", "do", "else", "elif", "if", "while", "until", "!", "{"]);
+
+const WRAPPER_VALUED_SHORT = new Map([["sudo", "ugUhpCDTrtR"], ["env", "uC"], ["nice", "n"], ["ionice", "cnp"], ["stdbuf", "ioe"], ["timeout", "ks"], ["xargs", "IPLnsdEa"], ["parallel", "jIPLnsda"], ["time", "fo"], ["exec", "a"], ["flock", "wE"], ["fakeroot", "lsib"], ["chrt", "TPD"], ["sh", "oO"], ["bash", "oO"], ["dash", "oO"], ["zsh", "oO"], ["ksh", "oO"], ["doas", "uC"], ["unshare", "SGRw"], ["nsenter", "tSG"], ["watch", "n"], ["strace", "abeEIoOpPsSuUX"], ["su", "gGsw"], ["runuser", "ugGslw"], ["systemd-run", "upEMH"]]);
+
+const WRAPPER_VALUED_LONG = new Set(["--user", "--group", "--host", "--prompt", "--chdir", "--unset", "--signal", "--kill-after", "--adjustment", "--class", "--classdata", "--input", "--output", "--error", "--arg-file", "--delimiter", "--max-args", "--max-chars", "--max-lines", "--max-procs", "--replace", "--format", "--other-user", "--role", "--type", "--command-timeout", "--close-from", "--lib", "--faked", "--conflict-exit-code", "--sched-runtime", "--sched-period", "--sched-deadline", "--rcfile", "--init-file", "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps", "--bounding-set", "--securebits", "--selinux-label", "--apparmor-profile", "--userspec"]);
+
+// Wrappers whose first operand is not the command: a lock file, a CPU mask.
+const WRAPPER_FIRST_OPERAND = new Set(["flock", "taskset", "chroot"]);
+
+const PIPE_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "mksh", "pdksh", "yash"]);
+
+const STDIN_PATH = /^\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/;
+
+// `script -c <text>`, spelt as a cluster, a long option, or either with the text attached.
+const SCRIPT_COMMAND = /(?:^|\s)(?:-[a-zA-Z]*c|--c[a-z]*)(?:=|\s*)("[^"]*"|'[^']*'|\S+)/;
+
+const SHELL_DELIMITER = /\|\|?&?|&&|(?<!>)&(?!>)|;|\n|`|\$\(|(?<![<$])\(|\)/g;
+
+// The `$` of `$'git'` or `$"git"`. A segment holding an escape keeps it, so the word is still read as computed.
+const ANSI_QUOTE_DOLLAR = /\$(?='[^'\\]*'|"[^"\\]*")/g;
+
+function shellWords(piece: string): string[] {
+  // Quotes and backslashes inside a word are removed as the shell removes them; a wholly quoted word stays one word.
+  return (piece.match(/[A-Za-z_]\w*=(?:[^\s"']|"(?:[^"\\]|\\.)*"|'[^']*')*|"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) ?? []).map((w) => (/^["']/.test(w) ? w : w.replace(ANSI_QUOTE_DOLLAR, "").replace(/['"\\]/g, "")).replace(/^[\s"'(]+|[\s"')]+$/g, "")).filter(Boolean);
+}
+
+/** True when a wrapper's option takes the next word as its value, so that word is not the command. */
+function wrapperFlagTakesNext(wrapper: string, flag: string): boolean {
+  // One name, two meanings: flock's takes a value, setsid's does not.
+  if (flag === "--wait" || flag === "--timeout") return wrapper === "flock";
+  if (flag.startsWith("--")) return WRAPPER_VALUED_LONG.has(flag);
+  const valued = WRAPPER_VALUED_SHORT.get(wrapper) ?? "";
+  for (let k = 1; k < flag.length; k++) if (valued.includes(flag.charAt(k))) return k === flag.length - 1;
+  return false;
+}
+
+// A wrapper option that moves the command elsewhere or hides its words: `env -C`, `env -S<text>`, `sudo -D`.
+function wrapperFlagHidesCall(wrapper: string, flag: string): boolean {
+  if (wrapper === "env") return /^(?:-[a-zA-Z0]*C|--c|-[a-zA-Z0]*S.|--s[^=]*=)/.test(flag);
+  // These move the root or the working directory the targets would be read against.
+  if (wrapper === "unshare" || wrapper === "nsenter") return /^(?:-[a-zA-Z]*[Rw]|--root|--wd)/.test(flag);
+  return wrapper === "sudo" && /^(?:-[a-zA-Z]*D|--chd)/.test(flag);
+}
+
+/**
+ * What a piece of shell text puts on standard input. Bash uses the last of several sources, and a later file beats
+ * a heredoc, so a piece with more than one is reported as unknown, as is a heredoc whose body the shell expands.
+ */
+function pieceStdin(command: string, text: string, from: number): { stdinText: string | null; stdinFile: string | null } {
+  const unknown = { stdinText: null, stdinFile: null };
+  if (text.includes("<<<")) return unknown;
+  const heredocs = text.match(/(?<!<)<<(?!<)/g)?.length ?? 0;
+  const files = text.match(/(?<!<)<(?!<)/g)?.length ?? 0;
+  if (heredocs + files !== 1) return unknown;
+  if (files === 1) {
+    const m = /(?<!\d)<\s*(?:"([^"]*)"|'([^']*)'|([^\s<>|;&()"'$`\\]+))(?=[\s;|&<>)]|$)/.exec(text);
+    return { stdinText: null, stdinFile: m?.[1] ?? m?.[2] ?? m?.[3] ?? null };
+  }
+  // Bodies follow in the order their operators appear on the line, so another heredoc on it owns the first body.
+  const lineEnd = command.indexOf("\n", from);
+  const line = command.slice(command.lastIndexOf("\n", from) + 1, lineEnd < 0 ? undefined : lineEnd);
+  if ((line.match(/(?<!<)<<(?!<)/g)?.length ?? 0) > 1) return unknown;
+  const m = /<<(-?)\s*(?:'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))(?=[\s;|&<>)]|$)/.exec(text);
+  const delim = m?.[2] ?? m?.[3] ?? m?.[4];
+  if (delim === undefined) return unknown;
+  const stripTabs = m?.[1] === "-";
+  const rest = command.slice(from).split("\n").slice(1);
+  const end = rest.findIndex((l) => (stripTabs ? l.replace(/^\t+/, "") : l) === delim);
+  if (end < 0) return unknown;
+  const body = `${rest.slice(0, end).join("\n")}\n`;
+  if (m?.[4] !== undefined && /[$`]|\\\r?\n/.test(body)) return unknown;
+  return { stdinText: body, stdinFile: null };
+}
+
+/** A call whose arguments and tool cannot be read from the text, so it fails closed in the hook. */
+function unseenPatchCall(guessed = false): TextPatchCall {
+  return { call: parsePatchArgs("git-apply", []), chdirs: [], stdinText: null, stdinFile: null, unseen: true, guessed };
 }
 
 // The quoted strings of a command that span more than one line, as [opening quote, closing quote].
@@ -1265,6 +1357,7 @@ interface InertSpan {
 
 // A plain `${name}` form. Anything richer can hold quotes the shell and this reader would pair differently.
 const PLAIN_PARAMETER = /^\$\{[^}"'`$()\s]*\}/;
+
 const HEREDOC_DELIMITER = /^<<(-?)[ \t]*((?:[^\s;&|()<>"'\\]|\\.|"[^"\n]*"|'[^'\n]*')+)/;
 
 /**

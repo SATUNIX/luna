@@ -426,7 +426,7 @@ try {
     `c\\d packages/core && patch -p1 -i ${WS}/reltrad.patch`, `c''d packages/core && patch -p1 -i ${WS}/reltrad.patch`,
     "shopt -s expand_aliases\nalias x=patch\nx -p1 < protected.patch",
     "echo 'git apply protected.patch' | sudo -s", "echo 'git apply protected.patch' | su", "echo 'git apply protected.patch' | at now", "echo 'git apply protected.patch' | batch",
-    // Blocked by the text walker before A-90; pinned so that neither reading can drop them.
+    // Blocked by the text walker before A-90 replaced it with the shared parser; pinned so the parser keeps them.
     "echo 'git apply protected.patch' | bash -o pipefail", "echo 'git apply protected.patch' | bash -O extglob", "echo 'git apply protected.patch' | busybox sh", "echo 'git apply protected.patch' | fish", "echo 'git apply protected.patch' | mksh",
     "sh <(echo 'git apply protected.patch')", "source <(echo 'git apply protected.patch')", `CMD='git apply protected.patch'; bash -c "$CMD"`,
     `sudo -D packages/core patch -p1 -i ${WS}/reltrad.patch`, `sudo --chdir=packages/core patch -p1 -i ${WS}/reltrad.patch`, "chroot /srv git apply protected.patch", "screen -dm git apply protected.patch",
@@ -436,6 +436,46 @@ try {
     "env -S'git apply protected.patch'", "env -vS'git apply protected.patch'", "env -u X -S'patch -p1 -i protected.patch'", "env -Sgit\\ apply\\ protected.patch", "env --split-string='git am protected.patch'",
     "sudo -s <<< 'git apply protected.patch'", "sudo -i <<< 'git apply protected.patch'", "su <<< 'git apply protected.patch'", "doas -s <<< 'git apply protected.patch'", "at now <<< 'git apply protected.patch'", "batch <<< 'git apply protected.patch'",
     "echo 'git apply protected.patch' > cmds.txt; su < cmds.txt",
+    // The parser reads these since A-90 part 3: `time -p`, a case arm or nested parentheses inside a command
+    // substitution (also in a heredoc), and a wrapper option that moves the directory (unknown, so it fails closed).
+    "time -p git apply protected.patch", "\\time -p git apply protected.patch", `echo "$(case x in x) git apply protected.patch;; esac)"`, "echo $(case x in x) git apply protected.patch;; esac)",
+    "cat <<EOF\n$( (git apply protected.patch) )\nEOF", "cat <<EOF\n$(case x in x) git apply protected.patch;; esac)\nEOF",
+    `nsenter --wd=packages/core patch -p1 -i ${WS}/reltrad.patch`, `unshare -w packages/core patch -p1 -i ${WS}/reltrad.patch`,
+    // Read through the shared parser by both hooks since A-90 part 3 (the firewall rated these medium or low before):
+    // text handed to a shell through a substitution, a heredoc fed to parallel, yash, busybox ash or make -f -, an
+    // arithmetic subscript, awk's system(), a command name or eval text computed at run time, and a pipe into make
+    // or a bare ssh.
+    `bash -c "$(cat <<'EOF'\ngit apply protected.patch\nEOF\n)"`, `bash -c "$(echo 'a; git apply protected.patch')"`,
+    "parallel <<'EOF'\ngit apply protected.patch\nEOF", "yash <<'EOF'\ngit apply protected.patch\nEOF", "busybox ash <<'EOF'\ngit apply protected.patch\nEOF", "make -f - <<'EOF'\nall:\n\tgit apply protected.patch\nEOF",
+    "let 'a[$(git apply protected.patch)]'", `awk 'BEGIN{system("git apply protected.patch")}'`,
+    "P=patch; $P -p1 < protected.patch", "G=git; $G apply protected.patch", `eval "$(echo git apply protected.patch)"`, `bash -c "$(echo git apply protected.patch)"`, `sh -c "$(printf 'git apply protected.patch')"`,
+    "echo 'git apply protected.patch' | make -f -", "echo 'git apply protected.patch' | ssh localhost",
+    // Forms the deleted walker refused, kept by the parser reading (A-90 part 3 review): interpreter code on a
+    // heredoc or here-string, `esac` as an argument inside a case arm, directory options of systemd-run and an
+    // abbreviated `sudo --chdir`, a patch writer in a value a program runs (GIT_EDITOR, PAGER, CC, `git -c
+    // core.editor`), a makefile on stdin in any spelling, `watch -d`/`-g`, `nsenter -r`/`-w`, pdksh, and `$"git"`.
+    "node <<'EOF'\nrequire('child_process').execSync('git apply protected.patch')\nEOF", "python3 <<'EOF'\nimport os\nos.system('git apply protected.patch')\nEOF", `node <<< "require('child_process').execSync('git apply protected.patch')"`,
+    "echo $(case y in x) echo esac;; y) git apply protected.patch;; esac)",
+    `systemd-run --working-directory packages/core patch -p1 -i ${WS}/reltrad.patch`, `systemd-run -p WorkingDirectory=${WS}/packages/core patch -p1 -i ${WS}/reltrad.patch`,
+    `sudo --chdi=packages/core patch -p1 -i ${WS}/reltrad.patch`, `sudo -n --chd=packages/core patch -p1 -i ${WS}/reltrad.patch`,
+    "GIT_EDITOR='git apply protected.patch; true' git commit", "GIT_SEQUENCE_EDITOR='git apply protected.patch; true' git rebase -i HEAD~1", "GIT_SSH_COMMAND='git apply protected.patch; ssh' git fetch",
+    "PAGER='git apply protected.patch; cat' man ls", "CC='git apply protected.patch; gcc' make", "env GIT_EDITOR='git apply protected.patch; true' git commit", "GIT_EDITOR='git apply protected.patch; true' sudo git commit",
+    "git -c core.editor='git apply protected.patch' commit", "git -c core.pager='git apply protected.patch; cat' log", "git -c credential.helper='!git apply protected.patch' fetch", "git -c diff.external='git apply protected.patch; true' diff",
+    "make -sf - <<'EOF'\nall:\n\tgit apply protected.patch\nEOF", "make -f /dev/stdin <<'EOF'\nall:\n\tgit apply protected.patch\nEOF", "make --makefile=- <<'EOF'\nall:\n\tgit apply protected.patch\nEOF", "gmake -f - <<'EOF'\nall:\n\tgit apply protected.patch\nEOF",
+    "watch -d git apply protected.patch", "watch -g git apply protected.patch", "nsenter -t 1 -r git apply protected.patch", "nsenter -t 1 -w git apply protected.patch",
+    "echo 'git apply protected.patch' | pdksh", "pdksh <<'EOF'\ngit apply protected.patch\nEOF", `$"git" apply protected.patch`, `$"patch" -p1 -i protected.patch`,
+    // A second review round: a subshell as a case arm, `if`/`while` before a case and a comment inside $( ),
+    // systemd-run -d and xargs -i/-l (flags, not value options), interpreter argument lists, a read-only call next
+    // to a hidden writer in an opaque runner, ssh -o ProxyCommand/LocalCommand, abbreviated and process-substitution
+    // makefiles, interpreter code from a process substitution, and a run-variable exported in an earlier command.
+    "case x in x) (git apply protected.patch);; esac", "echo $(case x in x) (git apply protected.patch);; esac)",
+    "echo $(if case x in x) git apply protected.patch;; esac; then :; fi)", "echo $(while case x in x) git apply protected.patch;; esac; do break; done)", "echo $(case x in # )\n x) git apply protected.patch;; esac)",
+    "systemd-run -d git apply protected.patch", "systemd-run -Pd git apply protected.patch", "echo | xargs -i git apply protected.patch", "echo | xargs -l git apply protected.patch",
+    `perl -e 'system("patch","-p1","-i","protected.patch")'`, `node -e 'require("child_process").spawnSync("patch",["-p1","-i","protected.patch"])'`,
+    "docker run --rm img bash -c 'git apply --check p.patch && G=git; $G apply protected.patch'", "mywrap 'git apply --check x.patch; mywrap2 git apply protected.patch'",
+    "ssh -o ProxyCommand='git apply protected.patch; nc %h %p' build true", "ssh -oLocalCommand='git apply protected.patch' -oPermitLocalCommand=yes build",
+    "make --fil=- <<'EOF'\nall:\n\tgit apply protected.patch\nEOF", "make -f <(cat <<'EOF'\nall:\n\tgit apply protected.patch\nEOF\n)",
+    "python3 <(echo \"import os; os.system('git apply protected.patch')\")", "GIT_EDITOR='git apply protected.patch; true'; export GIT_EDITOR; git commit",
     // A protected file restored from another ref.
     `git checkout HEAD~1 -- ${POLICY}`, `git checkout HEAD~1 ${POLICY}`, `git restore --source=HEAD~1 ${POLICY}`, `git restore -s HEAD~1 -- ${POLICY}`,
   ];
@@ -463,26 +503,17 @@ try {
     // The parser's fail-closed rules look at the segment they apply to: a computed command elsewhere on a line that
     // names a patch tool, an ssh or make that does not read commands from the pipe, stay allowed.
     `eval "$(direnv hook bash)" && npm version patch`, `"$CC" -o app main.c && npm version patch`, "cat release.patch | ssh build 'cat > /tmp/r.patch'", "echo patch | make -C build all", "$EDITOR notes.md && git log --grep apply",
+    // Read-only work the parser reading must leave alone: remote commands that only read or name patches, a dry run
+    // inside an opaque runner, `case` and `in` as plain words inside a substitution, and harmless environment values.
+    "ssh build 'cat /srv/fix.patch'", "ssh build 'git stash apply'", "ssh build 'cd app && git format-patch -1 HEAD'", "ssh build 'git log -1 --grep=apply'",
+    "docker run --rm -v $PWD:/w img bash -c 'cd /w && patch -p1 --dry-run < fix.patch'",
+    "cat $(ls tests/case/in/x.txt)", "echo $(git log --grep case -- in) ; ls", "cat <<EOF\n$(echo case in x) done\nEOF", "echo $(echo case in) ; git apply benign.patch",
+    "GIT_EDITOR=vim git commit", "CC=gcc make", "git -c user.name=x commit -m 'apply patch'",
+    // An environment value that only mentions a patch tool, given to a program that does not run it as a command.
+    `MSG="git apply x" echo hi`, `LABEL="git apply" ls`, `TITLE="git am fails" gh issue list`, `GIT_COMMITTER_NAME="git am bot" git commit -m x`, `DEBUG="git apply" npm test`, `NOTES="run patch -p1" npm version patch`,
   ];
   // High for their own reasons (a cluster change, a publish), so these only assert the patch guard stays out of it.
   const PATCH_BENIGN_RATED_ELSEWHERE = ["kubectl patch deployment web -p '{}'", "oc patch pod x -p '{}'", "cargo release patch"];
-  // The walk reads these; the firewall rates text handed to a shell through a substitution as dynamic execution,
-  // and its own parser does not read a heredoc fed to parallel, yash, busybox or make as commands (README limits).
-  const PATCH_WRITES_PROTECTED_PATHS_ONLY = [
-    `bash -c "$(cat <<'EOF'\ngit apply protected.patch\nEOF\n)"`, `bash -c "$(echo 'a; git apply protected.patch')"`, `echo "$(case x in x) git apply protected.patch;; esac)"`,
-    "parallel <<'EOF'\ngit apply protected.patch\nEOF", "yash <<'EOF'\ngit apply protected.patch\nEOF", "busybox ash <<'EOF'\ngit apply protected.patch\nEOF", "make -f - <<'EOF'\nall:\n\tgit apply protected.patch\nEOF",
-    // The firewall rates these medium or low (README limits): a directory-moving wrapper option, `time -p`, a case
-    // arm or nested parentheses in a substitution, an arithmetic subscript, awk's system(), a command name or eval
-    // text computed at run time, and a pipe into make or ssh. protected-paths fails closed on each.
-    `nsenter --wd=packages/core patch -p1 -i ${WS}/reltrad.patch`, `unshare -w packages/core patch -p1 -i ${WS}/reltrad.patch`,
-    "time -p git apply protected.patch", "\\time -p git apply protected.patch", "echo $(case x in x) git apply protected.patch;; esac)",
-    "cat <<EOF\n$( (git apply protected.patch) )\nEOF", "cat <<EOF\n$(case x in x) git apply protected.patch;; esac)\nEOF", "let 'a[$(git apply protected.patch)]'", `awk 'BEGIN{system("git apply protected.patch")}'`,
-    "P=patch; $P -p1 < protected.patch", "G=git; $G apply protected.patch", `eval "$(echo git apply protected.patch)"`, `bash -c "$(echo git apply protected.patch)"`, `sh -c "$(printf 'git apply protected.patch')"`,
-    "echo 'git apply protected.patch' | make -f -", "echo 'git apply protected.patch' | ssh localhost",
-  ];
-  for (const cmd of PATCH_WRITES_PROTECTED_PATHS_ONLY) {
-    if (!(await blocked(cmd))) problems.push(`protected-paths allows patch write: ${cmd}`);
-  }
   for (const cmd of PATCH_BENIGN_RATED_ELSEWHERE) {
     if (await blocked(cmd)) problems.push(`protected-paths blocks benign patch: ${cmd}`);
     if (C.classifyCommand(cmd, env).findings.some((f) => f.code === "patch_unreadable")) problems.push(`tool-firewall calls benign patch unreadable: ${cmd}`);

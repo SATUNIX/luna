@@ -4,7 +4,7 @@
 // critical), a reason code and a short human detail. The action's tier is the highest finding.
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
-import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchStdinOf, patchTargetsAt, type PatchTool } from "./shared/inline-guard.ts";
+import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInParse, patchCallsInText, patchStdinOf, patchTargetsAt, type PatchTool } from "./shared/inline-guard.ts";
 import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shared/shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
@@ -2594,8 +2594,11 @@ export function classifyCommand(command: string, env: ClassifyEnv, tool = "bash"
   // configuration and has a write- or exec-capable call is at least high, whatever target it builds.
   const inline = inlineAgentConfigWrite(command);
   if (inline) a.findings.push({ tier: "high", effect: "security_control", code: "inline_agent_config", detail: inline, key: "inline agent-config write" });
-  // The same catch-all protected-paths applies: a patch writer the shell walk could not place.
-  if (patchCallsInText(command).some((found) => found.guessed)) a.findings.push({ tier: "high", effect: "security_control", code: "patch_unreadable", detail: "the command names a patch tool in a form that cannot be read, so it may touch a safety-control file", key: "patch writer unreadable" });
+  // The same reading protected-paths applies (shared/inline-guard.ts patchCallsInParse): a patch writer the parser
+  // finds but cannot place, or a patch tool named where the parser cannot follow what runs.
+  // The text walker stays as a fail-closed backstop for forms the parser does not model (shared/inline-guard.ts).
+  const unseen = patchCallsInParse(parseShell(command, { cwd: env.cwd, home: env.home }), command).some((found) => "unseen" in found) || patchCallsInText(command).some((found) => found.guessed);
+  if (unseen) a.findings.push({ tier: "high", effect: "security_control", code: "patch_unreadable", detail: "the command names a patch tool in a form that cannot be read, so it may touch a safety-control file", key: "patch writer unreadable" });
   a.tool = tool;
   a.command = command;
   a.segments = segments;

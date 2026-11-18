@@ -146,38 +146,45 @@ runs. The limits it leaves open:
   anything: `python3 tool.py` is not inspected (`docs/security.md`).
 - **Inherited shell state.** A `CDPATH` or shell function that was set before the command, and an alias, are
   not visible in its text. A `cd` is placed as if none applied.
-- **Wrappers and spellings it does not know.** A catch-all runs after the walk: a piece whose words still
-  name `git` then `apply` or `am`, or `patch`, and that gave no readable call fails closed as an unreadable
-  patch, unless the command is a known reader or a known harmless command. Wrappers not on any list are
-  covered this way, and an unusual invocation may be refused when it does nothing wrong. `patch` counts
-  only when the next word is an option, a redirect or a `.patch` or `.diff` file, or when the piece has its
-  input fed in, and `apply` or `am` only straight after `git` and its global options, so a `patch` with plain
-  positional operands behind an unknown wrapper is not caught. The walk reads `$'git'` and `$"git"` as `git`,
-  but a word spelt with ANSI-C escapes (`$'\x67it'`) is not decoded.
-- **Computed commands and editors.** In the firewall, a command word computed at runtime (`X=git; $X apply
-  p.patch`, `$(which git) apply p.patch`), text passed to a shell or `eval` through a command substitution
-  (`bash -c "$(echo git apply p.patch)"`) and an editor's own command option (`vim -c '!git apply p.patch' x`)
-  are not read as patch writers even when the line names a patch tool; they get its medium rating for dynamic
-  execution. protected-paths refuses the computed forms on a line that names a patch tool.
+- **Wrappers and spellings it does not know.** A catch-all runs on every parsed command that is not itself a
+  patch call, and in the text walker on every piece: if its words still name `git` then `apply` or `am`, or
+  `patch`, it fails closed as an unreadable patch, unless the command is a known reader or a known harmless
+  command. Wrappers not on any list, and
+  inline interpreter code (`python3 -c 'os.system("git apply …")'`, awk's `system()`), are covered this way,
+  and an unusual invocation may be refused when it does nothing wrong. `patch` counts only when the next word
+  is an option, a redirect or a `.patch` or `.diff` file, or when the command has its input fed in, and
+  `apply` or `am` only straight after `git` and its global options, so a `patch` with plain positional
+  operands behind an unknown wrapper is not caught.
+- **Computed commands.** A command word or `eval` text computed at runtime (`X=git; $X apply p.patch`,
+  `$(which git) apply p.patch`, `bash -c "$(echo git apply p.patch)"`) fails closed when that command's own
+  words, with the values of the variables it uses, name a patch tool. A command computed from text that names
+  none (a variable set outside the command, an encoded string) is not read; the firewall rates it medium for
+  dynamic execution.
 - **Inert text.** A quoted-delimiter heredoc body, and quoted text, are not read as commands only when they
   go to a command that treats its words as data (`cat`, `tee`, `git commit` and the like; never `make`, which
   reads a heredoc as a makefile). Every other heredoc is read as commands. A heredoc saved to a file and run later is not seen, nor is an option of such a command that runs
   its value (`git fetch --upload-pack`, `man -P`). An unquoted heredoc body, and quoted text behind a wrapper or
   an assignment, are still read as commands and may be refused when they do nothing wrong.
-- **Two shell readers.** protected-paths reads patch writers twice and refuses what either reading finds:
-  with the shared text walker and with this firewall's parser (`packages/core/shared/shell.ts`, generated into
-  both extensions), whose reading of stdin and of the segment's directory both hooks share
-  (`shared/inline-guard.ts` `patchStdinOf`, `patchTargetsAt`). On a line that names a patch tool it also fails
-  closed on text the parser reports unreadable, a command name or `eval` text computed at run time when that
-  command's own words (with the variables it uses) name a patch tool, and commands fed to the standard input
-  (a pipe, a here-string, a `<` file) of a shell, `sudo -s`, `su`, `at`, `batch`, `make -f -` or an `ssh` with
-  no remote command. The parser reads `env -S` with the split string attached to the option (`env
-  -S'git apply p.patch'`) as a command, in both hooks. Some forms are still refused
-  only by protected-paths and rated medium or low here: a heredoc fed to `parallel`, `yash`, `busybox ash` or
-  `make -f -`, `time -p`, a `case` arm or nested parentheses inside a substitution, `nsenter --wd` and
-  `unshare -w`, and awk's `system()` (`PATCH_WRITES_PROTECTED_PATHS_ONLY` in
-  `tests/protected-paths-corpus-smoke.ts`). The text walker is still the firewall's catch-all for patch
-  writers it cannot place; replacing it with parser rules in both hooks is the rest of board item A-90.
+- **Two readers, one shared rule.** Both hooks read patch writers with this firewall's parser
+  (`packages/core/shared/shell.ts`, generated into both extensions) through one shared rule
+  (`shared/inline-guard.ts` `patchCallsInParse`, `patchStdinOf`, `patchTargetsAt`), and also with the shared
+  text walker (`patchCallsInText`), kept as a fail-closed backstop: a writer either reading finds is checked in
+  protected-paths, and either reading's unreadable verdict is `patch_unreadable` here. The walker stays because
+  two adversarial reviews of a parser-only reading found forms only its quote-blind reading catches (interpreter
+  argument lists, ssh options that run locally, exported variables, abbreviated build-tool options); removing it
+  would loosen both hooks. Besides a patch call it cannot place, the parser rule fails closed on a line that
+  names a patch tool when the parser reports text it cannot read, and on commands fed to the standard input (a
+  pipe, a heredoc, a here-string, a `<` file) of a shell, `sudo -s`, `su`, `at`, `batch`, `parallel`, a build
+  tool reading its build file from stdin or an `ssh` with no remote command, a shell with no script inside a
+  subshell, group or `if` after a pipe, and a script or build file read from a process substitution. A patch
+  tool named in a value a program runs as a command also fails closed: a run-variable in the command's
+  environment or set with `export` (`GIT_EDITOR`, `PAGER`, `CC`; any variable for a build tool) and `git -c`
+  values (`core.editor`, `core.pager`, `diff.external`), as does one in heredoc or here-string text fed to a
+  command that does not read it as data. Targets are placed at the session directory and also at the directory
+  the parser tracked; a wrapper option that moves the directory (`sudo -D`, `nsenter --wd`, `unshare -w`,
+  `systemd-run --working-directory`, `conda run --cwd` and the like) leaves it unknown, which fails closed.
+  protected-paths' other write targets (redirects, `cp`, `sed -i` and the like) are still read with its own
+  regular expressions (`docs/future-work.md`).
 - **Patch writers the text does not name.** A shell fed through a pipe is only caught when the line names a
   patch tool, so a script that is encoded or held in a file is not.
 - **History-carrying git commands.** `git stash pop` and `apply`, `merge`, `rebase`, `cherry-pick`,

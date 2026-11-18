@@ -320,6 +320,26 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **Both guards read patch writers with one shell parser and one rule (A-90, part 3).** Finding: after part 2
+  the firewall rated many patch writers protected-paths refused only medium or low (a heredoc fed to
+  `parallel`, `yash`, `busybox ash` or `make -f -`, text handed to a shell through a substitution, a computed
+  command name, awk's `system()`, a pipe into `make -f -` or a bare `ssh`, a patch tool in `GIT_EDITOR` or
+  `git -c core.editor`); and the parser misread `time -p`, a `case` arm or nested parentheses inside a command
+  substitution (also in a heredoc), a subshell as a case arm, `parallel` with no command (GNU parallel runs its
+  input lines), `watch -d`/`-g`, `nsenter -r`/`-w`, `systemd-run -d`, `xargs -i`/`-l` and `$"git"`. Cause: the
+  firewall's patch reading came partly from the text walker, and these parser gaps. Fix: the parser reads all
+  of these, leaves the directory unknown behind a wrapper option that moves it (`sudo -D` and its prefixes,
+  `nsenter --wd`, `unshare -w`, `systemd-run --working-directory`, `run0 --chdir`, `conda run --cwd` and the
+  like), and treats pdksh and yash as shells; `patchCallsInParse` carries the walker's word-level catch-all
+  onto each parsed command (heredoc and here-string text included) and fails closed on runners fed by any
+  stdin source, scriptless shells after a pipe, process-substitution scripts and build files, run-variables
+  and `git -c` values naming a patch tool, and patch writers applied through ssh; both hooks apply this rule,
+  and the text walker stays beside it in both as a fail-closed backstop. The walker was removed and then
+  restored before this landed: two adversarial reviews of the parser-only reading found about thirty forms
+  only the walker's quote-blind reading caught, so removing it would have loosened both hooks. Verification:
+  `tests/protected-paths-corpus-smoke.ts` refuses all 356 patch forms in both hooks (the protected-paths-only
+  list is gone) and allows all 113 controls.
+
 - **protected-paths reads patch writers with the firewall's shell parser too (A-90, part 2).** Finding:
   protected-paths found patch writers only with a text walker, which read some commands differently from
   bash and from the firewall: it allowed `# note \⏎git apply p.patch` (a comment does not continue onto

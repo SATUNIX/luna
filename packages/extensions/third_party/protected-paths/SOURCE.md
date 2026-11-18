@@ -48,6 +48,9 @@
     file into `sudo -s`, `su`, `doas -s`, `at` or `batch` are now refused, as are a command name or `eval` text
     computed at run time whose own words name a patch tool, and, on a line naming one, commands fed to
     `make -f -` or a bare `ssh` (`tests/protected-paths-corpus-smoke.ts`)
+  - patch writers are read through the parser by the same rule tool-firewall uses, with the shared text walker
+    kept as a fail-closed backstop in both hooks; every form either reads as a patch write is refused by both
+    (`tests/protected-paths-corpus-smoke.ts`)
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)

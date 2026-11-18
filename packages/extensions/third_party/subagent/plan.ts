@@ -32,7 +32,7 @@ export const PLAN_DESCRIPTION =
   "A step is {id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}. agent defaults to implementer; tools narrow. " +
   "outputs are files to write relative to the run directory. " +
   "{previous} is the prior step's output (after expand, its answer); {{steps.<id>.output}} an earlier one. when: {step, status} on an earlier result. " +
-  "gate: {pass, retry, max_loops?} loops until the last non-empty line is pass (or a /regex/ matches the output tail); the host adds the review to the retry step itself. " +
+  "gate: {pass, retry, max_loops?} loops until the last line is pass (a /regex/: the tail); the host adds the review to the retry step itself. " +
   'expand answers {"steps":[...]} or {"done":"text"}.';
 
 const EXAMPLE = 'Example: {"steps":[{"task":"..."}]}';

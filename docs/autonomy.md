@@ -1331,9 +1331,19 @@ version, 1), `at` (ISO time), `run` and `type`, plus the fields of its type:
 | `failure` | the run fails, or the supervisor stops on an error | `code` (the failure reason, `supervisor_error` or `boundary_violation`), `detail` |
 | `dispatch.claim` | a dispatch cycle claims or continues a board item | `n`, `item`, `engineer`, `outcome` |
 | `dispatch.submit` | a merged dispatch cycle records its item as submitted | `n`, `item`, `engineer`, `sha` |
+| `harness.degraded` | a worker session started without an optional harness command; the run continues (once per session) | `missing` (command names) |
 
 Cycle, gate, push and dispatch events come from the cycling templates (`self-improve`, `dispatch`);
-a finite run (`implement`, `deploy`) writes the `run.*` and `failure` events.
+a finite run (`implement`, `deploy`) writes the `run.*` and `failure` events. Any template can write
+`harness.degraded`.
+
+At the start of every worker session the supervisor asks pi for its registered commands to check
+the kit harness loaded (`HARNESS_CORE` and `HARNESS_OPTIONAL` in `packages/autonomy/lib/rpc.ts`). A
+missing core command (the goal, hand-off, verification and firewall commands), a malformed reply or
+no reply within 30 seconds fails the run with `worker_unavailable`. A missing optional command
+(orchestration or tracing) does not: the session goes on without it and the supervisor writes a
+`harness.degraded` event. `tests/autonomy-smoke.ts` and `tests/autonomy-events-smoke.ts` pin both
+outcomes.
 
 How the file is written:
 

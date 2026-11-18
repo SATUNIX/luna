@@ -150,9 +150,9 @@ dependencies {
     // Android Lint runs with the same outdated Bouncy Castle and commons-lang3 as AGP (see the
     // root build file), plus httpclient 4.5.6 (GHSA-7r82-7xv7-xcpj); raise them to their latest.
     constraints {
-        add("androidLintTool", "org.bouncycastle:bcprov-jdk18on:1.86")
-        add("androidLintTool", "org.bouncycastle:bcpkix-jdk18on:1.86")
-        add("androidLintTool", "org.bouncycastle:bcutil-jdk18on:1.86")
+        add("androidLintTool", "org.bouncycastle:bcprov-jdk18on:1.87")
+        add("androidLintTool", "org.bouncycastle:bcpkix-jdk18on:1.87")
+        add("androidLintTool", "org.bouncycastle:bcutil-jdk18on:1.87")
         add("androidLintTool", "org.apache.commons:commons-lang3:3.21.0")
         add("androidLintTool", "org.apache.httpcomponents:httpclient:4.5.14")
     }

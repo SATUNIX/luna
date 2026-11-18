@@ -277,6 +277,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A missing optional harness command degrades an autonomous run instead of killing it (PG-01).**
+  Finding: the supervisor's start-of-session `get_commands` check required all six harness
+  commands, so when `/subagents` was renamed two runs failed with `worker_unavailable` and stayed
+  down until they were recreated. Fix: the commands are split into core (`/goal`, `/handoff`,
+  `/verify`, `/firewall`: still fail closed, as do a malformed reply and a timeout) and optional
+  (`/orchestrate`, `/trace`): a session without an optional one continues, and the supervisor logs
+  it and writes a new `harness.degraded` host event once per session. A task step whose worker
+  failed the check is no longer accepted when it settles before the check is read. Verified by
+  `tests/autonomy-smoke.ts` and `tests/autonomy-events-smoke.ts`.
 - **The rename of the remaining `pi-system` identities is written down as a proposal (V-103).** Finding:
   `docs/branding.md` said why the package, paths, compose names and other identities keep `pi-system` but
   not how they could be renamed, and two placeholders still used the old name (the checkout path in

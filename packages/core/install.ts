@@ -41,7 +41,7 @@ import path from "node:path";
 import { resolveProfile, type ResolvedExtension } from "./lib/resolve.ts";
 import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
-import { mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
+import { applyCompanionFilters, mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
 import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
@@ -786,6 +786,21 @@ if (!noExternals) {
       }
     } else if (companions.length > 0) {
       console.log(`\n[install] ${companions.length} companion external(s) already registered.`);
+    }
+
+    // A companion's own skills are listed in the first request of every session, so sources.json can
+    // declare a skill filter for it (`skills`); it goes onto the companion's settings.json entry here,
+    // whether this run registered it or it was registered before (an entry that has a filter keeps it).
+    const filtered = companions.filter((c) => c.skills !== undefined);
+    if (filtered.length > 0 && dryRun) {
+      console.log(`\n[install] Dry run: would apply the sources.json skill filter to ${filtered.map((c) => c.name).join(", ")}`);
+    } else if (filtered.length > 0) {
+      try {
+        const applied = new Set(applyCompanionFilters(settingsPath, filtered));
+        for (const c of filtered) if (applied.has(c.source)) console.log(`[install] ${c.name}: skill filter applied (${c.skills?.length ? c.skills.join(", ") : "none of its bundled skills load"}).`);
+      } catch (error) {
+        console.warn(`[install] WARN: could not apply the skill filter for ${filtered.map((c) => c.name).join(", ")}: ${errorMessage(error)}`);
+      }
     }
   }
 }

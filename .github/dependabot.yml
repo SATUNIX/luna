@@ -66,6 +66,10 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # The images pin pi exactly in their Dockerfiles (PI_VERSION) and container-static checks the lockfile
+    # agrees, so any pi bump here (patch included) is a reviewed change made by hand with the pin.
+    ignore:
+      - dependency-name: "@earendil-works/*"
     groups:
       image-tools:
         patterns: ["*"]

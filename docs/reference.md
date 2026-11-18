@@ -186,7 +186,7 @@ Extension `memory-local`. Delete a memory entry by ID.
 
 ### `memory_forget`
 
-Extension `memory-vault`. Forget a memory by id, name or path (moved to the vault's .trash, recoverable). Use when the user says a memory is wrong or asks to forget it.
+Extension `memory-vault`. Forget a memory by id, name or path (moved to .trash, recoverable). Use when the user says it is wrong or asks to forget it.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -194,16 +194,16 @@ Extension `memory-vault`. Forget a memory by id, name or path (moved to the vaul
 
 ### `memory_save`
 
-Extension `memory-vault`. Save a durable memory to the vault. Use when asked to remember something, for a stated preference, or for a non-obvious decision or gotcha that should outlive the session. Updates an existing memory rather than duplicating it. Do not save what code or git history already records.
+Extension `memory-vault`. Save a durable memory: something asked to be remembered, a stated preference, or a non-obvious decision or gotcha. Updates an existing memory instead of duplicating. Do not save what code or git history records.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `title` | string | Short title (becomes the note name) |
-| `content` | string | The memory itself: the fact, and for decisions/gotchas the why and how to apply it |
+| `title` | string | Short title (the note name) |
+| `content` | string | The fact; for decisions and gotchas also the why and how to apply it |
 | `type?` | see source | — |
 | `tags?` | string[] | — |
-| `scope?` | "project" \| "global" | project (default) or global (applies in every project, e.g. personal preferences) |
-| `pinned?` | boolean | Show at the start of every session in this project |
+| `scope?` | "project" \| "global" | project (default) or global (every project) |
+| `pinned?` | boolean | Show at every session start in this project |
 
 ### `memory_search`
 
@@ -216,7 +216,7 @@ Extension `memory-local`. Search persistent local memory by semantic vector when
 
 ### `memory_search`
 
-Extension `memory-vault`. Search saved memories (this project and global) by keywords. Returns titles, types, snippets and note paths.
+Extension `memory-vault`. Search saved memories (project and global) by keywords. Returns titles, types, snippets, paths.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -269,12 +269,12 @@ Extension `skill-forge`. Score Luna against its own eval harness (real, eval-tie
 
 ### `skill_search`
 
-Extension `skill-router`. Search all installed skills (runbooks for specific kinds of work) — including ones not listed in the system prompt. Returns the best matches with their SKILL.md paths; read the one that fits before doing the work.
+Extension `skill-router`. Search all installed skills (runbooks), including unlisted ones. Returns the best matches with SKILL.md paths; read the best fit before working.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `query` | string | What you are about to do, in a few words |
-| `limit?` | number | Max results (default 5) |
+| `query` | string | What you are about to do |
+| `limit?` | number | Max results |
 
 ### `skill_synthesise`
 
@@ -332,7 +332,7 @@ Extension `task-graph`. List tasks in the graph, optionally filtered by status.
 
 ### `task_next`
 
-Extension `task-graph`. Return the next actionable task: a pending task whose dependencies are all done. Claims it (marks in_progress) so a second call does not hand out the same task twice. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
+Extension `task-graph`. Claim the next actionable task (pending, dependencies done) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
 
 Parameters: none.
 
@@ -359,17 +359,17 @@ Extension `todo`. The session's todo list. Actions: list, add (text or items), s
 
 ### `verdict_status`
 
-Extension `verifier-board`. Report the definition-of-done board: each recorded verdict, the goal, the todo and task progress, the latest verification report, and whether the mission may be considered complete.
+Extension `verifier-board`. Show the definition-of-done board: verdicts, goal, todo and task progress, latest verification report, and whether the mission may be considered complete.
 
 Parameters: none.
 
 ### `verify_completion`
 
-Extension `verify-gate`. Run an independent check that the task is done. It runs the project check command if one exists, then a read-only reviewer that compares the repository against the goal, todo list, task graph, and recent user requests. Use it before you report that the work is complete. It records the result on the verifier board.
+Extension `verify-gate`. Independent check that the task is done: runs the project check command if any, then a read-only reviewer compares the repository against the goal, todos, task graph and recent requests. Use it before reporting the work complete. Records the result on the verifier board.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `focus?` | string | The acceptance criteria or scope to check. Leave empty to use the goal, todos, and recent requests. |
+| `focus?` | string | Acceptance criteria or scope to check; empty uses the goal, todos and recent requests. |
 
 ### `workflow`
 

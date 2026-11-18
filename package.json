@@ -153,6 +153,7 @@
     "smoke:autonomy-run": "node tests/autonomy-run-smoke.ts",
     "smoke:autonomy-selfimprove": "node tests/autonomy-selfimprove-smoke.ts",
     "smoke:autonomy-meter": "node tests/autonomy-meter-smoke.ts",
+    "smoke:autonomy-reporting": "node tests/autonomy-reporting-smoke.ts",
     "smoke:autonomy-review-inputs": "node tests/autonomy-review-inputs-smoke.ts",
     "smoke:autonomy-lean": "node tests/autonomy-lean-smoke.ts",
     "smoke:autonomy-preflight": "node tests/autonomy-preflight-smoke.ts",

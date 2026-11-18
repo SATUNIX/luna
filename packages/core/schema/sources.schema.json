@@ -29,6 +29,11 @@
           "allowInstallScripts": {
             "type": "string",
             "description": "The reviewed reason this companion needs its dependency lifecycle scripts. Absent: the install runs with npm_config_ignore_scripts=true."
+          },
+          "skills": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "pi package-filter patterns for the skills this companion bundles, written onto its settings.json entry by the installer: [] loads none, \"!pattern\" excludes one. Absent: every skill the package ships is loaded. An entry that already has a skills filter is left as it is."
           }
         }
       }

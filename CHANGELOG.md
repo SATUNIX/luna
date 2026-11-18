@@ -97,6 +97,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **The ASCII status bar prints only ASCII.** With a tty, iso, ansi or ascii theme, `PI_KIT_ASCII=1`
+  or `/footer ascii on`, status text from other extensions still showed the Unicode ellipsis, circles
+  and wide characters, and a chip was cut with `…`. The bar now prints `...`, `*`, `o` and `-` for
+  those glyphs and `?` for any other non-ASCII character, in chips and in the path, branch, model and
+  session name, and cuts with `...`. A chip's colour is unchanged, and so is the Unicode bar
+  (`tests/status-bar-smoke.ts`).
+
 - **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
   `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
   dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only

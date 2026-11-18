@@ -22,6 +22,7 @@ export const MANUAL_ONLY: Readonly<Record<string, string>> = {
   "packages/container/capability/tests/smoke.sh": "needs a container engine and the capability image; run by the operator",
   "packages/container/capability/tests/validate-compose.sh": "needs a container engine (docker compose config); run by the operator",
   "tests/autonomy-dispatch-smoke.ts": "board claim race (real child processes) and dispatch template suite; tests/autonomy-cli-smoke.ts runs it as a subprocess in the gate",
+  "tests/autonomy-events-smoke.ts": "host event log suite; tests/autonomy-cli-smoke.ts runs it as a subprocess in the gate",
 };
 
 const TEST_DIR = /(^|\/)(tests?|__tests__)\//;

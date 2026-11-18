@@ -267,20 +267,27 @@ function publishNow(ctx: StepContext): void {
   const p = contract.promotion;
   if (ctx.engine.stopRequested || p.policy === "none" || p.requiresOperatorApproval) return;
   const si = siState(state);
+  const cfg = siConfig(ctx.cfg);
   try {
-    const r = gm.publish(repo.git(), siConfig(ctx.cfg), si.lastPushed);
+    const r = gm.publish(repo.git(), cfg, si.lastPushed);
     si.lastPushed = r.state;
     // Nothing was pushed when the destination already holds the published state (for example after
     // a blocked-publication reset). Only a real push is a successful publish, so only it clears the
     // blocker and the streak; otherwise an unchanged state would silently reset the guard.
     if (!r.pushed) return;
+    ctx.engine.emit({ type: "push", run: cfg.run, branch: cfg.integrationBranch, sha: lastPublishedHead(si, cfg.integrationBranch), ok: true });
     if (si.publishError) log("publish recovered");
     si.publishError = null;
     si.publishBlocker = null;
     si.publishBlockedCycles = 0;
   } catch (e) {
     const message = errorMessage(e);
-    if (message !== si.publishError) log(`publish failed (will retry): ${message}`);
+    // Publication is retried on every poll tick, so a failure is logged and written to the event log
+    // once per distinct message, not once per retry.
+    if (message !== si.publishError) {
+      log(`publish failed (will retry): ${message}`);
+      ctx.engine.emit({ type: "push", run: cfg.run, branch: cfg.integrationBranch, sha: null, ok: false, error: message });
+    }
     si.publishError = message;
     // A generic failure must not erase a real leak-scan blocker; only a PublishBlocked sets it (a successful publish clears it above).
     if (e instanceof gm.PublishBlocked) si.publishBlocker = message;
@@ -665,7 +672,10 @@ export async function runStep(ctx: StepContext): Promise<void> {
       claimed = claim.board;
       engineer = claim.engineer;
       const item = claim.board.items[0];
-      if (item) log(`cycle ${pad(n)} dispatch: ${claim.outcome} ${item.id} for ${claim.engineer}`);
+      if (item) {
+        log(`cycle ${pad(n)} dispatch: ${claim.outcome} ${item.id} for ${claim.engineer}`);
+        engine.emit({ type: "dispatch.claim", run: cfg.run, n, item: item.id, engineer: claim.engineer, outcome: claim.outcome });
+      }
     }
     if (!baseRed && (await idleQueue(ctx, upstream, claimed))) return;
     const last = si.history.at(-1);
@@ -681,6 +691,8 @@ export async function runStep(ctx: StepContext): Promise<void> {
   state.phase = "work";
   ctx.save();
   log(`cycle ${pad(n)}/${state.limits.budget.maxSteps} ${resume ? "resuming" : "starting"}; spent $${state.usage.usd.toFixed(2)} of $${state.limits.budget.totalUsd}`);
+  const claimedItem = si.current.board?.items[0]?.id;
+  engine.emit({ type: "cycle.started", run: cfg.run, n, resume, ...(si.current.engineer ? { engineer: si.current.engineer } : {}), ...(dispatchOf(ctx.contract) && claimedItem ? { item: claimedItem } : {}) });
   const held = si.current.reviewPending;
   if (held) {
     // Parked on review-pending: the cycle already ended and its head is held, so the answer retries
@@ -850,8 +862,9 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
       for (const r of ev.results) s.artefacts.push({ kind: "check-evidence", path: r.evidence, step: n, at: r.at });
     });
   }
-  if (engine.stopRequested) return;
   const failing = gate.results.flatMap((r) => (r.steps?.length ? r.steps.filter((x) => x.code !== 0).map((x) => x.name) : r.pass ? [] : [r.id]));
+  if (!gate.skipped) engine.emit({ type: "gate.result", run: cfg.run, n, sha, green: gate.green, failing });
+  if (engine.stopRequested) return;
   const salvaged = result.reason === "host close-out after session exit";
   // The worker's close-out is its note in the state home; a committed report.md still counts for a worker that writes one.
   const note = readNote(ctx.store.p.agentState);
@@ -928,6 +941,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   engine.writeStepSummary(n, { action: "cycle", outcome: entry.outcome, gate: entry.gate, merged: entry.merged, ...(salvaged ? { report: path.join("steps", pad(n), "salvaged-report.json") } : {}) });
   ctx.save();
   log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}cycle-${pad(n)}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
+  engine.emit({ type: "cycle.ended", run: cfg.run, n, outcome: entry.outcome, gate: entry.gate, merged: entry.merged, reason: entry.reason, ...(entry.merged ? {} : { mergeReason: entry.mergeReason }) });
 }
 
 /**
@@ -946,6 +960,7 @@ async function recordDispatchSubmission(ctx: StepContext, n: number, reports: re
     const sha = ctx.repo.git()(["rev-parse", `refs/heads/${cfg.integrationBranch}`]);
     const skipped = await recordSubmission(ctx.store.p.control, { id: item.id, engineer, sha, at: new Date(ctx.rt.now()).toISOString() });
     ctx.log(skipped ? `cycle ${pad(n)} dispatch: submission of ${item.id} not recorded: ${skipped}` : `cycle ${pad(n)} dispatch: ${item.id} submitted by ${engineer} at ${sha.slice(0, 12)}`);
+    if (!skipped) ctx.engine.emit({ type: "dispatch.submit", run: cfg.run, n, item: item.id, engineer, sha });
   } catch (e) {
     ctx.log(`cycle ${pad(n)} dispatch: submission of ${item.id} not recorded: ${errorMessage(e)}`);
   }

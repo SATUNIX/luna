@@ -1385,6 +1385,64 @@ await check("PG-67: a conflicting destination move parks the run on an integrati
   assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), slot.destination, "the destination is unchanged");
 });
 
+await check("PG-69: a host git failure while reconciling a diverged integration branch parks the run on a named question, keeps the cycle record and stays parked across a restart", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const slot: { engine?: MadeEngine; cycle1Head?: string } = {};
+  let moved = false;
+  let stops = 0;
+  const h: Harness = harness(improveRaw(sourceRepo(), {
+    budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 3, maxMinutes: 5000 },
+    promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false },
+  }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([]),
+    hooks: { onSleep: () => { if (slot.engine && h.state().status === "blocked") { stops++; slot.engine.engine.signalled = true; } } },
+    script: async (t) => {
+      t.write("AUDIT_OK", "1\n");
+      t.write("NOTES.md", `cycle ${t.step}\n`);
+      t.note("Outcome: successful\nMode: improve\n\nDone.\n");
+      t.commit(`cycle ${t.step}`);
+      if (t.step !== 1 || moved) return;
+      moved = true;
+      slot.cycle1Head = t.git(["rev-parse", "HEAD"]).stdout.trim();
+      // The destination moves (no conflict), so cycle 2 must reconcile; the host mirror cannot add the
+      // worktree reconciling needs, a real host git failure.
+      const seedSha = h.state().selfImprove?.seedSha;
+      assert.ok(seedSha, "the run recorded its seed");
+      const cloneDir = scratch();
+      sh(cloneDir, "clone", "--quiet", "--no-checkout", bare, cloneDir);
+      sh(cloneDir, "checkout", "--quiet", seedSha);
+      fs.writeFileSync(path.join(cloneDir, "OTHER.md"), "destination\n");
+      sh(cloneDir, "add", "OTHER.md"); sh(cloneDir, "commit", "--quiet", "-m", "destination moved");
+      sh(cloneDir, "push", "--quiet", "--force", bare, "HEAD:refs/heads/pi-autonomy/integration");
+      assert.ok(slot.engine, "the engine is running");
+      const worktrees = path.join(mirrorGit(slot.engine.rt).gitDir, "worktrees");
+      fs.rmSync(worktrees, { recursive: true, force: true });
+      fs.writeFileSync(worktrees, "not a directory\n");
+    },
+  });
+  slot.engine = h.engine();
+  await slot.engine.engine.run();
+  let state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "integration-reconcile-failed", "parked on the named question, not a supervisor_error pause");
+  assert.equal(state.blocker?.kind, "external");
+  assert.match(state.blocker?.question ?? "", /reconciling them failed with a host git error/);
+  assert.deepEqual(state.blocker?.options, ["Mirror checked; retry", "Stop the run"]);
+  assert.notEqual(state.outcome?.reason, "supervisor_error");
+  assert.equal(state.selfImprove?.history.length, 1, "the finished cycle's record is intact");
+  assert.equal(nth(state.selfImprove?.history ?? [], 0).head, slot.cycle1Head);
+  assert.equal(mirrorGit(slot.engine.rt)(["rev-parse", "refs/heads/pi-autonomy/integration"]), slot.cycle1Head, "the local integration ref is unchanged");
+  // A restart does not resume past the question.
+  slot.engine = h.engine({ pid: 1002 });
+  await slot.engine.engine.run();
+  state = h.state();
+  assert.equal(state.status, "blocked", JSON.stringify(state.outcome));
+  assert.equal(state.blocker?.id, "integration-reconcile-failed", "still parked after a restart");
+  assert.equal(state.selfImprove?.history.length, 1, "no cycle ran on the restart");
+  assert.ok(stops >= 2, "both supervisors stopped at the question");
+});
+
 await check("the deprecated v0 shape maps onto this template: same limits and budgets, no default remote, an explicit destination", () => {
   const v0 = { run: "perpetual-x", cycles: 4, gitRemote: "https://git.example.org/team/repo.git", promotion: "push", budget: { perCycleUsd: 2, totalUsd: 20 }, limits: { softMinutes: 60, hardMinutes: 90 }, integration: { branch: "experimental/main" } };
   const r = resolveContract(v0, { effort: testEffort });

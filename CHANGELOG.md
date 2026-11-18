@@ -17,6 +17,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   alerts once per condition, plus a daily digest. The relay records the OpenRouter key's own limit
   (`limit`, `limit_remaining` and `usage` only) in `meter/key.json`, and `pi-autonomy key-limit` asks
   for it on demand. Verified by `tests/autonomy-reporting-smoke.ts`.
+- **Guided install.** `node packages/core/install.ts --guided` shows what it detected, offers the
+  shipped profiles with a default, asks for the scope and a confirmation on stdin, then checks the
+  result and lists every configuration file it created or changed. Declining, three invalid answers
+  or input ending early change nothing; `--guided` refuses `--profile`, `--only`, `--all`, `--yes`,
+  `--uninstall` and `--capture-overrides`. Every other run stays non-interactive and prints as
+  before. See `docs/INSTALL.md` (Guided install); pinned by `tests/install-guided-smoke.ts` and
+  `tests/clean-install-smoke.ts`.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the

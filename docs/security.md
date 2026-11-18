@@ -218,7 +218,16 @@ are pinned by `tests/governance-smoke.ts`.
     `packages/extensions/src/secret-guard/`) stay readable, while an exact `secret`, `secrets` or
     `credentials` path segment still counts as a secret reference (`tests/secret-guard-smoke.ts`).
     The firewall separately classifies credential files as credential reads whether or not
-    `secret-guard` is loaded. For a tool the policy
+    `secret-guard` is loaded. Inside a home credential directory only the named settings files
+    `~/.ssh/config`, `~/.aws/config` and `~/.azure/config` stay ordinary reads; `~/.kube/config` is a
+    credential, and secret-guard refuses reading it as well (`tests/firewall-must-block-corpus-smoke.ts`,
+    `tests/firewall-shell-smoke.ts`). Secret-guard matches the path as a command spells it, so it also refuses
+    copying a file into `~/.kube/config`, and it does not see `cd ~/.kube && cat config` or an archive of the
+    whole directory, which the firewall refuses (`tests/secret-guard-smoke.ts`). Running a credential file as a
+    program rates as reading it. Every `grep` or `rg` operand that names a credential is rated as a read,
+    quoted or not, because both tools permute options and a later `-e` or `-f` makes that operand a file
+    they print; not covered: searching text for a credential path (`grep -rn '~/.kube/config' docs`) is
+    refused as well (`tests/firewall-shell-smoke.ts`). For a tool the policy
     allows, it checks every path the call names in a `path`, `file_path`, `filePath`, `file`,
     `files`, `paths`, `cwd`, `dir`, `directory`, `root`, `analysisRoot`, `newFilePath`,
     `scriptPath` or `trace_path` field (`tests/firewall-shell-smoke.ts`);

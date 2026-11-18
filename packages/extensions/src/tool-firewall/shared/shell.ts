@@ -1,4 +1,9 @@
+// GENERATED from packages/core/shared/shell.ts by packages/core/gen-shared.ts. Do not edit this copy:
+// change the source and run `npm run gen:shared` (`npm run verify` fails when a copy differs).
 // A conservative shell parser for the tool firewall.
+//
+// Canonical source: packages/core/shared/shell.ts. tool-firewall holds a generated, byte-checked copy
+// (`npm run gen:shared`; `npm run verify` fails on drift).
 //
 // It turns a command string into the simple commands that would actually run ("segments"),
 // looking through wrappers (`bash -c '…'`, `ssh host '…'`, `sudo`, `env`, `timeout`, `xargs`,

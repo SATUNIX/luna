@@ -961,7 +961,16 @@ branch (for example `integration/luna`), with `requiresOperatorApproval: false`.
 publication/promotion push first calls the repository's `packages/core/prepush-scan.ts` library on
 commits the destination does not already hold, including all tags about to be published. It fetches
 fresh destination refs, excludes known published main/master history, and reads exceptions from the
-supervisor-held source base, never worker changes. Findings (locations only), mixed exception/content
+supervisor-held source base, never worker changes. The same scan first runs at each cycle's
+close-out, on the cycle's own commits (excluding the integration head and the base), with the same
+exceptions: a cycle the push would refuse is refused there, before the acceptance run, the review or
+the merge. Its reason names commit and location only, its tag is `<prefix>refused/cycle-NN`, which
+is never published, and the next cycle is told to bring the work over in reworded commits from
+`attempts/<run>/refused/cycle-NN`. A scan that cannot complete judges nothing: the cycle is held,
+the run parks on a review-pending question and the answer scans it again. A manager reset scans the
+head it abandons the same way and tags a leaky one `<prefix>refused/abandoned-NN`
+(`tests/autonomy-selfimprove-smoke.ts`). Publication keeps its own scan as the backstop for what
+close-out cannot see, such as an upstream merge. Findings (locations only), mixed exception/content
 changes, or scan errors refuse the push; automatic cycles continue locally with
 `state.selfImprove.publishBlocker`/`publishError` and `state.selfImprove.publishBlockedCycles`, and
 explicit promotion records `promotion.error`. The refusal is now surfaced instead of only logged:

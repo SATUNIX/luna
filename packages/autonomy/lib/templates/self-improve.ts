@@ -25,9 +25,10 @@ import { type CycleDecision, type CycleOutcome, type CycleResult, type CycleRunt
 import { isPositiveCpus, isPositiveSize } from "../containment.ts";
 import { LockLost } from "../errors.ts";
 import * as gm from "../gitmirror.ts";
+import { REFUSED_TAGS } from "../mirror.ts";
 import type { RunState, SelfImproveState } from "../lifecycle.ts";
 import { decide } from "../manager.ts";
-import { reviewBlocker } from "../rpc.ts";
+import { leakScanBlocker, reviewBlocker } from "../rpc.ts";
 import { promotionTargets } from "../promotion.ts";
 import { CHARTER_PATH, type CycleReview, REVIEW_DIFF_BUDGET, controlChanges, isReviewRecord, reviewCriticalPaths, reviewCycle, reviewRecordDirectories, scriptTargets, upstreamMergeScope } from "../review.ts";
 import { isNewReport, ledgerCommits, uncoveredCommits, unknownShas } from "../ledger.ts";
@@ -66,6 +67,8 @@ export interface CycleEntry {
   withheldItems?: string[];
   /** True when the publish-blocked answer's rollback discarded this cycle's local-only history. */
   discarded?: boolean;
+  /** True when the leak scan refused the cycle at close-out: its tag is `<prefix>refused/cycle-NN`, never published. */
+  leakRefused?: boolean;
   review: CycleReview["verdict"] | null;
   /** The host's risk tier for the cycle, from the paths it changed (lib/risk.ts), and why. */
   risk?: Pick<RiskClassification, "tier" | "reasons">;
@@ -306,6 +309,26 @@ function lastPublishedHead(si: SelfImproveState, integrationBranch: string): str
   return si.seedSha;
 }
 
+/** The close-out leak scan of a head (gitmirror.scanCycle), unless a test replaced it (EngineDeps.scanCycle). */
+function scanCycle(ctx: StepContext, head: string): gm.CycleScanRefusal | null {
+  const scan = ctx.engine.deps.scanCycle;
+  return scan ? scan(head) : gm.scanCycle(ctx.repo.git(), siConfig(ctx.cfg), head);
+}
+
+/** What the next cycle is told about a reset cycle's abandoned head, under whichever tag resetToLastGood gave it. */
+function abandonedNote(ctx: StepContext, n: number): string {
+  const cfg = siConfig(ctx.cfg);
+  const refused = `${REFUSED_TAGS}abandoned-${pad(n)}`;
+  return ctx.repo.git()(["rev-parse", "--verify", "--quiet", `refs/tags/${cfg.tagPrefix}${refused}`], { allowFail: true })
+    ? `its work was abandoned (tag ${cfg.tagPrefix}${refused}); the leak scan refused it, so redo any of it only in commits that do not carry what the scan named.`
+    : `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(n)}).`;
+}
+
+/** A cycle's tag name after the run's tag prefix; a leak-refused cycle's is never published (mirror.ts REFUSED_TAGS). */
+function cycleTag(entry: Pick<CycleEntry, "n" | "leakRefused">): string {
+  return `${entry.leakRefused ? REFUSED_TAGS : ""}cycle-${pad(entry.n)}`;
+}
+
 /** The mergeReason the publish-blocked rollback writes on the cycles it discarded. */
 const DISCARDED_BY_RESET = "discarded by the publish-blocked reset to ";
 
@@ -393,8 +416,9 @@ function cyclePrompt(ctx: StepContext, n: number): string {
       previous += `merged into ${cfg.integrationBranch}.${last.reason === "host close-out after session exit" ? " The worker exited before writing a note, so the host closed it out from the committed work; inspect its commits." : ""}`;
       if (last.mode === "improve") previous += " It was an improve cycle; consolidate its changes after the higher-priority gate, upstream conflict and board work.";
       if (last.reportOutcome === "nothing found") previous += ` Its review found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}. Work only on what is assigned, failing or carried over.`;
-    } else if (last.mergeReason.startsWith("the diff without lockfiles")) previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: carry over only a reviewable subset (measure it as below; well under ${REVIEW_DIFF_BUDGET} characters); the rest stays on that branch for later cycles.`;
-    else if (last.gate === "skipped") previous += last.outcome === "reset" ? `its work was abandoned (tag ${cfg.tagPrefix}abandoned-${pad(last.n)}).` : "it made no commits.";
+    } else if (last.leakRefused) previous += `not merged into ${cfg.integrationBranch} and never published: ${last.mergeReason}. Its commits are on \`origin/attempts/${cfg.run}/${cycleTag(last)}\`. Bring the work over in new commits that do not carry what the scan names: reword the commit message, or rewrite the added line (the scan names the commit and the location only, never the value). Do not cherry-pick those commits unchanged; no exception or allowlist entry admits them.`;
+    else if (last.mergeReason.startsWith("the diff without lockfiles")) previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: carry over only a reviewable subset (measure it as below; well under ${REVIEW_DIFF_BUDGET} characters); the rest stays on that branch for later cycles.`;
+    else if (last.gate === "skipped") previous += last.outcome === "reset" ? abandonedNote(ctx, last.n) : "it made no commits.";
     else previous += `not merged into ${cfg.integrationBranch}: ${last.mergeReason}. This cycle starts without that work. Its commits are on \`origin/attempts/${cfg.run}/cycle-${pad(last.n)}\`: bring over what is sound (cherry-pick, fix what the rejection names, re-verify), following the work precedence below.`;
     if (last.reportOutcome === "nothing found" && !last.merged) previous += ` Its note found nothing to do${nothingFoundInARow(si.history) > 1 ? ` (${nothingFoundInARow(si.history)} cycles in a row)` : ""}. Work only on what is assigned, failing or carried over.`;
     if (last.unknownClaims?.length) previous += ` Its report claimed board items that were not assigned to it (${last.unknownClaims.join(", ")}); name only the IDs listed under "Assigned work" in Board: lines.`;
@@ -556,10 +580,15 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
     gates: async () => si.history.map((h) => h.gate).filter((x) => x === "green" || x === "red"),
     resetToLastGood: async () => {
       await engine.syncFromWorker({ silent: true });
-      const res = gm.resetBranch(g, cfg, { abandonedTag: `abandoned-${pad(n)}` });
+      // The abandoned head is unmerged worker work like a refused cycle: scanned before it is tagged, so a
+      // leak in it gets a tag publication never pushes instead of refusing every later publish.
+      const head = g(["rev-parse", `refs/heads/${cfg.branch}`]);
+      const leak = head === g(["rev-parse", `refs/heads/${cfg.integrationBranch}`]) ? null : scanCycle(ctx, head);
+      const abandoned = `${leak ? REFUSED_TAGS : ""}abandoned-${pad(n)}`;
+      const res = gm.resetBranch(g, cfg, { abandonedTag: abandoned });
       publishNow(ctx);
       await rt.setWorkerBranch(res.to, []);
-      ctx.log(`reset ${cfg.branch} ${res.from.slice(0, 12)} -> ${res.to.slice(0, 12)} (abandoned head tagged ${cfg.tagPrefix}abandoned-${pad(n)})`);
+      ctx.log(`reset ${cfg.branch} ${res.from.slice(0, 12)} -> ${res.to.slice(0, 12)} (abandoned head tagged ${cfg.tagPrefix}${abandoned}${leak ? `; ${leak.reason}` : ""})`);
     },
     publish: async () => {
       const r = await engine.syncFromWorker({ silent: true });
@@ -679,7 +708,7 @@ export async function runStep(ctx: StepContext): Promise<void> {
     }
     if (!baseRed && (await idleQueue(ctx, upstream, claimed))) return;
     const last = si.history.at(-1);
-    const extra = last && !last.merged && !last.discarded && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
+    const extra = last && !last.merged && !last.discarded && last.head !== head ? [`refs/tags/${cfg.tagPrefix}${cycleTag(last)}`] : [];
     if (upstream?.outcome === "conflict") extra.push("refs/upstream/trunk");
     await rt.setWorkerBranch(head, extra);
     publishNow(ctx);
@@ -845,12 +874,25 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   const start = g(["rev-parse", `refs/heads/${cfg.integrationBranch}`]);
   const changed = sha !== start;
   let gate: CycleGate = { skipped: true, green: false, results: [] };
+  // A cycle publication would refuse is refused here, before the gate, the review or the merge: once
+  // merged, it would strand every later cycle of the run behind a refused publish. Same scanner, same
+  // supervisor-held exceptions as publish (gitmirror.scanCycle).
+  const scan = changed ? scanCycle(ctx, sha) : null;
+  if (scan?.failed) {
+    // Nothing was judged: hold the cycle (its commits stay on the branch) and park, as for an unavailable review.
+    log(`cycle ${pad(n)} leak scan could not complete; parked at ${sha.slice(0, 12)}`);
+    ctx.save(() => { if (si.current) si.current.reviewPending = { outcome: result.outcome === "blocked" ? "aborted" : result.outcome, reason: result.reason, attempts: result.attempts, costUsd: result.costUsd, head: result.head }; });
+    await engine.enterBlocked(leakScanBlocker(sha));
+    return;
+  }
+  const leak = scan?.reason ?? null;
+  if (leak) log(`cycle ${pad(n)} refused by the leak scan; no acceptance run and no review`);
   // The diff cap is enforced here, in code, before the gate or any model: an over-budget diff is never
   // reviewed in part, so the gate's minutes and the review's tokens would both be wasted on it.
-  const early = changed && (result.outcome === "completed" || result.outcome === "partial") ? await measureDiff(ctx, start) : null;
+  const early = changed && !leak && (result.outcome === "completed" || result.outcome === "partial") ? await measureDiff(ctx, start) : null;
   const tooBig = early?.overBudget === true ? overBudgetReason(early.characters === null ? early.detail : `${early.characters} characters`) : null;
   if (tooBig) log(`cycle ${pad(n)} diff over the review budget; no acceptance run and no review`);
-  if (changed && !tooBig) {
+  if (changed && !tooBig && !leak) {
     state.phase = "acceptance";
     engine.tick();
     log(`cycle ${pad(n)} acceptance on ${sha.slice(0, 12)}`);
@@ -873,11 +915,12 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   const declared = result.outcome === "completed" ? reportOutcome(report) : { outcome: null, mode: null };
   const current = si.current;
   if (!current) throw new Error(`cycle ${pad(n)} is closing but no cycle is current`);
-  repo.tag(`cycle-${pad(n)}`, sha);
+  const tagName = cycleTag({ n, leakRefused: leak !== null });
+  repo.tag(tagName, sha);
   const recovered = salvaged ? readJson(path.join(engine.stepDir(n), "salvaged-report.json")) : null;
   const salvage = isPlainObject(recovered) && recovered.sha === sha && typeof recovered.report === "string" ? recovered.report : undefined;
   if (salvaged && !salvage) throw new Error(`cycle ${pad(n)} host report is missing or does not match ${sha}`);
-  const merge: MergeDecision = tooBig ? { merge: false, reason: tooBig } : await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage, failing, note });
+  const merge: MergeDecision = leak ? { merge: false, reason: leak } : tooBig ? { merge: false, reason: tooBig } : await mergeDecision(ctx, n, { result, sha, start, changed, gate, salvage, failing, note });
   if (engine.stopRequested) return;
   if (merge.reviewUnavailable !== undefined) {
     // The work was never judged: keep the cycle current (its commits stay on the branch and under
@@ -899,7 +942,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   // leaves the count unchanged. Only a successful publish (in publishNow) clears it.
   if (merge.merged && si.publishBlocker) si.publishBlockedCycles = (si.publishBlockedCycles ?? 0) + 1;
   const entry: CycleEntry = { n, outcome: result.outcome, reason: result.reason, attempts: result.attempts, start, head: sha, gate: gate.skipped ? "skipped" : gate.green ? "green" : "red", gateFailing: failing,
-    reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, review: merge.review ?? null, ...(merge.risk ? { risk: { tier: merge.risk.tier, reasons: merge.risk.reasons } } : {}), costUsd: +result.costUsd.toFixed(4),
+    reportOutcome: declared.outcome, mode: declared.mode, merged: Boolean(merge.merged), mergeReason: merge.reason, ...(leak ? { leakRefused: true } : {}), review: merge.review ?? null, ...(merge.risk ? { risk: { tier: merge.risk.tier, reasons: merge.risk.reasons } } : {}), costUsd: +result.costUsd.toFixed(4),
     decisions: result.decisions.map(({ decision, reason, triggers }) => ({ decision, reason, triggers })), startedAt: current.startedAt, endedAt: new Date(rt.now()).toISOString(), board, ...(merge.unknownClaims?.length ? { unknownClaims: merge.unknownClaims } : {}), ...(current.upstream ? { upstream: current.upstream } : {}),
     effective: { contractDigest: state.contractDigest, limits: { ...SELF_IMPROVE_LIMITS, budget: state.limits.budget } },
     ...(rt.meterSummary ? (() => { const m = rt.meterSummary(n); return { meter: { byRole: Object.fromEntries(Object.entries(m.byRole).map(([k, v]) => [k, +v.toFixed(4)])), rows: m.rows, unresolved: m.unresolved } }; })() : {}) };
@@ -940,7 +983,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   });
   engine.writeStepSummary(n, { action: "cycle", outcome: entry.outcome, gate: entry.gate, merged: entry.merged, ...(salvaged ? { report: path.join("steps", pad(n), "salvaged-report.json") } : {}) });
   ctx.save();
-  log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}cycle-${pad(n)}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
+  log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}${tagName}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
   engine.emit({ type: "cycle.ended", run: cfg.run, n, outcome: entry.outcome, gate: entry.gate, merged: entry.merged, reason: entry.reason, ...(entry.merged ? {} : { mergeReason: entry.mergeReason }) });
 }
 

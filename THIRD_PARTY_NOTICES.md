@@ -282,6 +282,11 @@ SOFTWARE.
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)
+  - every refusal also appends one `tool_refused` record to the firewall audit log through
+    `shared/refusal-record.ts` (a generated copy of `packages/core/shared/refusal-record.ts`, with its
+    `shared/safe-fs.ts` dependency): the cause, the matched protected entry (an absolute one by its last
+    two segments), field key or rule name, the tool, a SHA-256 digest of a bash command and the session
+    id, never the command text or file contents (`tests/firewall-refusal-record.ts`)
 
 ### `subagent`
 
@@ -423,7 +428,7 @@ SOFTWARE.
     is unset, points `PI_KIT_HUMAN_CONSOLE_DIR` at the starting session's console. See
     `docs/script-workflows.md` ("Approvals from workflow agents").
   - **Workflow-script sandbox (Luna, kit-original):** `wf-sandbox.ts` and `wf-runner.mjs` run one
-    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.3` dependency) under
+    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.4` dependency) under
     `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. The node
     binary comes from the generated `shared/node-runtime.ts`, never a compiled pi's `process.execPath`. Nothing in
     the extension calls it yet. See `docs/workflow-sandbox.md`; pinned by

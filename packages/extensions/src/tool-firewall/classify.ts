@@ -5,7 +5,7 @@
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
 import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchCallTargets, type PatchStdin, type PatchTool } from "./shared/inline-guard.ts";
-import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shell.ts";
+import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shared/shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
 export type Effect =
@@ -111,12 +111,16 @@ const DERIVED = new Set(["node_modules", "dist", "build", "out", ".next", ".nuxt
 const NULL_SINKS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/full"]);
 const DEVICE_RE = /^\/dev\/(?:sd[a-z]|nvme\d|mmcblk\d|hd[a-z]|vd[a-z]|xvd[a-z]|disk\d|dm-\d|md\d|loop\d|mapper\/|rdisk|mem$|kmem$|port$)/;
 
-const CRED_BASENAME = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|.*\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc|gpg)|\.netrc|_netrc|\.pgpass|\.pypirc|\.npmrc|\.yarnrc\.yml|\.git-credentials|\.htpasswd|credentials(?:\.json|\.db)?|auth\.json|\.credentials\.json|secrets?\.(?:ya?ml|json|toml|env)|service[-_]account.*\.json|shadow|gshadow|master\.key|\.vault[-_]token)$/i;
+const CRED_BASENAME = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|.*\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ppk|asc|gpg)|\.netrc|_netrc|\.pgpass|\.pypirc|\.npmrc|\.yarnrc\.yml|\.git-credentials|\.htpasswd|credentials(?:\.json|\.db|\.toml)?|auth\.json|\.credentials\.json|secrets?\.(?:ya?ml|json|toml|env)|service[-_]account.*\.json|shadow|gshadow|master\.key|\.vault[-_]token)$/i;
 // Certificates and CA bundles are public even though they share the .pem extension.
 const CERT_NAME = /(?:^|[-_.])(?:ca|cert|certs|certificate|chain|fullchain|bundle|root|intermediate|trust)(?:[-_.]|$)|\.crt$/i;
-const CRED_PUBLIC = /\.pub$|(?:^|\/)(?:known_hosts|authorized_keys|config)$|\.(?:example|sample|template|dist|defaults?)$|(?:^|\/)ca-certificates|\/certs?\//i;
+const CRED_PUBLIC = /\.pub$|(?:^|\/)(?:known_hosts|authorized_keys)$|\.(?:example|sample|template|dist|defaults?)$|(?:^|\/)ca-certificates|\/certs?\//i;
 const ENV_FILE = /^\.env(?:\..+)?$|^\.envrc$|^\.dev\.vars$/;
-const HOME_CRED_DIRS = [".ssh", ".aws", ".gnupg", ".kube", ".docker", ".password-store", ".local/share/keyrings", ".config/gh", ".config/gcloud", ".azure", ".config/rclone", ".mozilla", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".pi/agent/auth.json", ".claude/.credentials.json", ".codex/auth.json", ".config/op", ".terraform.d", ".vault-token"];
+const HOME_CRED_DIRS = [".ssh", ".aws", ".gnupg", ".kube", ".docker", ".password-store", ".local/share/keyrings", ".config/gh", ".config/gcloud", ".azure", ".config/rclone", ".mozilla", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".pi/agent/auth.json", ".claude/.credentials.json", ".codex/auth.json", ".config/op", ".terraform.d", ".vault-token", ".config/hub"];
+// Settings files inside a credential directory that hold no secret: ssh's client config (an exec_config below), the
+// AWS and Azure CLI settings. Named one by one, because a bare `config` is the secret in .kube/ (cluster tokens and
+// client keys) and can be in .config/op/ (the 1Password CLI's account list); tests/firewall-must-block-corpus-smoke.ts.
+const HOME_CRED_PUBLIC = new Set([".ssh/config", ".aws/config", ".azure/config"]);
 const PERSIST_HOME = [".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".config/fish/config.fish", ".config/fish/conf.d", ".config/autostart", ".config/systemd", ".config/environment.d", ".ssh/authorized_keys", ".ssh/rc", ".xprofile", ".xinitrc", ".xsession", "Library/LaunchAgents", ".local/share/systemd", ".pam_environment", ".config/hypr/autostart.conf"];
 // Config that can name commands to run later (ProxyCommand, core.sshCommand, aliases): worth a look, not a hard stop.
 const EXEC_CONFIG_HOME = [".ssh/config", ".gitconfig", ".config/git/config"];
@@ -404,7 +408,7 @@ export function classifyPath(abs: string | null, env: ClassifyEnv, remote?: stri
 
   // Credentials.
   const homeRel = trimmed.startsWith(`${home}/`) ? trimmed.slice(home.length + 1) : null;
-  if (homeRel !== null && HOME_CRED_DIRS.some((d) => within(homeRel, d)) && !CRED_PUBLIC.test(trimmed)) return "credential";
+  if (homeRel !== null && HOME_CRED_DIRS.some((d) => within(homeRel, d)) && !CRED_PUBLIC.test(trimmed) && !HOME_CRED_PUBLIC.has(homeRel)) return "credential";
   if (/^\/etc\/(?:shadow|gshadow|ssh\/ssh_host_.*_key$|ssl\/private)/.test(trimmed)) return "credential";
   if (CRED_BASENAME.test(base) && !CRED_PUBLIC.test(trimmed) && !(/\.pem$/i.test(base) && CERT_NAME.test(base))) return !remote && within(trimmed, env.workspace) && !/^id_/.test(base) && !/\.(?:pem|key|p12|pfx|jks|keystore|kdbx|ppk)$/i.test(base) ? "credential_ws" : "credential";
   if (ENV_FILE.test(base) && !CRED_PUBLIC.test(base)) return !remote && within(trimmed, env.workspace) ? "credential_ws" : "credential";
@@ -417,9 +421,9 @@ export function classifyPath(abs: string | null, env: ClassifyEnv, remote?: stri
   if (!remote) {
     if (within(trimmed, env.workspace)) {
       if (trimmed === env.workspace) return "workspace_root";
+      const git = workspaceGitClass(trimmed, env);
+      if (git) return git;
       const rel = relTo(trimmed, env.workspace);
-      if (/(?:^|\/)\.git\/hooks(?:\/|$)/.test(rel)) return "git_hooks";
-      if (/(?:^|\/)\.git(?:\/|$)/.test(rel)) return /\.lock$/.test(rel) ? "workspace" : "git_internal";
       if (rel.split("/").some((part) => DERIVED.has(part)) || /\.(?:log|pid|tmp|o|pyc|class|tsbuildinfo)$/.test(base)) return "workspace_derived";
       return "workspace";
     }
@@ -428,6 +432,22 @@ export function classifyPath(abs: string | null, env: ClassifyEnv, remote?: stri
   if (top.length && SYSTEM_TOP.includes(top[0] ?? "") && trimmed.startsWith("/") && !/^\/(?:home|Users|mnt|media|run\/media)\//.test(trimmed)) return "system";
   if (homeRel !== null || trimmed.startsWith("~/")) return "home";
   return "other";
+}
+
+// A path inside the workspace's .git directory: hooks git runs, or the internals that hold its history.
+function workspaceGitClass(trimmed: string, env: ClassifyEnv): "git_hooks" | "git_internal" | "workspace" | null {
+  const rel = relTo(trimmed, env.workspace);
+  if (/(?:^|\/)\.git\/hooks(?:\/|$)/.test(rel)) return "git_hooks";
+  if (/(?:^|\/)\.git(?:\/|$)/.test(rel)) return /\.lock$/.test(rel) ? "workspace" : "git_internal";
+  return null;
+}
+
+// A workspace secrets file inside .git (`.git/credentials.toml`) is classified as a secret, which rates reading it;
+// writing or deleting it is rated by the git class, which is the stronger of the two for those operations.
+function mutationClass(r: { abs: string | null; cls: PathClass }, c: Ctx): PathClass {
+  if (r.cls !== "credential_ws" || r.abs === null || c.seg.remote) return r.cls;
+  const git = workspaceGitClass(r.abs, c.env);
+  return git === "git_hooks" || git === "git_internal" ? git : r.cls;
 }
 
 // Tables keyed by a name the command chose (its executable, an effect in a family key): own entries only, so a
@@ -514,7 +534,7 @@ function writePath(c: Ctx, p: string, how: string): void {
     add(c, "high", "security_control", "console_key_write", `${how} the human console's answer key or a directory that holds it: ${r.shown}`, key);
     return;
   }
-  switch (r.cls) {
+  switch (mutationClass(r, c)) {
     case "null_sink":
       return;
     case "device":
@@ -585,7 +605,7 @@ function deletePath(c: Ctx, p: string, recursive: boolean): void {
   c.a.deletes++;
   const what = recursive ? "recursively deletes" : "deletes";
   const tierFor = (): [Tier, string] => {
-    switch (r.cls) {
+    switch (mutationClass(r, c)) {
       case "null_sink":
         return ["low", "null"];
       case "device":
@@ -778,6 +798,8 @@ function classifySegment(c: Ctx): void {
   if (first.includes("/") && !/^\/(?:usr\/)?(?:local\/)?s?bin\//.test(first) && !/^\/opt\/|^\/nix\/|^\/home\/[^/]+\/\.local\/share\/mise\//.test(first)) {
     const r = pathOf(c, first);
     c.a.executes.push(r.shown);
+    // A secret run as a program is read by whatever runs it, and the lines it cannot parse are echoed back.
+    if (READ_CRED_TIER(r.cls)) readPath(c, first);
     if (r.cls === "temp" || r.cls === "home" || r.cls === "other" || r.cls === "unknown") add(c, "medium", "code_exec", "outside_exec", `runs a program outside the workspace: ${r.shown}`, `exec ${r.key}`);
     else add(c, "low", "code_exec", "workspace_exec", `runs ${r.shown}`);
     if (!READ_ONLY.has(exe) && !DEV_TOOLS.has(exe) && !own(HANDLERS, exe)) return;
@@ -870,6 +892,7 @@ function devTool(c: Ctx): void {
     }
     const r = pathOf(c, script);
     c.a.executes.push(r.shown);
+    if (READ_CRED_TIER(r.cls)) readPath(c, script);
     // `tests/$t-smoke.mjs`: a relative path with a loop variable still lives under the cwd.
     if (r.cls === "unknown" && !/^[~/$]/.test(script) && c.seg.cwd && !c.seg.remote) { add(c, "low", "code_exec", "script_exec", `${exe} ${script}`); return; }
     if (r.cls === "temp") { add(c, "low", "code_exec", "script_exec", `${exe} ${r.shown}`); return; }
@@ -1274,7 +1297,7 @@ function mvCp(move: boolean): Handler {
       if (links) linkSource(c, s);
       if (move) {
         const r = pathOf(c, s);
-        if (["root_critical", "system", "security_control", "credential_control", "persistence", "git_internal", "git_hooks", "device"].includes(r.cls)) deletePath(c, s, true);
+        if (["root_critical", "system", "security_control", "credential_control", "persistence", "git_internal", "git_hooks", "device"].includes(mutationClass(r, c))) deletePath(c, s, true);
         else if (!c.seg.remote && r.abs !== null && holdsProjectControl(r.abs, c.env)) add(c, "high", "security_control", "security_control_move", `moves a directory that holds the project's .pi control directory: ${r.shown}`, `${c.exe} move ${r.key}`);
       }
     }

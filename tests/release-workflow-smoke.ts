@@ -190,10 +190,12 @@ const tests: Record<string, () => void> = {
     }
   },
 
-  "the functional gate runs on pull requests and on main, with every check": () => {
+  "the functional gate runs on pull requests, on main and on a manual dispatch without inputs, with every check": () => {
     const ci = read("ci.yml");
     const on = triggers(ci);
-    for (const t of ["push", "pull_request", "workflow_call"]) assert.ok(on.includes(t), `ci.yml triggers on ${t}`);
+    for (const t of ["push", "pull_request", "workflow_call", "workflow_dispatch"]) assert.ok(on.includes(t), `ci.yml triggers on ${t}`);
+    // A manual run takes no inputs, so nothing the dispatcher types can reach a step.
+    assert.ok(!/^ {2}workflow_dispatch:\n {4}inputs:/m.test(ci), "ci.yml workflow_dispatch has no inputs");
     assert.ok(!/^\s+paths(-ignore)?:/m.test(ci), "no path filters: a docs-only or workflow-only change still runs the gate");
     assert.match(ci, /npm run -s check:all/);
     assert.match(ci, /python -m mkdocs build --strict/);

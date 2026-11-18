@@ -159,8 +159,41 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after: `lite`
   3,596 to 3,564 (-32); the other four profiles are identical. `tests/effort-smoke.ts` covers every
   tier with and without a delegation tool.
+- **`self-improving` no longer carries `dual_review` and skill-forge's three tools until they are
+  used, 378 tokens off its first request.** They register inactive (`defaultActive: false`, honoured
+  by pi 1.x; an older pi leaves them active), following `workflow_status` and `workflow_control`:
+  `/review` wakes `dual_review`, and `/improve` wakes `skill_synthesise`, `skill_score` and
+  `skill_archive`. Only tools that are registered are ever added to the active set, and a pi without
+  tool control changes nothing. These four tools exist in no other profile, so no other profile
+  changes. Not included: `mem0_add`/`mem0_search` (the memory server is the default backend and no
+  event says when it is wanted) and the Conductor's `dispatch_specialist`/`dispatch_validator`
+  (`engagement` shares them, and its root agent needs them from its first turn). Measured on SRV02
+  with pi 1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `self-improving` 8,798 to 8,420 (-378, 50 to 46 tools); the other four profiles are identical.
+  `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
+  without tool control.
 
 ### Fixed
+
+- **A cycle the leak scan would refuse to publish is refused at close-out, not merged.** Finding: the
+  pre-push leak scan ran only at publication, after the gate and the merge review, so a cycle whose
+  commit message or added lines carried a blocked identifier was merged locally and then refused at
+  every publish, stranding every later cycle of the run behind it. Cause: acceptance never ran the
+  scanner. Fix: `closeCycle` (`packages/autonomy/lib/templates/self-improve.ts`) scans the cycle's own
+  commits with the same scanner and the same supervisor-held exceptions as publication
+  (`gitmirror.scanCycle`) before the gate and the review; a finding leaves the cycle unmerged with a
+  reason naming commit and location only, tags it `<prefix>refused/cycle-NN` (never published), and
+  tells the next cycle to reword or rewrite the commits. A scan that cannot complete judges nothing:
+  the cycle is held and the run parks on a review-pending question, charging no board item, and the
+  answer scans it again. A manager reset scans the head it abandons the same way, so a leaky one is
+  tagged `<prefix>refused/abandoned-NN` instead of refusing every later publish. The scanner itself
+  is unchanged. Verification: `tests/autonomy-selfimprove-smoke.ts` (a message leak and a file leak
+  are refused with no gate, review or publish; a leak removed before the head is still refused;
+  exceptions come from the base, not the cycle; a failed scan parks and re-scans; a reset keeps a
+  leaky head unpublished; a clean cycle merges and publishes) and `tests/autonomy-smoke.ts` (a
+  refused tag is never a publish refspec). The publish-blocked tests now skip the close-out scan to reach the
+  publish-time backstop.
 
 - **A project's install marker cannot write terminal sequences through the launch screen.** The
   launch screen printed the profile and extension names from the install marker as written, and a

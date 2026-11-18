@@ -254,7 +254,7 @@ flowchart TD
 - `packages/extensions/src/tool-firewall/unattended.ts` — the run contract, unattended state, egress and remote checks, hard and outside-the-zone denials.
 - `packages/extensions/src/tool-firewall/config.ts` — modes, policies, config file, state paths, known hosts (with sources and revocation), workspace root.
 - `packages/extensions/src/tool-firewall/classify.ts` — effects, tiers, path classes, per-command handlers, hosts and remotes contacted, signatures and families.
-- `packages/extensions/src/tool-firewall/shell.ts` — tokenizer and parser feeding the classifier.
+- `packages/core/shared/shell.ts` (generated into `tool-firewall/shared/shell.ts`) — tokenizer and parser feeding the classifier.
 - `packages/extensions/src/tool-firewall/trajectory.ts` — per-session state, trajectory findings, root-session sharing.
 - `packages/extensions/src/tool-firewall/judge.ts` — judge prompt, in-process model call, verdict and confidence parsing, timeout.
 - `packages/extensions/src/tool-firewall/card.ts` — bounded card, choices, detail view, outcome tag.

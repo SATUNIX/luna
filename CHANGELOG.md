@@ -154,6 +154,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The container image runs pi-mcp-adapter 7.0.1, with semantic search and extraction pinned off.**
+  Finding: Dependabot's 6.0.0 to 7.0.1 bump (#129) failed the container checks, which pin the
+  version in the Dockerfile, `capability/env/defaults.env` and both compose files. 7.0.0 also
+  replaced `settings.jev` with `settings.semanticSearch` and no longer treats `jev: false` as off:
+  semantic tool search is on for every configured server unless `semanticSearch` is `false`, and it
+  sends tool names and descriptions to a classifier model through Pi's credentials. A plain bump
+  would have turned it back on in the image. Fix: the image pins 7.0.1 everywhere. The overlay's
+  `mcp-adapter.json` sets `semanticSearch: false` and `extraction: false` (7.0.0's typed extraction
+  sends tool results to Cloudflare; it is off by default, now pinned off) and drops `jev`.
+  `validate-engagement-env.sh` and `validate-runtime-readiness.py` require both settings, and the
+  first refuses an overlay that still relies on `jev`. Verified by `tests/container-static-smoke.ts`
+  (a `jev`-only overlay fails, and the adapter pin case no longer names a version), and by hand:
+  pi 1.4.0 with 7.0.1 and the image's overlay and environment offered the model only `mcp` beside
+  the built-in tools, and an `mcp` call reached the governance server
+  (`docs/supply-chain.md` has the review).
+
 - **The container MCP servers take `@modelcontextprotocol/sdk` 1.32.2, and the SDK pin check follows
   the type mirror.** Finding: Dependabot's 1.32.1 to 1.32.2 bump could never pass
   `smoke:container-static`, because `scripts/validate-governance-mcp-server.sh` required the literal

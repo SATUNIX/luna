@@ -31,7 +31,8 @@ not read. Add the Burp server next to the seeded ones when the Burp MCP bridge i
     "elicitation": false,
     "allowInstall": false,
     "allowScriptToolSave": false,
-    "jev": false
+    "semanticSearch": false,
+    "extraction": false
   },
   "mcpServers": {
     "pi_system_governance": {

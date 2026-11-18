@@ -15,6 +15,7 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { BootItem } from "./boot-status.ts";
+import { oneVisibleLine } from "./shared/visible-text.ts";
 
 export const REVEAL_FRAMES = 10;
 export const REVEAL_FRAME_MS = 70;
@@ -98,9 +99,31 @@ function cell(item: BootItem, theme: LaunchTheme, pending: boolean): string {
   return `${theme.fg("dim", "[ -- ]")} ${theme.fg("dim", item.name)}`;
 }
 
+/** Longest marker-derived string shown; a name or fact past it is cut. */
+const MAX_SHOWN = 120;
+
+/** One visible line of at most MAX_SHOWN code points: no escape sequence, control or bidi character survives. */
+function shown(text: string): string {
+  return Array.from(oneVisibleLine(text)).slice(0, MAX_SHOWN).join("");
+}
+
+/**
+ * The info with every string that can come from the repository (the install marker's profile and
+ * extension names, a failure note) made visible text, in every mode: a cloned project's
+ * `.pi/.pi-kit.json` must not write terminal sequences at session start.
+ */
+function visibleInfo(info: LaunchInfo): LaunchInfo {
+  return {
+    ...info,
+    facts: info.facts.map(shown),
+    items: info.items.map((item) => ({ ...item, name: shown(item.name), ...(item.note === undefined ? {} : { note: shown(item.note) }) })),
+  };
+}
+
 /** The launch screen at a frame. Pure: same input, same lines. */
 export function launchLines(opts: LaunchRender): string[] {
-  const { info, width } = opts;
+  const { width } = opts;
+  const info = visibleInfo(opts.info);
   const theme = opts.ascii ? PLAIN : opts.theme;
   const sep = opts.ascii ? " | " : " · ";
   const lines: string[] = [];

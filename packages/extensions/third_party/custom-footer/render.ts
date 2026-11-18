@@ -20,7 +20,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { AgentsView, CompactionView, Cost, EffortView, FirewallView, SecurityView, UnattendedView, UsageTotals } from "./data.ts";
-import { displayWidth, padDisplay, truncateDisplay } from "./width.ts";
+import { displayWidth, foldAscii, padDisplay, truncateDisplay } from "./width.ts";
 
 // Method syntax so pi's own Theme (whose fg takes its ThemeColor union) is accepted as is.
 export type Theme = { fg(color: string, text: string): string; bold(text: string): string; name?: string | undefined };
@@ -158,7 +158,10 @@ const SEVERITY_COLOR: Record<ChipSeverity, string> = { error: "error", warn: "wa
 export const TRANSIENT_KEYS = new Set(["subagent", "workflow", "orchestrator", "profile", "console", "kit-update", "verify-gate", "verify", "recovery-orchestrator"]);
 export const STALE_CHIP_MS = 120_000;
 
-export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40, ellipsis = "…"): string {
+/** What the ASCII status bar prints for the glyphs other extensions put in their status text; anything else non-ASCII is "?". */
+const ASCII_NAMES: Readonly<Record<string, string>> = { "…": "...", "●": "*", "○": "o", "·": "-" };
+
+export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40, glyphs: Pick<Glyphs, "ascii" | "ellipsis"> = { ascii: false, ellipsis: "…" }): string {
   const text = raw.replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim();
   const label = key.replace(/^pi-kit-/, "");
   // Many extensions already prefix their own name ("trace-ledger: lost=0").
@@ -166,8 +169,10 @@ export function statusChip(key: string, raw: string, theme: Theme, maxWidth = 40
   const sameName = ownName?.toLowerCase() === label.toLowerCase();
   const name = sameName ? ownName : label;
   const value = sameName ? ownValue : text;
-  const chip = `${theme.fg("dim", name)} ${theme.fg(SEVERITY_COLOR[chipSeverity(value)], value)}`;
-  return truncateDisplay(chip, maxWidth, ellipsis);
+  // Severity reads the value as the extension sent it, so folding never changes a chip's colour.
+  const shown = (part: string): string => (glyphs.ascii ? foldAscii(part, ASCII_NAMES) : part);
+  const chip = `${theme.fg("dim", shown(name))} ${theme.fg(SEVERITY_COLOR[chipSeverity(value)], shown(value))}`;
+  return truncateDisplay(chip, maxWidth, glyphs.ellipsis);
 }
 
 // --- fitting ----------------------------------------------------------------------------------
@@ -308,7 +313,7 @@ function chipSegments({ state, theme, mode, glyphs }: Ctx): Seg[] {
     if (stale) continue;
     const prio = severity === "error" ? 0 : severity === "warn" || severity === "active" ? 2 : 7;
     if (mode === "light" && prio > 0) continue;
-    out.push({ id: `chip:${entry.key}`, prio, text: statusChip(entry.key, entry.text, theme, mode === "heavy" ? 56 : 34, glyphs.ellipsis) });
+    out.push({ id: `chip:${entry.key}`, prio, text: statusChip(entry.key, entry.text, theme, mode === "heavy" ? 56 : 34, glyphs) });
   }
   return out;
 }
@@ -353,7 +358,7 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
     const branch = branchSegment(ctx);
     const left: Seg[] = [projectSeg, ...warnings, ...(effortShort ? [effortShort] : []), ...(security ? [security] : []), contextSegment(ctx), ...work, ...(branch ? [branch] : []), ...chips];
     const right: Seg[] = [...catSeg, ...(modelSeg ? [{ ...modelSeg, prio: 5 }] : [])];
-    return [truncateDisplay(fitLine(left, right, width, sep, glyphs.ellipsis), width, glyphs.ellipsis)];
+    return finish([fitLine(left, right, width, sep, glyphs.ellipsis)], glyphs, width);
   }
 
   // Line 1: where and with what
@@ -383,7 +388,13 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
     const all = [...diag, ...chips];
     lines.push(all.length ? fitLine(all, [], width, sep, glyphs.ellipsis) : theme.fg("dim", truncateDisplay("status no extension status", width, glyphs.ellipsis)));
   }
-  return lines.map((line) => (displayWidth(line) > width ? truncateDisplay(line, width, glyphs.ellipsis) : line));
+  return finish(lines, glyphs, width);
+}
+
+/** The last step for every bar: an ASCII bar folds what the state carries too (a path, branch, model or session name), then each line is cut to the width. */
+function finish(lines: string[], glyphs: Glyphs, width: number): string[] {
+  const shown = glyphs.ascii ? lines.map((line) => foldAscii(line, ASCII_NAMES)) : lines;
+  return shown.map((line) => (displayWidth(line) > width ? truncateDisplay(line, width, glyphs.ellipsis) : line));
 }
 
 /** Plain-text detail for /footer status: everything the bar can show, with nothing dropped for width. */

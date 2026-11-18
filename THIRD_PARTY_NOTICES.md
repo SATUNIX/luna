@@ -160,6 +160,16 @@ SOFTWARE.
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
   - Nothing in the test suite pins this.
+- 2026-11-18 ASCII status chips.
+  - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
+    ASCII with its name, or `?`, and keeps ANSI sequences.
+  - `statusChip` takes `glyphs` (`ascii`, `ellipsis`) in place of its `ellipsis` argument. In ASCII
+    mode it prints `...` for the ellipsis, `*` and `o` for the filled and hollow circles, `-` for the
+    middle dot and `?` for anything else, and truncates with `...`; `chipSeverity` still reads the
+    text as sent, so a chip's colour is the same in both modes.
+  - `renderFooter` folds every line of an ASCII bar the same way, so a path, branch, model or
+    session name with non-ASCII text cannot reach a tty/iso/ansi/ascii terminal
+    (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
 
 ### `dirty-repo-guard`
 
@@ -573,6 +583,9 @@ SOFTWARE.
     glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
     stays. `tests/workflow-panel-smoke.ts` pins the alignment.
   - **Orphan detection by owner:** `run-recovery.ts` marks a run interrupted only when the pid recorded in its `owner.json` (written by `claimRunDir` in `workflow.ts`) is gone; runs without that file fall back to 5 minutes of quiet.
+  - **Overlay frame comment (2026-11-18):** the header of `overlay-frame.ts` (a byte-identical copy of
+    `control-center/overlay-frame.ts`) no longer says a smoke asserts the copies match; nothing does.
+    Comment only.
 
 ### `todo`
 

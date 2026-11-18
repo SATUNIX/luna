@@ -39,7 +39,11 @@ the style of a boot log:
 [ -- ] 18 off: branch-lab conductor dual-review ...
 ```
 
-The list shows names only, never paths. `OK` is an extension the install marker enables; `--` is a
+The list shows names only, never paths. The profile and the extension names come from the install
+marker, which a cloned project can carry (`.pi/.pi-kit.json`), so the screen shows them as visible
+text only, in every mode: control, format and bidirectional characters are removed (the shared
+filter in `packages/core/shared/visible-text.ts`) and each name or fact is cut at 120 characters
+(`tests/launch-screen-smoke.ts`). `OK` is an extension the install marker enables; `--` is a
 shipped extension that is not enabled; `FAIL` is an enabled extension whose `extension.json` says it
 registers commands or tools but which has none in pi (pi reports the load error itself under
 `[Extension issues]`). An enabled extension that registers nothing because you switched it off with
@@ -158,8 +162,9 @@ imports another extension to get it:
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
 The header strip, page titles (including the text renderer's page titles) and the informational
-rows (Doctor, Help) pass what they display through one display filter: pi-tui's terminal
-sequence strip first, then removal of every control and format code point (Unicode `Cc`, `Cf` and
+rows (Doctor, Help) pass what they display through one display filter: input past 4000 UTF-16
+units is dropped first, so the filter never runs on an unbounded string, then pi-tui's terminal
+sequence strip, then removal of every control and format code point (Unicode `Cc`, `Cf` and
 `Default_Ignorable_Code_Point`, which covers alternate-screen sequences, resets, C1 CSI and
 bidirectional overrides), then a trim, then a bound of 500 characters. The Unicode class and the
 one-line helpers live once in `packages/core/shared/visible-text.ts`; control-centre uses its
@@ -175,8 +180,9 @@ import another extension for the filter. Other rows are not sanitised
   fixed; on older pi it opens without an overlay. `tests/control-center-smoke.ts` checks the
   version rule (1.3.0 and newer only) and that the hub asks for an overlay exactly when the
   installed pi passes it. Both this hub and the `/workflows` panel draw a theme-coloured rounded
-  border and dim the transcript behind the overlay (`overlay-frame.ts`), pinned by
-  `tests/control-center-smoke.ts` and `tests/workflow-panel-smoke.ts`. The frame lays out its inner
+  border and dim the transcript behind the overlay (`overlay-frame.ts`). `tests/workflow-panel-smoke.ts`
+  pins the border, the dim and its removal for the panel; nothing pins them for the hub, and nothing
+  checks that the two copies of `overlay-frame.ts` stay identical. The frame lays out its inner
   content four cells narrower than the framed width (two border and two padding cells) and forwards
   mouse clicks and wheel events inside the content area, so the hub's rows and search respond to the
   pointer; below ten cells no frame is drawn and the content keeps the full width. The overlay

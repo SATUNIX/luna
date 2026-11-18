@@ -60,6 +60,8 @@ interface StartOptions {
   ui?: Record<string, unknown>;
   child?: boolean;
   env?: Record<string, string | undefined>;
+  /** A project install marker (`.pi/.pi-kit.json` in the session's cwd), as a cloned repository can carry. */
+  marker?: Record<string, unknown>;
 }
 
 interface Started {
@@ -77,6 +79,10 @@ async function start(options: StartOptions = {}): Promise<Started> {
   const kit = path.join(dir, "pi-kit");
   fs.mkdirSync(kit, { recursive: true });
   if (options.ui) fs.writeFileSync(path.join(kit, "ui.json"), JSON.stringify(options.ui, null, 2));
+  if (options.marker) {
+    fs.mkdirSync(path.join(dir, ".pi"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".pi", ".pi-kit.json"), JSON.stringify(options.marker));
+  }
 
   const cleanup = (): void => {
     for (const restore of restores.reverse()) restore();
@@ -201,6 +207,35 @@ tests.push([
       } finally {
         started.cleanup();
       }
+    }
+  },
+]);
+
+// pi-tui's own colour reset after a cut line (SGR) is the renderer's, not the marker's; built from a
+// named ESC because matching it is the point.
+const ESC = String.fromCharCode(0x1b);
+const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+
+tests.push([
+  "a project marker cannot write terminal sequences: profile and extension names are shown as visible text",
+  async () => {
+    // A cloned repository controls `.pi/.pi-kit.json`; its strings reach the launch screen in every mode.
+    const hostile = "\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J\u009b31m\u202e";
+    const started = await start({ env: { PI_KIT_REDUCED_MOTION: "1" }, marker: { profile: `evil${hostile}x`, extensions: [`ext${hostile}y`, "z".repeat(400)] } });
+    try {
+      for (const ascii of [false, true]) {
+        const lines = headerOf(started)(makeTui().tui, themeNamed(ascii ? "tty" : "dark")).render(120);
+        const text = lines.join("\n").replace(SGR, "");
+        assert.ok(text.includes("ext") && text.includes("y"), `the extension name keeps its visible text: ${JSON.stringify(text)}`);
+        assert.ok(!/[^\n\P{Cc}]|\p{Cf}/u.test(text), `no control, C1 or bidi character reaches the terminal (ascii ${ascii}): ${JSON.stringify(text)}`);
+      }
+      const launch = await loadLaunch();
+      const lines = launch.launchLines({ width: 120, rows: 40, frame: launch.REVEAL_FRAMES - 1, ascii: false, theme: themeNamed("dark"), info: { version: "pi 1", hubKey: "alt+m", menuCmd: "/menu", facts: [`profile evil${hostile}`], items: [{ name: `n${hostile}`, state: "fail", note: `bad${hostile}` }] } });
+      const text = lines.join("\n").replace(SGR, "");
+      assert.ok(text.includes("profile evil") && text.includes("bad"), "facts and notes keep their visible text");
+      assert.ok(!/[^\n\P{Cc}]|\p{Cf}/u.test(text), `facts, names and notes carry no control character: ${JSON.stringify(text)}`);
+    } finally {
+      started.cleanup();
     }
   },
 ]);

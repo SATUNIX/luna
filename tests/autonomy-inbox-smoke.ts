@@ -149,15 +149,16 @@ await check("bad input is refused and leaves the previous inbox untouched", asyn
   assert.equal(fs.readFileSync(inboxFile, "utf8"), before, "an oversized answer is refused before it is written");
 });
 
-await check("the listing sanitises the outcome timestamp a host file can carry", async () => {
-  writeJson(inboxFile, { cards: [{ id: "S1", question: "q", default: "d", deadline: "2099-10-02T00:00:00Z", outcome: { at: "2026-10-01T00:00:00Z\u001b[2J\u202e", via: "answer", text: "done" } }] });
+await check("the listing sanitises the outcome timestamp and text a host file can carry", async () => {
+  writeJson(inboxFile, { cards: [{ id: "S1", question: "q", default: "d", deadline: "2099-10-02T00:00:00Z", outcome: { at: "2026-10-01T00:00:00Z\u001b[2J\u202e", via: "answer", text: "do\u001b[?1049hne\u202e\u009b" } }] });
   const listed = await call("inbox", "--run", run);
   assert.equal(listed.code, 0, listed.stderr);
   assert.match(listed.stdout, /S1\s+answered/, "the card and its outcome are listed");
-  assert.ok(!listed.stdout.includes("\u001b") && !listed.stdout.includes("\u202e"), "the outcome timestamp carries no control or bidi character");
+  assert.ok(!listed.stdout.includes("\u001b") && !listed.stdout.includes("\u202e"), "the outcome timestamp and text carry no control or bidi character");
+  assert.ok(!listed.stdout.includes("\u009b"), "the outcome text carries no C1 CSI");
 });
 
-await check("the inbox is only for self-improve runs", async () => {
+await check("the inbox is only for cycling runs (self-improve and dispatch): a finite run is refused", async () => {
   const other = harness({ schemaVersion: 1, run: "inbox-implement-1", template: "implement", objective: { title: "x", spec: "y", backlog: [] }, inputs: {}, acceptance: { checks: [{ id: "gate", run: NODE_EXIT("true"), timeoutMinutes: 1, required: true }], review: false }, budget: { totalUsd: 1, perStepUsd: 1, maxSteps: 1, maxMinutes: 10 } });
   const out: string[] = [];
   const r = await main(["inbox", "--run", other.contract.run, "--json"], { home: other.home, effort: testEffort, isTTY: false, signals: false, pid: 9002, now: () => new Date(other.clock.now), stdout: { write: (s: string) => out.push(s) }, stderr: { write: () => {} } });

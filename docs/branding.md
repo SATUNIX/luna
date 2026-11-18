@@ -66,4 +66,5 @@ The identities above are deliberately **not** renamed: they are external contrac
 installs, recorded data, deployment files and operator commands depend on. Changing any of them
 needs an operator decision and a migration (compatibility aliases, a settings/path migration, or a
 major version), not a branding edit. Until then, display strings and documentation use Luna, and
-the contracts above keep their historical names.
+the contracts above keep their historical names. The migration steps a rename would need are in
+[Future work](future-work.md#renaming-the-package-and-its-identities).

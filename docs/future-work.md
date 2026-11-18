@@ -384,6 +384,30 @@ number look better.
   learning is kept and a regressing feature is reverted. Not covered: the targets are goals for an
   experiment, not measured results.
 
+## Renaming the package and its identities
+
+Luna keeps the `pi-system` identities listed in [Branding](branding.md) because each is an external
+contract. Renaming them is a proposal for an operator decision and a major version, not something
+the code does today. Each identity needs its own migration:
+
+1. **npm package and bin names.** Publish `@satunix/luna` as the package, keep `@satunix/pi-system`
+   as a deprecated alias that depends on it for one major version, and ship `luna`,
+   `luna-install` and `luna-verify` bins beside the old ones. `packages/core/lib/identity.ts`
+   already accepts `@satunix/luna`.
+2. **Environment variables.** Read `LUNA_*` first and fall back to `PI_SYSTEM_*` with a deprecation
+   notice; document both until the next major version drops the old names.
+3. **Install and data paths.** Move `/srv/data/pi-system*` and `/opt/pi-system` to `luna` paths
+   with a one-time migration that leaves a compatibility symlink at the old path, and teach
+   `secret-guard` and `engagement-governance` both paths until the symlink is removed.
+4. **Compose project, containers and image.** Rename the compose project and image tag, and give
+   operators a release note with the `docker exec` and `docker inspect` names that change.
+5. **Global symbols and the run-contract URN.** Accept both `Symbol.for` keys during a transition,
+   and bump the URN to a new version (`urn:luna:autonomy:run-contract:2`) with a reader for the
+   old one, because stored contracts name it.
+6. **`CAPABILITY_ID`, the governance server name and the TLS organisation.** Changing these changes
+   ledger records, MCP client configuration and every generated certificate; each needs a dated
+   cut-over and a note for downstream consumers that compare the values.
+
 ## Related records
 
 - [Roadmap](roadmap.md)

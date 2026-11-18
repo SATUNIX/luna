@@ -50,7 +50,7 @@ applied on the next `pi-agent` launch without rebuilding.
 sh scripts/build.sh --dev
 
 # Run with local kit mount
-PI_KIT_PATH=/path/to/pi-system \
+PI_KIT_PATH=/path/to/luna \
 docker compose -f capability/compose/compose.yaml \
                -f capability/compose/compose.dev.yaml \
                --env-file capability/env/defaults.env \

@@ -229,6 +229,27 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **The rename of the remaining `pi-system` identities is written down as a proposal (V-103).** Finding:
+  `docs/branding.md` said why the package, paths, compose names and other identities keep `pi-system` but
+  not how they could be renamed, and two placeholders still used the old name (the checkout path in
+  `packages/container/README.md` and the fallback repository in `packages/core/extract-extension.ts`, whose
+  last segment is never used). Fix: `docs/future-work.md` gains the migration steps per identity, linked
+  from the branding page, and both placeholders say `luna`. No identity, path, environment variable or
+  compose name changed. Not covered: the board item's repo-wide brand smoke, which the owner removed as a
+  presentation test; nothing pins the branding page.
+
+- **A host git failure while reconciling a diverged integration branch parks the run on a question
+  (PG-69).** Finding: `gm.reconcileIntegration` ran outside any error handling at cycle start, so a git
+  failure there (adding the worktree, the compare-and-swap `update-ref`, `rev-parse`) escaped the step and
+  paused the run as `supervisor_error`, which a restart resumes straight into the same failure. Cause: only
+  the fetch before it was guarded. Fix: the failure is logged and the run parks on an
+  `integration-reconcile-failed` question that names the branch and both heads (not git's own output);
+  answering retries the reconciliation. No cycle record was at risk: the reconciliation runs before a cycle
+  starts. Not covered: the journal backstop the board item also names (PG-49) is not in this tree, so only
+  the reconciliation half is pinned. Verification: `tests/autonomy-selfimprove-smoke.ts` blocks the mirror's
+  `git worktree add` while the destination has moved; the run parks on the question with the earlier cycle's
+  record and refs intact, and a restarted supervisor stays parked.
+
 - **A cycle the leak scan would refuse to publish is refused at close-out, not merged.** Finding: the
   pre-push leak scan ran only at publication, after the gate and the merge review, so a cycle whose
   commit message or added lines carried a blocked identifier was merged locally and then refused at

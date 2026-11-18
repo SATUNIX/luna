@@ -158,8 +158,9 @@ imports another extension to get it:
 
 The header strip combines the profile, effort, thinking level, security level and approval mode.
 The header strip, page titles (including the text renderer's page titles) and the informational
-rows (Doctor, Help) pass what they display through one display filter: pi-tui's terminal
-sequence strip first, then removal of every control and format code point (Unicode `Cc`, `Cf` and
+rows (Doctor, Help) pass what they display through one display filter: input past 4000 UTF-16
+units is dropped first, so the filter never runs on an unbounded string, then pi-tui's terminal
+sequence strip, then removal of every control and format code point (Unicode `Cc`, `Cf` and
 `Default_Ignorable_Code_Point`, which covers alternate-screen sequences, resets, C1 CSI and
 bidirectional overrides), then a trim, then a bound of 500 characters. The Unicode class and the
 one-line helpers live once in `packages/core/shared/visible-text.ts`; control-centre uses its

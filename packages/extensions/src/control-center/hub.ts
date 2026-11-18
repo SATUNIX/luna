@@ -170,14 +170,19 @@ export function terminalConfirm(ui: ExtensionUIContext): (title: string, detail:
 
 /** A repository-controlled string cannot flood a page or the header strip. */
 const MAX_DISPLAY_LENGTH = 500;
+/** Input beyond this many UTF-16 units is dropped before filtering, so the filters never run on an unbounded string. */
+const MAX_INPUT_LENGTH = MAX_DISPLAY_LENGTH * 8;
 
 /**
- * The one filter for every repository-controlled display string: pi-tui's sequence strip first, then
- * every remaining control/format code point (alternate-screen sequences, resets, C1 CSI, bidi
- * overrides), then trim, then the length bound. Capping by code point keeps a surrogate pair whole.
+ * The one filter for every repository-controlled display string: the input bound, then pi-tui's
+ * sequence strip, then every remaining control/format code point (alternate-screen sequences,
+ * resets, C1 CSI, bidi overrides), then trim, then the length bound. Capping by code point keeps a
+ * surrogate pair whole, and the input bound drops a high surrogate it would leave alone.
  */
 function displayText(text: string): string {
-  const filtered = stripTerminalSequences(text).replace(HIDDEN_CHARS, "").trim();
+  let bounded = text.length > MAX_INPUT_LENGTH ? text.slice(0, MAX_INPUT_LENGTH) : text;
+  if (/[\uD800-\uDBFF]$/.test(bounded) && bounded.length < text.length) bounded = bounded.slice(0, -1);
+  const filtered = stripTerminalSequences(bounded).replace(HIDDEN_CHARS, "").trim();
   return Array.from(filtered).slice(0, MAX_DISPLAY_LENGTH).join("");
 }
 

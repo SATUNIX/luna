@@ -154,6 +154,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **The container MCP servers take `@modelcontextprotocol/sdk` 1.32.2, and the SDK pin check follows
+  the type mirror.** Finding: Dependabot's 1.32.1 to 1.32.2 bump could never pass
+  `smoke:container-static`, because `scripts/validate-governance-mcp-server.sh` required the literal
+  1.32.1, so every SDK bump needed a hand edit of the validator as well as of the type mirror. Fix:
+  the governance and memory-mcp servers pin 1.32.2 (package.json and lockfile). The validator now
+  reads the version `mcp-servers/types/mcp-sdk.d.ts` says it mirrors and requires both servers to pin
+  exactly that version in package.json, the lockfile root and the locked package, so a bump still
+  cannot land without the mirror being reviewed and moved with it, and the check now covers
+  memory-mcp too. The mirror was checked against 1.32.2's published types: only `Transport`'s
+  optional handlers changed (each now also allows `undefined`), and the mirror follows. Verified by
+  `tests/container-static-smoke.ts`, which now breaks the mirror's version, loosens each server's
+  pin to a range and drifts each lockfile, and expects the validator to fail each time.
+
 - **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
   line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do
   not pass". The last non-empty line must now equal the pass text, ignoring case, surrounding

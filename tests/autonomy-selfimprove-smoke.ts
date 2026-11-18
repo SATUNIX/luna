@@ -11,6 +11,7 @@
  *   - promotion defaults to LOCAL only: no remote is contacted unless the contract lists one
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,7 @@ import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
+import * as gm from "../packages/autonomy/lib/gitmirror.ts";
 import { bookkeepingPaths } from "../packages/autonomy/lib/bookkeeping.ts";
 import { ALWAYS_CHECKS, CHANGED_PATH_CHECKS, checksForChangedPaths, verifyPlan } from "../packages/core/lib/check-map.ts";
 
@@ -756,12 +758,15 @@ await check("backlog inbox items reach the next cycle under a clear heading and 
   assert.equal(next.state.backlog?.[0]?.deliveredCycle, 1, "the interrupted cycle gets the same backlog on resume");
 });
 
+// The tests from here to the clean-publish one reach the publish-time scan, the backstop for a refusal
+// close-out cannot see, so they skip the close-out scan (closeOutScan: false) and let a leaky cycle
+// merge. The close-out refusal itself is pinned by the DE-99 tests below.
 await check("host leak scans block automatic publication and approved promotion, including unmerged tags; clean pushes remain fast-forward only", async () => {
   for (const approval of [false, true]) {
     const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
     const calls: ManagerCall[] = [];
     const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: approval } }), {
-      cfgOverride: { integrationRemote: bare, gitRemote: bare },
+      cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
       manager: manager(calls, { review: "REJECT" }),
       script: async (t) => { t.write("AUDIT_OK", "1"); t.write("internal/private-note.txt", "synthetic private-path fixture"); report(t, "successful"); t.commit("private path fixture"); },
     });
@@ -782,7 +787,7 @@ await check("host leak scans block automatic publication and approved promotion,
 await check("publish range scanning catches a private path removed before the final head", async () => {
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: false }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare }, manager: manager([]),
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false, manager: manager([]),
     script: async (t) => {
       t.write("internal/private-note.txt", "synthetic history fixture"); t.commit("private-path history fixture");
       t.remove("internal"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("remove private path before final head");
@@ -799,7 +804,7 @@ await check("PG-55: a leak-scan-refused merge is counted, surfaced by status, an
   const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
   const prompts: string[] = [];
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     script: async (t) => {
       prompts.push(t.message);
@@ -834,7 +839,7 @@ await check("PG-55: two consecutive leak-scan-refused merges stop the run with a
   const slot: { engine?: MadeEngine } = {};
   let stopped = false;
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     hooks: { onSleep: () => { if (slot.engine && !stopped && h.state().status === "blocked") { stopped = true; slot.engine.engine.signalled = true; } } },
     script: async (t) => {
@@ -867,7 +872,7 @@ await check("PG-55: answering the publish-blocked question runs exactly one cycl
   let answered = 0;
   let stopped = false;
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     hooks: { onSleep: () => {
       if (!slot.engine) return;
@@ -901,7 +906,7 @@ await check("PG-55: answering the publish-blocked question with a leak-free cycl
   const slot: { engine?: MadeEngine } = {};
   let answered = 0;
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     hooks: { onSleep: () => {
       if (!slot.engine) return;
@@ -944,7 +949,7 @@ await check("PG-55: a second publish-blocked answer does not name the tag of an 
   const slot: { engine?: MadeEngine } = {};
   let answered = 0;
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 5, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     hooks: { onSleep: () => {
       if (!slot.engine) return;
@@ -992,7 +997,7 @@ for (const answer of [
     let answered = false;
     let stopped = false;
     const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-      cfgOverride: { integrationRemote: bare, gitRemote: bare }, manager: manager([]),
+      cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false, manager: manager([]),
       hooks: { onSleep: () => {
         if (!slot.engine) return;
         const s = h.state();
@@ -1033,7 +1038,7 @@ await check("PG-55: a non-merged cycle between refused merges does not reset the
   const slot: { engine?: MadeEngine } = {};
   let stopped = false;
   const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
-    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, closeOutScan: false,
     manager: manager([]),
     hooks: { onSleep: () => { if (slot.engine && !stopped && h.state().status === "blocked") { stopped = true; slot.engine.engine.signalled = true; } } },
     script: async (t) => {
@@ -1086,6 +1091,153 @@ await check("PG-55: a clean publish clears the blocker, the unpublished count an
   assert.equal(state.selfImprove?.merged, 1);
   const text = await cliRun(h, ["status", "--run", "improve-test-1"]);
   assert.doesNotMatch(text.out, /publication BLOCKED/);
+});
+
+await check("DE-99: a cycle publication would refuse is refused at close-out: no gate, no review, no merge, its tag never published, and the next cycle is told to reword it; a clean cycle still merges", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const prompts: string[] = [];
+  const calls: ManagerCall[] = [];
+  const blocked = "M-" + "04"; // a roadmap-style identifier the scanner refuses, built at run time so this file stays clean
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 4, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager(calls),
+    script: async (t) => {
+      prompts.push(t.message);
+      t.write("AUDIT_OK", "1");
+      // Cycle 1 repairs the red seed (the fixture's base has no AUDIT_OK) and merges; 2 and 3 leak; 4 is clean.
+      if (t.step === 2) { t.write("two.txt", "two\n"); report(t, "successful"); t.commit(`cycle 2 for ${blocked}`); return; }
+      if (t.step === 3) { t.write("internal/private-note.txt", "synthetic private-path fixture\n"); report(t, "successful"); t.commit("cycle 3"); return; }
+      t.write(`clean-${t.step}.txt`, "clean\n"); report(t, "successful"); t.commit(`cycle ${t.step}, clean`);
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  const [c1, c2, c3, c4] = state.selfImprove?.history ?? [];
+  assert.ok(c1 && c2 && c3 && c4, "four cycles are recorded");
+  assert.equal(c1.merged, true, "the first, clean cycle merges");
+  // (a) the message leak and the file leak are refused before the gate and the review, naming commit and location only.
+  assert.deepEqual([c2.merged, c2.gate, c2.leakRefused, c3.merged, c3.gate, c3.leakRefused], [false, "skipped", true, false, "skipped", true]);
+  assert.match(c2.mergeReason, /^the pre-push leak scan would refuse to publish it: [0-9a-f]{12} message line 1: blocked identifier \(value redacted\)$/, c2.mergeReason);
+  assert.match(c3.mergeReason, /^the pre-push leak scan would refuse to publish it: [0-9a-f]{12} internal\/private-note\.txt: adds or changes a private path$/, c3.mergeReason);
+  assert.equal(calls.filter((c) => /You review one cycle/.test(c.system)).length, 2, "only the two clean cycles reached the merge review");
+  // (b) a clean cycle after the refusals still merges and publishes.
+  assert.deepEqual([c4.merged, c4.gate, c4.leakRefused], [true, "green", undefined]);
+  // (c) publication never saw the refused cycles: no blocker, no refused tag on the destination, nothing of theirs on its branch.
+  assert.deepEqual([state.selfImprove?.publishBlocker ?? null, state.selfImprove?.publishError ?? null, state.selfImprove?.publishBlockedCycles ?? 0], [null, null, 0]);
+  const g = mirrorGit(rt);
+  for (const nn of ["02", "03"]) {
+    assert.ok(g(["rev-parse", "--verify", `refs/tags/pi/improve-test-1/refused/cycle-${nn}`]), `refused cycle ${nn} is kept locally`);
+    assert.equal(g(["rev-parse", "--verify", "--quiet", `refs/tags/pi/improve-test-1/cycle-${nn}`], { allowFail: true }), null, `refused cycle ${nn} has no publishable tag`);
+  }
+  const tags = sh(bare, "tag", "--list");
+  assert.doesNotMatch(tags, /refused|cycle-0[23]/, "no refused cycle tag is published");
+  assert.match(tags, /cycle-01[\s\S]*cycle-04/, "the clean cycles' tags are published");
+  assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), c4.head, "the destination holds the clean cycle");
+  assert.doesNotMatch(sh(bare, "log", "--format=%B", "refs/heads/pi-autonomy/integration"), new RegExp(blocked), "no refused commit reached the destination");
+  assert.equal(sh(bare, "ls-tree", "-r", "--name-only", "refs/heads/pi-autonomy/integration").includes("internal/"), false);
+  // (d) the next cycle is told to reword, where the commits are, and never the value.
+  assert.match(nth(prompts, 2), /not merged into pi-autonomy\/integration and never published: the pre-push leak scan would refuse.*origin\/attempts\/improve-test-1\/refused\/cycle-02.*reword the commit message, or rewrite the added line/s);
+  assert.match(nth(prompts, 3), /origin\/attempts\/improve-test-1\/refused\/cycle-03/);
+  for (const p of prompts) assert.ok(!p.includes(blocked), "no prompt carries the refused value");
+  const remoteBranches = spawnSync("git", ["--git-dir", rt.p.remote, "for-each-ref", "--format=%(refname)"], { encoding: "utf8" }).stdout;
+  assert.match(remoteBranches, /refs\/heads\/attempts\/improve-test-1\/refused\/cycle-03/, "the worker's repository offers the refused attempt as a branch to reword");
+});
+
+await check("DE-99: the close-out scan covers every commit of the cycle, not only its head, and fails closed", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const h = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: false }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare }, manager: manager([]),
+    script: async (t) => {
+      t.write("internal/private-note.txt", "synthetic history fixture"); t.commit("private-path history fixture");
+      t.remove("internal"); t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("remove private path before final head");
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  const c1 = state.selfImprove?.history[0];
+  assert.deepEqual([c1?.merged, c1?.leakRefused], [false, true], "a leak removed before the head is still refused");
+  assert.match(c1?.mergeReason ?? "", /internal\/private-note\.txt: adds or changes a private path/);
+  assert.equal(sh(bare, "rev-parse", "refs/heads/pi-autonomy/integration"), state.selfImprove?.seedSha, "nothing was published");
+  // The library call gives the same verdict on the refused head, and a scan that cannot complete is a failure, not a pass.
+  const cfg = { integrationBranch: "pi-autonomy/integration", baseRef: h.cfg.baseRef };
+  assert.deepEqual(gm.scanCycle(mirrorGit(rt), cfg, c1?.head ?? ""), { reason: c1?.mergeReason, failed: false });
+  assert.deepEqual(gm.scanCycle(mirrorGit(rt), cfg, "0".repeat(40)), { reason: "the pre-push leak scan could not complete on the cycle's commits", failed: true });
+});
+
+await check("DE-99: close-out reads exceptions from the run's base, never from the cycle's own commits", async () => {
+  const blocked = "M-" + "04";
+  const line = `tracked as ${blocked} upstream`;
+  const sha256 = (t: string): string => createHash("sha256").update(t).digest("hex");
+  const exception = (file: string) => ({ path: file, matchSha256: sha256(blocked), lineSha256: sha256(line), reason: "synthetic fixture" });
+  const src = greenSourceRepo();
+  fs.mkdirSync(path.join(src, "packages", "core"), { recursive: true });
+  fs.writeFileSync(path.join(src, "packages", "core", "leak-scan-exceptions.json"), `${JSON.stringify({ schemaVersion: 1, scanExceptions: [exception("docs/allowed.md")] }, null, 2)}\n`);
+  sh(src, "add", "."); sh(src, "commit", "--quiet", "-m", "base exceptions");
+  const h = harness(improveRaw(src, { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    script: async (t) => {
+      if (t.step === 1) { t.write("docs/allowed.md", `${line}\n`); report(t, "successful"); t.commit("an excepted line"); return; }
+      // The worker excepts its own leak in the same commit: publication would not read that exception, so neither does close-out.
+      t.write("packages/core/leak-scan-exceptions.json", `${JSON.stringify({ schemaVersion: 1, scanExceptions: [exception("docs/allowed.md"), exception("docs/other.md")] }, null, 2)}\n`);
+      t.write("docs/other.md", `${line}\n`); report(t, "successful"); t.commit("a self-excepted line");
+    },
+  });
+  const { state } = await runOnce(h);
+  const [c1, c2] = state.selfImprove?.history ?? [];
+  assert.deepEqual([c1?.merged, c1?.leakRefused], [true, undefined], c1?.mergeReason ?? "");
+  assert.deepEqual([c2?.merged, c2?.leakRefused], [false, true], c2?.mergeReason ?? "");
+  assert.match(c2?.mergeReason ?? "", /docs\/other\.md:1: blocked identifier \(value redacted\)/);
+});
+
+await check("DE-99: a close-out scan that cannot complete parks the cycle with its work held, charges nothing, and the answer scans it again", async () => {
+  let failures = 1;
+  let sessions = 0;
+  let answered = false;
+  const board = { items: [{ id: "S-1", title: "Add the audit marker", priority: "P1", acceptance: "AUDIT_OK exists." }] };
+  const h: Harness = harness(improveRaw(sourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    manager: manager([]),
+    closeOutScan: () => (failures-- > 0 ? { reason: "the pre-push leak scan could not complete on the cycle's commits", failed: true } : "real"),
+    hooks: { onSleep: () => { const s = h.state(); if (s.status === "blocked" && !answered) { answered = true; h["blocker"] = s.blocker; h["attempts"] = JSON.stringify(s.selfImprove?.itemAttempts ?? {}); h["tags"] = mirrorGit(h["rt"] as HarnessRuntime)(["for-each-ref", "--format=%(refname)", "refs/tags/"]); h.store.enqueue("answer", { text: "continue" }); } } },
+    script: async (t) => { sessions++; t.write("AUDIT_OK", "1"); report(t, "successful", "fix", "Board: S-1 done"); t.commit("c"); },
+  });
+  fs.writeFileSync(path.join(h.store.p.control, "board.json"), JSON.stringify(board));
+  const made = h.engine();
+  h["rt"] = made.rt;
+  await made.engine.run();
+  const state = h.state();
+  assert.ok(answered, "the run parked on the failed scan");
+  const blocker = h["blocker"] as { id?: string; question?: string } | undefined;
+  assert.equal(blocker?.id, "review-pending");
+  assert.match(blocker?.question ?? "", /leak scan could not complete .* The work is kept and was not judged/);
+  assert.equal(h["attempts"], "{}", "an infrastructure failure charges no board item");
+  assert.equal(h["tags"], "", "nothing was tagged while the work was held");
+  assert.equal(sessions, 1, "the answer scanned the held head again; no second worker session");
+  assert.deepEqual([state.selfImprove?.history.at(-1)?.merged, state.selfImprove?.history.at(-1)?.leakRefused], [true, undefined], "the clean head merged once the scan completed");
+});
+
+await check("DE-99: a manager reset scans the abandoned head and keeps a leaky one under a tag publication never pushes", async () => {
+  const bare = scratch(); sh(bare, "init", "--quiet", "--bare");
+  const blocked = "M-" + "04";
+  let sessions = 0;
+  const prompts: string[] = [];
+  const h = harness(improveRaw(greenSourceRepo(), { budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 2, maxMinutes: 5000 }, promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: true }], requiresOperatorApproval: false } }), {
+    cfgOverride: { integrationRemote: bare, gitRemote: bare },
+    manager: manager([], { manager: { decision: "RESET_TO_LAST_GOOD", reason: "start again" } }),
+    script: async (t) => {
+      sessions++;
+      prompts.push(t.message);
+      if (sessions === 1) { t.write("one.txt", "one\n"); t.commit(`work for ${blocked}`); t.hang(); return; } // goes quiet: the manager resets
+      t.write("two.txt", "two\n"); report(t, "successful"); t.commit("clean redo");
+    },
+  });
+  const { state, rt } = await runOnce(h);
+  assert.equal(state.selfImprove?.history[0]?.outcome, "reset", "the manager reset the first cycle");
+  assert.match(nth(prompts, 1), /its work was abandoned \(tag pi\/improve-test-1\/refused\/abandoned-01\); the leak scan refused it/, "the next cycle is told the abandoned work was refused");
+  assert.ok(!prompts.some((p) => p.includes(blocked)), "no prompt carries the refused value");
+  const g = mirrorGit(rt);
+  assert.ok(g(["rev-parse", "--verify", "refs/tags/pi/improve-test-1/refused/abandoned-01"]), "the leaky abandoned head is kept locally under refused/");
+  assert.equal(g(["rev-parse", "--verify", "--quiet", "refs/tags/pi/improve-test-1/abandoned-01"], { allowFail: true }), null, "it has no publishable tag");
+  assert.equal(state.selfImprove?.publishBlocker ?? null, null, "publication was never refused");
+  assert.doesNotMatch(sh(bare, "tag", "--list"), /abandoned|refused/, "no abandoned or refused tag is published");
+  assert.equal(state.selfImprove?.history.at(-1)?.merged, true, "the clean redo merged and published");
 });
 
 await check("PG-67: a non-conflicting destination move is rebased at the next cycle, tags stay put, and publication stays fast-forward", async () => {

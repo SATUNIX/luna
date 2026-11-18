@@ -272,6 +272,11 @@ export function reviewBlocker(reason: string, sha: string): Blocker {
   return { kind: "external", id: "review-pending", method: "review", question: `No reviewer gave a usable verdict for the work at ${sha.slice(0, 12)} (${reason}). The work is kept and was not rejected. Check the review model and the provider, then resume with --answer "continue" to review it again.`, options: [] };
 }
 
+/** The close-out leak scan could not complete: the cycle is held like a review-pending one and the answer scans it again. */
+export function leakScanBlocker(sha: string): Blocker {
+  return { kind: "external", id: "review-pending", method: "review", question: `The pre-push leak scan could not complete on the cycle's commits at ${sha.slice(0, 12)}. The work is kept and was not judged. Check the host mirror and the scan exceptions on the run's base, then resume with --answer "continue" to scan it again.`, options: [] };
+}
+
 /** `String(value ?? fallback)` for a field pi sent unchecked (activity lines and blockers are display text). */
 function text(value: unknown, fallback = ""): string {
   const shown: unknown = value ?? fallback;

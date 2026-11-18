@@ -63,7 +63,7 @@ export interface EngineOptions {
   lock?: RunLock;
   gateSlots?: number;
   gateSlotsHome?: string;
-  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
 }
 
 /** An engine built around the harness's run, with the runtime and lock it uses. */

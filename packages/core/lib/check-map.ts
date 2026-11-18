@@ -51,7 +51,18 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   { glob: "packages/autonomy/**", checks: ["smoke:autonomy", "smoke:autonomy-run", "smoke:autonomy-selfimprove"] },
   { glob: "packages/core/check-all.ts", checks: ["smoke:check-all-npm", "smoke:docs"] },
   { glob: "packages/core/lib/**", checks: ["smoke:check-all-npm", "smoke:docs"] },
-  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install"] },
+  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install", "smoke:install-guided"] },
+  { glob: "packages/core/lib/install-guide.ts", checks: ["smoke:install-guided", "smoke:clean-install"] },
+  // Security paths plan the smokes that exercise them (DE-102), not only the always-on checks: the
+  // firewall gate and unattended policy, the shared redaction table and its corpus, the leak scan
+  // and its exceptions, and the autonomy modules whose behaviour another smoke pins.
+  { glob: "packages/extensions/src/tool-firewall/**", checks: ["smoke:tool-firewall", "smoke:firewall-gate", "smoke:firewall-unattended"] },
+  { glob: "packages/core/shared/redact.ts", checks: ["smoke:redaction-corpus", "smoke:fuzz-redaction"] },
+  { glob: "packages/core/lib/leak-scan.ts", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },
+  { glob: "packages/core/prepush-scan.ts", checks: ["smoke:prepush-scan"] },
+  { glob: "packages/core/leak-scan-exceptions.json", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },
+  { glob: "packages/autonomy/lib/gate-slots.ts", checks: ["smoke:autonomy-lifecycle"] },
+  { glob: "packages/autonomy/lib/unpublished.ts", checks: ["smoke:autonomy-cli"] },
   { glob: "packages/core/coverage.ts", checks: ["smoke:check-all-npm"] },
   // CI policy: the workflow policy check pins ci.yml itself and every other workflow, while the
   // settings, ownership and scanner-config checks pin their own .github files (tests/workflow-policy-smoke.ts,

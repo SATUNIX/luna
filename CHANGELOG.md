@@ -115,6 +115,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
+  line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do
+  not pass". The last non-empty line must now equal the pass text, ignoring case, surrounding
+  whitespace and markdown emphasis. A plan whose reviewer ends with `Verdict: PASS` under a `PASS` gate
+  now loops back: gate on the exact line, or use an anchored `/regex/` as the shipped workflows do.
+  The gate's parse error and the `workflow_run` description now say a `/regex/` is tested on the
+  output tail (`tests/workflow-smoke.ts`).
 - **Dependabot no longer proposes pi bumps for the image tool lockfiles.** The autonomy
   and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
   lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
@@ -282,6 +289,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   segments, or the field key or rule name; a digest for bash). No block became an allow.
   `tests/firewall-refusal-record.ts`.
 
+- **`check-all --for-changed` plans the smokes that cover security paths.** The tool firewall, the
+  shared redaction table, the leak scan and its exceptions, the installer's guided mode and the
+  autonomy gate-slot and unpublished-work modules mapped only to the always-on checks, so a cycle's
+  verify plan listed their covering smokes as skipped (the host gate still ran everything). Each now
+  plans its smokes (`tests/autonomy-selfimprove-smoke.ts`).
+- **A stop while an autonomous run waits for a gate slot is no longer ignored.** The host-wide
+  gate-slot wait polled until a slot was free and never looked at STOP, a signal, a pause or a
+  cancel, so a run waiting behind two other gates could not be stopped until it got its turn. The
+  wait now applies control commands on each poll; a stop ends it with the acceptance unrun and the
+  run parked and resumable, recorded as a stop, not a supervisor error
+  (`tests/autonomy-lifecycle-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
   `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
   dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only

@@ -286,6 +286,11 @@
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Whole-line plain-text gate (2026-11-18):** `workflow.ts` `gatePasses` passes a plain-text gate
+    only when the last non-empty line, without case, surrounding whitespace or markdown emphasis
+    (`verdictKey`), equals the pass text; it was a substring of that line, so a bare `PASS` gate
+    passed "the tests do not pass". A `/regex/` gate is unchanged. `workflow.ts`'s parse error and
+    `plan.ts`'s description and refusal now say what each kind matches (`tests/workflow-smoke.ts`).
   - **Workflow panel prune fallback (2026-11-12):** `wf-panel.ts` adds `inRun()`, which is true only
     while the view is `run` and its run is still in the registry, and uses it in `press()`,
     `footer()` and `render()`. A run pruned while open now shows the list body and list keys, and

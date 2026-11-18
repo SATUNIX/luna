@@ -11,6 +11,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { GateWaitInterrupted } from "./errors.ts";
 
 export const GATE_SLOTS_ENV = "PI_AUTONOMY_GATE_SLOTS";
 export const DEFAULT_GATE_SLOTS = 2;
@@ -35,6 +36,8 @@ export interface AcquireGateSlotOptions {
   pollMs?: number;
   /** Called once per attempt while all slots are busy; a throw rejects the acquisition. */
   onWait?: () => void;
+  /** Asked once per attempt while all slots are busy; true rejects with GateWaitInterrupted. */
+  shouldStop?: () => Promise<boolean> | boolean;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -79,10 +82,11 @@ function trySlot(lockFile: string): Promise<ChildProcess | null> {
 }
 
 /**
- * Take one of `limit` host-wide gate slots. Waits, polling, until a slot is free. Limit 0 (or
- * negative) is unbounded: no directory, no file, no child.
+ * Take one of `limit` host-wide gate slots. Waits, polling, until a slot is free or `shouldStop`
+ * says to give up (GateWaitInterrupted). Limit 0 (or negative) is unbounded: no directory, no file,
+ * no child.
  */
-export async function acquireGateSlot({ home, limit, pollMs = 500, onWait }: AcquireGateSlotOptions): Promise<GateSlot> {
+export async function acquireGateSlot({ home, limit, pollMs = 500, onWait, shouldStop }: AcquireGateSlotOptions): Promise<GateSlot> {
   if (limit <= 0) return { index: -1, release: () => {} };
   const dir = path.join(home, "gate-slots");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -102,6 +106,7 @@ export async function acquireGateSlot({ home, limit, pollMs = 500, onWait }: Acq
       };
     }
     onWait?.();
+    if (shouldStop && (await shouldStop())) throw new GateWaitInterrupted();
     await sleep(pollMs);
   }
 }

@@ -32,14 +32,14 @@ import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.t
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
 import { ceilingBreach } from "../../core/shared/ceiling.ts";
-import { BoundaryError, LockLost } from "./errors.ts";
+import { BoundaryError, GateWaitInterrupted, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
 
 export const IDLE_MINUTES = 20; // a worker session that emits nothing for this long is treated as stalled
 export const MAX_ACTIVITY_LINES = 60;
 const TERMINAL: readonly RunStatus[] = ["succeeded", "failed", "cancelled"];
 
-export { BoundaryError, LockLost };
+export { BoundaryError, GateWaitInterrupted, LockLost };
 
 // --- the runtime (rt) ---------------------------------------------------------------------------
 
@@ -219,7 +219,7 @@ export interface EngineOptions {
   /** Host-wide gate slot count (PG-50); default from PI_AUTONOMY_GATE_SLOTS, 0 = unbounded. */
   gateSlots?: number;
   gateSlotsHome?: string;
-  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -327,7 +327,7 @@ export class Engine {
   uiAnswered = 0;
   gateSlotLimit: number;
   gateSlotHome: string;
-  gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
   clockPaused = false;
 
   constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, log }: EngineOptions) {
@@ -391,7 +391,9 @@ export class Engine {
    * Run `fn` holding one of the host-wide gate slots, so several supervisors on one host do not
    * run their acceptance gates at once. While waiting this sets phase `gate-wait`, heartbeats it
    * and does not accrue wall-clock minutes; the gate then runs under phase `acceptance`. With a
-   * limit of 0 this is a plain call (unbounded), leaving the caller's phase untouched.
+   * limit of 0 this is a plain call (unbounded), leaving the caller's phase untouched. Control
+   * commands are applied while waiting: a STOP, a signal, a pause or a cancel ends the wait with
+   * GateWaitInterrupted (the acceptance never runs), and a lost lock with LockLost.
    */
   async withGateSlot<T>(fn: () => Promise<T>): Promise<T> {
     if (this.gateSlotLimit <= 0) return fn();
@@ -405,7 +407,16 @@ export class Engine {
       // Inside the try: a throwing tick must not leave clockPaused true or the phase stuck.
       this.state.phase = "gate-wait";
       this.tick();
-      slot = await this.gateSlotAcquire({ home: this.gateSlotHome, limit: this.gateSlotLimit, onWait: () => this.tick() });
+      slot = await this.gateSlotAcquire({
+        home: this.gateSlotHome,
+        limit: this.gateSlotLimit,
+        onWait: () => this.tick(),
+        shouldStop: async () => {
+          if (this.lockLost) throw new LockLost();
+          await this.applyControl();
+          return !this.active || this.stopRequested;
+        },
+      });
       // Drop the last poll gap while still paused, so the wait itself is never charged.
       this.tick();
       this.clockPaused = false;
@@ -488,6 +499,13 @@ export class Engine {
   }
 
   async handleFatal(error: unknown): Promise<void> {
+    if (error instanceof GateWaitInterrupted) {
+      // applyControl already parked or ended the run; a stop that did not (it cannot be active here
+      // after a STOP or signal, but never leave a run "running" with no supervisor) parks it.
+      if (this.active) this.go("paused", { reason: this.signalled ? "signal" : "stop_file", by: "operator" });
+      this.log(`acceptance interrupted: ${error.message}; the run is ${this.status}`);
+      return;
+    }
     if (error instanceof LockLost) { this.log("lock lost: another supervisor took over this run; stopping without touching state"); throw error; }
     if (error instanceof BoundaryError) {
       this.log(`BOUNDARY VIOLATION: ${error.message}`);

@@ -50,7 +50,9 @@ try {
 
   const tools = path.join(cdir, "tools", "package.json");
   const toolsOriginal = fs.readFileSync(tools, "utf8");
-  fs.writeFileSync(tools, toolsOriginal.replace('"pi-mcp-adapter": "6.0.0"', '"pi-mcp-adapter": "^6.0.0"'));
+  const loosenedTools = toolsOriginal.replace(/"pi-mcp-adapter": "(\d+\.\d+\.\d+)"/, '"pi-mcp-adapter": "^$1"');
+  assert.notEqual(loosenedTools, toolsOriginal, "tools/package.json pins pi-mcp-adapter exactly");
+  fs.writeFileSync(tools, loosenedTools);
   const badTools = validate();
   assert.notEqual(badTools.status, 0, "a tools manifest that stops pinning the adapter exactly (or drifts from its lockfile) must fail");
   assert.match(badTools.stderr, /pi-mcp-adapter/);
@@ -96,6 +98,11 @@ try {
   const badFlag = validate();
   assert.notEqual(badFlag.status, 0, "turning an MCP hardening flag on must fail");
   assert.match(badFlag.stderr, /autoAuth/);
+  // pi-mcp-adapter 7 ignores `jev: false` and turns semantic search on unless semanticSearch is false.
+  fs.writeFileSync(mcp, mcpOriginal.replace('"semanticSearch": false', '"jev": false'));
+  const legacySearch = validate();
+  assert.notEqual(legacySearch.status, 0, "an overlay that turns search off only with the legacy jev key must fail");
+  assert.match(legacySearch.stderr, /semanticSearch/);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
@@ -189,4 +196,4 @@ try {
   fs.rmSync(rt, { recursive: true, force: true });
 }
 
-console.log("[container-static-smoke] OK (preflight passes; a drifted pin, an MCP SDK pin off its type mirror and a loosened MCP flag are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR and restores mcp-adapter.json each start, readiness fails on a drifted live config, and --check needs no server)");
+console.log("[container-static-smoke] OK (preflight passes; a drifted pin, an MCP SDK pin off its type mirror, a loosened MCP flag and a legacy jev-only search switch are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR and restores mcp-adapter.json each start, readiness fails on a drifted live config, and --check needs no server)");

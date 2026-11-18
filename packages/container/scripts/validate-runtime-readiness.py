@@ -38,7 +38,8 @@ REQUIRED_MCP_SETTINGS = {
     "namespaceProxyTools": False,
     "allowInstall": False,
     "allowScriptToolSave": False,
-    "jev": False,
+    "semanticSearch": False,
+    "extraction": False,
 }
 REQUIRED_GOVERNANCE_SETTINGS = {
     "directTools": False,

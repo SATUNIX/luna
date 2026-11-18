@@ -12,6 +12,12 @@
 //     generation n/N and last rotation reason, and clears it for a run without them;
 //   - `status` with no run sets a one-line fleet footer (counts by status, plus the first blocked
 //     run and its question) and clears it for an empty fleet; without a screen it is untouched;
+//   - the live run widget (renderAutonomyWidget) lists runs at 80 and 120 columns with no line
+//     wider than the terminal, is shown by `status` while a run is active, hides when none is,
+//     and `watch off` hides it; it shows a run still in `setup` after a background start and a
+//     run after `resume`; paused and blocked runs alone are not polled, and a run paused before
+//     its first cycle (step 0) does not show it; the only hooks are session_start and
+//     session_shutdown;
 //   - `inbox` lists cards (or waiting runs) and answers with a literal --value (any text, even one
 //     starting with `--`); bad ids spawn nothing;
 //   - against the REAL CLI, `templates` and `plan` work end to end (no container engine needed).
@@ -20,6 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, type ExtensionFactory } from "../packages/core/eval/harness.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { array, isRecord, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import type * as AutonomyRun from "../packages/extensions/src/autonomy-run/index.ts";
 
@@ -69,6 +76,7 @@ if (cmd === "status" && json && args.includes("--run")) {
   return out({ ok: true, command: "status", run, status: "running", generations });
 }
 if (cmd === "status" && json) return out({ ok: true, command: "status", runs: JSON.parse(process.env.FAKE_FLEET || "[]") });
+if (cmd === "events" && json) return out({ ok: true, command: "events", events: JSON.parse(process.env.FAKE_EVENTS || "[]"), skipped: 0 });
 if (cmd === "promote") {
   if (!args.includes("--yes")) return out({ ok: false, command: "promote", error: "this promotion needs your approval: fast-forward branch pi/demo. Re-run with --yes, or from a terminal.", code: "refused" }, 3);
   return json ? out({ ok: true, command: "promote", status: "done" }) : text("promotion done");
@@ -118,10 +126,12 @@ interface Asked {
 
 interface Session {
   pi: ReturnType<typeof fakePi>;
-  ctx: { hasUI: boolean; cwd: string; ui: { notify(message: string, level: string): void; confirm(title: string, body: string): Promise<boolean | undefined>; setStatus(key: string, text: string | undefined): void } };
+  ctx: { hasUI: boolean; cwd: string; ui: { notify(message: string, level: string): void; confirm(title: string, body: string): Promise<boolean | undefined>; setStatus(key: string, text: string | undefined): void; setWidget(key: string, content: unknown): void } };
   notes: Note[];
   /** Every setStatus call, in order. */
   statuses: Array<[string, string | undefined]>;
+  /** Every setWidget call, in order (the session is not the terminal UI, so content is lines or undefined). */
+  widgets: Array<[string, unknown]>;
   asked: Asked[];
   run(args: string): Promise<unknown>;
 }
@@ -132,6 +142,7 @@ function session({ hasUI = true, answers = [] }: SessionOptions = {}): Session {
   const notes: Note[] = [];
   const asked: Asked[] = [];
   const statuses: Array<[string, string | undefined]> = [];
+  const widgets: Array<[string, unknown]> = [];
   const queue = [...answers];
   const ctx = {
     hasUI,
@@ -140,9 +151,10 @@ function session({ hasUI = true, answers = [] }: SessionOptions = {}): Session {
       notify: (message: string, level: string) => notes.push({ message, level }),
       confirm: async (title: string, body: string) => { asked.push({ title, body }); return queue.length ? queue.shift() : false; },
       setStatus: (key: string, text: string | undefined) => { statuses.push([key, text]); },
+      setWidget: (key: string, content: unknown) => { widgets.push([key, content]); },
     },
   };
-  return { pi, ctx, notes, asked, statuses, run: (args: string) => pi.commands.get("autonomy").handler(args, ctx) };
+  return { pi, ctx, notes, asked, statuses, widgets, run: (args: string) => pi.commands.get("autonomy").handler(args, ctx) };
 }
 
 /** The last notification a session showed. */
@@ -160,8 +172,8 @@ try {
     const s = session();
     assert.ok(s.pi.commands.has("autonomy"));
     assert.equal(s.pi.tools.size, 0, "no tool: a model cannot start or authorise a run");
-    assert.equal(s.pi.handlers.size, 0, "no hooks either: nothing observes or steers the model");
-    ok("/autonomy is a command; the extension registers no tool and no hook");
+    assert.deepEqual([...s.pi.handlers.keys()].sort(), ["session_shutdown", "session_start"], "only session lifecycle hooks (the live widget): nothing observes or steers the model");
+    ok("/autonomy is a command; the extension registers no tool and only session lifecycle hooks");
   }
 
   // 2. Declined: the boundary is shown, nothing is authorised, nothing starts.
@@ -183,16 +195,31 @@ try {
   {
     reset();
     const s = session({ answers: [true] });
-    await s.run("start run.json");
-    const seq = calls().map((c) => at(c, 0, "a command") + (c.includes("--authorise") ? ":authorise" : ""));
-    assert.deepEqual(seq, ["plan", "plan", "plan:authorise", "start"]);
+    // A detached start returns while the new run is still in `setup` (its container is being built).
+    const restoreFleet = setEnv("FAKE_FLEET", JSON.stringify([{ run: "demo-run-1", template: "implement", status: "setup", step: 0, spentUsd: 0, budgetUsd: 5 }]));
+    try {
+      await s.run("start run.json");
+      assert.match(lastNote(s).message, /Run demo-run-1 started \(supervisor pid 4242\)/);
+      const seq = calls().map((c) => at(c, 0, "a command") + (c.includes("--authorise") ? ":authorise" : ""));
+      // After a background start the run list (and the events, as a run is starting) are read for the live widget.
+      assert.deepEqual(seq, ["plan", "plan", "plan:authorise", "start", "status", "events"]);
+      const [, setup] = at(s.widgets, 0, "the widget is shown for a run still in setup");
+      assert.ok(Array.isArray(setup) && setup.some((l) => typeof l === "string" && /demo-run-1 .*cycle 0 +setup/.test(l)), "the run is listed as in setup");
+      const running = setEnv("FAKE_FLEET", JSON.stringify([{ run: "demo-run-1", template: "implement", status: "running", step: 1, spentUsd: 0.1, budgetUsd: 5 }]));
+      try { await s.run("watch"); } finally { running(); }
+      const [, now] = at(s.widgets, 1, "the widget is refreshed once the run is running");
+      assert.ok(Array.isArray(now) && now.some((l) => typeof l === "string" && /demo-run-1 .*cycle 1 +running/.test(l)), "the run is listed as running");
+    } finally {
+      restoreFleet();
+      // The widget is polling: stop it with the session.
+      await s.pi.handlers.get("session_shutdown")({}, s.ctx);
+    }
     const start = findCall((c) => c[0] === "start");
     assert.ok(start.includes("--detach") && start.includes("--yes") && start.includes("--config"));
     assert.ok(path.isAbsolute(at(start, start.indexOf("--config") + 1, "--config has a value")), "the contract path is resolved against the working directory");
     const authorise = findCall((c) => c.includes("--authorise"));
     assert.ok(authorise.includes("--by") && authorise[authorise.indexOf("--by") + 1] === os.userInfo().username);
     assert.equal(authorise[authorise.indexOf("--digest") + 1], "d1".repeat(32), "the authorisation is bound to the digest that was on screen");
-    assert.match(lastNote(s).message, /Run demo-run-1 started \(supervisor pid 4242\)/);
     ok("accepting authorises the shown boundary (by its digest) as the person, then starts the run in the background");
   }
 
@@ -381,6 +408,8 @@ try {
       await s.run("status");
       assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (which database?)"]]);
       assert.match(lastNote(s).message, /status ok/, "the CLI's own status text is still what is shown");
+      // A run is running, so the live widget started polling (case 7d): stop it with the session.
+      await s.pi.handlers.get("session_shutdown")({}, s.ctx);
       const empty = setEnv("FAKE_FLEET", "[]");
       try {
         const none = session();
@@ -400,6 +429,112 @@ try {
     assert.match(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "question", question: long } }] }) ?? "", /x{80}\u2026\)$/, "the question is truncated");
     assert.equal(mod.fleetStatusLine({ runs: [{ run: "a\u001b-1", status: "blocked", blocker: { kind: "question", question: "line1\nline2\u001b[2J" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (line1 line2[2J)", "worker text is collapsed to one visible line");
     ok("status with no run sets a one-line fleet footer, clears it when empty, and is untouched without a screen");
+  }
+
+  // 7d. The live run widget: the pure renderer, then the poller driven through /autonomy.
+  {
+    const now = Date.parse("2026-11-18T12:00:00.000Z");
+    const ago = (s: number): string => new Date(now - s * 1000).toISOString();
+    const report = {
+      ok: true,
+      runs: [
+        { run: "todo-api-1", template: "implement", status: "running", step: 3, spentUsd: 1.5, budgetUsd: 10, updatedAt: ago(600) },
+        { run: "fleet-dispatch-with-a-long-name-7", template: "dispatch", status: "recovering", step: 12, spentUsd: 23.456, budgetUsd: 100, updatedAt: ago(90) },
+        { run: "self-improve-2", template: "self-improve", status: "blocked", step: 1, spentUsd: null, budgetUsd: null, updatedAt: ago(7200) },
+        { run: "old-run-1", template: "implement", status: "succeeded", step: 9, spentUsd: 4, budgetUsd: 5, updatedAt: ago(9000) },
+      ],
+    };
+    const eventsReport = {
+      ok: true,
+      events: [
+        { v: 1, at: ago(400), run: "todo-api-1", type: "cycle.started", n: 3, resume: false },
+        { v: 1, at: ago(12), run: "todo-api-1", type: "gate.result", n: 3, sha: "abc1234", green: true, failing: [] },
+        { v: 1, at: ago(30), run: "fleet-dispatch-with-a-long-name-7", type: "cycle.started", n: 14, resume: true, engineer: "e1", item: "PG-07\u001b[2J" },
+        { v: 1, at: ago(5), run: "todo-api-1", type: "not.a.type" },
+      ],
+    };
+    const runs = mod.widgetRuns(report);
+    const events = mod.widgetEvents(eventsReport);
+    assert.equal(runs.length, 4, "every well-formed row is read");
+    assert.equal(events.length, 3, "an unknown event type is left out");
+    assert.equal(at(events, 2, "the dispatch cycle").phase, "working on PG-07[2J", "a worker-written item is one visible line");
+    for (const width of [80, 120]) {
+      const lines = mod.renderAutonomyWidget(runs, events, now, width);
+      assert.equal(lines.length, 4, `${width} columns: a heading and the three runs that have not ended`);
+      for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width} columns: no line is wider than the terminal (${line})`);
+      assert.match(at(lines, 0, "heading"), /^autonomy: 2 active, 1 waiting/);
+      assert.ok(!lines.some((l) => l.includes("old-run-1")), "an ended run is not listed");
+      assert.ok(!lines.some((l) => l.includes("\u001b")), "worker text reaches the widget as one visible line");
+    }
+    const wide = mod.renderAutonomyWidget(runs, events, now, 120);
+    assert.match(at(wide, 1, "first run"), /todo-api-1 +implement +cycle 3 +gate green +\$1\.50\/\$10\.00 +12s ago$/, "run, template, cycle, phase, spend/budget and last-event age");
+    assert.match(at(wide, 2, "second run"), /cycle 14 +recovering +\$23\.46\/\$100\.00 +30s ago$/, "the newest cycle number from the event log");
+    assert.match(at(wide, 3, "third run"), /self-improve-2 .*cycle 1 +blocked +\$- +2h ago$/, "a waiting run is listed after the active ones");
+    for (const width of [1, 10, 40]) for (const line of mod.renderAutonomyWidget(runs, events, now, width)) assert.ok(visibleWidth(line) <= width, `${width} columns: narrow terminals are safe`);
+    const idle = runs.filter((r) => !mod.isActiveRun(r));
+    assert.deepEqual(mod.renderAutonomyWidget(idle, events, now, 120), [], "no active run: nothing to show");
+    // Which runs show the widget and which keep it refreshing (a run's step is a number from 0, never null).
+    const row = (status: string, step: number): AutonomyRun.WidgetRun => ({ run: `r-${status}-${step}`, template: "implement", status, step, spentUsd: 0, budgetUsd: 5, updatedMs: now });
+    const pausedEarly = row("paused", 0);
+    const pausedMid = row("paused", 2);
+    assert.deepEqual(mod.renderAutonomyWidget([pausedEarly, row("blocked", 3)], [], now, 120), [], "a run paused before its first cycle, or blocked, does not show the widget");
+    assert.match(at(mod.renderAutonomyWidget([pausedMid], [], now, 120), 0, "heading"), /^autonomy: 1 active/, "a run paused part-way through shows it");
+    for (const status of ["setup", "ready", "running", "recovering"]) {
+      assert.ok(mod.isActiveRun(row(status, 0)), `${status} is shown`);
+      assert.ok(mod.widgetPolls([row(status, 0)], now, 0), `${status} changes on its own: the widget keeps refreshing`);
+    }
+    assert.equal(mod.widgetPolls([pausedMid, pausedEarly, row("blocked", 3)], now, 0), false, "paused and blocked runs change only when the operator acts: no refreshing");
+    assert.equal(mod.widgetPolls([], now, now + 1), true, "after start or resume it refreshes for a grace period");
+    assert.equal(mod.widgetPolls([pausedMid], now, now), false, "and stops when the grace period is over");
+    assert.deepEqual(mod.widgetRuns("not json"), []);
+    assert.deepEqual(mod.widgetEvents({ events: [{ run: "a-1", at: "yesterday", type: "push", ok: true }] }), [], "an event without a usable time is left out");
+
+    // The poller: `status` shows it while a run is active, `watch on` re-reads and hides it when none is, `watch off` hides it.
+    reset();
+    const restoreFleet = setEnv("FAKE_FLEET", JSON.stringify(report.runs));
+    const restoreEvents = setEnv("FAKE_EVENTS", JSON.stringify(eventsReport.events));
+    try {
+      const s = session();
+      await s.run("status");
+      assert.deepEqual(calls().map((c) => at(c, 0, "a command")), ["status", "status", "events"], "the fleet report is reused; the events are read once");
+      const [key, content] = at(s.widgets, 0, "the widget was shown");
+      assert.equal(key, "autonomy");
+      assert.ok(Array.isArray(content), "outside the terminal UI the widget is lines");
+      const shown: unknown[] = content;
+      assert.equal(shown.length, 4);
+      for (const l of shown) assert.ok(typeof l === "string" && visibleWidth(l) <= 80, "rendered at 80 columns");
+      const empty = setEnv("FAKE_FLEET", "[]");
+      try {
+        await s.run("watch on");
+        assert.deepEqual(s.widgets.at(-1), ["autonomy", undefined], "no active run: the widget hides itself");
+      } finally { empty(); }
+      await s.run("watch");
+      assert.equal(s.widgets.length, 3, "watch (on) shows it again while a run is active");
+      await s.run("watch off");
+      assert.deepEqual(s.widgets.at(-1), ["autonomy", undefined], "watch off hides it");
+      const before = calls().length;
+      await s.run("watch sideways");
+      assert.match(lastNote(s).message, /usage: \/autonomy watch/);
+      await s.run("status");
+      assert.equal(s.widgets.length, 4, "off for the session: status does not show it again");
+      assert.equal(calls().length, before + 2, "status reads the run list (text and JSON) and no events");
+      // Shutdown stops the poller: a later tick has no session to draw on.
+      await s.pi.handlers.get("session_shutdown")({}, s.ctx);
+      // Resuming a run checks the widget at once (and keeps checking for a while).
+      const paused = setEnv("FAKE_FLEET", JSON.stringify([{ run: "demo-run-1", template: "implement", status: "paused", step: 2, spentUsd: 1, budgetUsd: 5 }]));
+      const r = session();
+      try {
+        reset();
+        await r.run("resume demo-run-1");
+        assert.deepEqual(calls().map((c) => at(c, 0, "a command")), ["resume", "status", "events"], "resume, then the run list and events for the widget");
+        const [, lines] = at(r.widgets, 0, "the widget is shown after resume");
+        assert.ok(Array.isArray(lines) && lines.some((l) => typeof l === "string" && /demo-run-1 .*cycle 2 +paused/.test(l)), "the resumed run is listed before the run list shows it running");
+      } finally {
+        paused();
+        await r.pi.handlers.get("session_shutdown")({}, r.ctx);
+      }
+    } finally { restoreEvents(); restoreFleet(); }
+    ok("the live run widget renders at 80 and 120 columns within the width, shows while a run is active and hides when none is");
   }
 
   // 8. A missing CLI is a message, not a crash.

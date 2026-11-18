@@ -10,6 +10,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`/autonomy` shows a live run widget.** Finding: `/autonomy status` printed the run list once
+  and the only persistent surface was a one-line footer, so following a run meant re-running the
+  command. Fix: while a run is active, the `autonomy-run` extension shows a widget with one line
+  per run (id, template, cycle, phase from the host event log, spend against budget, last-event
+  age), cut to the terminal's width and refreshed every 2 seconds through the CLI while a run can
+  change on its own (starting, running or recovering) and for a minute after `/autonomy start` or
+  `resume`; a paused run alone is drawn once, not polled. It hides itself when no run is active,
+  and `/autonomy watch [on|off]` checks it now or turns it off for the session. Verified by
+  `tests/autonomy-command-smoke.ts`.
 - **A host event log for autonomous runs.** Finding: the per-step `events.jsonl` files were a run's
   own detail, and nothing recorded the sequence of what every run on a host did in one place for a
   live view to read. Fix: each supervisor appends `run.started`, `run.status`, `cycle.started`,

@@ -86,6 +86,9 @@ try {
     ["POST", `/api/sessions/${FIXTURE_ID}/fork`],
     ["POST", `/api/sessions/${FIXTURE_ID}/new`],
     ["GET", "/api/auth"],
+    // Read-only, but it shows what autonomous runs are doing: never part of the /api/health exemption.
+    ["GET", "/api/autonomy"],
+    ["POST", "/api/autonomy"],
   ] satisfies Array<[string, string]>;
 
   await check("missing token -> 401 on every session-revealing or controlling route", async () => {
@@ -141,7 +144,7 @@ try {
     const sessions = await auth("/api/sessions");
     assert.equal(sessions.status, 200);
     assert.ok((sessions.json() as SessionsBody).sessions.some((s) => s.id === FIXTURE_ID), "fixture session listed");
-    for (const route of ["/api/prompts", "/api/skills", "/api/models", "/api/cwds", "/api/agents", "/api/auth",
+    for (const route of ["/api/prompts", "/api/skills", "/api/models", "/api/cwds", "/api/agents", "/api/auth", "/api/autonomy",
       `/api/sessions/${FIXTURE_ID}`, `/api/sessions/${FIXTURE_ID}/stats`, `/api/sessions/${FIXTURE_ID}/todos`, `/api/sessions/${FIXTURE_ID}/lens`]) {
       const res = await auth(route);
       assert.equal(res.status, 200, `${route} -> ${res.status} ${res.text.slice(0, 120)}`);
@@ -154,6 +157,23 @@ try {
     assert.match(String(sse.headers["content-type"]), /text\/event-stream/);
     assert.ok(await waitFor(() => sse.received().includes('"state":"watching"')), `no lifecycle frame: ${sse.received()}`);
     sse.close();
+  });
+
+  await check("/api/autonomy answers its documented shape from the state home with the token, and is read-only", async () => {
+    // The sandbox sets no PI_AUTONOMY_HOME, so the server uses $HOME/.local/state/pi-autonomy.
+    const runDir = path.join(sandbox.home, ".local", "state", "pi-autonomy", "fixture-run");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "state.json"), JSON.stringify({ schemaVersion: 1, template: "implement", status: "running", step: 2 }));
+    const res = await auth("/api/autonomy");
+    assert.equal(res.status, 200, res.text.slice(0, 200));
+    assert.match(res.headers["cache-control"] || "", /no-store/);
+    const body = res.json() as { schemaVersion: number; runs: Array<{ run: string; status: string }>; events: unknown[]; status: unknown; skipped: unknown };
+    assert.equal(body.schemaVersion, 1);
+    assert.deepEqual(body.runs.map((r) => [r.run, r.status]), [["fixture-run", "running"]]);
+    assert.deepEqual([body.events, body.status, body.skipped], [[], null, { runs: 0, events: 0, status: 0 }]);
+    const post = await auth("/api/autonomy", { method: "POST", headers: JSON_HEADERS, body: "{}" });
+    assert.equal(post.status, 405);
+    assert.equal(post.headers.allow, "GET");
   });
 
   await check("/api/health stays open, reports the auth mode and reveals no token", async () => {

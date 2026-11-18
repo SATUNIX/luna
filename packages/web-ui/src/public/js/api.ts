@@ -236,6 +236,31 @@ function isLens(value: unknown): value is Wire.LensResponse {
 	);
 }
 
+function isAutonomyRun(value: unknown): value is Wire.AutonomyRun {
+	return isRecord(value) && typeof value.run === "string";
+}
+
+function isAutonomyEvent(value: unknown): value is Wire.AutonomyEvent {
+	return (
+		isRecord(value) &&
+		typeof value.at === "string" &&
+		typeof value.run === "string" &&
+		typeof value.type === "string"
+	);
+}
+
+function isAutonomy(value: unknown): value is Wire.AutonomyResponse {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === 1 &&
+		typeof value.at === "string" &&
+		isArrayOf(value.runs, isAutonomyRun) &&
+		isArrayOf(value.events, isAutonomyEvent) &&
+		(value.status === null || isRecord(value.status)) &&
+		isRecord(value.skipped)
+	);
+}
+
 // ------------------------------------------------------------------- api ---
 const enc = encodeURIComponent;
 
@@ -252,6 +277,7 @@ export const api = {
 	skills: (): Promise<Wire.SkillsResponse> => request("GET", "/api/skills", isSkills),
 	models: (): Promise<Wire.ModelsResponse> => request("GET", "/api/models", isModels),
 	cwds: (): Promise<Wire.CwdsResponse> => request("GET", "/api/cwds", isCwds),
+	autonomy: (): Promise<Wire.AutonomyResponse> => request("GET", "/api/autonomy", isAutonomy),
 
 	agents: (): Promise<Wire.AgentsResponse> => request("GET", "/api/agents", isAgents),
 	agent: (name: string, source?: string | null): Promise<Wire.AgentResponse> =>

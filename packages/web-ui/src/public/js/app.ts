@@ -23,9 +23,10 @@ import {
 	renderTodos,
 } from "./panels.ts";
 import { ChatRenderer, el, renderAgents, renderSessions } from "./render.ts";
+import { oneAtATime, renderAutonomy, renderAutonomyError } from "./autonomy.ts";
 import type * as Wire from "./wire.ts";
 
-type View = "sessions" | "agents" | "config";
+type View = "sessions" | "agents" | "autonomy" | "config";
 type InspectorPanel = "stats" | "todos" | "lens";
 /** What the chat header reports: "watching" is a session another process runs. */
 type Status = "idle" | "running" | "watching";
@@ -53,7 +54,7 @@ interface AppState {
 	stats: Wire.SessionStats | null;
 	panels: Panels;
 	inspectorPanel: InspectorPanel;
-	timers: Record<"sessions" | "stats" | "elapsed" | "health", ReturnType<typeof setInterval> | null>;
+	timers: Record<"sessions" | "stats" | "elapsed" | "health" | "autonomy", ReturnType<typeof setInterval> | null>;
 }
 
 const THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -64,7 +65,7 @@ function isThinkingLevel(value: string): value is Wire.ThinkingLevel {
 }
 
 function isView(value: string | null): value is View {
-	return value === "sessions" || value === "agents" || value === "config";
+	return value === "sessions" || value === "agents" || value === "autonomy" || value === "config";
 }
 
 function isInspectorPanel(value: string | null): value is InspectorPanel {
@@ -88,7 +89,7 @@ const state: AppState = {
 	stats: null,
 	panels: { sidebar: true, inspector: true, composer: true },
 	inspectorPanel: "stats",
-	timers: { sessions: null, stats: null, elapsed: null, health: null },
+	timers: { sessions: null, stats: null, elapsed: null, health: null, autonomy: null },
 };
 
 // Assigned once by init() before anything reads it.
@@ -374,6 +375,21 @@ async function loadResources(): Promise<void> {
 		console.error("failed to load resources", err);
 	}
 }
+
+// ------------------------------------------------------------- autonomy -----
+/**
+ * Read-only: the runs and recent host events under the autonomy state home. One request at a
+ * time (the poll skips a tick while one is pending), and an answer that arrives after the user
+ * left the view is not rendered.
+ */
+const loadAutonomy = oneAtATime(async () => {
+	try {
+		const data = await api.autonomy();
+		if (state.view === "autonomy") renderAutonomy(dom.autonomyBody, data);
+	} catch (err) {
+		if (state.view === "autonomy") renderAutonomyError(dom.autonomyBody, errorMessage(err) || "request failed");
+	}
+});
 
 // ----------------------------------------------------------- inspector ------
 function setPanel(panel: InspectorPanel): void {
@@ -668,9 +684,11 @@ function setView(view: View): void {
 	}
 	dom.sessionsView.classList.toggle("hidden", view !== "sessions");
 	dom.agentsView.classList.toggle("hidden", view !== "agents");
+	dom.autonomyView.classList.toggle("hidden", view !== "autonomy");
 	dom.configView.classList.toggle("hidden", view !== "config");
 	if (view !== "sessions" && dom.sidebar.classList.contains("is-open"))
 		closeDrawer();
+	if (view === "autonomy") void loadAutonomy();
 }
 
 // ---------------------------------------------------------------- init ------
@@ -704,6 +722,8 @@ function cacheDom() {
 		agentsView: byId("agents-view", HTMLElement),
 		newAgent: byId("new-agent", HTMLButtonElement),
 		agentGrid: byId("agent-grid", HTMLElement),
+		autonomyView: byId("autonomy-view", HTMLElement),
+		autonomyBody: byId("autonomy-body", HTMLElement),
 		configView: byId("config-view", HTMLElement),
 		configGrid: byId("config-grid", HTMLElement),
 		promptsCount: byId("prompts-count", HTMLElement),
@@ -909,6 +929,10 @@ async function init(): Promise<void> {
 	state.timers.health = setInterval(pollHealth, 10000);
 	state.timers.sessions = setInterval(() => {
 		if (state.view === "sessions" && !document.hidden) void loadSessions();
+	}, 5000);
+	// Polled only while the Autonomy view is the one shown and the tab is visible.
+	state.timers.autonomy = setInterval(() => {
+		if (state.view === "autonomy" && !document.hidden) void loadAutonomy();
 	}, 5000);
 	state.timers.stats = setInterval(() => {
 		if (state.activeId && !document.hidden) void refreshInspector();

@@ -301,6 +301,50 @@ export interface ResetResponse {
 	readonly reset?: unknown;
 }
 
+// ---------------------------------------------------------------- autonomy ---
+// GET /api/autonomy (read-only): the runs, host events and status file under the autonomy state
+// home. Every string in it can carry worker-influenced text, so it is only ever shown as text.
+
+export interface AutonomyRun {
+	readonly run: string;
+	readonly template: string | null;
+	readonly status: string | null;
+	readonly updatedAt: string | null;
+	readonly outcome: { readonly status: string; readonly reason: string } | null;
+	readonly spentUsd: number | null;
+	readonly budgetUsd: number | null;
+	readonly step: number | null;
+	readonly blocker: { readonly kind: string; readonly question: string } | null;
+	readonly lastEventAt: string | null;
+}
+
+export type AutonomyEventField = string | number | boolean | null | readonly string[];
+
+/** One host event log line: the envelope plus its type's own fields. */
+export interface AutonomyEvent {
+	readonly at: string;
+	readonly run: string;
+	readonly type: string;
+	readonly [field: string]: AutonomyEventField;
+}
+
+/** The parts of the reporting status file the panel shows. */
+export interface AutonomyStatus {
+	readonly generatedAt: string;
+	readonly spend: Readonly<Record<string, { readonly todayUsd: number; readonly monthUsd: number }>>;
+	readonly openPrs: readonly { readonly number: number; readonly title: string; readonly ci: string }[] | null;
+}
+
+export interface AutonomyResponse {
+	readonly schemaVersion: 1;
+	readonly at: string;
+	readonly runs: readonly AutonomyRun[];
+	readonly runsTotal: number;
+	readonly events: readonly AutonomyEvent[];
+	readonly status: AutonomyStatus | null;
+	readonly skipped: { readonly runs: number; readonly events: number; readonly status: number };
+}
+
 // ------------------------------------------------------------ event stream ---
 // GET /api/sessions/:id/events is a server-sent event stream. Each frame's `event:` name equals
 // its payload's `type`; the payload always carries the session id.

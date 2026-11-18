@@ -149,6 +149,8 @@ Environment overrides:
 - **Thinking wheel** — an animated activity readout that rotates through status phrases
   (`Working`, `Triangulating`, …) and switches to concrete labels (`Reading server.ts`,
   `Running \`ls\``,`Delegating to a subagent`) as the agent works, plus an elapsed timer.
+- **Autonomy view** — read-only: the autonomous runs on this host, their recent host events and
+  the reporting status file, polled while the view is shown (`docs/web-console.md`).
 - **Config view** — how this installation is set up: pi home, settings, models, paths, lens
   status, prompt templates and skills.
 - **Panel toggles** — three triangle buttons (top right) show/hide the sessions panel, the
@@ -210,6 +212,7 @@ Cross-origin requests and requests with a foreign `Host` are refused.
 | DELETE | `/api/agents/:name` | delete an agent file |
 | GET | `/api/models` | providers, models, default |
 | GET | `/api/cwds` | candidate working directories |
+| GET | `/api/autonomy` | autonomous runs, recent host events and the status file (read-only; other methods 405) |
 | GET | `/api/sessions` | disk sessions merged with live children (`status`: running/idle/external) |
 | POST | `/api/sessions` | spawn a session (`cwd`, `agent`, `provider`, `model`, `thinking`) |
 | GET | `/api/sessions/:id` | one session summary |

@@ -12,6 +12,7 @@ import {
 	type Schema,
 } from "../../core/lib/guard.ts";
 import { listAgents, type AgentDefinition } from "./agents.ts";
+import { autonomyView, type AutonomyResponse } from "./autonomy.ts";
 import {
 	KNOWN_TOOLS,
 	createAgent,
@@ -455,6 +456,13 @@ export async function handleApi(
 
 		if (section === "cwds" && parts.length === 2 && method === "GET") {
 			return sendJson(res, 200, { cwds: listCwds() } satisfies CwdsResponse), true;
+		}
+
+		// Read-only: what the autonomy supervisors record under the state home. No run control.
+		if (section === "autonomy" && parts.length === 2) {
+			if (method !== "GET")
+				return sendJson(res, 405, { error: "the autonomy view is read-only" }, { Allow: "GET" }), true;
+			return sendJson(res, 200, autonomyView() satisfies AutonomyResponse), true;
 		}
 
 		// ------------------------------------------------------------- agents ----

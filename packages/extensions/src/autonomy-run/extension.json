@@ -6,7 +6,7 @@
   "tier": "T3",
   "layer": 4,
   "entry": "index.ts",
-  "hooks": [],
+  "hooks": ["session_start", "session_shutdown"],
   "registers": { "tools": [], "commands": ["autonomy"] },
   "profiles": ["long-horizon"],
   "enabledByDefault": true,
@@ -14,7 +14,7 @@
   "runtime": {
     "nodeBuiltins": ["child_process", "fs", "os", "path", "url"],
     "npm": [],
-    "piPeers": ["@earendil-works/pi-coding-agent"],
+    "piPeers": ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"],
     "services": ["a container engine (Podman or Docker) for the runs themselves"],
     "models": []
   },

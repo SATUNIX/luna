@@ -4,7 +4,7 @@
 // critical), a reason code and a short human detail. The action's tier is the highest finding.
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
-import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchCallTargets, type PatchStdin, type PatchTool } from "./shared/inline-guard.ts";
+import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchStdinOf, patchTargetsAt, type PatchTool } from "./shared/inline-guard.ts";
 import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shared/shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
@@ -2356,21 +2356,10 @@ function patchWrites(c: Ctx, tool: PatchTool, args: string[], chdirs: readonly s
   if (!call.writes || c.seg.remote) return;
   const before = c.findings.length;
   const label = tool === "patch" ? "patch" : tool === "git-am" ? "git am" : "git apply";
-  const stdin = (): PatchStdin => {
-    const unknown = { text: null, file: null };
-    if (c.seg.unknownArgs || c.seg.pipeIn) return unknown;
-    // Bash uses the last of several sources and a later file beats a heredoc, so only a single source is known.
-    const inputs = c.seg.redirects.filter((r) => r.op.includes("<"));
-    const from = inputs[0];
-    if (!from || inputs.length > 1 || (from.fd !== "" && from.fd !== "0")) return unknown;
-    // The shell expands an unquoted heredoc and deletes a backslash-newline in it, so the text here may not be git's.
-    if (from.op === "<<" || from.op === "<<-") return { text: (from.bodyExpands ?? true) && /[$`]|\\\r?\n/.test(from.body ?? "") ? null : (from.body ?? null), file: null };
-    return from.op === "<" && !from.dynamic ? { text: null, file: from.target } : unknown;
-  };
   const toAbsolute = (dir: string, file: string): string | null => resolvePath(file, dir, c.env, c.seg.remote, c.seg.vars);
   const resolved = c.seg.unknownArgs
     ? { targets: [], unreadable: "the patch arrives through arguments that cannot be seen" }
-    : patchCallTargets(c.command, c.env.cwd, call, chdirs, toAbsolute, stdin());
+    : patchTargetsAt(c.command, c.env.cwd, c.seg.cwd, call, chdirs, toAbsolute, patchStdinOf(c.seg));
   for (const target of resolved.targets) writePath(c, target, `${label} writes`);
   if (resolved.unreadable !== null) add(c, "high", "security_control", "patch_unreadable", `${label}: ${resolved.unreadable}, so it may touch a safety-control file`, `${label} unreadable`);
   const fresh = c.findings.slice(before);

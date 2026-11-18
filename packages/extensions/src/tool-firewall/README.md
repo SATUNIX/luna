@@ -154,21 +154,30 @@ runs. The limits it leaves open:
   input fed in, and `apply` or `am` only straight after `git` and its global options, so a `patch` with plain
   positional operands behind an unknown wrapper is not caught. The walk reads `$'git'` and `$"git"` as `git`,
   but a word spelt with ANSI-C escapes (`$'\x67it'`) is not decoded.
-- **Computed commands and editors.** A command word computed at runtime (`X=git; $X apply p.patch`,
-  `$(which git) apply p.patch`), text passed to a shell or `eval` through a command substitution
+- **Computed commands and editors.** In the firewall, a command word computed at runtime (`X=git; $X apply
+  p.patch`, `$(which git) apply p.patch`), text passed to a shell or `eval` through a command substitution
   (`bash -c "$(echo git apply p.patch)"`) and an editor's own command option (`vim -c '!git apply p.patch' x`)
-  are not read as patch writers even when the line names a patch tool. They get the firewall's medium rating
-  for dynamic execution.
+  are not read as patch writers even when the line names a patch tool; they get its medium rating for dynamic
+  execution. protected-paths refuses the computed forms on a line that names a patch tool.
 - **Inert text.** A quoted-delimiter heredoc body, and quoted text, are not read as commands only when they
   go to a command that treats its words as data (`cat`, `tee`, `git commit` and the like; never `make`, which
   reads a heredoc as a makefile). Every other heredoc is read as commands. A heredoc saved to a file and run later is not seen, nor is an option of such a command that runs
   its value (`git fetch --upload-pack`, `man -P`). An unquoted heredoc body, and quoted text behind a wrapper or
   an assignment, are still read as commands and may be refused when they do nothing wrong.
-- **Two shell readers.** protected-paths uses its own shell walker rather than the firewall's parser, so a
-  form only one of them can read gets different treatment from each. protected-paths refuses a heredoc patch
-  call fed to `parallel`, `yash`, `busybox ash` or `make -f -`, which the firewall rates medium or low because
-  its parser does not read that heredoc as commands. The remaining gaps between the two walkers are tracked for
-  the post-release follow-up that moves protected-paths onto the firewall's parser.
+- **Two shell readers.** protected-paths reads patch writers twice and refuses what either reading finds:
+  with the shared text walker and with this firewall's parser (`packages/core/shared/shell.ts`, generated into
+  both extensions), whose reading of stdin and of the segment's directory both hooks share
+  (`shared/inline-guard.ts` `patchStdinOf`, `patchTargetsAt`). On a line that names a patch tool it also fails
+  closed on text the parser reports unreadable, a command name or `eval` text computed at run time when that
+  command's own words (with the variables it uses) name a patch tool, and commands fed to the standard input
+  (a pipe, a here-string, a `<` file) of a shell, `sudo -s`, `su`, `at`, `batch`, `make -f -` or an `ssh` with
+  no remote command. The parser reads `env -S` with the split string attached to the option (`env
+  -S'git apply p.patch'`) as a command, in both hooks. Some forms are still refused
+  only by protected-paths and rated medium or low here: a heredoc fed to `parallel`, `yash`, `busybox ash` or
+  `make -f -`, `time -p`, a `case` arm or nested parentheses inside a substitution, `nsenter --wd` and
+  `unshare -w`, and awk's `system()` (`PATCH_WRITES_PROTECTED_PATHS_ONLY` in
+  `tests/protected-paths-corpus-smoke.ts`). The text walker is still the firewall's catch-all for patch
+  writers it cannot place; replacing it with parser rules in both hooks is the rest of board item A-90.
 - **Patch writers the text does not name.** A shell fed through a pipe is only caught when the line names a
   patch tool, so a script that is encoded or held in a file is not.
 - **History-carrying git commands.** `git stash pop` and `apply`, `merge`, `rebase`, `cherry-pick`,

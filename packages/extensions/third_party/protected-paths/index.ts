@@ -3,8 +3,9 @@ import path from "node:path";
 import fs from "node:fs";
 
 import os from "node:os";
-import { inlineAgentConfigWrite, patchCallTargets, patchCallsInText } from "./shared/inline-guard.ts";
+import { inlineAgentConfigWrite, patchCallTargets, patchCallsInParse, patchCallsInText, patchTargetsAt } from "./shared/inline-guard.ts";
 import { appendRefusal, commandDigest, sessionIdOf } from "./shared/refusal-record.ts";
+import { parseShell } from "./shared/shell.ts";
 
 // Protected paths depend on the firewall policy (the same `policy` tool-firewall reads):
 //   coding  — secrets, key files and the agent-control/audit surfaces. `.git/`,
@@ -493,14 +494,23 @@ function gitRestoreTargets(command: string): string[] {
 }
 
 // What the patch writers in a command change, read from the patches themselves. `unreadable` fails the command
-// closed; the same reading in tool-firewall is classify.ts patchWrites.
-function patchWriteTargets(command: string, cwd: string): { targets: string[]; unreadable: string | null } {
+// closed; the same reading in tool-firewall is classify.ts patchWrites. Two readings count: the text walker on
+// `command` (backslash-newlines joined) and the firewall's parser (./shared/shell.ts) on `raw`, the command as
+// written, which follows what the walker misses (a comment ending in a backslash, `c\d`, aliases, pipes into
+// `sudo -s`). A patch writer either reading finds is checked, so neither can weaken the other.
+function patchWriteTargets(command: string, raw: string, cwd: string): { targets: string[]; unreadable: string | null } {
   const targets: string[] = [];
+  const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));
   for (const found of patchCallsInText(command)) {
     if (!found.call.writes) continue;
     if (found.unseen) return { targets, unreadable: "the patch arrives through arguments that cannot be seen" };
-    const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));
     const resolved = patchCallTargets(command, cwd, found.call, found.chdirs, toAbsolute, { text: found.stdinText, file: found.stdinFile });
+    targets.push(...resolved.targets);
+    if (resolved.unreadable !== null) return { targets, unreadable: resolved.unreadable };
+  }
+  for (const found of patchCallsInParse(parseShell(raw, { cwd, home: os.homedir() }), command)) {
+    if ("unseen" in found) return { targets, unreadable: found.unseen };
+    const resolved = patchTargetsAt(command, cwd, found.cwd, found.call, found.chdirs, toAbsolute, found.stdin);
     targets.push(...resolved.targets);
     if (resolved.unreadable !== null) return { targets, unreadable: resolved.unreadable };
   }
@@ -663,7 +673,7 @@ export default function (pi: ExtensionAPI) {
     if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value.replace(/\\\r?\n/g, "")) : [field.value];
     if (toolName === "bash" && field?.value) {
       const joined = field.value.replace(/\\\r?\n/g, "");
-      const patches = patchWriteTargets(joined, cwd);
+      const patches = patchWriteTargets(joined, field.value, cwd);
       if (patches.unreadable !== null) return refuse(`protected-paths: blocked ${toolName}: ${patches.unreadable}, so it may touch a protected path`, "patch-unreadable", "patch-input");
       candidatePaths.push(...patches.targets, ...intoDirectoryTargets(joined, cwd), ...gitRestoreTargets(joined));
     }

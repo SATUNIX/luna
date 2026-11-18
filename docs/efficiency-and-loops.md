@@ -122,7 +122,10 @@ What a request carries up front is kept to what most sessions use; the rest is o
 - **Lazy review and skill-forge tools (`self-improving`).** `dual_review` and skill-forge's
   `skill_synthesise`, `skill_score` and `skill_archive` register inactive and wake when the operator
   runs `/review` or `/improve`, the same way. A session that never reviews or improves does not carry
-  their text in every request (`tests/lazy-improve-tools-smoke.ts`).
+  their text in every request (`tests/lazy-improve-tools-smoke.ts`). Not covered: nothing in a
+  prompt names the four tools, so a session that never runs `/review` or `/improve`, such as an
+  unattended loop, never offers them to the model; it reaches the same work only through those
+  commands. On pi older than 1.x, which ignores `defaultActive`, they stay active from the start.
 - **Two skills listed, the rest searchable.** pi lists a skill in the system prompt unless it sets
   `disable-model-invocation`; only `coding-agent-workflow` and `verification-loop` are listed now.
   `general-agent-workflow` and `memory` are matched by `skill-router` triggers and found with

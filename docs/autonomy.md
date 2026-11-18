@@ -191,6 +191,7 @@ closed choice (no egress, no services, no unattended approval, no promotion), ne
 | `implement` | finite | Build or change something to a specification until the acceptance checks pass and the independent review approves. |
 | `deploy` | finite | Like `implement`, plus run-scoped services the supervisor starts on the run's internal network, so the worker can build, deploy and test against them. Nothing leaves the zone. |
 | `self-improve` | cycling | Repeated review, plan, improve and verify cycles on a repository, each merged into one integration branch when it has commits, passes the checks and passes a merge review (see below). Optional: one template among several. |
+| `dispatch` | cycling | A `self-improve` run whose queue is the steward board: each cycle claims the top ready item of the run's streams for one of its engineers and works that one item (see [The `dispatch` template](#the-dispatch-template)). |
 
 A template supplies prompts and defaults; everything that must not vary (lifecycle, lock,
 boundary, budgets, acceptance, recovery, promotion, evidence) belongs to the engine.
@@ -598,6 +599,72 @@ force-pushed, and by default nothing leaves the machine: promotion is `local-bra
 
 The charter, backlog and handoff a repository is seeded with are in `packages/autonomy/seed/`.
 
+## The `dispatch` template
+
+A dispatch run is a `self-improve` run (the same cycles, pre-flight, acceptance gate, merge review,
+integration branch, publication and limits) whose work for each cycle is one item from the steward
+board (`control/board.json`, see [Steward interface](#steward-interface)) instead of work the cycle
+chooses itself. The contract names the board streams the run takes items from and the engineers
+its cycles claim as:
+
+```json
+"templateOptions": {
+  "integration": { "branch": "pi-autonomy/integration", "review": true },
+  "dispatch": { "streams": ["ux"], "engineers": ["alice", "bob"] }
+}
+```
+
+Both lists are required and hold 1 to 20 distinct names: streams match `^[a-z0-9][a-z0-9._-]{0,63}$`
+and engineers `^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$`. Any other key under `dispatch` is an error, and
+a `self-improve` contract that carries `dispatch` gets the usual unknown-key warning and ignores it.
+`pi-autonomy init --template dispatch --streams ux,api --engineers alice,bob` writes such a
+contract with the self-improve defaults; `plan` and `start` accept it, and the run's
+`contract.json` names the streams and engineers.
+
+Each new cycle:
+
+1. Offers work to its engineers in turn: cycle *n* starts with `engineers[(n - 1) mod count]`,
+   then the others in order.
+2. After the pre-flight, and under `control/board.lock` (the lock `board claim` takes), reads the
+   board. For each engineer in that order: if it holds an open claim (`in_progress`, its
+   `assignee`, no `submittedAt`, not approved), the cycle continues it; otherwise it claims the top
+   ready, unowned, not approved item, in board priority order, setting `assignee`, `claimedAt` and
+   `status: "in_progress"` in one atomic write. The first engineer with work takes the cycle, so an
+   engineer whose turn finds nothing does not leave another engineer's unfinished claim waiting.
+   A board whose `stream` is missing or is not one of the run's streams offers nothing, and items
+   the host withheld after two failed attempts are neither continued nor claimed. A repair cycle on
+   a red base claims nothing. A board lock still held after the bounded wait (about five seconds)
+   counts as an idle poll: the host logs it and looks again on the next tick.
+3. Keeps that one item and its engineer as its board snapshot: the cycle prompt shows only the
+   item (id, priority, title, detail and acceptance), names the engineer and the stream, and asks
+   for its `Board:` line. A resumed cycle keeps its snapshot and engineer.
+4. With nothing to continue or claim, and no other host work, the host sleeps with no worker
+   session and no model call, and looks again (the empty-queue rule of self-improve). A dispatch
+   run waits for the steward for as long as it may run.
+5. When the cycle merges and its note reports `Board: <its item> done - ...`, records `submittedAt`
+   and `sha` (the integration head after the merge) on the item under the board lock, so the next
+   cycle does not continue it. Nothing else on the item changes; a board that no longer holds the
+   item, or holds it for another engineer, is left alone and the run log says so.
+6. When the host later rewrites or discards integration history (the rebase of a diverged
+   integration branch, or the rollback after a publish-blocked answer), it maps each recorded
+   `sha` of the run's engineers through the rewrite and clears `submittedAt` and `sha` from an item
+   whose commit is no longer on the integration branch, so that item is an open claim again and
+   is redone. The rebase and rollback paths themselves are not exercised end to end for a dispatch
+   run; the revision is pinned at the function level.
+
+`backlog`, `board`, `board claim` and `inbox` work for dispatch runs as for self-improve runs.
+`tests/autonomy-dispatch-smoke.ts` pins the contract rules, `init`/`plan`/`start`, the claim
+(lock wait, one write, continuation, the hand-over to another engineer's open claim, withheld,
+submitted, off-stream and stream-less boards, an empty queue, a busy lock), the prompt carrying
+only the claimed item, the recorded submission and its revision, and the idle run with no model
+call.
+
+Not covered yet: nothing reviews a submission against the item's acceptance, records a verdict or
+review rounds, or moves an approved item off the board (the submit, verdict and land steps); the
+`verdict`, `verdictBy`, `rounds` and `findings` fields are only validated. A submitted item stays
+`in_progress` with its owner until the steward changes it. The claim does not expire: an engineer
+whose claim was abandoned keeps it until the steward reassigns the item.
+
 ## Steward interface
 
 A steward is an external, scheduled operator session: for example, inspect after roughly 25 cycles
@@ -651,17 +718,22 @@ pi-autonomy resume --run <run> --detach
 `tests/autonomy-cli-smoke.ts` (the top-level help lists the available flags). `backlog --message` enqueues a file-based control online or offline; items appear
 under **Steward backlog for this cycle** in the next cycle prompt, are retained with their delivered
 cycle in state, and are replayed when that cycle resumes. It does not interrupt the current worker
-and is available only for self-improve (`tests/autonomy-cli-smoke.ts`,
+and is available only for the cycling templates, self-improve and dispatch (`tests/autonomy-cli-smoke.ts`,
 `tests/autonomy-selfimprove-smoke.ts`). Backlog text is operator authority: keep the run directory
 host-owned and out of worker mounts.
 
-`board --file` validates and atomically replaces `control/board.json`; `board claim` is the only
-way a worker takes one item. Both writes are serialised on `control/board.lock`, a real run lock
+`board --file` validates and atomically replaces `control/board.json`, except that it never drops
+a claim written since the steward read the board: for an item kept under the same id, a file that
+names no assignee keeps the board's `assignee`, `claimedAt`, `submittedAt`, `sha` and claimed
+status (unless the file sets the item `blocked`), and a file naming the same assignee keeps the
+`claimedAt`, `submittedAt` and `sha` it leaves out. Naming another assignee reassigns the item;
+leaving the claim out never releases it (drop the item, or re-file it under a new id). `--json`
+lists the ids whose claims were kept as `keptClaims` (`tests/autonomy-dispatch-smoke.ts`).
+`board claim` is the only way a worker takes one item. Both writes are serialised on `control/board.lock`, a real run lock
 separate from the supervisor's `supervisor.lock`, and the claimant retries with a bounded wait
 while another writer holds it. `inbox --run` takes the same lock for its writes, because settling
 a card can unblock a board item (nothing pins that the inbox takes the lock). `board --json` returns the current board (an empty items list for
-older runs) without taking the lock. The commands are available to self-improve runs and are guarded
-for the `dispatch` template when it is registered.
+older runs) without taking the lock. The commands are available to self-improve and dispatch runs.
 
 `board claim <id> --run <run> --by <agent> --json` claims one ready, unowned item: it sets
 `assignee`, `claimedAt` (the current ISO timestamp) and `status: "in_progress"` in one locked write.
@@ -696,7 +768,7 @@ ids, ids outside `^[A-Z]+-[0-9]{1,4}$`, more than 50 items, titles over 200 char
 detail/acceptance over 2000 characters are rejected. Stream names are limited to 200 characters,
 ids to 64 characters, and input files to 2 MiB. Each new cycle reads the host-owned board afresh
 and shows the top two nonblocked items by priority, preserving file order for ties. The next-item
-selector prepared for the `dispatch` template skips blocked, in-progress, owned and
+selector the `dispatch` template claims with skips blocked, in-progress, owned and
 verdict-approved items and takes the first ready item in that same priority order. The cycle keeps that snapshot
 until it closes: a cycle resumed after a pause or a blocking question shows and is judged against
 the board it started with, whatever the steward has written since; the new board applies from the
@@ -919,7 +991,7 @@ evidence and are not made safe for public posting by the commit scan.
 ### Owner inbox
 
 `inbox --file` validates and atomically replaces the host-owned `control/inbox.json`, exclusively
-for self-improve runs. A card records a question for the owner, the recommended default, a
+for the cycling templates (self-improve and dispatch). A card records a question for the owner, the recommended default, a
 deadline, and optionally the steward-board item it blocks. The format is:
 
 ```json
@@ -956,7 +1028,7 @@ duplicate card ids, ids outside `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, board ids ou
 characters, and defaults/answers/outcomes over 2000 characters are rejected (an oversize `--value` is refused before anything is written). An uploaded file may not carry `answer` or `outcome`: only the owner's `--answer`, a passed deadline, or the existing host file records a decision. Answering a card that already has an outcome is refused with the card id instead of being silently ignored. The text listing collapses card text to one visible line, removing control, format and bidirectional characters. Input files are capped
 at 2 MiB. The file is written at mode 0600. `tests/autonomy-inbox-smoke.ts` pins the answered,
 past-due and still-open cases, idempotence, refusal of bad input, the record-only rule, and the
-self-improve-only rule.
+refusal for finite runs; `tests/autonomy-dispatch-smoke.ts` pins that a dispatch run is accepted.
 
 ## Setting up
 

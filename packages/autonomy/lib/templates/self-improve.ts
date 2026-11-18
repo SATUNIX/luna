@@ -13,7 +13,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AcceptanceEvaluation, type CheckEvidence, runAcceptance, summariseEvaluation } from "../acceptance.ts";
-import { type BoardItem, type BoardReport, WORK_PRECEDENCE, assignedItems, boardPrompt, parseBoardReport, readBoard } from "../board.ts";
+import { type BoardItem, type BoardReport, BoardLockBusy, type StewardBoard, WORK_PRECEDENCE, assignedItems, boardPrompt, parseBoardReport, readBoard } from "../board.ts";
+import { type CycleClaim, type DispatchOptions, claimForCycle, cycleEngineer, cycleRotation, dispatchBoardPrompt, dispatchOptions, recordSubmission, reviseSubmissions } from "../dispatch.ts";
 import { ATTEMPTS_PER_ITEM, recordAttempts, withoutWithheld } from "../attempts.ts";
 import { bookkeepingPaths } from "../bookkeeping.ts";
 import { NOTE_LIMIT as NOTE_CHARS, WORKER_NOTE, clearNote, previousRecord, readNote, writeReceipt } from "../receipt.ts";
@@ -119,6 +120,17 @@ function siState(state: RunState): SelfImproveState {
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * The dispatch options of a `dispatch` run (lib/dispatch.ts), or null for a self-improve run. A
+ * dispatch run is a self-improve run whose cycles each claim one board item (templates/dispatch.ts).
+ */
+function dispatchOf(contract: RunContract): DispatchOptions | null {
+  if (contract.template !== "dispatch") return null;
+  const options = dispatchOptions(contract);
+  if (!options) throw new Error("the dispatch template needs templateOptions.dispatch with streams and engineers");
+  return options;
+}
+
 const describe = (): TemplateDescription => ({
   id: "self-improve",
   title: "Improve a repository in cycles",
@@ -128,7 +140,7 @@ const describe = (): TemplateDescription => ({
   optional: ["templateOptions.integration.branch (default pi-autonomy/integration)", "templateOptions.integration.upstream (sync before each cycle)", "templateOptions.limits", "inputs.references"],
 });
 
-const defaults = (): Record<string, unknown> => ({
+export const defaults = (): Record<string, unknown> => ({
   objective: { title: "Autonomous improvement", spec: "Find and fix real, evidenced problems in this repository, and improve it where the need is demonstrated." },
   // No default check: what "good" means is the operator's to define for their repository (the kit's own gate script is /opt/autonomy/gate.sh in the default image).
   acceptance: { review: true, checks: [], overlay: [] },
@@ -141,12 +153,13 @@ const defaults = (): Record<string, unknown> => ({
   templateOptions: { integration: { branch: "pi-autonomy/integration", review: true }, perStepHardUsd: null, limits: { ...SELF_IMPROVE_LIMITS }, gate: { memory: "8g", cpus: "8" } },
 });
 
-function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
+export function validate(contract: ContractDraft, { err, warn }: ProblemSink): void {
   const repo = contract.inputs.repository;
   if (!repo) err("inputs.repository", "the self-improve template improves an existing repository: set inputs.repository (path or url, and ref)");
   const t = contract.templateOptions;
   const ib = isPlainObject(t["integration"]) ? t["integration"]["branch"] : undefined;
-  const allowed = ["integration", "perStepHardUsd", "limits", "gate", "knownFlakes", "emptyQueueSleepMinutes"];
+  // `dispatch` is the dispatch template's own option (templates/dispatch.ts validates it).
+  const allowed = ["integration", "perStepHardUsd", "limits", "gate", "knownFlakes", "emptyQueueSleepMinutes", ...(contract.template === "dispatch" ? ["dispatch"] : [])];
   for (const key of Object.keys(t)) if (!allowed.includes(key)) warn(`templateOptions.${key}`, "unknown key ignored");
   // The acceptance gate's container limits (runcfg.ts): a 0 would start it unlimited (containment.ts limitProblems).
   const gate = t["gate"];
@@ -217,7 +230,7 @@ function streamCharter(cfg: SelfImproveConfig, contract: RunContract, start: str
 }
 
 /** Integration branch: adopted from the destination, or created from the base with the seed files; the working branch at its head. */
-async function seed(ctx: StepContext): Promise<void> {
+export async function seed(ctx: StepContext): Promise<void> {
   const { repo, contract, store, log, rt } = ctx;
   const cfg = siConfig(ctx.cfg);
   const g = repo.git();
@@ -356,11 +369,13 @@ function cyclePrompt(ctx: StepContext, n: number): string {
   // One board snapshot per cycle: a resumed cycle keeps the board it started with, so its claims
   // are judged against the assignments it was given, whatever the steward has written since.
   // An item whose ordinary attempt and repair are used up (lib/attempts.ts) is not offered again.
+  // A dispatch cycle's snapshot is the one item runStep claimed for it; it never sees the whole board.
+  const dispatch = dispatchOf(contract);
   const offered = readBoard(ctx.store.p.control);
-  const board = si.current?.board ?? (si.current?.baseRed ? { items: [] } : withoutWithheld(offered, si.itemAttempts));
+  const board = si.current?.board ?? (si.current?.baseRed || dispatch ? { items: [] } : withoutWithheld(offered, si.itemAttempts));
   ctx.save(() => { if (si.current && !si.current.board) si.current.board = board; });
   // Streams and runs with a steward board take improvements from the board; other runs choose their own.
-  const stewarded = Boolean(cfg.integrationUpstream) || offered.items.length > 0;
+  const stewarded = Boolean(dispatch) || Boolean(cfg.integrationUpstream) || offered.items.length > 0;
   let previous = "This is the first cycle of this run; earlier runs' cycles, if any, are recorded under autonomy/cycles/.";
   const record = last ? previousRecord(ctx.engine.stepDir(last.n)) : null;
   if (last) {
@@ -395,7 +410,7 @@ function cyclePrompt(ctx: StepContext, n: number): string {
     NOTE_LIMIT: NOTE_CHARS, PRECEDENCE: WORK_PRECEDENCE,
     STREAM: cfg.integrationUpstream ? `\n\nYour stream: ${focus}. Work only inside this stream's area. Problems you find elsewhere go into a proposal at \`${paths.proposals}\`, not this cycle.` : "",
     CHARTER_NOTE: cfg.integrationUpstream ? " Where its priorities or bookkeeping paths differ from this prompt, this prompt wins: the merge review judges streams against the current stream charter, which states the precedence below." : "",
-    BOARD: `${baseRed}${conflict}${stewarded ? boardPrompt(board) : ""}`,
+    BOARD: `${baseRed}${conflict}${dispatch ? dispatchBoardPrompt(board, si.current?.engineer ?? cycleEngineer(dispatch, n), dispatch) : stewarded ? boardPrompt(board) : ""}`,
     IMPROVE_MODE: stewarded ? "is for assigned improvements; board items outrank cleanup. Make the assigned system" : "is for when the review finds nothing worth fixing. Make an existing system",
     OWN_IDEAS: stewarded ? ` Own new ideas go into \`${paths.proposals}\` as proposals, not into this cycle, unless they block an assigned item.` : "",
     BOARD_RECORD: board.items.length ? " For each board item worked on, add exactly one line `Board: <ID> done|progress|blocked - <one sentence>`, using only the IDs under \"Assigned work\"." : "",
@@ -549,7 +564,7 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
   };
 }
 
-async function runStep(ctx: StepContext): Promise<void> {
+export async function runStep(ctx: StepContext): Promise<void> {
   const { engine, rt, repo, state, log } = ctx;
   const cfg = siConfig(ctx.cfg);
   const si = siState(state);
@@ -569,6 +584,8 @@ async function runStep(ctx: StepContext): Promise<void> {
         return;
       }
       resetToLastPublished(ctx);
+      // A submission recorded for a discarded merge names a commit no longer on the branch: reopen it.
+      await reviseDispatchSubmissions(ctx);
       ctx.save((s) => { s.pendingAnswer = null; });
     } else {
       const detail = si.publishBlocker?.replace(/^publication blocked by pre-push leak scan:\s*/, "") ?? "the leak scan refused the commit";
@@ -591,6 +608,8 @@ async function runStep(ctx: StepContext): Promise<void> {
   fs.mkdirSync(engine.stepDir(n), { recursive: true });
   let upstream = si.current?.upstream;
   let baseRed: string[] | undefined;
+  let claimed: StewardBoard | undefined;
+  let engineer: string | undefined;
   if (!resume) {
     let sync: gm.SyncResult;
     try { sync = gm.syncIntegration(g, cfg); }
@@ -608,15 +627,16 @@ async function runStep(ctx: StepContext): Promise<void> {
         return;
       }
       log(`${cfg.integrationBranch} diverged: rebased ${rec.commits} local commit(s) ${rec.from.slice(0, 12)} -> ${rec.head.slice(0, 12)} onto the destination ${rec.remote.slice(0, 12)}`);
+      const rewritten = new Map(rec.mapping.map(({ from, to }) => [from, to]));
+      const through = (sha: string): string => rewritten.get(sha) ?? sha;
       ctx.save((s) => {
         const record = siState(s);
-        const rewritten = new Map(rec.mapping.map(({ from, to }) => [from, to]));
-        const through = (sha: string): string => rewritten.get(sha) ?? sha;
         record.history = record.history.map((entry) => ({ ...entry, start: through(entry.start), head: through(entry.head) }));
         record.lastGoodSha = through(record.lastGoodSha);
         if (record.current) record.current.startSha = through(record.current.startSha);
         record.reconciliations = [...(record.reconciliations ?? []), { at: new Date(rt.now()).toISOString(), from: rec.from, remote: rec.remote, head: rec.head, commits: rec.commits }];
       });
+      await reviseDispatchSubmissions(ctx, through);
     }
     if (sync.state === "absent") throw new Error(`${cfg.integrationBranch} exists neither here nor at the destination`);
     if (sync.state === "adopted") log(`${cfg.integrationBranch} moved at the destination; continuing from ${sync.head.slice(0, 12)}`);
@@ -627,7 +647,27 @@ async function runStep(ctx: StepContext): Promise<void> {
     const base = await baseCheck(ctx, n, head);
     if (base === "parked") return;
     baseRed = base.repair;
-    if (!baseRed && (await idleQueue(ctx, upstream))) return;
+    // A dispatch cycle claims its one item before the empty-queue test, under the board lock; a
+    // repair cycle claims nothing. The claim becomes the cycle's board snapshot below.
+    // The cycle's engineer comes first; when it has nothing, another engineer's open claim is
+    // continued rather than the run idling on it. A board lock held past the bounded wait is a
+    // busy writer, not a broken run: the poll counts as idle and the next tick retries.
+    const dispatch = dispatchOf(ctx.contract);
+    if (dispatch && !baseRed) {
+      let claim: CycleClaim;
+      try { claim = await claimForCycle(ctx.store.p.control, { options: dispatch, engineers: cycleRotation(dispatch, n), attempts: si.itemAttempts, at: new Date(rt.now()).toISOString() }); }
+      catch (e) {
+        if (!(e instanceof BoardLockBusy)) throw e;
+        log(`cycle ${pad(n)} dispatch: the board lock is busy (${errorMessage(e)}); looking again next tick`);
+        await rt.sleep(rt.tickMs);
+        return;
+      }
+      claimed = claim.board;
+      engineer = claim.engineer;
+      const item = claim.board.items[0];
+      if (item) log(`cycle ${pad(n)} dispatch: ${claim.outcome} ${item.id} for ${claim.engineer}`);
+    }
+    if (!baseRed && (await idleQueue(ctx, upstream, claimed))) return;
     const last = si.history.at(-1);
     const extra = last && !last.merged && !last.discarded && last.head !== head ? [`refs/tags/${cfg.tagPrefix}cycle-${pad(last.n)}`] : [];
     if (upstream?.outcome === "conflict") extra.push("refs/upstream/trunk");
@@ -636,7 +676,7 @@ async function runStep(ctx: StepContext): Promise<void> {
     log(`cycle ${pad(n)} branch set to ${cfg.integrationBranch} ${head.slice(0, 12)}`);
   }
   const startSha = si.current?.startSha ?? repo.head();
-  si.current = { ...si.current, n, autoRestarts: si.current?.autoRestarts ?? 0, startedAt: si.current?.startedAt ?? new Date(rt.now()).toISOString(), startSha, ...(upstream ? { upstream } : {}), ...(baseRed ? { baseRed } : {}) };
+  si.current = { ...si.current, n, autoRestarts: si.current?.autoRestarts ?? 0, startedAt: si.current?.startedAt ?? new Date(rt.now()).toISOString(), startSha, ...(upstream ? { upstream } : {}), ...(baseRed ? { baseRed } : {}), ...(claimed ? { board: claimed } : {}), ...(engineer ? { engineer } : {}) };
   state.step = n;
   state.phase = "work";
   ctx.save();
@@ -746,14 +786,16 @@ async function baseCheck(ctx: StepContext, n: number, head: string): Promise<"pa
 }
 
 /** True when the queue is empty and the host slept: nothing is started, nothing is billed. */
-async function idleQueue(ctx: StepContext, upstream: gm.UpstreamSync | undefined): Promise<boolean> {
+async function idleQueue(ctx: StepContext, upstream: gm.UpstreamSync | undefined, claimed?: StewardBoard): Promise<boolean> {
   const { engine, rt, repo, state, log } = ctx;
   const cfg = siConfig(ctx.cfg);
   const si = siState(state);
   await engine.applyControl({ only: ["backlog"] });
   if (!engine.active) return true;
-  const offered = readBoard(ctx.store.p.control);
-  const stewarded = Boolean(cfg.integrationUpstream) || offered.items.length > 0;
+  // A dispatch run is stewarded, and its only board work is the item it holds or just claimed.
+  const dispatch = dispatchOf(ctx.contract) !== null;
+  const offered = dispatch ? claimed ?? { items: [] } : readBoard(ctx.store.p.control);
+  const stewarded = dispatch || Boolean(cfg.integrationUpstream) || offered.items.length > 0;
   const last = si.history.at(-1);
   const work = queueWork({
     stewarded, offered: withoutWithheld(offered, si.itemAttempts), backlogText: repo.fileAt(repo.head(), "autonomy/BACKLOG.md"), cycles: si.history.length,
@@ -838,6 +880,7 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
     if (!r.merged) merge.reason = r.reason;
   }
   if (merge.merged) { si.lastGoodSha = sha; si.merged = (si.merged ?? 0) + 1; delete si.baseRepairs; } // a green head ends the repairs: a later rollback to a red head starts its allowance afresh
+  if (merge.merged) await recordDispatchSubmission(ctx, n, board);
   publishNow(ctx);
   // A merged cycle the leak scan refused is one more unpublished cycle stacked; a non-merged cycle
   // leaves the count unchanged. Only a successful publish (in publishNow) clears it.
@@ -885,6 +928,50 @@ async function closeCycle(ctx: StepContext, n: number, result: CycleResult, salv
   engine.writeStepSummary(n, { action: "cycle", outcome: entry.outcome, gate: entry.gate, merged: entry.merged, ...(salvaged ? { report: path.join("steps", pad(n), "salvaged-report.json") } : {}) });
   ctx.save();
   log(`cycle ${pad(n)} done: ${entry.outcome}, gate ${entry.gate}${failing.length ? ` (${failing.join(", ")})` : ""}, $${entry.costUsd}; tagged ${cfg.tagPrefix}cycle-${pad(n)}; ${entry.merged ? `merged into ${cfg.integrationBranch}` : `not merged (${entry.mergeReason})`}`);
+}
+
+/**
+ * A merged dispatch cycle whose note reports its claimed item `done`: record the submission
+ * (submittedAt and the integration head) on the board, so the next cycle does not continue the
+ * item. Never fails the close-out: a board that moved on is logged and left alone.
+ */
+async function recordDispatchSubmission(ctx: StepContext, n: number, reports: readonly BoardReport[]): Promise<void> {
+  const dispatch = dispatchOf(ctx.contract);
+  const current = siState(ctx.state).current;
+  const item = current?.board?.items[0];
+  if (!dispatch || !item || !reports.some((r) => r.id === item.id && r.status === "done")) return;
+  const engineer = current?.engineer ?? cycleEngineer(dispatch, n);
+  const cfg = siConfig(ctx.cfg);
+  try {
+    const sha = ctx.repo.git()(["rev-parse", `refs/heads/${cfg.integrationBranch}`]);
+    const skipped = await recordSubmission(ctx.store.p.control, { id: item.id, engineer, sha, at: new Date(ctx.rt.now()).toISOString() });
+    ctx.log(skipped ? `cycle ${pad(n)} dispatch: submission of ${item.id} not recorded: ${skipped}` : `cycle ${pad(n)} dispatch: ${item.id} submitted by ${engineer} at ${sha.slice(0, 12)}`);
+  } catch (e) {
+    ctx.log(`cycle ${pad(n)} dispatch: submission of ${item.id} not recorded: ${errorMessage(e)}`);
+  }
+}
+
+/**
+ * After the host rewrote or discarded integration history (the publish-blocked rollback, or the
+ * rebase of a diverged branch): map each submission the run's engineers recorded through the
+ * rewrite, and clear one whose commit is no longer on the integration branch, so its item is
+ * worked again. Logged, never fatal: a board left behind is the steward's to correct.
+ */
+async function reviseDispatchSubmissions(ctx: StepContext, through: (sha: string) => string = (sha) => sha): Promise<void> {
+  const dispatch = dispatchOf(ctx.contract);
+  if (!dispatch) return;
+  const cfg = siConfig(ctx.cfg);
+  const g = ctx.repo.git();
+  try {
+    const head = g(["rev-parse", `refs/heads/${cfg.integrationBranch}`]);
+    const revised = await reviseSubmissions(ctx.store.p.control, dispatch.engineers, (sha) => {
+      const to = through(sha);
+      return g(["merge-base", "--is-ancestor", to, head], { allowFail: true }) === null ? null : to;
+    });
+    for (const r of revised) ctx.log(r.to ? `dispatch: submission of ${r.id} moved ${r.from.slice(0, 12)} -> ${r.to.slice(0, 12)} with the rewritten integration history` : `dispatch: submission of ${r.id} at ${r.from.slice(0, 12)} cleared: the commit is no longer on ${cfg.integrationBranch}, so the item is worked again`);
+  } catch (e) {
+    ctx.log(`dispatch: submissions not re-checked after the integration history changed: ${errorMessage(e)}`);
+  }
 }
 
 /** templateOptions.integration's review-input options (validated in validate()). */
@@ -1049,7 +1136,7 @@ async function finalize(ctx: StepContext, reason: string): Promise<void> {
   await engine.afterSuccess(head);
 }
 
-async function onStepsDone(ctx: StepContext): Promise<"handled"> {
+export async function onStepsDone(ctx: StepContext): Promise<"handled"> {
   await finalize(ctx, "cycles_done");
   return "handled";
 }

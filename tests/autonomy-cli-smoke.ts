@@ -244,7 +244,7 @@ await check("templates: every template is described, with what it needs and its 
   assert.equal(r.code, 0);
   const j = r.json();
   assert.equal(j.ok, true);
-  assert.deepEqual(j.templates.map((t) => t.id).sort(), ["deploy", "implement", "self-improve"]);
+  assert.deepEqual(j.templates.map((t) => t.id).sort(), ["deploy", "dispatch", "implement", "self-improve"]);
   for (const t of j.templates) { assert.ok(t.title && t.summary && t.requires.length && typeof t.finite === "boolean" && t.defaults); }
   const implement = j.templates.find((t) => t.id === "implement");
   assert.ok(implement, "the implement template is listed");

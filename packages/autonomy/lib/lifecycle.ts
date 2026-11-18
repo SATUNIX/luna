@@ -229,7 +229,7 @@ export interface SelfImproveState {
   merged: number;
   lastGoodSha: string;
   seedSha: string;
-  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard; /** The checks the host's pre-flight found failing on the base: this cycle is the one bounded repair (lib/preflight.ts), with no board work. */ baseRed?: string[]; /** Set while parked on review-pending: the cycle's close-out result, so the answer re-runs the review on the held head without a new worker session. */ reviewPending?: { outcome: Exclude<CycleOutcome, "blocked">; reason: string; attempts: number; costUsd: number; head: string } } | null;
+  current: { n: number; startedAt: string; startSha: string; autoRestarts?: number; upstream?: UpstreamSync; board?: StewardBoard; /** A dispatch cycle's engineer: the one whose claim it continues or made (lib/dispatch.ts claimForCycle). */ engineer?: string; /** The checks the host's pre-flight found failing on the base: this cycle is the one bounded repair (lib/preflight.ts), with no board work. */ baseRed?: string[]; /** Set while parked on review-pending: the cycle's close-out result, so the answer re-runs the review on the held head without a new worker session. */ reviewPending?: { outcome: Exclude<CycleOutcome, "blocked">; reason: string; attempts: number; costUsd: number; head: string } } | null;
   /** Automatic reconciliations of a diverged integration branch, oldest first. */
   reconciliations?: ReconciliationRecord[];
   /** The published refs state (gitmirror publish), so an unchanged state is not pushed again. */

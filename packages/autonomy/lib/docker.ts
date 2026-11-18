@@ -109,6 +109,13 @@ export function engineCpus(cpus: EngineQuantity, host: number = os.availablePara
   return Number.isFinite(n) && n > host && host >= 1 ? String(host) : String(cpus);
 }
 
+/**
+ * The options of every tmpfs the supervisor mounts. `exec` is explicit because the engines differ:
+ * podman leaves a tmpfs executable, Docker adds noexec unless told otherwise, and the gate runs
+ * binaries it stages under /tmp (tests/autonomy-boundary-smoke.ts pins both engines).
+ */
+const tmpfsSpec = (target: string, size: EngineQuantity): string => `${target}:rw,exec,nosuid,size=${String(size)}`;
+
 export function hardened(cfg: DockerConfig, { memory = cfg.container.memory, cpus = cfg.container.cpus, tmpSize = cfg.container.tmpSize, role = "helper", user }: HardenOptions = {}): string[] {
   return [
     // Rootless podman: map the operator's uid to itself inside the container (every other id
@@ -116,7 +123,7 @@ export function hardened(cfg: DockerConfig, { memory = cfg.container.memory, cpu
     ...(cfg.engine === "podman" ? ["--userns=keep-id"] : []),
     "--user", user ?? userSpec(cfg), "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
     "--pids-limit", String(cfg.container.pids), "--memory", String(memory), "--cpus", engineCpus(cpus),
-    "--tmpfs", `/tmp:rw,nosuid,size=${String(tmpSize)}`, "--no-healthcheck",
+    "--tmpfs", tmpfsSpec("/tmp", tmpSize), "--no-healthcheck",
     "--label", `pi-autonomy.run=${cfg.run}`, "--label", `pi-autonomy.role=${role}`,
   ];
 }
@@ -261,7 +268,7 @@ export function serviceRunArgs(cfg: DockerConfig, p: Pick<RunPaths, "deploy">, s
   const args = ["run", "-d", "--name", n.service(svc.name), ...hardened(cfg, { memory: svc.memory ?? "1g", cpus: svc.cpus ?? "1", role: "service", user: svc.user }),
     "--network", n.net, "--network-alias", svc.name,
     ...(svc.workspaceMounts ?? []).flatMap((m, i) => bind(deployDir(p, svc.name, i), m.target, true)),
-    ...(svc.tmpfs ?? []).flatMap((t) => ["--tmpfs", `${t}:rw,nosuid,size=${String(cfg.container.tmpSize)}`]),
+    ...(svc.tmpfs ?? []).flatMap((t) => ["--tmpfs", tmpfsSpec(t, cfg.container.tmpSize)]),
     ...Object.entries(svc.env ?? {}).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
     ...Object.keys(svc.credentialEnv ?? {}).flatMap((k) => ["--env", k]),
     ...(entrypoint === undefined ? [] : ["--entrypoint", entrypoint]),

@@ -97,6 +97,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Docker runs mount the worker and service `/tmp` executable, as podman does.** Finding: the first
+  Docker gate failed 26 of 220 checks with `EACCES` on binaries the smokes stage under `/tmp`
+  (`smoke:pi-cli`, `smoke:node-runtime`). Cause: `--tmpfs /tmp:rw,nosuid,size=N` leaves the tmpfs
+  executable under podman but Docker adds `noexec` unless `exec` is given. Fix: every tmpfs the
+  supervisor mounts (`packages/autonomy/lib/docker.ts`) is `rw,exec,nosuid,size=N`, so both engines
+  behave the same. Verification: `tests/autonomy-boundary-smoke.ts` asserts the options for the
+  worker and a service under both engines.
+
 - **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
   `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
   dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only

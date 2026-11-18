@@ -17,6 +17,7 @@ import { assessLock, createRunLock as createLock, type RunLockOptions } from "..
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { runPaths } from "../packages/autonomy/lib/paths.ts";
 import { GATE_SLOTS_ENV, acquireGateSlot, resolveGateSlots, type GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
+import { GateWaitInterrupted } from "../packages/autonomy/lib/errors.ts";
 import { nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 
 
@@ -405,6 +406,29 @@ await check("gate slots: at most two run at once; a third waits for a freed slot
   b.release();
   third.release();
   assert.ok(state.max <= 2, `at most two gates ran at once (saw ${state.max})`);
+  rm(home);
+});
+
+await check("gate slots: a stop while every slot is busy ends the wait (DE-102), and the held slot stays held", async () => {
+  const home = tempDir("autonomy-slots-stop-");
+  const held = await acquireGateSlot({ home, limit: 1, pollMs: 20 });
+  let asked = 0;
+  const started = Date.now();
+  await assert.rejects(
+    acquireGateSlot({ home, limit: 1, pollMs: 20, shouldStop: async () => { asked += 1; return asked >= 2; } }),
+    (error: unknown) => error instanceof GateWaitInterrupted,
+  );
+  assert.equal(asked, 2, "the stop is asked once per busy poll");
+  assert.ok(Date.now() - started < 5_000, "the wait ends promptly");
+  // The holder was never disturbed: a third waiter still cannot get the slot until it is released.
+  const pending: { slot: GateSlot | null } = { slot: null };
+  void acquireGateSlot({ home, limit: 1, pollMs: 20 }).then((s) => { pending.slot = s; });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(pending.slot === null, true, "the slot is still held after the interrupted wait");
+  held.release();
+  for (let i = 0; i < 250 && !pending.slot; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(pending.slot, "a later waiter gets the freed slot");
+  pending.slot.release();
   rm(home);
 });
 

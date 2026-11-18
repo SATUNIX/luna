@@ -302,15 +302,20 @@ one user on one host could otherwise each start an acceptance gate at once and c
 IO. A host-wide bound caps that at **two** concurrent gates per user, held under
 `$PI_AUTONOMY_HOME/gate-slots` (default `~/.local/state/pi-autonomy/gate-slots`). A supervisor that
 cannot take a slot sets phase `gate-wait`, keeps heartbeating (so it is not read as stalled) and
-waits without accruing wall-clock minutes; it then runs the gate under phase `acceptance`.
+waits without accruing wall-clock minutes; it then runs the gate under phase `acceptance`. Control
+commands still apply while it waits: a STOP file, a signal, a pause or a cancel ends the wait, the
+acceptance is never run, and the run is parked (or cancelled) and stays resumable, recorded as a stop
+rather than a supervisor error.
 `PI_AUTONOMY_GATE_SLOTS` sets the count; `0` is unbounded. The gate container, its checks and the
 definition of a pass are unchanged — only *when* a gate may start is bounded.
 `tests/autonomy-lifecycle-smoke.ts` pins the parse, the two-at-once bound, the unbounded `0`, that
 a killed holder frees its slot and that a `flock` failure other than lock contention (a permission
-error or an unsupported filesystem) rejects instead of polling forever; `tests/autonomy-selfimprove-smoke.ts`
+error or an unsupported filesystem) rejects instead of polling forever, and that a stop ends a wait without
+disturbing the holder; `tests/autonomy-selfimprove-smoke.ts`
 pins the `gate-wait` phase, the active minutes charged before the wait, the frozen minutes while
 waiting, the return to `acceptance`, three supervisors never overlapping more than two gates, and a
-throwing gate restoring the previous phase.
+throwing gate restoring the previous phase, and a signal or a pause during `gate-wait` parking the run
+without running the gate.
 
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see

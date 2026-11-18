@@ -289,6 +289,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   segments, or the field key or rule name; a digest for bash). No block became an allow.
   `tests/firewall-refusal-record.ts`.
 
+- **A stop while an autonomous run waits for a gate slot is no longer ignored.** The host-wide
+  gate-slot wait polled until a slot was free and never looked at STOP, a signal, a pause or a
+  cancel, so a run waiting behind two other gates could not be stopped until it got its turn. The
+  wait now applies control commands on each poll; a stop ends it with the acceptance unrun and the
+  run parked and resumable, recorded as a stop, not a supervisor error
+  (`tests/autonomy-lifecycle-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
 - **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
   `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
   dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only

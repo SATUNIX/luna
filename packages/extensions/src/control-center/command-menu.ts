@@ -244,7 +244,7 @@ export interface CurationOptions {
  * Filter a command-token suggestion list. A hidden item is dropped below the reveal length and
  * otherwise kept with its hub location prefixed to the description. `prefix` is the editor's
  * command token including the leading slash. A name shorter than the reveal length is revealed
- * once its full name is typed, so a three-character alias such as `/kit` can still complete.
+ * once its full name is typed, so a name shorter than the reveal length can still complete.
  */
 export function curateSuggestions(items: readonly AutocompleteItem[], prefix: string, options: CurationOptions): AutocompleteItem[] {
   const typed = prefix.startsWith("/") ? prefix.slice(1) : prefix;

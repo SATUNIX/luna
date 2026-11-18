@@ -12,7 +12,7 @@
  *
  * Extensions are self-contained, so the vendor copy of this file
  * (`packages/extensions/third_party/subagent/overlay-frame.ts`) is byte-identical to this one, like
- * `supportsOverlay`; the smokes assert the equality.
+ * `supportsOverlay`. Nothing checks that the two copies match: change both together.
  */
 import {
   stripTerminalSequences,

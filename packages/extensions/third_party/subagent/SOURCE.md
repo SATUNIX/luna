@@ -298,3 +298,6 @@
     glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
     stays. `tests/workflow-panel-smoke.ts` pins the alignment.
   - **Orphan detection by owner:** `run-recovery.ts` marks a run interrupted only when the pid recorded in its `owner.json` (written by `claimRunDir` in `workflow.ts`) is gone; runs without that file fall back to 5 minutes of quiet.
+  - **Overlay frame comment (2026-11-18):** the header of `overlay-frame.ts` (a byte-identical copy of
+    `control-center/overlay-frame.ts`) no longer says a smoke asserts the copies match; nothing does.
+    Comment only.

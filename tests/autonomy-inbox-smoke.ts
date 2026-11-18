@@ -149,12 +149,13 @@ await check("bad input is refused and leaves the previous inbox untouched", asyn
   assert.equal(fs.readFileSync(inboxFile, "utf8"), before, "an oversized answer is refused before it is written");
 });
 
-await check("the listing sanitises the outcome timestamp a host file can carry", async () => {
-  writeJson(inboxFile, { cards: [{ id: "S1", question: "q", default: "d", deadline: "2099-10-02T00:00:00Z", outcome: { at: "2026-10-01T00:00:00Z\u001b[2J\u202e", via: "answer", text: "done" } }] });
+await check("the listing sanitises the outcome timestamp and text a host file can carry", async () => {
+  writeJson(inboxFile, { cards: [{ id: "S1", question: "q", default: "d", deadline: "2099-10-02T00:00:00Z", outcome: { at: "2026-10-01T00:00:00Z\u001b[2J\u202e", via: "answer", text: "do\u001b[?1049hne\u202e\u009b" } }] });
   const listed = await call("inbox", "--run", run);
   assert.equal(listed.code, 0, listed.stderr);
   assert.match(listed.stdout, /S1\s+answered/, "the card and its outcome are listed");
-  assert.ok(!listed.stdout.includes("\u001b") && !listed.stdout.includes("\u202e"), "the outcome timestamp carries no control or bidi character");
+  assert.ok(!listed.stdout.includes("\u001b") && !listed.stdout.includes("\u202e"), "the outcome timestamp and text carry no control or bidi character");
+  assert.ok(!listed.stdout.includes("\u009b"), "the outcome text carries no C1 CSI");
 });
 
 await check("the inbox is only for self-improve runs", async () => {

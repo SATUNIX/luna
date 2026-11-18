@@ -5,7 +5,7 @@
 // `autoLow` marks a medium finding the operator chose to trust in auto mode (read-only ssh to
 // a known host, `sudo -n` reads); the decision matrix demotes those to low when auto is on.
 import { gitChdirs, inlineAgentConfigWrite, mentionsPatchWriter, parsePatchArgs, patchCallsInText, patchCallTargets, type PatchStdin, type PatchTool } from "./shared/inline-guard.ts";
-import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shell.ts";
+import { basenameOf, decoderLike, expandBraces, isForkBomb, isStdinPath, NAMESPACE_WRAPPERS, normalize, parseShell, type Segment } from "./shared/shell.ts";
 
 export type Tier = "low" | "medium" | "high" | "critical";
 export type Effect =

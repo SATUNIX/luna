@@ -19,11 +19,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadModule, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as Classify from "../packages/extensions/src/tool-firewall/classify.ts";
-import type * as Shell from "../packages/extensions/src/tool-firewall/shell.ts";
+import type * as Shell from "../packages/core/shared/shell.ts";
 
 const restoreIsolation = isolateKitEnv();
 const C = await loadModule<typeof Classify>("extensions/tool-firewall/classify.ts");
-const S = await loadModule<typeof Shell>("extensions/tool-firewall/shell.ts");
+const S = await loadModule<typeof Shell>("extensions/tool-firewall/shared/shell.ts");
 
 function which(name: string): string | null {
   for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {

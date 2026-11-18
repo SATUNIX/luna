@@ -40,7 +40,7 @@ The full description is in `docs/autonomy-gate.md`.
 
 | File | Role |
 |---|---|
-| `shell.ts` | Shell parser: quoting, substitutions, heredocs, wrappers (sudo/env/ssh/bash -c/xargs/find -exec/eval/tmux), obfuscation normalisation. |
+| `shared/shell.ts` | Shell parser (a generated copy of `packages/core/shared/shell.ts`): quoting, substitutions, heredocs, wrappers (sudo/env/ssh/bash -c/xargs/find -exec/eval/tmux), obfuscation normalisation. |
 | `classify.ts` | Command table, path classes and tool table → findings (tier, effect, code). |
 | `security-level.ts` | Canonical securityLevel persistence, immutable resolution, floors and the read-only security registry contract. |
 | `security-command.ts` | `/security` picker, status, explain, reset and weakening confirmation. |

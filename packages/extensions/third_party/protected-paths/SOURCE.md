@@ -45,3 +45,8 @@
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)
+  - every refusal also appends one `tool_refused` record to the firewall audit log through
+    `shared/refusal-record.ts` (a generated copy of `packages/core/shared/refusal-record.ts`, with its
+    `shared/safe-fs.ts` dependency): the cause, the matched protected entry (an absolute one by its last
+    two segments), field key or rule name, the tool, a SHA-256 digest of a bash command and the session
+    id, never the command text or file contents (`tests/firewall-refusal-record.ts`)

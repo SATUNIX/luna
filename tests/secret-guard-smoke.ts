@@ -391,6 +391,15 @@ async function run() {
     await blocks("read", { path: ".env" }, "read .env");
     await blocks("read", { path: "config/.env.production" }, "read .env.production");
     await blocks("read", { path: ".ssh/id_ed25519" }, "read ssh private key");
+    // The kubeconfig (cluster tokens and client keys): spellings of the same path and globs that name it are refused,
+    // as is copying into it, because the scan does not tell a transfer's source from its destination (as for .ssh/).
+    // Its template and the directory listing stay allowed. Reaching it through `cd ~/.kube && cat config` or an
+    // archive of the whole directory is left to the tool-firewall (tests/firewall-must-block-corpus-smoke.ts).
+    await blocks("read", { path: "deploy/.kube/config" }, "read a kubeconfig");
+    for (const command of ["cat ~/.kube/config", "cat ~/.kube//config", "cat ~/.kube/./config", "cat ~/.kube/conf*", "cat ~/.kube/c?nfig", "cp k3s.yaml ~/.kube/config"]) {
+      await blocks("bash", { command }, `kubeconfig: ${command}`);
+    }
+    for (const command of ["cat ~/.kube/config.example", "ls ~/.kube", "grep -rn '~/.kube/config' docs"]) await allows("bash", { command }, `kubeconfig neighbour: ${command}`);
     await blocks("read", { path: path.join(os.homedir(), ".pi", "agent", "auth.json") }, "read pi auth.json");
     await blocks("grep", { pattern: "token", path: "deploy/server.pem" }, "grep a pem file");
     await blocks("read", { path: "src/../.npmrc" }, "lexical traversal to .npmrc");

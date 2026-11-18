@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { appendFileSafe, ensureDirSafe, piWorkspaceOf, piWorkspaceOptions, rotateFileSafe, writeFileSafe, type SafeWriteOptions } from "./shared/safe-fs.ts";
 import { appendRefusal, commandDigest } from "./shared/refusal-record.ts";
 import { cardTimeoutMs, showWhenFree } from "./shared/input-owner.ts";
-import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
+import { classifyToolCall, describeFamilies, effectiveTier, familiesFromSignature, maxTier, needsOperator, signatureOf, summarize, TIER_RANK, type Assessment, type ClassifyEnv, type Finding, type Tier } from "./classify.ts";
 import { agentDir, configPath, feedbackPath, homeDir, knownHostsMeta, legacyAutoModePath, readConfig, resolveMode, resolvePolicy, tmpRoots, workspaceRoot, writeConfig, type FirewallConfig } from "./config.ts";
 import { appendFeedback, exactStatus, forget, learnable, listLearned, operatorApproved, precedentsFor, redact, scopeRecords, readFeedback, statusFor, type FeedbackRecord } from "./feedback.ts";
 import { appendJudgement, computeStats, distillInBackground, profileFor, readProfile, resetProfile, statsLine, distill } from "./profile.ts";
@@ -949,9 +949,11 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     const blocked = (reason: string, decider: string, outcome: Outcome, extra: Record<string, unknown> = {}) => {
       finish("deny", decider, { outcome, reason, ...extra });
       // One machine-readable record per refusal, alongside the existing tool_blocked line. The
-      // matched field names the finding or denial code that decided it, never the command text.
-      const deciding = a.findings.find((f) => f.tier !== "low");
-      const matched = [extra.matched, extra.unattendedDenial, extra.why, deciding?.code, decider].find((v): v is string => typeof v === "string" && v.length > 0) ?? outcome;
+      // matched field names the finding or denial code that decided it, never the command text: the
+      // highest-tier finding (the first of equals) decided the tier, so it outranks why no operator
+      // answered (`why`) and the decider; a pipe that reads a key and sends it is secret_egress.
+      const deciding = a.findings.reduce<Finding | undefined>((top, f) => (f.tier !== "low" && (!top || TIER_RANK[f.tier] > TIER_RANK[top.tier]) ? f : top), undefined);
+      const matched = [extra.matched, extra.unattendedDenial, deciding?.code, extra.why, decider].find((v): v is string => typeof v === "string" && v.length > 0) ?? outcome;
       appendRefusal({ guard: "tool-firewall", cause: outcome, matched, tool: toolName, commandDigest: commandDigest(command), sessionId: sessionIdOf(ctx) });
       return { block: true as const, reason };
     };
@@ -960,8 +962,10 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       getPolicy(ctx);
       return `${policyRevision()}|${JSON.stringify(securitySnapshot(ctx))}` !== revision;
     };
+    // Not a refusal: the pending answer is discarded and the call is decided again under the new
+    // policy, and that second decision is the one recorded (tool_refused only if it refuses).
     const reconsider = () => {
-      blocked("tool-firewall: policy or security level changed while approval was pending; re-evaluating this call", "policy", "uncertain");
+      audit({ event: "tool_reconsidered", ...base, decider: "policy", reason: "policy or security level changed while approval was pending", latencyMs: Date.now() - started });
       return decide(event, ctx);
     };
 

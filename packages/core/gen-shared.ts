@@ -51,6 +51,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/verify-gate/shared/safe-fs.ts",
     "packages/extensions/third_party/caveman/shared/safe-fs.ts",
     "packages/extensions/third_party/plan-mode/shared/safe-fs.ts",
+    "packages/extensions/third_party/protected-paths/shared/safe-fs.ts",
     "packages/extensions/third_party/subagent/shared/safe-fs.ts",
     "packages/extensions/third_party/todo/shared/safe-fs.ts",
   ],
@@ -64,6 +65,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   "refusal-record.ts": [
     "packages/extensions/src/secret-guard/shared/refusal-record.ts",
     "packages/extensions/src/tool-firewall/shared/refusal-record.ts",
+    "packages/extensions/third_party/protected-paths/shared/refusal-record.ts",
   ],
   "redact.ts": [
     "packages/extensions/src/herdr/shared/redact.ts",

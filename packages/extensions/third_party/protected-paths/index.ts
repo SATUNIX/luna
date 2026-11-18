@@ -494,10 +494,9 @@ function gitRestoreTargets(command: string): string[] {
 }
 
 // What the patch writers in a command change, read from the patches themselves. `unreadable` fails the command
-// closed; the same reading in tool-firewall is classify.ts patchWrites. Two readings count: the text walker on
-// `command` (backslash-newlines joined) and the firewall's parser (./shared/shell.ts) on `raw`, the command as
-// written, which follows what the walker misses (a comment ending in a backslash, `c\d`, aliases, pipes into
-// `sudo -s`). A patch writer either reading finds is checked, so neither can weaken the other.
+// closed. Two readings count, the same two tool-firewall uses: the firewall's parser (./shared/shell.ts) on `raw`,
+// the command as written, and the shared text walker on `command` (backslash-newlines joined), kept as a
+// fail-closed backstop for forms the parser does not model. A patch writer either reading finds is checked.
 function patchWriteTargets(command: string, raw: string, cwd: string): { targets: string[]; unreadable: string | null } {
   const targets: string[] = [];
   const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));

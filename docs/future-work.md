@@ -103,13 +103,13 @@ Each is a limit of the delivered kernel, not a bug in a test.
 
 ### Known issues
 
-- **`protected-paths` still has its own text readers.** Patch writers are read both by the shared
-  text walker in `packages/core/shared/inline-guard.ts` and by the firewall's parser, now shared as
-  `packages/core/shared/shell.ts`, and protected-paths refuses what either finds. Its other write
-  targets (`directWriteTargets`, redirects, `cp`/`mv`/`sed -i` and the like) are still read with
-  its own regular expressions, so a shell shape fixed in the firewall's classifier must be fixed
-  there too, and the walker remains the firewall's catch-all for patch writers it cannot place
-  (board item A-90). `tests/protected-paths-corpus-smoke.ts` covers the shapes both hooks read today.
+- **`protected-paths` still reads its other write targets as text.** Patch writers are read by
+  both hooks with the firewall's parser (`packages/core/shared/shell.ts`) through one shared rule,
+  with the shared text walker kept beside it as a fail-closed backstop until the parser covers the
+  forms only the walker catches (board item A-90). protected-paths' other write targets (`directWriteTargets`, redirects, `cp`/`mv`/`sed -i` and
+  the like) are still read with its own regular expressions, so a shell shape fixed in the
+  firewall's classifier must be fixed there too (board item PG-26).
+  `tests/protected-paths-corpus-smoke.ts` covers the shapes both hooks read today.
 - **`smoke:workflow-resume` flaked once in a sandbox.** It failed once and passed on rerun; the
   cause was not established and no reproduction is recorded. Re-run it after a failure, and treat
   a repeat as a defect.

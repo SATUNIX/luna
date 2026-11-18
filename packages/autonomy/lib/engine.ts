@@ -15,7 +15,7 @@ import type { MeterSummary } from "../relay.ts";
 import { type Budget, type GenerationSettings, type RunContract, contractDigest, isStoredContract, workerContract } from "./contract.ts";
 import { type EffortApi, taskMementoAllowance } from "./effort.ts";
 import type { HostRepo } from "./hostrepo.ts";
-import type { IngestResult } from "./gitmirror.ts";
+import type { CycleScanRefusal, IngestResult } from "./gitmirror.ts";
 import { type BlockerRecord, type BudgetReason, type GenerationRecord, type MementoDecision, type PendingAnswer, type RunState, type RunStatus, type TransitionInfo, applyResultsToBoard, resumeAction, transition } from "./lifecycle.ts";
 import type { Complete } from "./manager.ts";
 import { type PromotionRun, type PromotionTarget, runPromotions } from "./promotion.ts";
@@ -169,6 +169,12 @@ export interface EngineTemplate {
 export interface EngineDeps {
   /** Write the run's results to `out` (lib/export.ts), after a success. */
   exportRun?: ((o: { engine: Engine; out: string }) => unknown) | undefined;
+  /**
+   * Replaces the self-improve close-out leak scan (gitmirror.scanCycle): the refusal for a cycle
+   * head, or null. Only tests set it, to reach the publish-time scan with a refusal that close-out
+   * cannot see; the CLI never does.
+   */
+  scanCycle?: ((sha: string) => CycleScanRefusal | null) | undefined;
 }
 
 /** Apply `fn` to the state, stamp it and write state.json (Engine.save, and promoteRun without an engine). */

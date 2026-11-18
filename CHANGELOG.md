@@ -162,6 +162,25 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A cycle the leak scan would refuse to publish is refused at close-out, not merged.** Finding: the
+  pre-push leak scan ran only at publication, after the gate and the merge review, so a cycle whose
+  commit message or added lines carried a blocked identifier was merged locally and then refused at
+  every publish, stranding every later cycle of the run behind it. Cause: acceptance never ran the
+  scanner. Fix: `closeCycle` (`packages/autonomy/lib/templates/self-improve.ts`) scans the cycle's own
+  commits with the same scanner and the same supervisor-held exceptions as publication
+  (`gitmirror.scanCycle`) before the gate and the review; a finding leaves the cycle unmerged with a
+  reason naming commit and location only, tags it `<prefix>refused/cycle-NN` (never published), and
+  tells the next cycle to reword or rewrite the commits. A scan that cannot complete judges nothing:
+  the cycle is held and the run parks on a review-pending question, charging no board item, and the
+  answer scans it again. A manager reset scans the head it abandons the same way, so a leaky one is
+  tagged `<prefix>refused/abandoned-NN` instead of refusing every later publish. The scanner itself
+  is unchanged. Verification: `tests/autonomy-selfimprove-smoke.ts` (a message leak and a file leak
+  are refused with no gate, review or publish; a leak removed before the head is still refused;
+  exceptions come from the base, not the cycle; a failed scan parks and re-scans; a reset keeps a
+  leaky head unpublished; a clean cycle merges and publishes) and `tests/autonomy-smoke.ts` (a
+  refused tag is never a publish refspec). The publish-blocked tests now skip the close-out scan to reach the
+  publish-time backstop.
+
 - **Docker runs mount the worker and service `/tmp` executable, as podman does.** Finding: the first
   Docker gate failed 26 of 220 checks with `EACCES` on binaries the smokes stage under `/tmp`
   (`smoke:pi-cli`, `smoke:node-runtime`). Cause: `--tmpfs /tmp:rw,nosuid,size=N` leaves the tmpfs

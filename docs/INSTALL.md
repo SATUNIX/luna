@@ -51,7 +51,8 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--mode local\|git\|npm` | `local` registers this checkout in place; `git` and `npm` register a released kit. |
 | `--scope global\|project` | Global settings (default) or `.pi/settings.json` in the current repository. |
 | `--only a,b` / `--all` | Specific extensions only, or everything. `--only` always adds the required base (`requiredProfileExtensions` in `packages/core/distribution.json`: `tool-firewall`, `protected-paths`, `delegation-guard`, `effort`, `session-helpers`) and warns about each one it adds (`tests/install-marker-smoke.ts`). |
-| `--yes` | Accepted for scripts; the installer never prompts. |
+| `--guided` | Ask for the profile and scope on stdin, confirm, then check the result and list the files changed ([Guided install](#guided-install)). Not combinable with `--profile`, `--only`, `--all`, `--yes`, `--uninstall` or `--capture-overrides`. |
+| `--yes` | Accepted for scripts. Only `--guided` prompts; every other run is non-interactive. |
 | `--dry-run` | Print what would change; change nothing. |
 | `--verify` | Run the repository's verify gate before registering a checkout. It runs by default only in a development checkout (`npm ci` done); in a plain clone it is skipped with a line saying so, because it needs the development dependencies (`tests/install-marker-smoke.ts`). |
 | `--no-externals` | Skip companion packages such as `pi-lens`. |
@@ -64,6 +65,34 @@ code 1 and a usage line before anything changes (`tests/install-marker-smoke.ts`
 A `--profile` name that does not match a shipped profile is an operator typo, not a crash: the
 installer prints `[install] Profile not found: <path>`, then the real profile names, and exits 2
 without a stack trace (`tests/profile-transaction-smoke.ts`).
+
+### Guided install
+
+Run the installer with `--guided` to be asked instead of passing flags:
+
+```sh
+node packages/core/install.ts --guided
+```
+
+It prints what it detected (Node against the 22.19 floor, git, pi, a container, CI, a terminal,
+whether the current directory is a git repository, and the profile already installed), lists the
+shipped profiles with the installed one (or `balanced`) as the default, and asks for a profile by
+number or name, then the scope (unless `--scope` is given), then `Proceed? [Y/n]`. A retired profile
+name such as `quick` is not accepted. Answers are read from stdin, so a script can pipe them in.
+
+Answering `n` exits 0 and changes nothing. An invalid answer is asked again, up to three times;
+the third, or stdin ending before the confirmation, exits 1 with nothing changed. After installing,
+the installer reads back the kit's settings entry, the marker's profile and extensions and the
+firewall configuration, prints `[install] Verified:`, then `[install] Changed:` with one line per
+configuration file it created or changed (settings, marker, `firewall.json`, `security.json`). A
+failed check exits 1; with `--settings-only` the files are rolled back (no test drives a failing
+check). `--mode`, `--scope`, `--channel`, `--no-externals`, `--settings-only` and `--dry-run` are
+accepted with it; the tests run `--guided --settings-only --mode local --no-externals`. Pinned by
+`tests/install-guided-smoke.ts` (hermetic, fake pi) and `tests/clean-install-smoke.ts` (the packed
+artefact and the real pi, including a declined run).
+
+The installer never prompts on its own, even in a terminal: `/profile`, `/update` and scripted
+installs behave as without `--guided`.
 
 The installer keeps **exactly one** registered copy of Luna: registering a checkout replaces
 a release install and the other way round, because two copies would load every extension twice.

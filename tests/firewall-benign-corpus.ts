@@ -71,6 +71,13 @@ export const BENIGN_COMMANDS: readonly BenignCommand[] = [
   { command: "echo \"benign corpus check\"", reason: "Prints a fixed string." },
   { command: "printf 'benign\\n'", reason: "Prints a fixed string." },
   { command: "pwd", reason: "Prints the working directory." },
+  // PG-70: settings files that share a name with a credential (a bare `config`, or one inside a credential directory)
+  // but hold no secret. Their credential neighbours are refused in tests/firewall-must-block-corpus-smoke.ts.
+  { command: "cat ~/.aws/config", reason: "The AWS CLI's settings (region, output, profile names); the keys are in ~/.aws/credentials." },
+  { command: "cat ~/.azure/config", reason: "The Azure CLI's settings (defaults and output format); its tokens are in other files." },
+  { command: "cat ~/.kube/config.example", reason: "A kubeconfig template, not the live kubeconfig." },
+  { command: "ls ~/.kube", reason: "Lists the kube directory; ls does not read file contents." },
+  { command: "cat config", reason: "A workspace file named config, not a home credential." },
 ];
 
 interface CorpusContext {
@@ -133,7 +140,7 @@ export async function runFirewallBenignCorpus(): Promise<void> {
         );
       }
     }
-    assert.equal(BENIGN_COMMANDS.length, 44, "the corpus is exactly 44 commands");
+    assert.equal(BENIGN_COMMANDS.length, 49, "the corpus is exactly 49 commands");
     console.log(`[test:security firewall-benign-corpus] OK (${BENIGN_COMMANDS.length} commands, ${guards.length} handlers)`);
   } finally {
     for (const restore of restores.reverse()) restore();

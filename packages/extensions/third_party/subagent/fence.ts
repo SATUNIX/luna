@@ -31,7 +31,7 @@ const SECRET_READ_BASENAME_PATTERNS = [
   /^id_(?:rsa|ed25519|ecdsa|dsa)$/, /^\.npmrc$/, /^\.netrc$/,
   /^credentials(?:\.json)?$/, /^secrets?\.(?:json|ya?ml|toml|env|txt)$/,
 ];
-const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth\.json$/];
+const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth\.json$/, /(?:^|\/)\.kube\/config$/];
 
 function normalizePath(value: string): string {
   return value.replace(/\\/g, "/").toLowerCase();

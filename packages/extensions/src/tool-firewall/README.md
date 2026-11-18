@@ -201,8 +201,14 @@ Each tool call appends one JSONL record to `PI_KIT_FIREWALL_AUDIT_LOG`, or to
 `tool_refused` record from the shared `shared/refusal-record.ts` helper (guard, cause, matched rule
 or path token, tool, a command digest when the call carries a command, session id; never the command
 text or a secret value);
-`secret-guard` writes the same record (`tests/firewall-refusal-record.ts`). Decisions that wait on a judge or
-human add a closing `tool_approved` or `tool_blocked` record. Before an append, a log over 4 MiB
+`secret-guard` and `protected-paths` write the same record (`tests/firewall-refusal-record.ts`). For a
+firewall refusal, `matched` is the unattended denial code when there is one, else the code of the
+highest-tier finding (so a key read piped to the network is `secret_egress`, and a refusal for lack of
+an operator still names the finding, not `unavailable`), else why no operator answered, else the
+decider. Decisions that wait on a judge or
+human add a closing `tool_approved` or `tool_blocked` record. A call whose policy or security level
+changed while its approval was pending writes one `tool_reconsidered` record and is decided again;
+only that second decision can write `tool_refused` (`tests/firewall-refusal-record.ts`). Before an append, a log over 4 MiB
 is renamed to `<file>.1`, replacing the previous copy (`tests/firewall-outcomes-smoke.ts`).
 
 Audit is best-effort: `audit()` swallows its own errors and MUST never throw, and it must never

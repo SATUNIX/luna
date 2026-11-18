@@ -47,6 +47,9 @@ cd luna
 node packages/core/install.ts --channel latest --profile lite
 ```
 
+To be asked for the profile and scope instead, run `node packages/core/install.ts --guided`
+([Guided install](INSTALL.md#guided-install)).
+
 `--channel latest` needs at least one release tag; until the first tag exists the installer stops
 with a message saying so, and `--channel next` follows `main`. The installer keeps exactly one copy
 of Luna registered, so this replaces a `pi install` copy rather than adding a second one.

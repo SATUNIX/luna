@@ -320,6 +320,29 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **protected-paths reads patch writers with the firewall's shell parser too (A-90, part 2).** Finding:
+  protected-paths found patch writers only with a text walker, which read some commands differently from
+  bash and from the firewall: it allowed `# note \⏎git apply p.patch` (a comment does not continue onto
+  the next line, but the walker joined them first), `c\d dir && patch …` (the patch placed in the wrong
+  directory), an alias for `patch`, and a patch command piped into `sudo -s`, `su`, `at` or `batch`, all of
+  which the firewall rates high; neither hook read `env -S'git apply p.patch'` (the split string attached
+  to its option), and a here-string or `<` file into `sudo -s`, `su`, `at` or `batch` passed protected-paths.
+  Cause: two readers, and the firewall's parser could not be shared because it
+  lived inside the firewall extension. Fix: the parser moved to `packages/core/shared/shell.ts` (generated
+  into both extensions); protected-paths also reads the command as written with it and refuses a patch
+  writer either reading finds. It also fails closed on a command name or `eval` text computed at run time
+  whose own words name a patch tool, and, on a line naming one, on unreadable text and on commands fed to the
+  standard input of a shell, `sudo -s`, `su`, `at`, `batch`, `make -f -` or a bare `ssh`. The parser reads an
+  attached `env -S` string as commands, which also raises the firewall to high for that form. Both
+  hooks now share one reading of a patch call's stdin and also place its targets at the directory the parser
+  tracked (`patchStdinOf`, `patchTargetsAt` in `packages/core/shared/inline-guard.ts`). Only tightens: every
+  earlier corpus row keeps its decision. Not covered: the text walker is still in use (the firewall's
+  catch-all for writers it cannot place), and protected-paths' other write targets still come from its own
+  regular expressions. Verification: `tests/protected-paths-corpus-smoke.ts` gains 38 patch-write rows for
+  both hooks, 16 for protected-paths only and 5 benign controls; the new refusals fail on the earlier reading.
+  An adversarial review of the change found the `env -S`, here-string and three over-blocking cases, all fixed
+  and pinned here.
+
 - **An unfixable dev-only advisory no longer blocks every pull request.** Finding: GHSA-fc5q-39xc-vjpf
   (ReDoS in picomatch 4.0.7 and earlier, no patched release) reached the root dev tree through
   `typescript-eslint`, and the `dependencies` and `osv-scanner` jobs failed on every pull request into

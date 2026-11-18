@@ -190,7 +190,7 @@ await check("worker environment: ONE function, exact names, unattended only when
   const env = workerEnv(base, { branch: "pi/todo-api-1", reset: true });
   assert.deepEqual(env, {
     RUN_ID: "todo-api-1", RUN_BRANCH: "pi/todo-api-1", PI_MODEL: "deepseek/deepseek-v4.1-flash", PI_PROVIDER: "openrouter", CYCLE_RESET: "1", GIT_NAME: "pi autonomy", GIT_EMAIL: "pi-autonomy@localhost",
-    PI_KIT_EFFORT: "standard", PI_KIT_EFFORT_CAP: "standard",
+    PI_KIT_EFFORT: "standard", PI_KIT_EFFORT_CAP: "standard", PI_THINKING: "low",
     PI_KIT_UNATTENDED: "1", PI_KIT_UNATTENDED_BOUNDARY: "container", PI_KIT_UNATTENDED_CONTRACT: "/run/contract.json",
     AUTONOMY_EGRESS: "1", HTTPS_PROXY: "http://egress-proxy:3128", HTTP_PROXY: "http://egress-proxy:3128", https_proxy: "http://egress-proxy:3128", http_proxy: "http://egress-proxy:3128",
     NO_PROXY: "inference,egress-proxy,localhost,127.0.0.1", no_proxy: "inference,egress-proxy,localhost,127.0.0.1",
@@ -267,6 +267,7 @@ const builders = {
   probe: { args: dk.healthProbeRunArgs(cfg, p, { url: "http://web:8080/", expectStatus: 200 }), networks: [N.net], role: "probe" },
   deploySync: { args: dk.deploySyncRunArgs(cfg, p, { service: "web", index: 0, source: "dist" }), networks: [], role: "deploy-sync" },
   workerDocker: { args: dk.agentRunArgs(cfgDocker, p, { n: 1, attempt: 1, reset: false, effort: undefined }), networks: [N.net], role: "worker" },
+  serviceDocker: { args: dk.serviceRunArgs(cfgDocker, p, at(deployContract.permissions.network.services, 0, "the deploy contract has a service")).args, networks: [N.net], role: "service", secretEnvNames: ["API_SECRET"] },
 } satisfies Record<string, Builder>;
 // The check container gets 8 CPUs by default (gate.sh runs check-all --jobs from the quota).
 assert.deepEqual(flag(builders.check.args, "--cpus"), [String(Math.min(8, os.availableParallelism()))]); // the gate default, capped at the host
@@ -283,6 +284,8 @@ await check("every container the supervisor starts is hardened, on the right net
     for (const f of ["--read-only", "--cap-drop", "--security-opt", "--pids-limit", "--memory", "--cpus", "--user"]) assert.ok(b.args.includes(f), `${name} has ${f}`);
     assert.deepEqual(flag(b.args, "--cap-drop"), ["ALL"], name);
     assert.deepEqual(flag(b.args, "--security-opt"), ["no-new-privileges:true"], name);
+    // Docker mounts a tmpfs noexec unless told otherwise (podman does not), and the gate runs binaries it stages under /tmp.
+    for (const t of flag(b.args, "--tmpfs")) assert.match(t, /^\/[^:]*:rw,exec,nosuid,size=[^,]+$/, `${name}: tmpfs ${t} is exec and nosuid on both engines`);
     assert.ok(facts.user !== null, `${name} has a user`); // narrows; a missing --user is already a problem above
     assert.notEqual(facts.user.split(":")[0], "0", `${name} does not run as root`);
     assert.ok(!b.args.includes("--privileged") && !b.args.some((a) => a.startsWith("--cap-add") || a.startsWith("--network=host") || a === "--pid" || a === "--ipc" || a === "--device"), name);
@@ -292,6 +295,7 @@ await check("every container the supervisor starts is hardened, on the right net
     assert.ok(b.args.includes(`pi-autonomy.role=${b.role === "deploy-sync" ? "helper" : b.role}`) || b.role === "deploy-sync" || b.role === "bundle" || b.role === "snapshot" || b.role === "setref", `${name} role label`);
   }
   assert.ok(builders.worker.args.includes("--userns=keep-id") && !builders.workerDocker.args.includes("--userns=keep-id"), "keep-id is podman's");
+  for (const name of ["worker", "workerDocker", "service", "serviceDocker"] as const) assert.ok(flag(builders[name].args, "--tmpfs").length > 0, `${name} mounts a tmpfs`);
   assert.equal(assertRunArgs(builders.worker.args, inspectOpts(builders.worker)).image, cfg.image);
 });
 

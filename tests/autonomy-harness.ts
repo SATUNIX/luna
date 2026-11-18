@@ -12,6 +12,7 @@ import { Engine } from "../packages/autonomy/lib/engine.ts";
 import { TEMPLATES } from "../packages/autonomy/lib/templates/index.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
+import { type CycleScanRefusal, scanCycle } from "../packages/autonomy/lib/gitmirror.ts";
 import type { GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { FakeEngine, FakeRuntime } from "../packages/autonomy/tests/fake-runtime.ts";
 import type { RunStore } from "../packages/autonomy/lib/store.ts";
@@ -45,6 +46,12 @@ export interface HarnessOptions {
   clock?: Clock;
   fakeEngine?: FakeEngine;
   contractOpts?: { baseDir?: string; checkFs?: boolean };
+  /**
+   * false skips the close-out leak scan (EngineDeps.scanCycle), so a leaky cycle merges and the
+   * publish-time scan is what refuses it: how the publish-blocked tests reach that backstop. A
+   * function replaces the scan (null falls through to the real one).
+   */
+  closeOutScan?: boolean | ((sha: string) => CycleScanRefusal | null | "real");
 }
 
 export type RunLock = ReturnType<typeof createRunLock>;
@@ -56,7 +63,7 @@ export interface EngineOptions {
   lock?: RunLock;
   gateSlots?: number;
   gateSlotsHome?: string;
-  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
 }
 
 /** An engine built around the harness's run, with the runtime and lock it uses. */
@@ -114,7 +121,7 @@ export function taskRaw(dir: string, over: RawContract = {}): RawContract {
 }
 
 /** Build a run directory, a fake runtime and an engine factory around one contract. */
-export function harness(raw: RawContract, { script, review, boundary, tickMs, hooks, cfgOverride = {}, manager, clock = { now: Date.parse("2026-09-30T00:00:00Z") }, fakeEngine = new FakeEngine(), contractOpts = {} }: HarnessOptions = {}): Harness {
+export function harness(raw: RawContract, { script, review, boundary, tickMs, hooks, cfgOverride = {}, manager, closeOutScan = true, clock = { now: Date.parse("2026-09-30T00:00:00Z") }, fakeEngine = new FakeEngine(), contractOpts = {} }: HarnessOptions = {}): Harness {
   const home = scratch();
   const resolved = resolveContract(raw, { effort: testEffort, baseDir: home, ...contractOpts });
   assert.equal(resolved.ok, true, JSON.stringify(resolved.problems));
@@ -124,6 +131,11 @@ export function harness(raw: RawContract, { script, review, boundary, tickMs, ho
   const store = createRun({ contract: resolvedContract, authorisation: { boundaryDigest: digest, by: "test", at: "2026-09-30T00:00:00.000Z", via: "contract" }, home, now: () => new Date(clock.now), boundaryEffort: testEffort });
   const contract = JSON.parse(fs.readFileSync(store.p.contract, "utf8")) as RunContract;
   const cfg: RuntimeCfg = { ...runtimeConfig(contract, { namePrefix: "pi-autonomy-test-run" }), ...cfgOverride };
+  // A stream with an empty board is an empty queue, and the host then sleeps instead of starting a cycle
+  // (lib/queue.ts). Tests of stream mechanics need cycles, so they get one standing board item unless they bring a board.
+  const integration = contract.templateOptions["integration"];
+  const boardFile = path.join(store.p.control, "board.json");
+  if (typeof integration === "object" && integration !== null && "upstream" in integration && !fs.existsSync(boardFile)) fs.writeFileSync(boardFile, JSON.stringify({ items: [{ id: "H-00", title: "standing harness item", priority: "P2", acceptance: "Anything." }] }));
   const h: Harness = {
     home, store, contract, cfg, clock, fakeEngine, digest,
     runtime: (s = script) => new FakeRuntime({ store, cfg, contract, script: s, engine: fakeEngine, clock, review, boundary, tickMs, hooks, manager }),
@@ -133,13 +145,25 @@ export function harness(raw: RawContract, { script, review, boundary, tickMs, ho
     engine: ({ rt = h.runtime(), pid = 1001, lock = h.lock(pid), gateSlots = 0, gateSlotsHome, gateSlotAcquire } = {}) => {
       const acquired = lock.acquire();
       if (!acquired.acquired) assert.fail(`the run lock was not acquired: ${acquired.reason}`);
-      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, gateSlots, ...(gateSlotsHome === undefined ? {} : { gateSlotsHome }), ...(gateSlotAcquire === undefined ? {} : { gateSlotAcquire }), deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }) } }), rt, lock, acquired };
+      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, gateSlots, ...(gateSlotsHome === undefined ? {} : { gateSlotsHome }), ...(gateSlotAcquire === undefined ? {} : { gateSlotAcquire }), deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }), ...(closeOutScan === true ? {} : { scanCycle: closeOutScanDep(closeOutScan, rt) }) } }), rt, lock, acquired };
     },
     state: (): RunState => { const s = store.readState(); assert.ok(s, "the run has a state.json"); return s; },
   };
   return h;
 }
 
+
+/** EngineDeps.scanCycle for HarnessOptions.closeOutScan: off, or a test's stand-in that may defer to the real scan. */
+function closeOutScanDep(option: false | ((sha: string) => CycleScanRefusal | null | "real"), rt: HarnessRuntime): (sha: string) => CycleScanRefusal | null {
+  if (option === false) return () => null;
+  return (sha) => {
+    const verdict = option(sha);
+    if (verdict !== "real") return verdict;
+    const g = rt.repo.g;
+    assert.ok(g, "the host mirror is open");
+    return scanCycle(g, { integrationBranch: rt.cfg.integrationBranch ?? "", baseRef: rt.cfg.baseRef }, sha);
+  };
+}
 
 export function fakeAlive(engine: FakeEngine): string[] { return [...engine.containers]; }
 

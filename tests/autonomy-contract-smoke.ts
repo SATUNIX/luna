@@ -66,8 +66,8 @@ await check("a minimal finite-task contract resolves with every default filled a
   assert.equal(closed.model.provider, "openrouter");
   assert.equal(closed.model.review, closed.model.manager, "review falls back to the manager, then the worker model");
   assert.equal(c.authorisation, null);
-  assert.deepEqual(templateIds().sort(), ["deploy", "implement", "self-improve"]);
-  assert.equal(describeTemplates().length, 3);
+  assert.deepEqual(templateIds().sort(), ["deploy", "dispatch", "implement", "self-improve"]);
+  assert.equal(describeTemplates().length, 4);
 });
 
 await check("required fields, ids and bounds are enforced", () => {

@@ -211,6 +211,7 @@ function evalPassRate(): { rate: number; passed: number; total: number } | null 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "skill_synthesise",
+    defaultActive: false, // woken by /improve, so a session that never improves does not carry its text
     label: "Skill Forge: synthesise",
     description: "Mine the trace-ledger and synthesise a candidate SKILL.md into .pi/skill-proposals/ for review.",
     parameters: Type.Object({
@@ -240,6 +241,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "skill_score",
+    defaultActive: false, // woken by /improve, so a session that never improves does not carry its text
     label: "Skill Forge: score",
     description: "Score Luna against its own eval harness (real, eval-tied number) as the skill's regression baseline.",
     parameters: Type.Object({
@@ -263,6 +265,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "skill_archive",
+    defaultActive: false, // woken by /improve, so a session that never improves does not carry its text
     label: "Skill Forge: archive",
     description: "Archive a superseded skill proposal or skill into .pi/skill-archive/ (non-destructive move; an existing archive of the same name is kept and the new one gets a <name>-<timestamp> directory).",
     parameters: Type.Object({

@@ -279,7 +279,7 @@ steps:
     agent: reviewer
     task: "Review against the plan: {{steps.plan.output}}"
     gate:
-      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"     # text must be on the verdict line; or /regex/ (case-insensitive)
+      pass: "/(?:^|\\n)VERDICT: PASS\\s*$/"     # text must be the whole verdict line; or /regex/ (case-insensitive)
       retry: implement                            # an earlier top-level step to go back to
       max_loops: 2
 ---
@@ -300,7 +300,7 @@ steps:
 | `max_runtime` | Wall-clock limit for this step: `90s`, `20m`, `2h`. |
 | `outputs` | Files (relative to the run directory) the step must write. It fails if they are missing. |
 | `when` | `{ step: <earlier id>, status: passed \| failed \| skipped }` (or a list). Otherwise the step is skipped. A parallel group cannot take `when`, which is refused at parse time: put it on each member (`tests/workflow-hooks-smoke.ts`). |
-| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. Plain text is matched case-insensitively against the verdict line (the last non-empty line); a `/regex/` is tested on the last 64 KiB of the output, off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
+| `gate` | After the step passes, its output must match `pass`. If it doesn't, go back to `retry` (up to `max_loops`, a whole number from 0 to 10, default 2; anything else is refused at parse time). When the loops run out, the run fails. Plain text must be the whole verdict line (the last non-empty line), ignoring case, surrounding whitespace and markdown emphasis such as `**`, so `PASS` does not pass "the tests do not pass" (`tests/workflow-smoke.ts`); a `/regex/` is tested on the last 64 KiB of the output, off the host's event loop, and a test that takes over a second is a miss; if that test cannot run at all, the run fails and says so. A step skipped by `skip` or on resume fails its gate; a step skipped by its own `when` does not check it. A gate goes on a top-level step or a parallel group; on a parallel member it is refused at parse time. |
 | `continue_on_error` | A failure of this step doesn't fail the run, which then reports `partial`. |
 | `parallel` | A list of steps run concurrently (up to 4 at once in a run you start with `/workflows run`; in a model-started run, the tier's `maxConcurrent`) instead of `agent`/`task`. The group passes when every member passes. Groups can't nest. |
 

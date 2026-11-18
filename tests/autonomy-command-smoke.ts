@@ -311,6 +311,13 @@ try {
     assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value=--force it"], "a value starting with -- is passed in the equals form");
     ok("inbox passes a free-text value that starts with -- in the equals form");
     reset();
+    await s.run(`inbox --run demo-run-1 --answer D3 --value yes`);
+    assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--answer", "D3", "--value=yes"], "the CLI hint's --run form is accepted");
+    reset();
+    await s.run("inbox --run");
+    assert.equal(calls().length, 0, "--run without a run id starts no process");
+    ok("inbox accepts the --run form the CLI prints as its hint");
+    reset();
     await s.run("inbox demo-run-1 --file cards.json");
     assert.deepEqual(findCall((c) => c[0] === "inbox"), ["inbox", "--run", "demo-run-1", "--file", path.join(work, "cards.json")], "--file is resolved against the working directory");
     reset();
@@ -413,7 +420,7 @@ try {
     const s = session({ answers: [false] });
     await s.run("templates");
     const listing = lastNote(s).message;
-    for (const id of ["implement", "deploy", "self-improve"]) assert.match(listing, new RegExp(`^${id} `, "m"));
+    for (const id of ["implement", "deploy", "self-improve", "dispatch"]) assert.match(listing, new RegExp(`^${id} `, "m"));
     await s.run(`plan ${path.join(ROOT, "packages", "autonomy", "examples", "implement.json")}`);
     const plan = lastNote(s).message;
     assert.match(plan, /Boundary for run todo-api-1/);

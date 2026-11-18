@@ -160,6 +160,16 @@ SOFTWARE.
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
   - Nothing in the test suite pins this.
+- 2026-11-18 ASCII status chips.
+  - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
+    ASCII with its name, or `?`, and keeps ANSI sequences.
+  - `statusChip` takes `glyphs` (`ascii`, `ellipsis`) in place of its `ellipsis` argument. In ASCII
+    mode it prints `...` for the ellipsis, `*` and `o` for the filled and hollow circles, `-` for the
+    middle dot and `?` for anything else, and truncates with `...`; `chipSeverity` still reads the
+    text as sent, so a chip's colour is the same in both modes.
+  - `renderFooter` folds every line of an ASCII bar the same way, so a path, branch, model or
+    session name with non-ASCII text cannot reach a tty/iso/ansi/ascii terminal
+    (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
 
 ### `dirty-repo-guard`
 
@@ -269,9 +279,20 @@ SOFTWARE.
     could use, by `patchCallTargets` in `shared/inline-guard.ts`; stdin it cannot read, unreadable `cd`,
     backup options, series files, computed git subcommands and shells fed by a pipe or a heredoc fail
     closed, while quoted text and data-only heredocs stay inert (`tests/protected-paths-corpus-smoke.ts`)
+  - patch writers are also read with the tool firewall's shell parser (`shared/shell.ts`, a generated copy of
+    `packages/core/shared/shell.ts`) on the command as written, and a writer either reading finds is checked:
+    a comment ending in a backslash, an obfuscated `cd`, an alias, `env -S'…'`, and a pipe, here-string or `<`
+    file into `sudo -s`, `su`, `doas -s`, `at` or `batch` are now refused, as are a command name or `eval` text
+    computed at run time whose own words name a patch tool, and, on a line naming one, commands fed to
+    `make -f -` or a bare `ssh` (`tests/protected-paths-corpus-smoke.ts`)
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)
+  - every refusal also appends one `tool_refused` record to the firewall audit log through
+    `shared/refusal-record.ts` (a generated copy of `packages/core/shared/refusal-record.ts`, with its
+    `shared/safe-fs.ts` dependency): the cause, the matched protected entry (an absolute one by its last
+    two segments), field key or rule name, the tool, a SHA-256 digest of a bash command and the session
+    id, never the command text or file contents (`tests/firewall-refusal-record.ts`)
 
 ### `subagent`
 
@@ -413,7 +434,7 @@ SOFTWARE.
     is unset, points `PI_KIT_HUMAN_CONSOLE_DIR` at the starting session's console. See
     `docs/script-workflows.md` ("Approvals from workflow agents").
   - **Workflow-script sandbox (Luna, kit-original):** `wf-sandbox.ts` and `wf-runner.mjs` run one
-    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.3` dependency) under
+    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.4` dependency) under
     `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. The node
     binary comes from the generated `shared/node-runtime.ts`, never a compiled pi's `process.execPath`. Nothing in
     the extension calls it yet. See `docs/workflow-sandbox.md`; pinned by
@@ -561,6 +582,11 @@ SOFTWARE.
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Whole-line plain-text gate (2026-11-18):** `workflow.ts` `gatePasses` passes a plain-text gate
+    only when the last non-empty line, without case, surrounding whitespace or markdown emphasis
+    (`verdictKey`), equals the pass text; it was a substring of that line, so a bare `PASS` gate
+    passed "the tests do not pass". A `/regex/` gate is unchanged. `workflow.ts`'s parse error and
+    `plan.ts`'s description and refusal now say what each kind matches (`tests/workflow-smoke.ts`).
   - **Workflow panel prune fallback (2026-11-12):** `wf-panel.ts` adds `inRun()`, which is true only
     while the view is `run` and its run is still in the registry, and uses it in `press()`,
     `footer()` and `render()`. A run pruned while open now shows the list body and list keys, and
@@ -573,6 +599,9 @@ SOFTWARE.
     glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
     stays. `tests/workflow-panel-smoke.ts` pins the alignment.
   - **Orphan detection by owner:** `run-recovery.ts` marks a run interrupted only when the pid recorded in its `owner.json` (written by `claimRunDir` in `workflow.ts`) is gone; runs without that file fall back to 5 minutes of quiet.
+  - **Overlay frame comment (2026-11-18):** the header of `overlay-frame.ts` (a byte-identical copy of
+    `control-center/overlay-frame.ts`) no longer says a smoke asserts the copies match; nothing does.
+    Comment only.
 
 ### `todo`
 

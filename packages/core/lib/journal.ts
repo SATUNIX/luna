@@ -1,6 +1,8 @@
 // The team journal: one searchable line per autonomy cycle report. `tests/docs-smoke.ts`
-// asserts that `autonomy/JOURNAL.md` agrees with the reports on the branch, so a cycle
-// cannot close without a line naming its board item, outcome and decisions.
+// asserts that `autonomy/JOURNAL.md` agrees with the cycle reports committed on the branch.
+// New cycles commit no report (the host's receipt and the worker's note are in the run state
+// home, packages/autonomy/lib/receipt.ts), so they need no line; the reports already committed keep
+// theirs, and a repository whose runs still commit reports is held to the same rule.
 import fs from "node:fs";
 import path from "node:path";
 

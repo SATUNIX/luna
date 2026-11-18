@@ -280,5 +280,6 @@ export function mementoGenerations(id: string, policy: EffortPolicy = loadEffort
 export function renderEffortPrompt(id: string, policy: EffortPolicy = loadEffortPolicy(), baseDir = EFFORT_POLICY_DIR): string {
   const tier = tierOrDefault(id, policy);
   const read = (file: string): string => fs.readFileSync(path.join(baseDir, file), "utf8").trim();
-  return `${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`;
+  // `{{delegation}}...{{/delegation}}` spans are kept here (the runtime drops them where no delegation tool is registered).
+  return `${read(policy.sharedPromptFile)}\n\n${read(tier.promptFile)}`.replace(/\{\{delegation\}\}([\s\S]*?)\{\{\/delegation\}\}/g, "$1");
 }

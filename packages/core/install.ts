@@ -7,7 +7,7 @@
  *   node packages/core/install.ts [--profile <balanced|long-horizon|self-improving|engagement|lite>]
  *                        [--only <names>] [--all] [--scope <global|project>] [--mode <local|git|npm>]
  *                        [--channel <latest|next|trunk|X.Y.Z>] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall]
- *                        [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate]
+ *                        [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--guided]
  *
  *   --mode local         Register this checkout in place (edits apply on /reload). The default
  *                        when run from a git checkout without --channel.
@@ -32,6 +32,9 @@
  *   --no-migrate         Stop, before any change, instead of moving the kit off a retired or
  *                        previous source (/profile passes it: its rollback restores files and
  *                        cannot bring back the clone `pi remove` deletes).
+ *   --guided             Show what was detected, ask for the profile and scope on stdin, confirm,
+ *                        install, check the result and list the files changed. The only run that
+ *                        prompts (lib/install-guide.ts, tests/install-guided-smoke.ts).
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { stampCompiledKit } from "./lib/cold-stamp.ts";
@@ -41,12 +44,13 @@ import path from "node:path";
 import { resolveProfile, type ResolvedExtension } from "./lib/resolve.ts";
 import { readSources } from "./lib/sources.ts";
 import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
-import { mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
+import { applyCompanionFilters, mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
 import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
+import { detectEnvironment, profileChoices, runGuide, snapshotBytes, streamIO, summarizeChanges } from "./lib/install-guide.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, SOURCES_PATH, ENV_EXAMPLE, extensionRelPath } from "./lib/paths.ts";
 
 const ROOT = WORKSPACE_ROOT;
@@ -97,9 +101,9 @@ const has = (flag: string): boolean => args.includes(flag);
 // Every argument must be a known flag, and a value flag needs a value that is not another flag:
 // a typo such as `--profle engagement` used to be ignored and run a default balanced install.
 const VALUE_FLAGS = ["--profile", "--only", "--scope", "--mode", "--channel", "--git-ref"];
-const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--verify", "--help", "-h"];
+const BOOLEAN_FLAGS = ["--all", "--yes", "--dry-run", "--uninstall", "--no-externals", "--settings-only", "--capture-overrides", "--no-migrate", "--verify", "--guided", "--help", "-h"];
 const USAGE = "usage: install.ts [--profile <name>] [--only <a,b>] [--all] [--scope global|project] [--mode local|git|npm] " +
-  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--verify] [--help|-h]";
+  "[--channel latest|next|trunk|X.Y.Z] [--git-ref <ref>] [--yes] [--dry-run] [--uninstall] [--no-externals] [--settings-only] [--capture-overrides] [--no-migrate] [--verify] [--guided] [--help|-h]";
 
 // Help is recognized before any argument validation or install work: `--help --profile` must
 // print usage and exit 0, not fail because the next flag's value is missing.
@@ -121,11 +125,51 @@ for (let i = 0; i < args.length; i++) {
   i++;
 }
 
+// --guided asks for what these flags would set, so it refuses them rather than pick one.
+const guidedMode = has("--guided");
+const GUIDED_CONFLICTS = ["--profile", "--only", "--all", "--yes", "--uninstall", "--capture-overrides"];
+const guidedConflicts = guidedMode ? GUIDED_CONFLICTS.filter((flag) => args.includes(flag)) : [];
+if (guidedConflicts.length > 0) {
+  console.error(`[install] --guided cannot be combined with ${guidedConflicts.join(", ")}\n${USAGE}`);
+  process.exit(1);
+}
+const guided = guidedMode ? await guidedChoice() : null;
+
+/** Run the guided questions on stdin; exits on a decline (0) or a failure (1), nothing written. */
+async function guidedChoice(): Promise<{ profile: string; scope: "global" | "project" }> {
+  const fixed = get("--scope", null);
+  const fixedScope = fixed === "global" || fixed === "project" ? fixed : null;
+  const marker = readKitMarker(fixedScope === "project" ? path.join(process.cwd(), ".pi", ".pi-kit.json") : path.join(globalAgentDir(), ".pi-kit.json"));
+  const env = detectEnvironment({
+    nodeVersion: process.version,
+    env: process.env,
+    exists: (file) => fs.existsSync(file),
+    run: (cmd, cmdArgs) => {
+      const r = spawnSync(cmd, cmdArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+      return r.status === 0 ? (r.stdout.split("\n")[0] ?? "").trim() || null : null;
+    },
+    tty: process.stdin.isTTY,
+    installedProfile: marker?.profile === undefined ? null : migrateStoredProfile(marker.profile),
+  });
+  const io = streamIO(process.stdin, (text) => process.stdout.write(text));
+  const result = await runGuide(io, env, profileChoices(PROFILES_DIR), fixedScope);
+  io.close();
+  if (result.kind === "declined") {
+    console.log("[install] Declined; nothing was changed.");
+    process.exit(0);
+  }
+  if (result.kind === "failed") {
+    console.error(`[install] ${result.reason}`);
+    process.exit(1);
+  }
+  return { profile: result.profile, scope: result.scope };
+}
+
 const explicitProfile = args.includes("--profile");
-const typedProfile = String(get("--profile", "balanced"));
+const typedProfile = guided?.profile ?? String(get("--profile", "balanced"));
 const onlyNames = get("--only", null)?.split(",").map((n) => n.trim());
 const all = has("--all");
-const scopeArg = get("--scope", "global");
+const scopeArg = guided?.scope ?? get("--scope", "global");
 if (scopeArg !== "global" && scopeArg !== "project") {
   console.error(`[install] unknown --scope "${String(scopeArg)}" (expected global or project)`);
   console.error(USAGE);
@@ -200,6 +244,9 @@ if (renamedTo) {
 // (recorded in `packageChanges`) is not undone, and the rollback message names each one.
 let installCommitted = false;
 const packageChanges: string[] = [];
+// A guided run reports every configuration file it created or changed (summarizeChanges).
+const guidedFiles = [settingsPath, markerPath, firewallConfigPath(), securityConfigPath()];
+const guidedBefore = guided ? snapshotBytes(guidedFiles) : null;
 if (settingsOnly && !dryRun) {
   const snapshots = snapshotFiles([settingsPath, markerPath, firewallConfigPath(), securityConfigPath(), overridesPath(), profileSettingsPath(), path.join(globalAgentDir(), ".env")]);
   process.on("exit", (code) => {
@@ -787,6 +834,21 @@ if (!noExternals) {
     } else if (companions.length > 0) {
       console.log(`\n[install] ${companions.length} companion external(s) already registered.`);
     }
+
+    // A companion's own skills are listed in the first request of every session, so sources.json can
+    // declare a skill filter for it (`skills`); it goes onto the companion's settings.json entry here,
+    // whether this run registered it or it was registered before (an entry that has a filter keeps it).
+    const filtered = companions.filter((c) => c.skills !== undefined);
+    if (filtered.length > 0 && dryRun) {
+      console.log(`\n[install] Dry run: would apply the sources.json skill filter to ${filtered.map((c) => c.name).join(", ")}`);
+    } else if (filtered.length > 0) {
+      try {
+        const applied = new Set(applyCompanionFilters(settingsPath, filtered));
+        for (const c of filtered) if (applied.has(c.source)) console.log(`[install] ${c.name}: skill filter applied (${c.skills?.length ? c.skills.join(", ") : "none of its bundled skills load"}).`);
+      } catch (error) {
+        console.warn(`[install] WARN: could not apply the skill filter for ${filtered.map((c) => c.name).join(", ")}: ${errorMessage(error)}`);
+      }
+    }
   }
 }
 
@@ -909,8 +971,35 @@ if (!dryRun) {
     installedAt: new Date().toISOString(),
   };
   writeSettingsAtomic(markerPath, marker);
+  if (guidedBefore) verifyGuidedInstall(guidedBefore);
 }
 installCommitted = true;
+
+/**
+ * The guided run's self-check, read back from disk: the kit's settings entry, the marker's profile
+ * and extensions, and the firewall configuration. A failure exits 1 before the run commits, so a
+ * --settings-only run rolls its files back.
+ */
+function verifyGuidedInstall(before: Map<string, Buffer | undefined>): void {
+  const problems: string[] = [];
+  if (findPackageEntry(readSettings(settingsPath), kitSource, settingsPath) < 0) problems.push(`no settings entry for ${kitSource} in ${settingsPath}`);
+  const written = readKitMarker(markerPath);
+  if (written?.profile !== profile) problems.push(`the marker records profile ${String(written?.profile)}, not ${profile}`);
+  if (JSON.stringify(written?.extensions ?? []) !== JSON.stringify(selected)) problems.push("the marker's extensions differ from the profile's");
+  try {
+    checkFirewallConfig(profileDef);
+  } catch (error) {
+    problems.push(errorMessage(error));
+  }
+  if (problems.length > 0) {
+    for (const problem of problems) console.error(`[install] FAIL: guided self-check: ${problem}`);
+    process.exit(1);
+  }
+  console.log(`[install] Verified: settings entry, profile ${profile} (${selected.length} extension(s)) and firewall configuration`);
+  const changes = summarizeChanges(before, snapshotBytes(guidedFiles));
+  console.log("[install] Changed:");
+  console.log(changes.length > 0 ? changes.join("\n") : "  (no file changed)");
+}
 if (settingsOnly && sourceMigration && !dryRun) {
   removeMigratedSource();
   removeOtherKitEntries(settingsPath, kitSource);

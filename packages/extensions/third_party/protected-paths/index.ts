@@ -3,7 +3,9 @@ import path from "node:path";
 import fs from "node:fs";
 
 import os from "node:os";
-import { inlineAgentConfigWrite, patchCallTargets, patchCallsInText } from "./shared/inline-guard.ts";
+import { inlineAgentConfigWrite, patchCallTargets, patchCallsInParse, patchCallsInText, patchTargetsAt } from "./shared/inline-guard.ts";
+import { appendRefusal, commandDigest, sessionIdOf } from "./shared/refusal-record.ts";
+import { parseShell } from "./shared/shell.ts";
 
 // Protected paths depend on the firewall policy (the same `policy` tool-firewall reads):
 //   coding  — secrets, key files and the agent-control/audit surfaces. `.git/`,
@@ -252,7 +254,7 @@ function isAllowlisted(filePath: string, allowlist: string[], cwd: string): bool
 // Denylist can stay slightly broader than the allowlist (over-blocking here is safe,
 // fail-closed; it's the allowlist where over-matching is the security defect), but must
 // still respect real path segment boundaries rather than matching anywhere in the string.
-function isProtected(filePath: string, protectedList: string[], cwd: string): boolean {
+function protectedEntry(filePath: string, protectedList: string[], cwd: string): string | undefined {
   // Same canonical (realpath, win32-lowercased) form as resolveEntry, or directory
   // entries never match on Windows and symlinks escape the denylist.
   const candidateAbs = canonicalPath(path.resolve(cwd, normalizeSlashes(filePath)));
@@ -260,8 +262,8 @@ function isProtected(filePath: string, protectedList: string[], cwd: string): bo
   const base = segments[segments.length - 1] ?? "";
   // `.env` protection covers secret files; checked-in templates (.env.example / .env.sample)
   // are non-secret and exempt. Real `.env` and `.env.<other>` still match below.
-  if (base === ".env.example" || base === ".env.sample") return false;
-  return protectedList.some(entry => {
+  if (base === ".env.example" || base === ".env.sample") return undefined;
+  return protectedList.find(entry => {
     const slashed = normalizeSlashes(entry).replace(/\/+$/, "");
     const normalizedEntry = process.platform === "win32" ? slashed.toLowerCase() : slashed;
     if (normalizedEntry.includes("/")) {
@@ -278,7 +280,7 @@ function isProtected(filePath: string, protectedList: string[], cwd: string): bo
 // set of write primitives, not a full shell parser), but the set covers the common ways
 // a shell rewrites a file — a single missed primitive is a full bypass of this gate.
 // Over-extraction is safe: every candidate is still checked against the real path
-// boundary in `isProtected`/`isAllowlisted`, and these patterns only fire on commands
+// boundary in `protectedEntry`/`isAllowlisted`, and these patterns only fire on commands
 // that write, so plain reads are never matched.
 function directWriteTargets(command: string): string[] {
   const targets: string[] = [];
@@ -402,7 +404,7 @@ const INLINE_WRITE_API = new RegExp([
 // `~` literal is a target as written. The literal parts of a path composed at runtime (a literal appended to a
 // runtime value with `/` or `+`, the literal arguments of a join call that also takes a runtime value, the text
 // after an interpolation, and every literal after a `chdir`) are targets under the home directory, ~/.pi, the
-// agent directories and, through dynamicMayBeProtected, any protected entry they end in.
+// agent directories and, through dynamicProtectedEntry, any protected entry they end in.
 // tool-firewall applies the same rule (classify.ts inlineControlLiteral).
 function inlineProgramTargets(command: string): string[] {
   if (!INLINE_INTERPRETER.test(command) || !INLINE_WRITE_API.test(command)) return [];
@@ -492,14 +494,23 @@ function gitRestoreTargets(command: string): string[] {
 }
 
 // What the patch writers in a command change, read from the patches themselves. `unreadable` fails the command
-// closed; the same reading in tool-firewall is classify.ts patchWrites.
-function patchWriteTargets(command: string, cwd: string): { targets: string[]; unreadable: string | null } {
+// closed; the same reading in tool-firewall is classify.ts patchWrites. Two readings count: the text walker on
+// `command` (backslash-newlines joined) and the firewall's parser (./shared/shell.ts) on `raw`, the command as
+// written, which follows what the walker misses (a comment ending in a backslash, `c\d`, aliases, pipes into
+// `sudo -s`). A patch writer either reading finds is checked, so neither can weaken the other.
+function patchWriteTargets(command: string, raw: string, cwd: string): { targets: string[]; unreadable: string | null } {
   const targets: string[] = [];
+  const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));
   for (const found of patchCallsInText(command)) {
     if (!found.call.writes) continue;
     if (found.unseen) return { targets, unreadable: "the patch arrives through arguments that cannot be seen" };
-    const toAbsolute = (dir: string, file: string): string => path.resolve(dir, normalizeSlashes(expandHome(file)));
     const resolved = patchCallTargets(command, cwd, found.call, found.chdirs, toAbsolute, { text: found.stdinText, file: found.stdinFile });
+    targets.push(...resolved.targets);
+    if (resolved.unreadable !== null) return { targets, unreadable: resolved.unreadable };
+  }
+  for (const found of patchCallsInParse(parseShell(raw, { cwd, home: os.homedir() }), command)) {
+    if ("unseen" in found) return { targets, unreadable: found.unseen };
+    const resolved = patchTargetsAt(command, cwd, found.cwd, found.call, found.chdirs, toAbsolute, found.stdin);
     targets.push(...resolved.targets);
     if (resolved.unreadable !== null) return { targets, unreadable: resolved.unreadable };
   }
@@ -550,18 +561,26 @@ function dynamicTail(target: string): string | null {
   return tail.startsWith("/") ? tail.replace(/\/+$/, "") : null;
 }
 
-function dynamicMayBeProtected(target: string, protectedList: string[]): boolean {
+function dynamicProtectedEntry(target: string, protectedList: string[]): string | undefined {
   const tail = dynamicTail(target);
-  if (!tail) return false;
+  if (!tail) return undefined;
   const base = tail.split("/").pop() ?? "";
-  if (base === ".env.example" || base === ".env.sample") return false;
-  return protectedList.some((entry) => {
+  if (base === ".env.example" || base === ".env.sample") return undefined;
+  return protectedList.find((entry) => {
     const e = normalizeSlashes(entry).replace(/\/+$/, "").replace(/^\.\//, "");
     if (!e.includes("/")) return tail.split("/").includes(e) || (tail.split("/").pop() ?? "").startsWith(`${e}.`);
     // Relative entries match as a suffix; absolute ones by their last two segments (`pi-kit/firewall.json`).
     const rel = path.isAbsolute(e) ? e.split("/").slice(-2).join("/") : e;
     return tail.endsWith(`/${rel}`) || tail.includes(`/${rel}/`);
   });
+}
+
+// The protected-list entry a refusal record names: a relative entry as written, an absolute one
+// (the agent directory, the git common dir, a configured path) by its last two segments, so the
+// audit log never holds a machine path (`.git/hooks`, `pi-kit/firewall.json`).
+function ruleToken(entry: string): string {
+  const e = normalizeSlashes(entry).replace(/\/+$/, "");
+  return (path.isAbsolute(e) || /^[A-Za-z]:\//.test(e) ? e.split("/").filter(Boolean).slice(-2).join("/") : e) || "protected-path";
 }
 
 // sed/perl inline programs (`s/…/…/`, `y/…/…/`, a quoted one-liner) are code, not file
@@ -636,55 +655,41 @@ export default function (pi: ExtensionAPI) {
 
     let candidatePaths: string[] = [];
     const field = toolName === "write" || toolName === "edit" ? textField(input, ["path"]) : toolName === "bash" ? textField(input, ["command", "cmd", "script"]) : null;
-    if (field && !field.ok) {
-      const msg = `protected-paths: blocked ${toolName}: ${field.key} is not a string`;
+    // Every refusal is one UI notice and one structured tool_refused record (./shared/refusal-record.ts):
+    // the cause, a non-secret rule token (a protected-list entry, a field key or a rule name, never file
+    // contents or command text) and, for bash, a digest of the command.
+    const command = toolName === "bash" && field?.ok ? field.value : undefined;
+    const refuse = (msg: string, cause: string, matched: string) => {
       if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-      return { block: true, reason: msg };
-    }
+      appendRefusal({ guard: "protected-paths", cause, matched, tool: toolName, commandDigest: commandDigest(command), sessionId: sessionIdOf(ctx) });
+      return { block: true as const, reason: msg };
+    };
+    if (field && !field.ok) return refuse(`protected-paths: blocked ${toolName}: ${field.key} is not a string`, "malformed-input", field.key);
     // Coarse and fail closed: inline interpreter code that mentions agent configuration and can write or
     // exec is blocked even when no literal target is visible (./shared/inline-guard.ts).
     const inline = toolName === "bash" && field?.value ? inlineAgentConfigWrite(field.value) : null;
-    if (inline) {
-      const msg = `protected-paths: blocked ${toolName}: ${inline}`;
-      if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-      return { block: true, reason: msg };
-    }
+    if (inline) return refuse(`protected-paths: blocked ${toolName}: ${inline}`, "inline-config-write", "inline-agent-config");
     // The shell deletes a backslash-newline before splitting words; read the command as it will run.
     if (field?.value) candidatePaths = toolName === "bash" ? bashWriteTargets(field.value.replace(/\\\r?\n/g, "")) : [field.value];
     if (toolName === "bash" && field?.value) {
-      const command = field.value.replace(/\\\r?\n/g, "");
-      const patches = patchWriteTargets(command, cwd);
-      if (patches.unreadable !== null) {
-        const msg = `protected-paths: blocked ${toolName}: ${patches.unreadable}, so it may touch a protected path`;
-        if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-        return { block: true, reason: msg };
-      }
-      candidatePaths.push(...patches.targets, ...intoDirectoryTargets(command, cwd), ...gitRestoreTargets(command));
+      const joined = field.value.replace(/\\\r?\n/g, "");
+      const patches = patchWriteTargets(joined, field.value, cwd);
+      if (patches.unreadable !== null) return refuse(`protected-paths: blocked ${toolName}: ${patches.unreadable}, so it may touch a protected path`, "patch-unreadable", "patch-input");
+      candidatePaths.push(...patches.targets, ...intoDirectoryTargets(joined, cwd), ...gitRestoreTargets(joined));
     }
     if (candidatePaths.length === 0) return undefined;
 
     const git = trustedGitControl(cwd);
-    if (git.invalid) {
-      const msg = `protected-paths: blocked ${toolName}: ${git.invalid}`;
-      if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-      return { block: true, reason: msg };
-    }
+    if (git.invalid) return refuse(`protected-paths: blocked ${toolName}: ${git.invalid}`, "git-control-invalid", "git-link");
     const protectedList = getProtectedPaths(cwd);
     const allowlist = getWriteAllowlist();
     for (const filePath of candidatePaths) {
       // Denylist always applies.
       const candidateAbs = canonicalPath(path.resolve(cwd, normalizeSlashes(filePath)));
-      if (isProtected(filePath, protectedList, cwd) || dynamicMayBeProtected(filePath, protectedList) || git.links.some((link) => canonicalPath(link) === candidateAbs)) {
-        const msg = `protected-paths: blocked ${toolName} to protected path: ${filePath}`;
-        if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-        return { block: true, reason: msg };
-      }
+      const entry = protectedEntry(filePath, protectedList, cwd) ?? dynamicProtectedEntry(filePath, protectedList) ?? (git.links.some((link) => canonicalPath(link) === candidateAbs) ? "git-link" : undefined);
+      if (entry !== undefined) return refuse(`protected-paths: blocked ${toolName} to protected path: ${filePath}`, "protected-path", ruleToken(entry));
       // Allowlist mode (dream/print-mode): block anything not explicitly allowlisted.
-      if (allowlist && !isAllowlisted(filePath, allowlist, cwd)) {
-        const msg = `protected-paths: allowlist mode — blocked ${toolName} to non-allowlisted path: ${filePath}`;
-        if (ctx.hasUI) ctx.ui.notify(msg, "warning");
-        return { block: true, reason: msg };
-      }
+      if (allowlist && !isAllowlisted(filePath, allowlist, cwd)) return refuse(`protected-paths: allowlist mode — blocked ${toolName} to non-allowlisted path: ${filePath}`, "allowlist", "PI_KIT_WRITE_ALLOWLIST");
     }
 
     return undefined;

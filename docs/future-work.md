@@ -103,11 +103,13 @@ Each is a limit of the delivered kernel, not a bug in a test.
 
 ### Known issues
 
-- **`protected-paths` has its own shell walker.** The tool firewall's `shell.ts` and
-  `protected-paths`' `directWriteTargets` are two regular-expression sets, so a shell shape fixed
-  in one must be fixed in the other (follow-up A-90 on the operator's board, outside this
-  repository). `tests/protected-paths-corpus-smoke.ts` covers the shapes both understand today; a
-  shared shell-walker module, which the extension contract today forbids, would close it.
+- **`protected-paths` still has its own text readers.** Patch writers are read both by the shared
+  text walker in `packages/core/shared/inline-guard.ts` and by the firewall's parser, now shared as
+  `packages/core/shared/shell.ts`, and protected-paths refuses what either finds. Its other write
+  targets (`directWriteTargets`, redirects, `cp`/`mv`/`sed -i` and the like) are still read with
+  its own regular expressions, so a shell shape fixed in the firewall's classifier must be fixed
+  there too, and the walker remains the firewall's catch-all for patch writers it cannot place
+  (board item A-90). `tests/protected-paths-corpus-smoke.ts` covers the shapes both hooks read today.
 - **`smoke:workflow-resume` flaked once in a sandbox.** It failed once and passed on rerun; the
   cause was not established and no reproduction is recorded. Re-run it after a failure, and treat
   a repeat as a defect.
@@ -282,6 +284,105 @@ and nothing in the repository pins any of them.
   loader transforms JavaScript as well. Dropping or lazily loading `pi-lens` (3.8 s cold, 0.23 s
   warm) would help most, and needs that companion to register its tools later.
 - **Extension load is sequential**, so every companion adds its import time to the first frame.
+
+## Autonomous runs: durable tasks, integration and a flagship
+
+The autonomy supervisor keeps its progress in one `state.json` per run and one cycle in flight; the
+steps already shipped (attribution, a gated base, one review by the host, a receipt per cycle) are in
+[Autonomous runs](autonomy.md). What follows is the plan for the rest of the owner's staged model,
+written as limitations that exist today. None of it is built, and nothing pins it: each stage has
+exit conditions that a test must meet before the stage is written up as behaviour. The order is the
+dependency order, and each stage is small enough to stop after.
+
+Constraints that hold through every stage: the worker never holds host state; model calls and
+publication go through the host; acceptance runs on a clean checkout of the final tree and stays
+authoritative; the leak scan, the single integration writer and the owner's control of `main`,
+release tags, credentials and signed contracts do not move; and no stage relaxes a gate to make a
+number look better.
+
+### Stage D: durable task state, leases and fencing, outbox
+
+- **A task exists only as a cycle in `state.json`.** A crash between acknowledging a checkpoint and
+  recording it can lose or repeat work, and a replacement worker cannot be told which of a dead
+  worker's actions already happened. Plan: a small host-owned task store (state, event history,
+  artefact references and the budget ledger) beside the existing run lock, with a task moving
+  through ready, running, submitted, validating, integrating, observing and retained. A submission
+  carries the task version, the head, the base, a patch digest, the worker's note and the evidence
+  requested; host receipts append review and check results, and the task advances only when they
+  match the current submission and policy. Closed by: a crash and duplicate-event suite in which a
+  duplicate or replayed event produces one logical transition.
+- **A stale worker can keep spending and publishing after the supervisor loses it.** Containers keep
+  running when the controller loses contact. Plan: each attempt holds a short renewable lease with a
+  monotonically increasing fencing token (a pilot of a 30 second heartbeat and a three minute expiry,
+  tuned against observed host pauses). The model relay and the publication path check the token, so
+  an old attempt cannot bill or publish as current once a newer token exists; the old attempt is
+  killed or quarantined and its artefacts kept before the task is reclaimed. Fencing in a database
+  row alone is not enough. Closed by: a test in which an attempt that lost its lease is refused by
+  the relay and by publication.
+- **Side effects after a state change are not exactly once.** A push, a CI request or a provider call
+  follows a state change and can be repeated or lost across a crash. Plan: a transactional outbox:
+  the state change and the action request commit together, and a reconciler checks whether the
+  action already happened before retrying it. A local transaction does not make an external call
+  exactly once, so the reconciler, not the transaction, is the claim. Closed by: crashes injected
+  around every acknowledgement and around reservation, checkpoint, lease expiry, submission, CI
+  request and trunk update, each ending in one logical result.
+- **A provider timeout after billing begins looks like free money.** Plan: reserve before the call,
+  settle to the provider's reported usage, and keep a reservation as an unresolved liability when a
+  stream drops or a request times out; cancellation and a period rollover do not erase it. The
+  meter's unresolved rows already exist; the reservation and settlement ledger does not.
+- Exit and rollback: no duplicate publication and the budget survives a restart; rolling back drains
+  new tasks and returns dispatch to the existing supervisor at the last trusted head. Not covered:
+  rootless runtimes and other hosts, which the autonomy container smoke has not run on.
+
+### Stage E: event-driven integration and evidence reuse
+
+- **Integration is a fast-forward per cycle at the end of the cycle.** Two independent increments
+  cannot overlap their checks and review, and a candidate whose base moves while its checks run is
+  re-gated from the start. Plan: an integrator that reacts to submission events, regenerates a
+  candidate when the base advances (so a stale check can never advance the protected trunk), and
+  serialises tasks that reserve the same shared paths instead of rebuilding repeatedly. The single
+  integration writer is kept.
+- **Equivalent checks are run again.** The gate re-runs the whole suite on every head, including
+  heads whose changed paths cannot affect a check. Plan: reuse a check result keyed by the tree the
+  check actually read, the check definition and the environment, with the final combined tree still
+  checked in full and the cache disabled by one switch. A change to a gate policy is first run in
+  shadow beside the conservative policy and compared; it is adopted only if the comparison supports
+  it. Cached results are never reused across a changed definition or a control path.
+- **The model is chosen by habit, not measurement.** Plan: route comparable tasks through a single
+  agent, bounded delegation and a stronger-model escalation on a fixed evaluation suite, and adopt a
+  route only where it keeps the completion rate and spends less. No route changes a safety gate.
+- Exit and rollback: the final tree's checks stay authoritative and a shadow comparison supports any
+  policy change; rolling back disables the cache and the new routing and uses the conservative
+  checks. Not covered: this plan does not claim a saving, and the figure has to come from the
+  evaluation, not from the design.
+
+### Stage F: an outcome portfolio and one flagship
+
+- **Investment follows whatever is easiest to evidence.** A replenishing queue of small findings can
+  starve an ambitious objective, and nothing today records what an outcome was worth. Plan: a small
+  portfolio of one flagship and one reliability or efficiency outcome, an expedite lane for genuine
+  incidents that does not classify every red candidate as urgent, and at least half the delivery
+  allocation protected for the flagship (an incident may borrow within its reserve; persistent
+  reliability failures force an explicit portfolio decision). The owner keeps authority over which
+  outcomes exist; one accountable steward works when a decision is due, and an unchanged status
+  snapshot is a deterministic no-op. Outcome weights, if the owner sets any, are shown beside the
+  underlying outcomes and are judgement, not an engineering unit.
+- **Uncertain ideas have no bounded way to be tested.** Plan: one bounded discovery session that is
+  given the scenarios, the observed failures, the architectural constraints and the last rejected
+  ideas, and chooses the smallest experiment that could disprove its preferred approach, instead of
+  permanent scouts rediscovering the same backlog.
+- **Flagship: checkpointed task continuation.** Bounded recovery becomes a capability a user can see
+  and trust: kill a worker in the middle of a multi-step repository change, then resume from the
+  host's task state and the retained artefacts. Smallest persuasive experiment: twenty predefined
+  crash cases, with no duplicate external action and no acknowledged checkpoint lost, and the
+  completion rate and the cost reported separately. It depends on stage D, and the economic
+  evaluation that measures it is built first. Adaptive workflow selection is the next candidate once
+  measurement works; the other candidates (evidence-backed change inspection, usable asynchronous
+  delegation) are not started with it.
+- Exit and rollback: the end-to-end scenario improves and the economic targets are met or the
+  trade-off is accepted by the owner, then a seven day observation; otherwise investment stops, the
+  learning is kept and a regressing feature is reverted. Not covered: the targets are goals for an
+  experiment, not measured results.
 
 ## Related records
 

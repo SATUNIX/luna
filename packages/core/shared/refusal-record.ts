@@ -1,10 +1,11 @@
 /**
  * One structured record per refused tool call.
  *
- * The firewall and secret-guard both refuse calls, but only the firewall wrote a machine-readable
- * audit record (tool_seen / tool_blocked); a secret-guard refusal was a UI notice only, so its
- * cause could only be recovered by scraping session text afterwards. This helper appends one
- * `tool_refused` line to the same audit log for every refusal, whichever guard made it.
+ * The firewall, secret-guard and protected-paths all refuse calls, but only the firewall wrote a
+ * machine-readable audit record (tool_seen / tool_blocked); a secret-guard or protected-paths refusal
+ * was a UI notice only, so its cause could only be recovered by scraping session text afterwards.
+ * This helper appends one `tool_refused` line to the same audit log for every refusal, whichever of
+ * the three guards made it.
  *
  * A record names the guard, the cause, the non-secret rule identifier or token that matched, the
  * tool, a SHA-256 digest of the command when there is one (never the command text) and the session id. It must never
@@ -20,7 +21,7 @@ import { appendFileSafe, rotateFileSafe } from "./safe-fs.ts";
 
 /** The fields written for one refusal. `matched` is a rule id or path token, never a secret. */
 export interface RefusalRecord {
-  guard: "tool-firewall" | "secret-guard";
+  guard: "tool-firewall" | "secret-guard" | "protected-paths";
   cause: string;
   matched: string;
   tool: string;
@@ -74,7 +75,7 @@ const AUDIT_ROTATE_BYTES = 4 * 1024 * 1024;
 
 /**
  * Appends exactly one `tool_refused` line to the firewall audit log, rotating it to `<file>.1` past
- * 4 MiB exactly as the firewall does (so secret-guard alone also stays bounded). Best effort: a missing or
+ * 4 MiB exactly as the firewall does (so secret-guard or protected-paths alone also stays bounded). Best effort: a missing or
  * unsafe path, a permission error or a hostile symlink leaves the tool call unaffected.
  */
 export function appendRefusal(record: RefusalRecord): void {

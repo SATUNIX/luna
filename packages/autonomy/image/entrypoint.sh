@@ -68,6 +68,8 @@ node -e '
       if (typeof p === "string") s.packages[s.packages.indexOf(p)] = abs; else p.source = abs;
     }
   }
+  // Low thinking for the session AND every child it starts (children read this file too); the flag below repeats it for the session.
+  s.defaultThinkingLevel = process.env.PI_THINKING || "low";
   fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");'
 [ -f /opt/pi-kit/package.json ] || { echo "kit missing at /opt/pi-kit" >&2; exit 3; }
 [ -d /state/npm-cache ] || { [ -d /opt/npm-cache ] && cp -a /opt/npm-cache /state/npm-cache || mkdir -p /state/npm-cache; }
@@ -124,5 +126,5 @@ export PI_KIT_AUTO_MODE=0
 # pi-lens: no automatic formatting or fixing (it rewrites whole files the agent touched, which
 # the charter's scoped-diff rule forbids) and no language-server installs (offline).
 export PI_LENS_DISABLE_LSP_INSTALL=1
-exec pi --mode rpc --no-approve --provider "$provider_name" --model "$PI_MODEL" --session-dir /state/sessions \
+exec pi --mode rpc --no-approve --provider "$provider_name" --model "$PI_MODEL" --thinking "${PI_THINKING:-low}" --session-dir /state/sessions \
   --no-autoformat --no-autofix 1>&3

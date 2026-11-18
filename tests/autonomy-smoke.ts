@@ -224,6 +224,7 @@ await check("mirror: only the integration branch and the run's exp/<run>/ tags l
     "d refs/tags/exp/perpetual-test/cycle-01",
     "e refs/tags/v9.9.9",
     "f refs/tags/exp/perpetual-test/../../heads/main",
+    "h refs/tags/exp/perpetual-test/refused/cycle-02", // a cycle the close-out leak scan refused: kept locally, never published
   ].join("\n");
   assert.deepEqual(publishRefspecs(refs, cfg), [
     "refs/heads/experimental/main:refs/heads/experimental/main",
@@ -363,7 +364,7 @@ await check("publication and promotion refuse a push when the host leak scan can
 
 await check("cycle reminders and automatic restart briefings use stream bookkeeping paths and preserve legacy defaults", async () => {
   for (const stream of [false, true]) {
-    const bookkeeping = stream ? { handoff: "autonomy/runs/ux/HANDOFF.md", proposals: "autonomy/proposals/ux-01-<slug>.md" } : undefined;
+    const bookkeeping = stream ? { proposals: "autonomy/proposals/ux-01-<slug>.md" } : undefined;
     const follow = fakeRuntime({ manager: new Error("unexpected manager"), script: ({ minute, emit, report }) => {
       if (minute === 3) report();
       emit({ type: "agent_settled" });
@@ -371,14 +372,15 @@ await check("cycle reminders and automatic restart briefings use stream bookkeep
     assert.equal((await runCycle({ n: 1, cfg, rt: follow.rt, prompt: "begin", ...(bookkeeping ? { bookkeeping } : {}) })).outcome, "completed");
     assert.equal(follow.sent.length, 3);
     assert.ok(follow.sent[1]?.message?.includes(bookkeeping?.proposals ?? "BACKLOG.md"));
-    assert.ok(follow.sent[1]?.message?.includes(bookkeeping?.handoff ?? "HANDOFF.md"));
-    assert.ok(follow.sent[2]?.message?.includes(bookkeeping?.handoff ?? "HANDOFF.md"));
+    assert.ok(follow.sent[1]?.message?.includes("/state/cycle-note.md"));
+    assert.ok(follow.sent[2]?.message?.includes("/state/cycle-note.md"));
+    for (const message of follow.sent.slice(1)) assert.doesNotMatch(message.message ?? "", /HANDOFF|report\.md/, "the reminders ask for the note, not repository records");
     const restarted = fakeRuntime({ manager: new Error("unexpected manager"), script: ({ attempt, emit, exit, report }) => {
       if (attempt === 1) exit(137);
       else { report(); emit({ type: "agent_settled" }); }
     } });
     assert.equal((await runCycle({ n: 1, cfg, rt: restarted.rt, prompt: "begin", ...(bookkeeping ? { bookkeeping } : {}) })).outcome, "completed");
-    assert.ok(restarted.sent[1]?.message?.includes(`Re-read ${bookkeeping?.handoff ?? "autonomy/HANDOFF.md"}`));
+    assert.ok(restarted.sent[1]?.message?.includes("Check git status/log and /state/cycle-note.md"));
     if (stream) for (const message of [...follow.sent.slice(1), ...restarted.sent.slice(1)]) assert.doesNotMatch(message.message ?? "", /autonomy\/HANDOFF.md|autonomy\/BACKLOG.md/);
   }
 });
@@ -706,7 +708,7 @@ await check("merge review: only MERGE or REJECT with a reason; retried, then fai
   const bundle = { run: "r", cycle: 3, outcome: "completed", integrationBranch: "experimental/main", charter: "C", report: "R", verify: null, gitLog: "L", diff: "x".repeat(200_000) };
   const text = buildReviewBundle(bundle);
   assert.ok(text.length < 100_000, "the diff is clipped");
-  assert.match(text, /## Verification record\n\(missing\)/);
+  assert.match(text, /## Verification record\n\(none written: the host ran the acceptance checks itself/);
   let calls = 0;
   const huge = await reviewCycle(bundle, async () => { calls++; return '{"verdict":"MERGE","reason":"x"}'; });
   assert.deepEqual([huge.verdict, huge.failed, calls], ["REJECT", true, 0], "an over-budget diff is refused before any model call");
@@ -977,7 +979,7 @@ await check("cycle: CONTINUE decisions do not spend the per-cycle cap; the cap r
   assert.equal(nudge.rt.managerCalls.length, 3);
   assert.deepEqual([r2.outcome, r2.reason], ["completed", "report recorded"]);
   assert.equal(nudge.sent.filter((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now.")).length, 1);
-  assert.match(nudge.sent.find((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))?.message ?? "", /report\.md and autonomy\/cycles\/02\/verify\.md describing exactly the committed diff/);
+  assert.match(nudge.sent.find((m) => typeof m.message === "string" && m.message.startsWith("Stop new work now."))?.message ?? "", /\/state\/cycle-note\.md describing exactly the committed diff/);
   // Without a report within the grace window the cycle closes as before.
   const silent = fakeRuntime({ manager: { decision: "NUDGE", reason: "looping", message: "Carry on." }, script: ({ minute, emit }) => {
     if (minute % 3 === 0) emit({ type: "extension_ui_request", method: "notify", message: "progress-guard: loop detected" });

@@ -18,6 +18,11 @@ export const ExternalSourceSchema = object({
   integrity: optional(string()),
   /** Set only with the reviewed reason a companion needs its lifecycle scripts; absent means they never run. */
   allowInstallScripts: optional(string()),
+  /**
+   * pi package-filter patterns for the skills the companion bundles, written onto its settings.json entry by
+   * the installer (`[]` loads none, `!pattern` excludes one). Absent: every skill the package ships is loaded.
+   */
+  skills: optional(array(string())),
 });
 export type ExternalSource = Infer<typeof ExternalSourceSchema>;
 

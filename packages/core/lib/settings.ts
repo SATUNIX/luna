@@ -285,6 +285,40 @@ export function mergePackageBlock(settingsPath: string, kitSource: string, resol
   console.log(`[settings] Updated ${settingsPath}`);
 }
 
+/** A companion package and the pi skill-filter patterns its sources.json record declares for it. */
+export interface CompanionFilter {
+  source: string;
+  skills?: readonly string[];
+}
+
+/**
+ * Write the skill filter a companion declares in sources.json (`skills`) onto its registered entry,
+ * which `pi install` leaves as a bare source string. An entry that already carries a `skills` key is
+ * left exactly as it is, so a filter the operator or `pi config` wrote survives every later install
+ * (the same rule mergePackageBlock applies to the kit entry), and a companion with no declared filter
+ * or no registered entry is skipped. Keys of the entry this function does not own are preserved.
+ * Returns the sources whose entry it changed.
+ */
+export function applyCompanionFilters(settingsPath: string, companions: readonly CompanionFilter[]): string[] {
+  const changed = updateSettings(settingsPath, (settings): string[] | false => {
+    const packages = settings.packages ?? [];
+    const done: string[] = [];
+    for (const companion of companions) {
+      if (companion.skills === undefined) continue;
+      const idx = findPackageEntry(settings, companion.source, settingsPath);
+      const existing = packages[idx];
+      if (existing === undefined) continue;
+      const entry: PackageObject = typeof existing === "string" ? { source: existing } : { ...existing };
+      if (entry.skills !== undefined) continue;
+      entry.skills = [...companion.skills];
+      packages[idx] = entry;
+      done.push(companion.source);
+    }
+    return done.length > 0 ? done : false;
+  });
+  return changed || [];
+}
+
 /**
  * pi's startup listing prints every extension, skill and prompt by full path and buries the launch
  * screen. Set `quietStartup` to "header" (warnings stay, the listing goes) unless the operator has

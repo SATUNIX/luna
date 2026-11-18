@@ -42,6 +42,17 @@
     could use, by `patchCallTargets` in `shared/inline-guard.ts`; stdin it cannot read, unreadable `cd`,
     backup options, series files, computed git subcommands and shells fed by a pipe or a heredoc fail
     closed, while quoted text and data-only heredocs stay inert (`tests/protected-paths-corpus-smoke.ts`)
+  - patch writers are also read with the tool firewall's shell parser (`shared/shell.ts`, a generated copy of
+    `packages/core/shared/shell.ts`) on the command as written, and a writer either reading finds is checked:
+    a comment ending in a backslash, an obfuscated `cd`, an alias, `env -S'…'`, and a pipe, here-string or `<`
+    file into `sudo -s`, `su`, `doas -s`, `at` or `batch` are now refused, as are a command name or `eval` text
+    computed at run time whose own words name a patch tool, and, on a line naming one, commands fed to
+    `make -f -` or a bare `ssh` (`tests/protected-paths-corpus-smoke.ts`)
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)
+  - every refusal also appends one `tool_refused` record to the firewall audit log through
+    `shared/refusal-record.ts` (a generated copy of `packages/core/shared/refusal-record.ts`, with its
+    `shared/safe-fs.ts` dependency): the cause, the matched protected entry (an absolute one by its last
+    two segments), field key or rule name, the tool, a SHA-256 digest of a bash command and the session
+    id, never the command text or file contents (`tests/firewall-refusal-record.ts`)

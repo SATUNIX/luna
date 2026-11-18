@@ -6,9 +6,14 @@
 //   PI_KIT_UNATTENDED_BOUNDARY=container    the boundary is the container, enforced by the supervisor
 //   PI_KIT_UNATTENDED_CONTRACT=/run/contract.json   sanitised, read-only copy (lib/contract.ts workerContract)
 //   PI_KIT_EFFORT=<tier>  PI_KIT_EFFORT_CAP=<tier>  the effort snapshot; a session may lower its effort, never exceed the cap
+//   PI_THINKING=low                         the worker session's thinking level (the entrypoint passes it to pi as --thinking).
+//                                           Low by default: reasoning was over half of the orchestrator's output at medium. The
+//                                           entrypoint also writes it as pi's defaultThinkingLevel, so children start low too.
 //
 // No credential ever appears here: the worker's provider key is a placeholder the relay replaces.
 
+/** The thinking level of the worker session itself. */
+export const WORKER_THINKING = "low";
 export const WORKER_CONTRACT_PATH = "/run/contract.json";
 export const PROXY_HOST = "egress-proxy";
 export const PROXY_PORT = 3128;
@@ -60,6 +65,7 @@ export function workerEnv(contract: WorkerEnvContract, { branch, reset = false, 
     GIT_EMAIL: contract.runtime.gitIdentity.email,
     PI_KIT_EFFORT: e.tier,
     PI_KIT_EFFORT_CAP: e.cap,
+    PI_THINKING: WORKER_THINKING,
   };
   if (unattended.authorised) {
     env.PI_KIT_UNATTENDED = "1";

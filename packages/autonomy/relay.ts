@@ -7,9 +7,11 @@
 // model allowlist that also refuses OpenRouter's web-search features (screen()). The provider is
 // configuration, not code: OpenRouter reports cost in every response; any other
 // OpenAI-compatible provider is metered from token counts and the contract's price table.
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** A JSON object as it arrived: every value is unchecked. */
@@ -19,14 +21,22 @@ export interface ModelPrice { inputPerMTok: number; outputPerMTok: number }
 export type Pricing = Record<string, ModelPrice>;
 /** One metered response: a line of /meter/usage.jsonl (with `at` and `status`). */
 export interface UsageRecord { model: unknown; promptTokens: number | null; completionTokens: number | null; costUsd: number | null; unmetered?: true }
+/** Who a metered row belongs to: written by the supervisor to attribution.json beside the meter file and read on every request. */
+export interface Attribution { run: string | null; cycle: number | null; role: string }
+/** How a request ended. `ok` is billed from usage; `refused` never reached the provider; the rest are unresolved liabilities (cost unknown). */
+export type RowOutcome = "ok" | "refused" | "error" | "aborted" | "non-200" | "unmetered";
 export type ScreenResult = { body: JsonObject; error?: never } | { error: string; body?: never };
 
 /** The relay's configuration line on stdin (built by the supervisor, lib/runtime.ts). It holds the real API key. */
 export interface RelayConfig {
   upstream: string;
+  /** Where attribution.json (run, cycle, role) is read from; default: beside the meter file. */
+  attributionFile?: string;
   apiKey: string;
   meterFile?: string;
   maxUsd?: number | null;
+  /** Where the live spending cap ({ maxUsd }) is read from on every request; default: limit.json beside the meter file. It overrides maxUsd, so a reconfigure takes effect without a relay restart. */
+  limitFile?: string;
   models?: string[];
   provider?: string;
   pricing?: Pricing;
@@ -41,11 +51,13 @@ const isObject = (v: unknown): v is JsonObject => typeof v === "object" && v !==
  */
 export function parseRelayConfig(value: unknown): RelayConfig {
   if (!isObject(value)) throw new Error("relay config must be a JSON object");
-  const { upstream, apiKey, meterFile, maxUsd, models, provider, pricing, headers } = value;
+  const { upstream, apiKey, meterFile, maxUsd, models, provider, pricing, headers, attributionFile, limitFile } = value;
   if (typeof upstream !== "string" || !upstream) throw new Error("relay config: upstream must be a URL");
   if (typeof apiKey !== "string" || !apiKey) throw new Error("relay config: apiKey must be a non-empty string");
   const config: RelayConfig = { upstream, apiKey };
   if (meterFile !== undefined) { if (typeof meterFile !== "string" || !meterFile) throw new Error("relay config: meterFile must be a path"); config.meterFile = meterFile; }
+  if (attributionFile !== undefined) { if (typeof attributionFile !== "string" || !attributionFile) throw new Error("relay config: attributionFile must be a path"); config.attributionFile = attributionFile; }
+  if (limitFile !== undefined) { if (typeof limitFile !== "string" || !limitFile) throw new Error("relay config: limitFile must be a path"); config.limitFile = limitFile; }
   if (maxUsd !== undefined) { if (maxUsd !== null && (typeof maxUsd !== "number" || !Number.isFinite(maxUsd) || maxUsd < 0)) throw new Error("relay config: maxUsd must be a non-negative number or null"); config.maxUsd = maxUsd; }
   if (models !== undefined) { if (!Array.isArray(models) || !models.every((m) => typeof m === "string")) throw new Error("relay config: models must be a list of model ids"); config.models = models; }
   if (provider !== undefined) { if (typeof provider !== "string") throw new Error("relay config: provider must be a string"); config.provider = provider; }
@@ -153,6 +165,168 @@ export function meteredUsd(meterText: string | null | undefined): number {
   return total;
 }
 
+/** The run, cycle and role the supervisor says are active; an unreadable or absent file is "unattributed", never a guess. */
+export function readAttribution(file: string): Attribution {
+  try {
+    const v: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (isObject(v)) return { run: typeof v.run === "string" ? v.run : null, cycle: typeof v.cycle === "number" && Number.isInteger(v.cycle) ? v.cycle : null, role: typeof v.role === "string" && v.role ? v.role : "worker" };
+  } catch { /* absent or unreadable */ }
+  return { run: null, cycle: null, role: "unattributed" };
+}
+
+/** One /meter row for a request that did not produce a usable usage record. Without a cost it is a liability, not a price. */
+export function liabilityRow(at: string, who: Attribution, model: unknown, status: number | null, outcome: Exclude<RowOutcome, "ok">, detail?: string): JsonObject {
+  return { at, status, ...who, model: model ?? null, promptTokens: null, completionTokens: null, costUsd: null, outcome, ...(outcome === "refused" ? {} : { unresolved: true }), ...(detail ? { detail: detail.slice(0, 200) } : {}) };
+}
+
+/** What a meter says: spend and token counts by role, unresolved liabilities, and rows that could not be read. `cycle` limits it to one cycle. */
+export interface MeterSummary { usd: number; byRole: Record<string, number>; rows: number; unresolved: number; unreadable: number }
+export function summariseMeter(meterText: string | null | undefined, cycle?: number): MeterSummary {
+  const out: MeterSummary = { usd: 0, byRole: {}, rows: 0, unresolved: 0, unreadable: 0 };
+  for (const line of (meterText ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let record: unknown;
+    try { record = JSON.parse(line); } catch { out.unreadable++; continue; }
+    if (!isObject(record)) { out.unreadable++; continue; }
+    if (cycle !== undefined && record.cycle !== cycle) continue;
+    out.rows++;
+    const cost = typeof record.costUsd === "number" ? record.costUsd : 0;
+    const role = typeof record.role === "string" ? record.role : "unattributed";
+    out.usd += cost;
+    out.byRole[role] = (out.byRole[role] ?? 0) + cost;
+    if (record.unresolved === true || record.unmetered === true) out.unresolved++;
+  }
+  return out;
+}
+
+/** A handler for one relay: the supervisor-built config in, an http request listener out (main() serves it; tests serve it on any port). */
+export function createRelayHandler(config: RelayConfig): (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> {
+  const upstream = config.upstream.replace(/\/$/, "");
+  const meterFile = config.meterFile ?? "/meter/usage.jsonl";
+  const attributionFile = config.attributionFile ?? path.join(path.dirname(meterFile), "attribution.json");
+  const limitFile = config.limitFile ?? path.join(path.dirname(meterFile), "limit.json");
+  /** The cap now in force: the supervisor's limit file when it holds a number (a reconfigure rewrites it), else the config's. */
+  const cap = (): number | null | undefined => {
+    try { const v: unknown = JSON.parse(fs.readFileSync(limitFile, "utf8")); if (isObject(v) && typeof v.maxUsd === "number" && Number.isFinite(v.maxUsd) && v.maxUsd >= 0) return v.maxUsd; } catch { /* absent or unreadable: the config's cap */ }
+    return config.maxUsd;
+  };
+  const hostMeter = path.join(path.dirname(meterFile), "manager.jsonl");
+  const provider = config.provider ?? "openrouter";
+  const pricing = config.pricing ?? {};
+  const readText = (f: string): string => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };
+  // Spend starts from the ledgers on disk, so a relay restart never resets it; the host's own calls (manager, review) count too.
+  let spent = meteredUsd(readText(meterFile));
+  const total = (): number => spent + meteredUsd(readText(hostMeter));
+  const append = (row: JsonObject): void => { try { fs.appendFileSync(meterFile, JSON.stringify(row) + "\n"); } catch { /* a full disk must not take inference down; the supervisor sees the gap */ } };
+
+  return async (req, res) => {
+    const target = route(req.method, req.url);
+    const who = readAttribution(attributionFile);
+    let model: unknown = null;
+    const refuse = (status: number, message: string): void => { res.writeHead(status).end(message); append(liabilityRow(new Date().toISOString(), who, model, status, "refused", message)); };
+    if (!target) { refuse(403, "Only inference requests are allowed"); return; }
+    const maxUsd = cap();
+    if (maxUsd && total() >= maxUsd) { refuse(429, "Run budget exhausted"); return; }
+    const chunks: Buffer[] = []; let size = 0;
+    for await (const chunk of req as AsyncIterable<Buffer>) {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) { refuse(413, "Request too large"); return; }
+      chunks.push(chunk);
+    }
+    let body = Buffer.concat(chunks);
+    if (req.method === "POST") {
+      let parsed: unknown;
+      try { parsed = JSON.parse(body.toString()); } catch { refuse(400, "Request body must be JSON"); return; }
+      if (isObject(parsed)) model = parsed.model ?? null;
+      const screened = screen(parsed, config.models ?? [], { provider });
+      if (screened.error !== undefined) { refuse(403, screened.error); return; }
+      body = Buffer.from(JSON.stringify(screened.body));
+    }
+    const destination = new URL(upstream + target);
+    const transport = destination.protocol === "https:" ? https : http;
+    const headers: http.OutgoingHttpHeaders = { "content-type": "application/json", authorization: `Bearer ${config.apiKey}`, ...(config.headers ?? {}) };
+    // Exactly one outcome is written per forwarded request: a reply that billed, or a liability row saying how it ended.
+    let settled = false;
+    const settle = (write: () => void): void => { if (!settled) { settled = true; write(); } };
+    const liability = (status: number | null, outcome: Exclude<RowOutcome, "ok" | "refused">, detail?: string): void => settle(() => append(liabilityRow(new Date().toISOString(), who, model, status, outcome, detail)));
+    // The caller going away mid-reply does not stop the provider billing: the reply is still read to its usage, and without one the row is an unresolved "aborted".
+    let callerGone = false;
+    res.on("close", () => { if (!res.writableFinished) callerGone = true; });
+    const upstreamReq = transport.request(destination, { method: req.method, headers, timeout: 600_000 }, (reply) => {
+      const status = reply.statusCode ?? 502;
+      res.writeHead(status, { "content-type": reply.headers["content-type"] || "application/json" });
+      let seen = "";
+      reply.on("data", (c: Buffer) => { res.write(c); if (seen.length < 8 * 1024 * 1024) seen += String(c); });
+      reply.on("aborted", () => { liability(status, "aborted", "the provider's reply was cut off"); res.destroy(); });
+      reply.on("error", () => { liability(status, "error", "the provider's reply failed"); res.destroy(); });
+      reply.on("end", () => {
+        res.end();
+        const usage = usageFrom(seen, pricing);
+        settle(() => {
+          if (!usage.length) { append(liabilityRow(new Date().toISOString(), who, model, status, callerGone ? "aborted" : status === 200 ? "unmetered" : "non-200", callerGone ? "the caller closed the connection before the reply finished" : status === 200 ? "no usage in a 200 reply" : seen)); return; }
+          for (const u of usage) {
+            spent += u.costUsd ?? 0;
+            // A non-200 reply that still carries usage is billed; one without a cost stays unresolved.
+            append({ at: new Date().toISOString(), status, ...who, outcome: status === 200 ? "ok" : "non-200", ...u, ...(u.costUsd === null ? { unresolved: true } : {}) });
+          }
+        });
+      });
+    });
+    upstreamReq.on("timeout", () => upstreamReq.destroy(new Error("Inference timeout")));
+    upstreamReq.on("error", (e: Error) => { liability(null, /timeout/i.test(e.message) ? "aborted" : "error", e.message); if (!res.headersSent) res.writeHead(502); res.end("Inference upstream unavailable"); });
+    upstreamReq.end(body);
+  };
+}
+
+/** A response body as text, or null when it is larger than `max` bytes (reading stops there). */
+async function readCapped(body: ReadableStream<Uint8Array> | null, max: number): Promise<string | null> {
+  if (!body) return "";
+  const chunks: Buffer[] = []; let size = 0;
+  for await (const chunk of body) {
+    size += chunk.byteLength;
+    if (size > max) { await body.cancel().catch(() => undefined); return null; }
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The key's own limit from OpenRouter's `GET /key` reply. Only `limit`, `limit_remaining` and `usage`
+ * are kept: the rest of the reply (its `label` shows part of the key) never leaves this function.
+ */
+export function keyLimitFromReply(value: unknown, at: string): { at: string; limit: number | null; limit_remaining: number | null; usage: number | null } | null {
+  const data = isObject(value) && isObject(value.data) ? value.data : null;
+  if (!data) return null;
+  return { at, limit: num(data.limit), limit_remaining: num(data.limit_remaining), usage: num(data.usage) };
+}
+
+/**
+ * Ask OpenRouter for the run key's own limit and write it to `keyFile` (default key.json beside the
+ * meter; null writes nothing), which the host's status report reads. Other providers have no such endpoint: nothing is
+ * written. Never throws; returns what it wrote, or null.
+ */
+export async function probeKeyLimit(config: RelayConfig, { keyFile, fetchImpl = fetch, now = () => new Date() }: { keyFile?: string | null | undefined; fetchImpl?: typeof fetch | undefined; now?: (() => Date) | undefined } = {}): Promise<ReturnType<typeof keyLimitFromReply>> {
+  if ((config.provider ?? "openrouter") !== "openrouter") return null;
+  const file = keyFile === null ? null : keyFile ?? path.join(path.dirname(config.meterFile ?? "/meter/usage.jsonl"), "key.json");
+  try {
+    const res = await fetchImpl(`${config.upstream.replace(/\/$/, "")}/key`, { headers: { authorization: `Bearer ${config.apiKey}` }, redirect: "error", signal: AbortSignal.timeout(15_000) });
+    if (res.status !== 200) { await res.body?.cancel(); return null; }
+    const text = await readCapped(res.body, 64 * 1024);
+    if (text === null) return null;
+    const limit = keyLimitFromReply(JSON.parse(text), now().toISOString());
+    if (!limit) return null;
+    if (file) {
+      // An exclusive, unpredictable temp file with its mode set at creation, then an atomic rename (docs/security-standard.md).
+      const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(limit) + "\n", { flag: "wx", mode: 0o600 });
+        fs.renameSync(tmp, file);
+      } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
+    }
+    return limit;
+  } catch { return null; }
+}
+
 async function main(): Promise<void> {
   const configText = await new Promise<string>((resolve) => {
     let input = "";
@@ -162,51 +336,12 @@ async function main(): Promise<void> {
     });
   });
   const config = parseRelayConfig(JSON.parse(configText));
-  const upstream = config.upstream.replace(/\/$/, "");
-  const meterFile = config.meterFile ?? "/meter/usage.jsonl";
-  const provider = config.provider ?? "openrouter";
-  const pricing = config.pricing ?? {};
-  let spent = fs.existsSync(meterFile) ? meteredUsd(fs.readFileSync(meterFile, "utf8")) : 0;
-
-  const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
-    const target = route(req.method, req.url);
-    if (!target) { res.writeHead(403).end("Only inference requests are allowed"); return; }
-    if (config.maxUsd && spent >= config.maxUsd) { res.writeHead(429).end("Run budget exhausted"); return; }
-    const chunks: Buffer[] = []; let size = 0;
-    for await (const chunk of req as AsyncIterable<Buffer>) {
-      size += chunk.length;
-      if (size > 16 * 1024 * 1024) { res.writeHead(413).end(); return; }
-      chunks.push(chunk);
-    }
-    let body = Buffer.concat(chunks);
-    if (req.method === "POST") {
-      let parsed: unknown;
-      try { parsed = JSON.parse(body.toString()); } catch { res.writeHead(400).end("Request body must be JSON"); return; }
-      const screened = screen(parsed, config.models ?? [], { provider });
-      if (screened.error !== undefined) { res.writeHead(403).end(screened.error); return; }
-      body = Buffer.from(JSON.stringify(screened.body));
-    }
-    const destination = new URL(upstream + target);
-    const transport = destination.protocol === "https:" ? https : http;
-    const headers: http.OutgoingHttpHeaders = { "content-type": "application/json", authorization: `Bearer ${config.apiKey}`, ...(config.headers ?? {}) };
-    const upstreamReq = transport.request(destination, { method: req.method, headers, timeout: 600_000 }, (reply) => {
-      res.writeHead(reply.statusCode ?? 502, { "content-type": reply.headers["content-type"] || "application/json" });
-      let seen = "";
-      reply.on("data", (c: Buffer) => { res.write(c); if (seen.length < 8 * 1024 * 1024) seen += String(c); });
-      reply.on("end", () => {
-        res.end();
-        for (const u of usageFrom(seen, pricing)) {
-          spent += u.costUsd ?? 0;
-          fs.appendFileSync(meterFile, JSON.stringify({ at: new Date().toISOString(), status: reply.statusCode, ...u }) + "\n");
-        }
-      });
-    });
-    upstreamReq.on("timeout", () => upstreamReq.destroy(new Error("Inference timeout")));
-    upstreamReq.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end("Inference upstream unavailable"); });
-    upstreamReq.end(body);
-  };
+  const handle = createRelayHandler(config);
   const server = http.createServer((req, res) => { void handle(req, res); });
   server.listen(8081, "0.0.0.0", () => console.log("inference relay ready"));
+  // The key's own limit, at start and hourly, for the host's status report (OpenRouter only).
+  void probeKeyLimit(config);
+  setInterval(() => { void probeKeyLimit(config); }, 3_600_000).unref();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await main();

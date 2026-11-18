@@ -106,6 +106,23 @@ export function truncateDisplay(text: string, width: number, ellipsis = "…"): 
   return `${out}${sawAnsi ? "\x1b[0m" : ""}${ellipsis}`;
 }
 
+/**
+ * Replace every grapheme cluster outside printable ASCII with `names[cluster]`, or "?" when it has
+ * no name, keeping ANSI sequences intact. Used for the ASCII status bar.
+ */
+export function foldAscii(text: string, names: Readonly<Record<string, string>> = {}): string {
+  const fold = (segment: string): string =>
+    clusters(segment).map((c) => (/^[\x20-\x7e]+$/.test(c) ? c : names[c] ?? "?")).join("");
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(ANSI)) {
+    const index = m.index ?? 0;
+    out += fold(text.slice(last, index)) + m[0];
+    last = index + m[0].length;
+  }
+  return out + fold(text.slice(last));
+}
+
 /** Pad with spaces on the right up to `width` columns (no truncation). */
 export function padDisplay(text: string, width: number): string {
   const w = displayWidth(text);

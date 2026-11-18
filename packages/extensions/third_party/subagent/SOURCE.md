@@ -138,7 +138,7 @@
     is unset, points `PI_KIT_HUMAN_CONSOLE_DIR` at the starting session's console. See
     `docs/script-workflows.md` ("Approvals from workflow agents").
   - **Workflow-script sandbox (Luna, kit-original):** `wf-sandbox.ts` and `wf-runner.mjs` run one
-    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.3` dependency) under
+    untrusted workflow script in raw QuickJS (the pinned `quickjs-wasi@3.6.4` dependency) under
     `node --permission`, `prlimit` and `bwrap`, and broker its hook calls as JSON lines. The node
     binary comes from the generated `shared/node-runtime.ts`, never a compiled pi's `process.execPath`. Nothing in
     the extension calls it yet. See `docs/workflow-sandbox.md`; pinned by
@@ -286,6 +286,11 @@
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Whole-line plain-text gate (2026-11-18):** `workflow.ts` `gatePasses` passes a plain-text gate
+    only when the last non-empty line, without case, surrounding whitespace or markdown emphasis
+    (`verdictKey`), equals the pass text; it was a substring of that line, so a bare `PASS` gate
+    passed "the tests do not pass". A `/regex/` gate is unchanged. `workflow.ts`'s parse error and
+    `plan.ts`'s description and refusal now say what each kind matches (`tests/workflow-smoke.ts`).
   - **Workflow panel prune fallback (2026-11-12):** `wf-panel.ts` adds `inRun()`, which is true only
     while the view is `run` and its run is still in the registry, and uses it in `press()`,
     `footer()` and `render()`. A run pruned while open now shows the list body and list keys, and
@@ -298,3 +303,6 @@
     glyph (CJK, emoji) keeps the columns after it aligned. The final whole-line `truncateToWidth`
     stays. `tests/workflow-panel-smoke.ts` pins the alignment.
   - **Orphan detection by owner:** `run-recovery.ts` marks a run interrupted only when the pid recorded in its `owner.json` (written by `claimRunDir` in `workflow.ts`) is gone; runs without that file fall back to 5 minutes of quiet.
+  - **Overlay frame comment (2026-11-18):** the header of `overlay-frame.ts` (a byte-identical copy of
+    `control-center/overlay-frame.ts`) no longer says a smoke asserts the copies match; nothing does.
+    Comment only.

@@ -25,8 +25,8 @@ import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { nodeRuntime } from "./shared/node-runtime.ts";
 
-/** sha256 of quickjs-wasi 3.6.3's `quickjs.wasm` (unchanged since 3.6.2). A different binary is refused. */
-export const QUICKJS_WASM_SHA256 = "d4c9375f2b1ca4dc95f72c8aa2982a7a9951ac8011490d79c6582df732b4bbd9";
+/** sha256 of quickjs-wasi 3.6.4's `quickjs.wasm`. A different binary is refused. */
+export const QUICKJS_WASM_SHA256 = "5e48edbb6d87610f5e4ea6f7f6c7bfffafbc80a9c93f716a1ee05a1ad61972d5";
 /** quickjs-wasi versions the runner is written against. */
 export const QUICKJS_VERSION = /^3\.6\.\d+$/;
 /** Longest protocol line, script source, argument set or hook result, in characters. */

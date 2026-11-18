@@ -198,6 +198,26 @@ const tests: Record<string, () => void | Promise<void>> = {
     assert.equal(normalizeTier("E7", corePolicy), null);
   },
 
+  "an effort policy whose {{delegation}} markers do not pair up is refused, naming the file": () => {
+    const shipped = policyMod.policyDir();
+    const policy: unknown = JSON.parse(fs.readFileSync(path.join(shipped, "effort.json"), "utf8"));
+    assert.deepEqual(policyMod.validatePolicy(policy, shipped).filter((p) => p.includes("delegation")), [], "the shipped prompts pair up");
+    assert.equal(policyMod.delegationMarkerProblem("a {{delegation}}b{{/delegation}} c {{delegation}}d{{/delegation}}"), null);
+    assert.match(policyMod.delegationMarkerProblem("a {{delegation}}b") ?? "", /without a closing/);
+    assert.match(policyMod.delegationMarkerProblem("a b{{/delegation}}") ?? "", /without an opening/);
+    assert.match(policyMod.delegationMarkerProblem("{{delegation}}a{{delegation}}b{{/delegation}}") ?? "", /again before/);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-markers-"));
+    try {
+      fs.cpSync(shipped, dir, { recursive: true });
+      const shared = typeof policy === "object" && policy !== null && "sharedPromptFile" in policy ? policy.sharedPromptFile : undefined;
+      if (typeof shared !== "string") throw new Error("shipped policy has no sharedPromptFile");
+      fs.appendFileSync(path.join(dir, shared), "\n{{delegation}}Start a subagent when the work splits.\n");
+      const problems = policyMod.validatePolicy(policy, dir);
+      assert.ok(problems.some((p) => p.startsWith("sharedPromptFile has {{delegation}} without a closing")), problems.join("; "));
+      assert.throws(() => policyMod.loadPolicy(dir), /without a closing/);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  },
+
   // S5: the workflow launch kind's limits live in effort.json and both loaders read them alike.
   "the runtime and toolchain implementations agree on the workflow limits (16 / 1000 / 2000) and refuse the same bad blocks": () => {
     const expected = { workflowConcurrent: 16, workflowTotalPerRun: 1000, workflowSessionTotal: 2000 };
@@ -302,7 +322,7 @@ const tests: Record<string, () => void | Promise<void>> = {
   "each tier injects the shared policy once plus its own contribution, and nothing about permissions or models": async () => {
     const w = world();
     try {
-      const shared = fs.readFileSync(path.join(path.resolve("packages/extensions/src/effort/policy"), "shared.md"), "utf8").trim();
+      const shared = fs.readFileSync(path.join(path.resolve("packages/extensions/src/effort/policy"), "shared.md"), "utf8").trim().replace(/\{\{\/?delegation\}\}/g, "");
       for (const tier of corePolicy.tiers) {
         const b = boot();
         saveDefault(tier.id);
@@ -314,6 +334,32 @@ const tests: Record<string, () => void | Promise<void>> = {
         assert.ok(out.startsWith("BASE PROMPT"), "the base prompt is kept");
         assert.ok(!/thinking level|switch model|grant|bypass/i.test(out.replace(shared, "")), `${tier.id}: tier text says nothing about models or permissions`);
       }
+    } finally { w.cleanup(); }
+  },
+
+  "the delegation wording is emitted only when a delegation tool is registered": async () => {
+    const w = world();
+    try {
+      const wording = /Delegate only bounded|delegate selectively|children at once|Delegation is rare|workflow_run/;
+      for (const tier of corePolicy.tiers.filter((t) => t.id !== "minimal")) {
+        for (const [names, delegating] of [[["read", "bash", "edit"], false], [["read", "subagent"], true], [["read", "workflow_run"], true], [["dispatch_specialist"], true]] as const) {
+          const b = boot();
+          Object.assign(b.pi.api, { getAllTools: () => names.map((name) => ({ name })) });
+          saveDefault(tier.id);
+          await b.start();
+          const out = (await b.turn("BASE PROMPT")).systemPrompt;
+          assert.ok(!out.includes("{{") && !out.includes("}}"), `${tier.id}: no marker leaks into the prompt`);
+          assert.ok(out.includes(`Tier: ${tier.code} ${tier.label}.`) && out.includes("not reasoning or permissions") && out.includes("Never invent work"), `${tier.id}: the rest of the block is intact`);
+          assert.equal(wording.test(out), delegating, `${tier.id} with [${names.join(", ")}]: delegation wording ${delegating ? "kept" : "dropped"}`);
+          if (!delegating) assert.ok(!/child|scout|delegat/i.test(out.replace(/^BASE PROMPT/, "")), `${tier.id}: no word about children, scouts or delegating without a delegation tool`);
+        }
+      }
+      // A pi that cannot list its tools keeps the full wording, exactly as before.
+      const b = boot();
+      saveDefault("standard");
+      await b.start();
+      const out = (await b.turn("BASE PROMPT")).systemPrompt;
+      assert.ok(wording.test(out) && out.includes("Up to two children at once and three in total, at most one of them a scout."), "no tool listing: the wording stays");
     } finally { w.cleanup(); }
   },
 

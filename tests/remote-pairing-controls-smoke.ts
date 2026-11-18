@@ -16,6 +16,7 @@ import { deviceIdFromSpki } from "../packages/web-ui/server/remote/codes.ts";
 import { DeviceRegistry } from "../packages/web-ui/server/remote/devices.ts";
 import { PairingError, Pairings, addressScope, deviceConfirmation, pairProofPayload } from "../packages/web-ui/server/remote/pairing.ts";
 import { inspectPeer, judgeTerminal, parseProcStat, socketInode } from "../packages/web-ui/server/remote/peer.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { loadModule } from "../packages/core/eval/harness.ts";
 
 let checks = 0;
@@ -36,7 +37,7 @@ function phoneClaim(code: string, fingerprint: string, name: string, address = i
 }
 
 try {
-	const { maskDeviceId } = await loadModule<{ maskDeviceId: (display: unknown) => string }>("extensions/remote-control/index.ts");
+	const { maskDeviceId, wrap } = await loadModule<{ maskDeviceId: (display: unknown) => string; wrap: (text: string, width: number, hang?: number) => string[] }>("extensions/remote-control/index.ts");
 	// peer.ts -------------------------------------------------------------------------------------
 	{
 		assert.deepEqual(parseProcStat("1234 (pi) S 1 1234 1234 34816 1234 4194560 0"), { pgrp: 1234, ttyNr: 34816, tpgid: 1234 });
@@ -82,6 +83,15 @@ try {
 		assert.equal(deviceConfirmation("ABCDEFGHJKMNPQRS"), "PQRS");
 		assert.equal(maskDeviceId("ABCD-EFGH-JKMN-PQRS"), "ABCD-EFGH-JKMN-····");
 		ok("pairing.ts: address scopes (loopback, LAN, Tailscale, other) and the last-four confirmation; the terminal masks it");
+
+		// A wide character that does not fit beside the continuation indent moves to the next line with
+		// the rest of its word; nothing after it is dropped, and no line is wider than asked.
+		for (const [text, width, hang] of [["abc\u{1F680}def", 2, 1], ["ab\u6F22\u5B57cd", 3, 2], ["x \u6F22\u5B57\u6F22", 2, 1]] as const) {
+			const lines = wrap(text, width, hang);
+			assert.equal(lines.map((line) => line.trim()).join("").replace(/ /g, ""), text.replace(/ /g, ""), `wrap keeps every character of ${JSON.stringify(text)}: ${JSON.stringify(lines)}`);
+			for (const line of lines) assert.ok(visibleWidth(line) <= width, `wrap line ${JSON.stringify(line)} fits ${width} columns`);
+		}
+		ok("remote-control wrap(): a wide character that does not fit carries the rest of its word to the next line");
 
 		const fingerprint = "fp-test";
 		const audit: Array<Record<string, unknown>> = [];

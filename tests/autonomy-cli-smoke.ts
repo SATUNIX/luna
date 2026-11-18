@@ -244,7 +244,7 @@ await check("templates: every template is described, with what it needs and its 
   assert.equal(r.code, 0);
   const j = r.json();
   assert.equal(j.ok, true);
-  assert.deepEqual(j.templates.map((t) => t.id).sort(), ["deploy", "implement", "self-improve"]);
+  assert.deepEqual(j.templates.map((t) => t.id).sort(), ["deploy", "dispatch", "implement", "self-improve"]);
   for (const t of j.templates) { assert.ok(t.title && t.summary && t.requires.length && typeof t.finite === "boolean" && t.defaults); }
   const implement = j.templates.find((t) => t.id === "implement");
   assert.ok(implement, "the implement template is listed");
@@ -700,6 +700,8 @@ await check("a detached supervisor's log line is written exactly once", () => {
 {
   const dispatch = spawnSync(process.execPath, [path.join(HERE, "autonomy-dispatch-smoke.ts")], { encoding: "utf8" });
   assert.equal(dispatch.status, 0, `the dispatch claim suite failed: ${dispatch.stdout}${dispatch.stderr}`);
+  const events = spawnSync(process.execPath, [path.join(HERE, "autonomy-events-smoke.ts")], { encoding: "utf8" });
+  assert.equal(events.status, 0, `the host event log suite failed: ${events.stdout}${events.stderr}`);
 }
 
 /** A commit in a working repository; deterministic identity and dates (no global config is read). */

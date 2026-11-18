@@ -35,7 +35,7 @@ export interface RunSummary {
   spentUsd: number | null;
   budgetUsd: number | null;
   step: number | null;
-  blocker: { kind: string; question: string } | null;
+  blocker: { kind: string; question: string; waiting?: string } | null;
   legacy?: true;
 }
 
@@ -146,7 +146,7 @@ export function listRuns(home: string = stateHome()): RunSummary[] {
     const rawBlocker = s.blocker;
     // A worker writes the question; collapse it to one visible line before it reaches a list or footer.
     const blocker = isPlainObject(rawBlocker) && typeof rawBlocker.kind === "string" && typeof rawBlocker.question === "string"
-      ? { kind: oneVisibleLine(rawBlocker.kind), question: oneVisibleLine(rawBlocker.question) }
+      ? { kind: oneVisibleLine(rawBlocker.kind), question: oneVisibleLine(rawBlocker.question), ...(rawBlocker.waiting === "waiting_budget" || rawBlocker.waiting === "waiting_provider" ? { waiting: rawBlocker.waiting } : {}) }
       : null;
     return [{ run, template: s.template ?? "self-improve", status: s.status, updatedAt: s.updatedAt ?? s.startedAt, outcome: s.outcome, spentUsd: finite(usage?.usd), budgetUsd: finite(budget?.totalUsd), step: finite(s.step), blocker, ...(s.schemaVersion === undefined ? { legacy: true as const } : {}) }];
   }).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));

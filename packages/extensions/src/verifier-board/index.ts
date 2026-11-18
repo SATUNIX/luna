@@ -246,7 +246,7 @@ export default function (pi: ExtensionAPI) {
     name: "verdict_status",
     label: "Verdict: status",
     description:
-      "Report the definition-of-done board: each recorded verdict, the goal, the todo and task progress, the latest verification report, and whether the mission may be considered complete.",
+      "Show the definition-of-done board: verdicts, goal, todo and task progress, latest verification report, and whether the mission may be considered complete.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       return text(statusText(ctx.cwd, resolveSessionId(ctx.sessionManager)).text);

@@ -187,7 +187,8 @@ is not process isolation. Active diagnostic scans can launch configured local an
 
 The profile JSON selects the companion as a whole: `balanced` includes `pi-lens` and has
 no per-tool filter. Installer filters scope Luna's own extensions/skills/prompts, not
-a separately registered companion's tools. No Luna test claims a diagnostics-only pi-lens
+a separately registered companion's tools (its bundled skills are the one exception; see
+Companion installs). No Luna test claims a diagnostics-only pi-lens
 surface in balanced. The policy decisions above apply wherever its tools are exposed.
 
 4.4.4's manifest is MIT (`package.json:92`), has native ast-grep dependencies (`:128`), and
@@ -279,6 +280,20 @@ unless the entry records a reviewed `allowInstallScripts` reason (none does). Af
 the installer compares the integrity npm recorded for the companion in that root's
 `package-lock.json` with the pin; a difference removes the package again and fails the install.
 `tests/companion-integrity-smoke.ts` pins each rule.
+
+A companion entry in `sources.json` may also carry `skills`, pi package-filter patterns for the
+skills the package bundles; `install.ts` writes them onto the companion's `settings.json` entry
+(`[]` loads none, `!pattern` excludes one). pi lists every loaded skill's name and description in
+the system prompt of the first request, and pi-lens bundles four (`pi-lens-ast-grep`,
+`pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule`, `pi-lens-write-tree-sitter-rule`) that
+cost about 420 tokens in every `balanced`, `long-horizon`, `self-improving` and `engagement`
+session, so its entry declares `"skills": []`; its 13 tools and its diagnostics are not affected.
+The filter is added to an entry that has none, whether the run just registered the companion or it
+was registered before; an entry that already has a `skills` key is never rewritten. To get the
+skills back, give the entry in `settings.json` a filter of its own: a filter made only of `+`,
+`-` and `!` patterns starts from every skill, so `"skills": ["+skills/pi-lens-ast-grep"]` loads
+all four (checked with a first-request capture) and `"skills": ["!skills/pi-lens-ast-grep"]`
+drops one. Deleting the key does not opt in: the next install writes `[]` again.
 
 Not covered: the pin is the companion's own tarball, not its dependency tree, which npm resolves
 at install time; a root with no lockfile entry for the companion is a warning, not a failure; and

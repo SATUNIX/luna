@@ -19,9 +19,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ensureDirSafe, writeFileSafe } from "../../core/shared/safe-fs.ts";
-import { bookkeepingPaths } from "./bookkeeping.ts";
-import { exceptionsAt, scanCommits } from "../../core/prepush-scan.ts";
-import { publishRefspecs, type PublishConfig } from "./mirror.ts";
+import { exceptionsAt, scanCommits, type ScanResult } from "../../core/prepush-scan.ts";
+import { isPublishableTag, publishRefspecs, type PublishConfig } from "./mirror.ts";
 
 export interface GitRunOptions {
   /** Return null instead of throwing when git fails. */
@@ -264,8 +263,7 @@ export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDi
     const seeds: Record<string, string> = { ...files };
     for (const name of fs.readdirSync(seedDir)) {
       if (cfg.integrationUpstream && name === "BACKLOG.md") continue;
-      const file = name === "HANDOFF.md" ? bookkeepingPaths(cfg, 0).handoff : `autonomy/${name}`;
-      seeds[file] = fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars);
+      seeds[`autonomy/${name}`] = fill(fs.readFileSync(path.join(seedDir, name), "utf8"), vars);
     }
     seeds["autonomy/cycles/.gitkeep"] = "";
     for (const [file, content] of Object.entries(seeds)) {
@@ -279,7 +277,7 @@ export function seedBranch(g: HostGit, cfg: MirrorConfig, { seedDir, vars, tmpDi
       g(["update-ref", `refs/heads/${cfg.integrationBranch}`, from, parent ?? ""]);
       return from;
     }
-    wg(["commit", "--quiet", "-m", `chore(autonomy): seed ${cfg.integrationBranch}\n\nCharter, backlog and handoff for autonomous improvement runs, first used by run\n${cfg.run} and cut from ${cfg.baseRef} at ${base.slice(0, 12)}. See docs/autonomy.md.`]);
+    wg(["commit", "--quiet", "-m", `chore(autonomy): seed ${cfg.integrationBranch}\n\nCharter and backlog for autonomous improvement runs, first used by run\n${cfg.run} and cut from ${cfg.baseRef} at ${base.slice(0, 12)}. See docs/autonomy.md.`]);
     const sha = wg(["rev-parse", "HEAD"]);
     g(["update-ref", `refs/heads/${cfg.integrationBranch}`, sha, parent ?? ""]);
     return sha;
@@ -396,8 +394,11 @@ export function bundleBranch(g: HostGit, cfg: Pick<MirrorConfig, "branch">, out:
   return out;
 }
 
+/** The publishable refs as `<sha> <refname>` lines: the integration branch and the run's publishable tags. */
 export function refsState(g: HostGit, cfg: Pick<MirrorConfig, "integrationBranch" | "tagPrefix">): string {
-  return g(["for-each-ref", "--format=%(objectname) %(refname)", `refs/heads/${cfg.integrationBranch}`, `refs/tags/${cfg.tagPrefix}`]);
+  const tagPrefix = `refs/tags/${cfg.tagPrefix}`;
+  return g(["for-each-ref", "--format=%(objectname) %(refname)", `refs/heads/${cfg.integrationBranch}`, tagPrefix])
+    .split("\n").filter((line) => { const ref = line.trim().split(/\s+/)[1] ?? ""; return !ref.startsWith(tagPrefix) || isPublishableTag(ref.slice(tagPrefix.length)); }).join("\n");
 }
 
 /** Push the integration branch and run tags to the operator's remote, fast-forward only. */
@@ -414,6 +415,42 @@ export function publish(g: HostGit, cfg: MirrorConfig, lastPushed: string | null
   const published = g(["rev-parse", "--verify", "--quiet", `refs/heads/${cfg.integrationBranch}`], { allowFail: true });
   if (specs.some((spec) => spec.startsWith(`refs/heads/${cfg.integrationBranch}:`)) && published) g(["update-ref", "refs/integration/remote", published]);
   return { pushed: true, state };
+}
+
+/**
+ * Why publication refuses a scan result, naming commits and locations only (never a matched
+ * value), first reason first; empty when it does not. The one rule for scanPush and scanCycle.
+ */
+function leakRefusals(result: ScanResult): string[] {
+  const reasons = result.findings.map((f) => `${f.commit} ${f.where}: ${f.problem}`);
+  if (result.exceptionsChanged && result.otherChanged) reasons.push("scan exceptions changed together with other files");
+  return reasons;
+}
+
+/** Why the close-out scan refuses a head; `failed` when the scan could not complete (nothing was judged). */
+export interface CycleScanRefusal { readonly reason: string; readonly failed: boolean }
+
+/**
+ * Scan a cycle's own commits (`sha`, excluding the integration head and the run's base) as
+ * publication would: the same scanner and the same supervisor-held exceptions (from
+ * refs/base/<baseRef>, never from the worker's commits). Returns the refusal, or null when
+ * publication would accept them. Fails closed: a scan that cannot complete is a refusal with
+ * `failed` set, so the caller holds the work instead of judging it.
+ */
+export function scanCycle(g: HostGit, cfg: Pick<MirrorConfig, "integrationBranch" | "baseRef">, sha: string): CycleScanRefusal | null {
+  try {
+    const base = `refs/base/${cfg.baseRef}`;
+    const known = (ref: string): boolean => g(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { allowFail: true }) !== null;
+    const exclude = [`refs/heads/${cfg.integrationBranch}`, base].filter(known);
+    const refused = leakRefusals(scanCommits(g.gitDir, [sha, ...(exclude.length ? ["--not", ...exclude] : [])], exclude.includes(base) ? exceptionsAt(g.gitDir, base) : []));
+    if (!refused.length) return null;
+    const shown = refused.slice(0, 5);
+    if (refused.length > shown.length) shown.push(`${refused.length - shown.length} more`);
+    return { reason: `the pre-push leak scan would refuse to publish it: ${shown.join("; ")}`, failed: false };
+  } catch {
+    // Git or file errors can carry untrusted content: name nothing from them.
+    return { reason: "the pre-push leak scan could not complete on the cycle's commits", failed: true };
+  }
 }
 
 /** A publication blocker, containing locations only, never the matched values. */
@@ -446,11 +483,8 @@ export function scanPush(g: HostGit, url: string, specs: readonly string[], trus
       if (g(["rev-parse", tracking]) !== before) throw new Error("destination moved during scan; retry later");
       remoteHeads.push(g(["rev-parse", `${tracking}^{commit}`]));
     }
-    const result = scanCommits(g.gitDir, [...localHeads, ...(remoteHeads.length ? ["--not", ...remoteHeads] : [])], trustedBase ? exceptionsAt(g.gitDir, trustedBase) : []);
-    const finding = result.findings[0];
-    if (finding || (result.exceptionsChanged && result.otherChanged)) {
-      throw new PublishBlocked(`publication blocked by pre-push leak scan: ${finding ? `${finding.commit} ${finding.where}: ${finding.problem}` : "scan exceptions changed together with other files"}`);
-    }
+    const [refused] = leakRefusals(scanCommits(g.gitDir, [...localHeads, ...(remoteHeads.length ? ["--not", ...remoteHeads] : [])], trustedBase ? exceptionsAt(g.gitDir, trustedBase) : []));
+    if (refused !== undefined) throw new PublishBlocked(`publication blocked by pre-push leak scan: ${refused}`);
   } catch (error) {
     if (error instanceof PublishBlocked) throw error;
     // Git/model/file errors can contain untrusted content: do not echo it into a blocker.

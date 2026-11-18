@@ -27,7 +27,7 @@ that step's child.
 Each step's task must stand alone; the previous step's output is `{previous}`, and
 `{{steps.<id>.output}}` names an earlier step by id. A failed step fails the run unless it has
 `continue_on_error`. A `gate` `{pass, retry, max_loops}` sends work back until the reviewer's
-verdict line — the last non-empty line of the output — matches `pass`, and a `/regex/` is tested
+verdict line — the last non-empty line of the output — is `pass` (whole line, any case), and a `/regex/` is tested
 on the output tail; keep `max_loops` low. A reviewer told to answer `VERDICT: PASS` or
 `VERDICT: FAIL` should be gated on an anchored `/regex/` so an echoed template line cannot pass.
 

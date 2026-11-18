@@ -297,10 +297,31 @@ export function applyProposal(cwd: string, proposal: Proposal): string {
   return agents;
 }
 
+// skill-forge registers these inactive; an /improve cycle is what makes them callable.
+const SKILL_FORGE_TOOLS = ["skill_synthesise", "skill_score", "skill_archive"];
+
+/**
+ * Make tools registered inactive callable again (the pattern third_party/subagent uses for
+ * workflow_status: pi 1.x honours `defaultActive: false`, an older pi leaves them active). A pi
+ * without tool control, or a tool that is not registered, is skipped.
+ */
+function wakeTools(pi: ExtensionAPI, names: string[]): void {
+  try {
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+    const current = pi.getActiveTools();
+    const registered = typeof pi.getAllTools === "function" ? pi.getAllTools().map((tool) => tool.name) : names;
+    const missing = names.filter((name) => !current.includes(name) && registered.includes(name));
+    if (missing.length > 0) pi.setActiveTools([...current, ...missing]);
+  } catch {
+    /* activation is an optimisation; the tools stay inactive */
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("improve", {
     description: "Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md.",
     handler: async (args, ctx) => {
+      wakeTools(pi, SKILL_FORGE_TOOLS);
       const c = ctx as ExtensionContext;
       const cwd = c.cwd ?? process.cwd();
       const arm = parseArm(args);

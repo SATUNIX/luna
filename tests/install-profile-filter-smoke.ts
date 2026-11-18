@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProfile, type ResolvedExtension } from "../packages/core/lib/resolve.ts";
-import { type PackageEntry, type PackageObject, mergePackageBlock, removeOtherKitEntries, findPackageEntry, leanCtxBinaryAvailable, readSettings, globalAgentDir, globalSettingsPath, updateSettings } from "../packages/core/lib/settings.ts";
+import { type PackageEntry, type PackageObject, applyCompanionFilters, mergePackageBlock, removeOtherKitEntries, findPackageEntry, leanCtxBinaryAvailable, readSettings, globalAgentDir, globalSettingsPath, updateSettings } from "../packages/core/lib/settings.ts";
 import { object, optional, parseJson, parseJsonAs, string } from "../packages/core/lib/guard.ts";
 import { applyExtensionOverrides, captureDrift, excludedPrompts, excludedSkills, kitSkills, normalizeOverrides, parseProfile, skillFilterPatterns, loadProfileDef, firewallConfigFor, writeFirewallConfig } from "../packages/core/lib/profiles.ts";
 
@@ -386,6 +386,44 @@ function testIdentityBridgeCleanup() {
   });
 }
 
+// A companion's skill filter (sources.json `skills`) goes onto its registered entry: a bare source
+// becomes the object form, keys the installer does not own survive, a filter already on the entry
+// is never replaced (so the operator can opt the skills back in), and a companion that declares
+// no filter, or is not registered, is left alone.
+function testApplyCompanionFilters() {
+  const lens = "npm:pi-lens@4.4.4";
+  withTempSettings((settingsPath) => {
+    fs.writeFileSync(settingsPath, JSON.stringify({ defaultModel: "keep-me", packages: ["some-other-pkg", lens, "npm:pi-readseek@0.4.26"] }, null, 2));
+    const companions = [{ source: lens, skills: [] as string[] }, { source: "npm:pi-readseek@0.4.26" }, { source: "npm:not-registered@1.0.0", skills: [] as string[] }];
+    assert.deepEqual(applyCompanionFilters(settingsPath, companions), [lens]);
+    const after = readSettings(settingsPath);
+    assert.equal(after.defaultModel, "keep-me", "unrelated settings must be preserved");
+    assert.deepEqual(after.packages, ["some-other-pkg", { source: lens, skills: [] }, "npm:pi-readseek@0.4.26"]);
+    const written = fs.readFileSync(settingsPath, "utf8");
+    assert.deepEqual(applyCompanionFilters(settingsPath, companions), [], "a second run changes nothing");
+    assert.equal(fs.readFileSync(settingsPath, "utf8"), written, "and does not rewrite the file");
+  });
+  withTempSettings((settingsPath) => {
+    // The entry is on another pinned version, as after a kit update: it is still the same package.
+    const entry = { source: "npm:pi-lens@4.4.3", autoload: false, extensions: ["!extensions/legacy.ts"] };
+    fs.writeFileSync(settingsPath, JSON.stringify({ packages: [entry] }, null, 2));
+    assert.deepEqual(applyCompanionFilters(settingsPath, [{ source: lens, skills: [] }]), [lens]);
+    assert.deepEqual(readSettings(settingsPath).packages, [{ ...entry, skills: [] }], "keys the installer does not own are kept");
+  });
+  for (const own of [["+skills/pi-lens-ast-grep"], ["!skills/other"], []]) {
+    withTempSettings((settingsPath) => {
+      const entry = { source: lens, skills: own };
+      fs.writeFileSync(settingsPath, JSON.stringify({ packages: [entry] }, null, 2));
+      assert.deepEqual(applyCompanionFilters(settingsPath, [{ source: lens, skills: ["!skills/x"] }]), []);
+      assert.deepEqual(readSettings(settingsPath).packages, [entry], `an existing filter ${JSON.stringify(own)} is never replaced`);
+    });
+  }
+  withTempSettings((settingsPath) => {
+    assert.deepEqual(applyCompanionFilters(settingsPath, [{ source: lens, skills: [] }]), [], "no settings file: nothing to filter");
+    assert.ok(!fs.existsSync(settingsPath), "and none is created");
+  });
+}
+
 const tests: Array<[name: string, fn: () => void]> = [
   ["installer derives firewall.json from the profile", testFirewallConfigFromProfile],
   ["lite profile resolves to a proper subset, no stubs", testLiteProfileResolvesToSubset],
@@ -405,6 +443,7 @@ const tests: Array<[name: string, fn: () => void]> = [
   ["updateSettings refuses to rewrite an unparseable settings file", testUpdateSettingsRefusesInvalidJson],
   ["profile skill/prompt filters and overrides resolve as documented", testProfileSkillAndOverrideResolution],
   ["captureDrift records only hand-made changes", testCaptureDrift],
+  ["a companion's sources.json skill filter is written onto its entry, once", testApplyCompanionFilters],
 ];
 
 let failed = 0;

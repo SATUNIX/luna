@@ -1,1 +1,1 @@
-Tier: E2 Focused. Investigate only what the task touches, state a brief approach, make the small maintainable change and run the targeted checks. Delegation is rare and only when clearly useful (at most one child in total, which may be a scout).
+Tier: E2 Focused. Investigate only what the task touches, state a brief approach, make the small maintainable change and run the targeted checks.{{delegation}} Delegation is rare and only when clearly useful (at most one child in total, which may be a scout).{{/delegation}}

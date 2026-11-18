@@ -35,6 +35,7 @@ import { redact as saveRedact } from "../packages/extensions/src/save/index.ts";
 import { redact as feedbackRedact } from "../packages/extensions/src/tool-firewall/feedback.ts";
 import { redactText as workflowRedact } from "../packages/extensions/third_party/subagent/redact.ts";
 import { redactSecrets as notebookRedact } from "../packages/autonomy/lib/notebook.ts";
+import { redactEventText } from "../packages/autonomy/lib/events.ts";
 import { assertCpuWithin } from "./timing.ts";
 
 const restoreEnv = isolateKitEnv();
@@ -95,6 +96,7 @@ const REDACTORS: ReadonlyArray<readonly [string, Redactor]> = [
   ["firewall feedback redact", feedbackRedact],
   ["workflow redactText", (t) => workflowRedact(t).text],
   ["autonomy notebook redactSecrets", (t) => notebookRedact(t).text],
+  ["autonomy event log redactEventText", (t) => redactEventText(t)],
   ...roleRunner,
 ];
 

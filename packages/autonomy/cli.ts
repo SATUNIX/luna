@@ -7,6 +7,7 @@
 //   pi-autonomy plan --config run.json [--authorise --by <name>]   validate, show the resolved boundary and its digest
 //   pi-autonomy start --config run.json [--yes] [--detach]        confirm the boundary, then run
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
+//   pi-autonomy events [--since <ISO|2h>] [--run <id>] [--type <t>] [--limit N]   the host event log, oldest first
 //   pi-autonomy promote --run <id>              carry out an approval-gated promotion
 //   pi-autonomy export --run <id> [--out dir]   results, evidence, usage, decisions and the work
 //   pi-autonomy board claim <id> --run <id> --by <agent>   atomically claim a board item
@@ -36,6 +37,7 @@ import { BoardLockBusy, type ClaimBoardResult, claimBoardItem, keepHostClaims, r
 import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
 import { resolveGateSlots } from "./lib/gate-slots.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
+import { EVENT_FAMILIES, EVENT_TYPES, formatEvent, readEvents } from "./lib/events.ts";
 import { exportRun } from "./lib/export.ts";
 import { HostRepo } from "./lib/hostrepo.ts";
 import { type LimitsSnapshot, type RunAuthorisation, type RunState, isTerminal, resumeAction, transition } from "./lib/lifecycle.ts";
@@ -45,6 +47,7 @@ import { stateHome } from "./lib/paths.ts";
 import { planReconfigure } from "./lib/reconfigure.ts";
 import { type Alert, prsFromGh, publish, reportTick } from "./lib/reporting.ts";
 import { probeKeyLimit } from "./relay.ts";
+import { UnsafePathError } from "../core/shared/safe-fs.ts";
 import { createRun } from "./lib/rundir.ts";
 import { type RunLock, type RunLockOptions, createRunLock } from "./lib/runlock.ts";
 import { type RunConfig, runtimeConfig } from "./lib/runcfg.ts";
@@ -236,6 +239,22 @@ async function cleanupOrphans(store: RunStore, deps: CliDeps, { contract, cfg }:
 
 /** state.json is not checked field by field (lib/store.ts), so a figure from it is converted, not assumed. */
 const usd = (n: unknown): string => `$${Number(n).toFixed(2)}`;
+
+const DURATION_UNIT_MS: Readonly<Record<string, number>> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** `events --since`: an ISO time, or a duration back from now (`90s`, `30m`, `2h`, `7d`), as an ISO time. */
+function sinceInstant(value: string, now: Date): string {
+  const m = /^(\d{1,9})([smhd])$/.exec(value.trim());
+  const unit = m?.[2] === undefined ? undefined : DURATION_UNIT_MS[m[2]];
+  if (m && unit !== undefined) {
+    const back = new Date(now.getTime() - Number(m[1]) * unit);
+    if (Number.isNaN(back.getTime())) throw new CliError("usage", `--since ${value} reaches back before the earliest time there is`);
+    return back.toISOString();
+  }
+  const at = Date.parse(value);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value) || !Number.isFinite(at)) throw new CliError("usage", `--since must be an ISO time or a duration like 2h (got ${JSON.stringify(value)})`);
+  return new Date(at).toISOString();
+}
 
 /** The most of a rotation's problems the status shows. */
 const ROTATION_PROBLEMS_SHOWN = 3;
@@ -592,6 +611,27 @@ const commands: Record<string, Command> = {
     }
     const report = statusReport(openStore(opts.run, deps), deps);
     return { data: report, text: statusText(report) };
+  },
+
+  /** The host event log (lib/events.ts), oldest first; read-only. */
+  async events(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["since", "run", "limit"], lists: ["type"], flags: ["json"] });
+    const since = opts.since === undefined ? undefined : sinceInstant(opts.since, deps.now());
+    const limit = num(opts.limit, "limit");
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) throw new CliError("usage", "--limit must be a whole number");
+    const types = (opts.type ?? []).flatMap((t) => t.split(",")).map((t) => t.trim()).filter(Boolean);
+    const unknown = types.filter((t) => !(EVENT_TYPES as readonly string[]).includes(t) && !EVENT_FAMILIES.includes(t));
+    if (unknown.length) throw new CliError("usage", `unknown event type ${unknown.join(", ")}; one of ${[...EVENT_TYPES, ...EVENT_FAMILIES].join(", ")}`);
+    let result: ReturnType<typeof readEvents>;
+    try {
+      result = readEvents(deps.home, { ...(since ? { since } : {}), ...(opts.run ? { run: opts.run } : {}), ...(types.length ? { types } : {}), ...(limit !== undefined ? { limit } : {}) });
+    } catch (e) {
+      if (e instanceof UnsafePathError) throw new CliError("refused", e.message);
+      throw e;
+    }
+    const lines = result.events.map(formatEvent);
+    if (result.skipped) lines.push(`(${result.skipped} line(s) that are not events were skipped)`);
+    return { data: { home: deps.home, events: result.events, skipped: result.skipped }, text: lines.length ? lines.join("\n") : `no events under ${deps.home}` };
   },
 
   /** Runs whose merged integration work has not reached its git remote (read-only; never fetches). */
@@ -973,6 +1013,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs
   top [--run <id>]                       every run, and whether it has merged work not yet published
+  events [--since <ISO|2h>] [--run <id>] [--type <type|family>] [--limit n]   the host event log, oldest first
   inbox                                  runs waiting on you for over 30 minutes
   doctor                                 exit non-zero when merged work is unpublished
   report --out status.json [--ntfy-url <topic-url> --ntfy-token-file <path>] [--gh-repo o/r] [--time-zone tz] [--digest-hour h]

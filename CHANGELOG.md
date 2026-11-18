@@ -10,6 +10,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **A host event log for autonomous runs.** Finding: the per-step `events.jsonl` files were a run's
+  own detail, and nothing recorded the sequence of what every run on a host did in one place for a
+  live view to read. Fix: each supervisor appends `run.started`, `run.status`, `cycle.started`,
+  `gate.result`, `cycle.ended`, `push`, `failure`, `dispatch.claim` and `dispatch.submit` events to
+  one `events.jsonl` in the state home (schema version 1, bounded and redacted fields, mode 0600,
+  links refused, one rotation at 16 MiB, best effort), and `pi-autonomy events` reads it with
+  `--since`, `--run`, `--type` and `--limit`. The reader is the library function `readEvents`.
+  Verified by `tests/autonomy-events-smoke.ts`.
 - **Reporting lines from autonomy up the chain.** Finding: with no one watching, the operator learnt
   of a stopped, parked or refused run, an exhausted budget or key, or a red autonomy pull request only
   by reading the host. Fix: `pi-autonomy report` writes one status file (per-run state, last cycle,

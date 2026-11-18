@@ -31,6 +31,7 @@ import { clip } from "./templates/common.ts";
 import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
+import { type EventInput, appendEvent } from "./events.ts";
 import { ceilingBreach } from "../../core/shared/ceiling.ts";
 import { BoundaryError, GateWaitInterrupted, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
@@ -358,6 +359,7 @@ export class Engine {
   save(fn?: (s: RunState) => void): void { saveState(this.store, this.state, this.rt.now(), fn); }
 
   go(to: RunStatus, info: TransitionInfo = {}): void {
+    const from = this.state.status;
     const next = transition(this.state, to, { at: new Date(this.rt.now()).toISOString(), ...info });
     // In place, so every holder of `this.state` (a step that started before the transition) keeps seeing the live record.
     for (const k of Object.keys(this.state)) if (!(k in next)) Reflect.deleteProperty(this.state, k);
@@ -365,6 +367,14 @@ export class Engine {
     this.store.writeState(this.state);
     reportRun(this.state, this.store.p);
     this.log(`state ${to}${info.reason ? ` (${info.reason})` : ""}`);
+    if (from === "ready" && to === "running") this.emit({ type: "run.started", run: this.store.run, template: this.contract.template });
+    this.emit({ type: "run.status", run: this.store.run, from, to, reason: info.reason ?? null, ...(info.by ? { by: info.by } : {}) });
+    if (to === "failed") this.emit({ type: "failure", run: this.store.run, code: info.reason ?? "failed", detail: info.detail ?? "" });
+  }
+
+  /** Append one event to the host event log (lib/events.ts). Best effort: a failure is logged, never thrown. */
+  emit(event: EventInput): void {
+    appendEvent(this.store.home, event, this.log, { at: new Date(this.rt.now()).toISOString() });
   }
 
   get status(): RunStatus { return this.state.status; }
@@ -510,12 +520,13 @@ export class Engine {
     if (error instanceof BoundaryError) {
       this.log(`BOUNDARY VIOLATION: ${error.message}`);
       try { await this.stopWorker("boundary violation"); } catch { /* ignore */ }
-      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); return; }
+      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.emit({ type: "failure", run: this.store.run, code: "boundary_violation", detail: error.message }); return; }
       this.go("failed", { reason: "boundary_violation", detail: error.message });
       return;
     }
     this.log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     try { this.save((s) => { s.lastError = errorText(error).slice(0, 1000); }); } catch { /* ignore */ }
+    this.emit({ type: "failure", run: this.store.run, code: "supervisor_error", detail: errorText(error) });
     if (this.active) this.go("paused", { reason: "supervisor_error", detail: errorText(error).slice(0, 1000) });
     throw error; // parked with the error recorded; can be resumed
   }

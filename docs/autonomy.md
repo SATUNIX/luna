@@ -1286,6 +1286,75 @@ Not covered:
 - A `key.json` left by a finished run keeps its last reading. The status file shows the reading's time, not whether it is stale.
 - `--gh-repo` reads at most 200 open pull requests.
 
+## Host event log
+
+Every supervisor on a host appends what its run does to one file, `events.jsonl` in the state home
+(`$PI_AUTONOMY_HOME`, default `~/.local/state/pi-autonomy`). The status file above is the current
+state; the event log is the history, oldest first. Each line is one JSON object with `v` (schema
+version, 1), `at` (ISO time), `run` and `type`, plus the fields of its type:
+
+| Type | Written when | Fields |
+|---|---|---|
+| `run.started` | the run enters `running` from `ready` | `template` |
+| `run.status` | every state change the supervisor makes | `from`, `to`, `reason` (`null` when none), `by` when given |
+| `cycle.started` | a cycle starts or resumes | `n`, `resume`, and for a dispatch cycle `engineer` and `item` |
+| `gate.result` | a cycle's acceptance gate has run | `n`, `sha`, `green`, `failing` (check or step names) |
+| `cycle.ended` | a cycle closes | `n`, `outcome`, `gate` (`skipped`, `green` or `red`), `merged`, `reason`, and `mergeReason` when not merged |
+| `push` | the integration branch is published, or publication fails with an error different from the last one (a retry that fails the same way writes nothing) | `branch`, `sha` (`null` on failure), `ok`, `error` on failure |
+| `failure` | the run fails, or the supervisor stops on an error | `code` (the failure reason, `supervisor_error` or `boundary_violation`), `detail` |
+| `dispatch.claim` | a dispatch cycle claims or continues a board item | `n`, `item`, `engineer`, `outcome` |
+| `dispatch.submit` | a merged dispatch cycle records its item as submitted | `n`, `item`, `engineer`, `sha` |
+
+Cycle, gate, push and dispatch events come from the cycling templates (`self-improve`, `dispatch`);
+a finite run (`implement`, `deploy`) writes the `run.*` and `failure` events.
+
+How the file is written:
+
+- Each event is one line, appended in a single write to a file opened with `O_APPEND` and
+  `O_NOFOLLOW`, so concurrent supervisors on one local file system do not interleave lines.
+- The file is mode 0600. A symbolic link at its name, or a file that is not the user's own regular
+  file, is refused.
+- Free text (`reason`, `mergeReason`, `detail`, `error`) and the `failing` names are made one
+  visible line (so a secret split by a hidden character is joined) and then pass through the
+  redaction table (`docs/security-standard.md`, Redaction; `tests/redaction-corpus-smoke.ts` runs
+  the corpus through it). Every field is bounded in bytes as encoded in the line: identifiers at
+  200, free text at 500, `failing` at 20 names of 100, so a line stays under 4 KiB whatever the
+  characters.
+- Writing is best effort. An event that cannot be written is noted in the run's `supervisor.log`,
+  and the run carries on.
+- Once the file is over 16 MiB it is renamed to `events.jsonl.1` (replacing the older one) before
+  the next append. The rename happens under a lock file, `events.jsonl.lock`, and the size is
+  checked again under it, so two supervisors that both see an oversized file rotate it once. A
+  supervisor that finds the lock held appends without rotating; a lock older than a minute is taken
+  as left by a supervisor that died.
+
+`pi-autonomy events` reads the log: `events.jsonl.1` first, then `events.jsonl`, one line per
+event, or the events as JSON with `--json`. Options:
+
+- `--since <ISO time | duration>` (`90s`, `30m`, `2h`, `7d`)
+- `--run <id>`
+- `--type <type or family>` (repeatable or comma-separated; `cycle` means both cycle types)
+- `--limit <n>`, which keeps the most recent `n`, still oldest first
+
+A line that is not a valid event is skipped and counted, and a symbolic link at either name is
+refused. Both files are opened before either is read, and opened again if a rotation happened in
+between, so a rotation while the log is read neither loses nor repeats a generation. The reader is the library function `readEvents` in `packages/autonomy/lib/events.ts`, for
+other callers. `tests/autonomy-events-smoke.ts` pins the event sequence of a dispatch cycle, the
+`run.*` events of a finite run, one failed `push` for repeated identical failures, the filters, the
+skipped lines, rotation and its lock, redaction (including a split secret) and byte bounds with
+multi-byte text, the refused link, and a run that is not failed by a log it cannot write. Nothing
+races two rotating supervisors or a rotation during a read.
+
+Not covered:
+- Events from outside a supervisor are not in the log: the integrator, `report`, host-kit tools, and
+  a state change a command makes while no supervisor runs (an offline `pause`, `cancel` or
+  `reconfigure`).
+- There is no follow mode: `events` reads the log once and exits.
+- Rotation keeps one older file. On a network file system, concurrent appends may interleave.
+- Two supervisors that find the same stale rotation lock at the same moment can both rotate, and
+  the second rename then replaces the generation the first rotated.
+- An event lost to a failed write is not retried.
+
 ## The run directory
 
 Everything is under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-autonomy/<run>`); nothing

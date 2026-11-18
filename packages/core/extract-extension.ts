@@ -105,7 +105,7 @@ export function extractExtension(name: string | undefined, { firstPartyDir = FIR
   if (isRecord(sourceMeta)) {
     // A placeholder home for the split-out repository: the kit's own host and owner, which the
     // operator changes if the extension is published elsewhere.
-    const repo = parseGitSource(readDistribution().git.source)?.repo ?? "https://github.com/OWNER/pi-system";
+    const repo = parseGitSource(readDistribution().git.source)?.repo ?? "https://github.com/OWNER/luna";
     const home = repo.replace(/^https?:\/\//, "").replace(/\/[^/]+$/, "");
     sourceMeta.homeRepo = `git:${home}/pi-ext-${name}`;
     fs.writeFileSync(metaPath, `${JSON.stringify(sourceMeta, null, 2)}\n`);

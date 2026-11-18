@@ -1,1 +1,1 @@
-Tier: E3 Standard. Plan non-trivial work, inspect the relevant dependencies, delegate selectively, implement and validate, then review the affected behaviour. Up to two children at once and three in total, at most one of them a scout.
+Tier: E3 Standard. Plan non-trivial work, inspect the relevant dependencies,{{delegation}} delegate selectively,{{/delegation}} implement and validate, then review the affected behaviour.{{delegation}} Up to two children at once and three in total, at most one of them a scout.{{/delegation}}

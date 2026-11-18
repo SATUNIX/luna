@@ -91,14 +91,14 @@ export default function (pi: ExtensionAPI) {
     name: "skill_search",
     label: "Skill search",
     description:
-      "Search all installed skills (runbooks for specific kinds of work) — including ones not listed in the system prompt. Returns the best matches with their SKILL.md paths; read the one that fits before doing the work.",
-    promptSnippet: "Find a runbook skill for the current task, then read its SKILL.md",
+      "Search all installed skills (runbooks), including unlisted ones. Returns the best matches with SKILL.md paths; read the best fit before working.",
+    promptSnippet: "Find a runbook skill, then read its SKILL.md",
     promptGuidelines: [
-      "Before non-trivial work in an area you have no listed skill for (security review, docs, dependencies, delegation, context resets, local models, recovery), call skill_search and read the best match.",
+      "Before non-trivial work with no listed skill (security review, docs, dependencies, delegation, context resets, local models, recovery), skill_search and read the best match.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "What you are about to do, in a few words" }),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 5)" })),
+      query: Type.String({ description: "What you are about to do" }),
+      limit: Type.Optional(Type.Number({ description: "Max results" })),
     }),
     async execute(_id, params) {
       const results = searchSkills(params.query, getCatalog(), Math.max(1, Math.min(Number(params.limit) || 5, 10)));

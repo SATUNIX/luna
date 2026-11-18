@@ -10,6 +10,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **Reporting lines from autonomy up the chain.** Finding: with no one watching, the operator learnt
+  of a stopped, parked or refused run, an exhausted budget or key, or a red autonomy pull request only
+  by reading the host. Fix: `pi-autonomy report` writes one status file (per-run state, last cycle,
+  spend today and this month per source, key limits, open pull requests, last alert) and sends ntfy
+  alerts once per condition, plus a daily digest. The relay records the OpenRouter key's own limit
+  (`limit`, `limit_remaining` and `usage` only) in `meter/key.json`, and `pi-autonomy key-limit` asks
+  for it on demand. Verified by `tests/autonomy-reporting-smoke.ts`.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
@@ -85,15 +92,73 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **Dependabot no longer proposes pi bumps for the image tool lockfiles.** The autonomy
+  and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
+  lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
+  pin, as for the root workspace.
+
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
   risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
   delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish
   checks, `packages/kit/profiles/`, a Dockerfile, or the autonomy modules that build the worker's
   sandbox and read its output got a single review. They are now R3 (refused for the owner or steward
   route unless `allowControlChanges` is on). Stricter only. `tests/autonomy-lean-smoke.ts`.
+- **An effort policy whose `{{delegation}}` markers do not pair up is refused.** An unpaired marker was
+  never matched, so it reached the model as literal text and the wording it should have hidden stayed;
+  this matters for an operator-overridden policy. The policy loader now names the prompt file and the
+  problem, like any other invalid policy. Stricter only. `tests/effort-smoke.ts`.
 - **The worker's cycle note is read only when it is a regular file.** A FIFO left at the note path
   blocked the host's read for ever, and a directory made the next cycle's clear throw; both now read as
   no note and are cleared. `tests/autonomy-lean-smoke.ts`.
+- **The installer no longer loads pi-lens's four bundled skills, saving about 420 tokens in every
+  first request.** pi lists each loaded skill's name and description in the system prompt, and
+  `pi-lens` ships `pi-lens-ast-grep`, `pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule` and
+  `pi-lens-write-tree-sitter-rule`, so `balanced`, `long-horizon`, `self-improving` and
+  `engagement` paid for them before the first word was typed. A companion in
+  `packages/core/sources.json` can now carry `skills`, pi package-filter patterns the installer
+  writes onto the companion's `settings.json` entry (`install.ts` step 3, `applyCompanionFilters`
+  in `packages/core/lib/settings.ts`); pi-lens declares `"skills": []`. Nothing is keyed on a
+  package name. The filter is also written for a companion registered before (a `/profile`
+  switch or `/update` adds it), and an entry that already has a `skills` key is never rewritten,
+  so setting your own filter on the entry (for example `"skills": ["+skills/pi-lens-ast-grep"]`)
+  brings the skills back and keeps them (`docs/supply-chain.md`, Companion installs). pi-lens's
+  13 tools and its diagnostics are unchanged. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `balanced` 6,392 to 5,973 (-419), `long-horizon` 8,652 to 8,225 (-427), `self-improving` 9,385
+  to 8,954 (-431), `engagement` 8,853 to 8,430 (-423); `lite` has no pi-lens and stays at 3,650;
+  tool definitions are identical, so the whole change is in the system prompt.
+  `tests/companion-integrity-smoke.ts` runs the real installer with a fake `pi` (a fresh
+  registration, one already registered, one with the operator's own filter) and
+  `tests/install-profile-filter-smoke.ts` covers `applyCompanionFilters`.
+
+- **Shorter tool descriptions for the memory, skill and verification tools, 54 to 156 tokens off
+  every first request.** `memory_save`, `memory_search`, `memory_forget`, `skill_search` (its
+  description, prompt snippet and guideline line), `verify_completion`, `verdict_status` and
+  `task_next` drop restatement and keep every instruction: when to call, what comes back, and the
+  trigger words a router or a model matches on. The `type` and `scope` parameters of the vault's
+  memory tools are now a single string `enum` instead of an `anyOf` of literals, which is also what
+  Google-style providers need; the reference generator (`packages/core/reference.ts`) reads the
+  `StringEnum` helper, so `docs/reference.md` still lists the allowed values. Nothing about the
+  safety text or the verdict rules changes. Measured on SRV02 with pi 1.5.1 as real first-request
+  captures to a local endpoint (isolated agent directory, the installer run with its companion
+  step, `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after:
+  `lite` 3,650 to 3,596 (-54), `balanced` 5,973 to 5,829 (-144), `long-horizon` 8,225 to 8,069
+  (-156), `self-improving` 8,954 to 8,798 (-156), `engagement` 8,430 to 8,274 (-156).
+
+- **`lite` is no longer told how to delegate, 32 tokens off its first request.** The effort block
+  carried "Delegate only bounded work...", "delegate selectively" and the child and scout counts,
+  although `lite` registers no delegation tool. The policy files
+  (`packages/extensions/src/effort/policy/*.md`) now wrap that wording in
+  `{{delegation}}...{{/delegation}}`, and the `effort` extension keeps it only while one of
+  `subagent`, `workflow_run`, `workflow`, `dual_review` or `dispatch_specialist` is registered (a pi
+  that cannot list tools keeps the full text). The sentence that effort sets depth and breadth, not
+  reasoning or permissions, and the tier limits are unchanged, and `balanced`, `long-horizon`,
+  `self-improving` and `engagement` render the same prompt as before. Measured on SRV02 with pi
+  1.5.1 as real first-request captures to a local endpoint (isolated agent directory,
+  `--no-context-files`; o200k_base, system prompt plus tool definitions), before and after: `lite`
+  3,596 to 3,564 (-32); the other four profiles are identical. `tests/effort-smoke.ts` covers every
+  tier with and without a delegation tool.
 
 ### Fixed
 
@@ -114,6 +179,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   a test process under one root that is removed on exit, and the next test process removes the roots
   of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
   behind, and about 5,400 had built up. Tests only; no product change.
+
+### Security
+
+- **An unfixable dev-only advisory no longer blocks every pull request.** Finding: GHSA-fc5q-39xc-vjpf
+  (ReDoS in picomatch 4.0.7 and earlier, no patched release) reached the root dev tree through
+  `typescript-eslint`, and the `dependencies` and `osv-scanner` jobs failed on every pull request into
+  `integration/luna`. Cause: `npm audit` cannot accept an advisory. Fix: the root audit runs through
+  `packages/core/audit-gate.ts`, which reads the dated `[[IgnoredVulns]]` entries of `osv-scanner.toml`
+  (the same list OSV-Scanner uses), fails on any high or critical advisory in the production tree and on
+  an expired entry; the advisory is accepted until 2027-02-18 in the risk-acceptance register.
+  Verification: `npm run smoke:audit-gate`, `npm run security:audit`.
 
 ## [0.4.0-beta.1]
 

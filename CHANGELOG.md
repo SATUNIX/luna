@@ -10,6 +10,41 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`/update` moves a local checkout that a pull cannot update.** Finding: for a checkout
+  registered in local mode, `/update kit` always planned `git pull --ff-only`, which cannot work
+  on a detached HEAD or on a branch with no upstream (an installed copy kept as its own git
+  worktree on its own branch); the check compared only origin's branch of the same name, so it
+  never saw a newer release, and updating meant a manual worktree move, `npm ci` and a reinstall.
+  Cause: the local path knew only "pull the tracked branch". Fix: a branch with a configured
+  upstream (any name) keeps the fast-forward pull; otherwise the check reads origin's refs and
+  reports the newest release tag and the heads of `main` and the trunk branch, offering one only
+  when the move goes forward (a release above the installed version, a branch head that descends
+  from the checkout). `/update kit` (and `/update all`) moves to the newest release,
+  `/update kit next|trunk` to a branch head, and the `/update` list offers each newer ref. The
+  plan, under one confirmation, is `git fetch` of the ref into a local tag or remote-tracking ref,
+  `git checkout --no-overwrite-ignore --detach` of its commit, `npm ci` and the checkout's own
+  installer in local mode for the recorded profile, each step verified; it never runs
+  `reset --hard`, `checkout -f` or `clean`. It refuses, naming the commands left, when tracked
+  files have uncommitted changes, a rebase, merge, cherry-pick, revert, `am` or bisect is in
+  progress, the detached HEAD holds commits no ref holds, origin is missing, unreachable, a retired
+  private source in any URL or scp form, or an address it cannot parse (never contacted), or
+  nothing is newer; a newer release whose move is refused is still reported as an update, with
+  the reason, never "up to date". Any well-formed URL or scp address that is not a retired source
+  is an ordinary remote; an address it does not cleanly understand (unparseable, git's
+  `transport::address` form, a malformed percent-escape) is not contacted, and a retired host is
+  recognised whatever its letter case or trailing dot. A kit root that is not the top level of its
+  own git checkout (a copy vendored inside another repository) gets no git command at all, so the
+  enclosing repository is never fetched, checked out or pulled. `/update undo` moves back only what the update moved: the journal now
+  records the branch (validated as a git branch name), the commit (validated as a commit id) and
+  whether the update pulled or moved. After a move it checks the branch out again, or detaches at
+  the recorded commit, and resets no branch; after a pull it resets the branch with
+  `git reset --keep`, refusing when that would drop commits only the branch holds; a journal from
+  before the branch was recorded is undone as before (`git reset --keep` on the checked-out
+  branch). Undo has the
+  same in-progress and orphaned-commit refusals. Verified by `tests/kit-update-local-smoke.ts`
+  (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
+  installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
+  not rerun `npm ci`, and only a newer release raises the start-up notice.
 - **The web console has a read-only Autonomy view.** Finding: the console had no autonomy
   awareness, so following unattended runs from a browser was not possible. Fix: an authenticated
   `GET /api/autonomy` (schema version 1; other methods 405) answers with the runs under the

@@ -177,6 +177,8 @@ function fakeGit({ tags = [], main = SHA_MAIN, head = SHA_OLD, reachable = true,
       if (args.includes("origin")) return upstream ? `${upstream}\trefs/heads/${branch}\n` : "";
       return [...tags.map((t, i) => `${String(i + 3).repeat(40)}\trefs/tags/v${t}`), `${main}\trefs/heads/main`, `${"9".repeat(40)}\trefs/heads/feature`].join("\n") + "\n";
     }
+    if (args.includes("--show-toplevel")) return `${args[1] ?? ""}\n`; // the kit root is its checkout's top level, as real git reports it
+    if (args.includes("symbolic-ref")) return branch && branch !== "HEAD" ? `refs/heads/${branch}\n` : null;
     if (args.includes("--abbrev-ref")) return `${branch}\n`;
     if (args.includes("rev-parse")) return `${head}\n`;
     if (args.includes("merge-base")) return contains ? "" : null;

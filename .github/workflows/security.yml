@@ -143,8 +143,10 @@ jobs:
       - run: npm audit signatures
       # The published package has no runtime dependencies; everything audited here is the
       # dev toolchain (the pi framework, TypeScript, ajv). High and critical findings fail the
-      # job; triage accepted upstream advisories in docs/supply-chain.md.
-      - run: npm audit --audit-level=high
+      # job. An advisory no release fixes yet, in the dev tree only, can be accepted with a reason
+      # and an expiry in osv-scanner.toml (docs/vulnerability-management.md); the gate fails on it
+      # again when it expires, and on any high or critical advisory in the production tree.
+      - run: npm run -s security:audit
       # Every other lockfile lockfile-check discovers (the MCP servers the container installs),
       # each installed without scripts and audited where it lives. The list is captured by a
       # checked assignment: `--list` exits non-zero on an error or when it finds no lockfile, and a

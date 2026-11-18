@@ -110,6 +110,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
   pin, as for the root workspace.
 
+- **quickjs-wasi 3.6.4 and typescript-eslint 8.72.2.** The workflow sandbox's QuickJS moves to 3.6.4,
+  which hardens the host-promise bridge (pending host observers reject when the VM terminates) and adds
+  one export, `qjs_is_uncatchable_error`; its WASI imports are unchanged. The pinned `quickjs.wasm`
+  digest in `wf-sandbox.ts` moves with it, after comparing the 3.6.3 and 3.6.4 tarballs; with the old
+  pin every sandbox run ends with kind `integrity` (`tests/workflow-sandbox-smoke.ts`). typescript-eslint
+  is lint tooling only.
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
   risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
   delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish

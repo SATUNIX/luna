@@ -16,6 +16,7 @@ import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR
 import { registeredCommands } from "../packages/core/eval/footprint.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
+import { keepGateLogs, runAcceptance, type AcceptanceRuntime } from "../packages/autonomy/lib/acceptance.ts";
 import { parseReview, reviewCycle, buildReviewBundle } from "../packages/autonomy/lib/review.ts";
 import { route, withUsage, screen, usageFrom, meteredUsd } from "../packages/autonomy/relay.ts";
 import { runCycle } from "../packages/autonomy/lib/cycle.ts";
@@ -1078,6 +1079,65 @@ await check("hostile model output and malformed RPC lines fail closed", () => {
   assert.equal(bad.at(-1), 'handler:{"type":"agent_end"}');
   assert.deepEqual(missingHarness({ type: "response", data: { commands: [{ name: { toString: "goal" } }, "goal", null] } }), HARNESS_COMMANDS);
   assert.deepEqual(missingHarness("goal"), HARNESS_COMMANDS);
+});
+
+await check("acceptance: a later gate does not destroy an earlier step's or check's log (F-05)", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-gatelogs-"));
+  try {
+    const root = path.join(tmp, "run");
+    const gateWork = path.join(root, "gate-work");
+    let n = 0;
+    // As the real runtime: one shared scratch dir, wiped before every check, a full log written into it.
+    const rt: AcceptanceRuntime = {
+      now: () => Date.now(),
+      runCheck: ({ check, logDir }) => {
+        fs.rmSync(gateWork, { recursive: true, force: true });
+        fs.mkdirSync(gateWork, { recursive: true });
+        const full = `${check.id} run ${++n}: FAILING ASSERTION at line 1\n${"x".repeat(10_000)}\nend of ${check.id} run ${n}\n`;
+        fs.writeFileSync(path.join(gateWork, "check.log"), full);
+        fs.writeFileSync(path.join(gateWork, "result.json"), JSON.stringify({ steps: [] }));
+        return Promise.resolve({ exitCode: 1, tail: full.slice(-4000), logs: logDir ? keepGateLogs(gateWork, logDir) : undefined });
+      },
+      serviceHealth: () => Promise.resolve({ ok: true }),
+    };
+    const checks = [{ id: "unit", type: "command", run: "x", required: true, timeoutMinutes: 1 }, { id: "lint", type: "command", run: "y", required: true, timeoutMinutes: 1 }] as unknown as Parameters<typeof runAcceptance>[0]["contract"]["acceptance"]["checks"];
+    const contract = { acceptance: { checks } };
+    const first = await runAcceptance({ rt, contract, sha: "a".repeat(40), step: 1, dir: path.join(root, "steps", "01", "checks"), runRoot: root });
+    await runAcceptance({ rt, contract, sha: "b".repeat(40), step: 2, dir: path.join(root, "steps", "02", "checks"), runRoot: root });
+    const unit1 = first.results.find((r) => r.id === "unit");
+    assert.deepEqual(unit1?.logs, ["steps/01/checks/unit.logs/check.log", "steps/01/checks/unit.logs/result.json"], "the evidence names the kept logs, relative to the run directory");
+    const kept = fs.readFileSync(path.join(root, "steps", "01", "checks", "unit.logs", "check.log"), "utf8");
+    assert.ok(kept.startsWith("unit run 1: FAILING ASSERTION") && kept.endsWith("end of unit run 1\n") && kept.length > 10_000, "step 1's full log survives step 2's gates, beyond the 4000-character tail");
+    assert.match(fs.readFileSync(path.join(root, "steps", "01", "checks", "lint.logs", "check.log"), "utf8"), /^lint run 2:/, "and the second check of a step does not destroy the first's");
+    const evidence = JSON.parse(fs.readFileSync(path.join(root, "steps", "01", "checks", "unit.json"), "utf8")) as { logs?: unknown };
+    assert.deepEqual(evidence.logs, unit1?.logs, "the evidence file records them too");
+    assert.match(fs.readFileSync(path.join(gateWork, "check.log"), "utf8"), /^lint run 4:/, "the shared scratch dir holds only the last gate");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+await check("acceptance: keepGateLogs takes only bounded regular files and never follows a link out of the gate dir", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-gatelogs-"));
+  try {
+    const gate = path.join(tmp, "gate");
+    const out = path.join(tmp, "kept");
+    fs.mkdirSync(path.join(gate, "home"), { recursive: true });
+    const secret = path.join(tmp, "operator-secret.log");
+    fs.writeFileSync(secret, "do not keep");
+    fs.symlinkSync(secret, path.join(gate, "evil.log"));
+    fs.mkdirSync(path.join(gate, "dir.log"));
+    fs.writeFileSync(path.join(gate, "notes.txt"), "not a log");
+    fs.writeFileSync(path.join(gate, ".hidden.log"), "hidden");
+    fs.writeFileSync(path.join(gate, "big.log"), `HEAD${"y".repeat(5000)}TAIL`);
+    fs.writeFileSync(path.join(gate, "gate.log"), "ok");
+    fs.mkdirSync(out); fs.writeFileSync(path.join(out, "stale.log"), "from an earlier evaluation");
+    const kept = keepGateLogs(gate, out, 1000);
+    assert.deepEqual(kept.map((f) => path.basename(f)), ["big.log", "gate.log"], "only plain-named regular .log/.json files");
+    assert.deepEqual(fs.readdirSync(out).sort(), ["big.log", "gate.log"], "a stale copy is replaced, not mixed in");
+    const big = fs.readFileSync(path.join(out, "big.log"), "utf8");
+    assert.ok(big.startsWith("...[4008 bytes cut; the last 1000 kept]...\n") && big.endsWith("TAIL") && !big.includes("HEAD"), "an oversized log keeps its last part");
+    assert.equal(fs.statSync(path.join(out, "gate.log")).mode & 0o777, 0o600);
+    assert.deepEqual(keepGateLogs(path.join(tmp, "missing"), out), [], "a missing gate dir keeps nothing");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 await check("export: a symlink inside the run directory cannot carry an outside file into the export", () => {

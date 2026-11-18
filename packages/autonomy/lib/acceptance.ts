@@ -22,12 +22,15 @@ export interface RawCheckOutcome {
   readonly steps?: unknown;
   readonly ok?: boolean | undefined;
   readonly error?: boolean | undefined;
+  /** The gate's log files kept for this check (absolute paths under the `logDir` it was given). */
+  readonly logs?: readonly string[] | undefined;
 }
 
 /** The runtime calls acceptance makes (lib/runtime.ts, tests/fake-runtime.ts). */
 export interface AcceptanceRuntime {
   now(): number;
-  runCheck(o: { check: AcceptanceCheck; sha: string }): Promise<RawCheckOutcome>;
+  /** `logDir`: where to keep this check's full gate logs, which the next check's gate would wipe. */
+  runCheck(o: { check: AcceptanceCheck; sha: string; logDir?: string | undefined }): Promise<RawCheckOutcome>;
   serviceHealth(o: { check: AcceptanceCheck }): Promise<RawCheckOutcome>;
 }
 
@@ -51,6 +54,8 @@ export interface CheckResult {
   definitionDigest: string;
   tail: string;
   steps?: CheckStep[];
+  /** The check's full gate logs, relative to the run directory (`steps/<n>/checks/<id>.logs/`). */
+  logs?: string[];
   at: string;
 }
 
@@ -89,11 +94,51 @@ export interface RunAcceptanceOptions {
   only?: readonly string[] | undefined;
 }
 
+/** The most a kept gate log may hold; a larger one keeps its last part, after a marker line. */
+export const GATE_LOG_MAX_BYTES = 8 * 1024 * 1024;
+/** The most gate files kept per check. */
+export const GATE_LOG_MAX_FILES = 16;
+const GATE_LOG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(?:log|json)$/;
+
+/**
+ * Copy the gate's top-level log and result files out of its scratch directory (one shared directory,
+ * wiped before every check) into `to`, so a later gate cannot destroy them. The gate container ran
+ * the worker's code and wrote `from`, so only regular files with a plain name are taken, a symlink
+ * is never followed (lstat, then O_NOFOLLOW), and each copy is bounded. Returns the files written.
+ */
+export function keepGateLogs(from: string, to: string, maxBytes = GATE_LOG_MAX_BYTES): string[] {
+  let names: string[];
+  try { names = fs.readdirSync(from).filter((n) => GATE_LOG_NAME.test(n)).sort().slice(0, GATE_LOG_MAX_FILES); } catch { return []; }
+  fs.rmSync(to, { recursive: true, force: true });
+  const kept: string[] = [];
+  for (const name of names) {
+    const src = path.join(from, name);
+    let fd: number;
+    try {
+      if (!fs.lstatSync(src).isFile()) continue;
+      fd = fs.openSync(src, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    } catch { continue; }
+    try {
+      const size = fs.fstatSync(fd).size;
+      const length = Math.min(size, maxBytes);
+      const buf = Buffer.alloc(length);
+      const read = length > 0 ? fs.readSync(fd, buf, 0, length, size - length) : 0;
+      const body = buf.subarray(0, read);
+      fs.mkdirSync(to, { recursive: true });
+      const dest = path.join(to, name);
+      fs.writeFileSync(dest, size > maxBytes ? Buffer.concat([Buffer.from(`...[${size - length} bytes cut; the last ${length} kept]...\n`), body]) : body, { mode: 0o600 });
+      kept.push(dest);
+    } finally { fs.closeSync(fd); }
+  }
+  return kept;
+}
+
 const clip = (s: string, max: number): string => (s.length <= max ? s : `${s.slice(0, max / 4)}\n...[${s.length - max} characters cut]...\n${s.slice(-(max * 3) / 4)}`);
 
 /** Run every check for `sha` and write one evidence file per check. */
 export async function runAcceptance({ rt, contract, sha, step, dir, runRoot, log = () => {}, only }: RunAcceptanceOptions): Promise<AcceptanceEvaluation> {
   fs.mkdirSync(dir, { recursive: true });
+  const root = runRoot ?? path.dirname(path.dirname(path.dirname(dir)));
   const results: CheckEvidence[] = [];
   const checks = contract.acceptance.checks.filter((c) => !only || only.includes(c.id));
   // Command checks first (they judge the code), then service health (which judges the deployment).
@@ -102,7 +147,7 @@ export async function runAcceptance({ rt, contract, sha, step, dir, runRoot, log
     const started = rt.now();
     let raw: RawCheckOutcome;
     try {
-      raw = check.type === "service-health" ? await rt.serviceHealth({ check }) : await rt.runCheck({ check, sha });
+      raw = check.type === "service-health" ? await rt.serviceHealth({ check }) : await rt.runCheck({ check, sha, logDir: path.join(dir, `${check.id}.logs`) });
     } catch (error) {
       raw = { exitCode: 125, timedOut: false, tail: `the check could not run: ${error instanceof Error ? error.message : String(error)}`, error: true };
     }
@@ -114,11 +159,12 @@ export async function runAcceptance({ rt, contract, sha, step, dir, runRoot, log
       definitionDigest: sha256(canonicalJson(check)),
       tail: clip(raw.tail ?? raw.detail ?? "", 4000),
       ...(Array.isArray(raw.steps) ? { steps: raw.steps.slice(0, 20).map((x: unknown) => stepOf(x)) } : {}),
+      ...(raw.logs?.length ? { logs: raw.logs.map((f) => path.relative(root, f)) } : {}),
       at: new Date(rt.now()).toISOString(),
     };
     const file = path.join(dir, `${check.id}.json`);
     writeJsonAtomic(file, result);
-    results.push({ ...result, evidence: path.relative(runRoot ?? path.dirname(path.dirname(path.dirname(dir))), file) });
+    results.push({ ...result, evidence: path.relative(root, file) });
     log(`check ${check.id}: ${pass ? "PASS" : "FAIL"}${result.timedOut ? " (timed out)" : ""}`);
   }
   const allRequiredPass = contract.acceptance.checks.filter((c) => c.required).every((c) => results.find((r) => r.id === c.id)?.pass === true) && checks.length === contract.acceptance.checks.length;

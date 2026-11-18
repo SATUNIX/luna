@@ -419,6 +419,18 @@ try {
     // A quoted heredoc is inert only to a command that reads it as data.
     "ash <<'EOF'\ngit apply protected.patch\nEOF", "mksh <<'EOF'\ngit apply protected.patch\nEOF",
     "sudo -s <<'EOF'\ngit apply protected.patch\nEOF", "su <<'EOF'\ngit apply protected.patch\nEOF", "at now <<'EOF'\ngit apply protected.patch\nEOF",
+    // Read by the firewall's parser in protected-paths too (A-90): a comment ending in a backslash does not continue
+    // onto the next line, an obfuscated cd still moves the directory, an alias is expanded, and a pipe into
+    // sudo -s, su, at or batch runs the piped text.
+    "# note \\\ngit apply protected.patch", "true # \\\ngit apply protected.patch", "x=1 # \\\npatch -p1 -i protected.patch",
+    `c\\d packages/core && patch -p1 -i ${WS}/reltrad.patch`, `c''d packages/core && patch -p1 -i ${WS}/reltrad.patch`,
+    "shopt -s expand_aliases\nalias x=patch\nx -p1 < protected.patch",
+    "echo 'git apply protected.patch' | sudo -s", "echo 'git apply protected.patch' | su", "echo 'git apply protected.patch' | at now", "echo 'git apply protected.patch' | batch",
+    // Blocked by the text walker before A-90; pinned so that neither reading can drop them.
+    "echo 'git apply protected.patch' | bash -o pipefail", "echo 'git apply protected.patch' | bash -O extglob", "echo 'git apply protected.patch' | busybox sh", "echo 'git apply protected.patch' | fish", "echo 'git apply protected.patch' | mksh",
+    "sh <(echo 'git apply protected.patch')", "source <(echo 'git apply protected.patch')", `CMD='git apply protected.patch'; bash -c "$CMD"`,
+    `sudo -D packages/core patch -p1 -i ${WS}/reltrad.patch`, `sudo --chdir=packages/core patch -p1 -i ${WS}/reltrad.patch`, "chroot /srv git apply protected.patch", "screen -dm git apply protected.patch",
+    `python3 -c 'import os; os.system("git apply protected.patch")'`, `perl -e 'system("git apply protected.patch")'`, `node -e 'require("child_process").execSync("git apply protected.patch")'`, "ssh localhost git apply protected.patch",
     // A protected file restored from another ref.
     `git checkout HEAD~1 -- ${POLICY}`, `git checkout HEAD~1 ${POLICY}`, `git restore --source=HEAD~1 ${POLICY}`, `git restore -s HEAD~1 -- ${POLICY}`,
   ];
@@ -451,6 +463,14 @@ try {
   const PATCH_WRITES_PROTECTED_PATHS_ONLY = [
     `bash -c "$(cat <<'EOF'\ngit apply protected.patch\nEOF\n)"`, `bash -c "$(echo 'a; git apply protected.patch')"`, `echo "$(case x in x) git apply protected.patch;; esac)"`,
     "parallel <<'EOF'\ngit apply protected.patch\nEOF", "yash <<'EOF'\ngit apply protected.patch\nEOF", "busybox ash <<'EOF'\ngit apply protected.patch\nEOF", "make -f - <<'EOF'\nall:\n\tgit apply protected.patch\nEOF",
+    // The firewall rates these medium or low (README limits): a directory-moving wrapper option, `time -p`, a case
+    // arm or nested parentheses in a substitution, an arithmetic subscript, awk's system(), a command name or eval
+    // text computed at run time, and a pipe into make or ssh. protected-paths fails closed on each.
+    `nsenter --wd=packages/core patch -p1 -i ${WS}/reltrad.patch`, `unshare -w packages/core patch -p1 -i ${WS}/reltrad.patch`,
+    "time -p git apply protected.patch", "\\time -p git apply protected.patch", "echo $(case x in x) git apply protected.patch;; esac)",
+    "cat <<EOF\n$( (git apply protected.patch) )\nEOF", "cat <<EOF\n$(case x in x) git apply protected.patch;; esac)\nEOF", "let 'a[$(git apply protected.patch)]'", `awk 'BEGIN{system("git apply protected.patch")}'`,
+    "P=patch; $P -p1 < protected.patch", "G=git; $G apply protected.patch", `eval "$(echo git apply protected.patch)"`, `bash -c "$(echo git apply protected.patch)"`, `sh -c "$(printf 'git apply protected.patch')"`,
+    "echo 'git apply protected.patch' | make -f -", "echo 'git apply protected.patch' | ssh localhost",
   ];
   for (const cmd of PATCH_WRITES_PROTECTED_PATHS_ONLY) {
     if (!(await blocked(cmd))) problems.push(`protected-paths allows patch write: ${cmd}`);

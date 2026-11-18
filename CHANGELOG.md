@@ -228,6 +228,23 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **protected-paths reads patch writers with the firewall's shell parser too (A-90, part 2).** Finding:
+  protected-paths found patch writers only with a text walker, which read some commands differently from
+  bash and from the firewall: it allowed `# note \⏎git apply p.patch` (a comment does not continue onto
+  the next line, but the walker joined them first), `c\d dir && patch …` (the patch placed in the wrong
+  directory), an alias for `patch`, and a patch command piped into `sudo -s`, `su`, `at` or `batch`, all of
+  which the firewall rates high. Cause: two readers, and the firewall's parser could not be shared because it
+  lived inside the firewall extension. Fix: the parser moved to `packages/core/shared/shell.ts` (generated
+  into both extensions); protected-paths also reads the command as written with it and refuses a patch
+  writer either reading finds, and on a line naming a patch tool also fails closed on unreadable text, a
+  command name or `eval` text computed at run time, and commands piped into a shell, `make` or `ssh`. Both
+  hooks now share one reading of a patch call's stdin and also place its targets at the directory the parser
+  tracked (`patchStdinOf`, `patchTargetsAt` in `packages/core/shared/inline-guard.ts`). Only tightens: every
+  earlier corpus row keeps its decision. Not covered: the text walker is still in use (the firewall's
+  catch-all for writers it cannot place), and protected-paths' other write targets still come from its own
+  regular expressions. Verification: `tests/protected-paths-corpus-smoke.ts` gains 26 patch-write rows for
+  both hooks and 16 for protected-paths only; the 17 new refusals fail on the earlier reading.
+
 - **An unfixable dev-only advisory no longer blocks every pull request.** Finding: GHSA-fc5q-39xc-vjpf
   (ReDoS in picomatch 4.0.7 and earlier, no patched release) reached the root dev tree through
   `typescript-eslint`, and the `dependencies` and `osv-scanner` jobs failed on every pull request into

@@ -94,6 +94,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
   ],
   "shell.ts": [
     "packages/extensions/src/tool-firewall/shared/shell.ts",
+    "packages/extensions/third_party/protected-paths/shared/shell.ts",
   ],
   "input-owner.ts": [
     "packages/extensions/src/conductor/shared/input-owner.ts",

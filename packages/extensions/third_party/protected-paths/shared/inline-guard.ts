@@ -29,6 +29,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { basenameOf, type Parsed, type Segment } from "./shell.ts";
 
 /**
  * Interpreter basenames whose inline code this rule inspects: Python, PyPy, Node and its TypeScript and
@@ -1089,6 +1090,77 @@ export function patchCallTargets(command: string, cwd: string, call: PatchCall, 
 /** True when the text names a patch writer, for a shell whose commands arrive on a pipe. Deliberately coarse. */
 export function mentionsPatchWriter(text: string): boolean {
   return /\b(?:git-apply|git-am|g?patch)\b/.test(text) || (/\bgit\b/.test(text) && /\b(?:apply|am)\b/.test(text));
+}
+
+// --- The parser's reading of patch writers (./shell.ts), shared by tool-firewall and protected-paths ----------
+
+/**
+ * What a patch writer in one parsed segment reads on stdin. Only a single literal source is known: bash uses
+ * the last of several sources and a later file beats a heredoc, and piped or hidden input is unknown. The shell
+ * expands an unquoted heredoc and deletes a backslash-newline in it, so such a body may not be what git reads.
+ */
+export function patchStdinOf(seg: Segment): PatchStdin {
+  const unknown = { text: null, file: null };
+  if (seg.unknownArgs || seg.pipeIn) return unknown;
+  const inputs = seg.redirects.filter((r) => r.op.includes("<"));
+  const from = inputs[0];
+  if (!from || inputs.length > 1 || (from.fd !== "" && from.fd !== "0")) return unknown;
+  if (from.op === "<<" || from.op === "<<-") return { text: (from.bodyExpands ?? true) && /[$`]|\\\r?\n/.test(from.body ?? "") ? null : (from.body ?? null), file: null };
+  return from.op === "<" && !from.dynamic ? { text: null, file: from.target } : unknown;
+}
+
+/**
+ * patchCallTargets at the session directory and, when it differs, at the directory the parser tracked for the
+ * segment (`cd` written in a form the text reading misses, such as `c\d`). Both readings count, so this only
+ * adds targets; a segment whose directory the parser could not follow fails closed.
+ */
+export function patchTargetsAt(command: string, cwd: string, segmentCwd: string | null, call: PatchCall, chdirs: readonly string[], toAbsolute: (dir: string, file: string) => string | null, stdin: PatchStdin): PatchResolution {
+  if (segmentCwd === null) return { targets: [], unreadable: "the directory it runs in cannot be determined" };
+  const atSession = patchCallTargets(command, cwd, call, chdirs, toAbsolute, stdin);
+  if (atSession.unreadable !== null || segmentCwd === cwd) return atSession;
+  const atSegment = patchCallTargets(command, segmentCwd, call, chdirs, toAbsolute, stdin);
+  return { targets: [...new Set([...atSession.targets, ...atSegment.targets])], unreadable: atSegment.unreadable };
+}
+
+/** A patch writer the parser found in one segment, or why what it changes cannot be seen. */
+export type ParsedPatchCall = { call: PatchCall; chdirs: string[]; stdin: PatchStdin; cwd: string | null } | { unseen: string };
+
+// Programs that run commands read from a pipe: shells, `source`, job schedulers and runners.
+const PIPE_RUNNERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "yash", "fish", "busybox", "source", ".", "at", "batch", "parallel", "make", "ssh", "script"]);
+
+/**
+ * The patch writers in a parsed command (the firewall's parser), for protected-paths. Fails closed, when the
+ * command names a patch writer anywhere, on what the parser cannot follow: unreadable text, a command name
+ * computed at run time, or commands arriving on a pipe into a shell or runner. A remote segment changes no
+ * local file and is the firewall's remote-exec rule's.
+ */
+export function patchCallsInParse(parsed: Parsed, command: string): ParsedPatchCall[] {
+  const out: ParsedPatchCall[] = [];
+  const named = mentionsPatchWriter(command);
+  if (named && parsed.opaque.length > 0) out.push({ unseen: "part of the command cannot be read" });
+  for (const seg of parsed.segments) {
+    if (seg.remote || seg.argv.length === 0) continue;
+    const exe = basenameOf(seg.argv[0] ?? "");
+    if (named && (seg.dynamicName || seg.evalOf === true || (exe === "eval" && seg.words.slice(1).some((w) => w.dynamic)))) { out.push({ unseen: "a command name is computed at run time" }); continue; }
+    if (named && seg.pipeIn && (seg.interactiveShell === true || PIPE_RUNNERS.has(exe))) { out.push({ unseen: "commands arrive on a pipe into a shell" }); continue; }
+    let tool: PatchTool | null = null;
+    let args: string[] = [];
+    let chdirs: string[] = [];
+    if (exe === "patch" || exe === "gpatch") { tool = "patch"; args = seg.argv.slice(1); }
+    else if (exe === "git-apply" || exe === "git-am") { tool = exe; args = seg.argv.slice(1); }
+    else if (exe === "git") {
+      const at = gitSubcommandIndex(seg.argv, 1);
+      const sub = seg.argv[at];
+      if (sub !== undefined && /[$`]/.test(sub)) { out.push({ unseen: "the git subcommand is computed at run time" }); continue; }
+      if (sub === "apply" || sub === "am") { tool = sub === "apply" ? "git-apply" : "git-am"; args = seg.argv.slice(at + 1); chdirs = gitChdirs(seg.argv, 1); }
+    }
+    if (tool === null) continue;
+    const call = parsePatchArgs(tool, args);
+    if (!call.writes) continue;
+    if (seg.unknownArgs) { out.push({ unseen: "the patch arrives through arguments that cannot be seen" }); continue; }
+    out.push({ call, chdirs, stdin: patchStdinOf(seg), cwd: seg.cwd });
+  }
+  return out;
 }
 
 /** A call whose arguments and tool cannot be read from the text, so it fails closed in the hook. */

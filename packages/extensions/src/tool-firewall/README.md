@@ -168,8 +168,11 @@ runs. The limits it leaves open:
   with the shared text walker and with this firewall's parser (`packages/core/shared/shell.ts`, generated into
   both extensions), whose reading of stdin and of the segment's directory both hooks share
   (`shared/inline-guard.ts` `patchStdinOf`, `patchTargetsAt`). On a line that names a patch tool it also fails
-  closed on text the parser reports unreadable, a command name or `eval` text computed at run time, and
-  commands piped into a shell, `sudo -s`, `su`, `at`, `batch`, `make` or `ssh`. Some forms are still refused
+  closed on text the parser reports unreadable, a command name or `eval` text computed at run time when that
+  command's own words (with the variables it uses) name a patch tool, and commands fed to the standard input
+  (a pipe, a here-string, a `<` file) of a shell, `sudo -s`, `su`, `at`, `batch`, `make -f -` or an `ssh` with
+  no remote command. The parser reads `env -S` with the split string attached to the option (`env
+  -S'git apply p.patch'`) as a command, in both hooks. Some forms are still refused
   only by protected-paths and rated medium or low here: a heredoc fed to `parallel`, `yash`, `busybox ash` or
   `make -f -`, `time -p`, a `case` arm or nested parentheses inside a substitution, `nsenter --wd` and
   `unshare -w`, and awk's `system()` (`PATCH_WRITES_PROTECTED_PATHS_ONLY` in

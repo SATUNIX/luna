@@ -431,6 +431,11 @@ try {
     "sh <(echo 'git apply protected.patch')", "source <(echo 'git apply protected.patch')", `CMD='git apply protected.patch'; bash -c "$CMD"`,
     `sudo -D packages/core patch -p1 -i ${WS}/reltrad.patch`, `sudo --chdir=packages/core patch -p1 -i ${WS}/reltrad.patch`, "chroot /srv git apply protected.patch", "screen -dm git apply protected.patch",
     `python3 -c 'import os; os.system("git apply protected.patch")'`, `perl -e 'system("git apply protected.patch")'`, `node -e 'require("child_process").execSync("git apply protected.patch")'`, "ssh localhost git apply protected.patch",
+    // env -S with the split string attached to its option, and a here-string or a `<` file into sudo -s, su, doas,
+    // at or batch: read as commands like the pipe and heredoc forms.
+    "env -S'git apply protected.patch'", "env -vS'git apply protected.patch'", "env -u X -S'patch -p1 -i protected.patch'", "env -Sgit\\ apply\\ protected.patch", "env --split-string='git am protected.patch'",
+    "sudo -s <<< 'git apply protected.patch'", "sudo -i <<< 'git apply protected.patch'", "su <<< 'git apply protected.patch'", "doas -s <<< 'git apply protected.patch'", "at now <<< 'git apply protected.patch'", "batch <<< 'git apply protected.patch'",
+    "echo 'git apply protected.patch' > cmds.txt; su < cmds.txt",
     // A protected file restored from another ref.
     `git checkout HEAD~1 -- ${POLICY}`, `git checkout HEAD~1 ${POLICY}`, `git restore --source=HEAD~1 ${POLICY}`, `git restore -s HEAD~1 -- ${POLICY}`,
   ];
@@ -455,6 +460,9 @@ try {
     "cat > notes.md <<'EOF'\ngit apply foo.patch\nEOF", "tee notes.md <<'EOF'\ngit apply foo.patch\nEOF", "cat <<'EOF' | tee notes.md\npatch -p1 -i x\nEOF", "git commit -m \"$(cat <<'EOF'\nfix: `git apply` now reads names\nEOF\n)\"", `git commit -m "fix\n\ngit apply now handles quotes"`, `git commit -m "fix; git apply broke"`, `echo "run; git apply x"`,
     // Each tool prints and exits during option parsing.
     "patch --version", "patch --help", "git apply --help",
+    // The parser's fail-closed rules look at the segment they apply to: a computed command elsewhere on a line that
+    // names a patch tool, an ssh or make that does not read commands from the pipe, stay allowed.
+    `eval "$(direnv hook bash)" && npm version patch`, `"$CC" -o app main.c && npm version patch`, "cat release.patch | ssh build 'cat > /tmp/r.patch'", "echo patch | make -C build all", "$EDITOR notes.md && git log --grep apply",
   ];
   // High for their own reasons (a cluster change, a publish), so these only assert the patch guard stays out of it.
   const PATCH_BENIGN_RATED_ELSEWHERE = ["kubectl patch deployment web -p '{}'", "oc patch pod x -p '{}'", "cargo release patch"];

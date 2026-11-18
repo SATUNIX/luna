@@ -1125,8 +1125,26 @@ export function patchTargetsAt(command: string, cwd: string, segmentCwd: string 
 /** A patch writer the parser found in one segment, or why what it changes cannot be seen. */
 export type ParsedPatchCall = { call: PatchCall; chdirs: string[]; stdin: PatchStdin; cwd: string | null } | { unseen: string };
 
-// Programs that run commands read from a pipe: shells, `source`, job schedulers and runners.
-const PIPE_RUNNERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "yash", "fish", "busybox", "source", ".", "at", "batch", "parallel", "make", "ssh", "script"]);
+// Programs that run commands read from their standard input: shells, `source`, job schedulers and runners.
+// `make` only with a makefile on stdin, and `ssh` only as a bare session with no remote command.
+const STDIN_RUNNERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "yash", "fish", "busybox", "source", ".", "at", "batch", "parallel", "script"]);
+const readsStdinAsCommands = (seg: Segment, exe: string, parsed: Parsed): boolean =>
+  seg.interactiveShell === true || STDIN_RUNNERS.has(exe) || (exe === "make" && seg.argv.some((a, i) => a === "--file=-" || a === "-f-" || ((a === "-f" || a === "--file") && seg.argv[i + 1] === "-"))) ||
+  // ssh with no remote command runs a shell on its stdin: no segment of the command runs on that host.
+  (exe === "ssh" && !parsed.segments.some((other) => other.remote !== undefined && other.remote === seg.ssh?.host));
+// Standard input from a pipe, a here-string, a `<` file or a duplicated descriptor; a heredoc fed to a shell is
+// already parsed as commands of its own.
+const stdinFed = (seg: Segment): boolean => seg.pipeIn || seg.redirects.some((r) => (r.fd === "" || r.fd === "0") && (r.op === "<<<" || r.op === "<" || r.op === "<&" || r.op === "<>"));
+
+/**
+ * The text a segment itself runs, for deciding whether a part the parser cannot follow may be a patch writer:
+ * its words as written, with each `$NAME` it uses given the value assigned earlier in the command.
+ */
+function segmentText(seg: Segment): string {
+  const words = seg.words.map((w) => w.raw);
+  const used = Object.entries(seg.vars).filter(([name]) => words.some((w) => w.includes("$" + name) || w.includes("${" + name)));
+  return [...words, ...used.map(([, value]) => value)].join(" ");
+}
 
 /**
  * The patch writers in a parsed command (the firewall's parser), for protected-paths. Fails closed, when the
@@ -1141,8 +1159,9 @@ export function patchCallsInParse(parsed: Parsed, command: string): ParsedPatchC
   for (const seg of parsed.segments) {
     if (seg.remote || seg.argv.length === 0) continue;
     const exe = basenameOf(seg.argv[0] ?? "");
-    if (named && (seg.dynamicName || seg.evalOf === true || (exe === "eval" && seg.words.slice(1).some((w) => w.dynamic)))) { out.push({ unseen: "a command name is computed at run time" }); continue; }
-    if (named && seg.pipeIn && (seg.interactiveShell === true || PIPE_RUNNERS.has(exe))) { out.push({ unseen: "commands arrive on a pipe into a shell" }); continue; }
+    const computed = seg.dynamicName || seg.evalOf === true || (exe === "eval" && seg.words.slice(1).some((w) => w.dynamic));
+    if (computed && mentionsPatchWriter(segmentText(seg))) { out.push({ unseen: "a command name is computed at run time" }); continue; }
+    if (named && stdinFed(seg) && readsStdinAsCommands(seg, exe, parsed)) { out.push({ unseen: "commands arrive on standard input of a shell" }); continue; }
     let tool: PatchTool | null = null;
     let args: string[] = [];
     let chdirs: string[] = [];

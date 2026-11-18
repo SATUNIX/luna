@@ -963,6 +963,13 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
           if (a === undefined) break;
           // `env -C` moves the command but not the shell's redirects, so what it reads is no longer known here.
           if (/^(?:-[a-zA-Z0]*C|--c)/.test(a)) seg.unknownArgs = true;
+          // The split string attached to its option (`-S'cmd'`, `-vS'cmd'`, `--split-string=cmd`) is a command too.
+          // Only the flags that take no value (-i, -0, -v) can come before S in one word.
+          const attached = /^-[iv0]*S(.+)$/.exec(a) ?? /^--split-string=(.+)$/.exec(a);
+          if (attached?.[1] !== undefined) {
+            parseInto([attached[1], ...seg.argv.slice(i + 1)].join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "env -S"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
+            return null;
+          }
           if (/^-[a-zA-Z0]*[uC]$/.test(a) || a === "--unset" || a === "--chdir" || a === "-S" || a === "--split-string") {
             if ((a === "-S" || a === "--split-string") && seg.argv[i + 1]) {
               parseInto(seg.argv.slice(i + 1).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "env -S"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);

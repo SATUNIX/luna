@@ -26,6 +26,9 @@
         <button class="nav-item" type="button" data-view="agents">
           Agents
         </button>
+        <button class="nav-item" type="button" data-view="autonomy">
+          Autonomy
+        </button>
         <button class="nav-item" type="button" data-view="config">
           Config
         </button>
@@ -213,6 +216,19 @@
             </button>
           </div>
           <div id="agent-grid" class="agent-grid"></div>
+        </div>
+
+        <!-- ---------------------------------------------------- autonomy -->
+        <div id="autonomy-view" class="view view-scroll hidden">
+          <div class="view-head">
+            <h1 class="view-title">Autonomy</h1>
+            <p class="view-sub">
+              Autonomous runs on this host, their recent events and the
+              reporting status file. Read-only: control runs with
+              <code>/autonomy</code> or <code>pi-autonomy</code>.
+            </p>
+          </div>
+          <div id="autonomy-body" class="autonomy-body"></div>
         </div>
 
         <!-- ------------------------------------------------------ config -->

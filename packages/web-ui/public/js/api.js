@@ -173,6 +173,24 @@ function isLens(value) {
         typeof value.lens.available === "boolean" &&
         Array.isArray(value.lens.files));
 }
+function isAutonomyRun(value) {
+    return isRecord(value) && typeof value.run === "string";
+}
+function isAutonomyEvent(value) {
+    return (isRecord(value) &&
+        typeof value.at === "string" &&
+        typeof value.run === "string" &&
+        typeof value.type === "string");
+}
+function isAutonomy(value) {
+    return (isRecord(value) &&
+        value.schemaVersion === 1 &&
+        typeof value.at === "string" &&
+        isArrayOf(value.runs, isAutonomyRun) &&
+        isArrayOf(value.events, isAutonomyEvent) &&
+        (value.status === null || isRecord(value.status)) &&
+        isRecord(value.skipped));
+}
 // ------------------------------------------------------------------- api ---
 const enc = encodeURIComponent;
 const agentPath = (name, source) => `/api/agents/${enc(name)}${source ? `?source=${enc(source)}` : ""}`;
@@ -185,6 +203,7 @@ export const api = {
     skills: () => request("GET", "/api/skills", isSkills),
     models: () => request("GET", "/api/models", isModels),
     cwds: () => request("GET", "/api/cwds", isCwds),
+    autonomy: () => request("GET", "/api/autonomy", isAutonomy),
     agents: () => request("GET", "/api/agents", isAgents),
     agent: (name, source) => request("GET", agentPath(name, source), isAgent),
     createAgent: (payload) => request("POST", "/api/agents", isAgent, payload),

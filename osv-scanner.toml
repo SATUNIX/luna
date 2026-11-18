@@ -1,0 +1,9 @@
+# Accepted advisories (docs/vulnerability-management.md, "Risk-acceptance register").
+# OSV-Scanner reads this file; `npm run security:audit` (packages/core/audit-gate.ts) reads the same
+# entries for the root `npm audit`, so one list governs both. Each entry is dev-only, dated and
+# expires: after `ignoreUntil` both scanners fail on it again. `tests/audit-gate-smoke.ts` pins this.
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-02-18T00:00:00Z
+reason = "picomatch <=4.0.7 ReDoS, no patched release; dev-only via typescript-eslint (lint tooling), never installed with Luna"

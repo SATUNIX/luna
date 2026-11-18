@@ -429,6 +429,13 @@ tests.push([
     assert.ok(!screened.includes("\u001b"), "the header must not contain ESC from an alternate screen or reset");
     assert.ok(!hidden.test(screened), "the header keeps no control or format code point");
     assert.ok(screened.includes("own"), "the header keeps its visible text");
+    // A full reset (RIS, ESC c) is not CSI, so pi-tui leaves it; the whole-class filter drops its ESC.
+    const reset = headerLine({ profile: "x\u001bcown", securityMissing: true });
+    assert.ok(!reset.includes("\u001b"), "the header must not contain ESC from a full reset");
+    assert.ok(!hidden.test(reset), "a full reset leaves no control code point");
+    // The input is bounded before it is filtered: text after 4000 units of escapes never reaches the page.
+    const flooded = headerLine({ profile: `${"\u001b".repeat(4000)}tail`, securityMissing: true });
+    assert.ok(!flooded.includes("tail"), "input beyond the bound is dropped before filtering");
 
     const model = await modelFor([]);
     const deps = makeDeps({ model, commands: [] });

@@ -18,7 +18,10 @@ import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { runPaths } from "../packages/autonomy/lib/paths.ts";
 import { GATE_SLOTS_ENV, acquireGateSlot, resolveGateSlots, type GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { GateWaitInterrupted } from "../packages/autonomy/lib/errors.ts";
-import { nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import { array, nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import { cleanup, harness, runOnce, simpleRaw, solve } from "./autonomy-harness.ts";
+import { HARNESS_COMMANDS } from "../packages/autonomy/lib/rpc.ts";
+import { POSTMORTEM_EVENTS, POSTMORTEM_LOG_LINES, POSTMORTEM_SCHEMA_VERSION } from "../packages/autonomy/lib/postmortem.ts";
 
 
 const { check, done } = makeChecker("autonomy-lifecycle-smoke");
@@ -515,5 +518,42 @@ await check("gate slots: a non-contention flock failure rejects loudly instead o
     rm(home);
   }
 });
+
+await check("a run failure writes postmortem.json: the code, the run's last events, usage and a redacted log tail; a clean run writes none", async () => {
+  const reply = (names: readonly string[]) => ({ type: "response", id: "harness-check", data: { commands: names.map((name) => ({ name })) } });
+  const h = harness(simpleRaw({ run: "postmortem-1" }), { script: solve });
+  const rt = h.runtime(solve);
+  rt.harnessReply = reply(HARNESS_COMMANDS.filter((c) => c !== "verify")); // a core command missing: the run fails
+  const secret = "ghp" + "_" + "c".repeat(36); // the synthetic token tests/autonomy-events-smoke.ts uses
+  // A private key over several lines (as in a stack): the body lines must go too, not only the BEGIN line.
+  const key = "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIB" + "j".repeat(40) + "\n" + "q".repeat(48) + "\n-----END " + "RSA PRIVATE KEY-----";
+  fs.appendFileSync(h.store.p.log, `token ${secret} from an earlier line\nfatal: ${key}\n`);
+  const done1 = await runOnce(h, { rt });
+  assert.equal(done1.state.status, "failed");
+  const file = h.store.p.postmortem;
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "the post-mortem is the user's alone");
+  const pm = parseJsonAs(object({
+    v: number(), run: string(), code: string(), detail: string(), status: string(), step: number(),
+    usage: object({ usd: number(), minutes: number(), steps: number() }), budgetUsd: number(),
+    events: array(object({ type: string(), run: string() })), logTail: array(string()), worker: nullable(string()),
+  }), fs.readFileSync(file, "utf8"), "postmortem.json");
+  assert.match(pm.worker ?? "", /-agent-01-1$/, "the worker is named although stopWorker cleared state.worker");
+  assert.deepEqual([pm.v, pm.run, pm.code, pm.status], [POSTMORTEM_SCHEMA_VERSION, "postmortem-1", "worker_unavailable", "failed"]);
+  assert.match(pm.detail, /missing commands: verify/);
+  assert.ok(pm.events.length >= 5, `at least 5 event records (got ${String(pm.events.length)})`);
+  assert.ok(pm.events.length <= POSTMORTEM_EVENTS);
+  assert.ok(pm.events.every((e) => e.run === "postmortem-1"), "only this run's events");
+  assert.equal(pm.events.at(-1)?.type, "failure", "the failure event itself is the last one");
+  assert.ok(pm.logTail.length > 0 && pm.logTail.length <= POSTMORTEM_LOG_LINES);
+  assert.ok(pm.logTail.some((l) => /state failed/.test(l)), pm.logTail.join("\n"));
+  const raw = fs.readFileSync(file, "utf8");
+  assert.ok(!raw.includes(secret), "a secret in the log is redacted");
+  assert.ok(!raw.includes("PRIVATE KEY") && !raw.includes("j".repeat(40)) && !raw.includes("q".repeat(48)), "a multi-line private key is redacted whole");
+
+  const ok = harness(simpleRaw({ run: "postmortem-2" }), { script: solve });
+  assert.equal((await runOnce(ok)).state.status, "succeeded");
+  assert.equal(fs.existsSync(ok.store.p.postmortem), false, "no failure, no post-mortem");
+});
+cleanup();
 rm(tmp);
 done();

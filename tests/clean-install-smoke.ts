@@ -4,7 +4,8 @@
 // `npm pack` the repository exactly as a release would, unpack the tarball into an empty directory
 // (so nothing can lean on the checkout: no tests/, docs/ or node_modules of this repo), install the
 // kit from that copy into a throw-away HOME and agent directory for every shipped profile, and start
-// the real `pi` in RPC mode with it. RPC mode loads every extension without needing a model or a
+// the real `pi` in RPC mode with it. Each profile is installed non-interactively (--profile --yes);
+// one more install answers the --guided questions on stdin, and one declines them. RPC mode loads every extension without needing a model or a
 // network, and answers `get_commands` with what the extensions registered. A profile passes when
 // pi starts, reports no extension error, and offers the commands the kit promises.
 //
@@ -36,6 +37,7 @@ const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
 interface RunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   readonly timeout?: number;
 }
 
@@ -105,6 +107,8 @@ type PackageEntry = Infer<typeof PackageEntry>;
 /** settings.json as far as this test reads it. */
 const AgentSettings = object({ packages: optional(array(union(string(), PackageEntry))) });
 const ArtefactPackage = object({ dependencies: optional(record(string())) });
+/** The install marker field the guided install checks. */
+const KitMarkerProfile = object({ profile: optional(string()) });
 
 /** Talk to `pi --mode rpc`: send one command, wait for its response, return it with the events seen. */
 function rpc(agentDir: string, home: string, cwd: string, command: { id: string; type: string }): Promise<RpcResult> {
@@ -150,6 +154,33 @@ function rpc(agentDir: string, home: string, cwd: string, command: { id: string;
     // Give the extensions a moment to finish loading before the first command.
     setTimeout(() => pi.stdin.write(`${JSON.stringify(command)}\n`), 2500);
   });
+}
+
+/**
+ * Start the real pi in RPC mode on an installed agent directory and assert what every install must
+ * give: the promised commands, all loaded from the artefact, no extension error, no reload request,
+ * no compaction warning and nothing on stderr. Returns the number of commands offered.
+ */
+async function assertPiLoads(label: string, agentDir: string, home: string, work: string): Promise<number> {
+  const { response, events, stderr } = await rpc(agentDir, home, work, { id: "commands", type: "get_commands" });
+  assert.equal(response.success, true, `${label}: get_commands failed: ${JSON.stringify(response)}`);
+  const commands = new Map(CommandsData.parse(response.data, `${label}: get_commands data`).commands.map((c): [string, RpcCommand] => [c.name, c]));
+  for (const name of EVERY_PROFILE) assert.ok(commands.has(name), `${label}: /${name} is registered (have: ${[...commands.keys()].sort().join(", ")})`);
+  // Every command must come from the artefact, not from a checkout of this repository.
+  for (const [name, command] of commands) {
+    const from = command.sourceInfo?.path ?? "";
+    if (command.source === "extension") assert.ok(!from.startsWith(ROOT + path.sep), `${label}: /${name} loaded from the checkout (${from}), not the artefact`);
+  }
+  const errors = events.filter((e) => /error/i.test(typeof e.type === "string" ? e.type : "") || (e.method === "notify" && e.notifyType === "error"));
+  assert.deepEqual(errors, [], `${label}: pi reported extension errors: ${JSON.stringify(errors).slice(0, 600)}`);
+  // The installer applied the profile itself: the first start needs no /reload and no auto-profile notice.
+  const reloadAsks = events.filter((e) => e.method === "notify" && typeof e.message === "string" && /\/reload|applied the .* profile/.test(e.message));
+  assert.deepEqual(reloadAsks, [], `${label}: the first start asked for a reload`);
+  // With no model configured there is nothing to size compaction for, so no compaction warning either.
+  const warnings = events.filter((e) => e.method === "notify" && e.notifyType === "warning" && typeof e.message === "string" && /compaction/i.test(e.message));
+  assert.deepEqual(warnings, [], `${label}: a first start with no model warned about compaction`);
+  assert.ok(!/failed to load|cannot find module|unhandled/i.test(stderr), `${label}: pi wrote load errors to stderr:\n${stderr.slice(-600)}`);
+  return commands.size;
 }
 
 // npm <=11 prints an array of package reports, npm >=12 an object keyed by package name; packReports
@@ -252,25 +283,37 @@ try {
     const selected = (entry.extensions ?? []).length;
     assert.ok(selected >= 10, `${profile}: the profile selected extensions (${selected})`);
 
-    const { response, events, stderr } = await rpc(agentDir, home, work, { id: "commands", type: "get_commands" });
-    assert.equal(response.success, true, `${profile}: get_commands failed: ${JSON.stringify(response)}`);
-    const commands = new Map(CommandsData.parse(response.data, `${profile}: get_commands data`).commands.map((c): [string, RpcCommand] => [c.name, c]));
-    for (const name of EVERY_PROFILE) assert.ok(commands.has(name), `${profile}: /${name} is registered (have: ${[...commands.keys()].sort().join(", ")})`);
-    // Every command must come from the artefact, not from a checkout of this repository.
-    for (const [name, command] of commands) {
-      const from = command.sourceInfo?.path ?? "";
-      if (command.source === "extension") assert.ok(!from.startsWith(ROOT + path.sep), `${profile}: /${name} loaded from the checkout (${from}), not the artefact`);
+    const commandCount = await assertPiLoads(profile, agentDir, home, work);
+    ok(`profile ${profile} (non-interactive): installed from the artefact, real pi loaded ${selected} extensions with no error and offers ${commandCount} commands`);
+  }
+
+  // 3. A guided install (packages/core/lib/install-guide.ts) answering on stdin: profile by name,
+  // the default scope, confirm. Then a guided run that declines, which must write nothing.
+  for (const [answers, label] of [["lite\n\ny\n", "guided"], ["lite\n\nn\n", "guided-decline"]] as const) {
+    const home = path.join(tmp, `home-${label}`);
+    const agentDir = path.join(tmp, `agent-${label}`);
+    const work = path.join(tmp, `work-${label}`);
+    for (const dir of [home, agentDir, work]) fs.mkdirSync(dir, { recursive: true });
+    run("git", ["init", "-q"], { cwd: work });
+    const env = { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agentDir, PI_LEAN_CTX_BIN: path.join(home, "no-lean-ctx") };
+    const install = run(process.execPath, [path.join(unpacked, "packages", "core", "install.js"), "--guided", "--settings-only", "--mode", "local", "--no-externals"], { cwd: work, env, input: answers });
+    assert.equal(install.status, 0, `${label}: install failed:\n${install.stdout}\n${install.stderr}`);
+    if (label === "guided-decline") {
+      assert.ok(!fs.existsSync(path.join(agentDir, "settings.json")), "a declined guided install writes no settings.json");
+      assert.deepEqual(fs.readdirSync(agentDir), [], "a declined guided install writes nothing in the agent directory");
+      ok("guided install declined: exit 0 and nothing written");
+      continue;
     }
-    const errors = events.filter((e) => /error/i.test(typeof e.type === "string" ? e.type : "") || (e.method === "notify" && e.notifyType === "error"));
-    assert.deepEqual(errors, [], `${profile}: pi reported extension errors: ${JSON.stringify(errors).slice(0, 600)}`);
-    // The installer applied the profile itself: the first start needs no /reload and no auto-profile notice.
-    const reloadAsks = events.filter((e) => e.method === "notify" && typeof e.message === "string" && /\/reload|applied the .* profile/.test(e.message));
-    assert.deepEqual(reloadAsks, [], `${profile}: the first start asked for a reload`);
-    // With no model configured there is nothing to size compaction for, so no compaction warning either.
-    const warnings = events.filter((e) => e.method === "notify" && e.notifyType === "warning" && typeof e.message === "string" && /compaction/i.test(e.message));
-    assert.deepEqual(warnings, [], `${profile}: a first start with no model warned about compaction`);
-    assert.ok(!/failed to load|cannot find module|unhandled/i.test(stderr), `${profile}: pi wrote load errors to stderr:\n${stderr.slice(-600)}`);
-    ok(`profile ${profile}: installed from the artefact, real pi loaded ${selected} extensions with no error and offers ${commands.size} commands`);
+    assert.match(install.stdout, /\[install\] Verified:/, install.stdout);
+    assert.match(install.stdout, /\[install\] Changed:\n {2}\S/, install.stdout);
+    const marker = parseJsonAs(KitMarkerProfile, fs.readFileSync(path.join(agentDir, ".pi-kit.json"), "utf8"), ".pi-kit.json");
+    assert.equal(marker.profile, "lite", "the guided answer is the recorded profile");
+    const settings = parseJsonAs(AgentSettings, fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"), "settings.json");
+    const entry = settings.packages?.find((p): p is PackageEntry => typeof p === "object");
+    const selected = (entry?.extensions ?? []).length;
+    assert.ok(selected >= 10, `guided: the profile selected extensions (${selected})`);
+    const commandCount = await assertPiLoads(label, agentDir, home, work);
+    ok(`guided install: profile lite chosen on stdin, verified, and real pi loaded ${selected} extensions with ${commandCount} commands`);
   }
 } finally {
   cleanup();

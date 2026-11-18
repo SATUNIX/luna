@@ -79,7 +79,7 @@
     ]
   },
   "dependencies": {
-    "quickjs-wasi": "3.6.3"
+    "quickjs-wasi": "3.6.4"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.85.1",
@@ -97,7 +97,7 @@
     "jsdom": "31.0.0",
     "mermaid": "12.3.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1",
+    "typescript-eslint": "8.72.2",
     "zod": "4.6.7"
   },
   "scripts": {
@@ -200,6 +200,7 @@
     "smoke:human-console-auth": "node tests/human-console-auth-smoke.ts",
     "smoke:install-filter": "node tests/install-profile-filter-smoke.ts",
     "smoke:install-marker": "node tests/install-marker-smoke.ts",
+    "smoke:install-guided": "node tests/install-guided-smoke.ts",
     "smoke:lifecycle-containment": "node tests/lifecycle-containment-smoke.ts",
     "smoke:live-evaluation-integrity": "node tests/live-evaluation-integrity.test.ts",
     "smoke:liveness-containment": "node tests/liveness-containment-smoke.ts",

@@ -17,6 +17,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   alerts once per condition, plus a daily digest. The relay records the OpenRouter key's own limit
   (`limit`, `limit_remaining` and `usage` only) in `meter/key.json`, and `pi-autonomy key-limit` asks
   for it on demand. Verified by `tests/autonomy-reporting-smoke.ts`.
+- **Guided install.** `node packages/core/install.ts --guided` shows what it detected, offers the
+  shipped profiles with a default, asks for the scope and a confirmation on stdin, then checks the
+  result and lists every configuration file it created or changed. Declining, three invalid answers
+  or input ending early change nothing; `--guided` refuses `--profile`, `--only`, `--all`, `--yes`,
+  `--uninstall` and `--capture-overrides`. Every other run stays non-interactive and prints as
+  before. See `docs/INSTALL.md` (Guided install); pinned by `tests/install-guided-smoke.ts` and
+  `tests/clean-install-smoke.ts`.
+- **The CI gate can be run by hand on the exact commit of a branch.** No push or pull request event
+  covers the `integration/luna` head that the autonomy harness runs from, so its CI evidence had to rest
+  on a pull request with the same tree. `ci.yml` now also takes `workflow_dispatch`, with no inputs. This
+  was chosen over a push trigger for `integration/**`, which would run the full gate on every automated
+  push. Permissions and concurrency are unchanged. `tests/release-workflow-smoke.ts` pins the trigger and
+  that it has no inputs.
 - **Autonomous cycles keep their record out of the repository.** Finding: 84 of 280 non-merge commits
   in the audited release were routine cycle records (30%), and the five model-written files per cycle
   (report, plan, verify, review, HANDOFF) plus a journal line were read again by the review and the
@@ -97,6 +110,12 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the
   pin, as for the root workspace.
 
+- **quickjs-wasi 3.6.4 and typescript-eslint 8.72.2.** The workflow sandbox's QuickJS moves to 3.6.4,
+  which hardens the host-promise bridge (pending host observers reject when the VM terminates) and adds
+  one export, `qjs_is_uncatchable_error`; its WASI imports are unchanged. The pinned `quickjs.wasm`
+  digest in `wf-sandbox.ts` moves with it, after comparing the 3.6.3 and 3.6.4 tarballs; with the old
+  pin every sandbox run ends with kind `integrity` (`tests/workflow-sandbox-smoke.ts`). typescript-eslint
+  is lint tooling only.
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The
   risk tiers missed these authority-sensitive paths, so a cycle editing secret-guard, protected-paths,
   delegation-guard, the spend ceiling, `packages/core/policies/`, `verify.ts` and the other publish

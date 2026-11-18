@@ -32,6 +32,7 @@ import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.t
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
 import { type EventInput, appendEvent } from "./events.ts";
+import { writePostmortem } from "./postmortem.ts";
 import { ceilingBreach } from "../../core/shared/ceiling.ts";
 import { BoundaryError, GateWaitInterrupted, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
@@ -371,13 +372,22 @@ export class Engine {
     this.log(`state ${to}${info.reason ? ` (${info.reason})` : ""}`);
     if (from === "ready" && to === "running") this.emit({ type: "run.started", run: this.store.run, template: this.contract.template });
     this.emit({ type: "run.status", run: this.store.run, from, to, reason: info.reason ?? null, ...(info.by ? { by: info.by } : {}) });
-    if (to === "failed") this.emit({ type: "failure", run: this.store.run, code: info.reason ?? "failed", detail: info.detail ?? "" });
+    if (to === "failed") this.recordFailure(info.reason ?? "failed", info.detail ?? "");
   }
 
   /** Append one event to the host event log (lib/events.ts). Best effort: a failure is logged, never thrown. */
   emit(event: EventInput): void {
     appendEvent(this.store.home, event, this.log, { at: new Date(this.rt.now()).toISOString() });
   }
+
+  /** A failure: the `failure` host event, then <run>/postmortem.json (lib/postmortem.ts), which includes that event. Both best effort. */
+  recordFailure(code: string, detail: string): void {
+    this.emit({ type: "failure", run: this.store.run, code, detail });
+    writePostmortem(this.store, this.state, code, detail, new Date(this.rt.now()).toISOString(), this.log, this.lastWorker);
+  }
+
+  /** The worker container this supervisor last started, kept after stopWorker clears state.worker (for the post-mortem). */
+  lastWorker: string | null = null;
 
   get status(): RunStatus { return this.state.status; }
   get stopFile(): boolean { return fs.existsSync(path.join(this.store.p.root, "STOP")); }
@@ -531,13 +541,13 @@ export class Engine {
     if (error instanceof BoundaryError) {
       this.log(`BOUNDARY VIOLATION: ${error.message}`);
       try { await this.stopWorker("boundary violation"); } catch { /* ignore */ }
-      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.emit({ type: "failure", run: this.store.run, code: "boundary_violation", detail: error.message }); return; }
+      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.recordFailure("boundary_violation", error.message); return; }
       this.go("failed", { reason: "boundary_violation", detail: error.message });
       return;
     }
     this.log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     try { this.save((s) => { s.lastError = errorText(error).slice(0, 1000); }); } catch { /* ignore */ }
-    this.emit({ type: "failure", run: this.store.run, code: "supervisor_error", detail: errorText(error) });
+    this.recordFailure("supervisor_error", errorText(error));
     if (this.active) this.go("paused", { reason: "supervisor_error", detail: errorText(error).slice(0, 1000) });
     throw error; // parked with the error recorded; can be resumed
   }
@@ -735,6 +745,7 @@ export class Engine {
     if (this.state.generations && resetWorkspace) this.state.generations.resetPending = false;
     void live.agent.exited.then((e) => { live.exited = e ?? { code: 1 }; live.dead = true; });
     this.state.sessions = attempt;
+    this.lastWorker = live.agent.name;
     this.save((s) => { s.worker = { container: live.agent.name, attempt, step, startedAt: new Date(this.rt.now()).toISOString() }; });
     this.session = live;
     return live;
@@ -747,6 +758,7 @@ export class Engine {
   adoptAgent(agent: WorkerAgent, say: ((message: string) => void) | null = null): WorkerSession {
     this.session = { attempt: this.state.sessions ?? 0, agent, settled: false, exited: null, blocker: null, dead: false, lastEventAt: this.rt.now(), activity: [], say };
     void agent.exited.then(() => { if (this.session?.agent === agent) this.session.dead = true; });
+    this.lastWorker = agent.name;
     this.save((s) => { s.worker = { container: agent.name, attempt: s.sessions ?? 0, step: s.step, startedAt: new Date(this.rt.now()).toISOString() }; });
     return this.session;
   }

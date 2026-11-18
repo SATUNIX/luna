@@ -1345,6 +1345,16 @@ no reply within 30 seconds fails the run with `worker_unavailable`. A missing op
 `harness.degraded` event. `tests/autonomy-smoke.ts` and `tests/autonomy-events-smoke.ts` pin both
 outcomes.
 
+Whenever the supervisor writes a `failure` event it also writes `postmortem.json` in the run
+directory (mode 0600; `packages/autonomy/lib/postmortem.ts`), so the cause can be read in one place.
+It holds the failure `code` and `detail`, the run's status, template, step, phase and cycle, its
+usage and budget, the worker container this supervisor last started, the required acceptance checks failing in the
+latest evaluation, the last fatal error, the run's last 20 host events and the last 20 lines of
+`supervisor.log`. Free text and log lines are redacted as event text is. Each failure replaces the
+previous file, so only the latest is kept; the event log has them all. The file records no command
+lines: a failed command shows up only through the failing checks, the detail and the log tail.
+`tests/autonomy-lifecycle-smoke.ts` pins it.
+
 How the file is written:
 
 - Each event is one line, appended in a single write to a file opened with `O_APPEND` and
@@ -1406,6 +1416,7 @@ is written to `~/.pi`.
 | `mirror.git`, `steps/`, `results/` | The host's copy of the work, each step's evidence, and exports. |
 | `egress/`, `meter/`, `boundary.json` | Proxy audit, spend records, the last boundary probe. |
 | `notebook.json` | The generations notebook (0600), when generations are on. |
+| `postmortem.json` | The latest failure's post-mortem (0600), written whenever the supervisor records a failure (see the event log section). |
 | `remote.git`, `work/`, `agent-state/` | The worker's side, written by the container. |
 | `outcome.md` | Written whenever the run stops working (succeeded, failed, cancelled, blocked, paused, budget exhausted): the status, the reason, what a blocked run waits for, what was spent and the next step. |
 

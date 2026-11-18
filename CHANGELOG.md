@@ -10,6 +10,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **An autonomous run writes a post-mortem when it fails (PG-05).** Finding: when a run failed,
+  `state.json` kept only a failure code, so the cause had to be pieced together from the host event
+  log and `supervisor.log`. Fix: whenever the supervisor records a failure (the run fails, or it stops
+  on a supervisor error or boundary violation), it writes `postmortem.json` in the run directory
+  (schema version 1, mode 0600). It holds the failure code and detail, status, template, step, phase,
+  cycle, usage and budget, the worker, the failing required checks, the last fatal error, the run's
+  last 20 host events and the last 20 lines of `supervisor.log`, with free text redacted. Writing is
+  best effort and never changes the run's outcome. Verified by `tests/autonomy-lifecycle-smoke.ts`.
+
 - **The web console has a read-only Autonomy view.** Finding: the console had no autonomy
   awareness, so following unattended runs from a browser was not possible. Fix: an authenticated
   `GET /api/autonomy` (schema version 1; other methods 405) answers with the runs under the

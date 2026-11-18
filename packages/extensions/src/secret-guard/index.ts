@@ -371,6 +371,8 @@ function commandHasGlobTokenMatchingSecret(command: string): boolean {
       const base = segments.at(-1) || token;
       const re = globTokenToRegExp(base);
       if (re && CANONICAL_SECRET_BASENAMES.some(name => re.test(name))) return true;
+      // `~/.kube/conf*`: a glob that names the kubeconfig in its own directory (SECRET_READ_PATH_PATTERNS).
+      if (re && segments.slice(0, -1).filter(s => s !== "" && s !== ".").at(-1) === ".kube" && re.test("config")) return true;
       if (segments.some(globSegmentReachesSecretDirectory)) return true;
     }
   }
@@ -540,7 +542,7 @@ const SECRET_READ_BASENAME_PATTERNS = [
   /^id_(?:rsa|ed25519|ecdsa|dsa)$/, /^\.npmrc$/, /^\.netrc$/,
   /^credentials(?:\.json)?$/, /^secrets?\.(?:json|ya?ml|toml|env|txt)$/,
 ];
-const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth\.json$/];
+const SECRET_READ_PATH_PATTERNS = [/(?:^|\/)\.ssh\//, /(?:^|\/)\.pi\/agent\/auth\.json$/, /(?:^|\/)\.kube\/config$/];
 
 // Checked-in env *templates* are not secrets: the installer scaffolds `.env.example` and
 // refreshes it on upgrade, so the template must be readable and writable. Without this the
@@ -715,6 +717,10 @@ function searchPatternSpans(command: string): SearchWord[] {
   return patterns;
 }
 
+function collapseSlashes(token: string): string {
+  return token.replace(/\/(?:\.?\/)+/g, "/");
+}
+
 function commandReferencesSecret(command: string): boolean {
   let scanned = command;
   for (const span of searchPatternSpans(command).reverse()) {
@@ -727,7 +733,9 @@ function commandReferencesSecret(command: string): boolean {
     const base = segments.pop() || token;
     if (SECRET_PATH_PATTERNS.some(p => p.test(base))) return true;
     if (SECRET_READ_BASENAME_PATTERNS.some(p => p.test(base))) return true;
-    if (SECRET_READ_PATH_PATTERNS_FOR_COMMANDS.some(p => p.test(token))) return true;
+    // `~/.kube//config` and `~/.kube/./config` name the same file as `~/.kube/config`.
+    const squashed = collapseSlashes(token);
+    if (SECRET_READ_PATH_PATTERNS_FOR_COMMANDS.some(p => p.test(token) || p.test(squashed))) return true;
     if (segments.some(segment => SECRET_PATH_SEGMENTS.has(segment))) return true;
   }
   return false;

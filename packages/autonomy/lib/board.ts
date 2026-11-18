@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseJson } from "../../core/lib/guard.ts";
 import { isPlainObject } from "./fsutil.ts";
+import { type RunLockOptions, createRunLock } from "./runlock.ts";
 
 export type BoardVerdict = "pending" | "approved" | "rejected";
 
@@ -168,6 +169,61 @@ export function readBoard(control: string): StewardBoard {
   const file = path.join(control, "board.json");
   return fs.existsSync(file) ? readBoardFile(file) : { items: [] };
 }
+/** The board lock was held by another writer for the whole bounded wait. */
+export class BoardLockBusy extends Error {}
+
+/** The board lock is short-lived but contended: a claimant waits for the current writer instead of failing. */
+const BOARD_LOCK_ATTEMPTS = 200;
+const BOARD_LOCK_DELAY_MS = 25;
+
+/**
+ * Run `fn` holding control/board.lock, the lock every board write takes (`board claim`,
+ * `board --file`, `inbox`, and a dispatch cycle's claim and submission). It is a real run lock,
+ * separate from the supervisor's; a writer waits a bounded time for the holder, then throws
+ * BoardLockBusy.
+ */
+export async function withBoardLock<T>(control: string, fn: () => T | Promise<T>, options: Omit<Partial<RunLockOptions>, "file"> = {}): Promise<T> {
+  const lock = createRunLock({ ...options, file: path.join(control, "board.lock") });
+  let got = lock.acquire();
+  for (let attempt = 1; !got.acquired && attempt < BOARD_LOCK_ATTEMPTS; attempt++) {
+    await new Promise<void>((resolve) => { setTimeout(resolve, BOARD_LOCK_DELAY_MS); });
+    got = lock.acquire();
+  }
+  if (!got.acquired) throw new BoardLockBusy(got.reason);
+  try { return await fn(); } finally { lock.release(); }
+}
+
+/**
+ * Merge a steward's replacement board over the board on disk without losing claims the host or a
+ * claimant wrote since the steward read it. For an item kept under the same id:
+ * - the file names no assignee but the disk does: the claim (assignee, claimedAt, submittedAt, sha)
+ *   and the claimed status are carried over, unless the file sets the item `blocked`;
+ * - the file names the same assignee: claimedAt, submittedAt and sha the file leaves out are
+ *   carried over;
+ * - the file names another assignee: the file wins (an explicit reassignment).
+ * A claim is therefore never released by leaving it out of the file. Returns the merged board and
+ * the ids whose claim fields were carried over. Pure.
+ */
+export function keepHostClaims(current: StewardBoard, incoming: StewardBoard): { board: StewardBoard; kept: string[] } {
+  const kept: string[] = [];
+  const items = incoming.items.map((item): BoardItem => {
+    const disk = current.items.find((candidate) => candidate.id === item.id);
+    if (disk?.assignee === undefined) return item;
+    if (item.assignee !== undefined && item.assignee !== disk.assignee) return item;
+    const merged: BoardItem = { ...item };
+    if (merged.assignee === undefined) {
+      merged.assignee = disk.assignee;
+      if (merged.status !== "blocked" && disk.status !== undefined) merged.status = disk.status;
+    }
+    if (merged.claimedAt === undefined && disk.claimedAt !== undefined) merged.claimedAt = disk.claimedAt;
+    if (merged.submittedAt === undefined && disk.submittedAt !== undefined) merged.submittedAt = disk.submittedAt;
+    if (merged.sha === undefined && disk.sha !== undefined) merged.sha = disk.sha;
+    if (JSON.stringify(merged) !== JSON.stringify(item)) kept.push(item.id);
+    return merged;
+  });
+  return { board: { ...incoming, items }, kept };
+}
+
 export const assignedItems = (board: StewardBoard): BoardItem[] => board.items.filter((i) => i.status !== "blocked").sort((a, b) => a.priority.localeCompare(b.priority)).slice(0, 2);
 
 /** Only exact, bounded Board: lines count; prose and malformed claims are ignored. */

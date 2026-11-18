@@ -1,7 +1,7 @@
 # pi-autonomy
 
 The bounded autonomous task runner for Luna: a versioned run contract, a run engine with an
-explicit lifecycle, templates (`implement`, `deploy`, `self-improve`), a hardened container runtime,
+explicit lifecycle, templates (`implement`, `deploy`, `self-improve`, `dispatch`), a hardened container runtime,
 an inference relay and an egress proxy. Private (not published on npm); it ships with the kit's git
 delivery and runs from a checkout or from pi's copy of the kit.
 
@@ -30,7 +30,8 @@ node packages/autonomy/cli.ts start --config run.json       # confirm the bounda
 | `lib/recovery.ts`, `lib/reconfigure.ts`, `lib/promotion.ts`, `lib/export.ts` | Bounded recovery, the only way limits change, promotion, and evidence export. |
 | `lib/reporting.ts` | The reporting line: the status file and the ntfy alerts (`pi-autonomy report`). |
 | `lib/board.ts`, `lib/inbox.ts` | The host-owned steward board and the owner decision inbox whose past-due cards settle into their default. |
-| `lib/templates/` | `implement`, `deploy` and `self-improve`. |
+| `lib/dispatch.ts` | The dispatch template's per-cycle board claim under `control/board.lock`, and the submission a merged, done cycle records. |
+| `lib/templates/` | `implement`, `deploy`, `self-improve` and `dispatch` (self-improve cycles that each claim one steward-board item). |
 | `image/`, `build-image.sh` | The image and the script that builds it from local git objects. |
 | `examples/` | Working run contracts. |
 | `tests/` | The in-container boundary probe (`boundary-probe.ts`, manual and run before every start), and the fake runtime and upstream the offline suites use. |

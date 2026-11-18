@@ -22,7 +22,7 @@ import { canonicalJson, clone, deepMerge, isPlainObject, sha256 } from "./fsutil
 import { globProblem, hasControlChar } from "./glob.ts";
 import { FORBIDDEN_SOURCES, isPositiveCpus, isPositiveSize } from "./containment.ts";
 import { EFFORT_UNAVAILABLE, type EffortApi, effortApi } from "./effort.ts";
-import { TEMPLATES, templateIds } from "./templates/index.ts";
+import { TEMPLATES, isCycleTemplate, templateIds } from "./templates/index.ts";
 import { isPublicIpLiteral, isIpLiteral, canonicalIp, classifyAddress, normaliseHost } from "./netaddr.ts";
 
 export const SCHEMA_VERSION = 1;
@@ -1174,7 +1174,7 @@ export function resolveContract(rawInput: unknown, opts: ResolveOptions = {}): R
 
   // Cross-field rules.
   checkGenerationsWithinBudget(generations, contract.budget, c);
-  if (generations.enabled && templateId === "self-improve") c.err("generations.enabled", "generations apply to the finite templates (implement, deploy); self-improve drives its own cycles");
+  if (generations.enabled && isCycleTemplate(templateId)) c.err("generations.enabled", `generations apply to the finite templates (implement, deploy); ${String(templateId)} drives its own cycles`);
   const checkIds = new Set(acceptance.checks.map((k) => k.id));
   for (const [i, item] of objective.backlog.entries()) for (const id of item.acceptance ?? []) if (!checkIds.has(id)) c.err(`objective.backlog[${i}].acceptance`, `unknown check id "${id}"`);
   const serviceNames = new Set(permissions.network.services.map((s) => s.name));
@@ -1184,7 +1184,7 @@ export function resolveContract(rawInput: unknown, opts: ResolveOptions = {}): R
     const api: ProblemSink = { err: c.err, warn: c.warn };
     template.validate(contract, api);
   }
-  if (contract.promotion.policy === "local-branch" && !inputs.repository?.path && !contract.promotion.destinations.some((d) => d.kind === "local-branch" && d.repo) && template && template.id !== "self-improve") {
+  if (contract.promotion.policy === "local-branch" && !inputs.repository?.path && !contract.promotion.destinations.some((d) => d.kind === "local-branch" && d.repo) && template && !isCycleTemplate(template.id)) {
     c.err("promotion", 'policy "local-branch" needs a local repository: use inputs.repository.path or set promotion.destinations[].repo');
   }
   if (opts.checkFs) checkFilesystem(contract, c);

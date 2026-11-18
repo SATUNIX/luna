@@ -413,7 +413,7 @@ try {
     const s = session({ answers: [false] });
     await s.run("templates");
     const listing = lastNote(s).message;
-    for (const id of ["implement", "deploy", "self-improve"]) assert.match(listing, new RegExp(`^${id} `, "m"));
+    for (const id of ["implement", "deploy", "self-improve", "dispatch"]) assert.match(listing, new RegExp(`^${id} `, "m"));
     await s.run(`plan ${path.join(ROOT, "packages", "autonomy", "examples", "implement.json")}`);
     const plan = lastNote(s).message;
     assert.match(plan, /Boundary for run todo-api-1/);

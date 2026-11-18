@@ -200,6 +200,7 @@
     "smoke:human-console-auth": "node tests/human-console-auth-smoke.ts",
     "smoke:install-filter": "node tests/install-profile-filter-smoke.ts",
     "smoke:install-marker": "node tests/install-marker-smoke.ts",
+    "smoke:install-guided": "node tests/install-guided-smoke.ts",
     "smoke:lifecycle-containment": "node tests/lifecycle-containment-smoke.ts",
     "smoke:live-evaluation-integrity": "node tests/live-evaluation-integrity.test.ts",
     "smoke:liveness-containment": "node tests/liveness-containment-smoke.ts",

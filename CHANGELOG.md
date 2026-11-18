@@ -107,6 +107,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   of processes that have ended; an interrupted run used to leave 30 to 35 `autonomy-run-*` directories
   behind, and about 5,400 had built up. Tests only; no product change.
 
+### Security
+
+- **An unfixable dev-only advisory no longer blocks every pull request.** Finding: GHSA-fc5q-39xc-vjpf
+  (ReDoS in picomatch 4.0.7 and earlier, no patched release) reached the root dev tree through
+  `typescript-eslint`, and the `dependencies` and `osv-scanner` jobs failed on every pull request into
+  `integration/luna`. Cause: `npm audit` cannot accept an advisory. Fix: the root audit runs through
+  `packages/core/audit-gate.ts`, which reads the dated `[[IgnoredVulns]]` entries of `osv-scanner.toml`
+  (the same list OSV-Scanner uses), fails on any high or critical advisory in the production tree and on
+  an expired entry; the advisory is accepted until 2027-02-18 in the risk-acceptance register.
+  Verification: `npm run smoke:audit-gate`, `npm run security:audit`.
+
 ## [0.4.0-beta.1]
 
 ### Fixed

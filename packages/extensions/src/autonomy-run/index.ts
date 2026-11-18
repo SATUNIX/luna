@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type Component, sliceByColumn, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { nodeRuntime } from "./shared/node-runtime.ts";
 import { oneVisibleLine } from "./shared/visible-text.ts";
 
-// Self-containment rule: only node:* builtins, the pi peer and the generated ./shared/ copy. The extension does not import the
+// Self-containment rule: only node:* builtins, the pi peers and the generated ./shared/ copy. The extension does not import the
 // autonomy package: it runs its operator CLI (packages/autonomy/cli.ts) as a child process and
 // speaks its `--json` protocol, exactly as an operator at a shell would.
 //
@@ -131,6 +132,7 @@ const USAGE = [
   "  inbox [run] [--file <path>] [--answer <card> --value <text>]   owner cards, or runs waiting to be published",
   "  boundary <run.json> | boundary --run <run>",
   "  reconfigure <run> [--effort E4 --budget-usd n ...]   the only way effort or budgets change for a run",
+  "  watch [on|off]                         the live run widget: show it now, or turn it off for this session",
   "Nothing starts without you confirming the boundary. Runs need a container engine; see docs/autonomy.md.",
 ].join("\n");
 
@@ -222,8 +224,304 @@ export function fleetStatusLine(report: unknown): string | undefined {
   return `autonomy: ${runs.length} run${runs.length === 1 ? "" : "s"} \u2014 ${ordered.map((s) => `${counts.get(s) ?? 0} ${s}`).join(", ")}${blocked ? `; blocked: ${blocked}` : ""}`;
 }
 
+// --- the live run widget ----------------------------------------------------------------------
+
+/** The key the live run widget is shown under. */
+export const WIDGET_KEY = "autonomy";
+/** How often the widget refreshes while a run is active. */
+export const WIDGET_POLL_MS = 2_000;
+/** The width the widget's lines are rendered at outside the terminal UI, which has no width to ask. */
+const WIDGET_FALLBACK_WIDTH = 80;
+/** The most runs the widget lists; the rest are counted on one line. */
+const WIDGET_MAX_RUNS = 6;
+/** How many of the host event log's newest events one refresh reads. */
+const WIDGET_EVENT_LIMIT = 200;
+/** One refresh's CLI calls give up after this long; the next tick tries again. */
+const WIDGET_CLI_TIMEOUT_MS = 15_000;
+/** How long the widget keeps refreshing after `/autonomy start` or `resume`, even before the run list shows the change. */
+const WIDGET_GRACE_MS = 60_000;
+/** Statuses a run does not leave without the operator (lib/lifecycle.ts): the widget does not list them. */
+const ENDED: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled", "budget_exhausted"]);
+const STATUS_WORD = /^[a-z_]{1,32}$/;
+
+/** One run as the widget shows it, narrowed from `status --json`. */
+export interface WidgetRun {
+  run: string;
+  template: string;
+  status: string;
+  step: number | null;
+  spentUsd: number | null;
+  budgetUsd: number | null;
+  /** When the run's state last changed, in ms since the epoch; null when unknown. */
+  updatedMs: number | null;
+}
+
+/** One host event as the widget uses it, narrowed from `events --json`. */
+export interface WidgetEvent {
+  run: string;
+  atMs: number;
+  /** The event's cycle number, when it has one. */
+  n: number | null;
+  /** What the run is doing, as of this event. */
+  phase: string;
+}
+
+/** Worker or run text as one visible line of at most `max` characters. */
+const clipText = (value: unknown, max: number): string => {
+  const line = typeof value === "string" ? oneLine(value) : "";
+  return line.length > max ? `${line.slice(0, max - 1)}\u2026` : line;
+};
+
+const nonNegative = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
+
+/** The runs of a no-run `status --json` report the widget can show; a malformed row is left out. */
+export function widgetRuns(report: unknown): WidgetRun[] {
+  const runs = field(report, "runs");
+  if (!isArray(runs)) return [];
+  return runs.slice(0, 1000).flatMap((r): WidgetRun[] => {
+    const run = field(r, "run");
+    const status = field(r, "status");
+    if (typeof run !== "string" || !RUN_ID.test(run) || typeof status !== "string" || !STATUS_WORD.test(status)) return [];
+    const updated = field(r, "updatedAt");
+    const updatedMs = typeof updated === "string" ? Date.parse(updated) : Number.NaN;
+    return [{
+      run,
+      template: clipText(field(r, "template"), 24) || "-",
+      status,
+      step: nonNegative(field(r, "step")),
+      spentUsd: nonNegative(field(r, "spentUsd")),
+      budgetUsd: nonNegative(field(r, "budgetUsd")),
+      updatedMs: Number.isFinite(updatedMs) ? updatedMs : null,
+    }];
+  });
+}
+
+/** What a run is doing as of one host event (the event types of packages/autonomy/lib/events.ts). */
+function eventPhase(e: unknown): string | null {
+  const item = clipText(field(e, "item"), 30);
+  switch (field(e, "type")) {
+    case "run.started": return "starting";
+    case "run.status": return clipText(field(e, "to"), 20) || null;
+    case "cycle.started": return item ? `working on ${item}` : "working";
+    case "gate.result": return field(e, "green") === true ? "gate green" : "gate red";
+    case "cycle.ended": return `cycle ${clipText(field(e, "outcome"), 20) || "ended"}`;
+    case "push": return field(e, "ok") === true ? "pushed" : "push failed";
+    case "failure": return `failure ${clipText(field(e, "code"), 30)}`.trim();
+    case "dispatch.claim": return `claimed ${item}`.trim();
+    case "dispatch.submit": return `submitted ${item}`.trim();
+    default: return null;
+  }
+}
+
+/** The events of an `events --json` report the widget can use; an unknown or malformed event is left out. */
+export function widgetEvents(report: unknown): WidgetEvent[] {
+  const events = field(report, "events");
+  if (!isArray(events)) return [];
+  return events.slice(-WIDGET_EVENT_LIMIT).flatMap((e): WidgetEvent[] => {
+    const run = field(e, "run");
+    const at = field(e, "at");
+    const phase = eventPhase(e);
+    if (typeof run !== "string" || typeof at !== "string" || phase === null) return [];
+    const atMs = Date.parse(at);
+    const n = field(e, "n");
+    if (!Number.isFinite(atMs)) return [];
+    return [{ run, atMs, n: typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null, phase }];
+  });
+}
+
+/**
+ * Statuses the supervisor leaves on its own (TRANSITIONS in packages/autonomy/lib/lifecycle.ts):
+ * a new run is `setup` while its container is built, then `ready`, then `running`. A paused or
+ * blocked run changes only when the operator acts.
+ */
+const MOVING: ReadonlySet<string> = new Set(["setup", "ready", "running", "recovering"]);
+
+/** A run whose status can change without the operator, so the widget keeps refreshing while one exists. */
+export const isMovingRun = (r: WidgetRun): boolean => MOVING.has(r.status);
+
+/**
+ * A run the widget is shown for: one starting, running or recovering, or one paused part-way
+ * through (a run's step counts its cycles from 0, so a run paused before its first cycle is not).
+ */
+export const isActiveRun = (r: WidgetRun): boolean => isMovingRun(r) || (r.status === "paused" && r.step !== null && r.step > 0);
+
+/**
+ * Whether the widget keeps refreshing: while a run can change on its own, or until `graceUntil`
+ * (ms since the epoch) after a command that changed a run, whose new status the run list may not
+ * show yet. A paused run alone is shown but not refreshed.
+ */
+export const widgetPolls = (runs: readonly WidgetRun[], now: number, graceUntil: number): boolean => runs.some(isMovingRun) || now < graceUntil;
+
+const ageText = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86_400)}d`;
+};
+
+const dollars = (n: number | null): string => (n === null ? "$-" : `$${n.toFixed(2)}`);
+
+/**
+ * Plain `text` (no escape sequences: every value is one visible line) in at most `width` columns,
+ * ending in an ellipsis when cut. pi-tui's truncateToWidth would add SGR resets, which a line
+ * widget outside the terminal UI would show as text.
+ */
+const fit = (text: string, width: number): string =>
+  visibleWidth(text) <= width ? text : `${sliceByColumn(text, 0, Math.max(0, width - 1), true)}\u2026`;
+
+/** `text` cut to `width` columns (with an ellipsis) or padded to it. */
+const column = (text: string, width: number): string => {
+  const cut = fit(text, width);
+  return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)));
+};
+
+/**
+ * The widget's lines: a heading and one line per run that has not ended (active runs first, at most
+ * WIDGET_MAX_RUNS), each giving the run, its template, cycle, phase, spend against budget and the
+ * age of its last event. No line is wider than `width` columns. Empty (the widget is hidden) when no
+ * run is active.
+ */
+export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonly WidgetEvent[], now: number, width: number): string[] {
+  const cols = Math.floor(width);
+  if (!Number.isFinite(cols) || cols < 1) return [];
+  const open = runs.filter((r) => !ENDED.has(r.status));
+  const active = open.filter(isActiveRun);
+  if (active.length === 0) return [];
+  const last = new Map<string, WidgetEvent>();
+  const cycle = new Map<string, number>();
+  for (const e of events) {
+    const prev = last.get(e.run);
+    if (!prev || e.atMs >= prev.atMs) last.set(e.run, e);
+    if (e.n !== null) cycle.set(e.run, Math.max(cycle.get(e.run) ?? 0, e.n));
+  }
+  const ordered = [...active, ...open.filter((r) => !isActiveRun(r))];
+  const listed = ordered.slice(0, WIDGET_MAX_RUNS);
+  const idWidth = Math.min(24, Math.max(...listed.map((r) => r.run.length)));
+  const templateWidth = Math.min(14, Math.max(...listed.map((r) => r.template.length)));
+  const waiting = open.length - active.length;
+  const lines = [`autonomy: ${active.length} active${waiting ? `, ${waiting} waiting` : ""} (/autonomy status for detail, /autonomy watch off hides this)`];
+  for (const r of listed) {
+    const e = last.get(r.run);
+    const n = cycle.get(r.run) ?? r.step;
+    const phase = r.status === "running" ? (e?.phase ?? "running") : r.status;
+    const spend = r.budgetUsd === null ? dollars(r.spentUsd) : `${dollars(r.spentUsd)}/${dollars(r.budgetUsd)}`;
+    const since = e?.atMs ?? r.updatedMs;
+    const age = since === null ? "-" : `${ageText(now - since)} ago`;
+    lines.push(`  ${column(r.run, idWidth)}  ${column(r.template, templateWidth)}  cycle ${n === null ? "-" : String(n)}  ${phase}  ${spend}  ${age}`);
+  }
+  if (ordered.length > listed.length) lines.push(`  +${ordered.length - listed.length} more (/autonomy status)`);
+  return lines.map((line) => fit(line, cols));
+}
+
+/**
+ * The live run widget's poller for one session. A refresh reads the run list (`status --json`) and,
+ * when a run is active, the newest host events (`events --json`), and shows the widget; with no
+ * active run it hides the widget. It refreshes every WIDGET_POLL_MS on an unref'd timer while
+ * widgetPolls says so, skipping a tick while the previous refresh is still running.
+ */
+function runWidget() {
+  let ctx: ExtensionContext | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let inFlight = false;
+  let off = false;
+  let shown = false;
+  let graceUntil = 0;
+  let tui: TUI | undefined;
+  let runs: WidgetRun[] = [];
+  let events: WidgetEvent[] = [];
+
+  const stop = (): void => {
+    if (timer) clearInterval(timer);
+    timer = undefined;
+  };
+
+  /** Keep refreshing on the timer, or stop. */
+  const poll = (value: boolean): void => {
+    if (!value) { stop(); return; }
+    if (timer) return;
+    timer = setInterval(() => { void refresh(); }, WIDGET_POLL_MS);
+    timer.unref();
+  };
+
+  const hide = (on: ExtensionContext): void => {
+    if (shown) {
+      try { on.ui.setWidget(WIDGET_KEY, undefined); } catch { /* the session's UI is gone */ }
+    }
+    shown = false;
+    tui = undefined;
+  };
+
+  const show = (on: ExtensionContext): void => {
+    if (on.mode === "tui") {
+      // The terminal renders the component at its current width on every frame, so a resize never overflows.
+      if (!shown) {
+        on.ui.setWidget(WIDGET_KEY, (t: TUI): Component => {
+          tui = t;
+          return { render: (width: number) => renderAutonomyWidget(runs, events, Date.now(), width), invalidate: () => undefined };
+        });
+      } else tui?.requestRender();
+    } else {
+      on.ui.setWidget(WIDGET_KEY, renderAutonomyWidget(runs, events, Date.now(), WIDGET_FALLBACK_WIDTH));
+    }
+    shown = true;
+  };
+
+  /**
+   * Refresh now. `statusReport` is a `status --json` report the caller already has, so it is not
+   * read twice; `changed` says a command just changed a run, so refreshing goes on for
+   * WIDGET_GRACE_MS even while the run list does not show the change yet.
+   */
+  async function refresh(on: ExtensionContext | undefined = ctx, statusReport?: Record<string, unknown> | null, changed = false): Promise<void> {
+    if (!on?.hasUI || off) return;
+    if (changed) graceUntil = Date.now() + WIDGET_GRACE_MS;
+    if (inFlight) return;
+    ctx = on;
+    inFlight = true;
+    try {
+      const report = statusReport === undefined ? (await runCli(["status"], { cwd: on.cwd, timeoutMs: WIDGET_CLI_TIMEOUT_MS })).json : statusReport;
+      const next = report?.ok === true ? widgetRuns(report) : [];
+      if (ctx !== on || off) return;
+      poll(widgetPolls(next, Date.now(), graceUntil));
+      if (!next.some(isActiveRun)) { hide(on); return; }
+      const read = await runCli(["events", "--limit", String(WIDGET_EVENT_LIMIT)], { cwd: on.cwd, timeoutMs: WIDGET_CLI_TIMEOUT_MS });
+      // A session that ended or a widget turned off while the CLI ran is not drawn on.
+      if (ctx !== on || off) return;
+      runs = next;
+      events = read.json?.ok === true ? widgetEvents(read.json) : [];
+      show(on);
+    } catch {
+      stop();
+      hide(on);
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  return {
+    refresh,
+    /** `/autonomy watch on|off`. */
+    setOff(on: ExtensionContext, value: boolean): void {
+      off = value;
+      if (value) { stop(); hide(on); }
+    },
+    /** The session ended: stop polling and forget its UI. */
+    shutdown(): void {
+      stop();
+      ctx = undefined;
+      shown = false;
+      tui = undefined;
+    },
+  };
+}
+
 export default function autonomyRun(pi: ExtensionAPI) {
   const resolveFile = (ctx: ExtensionCommandContext, file: string): string => path.resolve(ctx.cwd ?? process.cwd(), file);
+  const widget = runWidget();
+
+  // Lifecycle only: show the widget at session start when a run is already active, and stop polling at shutdown.
+  pi.on("session_start", (_event, ctx) => { void widget.refresh(ctx); });
+  pi.on("session_shutdown", () => { widget.shutdown(); });
 
   async function show(ctx: ExtensionCommandContext, args: string[]): Promise<CliResult> {
     const r = await runCli(args, { json: false, cwd: ctx.cwd });
@@ -278,6 +576,8 @@ export default function autonomyRun(pi: ExtensionAPI) {
     say(ctx, detach
       ? `Run ${run} started (supervisor pid ${String(s.pid)}). Follow it with /autonomy status ${run}; results with /autonomy export ${run}. Logs: ${String(s.log)}`
       : `Run ${run} ended: ${String(s.status)}${s.outcome ? ` (${String(field(s.outcome, "reason"))})` : ""}. Results: /autonomy export ${run}`);
+    // The new run is in `setup` while its container is built: the widget shows it and keeps refreshing.
+    if (detach) await widget.refresh(ctx, undefined, true);
   }
 
   /** Commands that change a run and first show the CLI's own account of what would change, then ask. */
@@ -297,9 +597,9 @@ export default function autonomyRun(pi: ExtensionAPI) {
   }
 
   pi.registerCommand("autonomy", {
-    description: "Start and manage autonomous runs in a hardened container: /autonomy templates|init|plan|start|status|pause|resume|steer|cancel|promote|export|inbox|boundary|reconfigure. A run only starts after you confirm its boundary.",
+    description: "Start and manage autonomous runs in a hardened container: /autonomy templates|init|plan|start|status|pause|resume|steer|cancel|promote|export|inbox|boundary|reconfigure|watch. A run only starts after you confirm its boundary.",
     getArgumentCompletions: (prefix: string) =>
-      ["templates", "init", "plan", "start", "status", "pause", "resume", "steer", "cancel", "promote", "export", "inbox", "boundary", "reconfigure", "help"]
+      ["templates", "init", "plan", "start", "status", "pause", "resume", "steer", "cancel", "promote", "export", "inbox", "boundary", "reconfigure", "watch", "help"]
         .filter((v) => v.startsWith(prefix.trim().toLowerCase()))
         .map((v) => ({ value: v, label: v })),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -353,11 +653,22 @@ export default function autonomyRun(pi: ExtensionAPI) {
             const report = await runCli(["status", "--run", words[0]], { cwd: ctx.cwd });
             ctx.ui.setStatus(STATUS_KEY, report.json?.ok === true ? generationStatusLine(report.json) : undefined);
           }
-          // No run: a one-line fleet summary, or the line is cleared when there are no runs.
+          // No run: a one-line fleet summary, or the line is cleared when there are no runs; the
+          // same report shows the live widget when a run is active.
           if (!words[0] && ctx.hasUI) {
             const report = await runCli(["status"], { cwd: ctx.cwd });
             ctx.ui.setStatus(STATUS_KEY, report.json?.ok === true ? fleetStatusLine(report.json) : undefined);
+            await widget.refresh(ctx, report.json);
           }
+          return;
+        }
+        case "watch": {
+          const mode = words[0] ?? "on";
+          if (mode !== "on" && mode !== "off") { say(ctx, "usage: /autonomy watch [on|off]", "error"); return; }
+          if (!ctx.hasUI) { say(ctx, "the live run widget needs a screen", "error"); return; }
+          widget.setOff(ctx, mode === "off");
+          if (mode === "on") await widget.refresh(ctx);
+          say(ctx, mode === "off" ? "The live run widget is off for this session; /autonomy watch on shows it again." : "The live run widget shows while a run is active (refreshed every 2 s).");
           return;
         }
         case "pause": {
@@ -381,7 +692,9 @@ export default function autonomyRun(pi: ExtensionAPI) {
           const answer = rest.filter((w) => w !== "--approve" && w !== "--deny").join(" ").trim();
           if (approve && ctx.hasUI && !(await ctx.ui.confirm(`Approve for run ${id}?`, "You are answering the run's pending approval with yes. Check `/autonomy status` for what it is asking."))) { say(ctx, "Not approved."); return; }
           if (approve && !ctx.hasUI) { say(ctx, "approving a run's request needs a screen to confirm on", "error"); return; }
-          await run(ctx, ["resume", "--run", id, "--detach", ...(approve ? ["--approve"] : []), ...(deny ? ["--deny"] : []), ...(answer ? ["--answer", answer] : [])]);
+          const resumed = await run(ctx, ["resume", "--run", id, "--detach", ...(approve ? ["--approve"] : []), ...(deny ? ["--deny"] : []), ...(answer ? ["--answer", answer] : [])]);
+          // A paused or blocked run is not refreshed on its own: watch for it to start running again.
+          if (resumed.code === 0) await widget.refresh(ctx, undefined, true);
           return;
         }
         case "steer": {

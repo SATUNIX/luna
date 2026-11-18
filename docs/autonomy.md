@@ -129,7 +129,34 @@ The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
 ```
 /autonomy templates | init <template> [flags] | plan <run.json> | start <run.json>
 /autonomy status [run] | pause | cancel | resume | steer | promote | export | inbox | reconfigure
+/autonomy watch [on|off]
 ```
+
+**Live run widget.** While a run is active (starting up in `setup` or `ready`, running,
+recovering, or paused after at least one cycle), pi shows a widget above the editor: a heading with the number of active and waiting runs,
+then one line per run that has not ended (active runs first, at most six, the rest counted) with
+its id, template, cycle, phase (from the newest host event: working, gate green or red, pushed, a
+failure code, or the run's status when it is not running), spend against budget and the age of its
+last event. Every line is cut to the terminal's width, so a narrow terminal never wraps it. The
+widget is refreshed every 2 seconds through the CLI (`pi-autonomy status --json` and
+`pi-autonomy events --json --limit 200`), skipping a refresh while the previous one is still
+running, but only while some run can change on its own (`setup`, `ready`, `running` or
+`recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. A paused or blocked
+run changes only when the operator acts, so with only such runs the widget is drawn once and not
+refreshed. It hides itself when no run is active. It is checked at session start, after
+`/autonomy start` starts a run in the background, after `/autonomy resume` and after
+`/autonomy status` with no run; `/autonomy watch` checks it now and `/autonomy watch off` hides it
+for the rest of the session. Pinned by `tests/autonomy-command-smoke.ts` (the renderer at 80 and
+120 columns and at narrow widths, which runs show and which keep it refreshing, showing a run
+still in `setup` after a background start, showing after resume, hiding and `watch off`).
+
+**Not covered:** the widget needs a screen and is not drawn in print or JSON mode; outside the
+terminal UI (RPC mode) its lines are rendered at 80 columns. Each refresh starts the CLI twice and
+reads the host event log in full, so a very large log makes each refresh slower. A run that becomes
+active from outside this session (another terminal or a timer), or a paused run resumed from
+outside it, shows only at the next check above. A run whose supervisor died during `setup` keeps
+the widget refreshing until the run is cancelled.
+No test draws the widget in a real terminal.
 
 `/autonomy inbox` lists a run's owner cards (or the fleet's runs waiting to be published) and
 `--answer <card> --value <text>` answers one; listing a run's cards settles its past-due ones, so

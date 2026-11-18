@@ -19,7 +19,7 @@ describes. Commands are for the operator: the model cannot call them.
 | Command | Extension | Description | Documented in |
 |---|---|---|---|
 | `/auto` | `tool-firewall` | Auto mode: /auto [status\|on\|off\|explain [n]\|learned\|forget <sig>\|learn on\|off\|stats\|profile [rebuild\|reset]\|check <command>] | [autonomy-gate](autonomy-gate.md) |
-| `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|inbox\|boundary\|reconfigure. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
+| `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|inbox\|boundary\|reconfigure\|watch. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
 | `/away` | `tool-firewall` | /away [--for 2h] [--budget 5] \| off \| status. Automatic approvals for a bounded time and budget; anything that would need your approval is refused with the reason. Needs the terminal of an interactive session. | [autonomy](autonomy.md) |
 | `/boost` | `progress-guard` | Auto-boost control: /boost reassesses now; /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |

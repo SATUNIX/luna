@@ -876,6 +876,36 @@ const EXPAND_NOTE =
   "\n\n## Your answer\nYour final answer is exactly one JSON object and nothing else: {\"steps\":[...]} and the host runs those steps next, or {\"done\":\"the result\"} if no more steps are needed. " +
   `A step is ${STEP_SHAPE}. tools only narrow what you have. You cannot start agents yourself; the steps are how you ask.`;
 
+/** Each run-directory file (as listRunFiles names them) with its modification time. */
+function runFileTimes(runDir: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const f of listRunFiles(runDir)) {
+    try { out.set(f, fs.statSync(path.join(runDir, f)).mtimeMs); } catch { /* removed meanwhile */ }
+  }
+  return out;
+}
+
+/** Files created or changed since `before`, leaving out the runner's own step answers (steps/<id>.md). */
+function filesWrittenSince(runDir: string, before: ReadonlyMap<string, number>): string[] {
+  return [...runFileTimes(runDir)].filter(([f, t]) => !f.startsWith("steps/") && before.get(f) !== t).map(([f]) => f).sort();
+}
+
+const MAX_WRITTEN_NAMED = 10;
+
+/**
+ * The error for a step that finished without its declared outputs: the missing paths, the files it
+ * wrote in the run directory instead (or that it wrote none), and where its final answer was kept.
+ * The runner never writes a declared output from the answer: an answer often only describes the
+ * report ("written to board-report.md"), so copying it would pass a step on a report that does not
+ * exist. Pinned by tests/workflow-smoke.ts.
+ */
+export function missingOutputsError(runDir: string, stepId: string, missing: readonly string[], written: readonly string[]): string {
+  const named = written.slice(0, MAX_WRITTEN_NAMED).map((f) => path.join(runDir, f));
+  const more = written.length > MAX_WRITTEN_NAMED ? ` and ${written.length - MAX_WRITTEN_NAMED} more` : "";
+  const instead = named.length ? `it wrote ${named.join(", ")}${more} instead` : "it wrote no file in the run directory";
+  return `declared output(s) not written in ${runDir}: ${missing.map((o) => path.join(runDir, o)).join(", ")}; ${instead}; its final answer is in ${path.join(runDir, "steps", `${stepId}.md`)}`;
+}
+
 function listRunFiles(runDir: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, rel: string) => {
@@ -996,6 +1026,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
     maxRuntimeMs: step.maxRuntimeMs,
     appendSystemPrompt: BLACKBOARD_NOTE(runDir, listRunFiles(runDir)) + (step.expand ? EXPAND_NOTE : ""),
   };
+  const filesBefore = step.outputs?.length ? runFileTimes(runDir) : undefined;
   const agentId = tele.run.agentStart(start);
   const handle = opts.control.agent(step.id, agentId);
   let result: SingleResult;
@@ -1059,7 +1090,7 @@ async function runStep(step: StepDef, state: RunState, runDir: string, loop: num
   const missingOutputs = (step.outputs ?? []).filter((o) => !fs.existsSync(path.join(runDir, o)));
   if (missingOutputs.length) {
     st.status = "failed";
-    st.error = `declared output(s) not written in ${runDir}: ${missingOutputs.map((o) => path.join(runDir, o)).join(", ")}`;
+    st.error = missingOutputsError(runDir, step.id, missingOutputs, filesBefore ? filesWrittenSince(runDir, filesBefore) : []);
     settle("failed");
     return settled();
   }

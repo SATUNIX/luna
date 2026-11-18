@@ -320,6 +320,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **A workflow step that misses a declared output says where it wrote instead (F-03).** Finding:
+  two runs failed on the output contract after doing the work under another name (`board-report.md`
+  for `board-changes.md`, `verify.md` for `verification.md`). The error named only the missing path,
+  so the work had to be found and the workflow re-run by hand. (The step's task already names the
+  exact path.) Fix: the error now also lists the files written in the run directory while the step
+  ran, or says it wrote none, and names `steps/<id>.md`, where its final answer is kept. The runner
+  still never writes a declared output from the answer, which often only describes the report;
+  `docs/workflows.md` says so. Verified by `tests/workflow-smoke.ts` (a step that writes
+  `board-report.md` for `board-changes.md`, and one that writes nothing) and
+  `tests/workflow-plan-smoke.ts`.
+
 - **Each check's full gate log is kept with its step (F-05).** Finding: an acceptance check's gate
   ran in one shared scratch directory (`gate-work/`) that the runtime wiped before every check, and
   the evidence file kept only the last 4000 characters (`tail`). The next check, in the same step

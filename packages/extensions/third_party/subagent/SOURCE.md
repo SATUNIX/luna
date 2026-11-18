@@ -286,6 +286,10 @@
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Missing declared outputs name what was written (2026-11-19):** `workflow.ts` snapshots the run
+    directory before a step with `outputs` and, when one is missing, `missingOutputsError` names the
+    missing paths, the files written while the step ran (or none) and `steps/<id>.md`. It never
+    writes a declared output from the answer (`tests/workflow-smoke.ts`, `tests/workflow-plan-smoke.ts`).
   - **Whole-line plain-text gate (2026-11-18):** `workflow.ts` `gatePasses` passes a plain-text gate
     only when the last non-empty line, without case, surrounding whitespace or markdown emphasis
     (`verdictKey`), equals the pass text; it was a substring of that line, so a bare `PASS` gate

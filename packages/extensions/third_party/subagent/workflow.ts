@@ -139,7 +139,7 @@ function parseStep(raw: unknown, where: string, errors: string[], inline: boolea
     const loopsOk = Number.isInteger(maxLoops) && maxLoops >= 0 && maxLoops <= MAX_GATE_LOOPS;
     if (!loopsOk) errors.push(`${where}: gate max_loops must be a whole number from 0 to ${String(MAX_GATE_LOOPS)}`);
     step.gate = { pass: toText(g.pass ?? g.expect ?? ""), retry: toText(g.retry ?? g.on_fail ?? ""), maxLoops: loopsOk ? maxLoops : DEFAULT_GATE_LOOPS };
-    if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text or /regex/ the verdict line, the last non-empty line, must contain)`);
+    if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text the verdict line, the last non-empty line, must be, or a /regex/ tested on the output tail)`);
   }
   return step;
 }
@@ -673,19 +673,33 @@ function testInWorker(re: RegExp, output: string): Promise<boolean> {
   });
 }
 
+/** Whitespace and markdown emphasis a model may wrap a verdict in (`**VERDICT: PASS**`). */
+const VERDICT_WRAP = new Set([" ", "\t", "\r", "*", "_", "`"]);
+
+/** A verdict line or a plain-text pass, compared without case and without its wrapping. */
+export function verdictKey(line: string): string {
+  let start = 0;
+  let end = line.length;
+  while (start < end && VERDICT_WRAP.has(line.charAt(start))) start++;
+  while (end > start && VERDICT_WRAP.has(line.charAt(end - 1))) end--;
+  return line.slice(start, end).toLowerCase();
+}
+
 /** Whether a step's answer passes its gate. Verdicts come last, so a long answer is tested on its tail. */
 export async function gatePasses(pattern: string, output: string): Promise<boolean> {
   const checked = compileGate(pattern);
   if (!checked) {
-    // Plain text must appear on the verdict line: the last non-empty line of the output. A verdict
-    // comes last, and matching the pass token anywhere else in the prose lets a reviewer's FAIL pass.
+    // Plain text must BE the verdict line: the last non-empty line of the output, whole. A verdict
+    // comes last; matching the pass token anywhere else in the prose lets a reviewer's FAIL pass, and
+    // a substring of the last line lets "the tests do not pass" satisfy a bare PASS gate.
     const lastLine = output
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
       .at(-1);
     if (lastLine === undefined) return false;
-    return lastLine.toLowerCase().includes(pattern.toLowerCase());
+    const want = verdictKey(pattern);
+    return want !== "" && verdictKey(lastLine) === want;
   }
   return checked.ok ? testInWorker(checked.re, output.slice(-MAX_FILE_INCLUDE)) : false;
 }

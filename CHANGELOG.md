@@ -115,6 +115,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
+  line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do
+  not pass". The last non-empty line must now equal the pass text, ignoring case, surrounding
+  whitespace and markdown emphasis. A plan whose reviewer ends with `Verdict: PASS` under a `PASS` gate
+  now loops back: gate on the exact line, or use an anchored `/regex/` as the shipped workflows do.
+  The gate's parse error and the `workflow_run` description now say a `/regex/` is tested on the
+  output tail (`tests/workflow-smoke.ts`).
 - **Dependabot no longer proposes pi bumps for the image tool lockfiles.** The autonomy
   and container images pin pi in their Dockerfiles and `smoke:container-static` checks that the
   lockfile agrees, so any such bump, patch included, could only be red; it is made by hand with the

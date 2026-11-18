@@ -1580,7 +1580,8 @@ await check("a step output past the read limit reaches a later step truncated; t
 
 await check("a gated group over the read limit is tested on every member's whole answer and never rejects the call", async () => {
   await session();
-  useFake((s) => ({ text: `${"y".repeat(700_000)}${s.task.includes("second") ? "END-OF-B" : ""}` }));
+  // The pass text is b's last line, so it reaches the gate only if the whole over-limit answer does.
+  useFake((s) => ({ text: `${"y".repeat(700_000)}${s.task.includes("second") ? "\nEND-OF-B" : ""}` }));
   const r = await call({ steps: [{ id: "g", parallel: [{ id: "a", agent: "scout", task: "first" }, { id: "b", agent: "scout", task: "second" }], gate: { pass: "END-OF-B", retry: "g", max_loops: 0 } }] });
   assert.equal(statusIn(textOf(r)), "passed", textOf(r));
 });

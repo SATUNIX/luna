@@ -405,6 +405,8 @@ export default function autonomyRun(pi: ExtensionAPI) {
         }
         case "inbox": {
           if (!words[0]) { await run(ctx, ["inbox"]); return; }
+          // The CLI's own hint is `pi-autonomy inbox --run <run> ...`, so that form is accepted too.
+          if (words[0] === "--run") words.shift();
           const id = runId();
           if (!id) return;
           const rest: string[] = [];

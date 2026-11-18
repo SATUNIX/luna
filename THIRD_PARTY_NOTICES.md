@@ -160,6 +160,16 @@ SOFTWARE.
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
   - Nothing in the test suite pins this.
+- 2026-11-18 ASCII status chips.
+  - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
+    ASCII with its name, or `?`, and keeps ANSI sequences.
+  - `statusChip` takes `glyphs` (`ascii`, `ellipsis`) in place of its `ellipsis` argument. In ASCII
+    mode it prints `...` for the ellipsis, `*` and `o` for the filled and hollow circles, `-` for the
+    middle dot and `?` for anything else, and truncates with `...`; `chipSeverity` still reads the
+    text as sent, so a chip's colour is the same in both modes.
+  - `renderFooter` folds every line of an ASCII bar the same way, so a path, branch, model or
+    session name with non-ASCII text cannot reach a tty/iso/ansi/ascii terminal
+    (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
 
 ### `dirty-repo-guard`
 

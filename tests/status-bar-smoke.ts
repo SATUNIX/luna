@@ -422,6 +422,51 @@ const tests = {
     }
   },
 
+  asciiBarPrintsOnlyAscii() {
+    // Status text from other extensions carries the ellipsis, circles and wide text; an ASCII bar
+    // (a tty/iso/ansi/ascii theme, PI_KIT_ASCII=1 or /footer ascii on) must print none of it.
+    const statuses = [
+      { key: "remote-control", text: "remote \u25cf" },
+      { key: "remote", text: "remote: starting\u2026" },
+      { key: "verify-gate", text: "running\u2026" },
+      { key: "kit-update", text: "checking for updates..." },
+      { key: "lint", text: "\u25cb idle \u00b7 \u6f22\u5b57 \u{1F680} failed" },
+    ];
+    const state: FooterState = {
+      cwd: "/work/\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", branch: "feature/\u00e9t\u00e9", sessionName: "s\u00e9ance", model: "m\u00f6del", provider: "p",
+      totals: { input: 1200, output: 300, cacheRead: 5, cacheWrite: 0, total: 1505, cost: 0 }, partial: false, cost: { kind: "unknown" },
+      statuses: statuses.map((entry) => ({ ...entry, ageMs: 0 })), todos: [], now: 0, running: true,
+    };
+    const ansi = (name: string): Theme => ({ name, fg: (c, t) => `\u001b[3${c.length % 8}m${t}\u001b[39m`, bold: (t) => `\u001b[1m${t}\u001b[22m` });
+    const printable = /^[\x20-\x7e]*$/;
+    const restore = setEnv("PI_KIT_ASCII", "1");
+    try {
+      for (const theme of [ansi("tty-dark"), plain]) {
+        for (const mode of ["light", "default", "heavy"] as const) {
+          for (let width = 20; width <= 120; width++) {
+            for (const line of renderMod.renderFooter(state, theme, width, mode)) {
+              assert.match(strip(line), printable, `ASCII ${mode} bar at ${width} columns: ${JSON.stringify(strip(line))}`);
+              assert.ok(renderMod.visibleWidth(line) <= width, `ASCII ${mode} bar fits ${width} columns`);
+            }
+          }
+        }
+      }
+      const wide = strip(renderMod.renderFooter(state, ansi("tty-dark"), 400, "heavy").join("\n"));
+      for (const want of ["remote *", "starting...", "running...", "o idle - ?? ? failed"]) assert.ok(wide.includes(want), `ASCII bar names ${JSON.stringify(want)}: ${wide}`);
+    } finally { restore(); }
+    // The Unicode bar keeps the glyphs as sent, and folding never changes a chip's severity.
+    const unicode = strip(renderMod.renderFooter(state, ansi("dark"), 400, "heavy").join("\n"));
+    for (const want of ["remote \u25cf", "running\u2026", "\u6f22\u5b57"]) assert.ok(unicode.includes(want), `Unicode bar keeps ${JSON.stringify(want)}`);
+    const tagged: Theme = { fg: (c, t) => `<${c}>${t}`, bold: (t) => t };
+    const colourOf = (chip: string): string => [...chip.matchAll(/<(\w+)>/g)].at(-1)?.[1] ?? "";
+    for (const entry of statuses) {
+      const asciiChip = renderMod.statusChip(entry.key, entry.text, tagged, 400, { ascii: true, ellipsis: "..." });
+      const unicodeChip = renderMod.statusChip(entry.key, entry.text, tagged, 400);
+      assert.equal(colourOf(asciiChip), colourOf(unicodeChip), `${entry.key}: the ASCII chip has the Unicode chip's severity colour`);
+      assert.match(asciiChip, printable, `${entry.key}: the ASCII chip is printable ASCII`);
+    }
+  },
+
   branchProfileAndPathHelpersAvoidSubprocesses() {
     const ws = tmpWorkspace("pi-kit-footer-git-");
     try {

@@ -206,6 +206,40 @@ runs. The limits it leaves open:
 - **Replaced parents.** Moving or linking a directory above a protected file is only caught where the
   parent is itself classified.
 
+## Operator delegation
+
+The operator can let a session run named day-to-day verbs of one wrapper program without a prompt, for a
+limited time, by adding an entry to `firewall.json` (never the shipped policy):
+
+```json
+"delegations": [{ "operator": "alex", "path": "/opt/ops/bin/runctl", "verbs": ["status", "pause", "steer"], "expires": "2027-01-31" }]
+```
+
+- **What is delegated.** A bash call that is exactly one plain command (no pipe, list, redirect,
+  assignment, substitution, background job or wrapper such as `env`, `sudo` or `bash -c`) whose program,
+  named by path, resolves to the entry's `path`, and whose first argument is one of its `verbs`. Every
+  other finding must be low: a call that also reads a secret or writes a protected file is decided as
+  usual. The decision is audited as `tool_approved` with `decider: "delegate"` and the operator, path,
+  verb and expiry; it writes no feedback and no approval, so it never teaches the judge or the learner.
+- **What never is.** Verbs outside `status`, `pause`, `resume`, `restart`, `steer`, `backlog`,
+  `board-push`, `answer`, `raise-budget`, `units`, `tick` and `metrics`; any of `start`, `supervise`,
+  `plan`, `promote`, `cancel`, `reconfigure`, `init`, `recreate`, `decide`, `add-stream`,
+  `remove-stream` and `start-streams`, even when an entry lists them (the entry is dropped); the same
+  verbs through the autonomy CLI itself or any other program; `systemctl enable`; and any session that
+  is unattended, a kit child, under the engagement policy or at strict security.
+- **How an entry is checked.** Strictly, on every call: `path` must be absolute, its own real path, a
+  regular file owned by the operator (or root) and not writable by its group or everyone; `expires` must
+  be a date in the future and at most 90 days ahead; unknown keys are refused. A bad entry is dropped with
+  a warning in `/firewall status`, which also lists the live ones; nothing else in `firewall.json`
+  changes. Every configured delegate path, valid or not, joins the protected boundary, so writing, moving
+  or `chmod`-ing it is a safety-control action even while its entry is dropped, and running any protected
+  file as a program or as an interpreter's script is never routine (`protected_exec`). Of the tilde forms
+  only `~/` names a delegate; `~user/`, `~+/` and `~-/` never do.
+- **Not covered.** The firewall cannot see what the delegate program does with a verb: the operator is
+  trusting that program, which runs with the session's permissions. Pinning its contents (a hash) is not
+  implemented; the ownership and mode checks, the boundary and the expiry are what bound it
+  (`tests/firewall-delegation-smoke.ts`).
+
 ## Audit
 
 Each tool call appends one JSONL record to `PI_KIT_FIREWALL_AUDIT_LOG`, or to

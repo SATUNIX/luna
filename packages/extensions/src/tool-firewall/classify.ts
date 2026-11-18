@@ -145,6 +145,10 @@ export function resolvePath(p: string, cwd: string | null, env: ClassifyEnv, rem
   if (/[`]|\$\(|\$\{?[A-Za-z_]/.test(s)) return null; // unresolved expansion
   if (s === "~" || s.startsWith("~/")) return remote ? normalize(s) : normalize(env.home + s.slice(1));
   if (/^~[A-Za-z]/.test(s)) return remote ? s : `/home/${s.slice(1)}`;
+  // `~+` is the working directory and `~-` the previous one (OLDPWD): bash expands both, so neither is a
+  // relative path named `~+`.
+  if (s === "~+" || s.startsWith("~+/")) return cwd === null ? null : normalize(cwd + s.slice(2));
+  if (s === "~-" || s.startsWith("~-/")) return null;
   if (s.startsWith("/")) return normalize(s);
   if (cwd === null) return null;
   return normalize(`${cwd}/${s}`);
@@ -810,7 +814,10 @@ function classifySegment(c: Ctx): void {
     // A secret run as a program is read by whatever runs it, and the lines it cannot parse are echoed back.
     if (READ_CRED_TIER(r.cls)) readPath(c, first);
     if (r.cls === "temp" || r.cls === "home" || r.cls === "other" || r.cls === "unknown") add(c, "medium", "code_exec", "outside_exec", `runs a program outside the workspace: ${r.shown}`, `exec ${r.key}`);
-    else add(c, "low", "code_exec", "workspace_exec", `runs ${r.shown}`);
+    else if (r.cls === "workspace" || r.cls === "workspace_root" || r.cls === "workspace_derived" || r.cls === "system") add(c, "low", "code_exec", "workspace_exec", `runs ${r.shown}`);
+    // A protected file run as a program (a safety-control or credential file, a git hook, a startup file, a
+    // system-critical path, an operator's delegate): never routine, whatever it is called.
+    else add(c, "medium", "code_exec", "protected_exec", `runs a protected file as a program: ${r.shown}`, `exec ${r.key}`);
     if (!READ_ONLY.has(exe) && !DEV_TOOLS.has(exe) && !own(HANDLERS, exe)) return;
   }
 
@@ -906,7 +913,10 @@ function devTool(c: Ctx): void {
     if (r.cls === "unknown" && !/^[~/$]/.test(script) && c.seg.cwd && !c.seg.remote) { add(c, "low", "code_exec", "script_exec", `${exe} ${script}`); return; }
     if (r.cls === "temp") { add(c, "low", "code_exec", "script_exec", `${exe} ${r.shown}`); return; }
     if (r.cls === "home" || r.cls === "other" || r.cls === "unknown" || r.cls === "system") { add(c, "medium", "code_exec", "outside_script", `${exe} runs a script outside the workspace: ${r.shown}`, `${exe} ${r.key}`); return; }
-    add(c, "low", "code_exec", "script_exec", `${exe} ${r.shown}`); return;
+    if (r.cls === "workspace" || r.cls === "workspace_root" || r.cls === "workspace_derived") { add(c, "low", "code_exec", "script_exec", `${exe} ${r.shown}`); return; }
+    // A protected file as the script (a safety-control file, an operator's delegate, a startup file): as when
+    // it is run directly, never routine.
+    add(c, "medium", "code_exec", "protected_exec", `${exe} runs a protected file: ${r.shown}`, `${exe} ${r.key}`); return;
   }
   const pm = own(PACKAGE_MANAGERS, exe);
   if (pm) { pm(c); return; }

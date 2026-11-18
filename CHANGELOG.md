@@ -350,6 +350,27 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **The operator can delegate named autonomy-control verbs to one program (F-02, part 2).** Finding: the
+  firewall had no way to express the owner's delegation of day-to-day run control to the manager session:
+  every `pause`, `steer` or `status` through the operator's wrapper opened an approval card (10 high
+  escalations, 9 prompts and 1,460 s of waiting in one 189-call session), and the wrapper passed only when
+  its text happened to be opaque to the classifier. Cause: `command_rules` can only deny or ask, and session
+  grants are exact-hash approvals, not delegations. Fix: a `delegations` entry in `firewall.json` names the
+  operator, the delegate program's real path, the verbs and an expiry (at most 90 days ahead); a bash call
+  that is one plain command of a listed verb of that program runs without a prompt in a root session under
+  the coding policy, and is audited as `decider: "delegate"` with the operator, path, verb and expiry. It
+  writes no feedback or approval. Never-delegable verbs, the raw autonomy CLI, `systemctl enable`, any other
+  program, chains, redirects, wrappers, and unattended, child, engagement and strict sessions still need the
+  operator; a malformed, expired, linked, foreign-owned or group-writable entry is dropped with a warning in
+  `/firewall status`. The delegate joins the protected boundary (every configured path, so a dropped entry's
+  delegate cannot be replaced and trusted again), running any protected file as a program or as an
+  interpreter's script is now medium (`protected_exec`) instead of low, and the classifier expands `~+` and
+  `~-` as bash does instead of reading them as relative paths; a `~user/` program never matches a delegation.
+  An adversarial review found these gaps (and two entries for one path honouring only the first) before it
+  landed. Authority change: for operator review before it reaches
+  `integration/luna`. Not covered: what the delegate itself does with a verb. Verification:
+  `tests/firewall-delegation-smoke.ts` (both sides, in `test:security`).
+
 - **The autonomy CLI's control commands ask the operator however the CLI is reached.** Finding: `pause`,
   `steer`, `start` and the other control commands are high and never learned from an agent's shell, but only
   when the CLI was typed as `pi-autonomy` or an interpreter running `autonomy/cli.ts`; eight other forms ran

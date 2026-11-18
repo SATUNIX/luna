@@ -32,6 +32,7 @@ import { isLocalProvider, isUncertainBlock, runJudge, type Completer, type Verdi
 import { loadSession, recordAction, rootSessionId, saveSession, trajectoryFindings, type SessionGrant, type SessionState } from "./trajectory.ts";
 import { addApproval, describeScope, findExact, floorFor, readApprovals, reportProblems, revokeApprovals, sessionApprovals, similarApprovals, SESSION_APPROVAL_TTL_MS, type Approval, type ApprovalsView } from "./approvals.ts";
 import { createUnattended, unattendedDenial, type ProvenanceIo, type UnattendedState } from "./unattended.ts";
+import { matchDelegation, readDelegations } from "./delegation.ts";
 import { loadConsoleKey, requestDigest, verifyAnswer } from "./console-auth.ts";
 import { buildCard, buildDetail, CARD_MAX_LINES, CHOICE_ALLOW_ONCE, CHOICE_DENY_TELL, choicesFor, isProjectChoice, isSessionChoice, projectAllowOffered, type CardExtras } from "./card.ts";
 
@@ -688,6 +689,10 @@ function registerProtection(name: string): void {
   }
 }
 
+// The findings a delegated call may carry above low: the ones that only say it runs a program by path or by a
+// name the classifier has no rule for. Any other finding keeps the ordinary decision.
+const DELEGATE_EXEC_CODES: ReadonlySet<string> = new Set(["outside_exec", "protected_exec", "workspace_exec", "unknown_exec"]);
+
 export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((...args: never[]) => unknown) = {}) {
   const d: FirewallDeps = typeof deps === "function" ? {} : deps;
   disableCompanionInstalls();
@@ -894,7 +899,9 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // Unattended: the state to decide by (null unless the supervisor's env + contract entered it and it still holds).
     const u: UnattendedState | null = unattended.current(policyName, { cwd, workspace });
     const contractEnv = process.env.PI_KIT_UNATTENDED_CONTRACT?.trim();
-    const boundaryPaths = [...new Set([path.resolve(securityPath()), contractEnv, u?.contractPath].filter((x): x is string => !!x))];
+    // A delegate program is part of the boundary too: an agent that could rewrite it could run anything through it.
+    const delegations = readDelegations();
+    const boundaryPaths = [...new Set([path.resolve(securityPath()), contractEnv, u?.contractPath, ...delegations.paths].filter((x): x is string => !!x))];
     const env: ClassifyEnv = { cwd, workspace, home: homeDir(), tmpRoots: tmpRoots(), knownHosts: trustedHosts(cfg, ctx), policy: policyName, ...(boundaryPaths.length ? { boundaryPaths } : {}) };
 
     const toolRule = Object.hasOwn(policy.tools, toolName) ? policy.tools[toolName] : undefined;
@@ -1011,6 +1018,18 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       && a.findings.every((f) => f.tier === "low" || f.code === "policy_ask") && workflowPreauthorised()) {
       finish("allow", "standing");
       return undefined;
+    }
+    // Operator delegation (delegation.ts): one plain call of a delegated verb of the delegate program, in a root
+    // session under the coding policy without strict security. Its only finding above low is that it runs that
+    // program; anything else (a chain, a secret, a write) is decided as before. No feedback and no approval is
+    // recorded, so it never teaches the judge or the learner; the audit line names the delegation.
+    if (toolName === "bash" && command !== null && !operatorOnly && policyName !== "engagement" && process.env.PI_KIT_INTERNAL_CHILD !== "1"
+      && a.findings.every((f) => f.tier === "low" || DELEGATE_EXEC_CODES.has(f.code))) {
+      const delegated = matchDelegation(command, cwd, homeDir(), delegations.entries);
+      if (delegated) {
+        finish("allow", "delegate", { delegate: { operator: delegated.entry.operator, path: delegated.entry.path, verb: delegated.verb, expires: delegated.entry.expires } });
+        return undefined;
+      }
     }
     // Engagement approvals are per action: no session approvals (the card does not offer one).
     const strict = operatorOnly || policyName === "engagement";
@@ -1328,6 +1347,7 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
   };
 
   const firewallStatus = (ctx: ExtensionContext): string => {
+    const delegations = readDelegations();
     const policy = getPolicy();
     const cfg = readConfig();
     const cwd = ctx?.cwd || process.cwd();
@@ -1354,6 +1374,8 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
       `tool-firewall: policy=${p.policy} (${p.source}) mode=${m.mode} (${m.source})`,
       ...(p.error ? [`  WARNING: ${p.error}`] : []),
       `  security: ${securitySnapshot(ctx).effective} (requested ${securitySnapshot(ctx).requested}); /security status explains the active restrictions and unavailable checks`,
+      ...delegations.entries.map((d) => `  delegation: ${d.operator} delegates ${d.verbs.join(", ")} of ${d.path} to this session until ${d.expires} (root sessions only; never unattended, strict or engagement)`),
+      ...delegations.warnings.map((w) => `  WARNING: delegation dropped: ${w}`),
       `  configured strategy (security restrictions apply on top): ${decides}`,
       `  runs without asking: low-tier actions in every mode (reads of non-credential paths, git reads, network GETs, workspace writes, dev tooling, explicitly allowed external tools); unknown tool names need operator authority${m.mode === "auto" && p.policy === "coding" ? "; in auto mode also read-only ssh and sudo -n reads on known hosts" : "; read-only ssh/sudo -n on known hosts is NOT trusted in this mode and asks"}`,
       `  outcomes: HARD DENY (policy says never; no approval or judge overrides) · UNCERTAIN (judge/classifier unsure, unavailable or timed out: asks you, or fails closed when nobody can be asked) · OPERATOR DECISION (you allowed or denied; remembered only within the scope the card names)`,

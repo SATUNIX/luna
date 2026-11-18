@@ -46,6 +46,7 @@
     "packages/core/lib/**",
     "packages/core/shared/profile-names.ts",
     "packages/core/shared/ceiling.ts",
+    "packages/core/shared/redact.ts",
     "packages/core/luna.ts",
     "packages/core/schema/**",
     "packages/core/policies/**",

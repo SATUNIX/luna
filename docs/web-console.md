@@ -40,7 +40,7 @@ log. `/console stop` removes that file.
 | A web page you visit sends requests to the console (CSRF) | Every state-changing request needs the bearer token in the `Authorization` header, which a foreign page cannot set. Cross-origin and cross-port requests, and `Sec-Fetch-Site` values other than same-origin, get 403 before any handler runs. No CORS headers are ever sent. State-changing requests must be `application/json` (415 otherwise). |
 | DNS rebinding | The `Host` header must be on an allowlist (loopback names and the bound port, plus `PI_CONSOLE_ALLOWED_HOSTS`) for every route, static files included. |
 | Reaching the console from the network | The bind address must be loopback. Anything else is refused unless `PI_CONSOLE_ALLOW_REMOTE=1`, and a wildcard bind additionally needs `PI_CONSOLE_ALLOWED_HOSTS`. Remote mode always requires the token. |
-| Unauthenticated use | 401 on every route except `/api/health` and the static shell, the event stream included. The token is compared in constant time, is never accepted in a query string, never set as a cookie and never logged. |
+| Unauthenticated use | 401 on every route except `/api/health` and the static shell, the event stream and the read-only `/api/autonomy` included. The token is compared in constant time, is never accepted in a query string, never set as a cookie and never logged. |
 | Driving pi beyond a chat | Only eight RPC command types can reach a child. pi's `bash`, `switch_session` and `export_html` cannot. Request bodies are capped at 1 MB, and ids and session-spawn settings are validated before anything is started. The token is removed from the child's environment. |
 | Script injection through agent output | Markdown is rendered by building DOM text nodes, never by parsing HTML. A Content-Security-Policy forbids inline script and style; `nosniff`, `no-referrer`, frame denial and `no-store` on the API are set. |
 | Stuck children on shutdown | SIGTERM closes event streams and tailers and kills a child that ignores SIGTERM, within about six seconds. |
@@ -58,6 +58,63 @@ log. `/console stop` removes that file.
 | `PI_CONSOLE_ALLOWED_HOSTS` | unset | Comma-separated host names the server answers to |
 | `PI_CONSOLE_ACCESS_LOG` | unset | `1` logs every request line (path only, never the query, headers or token) |
 | `PI_CONSOLE_RUNTIME_DIR` | `.runtime/` | Scratch directory, mainly for tests |
+
+## Autonomy view
+
+The **Autonomy** tab shows the [autonomous runs](autonomy.md) on this host. It is read-only:
+there is no way to start, pause, answer or cancel a run from the console. Use `/autonomy` or
+`pi-autonomy` for that.
+
+The tab reads `GET /api/autonomy`. It polls every 5 seconds while the tab is shown and the
+browser tab is visible, one request at a time: a tick while a request is still pending is skipped,
+and an answer that arrives after you left the tab is not shown. The route needs the token like every other route. It is not part of the
+`/api/health` exemption. With the token, any method other than `GET` gets 405 with `Allow: GET`. The server reads the
+autonomy state home on each request: `PI_AUTONOMY_HOME`, else `$XDG_STATE_HOME/pi-autonomy`,
+else `~/.local/state/pi-autonomy`, resolved in the environment the console server was started
+with. The answer is schema version 1:
+
+| Field | What it holds |
+| --- | --- |
+| `schemaVersion` | `1` |
+| `at` | when the answer was built (ISO time) |
+| `runs` | at most 200 runs, newest first. Each has `run`, `template`, `status`, `updatedAt`, `outcome` (`{status, reason}` or null), `spentUsd`, `budgetUsd`, `step`, `blocker` (`{kind, question, waiting?}` or null), `legacy` (only on a run the previous supervisor wrote) and `lastEventAt`. These are the fields `pi-autonomy status` lists. A figure the run did not record is `null` |
+| `runsTotal` | how many runs there were before the cut at 200 |
+| `events` | the newest 50 events of the [host event log](autonomy.md#host-event-log), oldest first, each line as written (`v`, `at`, `run`, `type` and that type's own fields) |
+| `status` | the [reporting status file](autonomy.md#reporting-lines) `status.json` in the state home, when it is schema version 1, else `null`. `pi-autonomy report --out "$PI_AUTONOMY_HOME/status.json"` writes it there |
+| `skipped` | `{runs, events, status}`: how many run states, event lines and status files could not be read or did not match, and were left out |
+
+The tab shows one row per run with its id, template, status (with the blocker question or the
+outcome reason), step, spend against budget and the age of its newest event. Below that it shows
+the recent events, newest first, and the spend and open pull requests from the status file.
+
+A malformed `state.json`, event line or status file is skipped and counted. It never fails the
+whole answer. Blocker questions, reasons and branch names can carry text a worker wrote. Every
+string the server sends from `state.json`, an event line or the status file (record keys
+included) first passes through the kit's [redaction table](security.md#redaction), as the status
+file and phone alerts do, and is then reduced to one visible line (control, bidirectional and
+zero-width characters become spaces) and clipped. Redaction is best effort: a secret in a shape
+the table does not know is sent as written. A FIFO or other non-regular file at any of these names
+is skipped and counted without waiting on it. The page shows every string as text and never
+parses it as HTML.
+
+The console does not load the autonomy library. `packages/autonomy` is not in the published
+package, so the server reads the files with its own parsers: `packages/web-ui/server/autonomy.ts`.
+Type checks against the library's event, run and status types fail `npm run test:typecheck` if
+the two drift apart. `tests/web-ui-api-smoke.ts` pins the shape against state written by the
+library itself: every event type, a malformed run, line and status file, the cut at 50 events,
+redaction and one-line strings in runs, events and the status file, a FIFO skipped, and 405 on
+other methods. `tests/web-ui-security-smoke.ts` pins the 401 without a token and the
+answer over real HTTP. `packages/web-ui/scripts/ui-smoke.ts` pins the rendering and that polls never overlap.
+
+**Not covered:**
+
+- The events come from the last 512 KiB of `events.jsonl` and its rotated generation. A run whose
+  newest event is older than that shows no last-event age.
+- A state home that is a link is followed, as the autonomy CLI follows it. `state.json`,
+  `status.json` or an event log that is itself a link is not read and counts as skipped.
+- A paired phone holds a console token, so it can read this route too.
+- The console reads the state home of the account it runs as. A run that another account
+  supervises, or one in another state home, is not shown.
 
 ## Limits and residual risks
 

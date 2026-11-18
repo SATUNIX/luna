@@ -10,6 +10,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **The web console has a read-only Autonomy view.** Finding: the console had no autonomy
+  awareness, so following unattended runs from a browser was not possible. Fix: an authenticated
+  `GET /api/autonomy` (schema version 1; other methods 405) answers with the runs under the
+  autonomy state home (at most 200, with the fields `pi-autonomy status` lists and each run's
+  last-event time), the newest 50 host events and the reporting `status.json` when it is in the
+  state home. A malformed run state, event line or status file is skipped and counted, never
+  fatal. Every string sent passes through the kit's redaction table and is made one visible line,
+  and a FIFO at a file name is skipped rather than waited on. The new **Autonomy** tab lists them
+  as text and polls every 5 seconds while it is shown, one request at a time.
+  The server reads the files with its own parsers, because `packages/autonomy` is not in the
+  published package; type checks tie them to the library's types. No run control. Verified by
+  `tests/web-ui-api-smoke.ts`, `tests/web-ui-security-smoke.ts` and
+  `packages/web-ui/scripts/ui-smoke.ts`; see `docs/web-console.md`.
 - **`/autonomy` shows a live run widget.** Finding: `/autonomy status` printed the run list once
   and the only persistent surface was a one-line footer, so following a run meant re-running the
   command. Fix: while a run is active, the `autonomy-run` extension shows a widget with one line

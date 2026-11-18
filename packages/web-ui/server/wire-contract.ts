@@ -8,6 +8,7 @@
 import type * as Wire from "../src/public/js/wire.ts";
 import type { AgentSource } from "./agents.ts";
 import type { AgentInput, deleteAgent } from "./agentstore.ts";
+import type { AutonomyEvent, AutonomyResponse, AutonomyRun, AutonomyStatus } from "./autonomy.ts";
 import type { ConfigInfo, KitEntry } from "./configinfo.ts";
 import type { SessionLens } from "./lens.ts";
 import type { ModelList, ProviderInfo } from "./models.ts";
@@ -82,6 +83,10 @@ export type Checks = [
 	Assert<Fits<ThinkingResponse, Wire.ThinkingResponse>>,
 	Assert<Fits<ForkResponse, Wire.ForkResponse>>,
 	Assert<Fits<ResetResponse, Wire.ResetResponse>>,
+	Assert<Fits<AutonomyRun, Wire.AutonomyRun>>,
+	Assert<Fits<AutonomyEvent, Wire.AutonomyEvent>>,
+	Assert<Fits<AutonomyStatus, Wire.AutonomyStatus>>,
+	Assert<Fits<AutonomyResponse, Wire.AutonomyResponse>>,
 
 	// the event stream: server -> wire
 	Assert<Fits<ObservedEvent, Wire.ObservedEvent>>,

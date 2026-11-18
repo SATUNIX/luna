@@ -18,7 +18,8 @@ import { fileURLToPath } from "node:url";
 import { assert, makeChecker, rm, tempDir, testEffort, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, fakeAlive, harness, runOnce, scratch, NODE_EXIT, type Harness, type HarnessRuntime, type MadeEngine, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
 import { main } from "../packages/autonomy/cli.ts";
-import { LockLost } from "../packages/autonomy/lib/engine.ts";
+import { GateWaitInterrupted, LockLost } from "../packages/autonomy/lib/engine.ts";
+import { acquireGateSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { parseBoardReport, WORK_PRECEDENCE } from "../packages/autonomy/lib/board.ts";
@@ -349,6 +350,35 @@ await check("gate slots: a waiting engine heartbeats gate-wait, freezes wall-clo
   assert.equal(ran, true);
   assert.equal(made.engine.state.phase, "acceptance");
   made.lock.release();
+});
+
+await check("gate slots: a STOP signal or a pause while waiting for a slot interrupts the acceptance and parks the run (DE-102)", async () => {
+  for (const how of ["signal", "pause"] as const) {
+    const home = tempDir("autonomy-slot-wait-stop-");
+    const busy = await acquireGateSlot({ home, limit: 1, pollMs: 20 });
+    const h = harness(improveRaw(sourceRepo()));
+    const made = h.engine({ gateSlots: 1, gateSlotsHome: home });
+    made.engine.state = h.state();
+    made.engine.go("ready"); made.engine.go("running");
+    made.engine.state.phase = "acceptance";
+    let ran = false;
+    const p = made.engine.withGateSlot(async () => { ran = true; return "ran"; });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(made.engine.state.phase, "gate-wait", `${how}: the engine is waiting for a slot`);
+    if (how === "signal") made.engine.signalled = true;
+    else h.store.enqueue("pause", { reason: "operator pause during gate-wait" });
+    await assert.rejects(p, (error: unknown) => error instanceof GateWaitInterrupted, `${how}: the wait ends`);
+    assert.equal(ran, false, `${how}: the acceptance never runs`);
+    assert.equal(made.engine.status, "paused", `${how}: the run is parked`);
+    assert.equal(made.engine.state.phase, "acceptance", `${how}: the phase is restored`);
+    // The engine records it as a stop, not a supervisor error, and stays resumable.
+    await made.engine.handleFatal(new GateWaitInterrupted());
+    assert.equal(made.engine.status, "paused");
+    assert.notEqual(made.engine.state.history.at(-1)?.reason, "supervisor_error", `${how}: not a supervisor error`);
+    busy.release();
+    made.lock.release();
+    rm(home);
+  }
 });
 
 await check("gate slots: three supervisors with N=2 never overlap more than two gates; the third waits in gate-wait then runs", async () => {
@@ -1905,6 +1935,23 @@ await check("check-map: a changed-path diff implies the host gate's checks, and 
   assert.ok(secretGuardSource.includes("smoke:secret-guard"), "a changed secret-guard source plans smoke:secret-guard");
   const commonSource = checksForChangedPaths(["packages/autonomy/lib/templates/common.ts"]);
   assert.ok(commonSource.includes("smoke:workflow-notify"), "the other copy-pair source plans smoke:workflow-notify");
+
+  // DE-102: security paths and the autonomy modules other smokes pin plan those smokes.
+  const covered: Array<[string, readonly string[]]> = [
+    ["packages/extensions/src/tool-firewall/index.ts", ["smoke:tool-firewall", "smoke:firewall-gate", "smoke:firewall-unattended"]],
+    ["packages/core/shared/redact.ts", ["smoke:redaction-corpus", "smoke:fuzz-redaction"]],
+    ["packages/core/lib/leak-scan.ts", ["smoke:prepush-scan"]],
+    ["packages/core/prepush-scan.ts", ["smoke:prepush-scan"]],
+    ["packages/core/leak-scan-exceptions.json", ["smoke:prepush-scan"]],
+    ["packages/core/install.ts", ["smoke:install-guided", "smoke:clean-install"]],
+    ["packages/core/lib/install-guide.ts", ["smoke:install-guided"]],
+    ["packages/autonomy/lib/gate-slots.ts", ["smoke:autonomy-lifecycle"]],
+    ["packages/autonomy/lib/unpublished.ts", ["smoke:autonomy-cli"]],
+  ];
+  for (const [file, needed] of covered) {
+    const planned = checksForChangedPaths([file]);
+    for (const name of needed) assert.ok(planned.includes(name), `${name} is planned for a change to ${file}`);
+  }
 
   const docs = checksForChangedPaths(["docs/guide.md"]);
   assert.ok(docs.includes("docs:check"), "docs changes need docs:check");

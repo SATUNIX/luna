@@ -276,7 +276,13 @@ steps:
     assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: PASS"), true, "a regex gate still matches the output tail");
     assert.equal(await W.gatePasses("/VERDICT: PASS/", "x\nVERDICT: FAIL"), false, "a regex gate still misses when absent");
     assert.equal(await W.gatePasses("PASS", ""), false, "empty output has no verdict line");
-    ok("a plain-text gate passes only on the last non-empty verdict line");
+    // DE-102: the plain text must be the whole verdict line, not a substring of it.
+    assert.equal(await W.gatePasses("PASS", "Review done.\nVERDICT: FAIL, the tests do not pass"), false, "a last line that merely contains pass does not pass a bare PASS gate");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "VERDICT: PASS? no, VERDICT: FAIL"), false, "the pass text inside a longer last line does not pass");
+    assert.equal(await W.gatePasses("PASS", "All good.\npass"), true, "the whole line matches without case");
+    assert.equal(await W.gatePasses("VERDICT: PASS", "Done.\n**VERDICT: PASS**  "), true, "markdown emphasis and whitespace around the verdict are ignored");
+    assert.equal(await W.gatePasses("**", "x\n**"), false, "a pass text that is only wrapping never passes");
+    ok("a plain-text gate passes only when the last non-empty line is the pass text");
   }
 
   // 5 + 6. Outputs and when.

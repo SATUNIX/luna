@@ -700,6 +700,8 @@ await check("a detached supervisor's log line is written exactly once", () => {
 {
   const dispatch = spawnSync(process.execPath, [path.join(HERE, "autonomy-dispatch-smoke.ts")], { encoding: "utf8" });
   assert.equal(dispatch.status, 0, `the dispatch claim suite failed: ${dispatch.stdout}${dispatch.stderr}`);
+  const events = spawnSync(process.execPath, [path.join(HERE, "autonomy-events-smoke.ts")], { encoding: "utf8" });
+  assert.equal(events.status, 0, `the host event log suite failed: ${events.stdout}${events.stderr}`);
 }
 
 /** A commit in a working repository; deterministic identity and dates (no global config is read). */

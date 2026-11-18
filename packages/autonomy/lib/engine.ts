@@ -31,15 +31,16 @@ import { clip } from "./templates/common.ts";
 import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
+import { type EventInput, appendEvent } from "./events.ts";
 import { ceilingBreach } from "../../core/shared/ceiling.ts";
-import { BoundaryError, LockLost } from "./errors.ts";
+import { BoundaryError, GateWaitInterrupted, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
 
 export const IDLE_MINUTES = 20; // a worker session that emits nothing for this long is treated as stalled
 export const MAX_ACTIVITY_LINES = 60;
 const TERMINAL: readonly RunStatus[] = ["succeeded", "failed", "cancelled"];
 
-export { BoundaryError, LockLost };
+export { BoundaryError, GateWaitInterrupted, LockLost };
 
 // --- the runtime (rt) ---------------------------------------------------------------------------
 
@@ -219,7 +220,7 @@ export interface EngineOptions {
   /** Host-wide gate slot count (PG-50); default from PI_AUTONOMY_GATE_SLOTS, 0 = unbounded. */
   gateSlots?: number;
   gateSlotsHome?: string;
-  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -327,7 +328,7 @@ export class Engine {
   uiAnswered = 0;
   gateSlotLimit: number;
   gateSlotHome: string;
-  gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void }) => Promise<GateSlot>;
+  gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
   clockPaused = false;
 
   constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, log }: EngineOptions) {
@@ -358,6 +359,7 @@ export class Engine {
   save(fn?: (s: RunState) => void): void { saveState(this.store, this.state, this.rt.now(), fn); }
 
   go(to: RunStatus, info: TransitionInfo = {}): void {
+    const from = this.state.status;
     const next = transition(this.state, to, { at: new Date(this.rt.now()).toISOString(), ...info });
     // In place, so every holder of `this.state` (a step that started before the transition) keeps seeing the live record.
     for (const k of Object.keys(this.state)) if (!(k in next)) Reflect.deleteProperty(this.state, k);
@@ -365,6 +367,14 @@ export class Engine {
     this.store.writeState(this.state);
     reportRun(this.state, this.store.p);
     this.log(`state ${to}${info.reason ? ` (${info.reason})` : ""}`);
+    if (from === "ready" && to === "running") this.emit({ type: "run.started", run: this.store.run, template: this.contract.template });
+    this.emit({ type: "run.status", run: this.store.run, from, to, reason: info.reason ?? null, ...(info.by ? { by: info.by } : {}) });
+    if (to === "failed") this.emit({ type: "failure", run: this.store.run, code: info.reason ?? "failed", detail: info.detail ?? "" });
+  }
+
+  /** Append one event to the host event log (lib/events.ts). Best effort: a failure is logged, never thrown. */
+  emit(event: EventInput): void {
+    appendEvent(this.store.home, event, this.log, { at: new Date(this.rt.now()).toISOString() });
   }
 
   get status(): RunStatus { return this.state.status; }
@@ -391,7 +401,9 @@ export class Engine {
    * Run `fn` holding one of the host-wide gate slots, so several supervisors on one host do not
    * run their acceptance gates at once. While waiting this sets phase `gate-wait`, heartbeats it
    * and does not accrue wall-clock minutes; the gate then runs under phase `acceptance`. With a
-   * limit of 0 this is a plain call (unbounded), leaving the caller's phase untouched.
+   * limit of 0 this is a plain call (unbounded), leaving the caller's phase untouched. Control
+   * commands are applied while waiting: a STOP, a signal, a pause or a cancel ends the wait with
+   * GateWaitInterrupted (the acceptance never runs), and a lost lock with LockLost.
    */
   async withGateSlot<T>(fn: () => Promise<T>): Promise<T> {
     if (this.gateSlotLimit <= 0) return fn();
@@ -405,7 +417,16 @@ export class Engine {
       // Inside the try: a throwing tick must not leave clockPaused true or the phase stuck.
       this.state.phase = "gate-wait";
       this.tick();
-      slot = await this.gateSlotAcquire({ home: this.gateSlotHome, limit: this.gateSlotLimit, onWait: () => this.tick() });
+      slot = await this.gateSlotAcquire({
+        home: this.gateSlotHome,
+        limit: this.gateSlotLimit,
+        onWait: () => this.tick(),
+        shouldStop: async () => {
+          if (this.lockLost) throw new LockLost();
+          await this.applyControl();
+          return !this.active || this.stopRequested;
+        },
+      });
       // Drop the last poll gap while still paused, so the wait itself is never charged.
       this.tick();
       this.clockPaused = false;
@@ -488,16 +509,24 @@ export class Engine {
   }
 
   async handleFatal(error: unknown): Promise<void> {
+    if (error instanceof GateWaitInterrupted) {
+      // applyControl already parked or ended the run; a stop that did not (it cannot be active here
+      // after a STOP or signal, but never leave a run "running" with no supervisor) parks it.
+      if (this.active) this.go("paused", { reason: this.signalled ? "signal" : "stop_file", by: "operator" });
+      this.log(`acceptance interrupted: ${error.message}; the run is ${this.status}`);
+      return;
+    }
     if (error instanceof LockLost) { this.log("lock lost: another supervisor took over this run; stopping without touching state"); throw error; }
     if (error instanceof BoundaryError) {
       this.log(`BOUNDARY VIOLATION: ${error.message}`);
       try { await this.stopWorker("boundary violation"); } catch { /* ignore */ }
-      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); return; }
+      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.emit({ type: "failure", run: this.store.run, code: "boundary_violation", detail: error.message }); return; }
       this.go("failed", { reason: "boundary_violation", detail: error.message });
       return;
     }
     this.log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     try { this.save((s) => { s.lastError = errorText(error).slice(0, 1000); }); } catch { /* ignore */ }
+    this.emit({ type: "failure", run: this.store.run, code: "supervisor_error", detail: errorText(error) });
     if (this.active) this.go("paused", { reason: "supervisor_error", detail: errorText(error).slice(0, 1000) });
     throw error; // parked with the error recorded; can be resumed
   }

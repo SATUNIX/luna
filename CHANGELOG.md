@@ -83,6 +83,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   429 used to be an ordinary retry for ever and now parks after five failed replies in a row (a 403 on the second). Child agents
   share the worker's key and are tagged `worker`. `tests/autonomy-meter-smoke.ts`.
 
+- **A must-block corpus pins what the guards refuse.** 38 tool calls in five families (credential
+  reads by path, writes outside the workspace, privilege escalation, unpinned installs and remote
+  scripts, exfiltration) go through the firewall, secret-guard and protected-paths handlers. Each
+  row names the guard(s) that must refuse it; the test checks that each refusal names its guard,
+  writes one `tool_refused` record with the command digest and, for the firewall, the deciding
+  finding code, and meets its tier floor. A fixture secret-guard made blind to `.ssh/`, and each
+  guard replaced by a no-op, must fail exactly the rows that depend on it. No guard code changed.
+  Not covered: the corpus is a floor of known shapes, not every spelling (control C-63).
+  `tests/firewall-must-block-corpus-smoke.ts`, in `test:security`.
+
 ### Changed
 
 - **Autonomy cycles that touch a guard, the policy mirror, a profile or the worker sandbox are R3.** The

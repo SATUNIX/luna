@@ -34,7 +34,9 @@ and anything outside the zone are refused. The contract must be on a read-only m
 user's unwritable file) and outside the workspace, so a file the agent wrote and `chmod`-ed does not
 count, and launching a child with those variables from a shell is a safety-setting override. The
 autonomy CLI's control commands (`start`, `plan --authorise`, `promote`, `resume`, `reconfigure` and
-the like) are high and never learned from an agent's shell.
+the like) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
+script run directly or through `env`, by an interpreter or a package runner (`npx tsx`, `npx
+pi-autonomy`, `npm exec pi-autonomy --`), or by a path relative to a `cd` (`tests/firewall-unattended-smoke.ts`).
 
 The full description is in `docs/autonomy-gate.md`.
 

@@ -268,21 +268,24 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
     if (pending > 0) await Promise.race([queue, new Promise((r) => setTimeout(r, 5000))]);
   });
 
-  const TypeEnum = Type.Union(MEMORY_TYPES.map((t) => Type.Literal(t)));
+  // A plain string enum (one "enum" array) is cheaper on the wire than an anyOf of literals, and Google-compatible.
+  const StringEnum = <T extends string>(values: readonly T[], options?: { description?: string }) =>
+    Type.Unsafe<T>({ type: "string", enum: [...values], ...(options?.description ? { description: options.description } : {}) });
+  const TypeEnum = StringEnum(MEMORY_TYPES);
 
   pi.registerTool({
     name: "memory_save",
     label: "Memory save",
     description:
-      "Save a durable memory to the vault. Use when asked to remember something, for a stated preference, or for a non-obvious decision or gotcha that should outlive the session. Updates an existing memory rather than duplicating it. Do not save what code or git history already records.",
-    promptSnippet: "Save something to long-term memory (preferences, decisions, gotchas)",
+      "Save a durable memory: something asked to be remembered, a stated preference, or a non-obvious decision or gotcha. Updates an existing memory instead of duplicating. Do not save what code or git history records.",
+    promptSnippet: "Save to long-term memory (preferences, decisions, gotchas)",
     parameters: Type.Object({
-      title: Type.String({ description: "Short title (becomes the note name)" }),
-      content: Type.String({ description: "The memory itself: the fact, and for decisions/gotchas the why and how to apply it" }),
+      title: Type.String({ description: "Short title (the note name)" }),
+      content: Type.String({ description: "The fact; for decisions and gotchas also the why and how to apply it" }),
       type: Type.Optional(TypeEnum),
       tags: Type.Optional(Type.Array(Type.String())),
-      scope: Type.Optional(Type.Union([Type.Literal("project"), Type.Literal("global")], { description: "project (default) or global (applies in every project, e.g. personal preferences)" })),
-      pinned: Type.Optional(Type.Boolean({ description: "Show at the start of every session in this project" })),
+      scope: Type.Optional(StringEnum(["project", "global"], { description: "project (default) or global (every project)" })),
+      pinned: Type.Optional(Type.Boolean({ description: "Show at every session start in this project" })),
     }),
     async execute(_id, params) {
       try {
@@ -307,11 +310,11 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
   pi.registerTool({
     name: "memory_search",
     label: "Memory search",
-    description: "Search saved memories (this project and global) by keywords. Returns titles, types, snippets and note paths.",
+    description: "Search saved memories (project and global) by keywords. Returns titles, types, snippets, paths.",
     promptSnippet: "Search long-term memory",
     parameters: Type.Object({
       query: Type.String(),
-      scope: Type.Optional(Type.Union([Type.Literal("project"), Type.Literal("global"), Type.Literal("all")])),
+      scope: Type.Optional(StringEnum(["project", "global", "all"])),
       limit: Type.Optional(Type.Number()),
     }),
     async execute(_id, params) {
@@ -323,7 +326,7 @@ export function createMemoryVault(pi: ExtensionAPI, deps: MemoryVaultDeps = {}):
   pi.registerTool({
     name: "memory_forget",
     label: "Memory forget",
-    description: "Forget a memory by id, name or path (moved to the vault's .trash, recoverable). Use when the user says a memory is wrong or asks to forget it.",
+    description: "Forget a memory by id, name or path (moved to .trash, recoverable). Use when the user says it is wrong or asks to forget it.",
     promptSnippet: "Forget a saved memory",
     parameters: Type.Object({ id: Type.String() }),
     async execute(_id, params) {

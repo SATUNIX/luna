@@ -33,6 +33,12 @@ proportion to complexity, uncertainty and risk; that it should delegate only bou
 clear deliverable; and that it must not claim checks it did not perform, and should recover in a
 bounded way when blocked rather than repeat what failed.
 
+The wording about starting child agents (the shared paragraph's delegation sentence, "delegate
+selectively" and the child counts) is wrapped in `{{delegation}}...{{/delegation}}` in those files.
+It is injected only when a delegation tool (`subagent`, `workflow_run`, `workflow`, `dual_review` or
+`dispatch_specialist`) is registered, so a profile without one, such as `lite`, is not told how to
+delegate. Tier limits and permissions are unchanged.
+
 ## Choosing a tier
 
 ```

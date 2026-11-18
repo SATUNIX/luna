@@ -40,8 +40,8 @@
   },
   "profiles": {
     "balanced": {
-      "toolText": 6924,
-      "promptText": 477,
+      "toolText": 6388,
+      "promptText": 422,
       "systemAdditions": 1203,
       "ceiling": 7500,
       "delegation": {
@@ -52,13 +52,13 @@
       "tools": {
         "ask_human": 264,
         "loop_complete": 268,
-        "memory_forget": 228,
-        "memory_save": 1094,
-        "memory_search": 349,
-        "skill_search": 427,
+        "memory_forget": 210,
+        "memory_save": 806,
+        "memory_search": 273,
+        "skill_search": 330,
         "subagent": 1083,
         "todo": 699,
-        "verify_completion": 506,
+        "verify_completion": 449,
         "workflow": 908,
         "workflow_control": 1063,
         "workflow_run": 1098,

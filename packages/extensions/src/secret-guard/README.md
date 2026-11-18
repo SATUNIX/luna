@@ -91,4 +91,5 @@ It names the guard, the cause (`secret-path`, `secret-read`, `protected-path`, `
 tool, a SHA-256 digest of the command when the call carries one, and the session id. For a
 `secret-content` refusal the matched value is the pattern label (for example `provider API key (sk-)`),
 never the content itself. It never writes the command text or a secret value, and a failed write never
-breaks the refusal.
+breaks the refusal. tool-firewall and protected-paths write the same record through their own copies of
+the helper.

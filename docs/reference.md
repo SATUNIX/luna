@@ -483,7 +483,7 @@ absolute or relative to the working directory.
 | `PI_KIT_EMBED_MODEL` | `memory-local` | — | — |
 | `PI_KIT_EXTENSIONS_ROOT` | `delegation-guard` | — | — |
 | `PI_KIT_FIREWALL_APPROVALS` | `secret-guard`, `tool-firewall`, `protected-paths` | Where remembered approvals are stored ([Security](security.md)) (default `<agent dir>/pi-kit/firewall-approvals.json`) | [INSTALL](INSTALL.md#environment-variables) |
-| `PI_KIT_FIREWALL_AUDIT_LOG` | `secret-guard`, `tool-firewall` | — | [autonomy-gate](autonomy-gate.md) |
+| `PI_KIT_FIREWALL_AUDIT_LOG` | `secret-guard`, `tool-firewall`, `protected-paths` | — | [autonomy-gate](autonomy-gate.md) |
 | `PI_KIT_FIREWALL_CONFIG` | `tool-firewall`, `custom-footer`, `protected-paths` | — | — |
 | `PI_KIT_FIREWALL_FEEDBACK` | `tool-firewall`, `protected-paths` | — | — |
 | `PI_KIT_FIREWALL_JUDGEMENTS` | `tool-firewall` | — | — |

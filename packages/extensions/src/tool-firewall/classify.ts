@@ -778,7 +778,16 @@ function classifySegment(c: Ctx): void {
 
   // The autonomous-run CLI: whoever runs `start`, `plan --authorise`, `promote` and the like is the person who
   // authorises the run's boundary and spends its budget, so from an agent's shell that is the operator's call.
-  const autonomyAt = exe === "pi-autonomy" ? 0 : INTERPRETERS.has(exe) ? argv.findIndex((a, i) => i > 0 && /(?:^|\/)(?:autonomy\/cli\.(?:ts|mjs)|pi-autonomy)$/.test(a)) : -1;
+  // The CLI is recognised by its script, however it is reached: run directly (`./cli.ts`, through `env`), by an
+  // interpreter or a package runner (`npx tsx`, `npx pi-autonomy`, `npm exec pi-autonomy --`), and by a path
+  // relative to the directory the command runs in (`cd packages/autonomy && node cli.ts`).
+  const autonomyScript = (a: string): boolean => {
+    if (/(?:^|\/)autonomy\/cli\.(?:ts|mjs)$/.test(a) || /(?:^|\/)pi-autonomy$/.test(a)) return true;
+    if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(a)) return false;
+    const base = seg.cwd ?? c.env.cwd;
+    return /\/autonomy\/cli\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${base}/${a}`));
+  };
+  const autonomyAt = exe === "pi-autonomy" || autonomyScript(argv[0] ?? "") ? 0 : INTERPRETERS.has(exe) || CLI_RUNNERS.has(exe) ? argv.findIndex((a, i) => i > 0 && autonomyScript(a)) : -1;
   if (autonomyAt >= 0) { autonomyCli(c, argv.slice(autonomyAt + 1)); return; }
 
   // Agent CLIs are recognised by identity (name, script path or package), not by the name typed.
@@ -945,6 +954,8 @@ function stdinExec(c: Ctx): void {
 }
 
 const AUTONOMY_CONTROL = new Set(["start", "supervise", "resume", "steer", "cancel", "pause", "promote", "reconfigure"]);
+// Package runners that run a package's CLI or a script named in their arguments.
+const CLI_RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bunx"]);
 
 // `pi-autonomy <command>`: commands that authorise, start, steer or promote a run are high and never learned
 // (each one asks the operator); an unattended worker may not run them at all. Reading or preparing is routine.

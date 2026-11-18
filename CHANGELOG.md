@@ -350,6 +350,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **The autonomy CLI's control commands ask the operator however the CLI is reached.** Finding: `pause`,
+  `steer`, `start` and the other control commands are high and never learned from an agent's shell, but only
+  when the CLI was typed as `pi-autonomy` or an interpreter running `autonomy/cli.ts`; eight other forms ran
+  unasked or at a learnable medium: `./packages/autonomy/cli.ts pause` (its shebang), `env …/cli.ts`,
+  `cd packages/autonomy && node cli.ts pause` or `./cli.ts`, `npx tsx …/cli.ts`, `npx pi-autonomy steer`,
+  `npm exec pi-autonomy -- pause`, and a copy under `node_modules`. Cause: the classifier matched the typed
+  command name and interpreter arguments only. Fix: the CLI is recognised by its script path, resolved
+  against the directory the command runs in, when run directly or through an interpreter or package runner.
+  Reading commands stay routine. Verification: `tests/firewall-unattended-smoke.ts` adds the eight forms
+  (asked attended, hard-denied in a worker) and a `cd … && node cli.ts status` read; they fail on the
+  earlier classifier. This is the first part of board item F-02, which needs the raw CLI to keep asking.
+
 - **Both guards read patch writers with one shell parser and one rule (A-90, part 3).** Finding: after part 2
   the firewall rated many patch writers protected-paths refused only medium or low (a heredoc fed to
   `parallel`, `yash`, `busybox ash` or `make -f -`, text handed to a shell through a substitution, a computed

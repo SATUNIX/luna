@@ -488,8 +488,11 @@ try {
     zone.close();
     // (e3) The autonomy CLI: whoever runs start / plan --authorise / promote authorises the boundary and spends the
     // budget, so from an agent's shell that is the operator's call (asked, never learned), and a worker may not at all.
-    const controls = ["pi-autonomy start --config run.json --yes", "node packages/autonomy/cli.ts plan --config run.json --authorise --yes", "node ./packages/autonomy/cli.mjs promote --run r1 --yes", "bash -c 'pi-autonomy resume --run r1 --detach'", "pi-autonomy reconfigure --run r1 --budget-usd 500 --yes"];
-    const reads = ["pi-autonomy templates", "node packages/autonomy/cli.ts status", "node packages/autonomy/cli.ts plan --config run.json", "pi-autonomy init --template implement --out run.json"];
+    const controls = ["pi-autonomy start --config run.json --yes", "node packages/autonomy/cli.ts plan --config run.json --authorise --yes", "node ./packages/autonomy/cli.mjs promote --run r1 --yes", "bash -c 'pi-autonomy resume --run r1 --detach'", "pi-autonomy reconfigure --run r1 --budget-usd 500 --yes",
+      // The CLI however it is reached: run directly, through env, relative to a cd, through a package runner.
+      "./packages/autonomy/cli.ts pause --run r1", "env ./packages/autonomy/cli.ts pause --run r1", "cd packages/autonomy && node cli.ts pause --run r1", "cd packages/autonomy && ./cli.ts steer --run r1 --message x",
+      "npx tsx packages/autonomy/cli.ts pause --run r1", "npx pi-autonomy steer --run r1 --message x", "npm exec pi-autonomy -- pause --run r1", "node node_modules/@satunix/autonomy/cli.ts pause --run r1"];
+    const reads = ["pi-autonomy templates", "node packages/autonomy/cli.ts status", "node packages/autonomy/cli.ts plan --config run.json", "pi-autonomy init --template implement --out run.json", "cd packages/autonomy && node cli.ts status"];
     const cli = await boot({});
     for (const command of controls) {
       const v = interactive(cli, [undefined]);

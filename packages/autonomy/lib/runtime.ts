@@ -189,6 +189,7 @@ export class DockerRuntime implements Runtime {
   sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
   log(line: string): void { console.log(`${new Date().toISOString()} ${line}`); }
   workerProblem(): string | null { return this.harness.failure; }
+  workerDegraded(): readonly string[] { return this.harness.takeDegraded(); }
 
   /** The inference key; preflight() reads it before anything needs it. */
   key(): string {
@@ -516,6 +517,7 @@ export class DockerRuntime implements Runtime {
         clearTimeout(timer);
         const settled = this.harness.settle(msg);
         if (!settled) this.log(`HARNESS FAIL: ${this.harness.failure ?? "the kit harness did not load"}`);
+        else if (this.harness.degraded.length > 0) this.log(`HARNESS DEGRADED: optional commands missing (${this.harness.degraded.join(", ")}); the run continues without them`);
         else this.log("harness verified: kit commands registered");
         return;
       }

@@ -18,6 +18,7 @@
 // | failure          | code, detail                                                            |
 // | dispatch.claim   | n, item, engineer, outcome                                              |
 // | dispatch.submit  | n, item, engineer, sha                                                  |
+// | harness.degraded | missing (optional harness commands the worker session lacks, at most 20) |
 //
 // Every field is bounded in encoded bytes (its UTF-8 JSON encoding, so escapes and multi-byte
 // characters count): identifiers at ID_MAX, free text (reason, mergeReason, detail, error) and
@@ -75,13 +76,14 @@ const Push = object({ ...base, type: literal("push"), branch: id, sha: nullable(
 const Failure = object({ ...base, type: literal("failure"), code: id, detail: text });
 const DispatchClaim = object({ ...base, type: literal("dispatch.claim"), n: cycle, item: id, engineer: id, outcome: id });
 const DispatchSubmit = object({ ...base, type: literal("dispatch.submit"), n: cycle, item: id, engineer: id, sha });
+const HarnessDegraded = object({ ...base, type: literal("harness.degraded"), missing: array(string({ maxLength: LIST_ITEM_MAX }), { maxItems: LIST_MAX }) });
 
-const HostEventSchema = union(RunStarted, RunStatusEvent, CycleStarted, GateResult, CycleEnded, Push, Failure, DispatchClaim, DispatchSubmit);
+const HostEventSchema = union(RunStarted, RunStatusEvent, CycleStarted, GateResult, CycleEnded, Push, Failure, DispatchClaim, DispatchSubmit, HarnessDegraded);
 
 /** One line of the host event log. */
 export type HostEvent = Infer<typeof HostEventSchema>;
 export type HostEventType = HostEvent["type"];
-export const EVENT_TYPES: readonly HostEventType[] = ["run.started", "run.status", "cycle.started", "gate.result", "cycle.ended", "push", "failure", "dispatch.claim", "dispatch.submit"];
+export const EVENT_TYPES: readonly HostEventType[] = ["run.started", "run.status", "cycle.started", "gate.result", "cycle.ended", "push", "failure", "dispatch.claim", "dispatch.submit", "harness.degraded"];
 /** The families a filter may name instead of a type (`cycle` matches cycle.started and cycle.ended). */
 export const EVENT_FAMILIES: readonly string[] = [...new Set(EVENT_TYPES.map((t) => t.split(".")[0] ?? t))];
 

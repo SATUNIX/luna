@@ -73,6 +73,7 @@ export const AUTONOMY_EVENT_TYPES = [
 	"failure",
 	"dispatch.claim",
 	"dispatch.submit",
+	"harness.degraded",
 ] as const;
 export type AutonomyEventType = (typeof AUTONOMY_EVENT_TYPES)[number];
 

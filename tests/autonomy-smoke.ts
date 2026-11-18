@@ -12,7 +12,7 @@ import { resolveConfig } from "../packages/autonomy/lib/config.ts";
 import { evaluate, runStop, reportOutcome, nothingFoundInARow } from "../packages/autonomy/lib/triggers.ts";
 import { isNewReport, itemShas, uncoveredCommits, unknownShas } from "../packages/autonomy/lib/ledger.ts";
 import { type ManagerBundle, type ManagerDecision, parseDecision, buildBundle, DECISIONS } from "../packages/autonomy/lib/manager.ts";
-import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
+import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CORE, HARNESS_OPTIONAL, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
 import { registeredCommands } from "../packages/core/eval/footprint.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
@@ -807,6 +807,29 @@ await check("harness check: HarnessCheck is per-session, fails closed on missing
   assert.equal(check.failure, null);
   assert.equal(check.settle(full), true);
   assert.equal(check.verified, true);
+});
+
+await check("harness check: an optional command missing degrades the session; a core one fails it", () => {
+  assert.deepEqual([...HARNESS_CORE, ...HARNESS_OPTIONAL], [...HARNESS_COMMANDS]);
+  assert.ok(HARNESS_CORE.includes("firewall") && HARNESS_CORE.includes("verify"), "the firewall and the gate stay fail-closed");
+  const reply = (names: readonly string[]) => ({ type: "response", id: "harness-check", data: { commands: names.map((name) => ({ name })) } });
+  const check = new HarnessCheck();
+  assert.equal(check.settle(reply(HARNESS_COMMANDS.filter((c) => c !== "orchestrate"))), true);
+  assert.equal(check.verified, true);
+  assert.equal(check.failure, null);
+  assert.deepEqual(check.degraded, ["orchestrate"]);
+  assert.deepEqual(check.takeDegraded(), ["orchestrate"]);
+  assert.deepEqual(check.takeDegraded(), [], "reported once per session");
+  check.reset();
+  assert.deepEqual(check.degraded, [], "pending is not degraded");
+  check.settle(reply(HARNESS_CORE));
+  assert.deepEqual(check.takeDegraded(), [...HARNESS_OPTIONAL], "a new session reports again");
+  for (const core of HARNESS_CORE) {
+    check.reset();
+    assert.equal(check.settle(reply(HARNESS_COMMANDS.filter((c) => c !== core))), false, `/${core} missing fails`);
+    assert.match(check.failure ?? "", new RegExp(`missing commands: ${core}\\)$`));
+    assert.deepEqual(check.takeDegraded(), [], "a failed session is not degraded");
+  }
 });
 
 // --- the cycle loop against a fake runtime ---------------------------------------------------

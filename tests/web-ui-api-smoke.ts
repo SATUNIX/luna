@@ -129,6 +129,7 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
       { type: "failure", run: "r-good", code: "boom", detail: "it broke" },
       { type: "dispatch.claim", run: "r-good", n: 2, item: "PG-08", engineer: "e1", outcome: "winner" },
       { type: "dispatch.submit", run: "r-good", n: 2, item: "PG-08", engineer: "e1", sha: "c".repeat(40) },
+      { type: "harness.degraded", run: "r-good", missing: ["orchestrate"] },
     ];
     inputs.forEach((input, i) => appendEvent(home, input, log, { at: at(i) }));
     const typed = await view();

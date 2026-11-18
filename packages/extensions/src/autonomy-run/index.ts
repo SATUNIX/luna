@@ -309,6 +309,7 @@ function eventPhase(e: unknown): string | null {
     case "failure": return `failure ${clipText(field(e, "code"), 30)}`.trim();
     case "dispatch.claim": return `claimed ${item}`.trim();
     case "dispatch.submit": return `submitted ${item}`.trim();
+    case "harness.degraded": return "harness degraded";
     default: return null;
   }
 }

@@ -121,6 +121,8 @@ export interface Runtime extends AcceptanceRuntime {
   setBudgetCap?(usd: number): void;
   /** Why the worker cannot be used (e.g. the kit harness did not load), or null. */
   workerProblem?(): string | null;
+  /** The optional harness commands the current worker session lacks, reported once per session (empty otherwise). */
+  workerDegraded?(): readonly string[];
 }
 
 // --- templates ----------------------------------------------------------------------------------
@@ -383,7 +385,7 @@ export class Engine {
   get active(): boolean { return this.state.status === "running" || this.state.status === "recovering"; }
   stepDir(n: number = this.state.step): string { return path.join(this.store.p.steps, String(n).padStart(2, "0")); }
 
-  /** Accrue active minutes and check the contract has not changed under the run. */
+  /** Accrue active minutes, check the contract has not changed under the run, and report a degraded worker harness. */
   tick(): void {
     if (this.lockLost) throw new LockLost();
     const now = this.rt.now();
@@ -391,6 +393,15 @@ export class Engine {
     this.lastTickAt = now;
     this.verifyContractIntact();
     this.writeHeartbeat();
+    this.reportDegraded();
+  }
+
+  /** A worker session without its optional harness commands keeps running; say so once per session (rpc.ts HARNESS_OPTIONAL). */
+  reportDegraded(): void {
+    const missing = this.rt.workerDegraded?.() ?? [];
+    if (missing.length === 0) return;
+    this.log(`harness degraded: optional commands missing (${missing.join(", ")}); the run continues`);
+    this.emit({ type: "harness.degraded", run: this.store.run, missing: [...missing] });
   }
 
   writeHeartbeat(): void {
@@ -580,6 +591,7 @@ export class Engine {
         if ((["budget_exhausted", "succeeded", "failed", "cancelled"] as readonly RunStatus[]).includes(this.status)) return;
         continue;
       }
+      this.reportDegraded();
       const problem = this.rt.workerProblem?.();
       if (problem) { await this.stopWorker("worker unusable"); this.go("failed", { reason: "worker_unavailable", detail: problem }); return; }
       if (this.template.runStep) await this.template.runStep(this.ctx());
@@ -763,14 +775,15 @@ export class Engine {
       const limit = this.limitReached();
       if (limit) return { end: "limit", limit };
       if (session.blocker) return { end: "blocked", blocker: session.blocker };
+      // Before `settled`: a session whose harness check failed is not trusted to have finished the step.
+      const problem = this.rt.workerProblem?.();
+      if (problem) return { end: "unusable", problem };
       if (session.exited) return { end: "exited", exit: session.exited };
       const box = this.generationBox();
       if (box) return { end: "generation", box };
       if (session.settled) return { end: "settled" };
       if (this.state.usage.usd - stepStartUsd >= this.state.limits.budget.perStepUsd) { session.agent.send({ type: "abort" }); return { end: "step_budget" }; }
       if ((this.rt.now() - session.lastEventAt) / 60_000 >= IDLE_MINUTES) return { end: "idle" };
-      const problem = this.rt.workerProblem?.();
-      if (problem) return { end: "unusable", problem };
     }
   }
 

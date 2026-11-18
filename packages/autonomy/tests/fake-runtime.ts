@@ -18,6 +18,7 @@ import { array, number, object, optional, parseJsonAs, string, union } from "../
 import type { AcceptanceCheck, RunContract } from "../lib/contract.ts";
 import { HostRepo } from "../lib/hostrepo.ts";
 import type { Complete } from "../lib/manager.ts";
+import { HARNESS_COMMANDS, HarnessCheck } from "../lib/rpc.ts";
 import { BARE_REPO_CONFIG } from "../lib/mirror.ts";
 import type { RunPaths } from "../lib/paths.ts";
 import type { TaskReview, TaskReviewBundle } from "../lib/review.ts";
@@ -232,11 +233,17 @@ export class FakeRuntime implements Runtime {
     return removed;
   }
 
-  workerProblem(): string | null { return this.workerProblemText; }
+  /** Each session's harness verdict, settled at start on `harnessReply` (the real check; the default reply has every command). */
+  readonly harness = new HarnessCheck();
+  harnessReply: unknown = { type: "response", id: "harness-check", data: { commands: HARNESS_COMMANDS.map((name) => ({ name })) } };
+  workerProblem(): string | null { return this.workerProblemText ?? this.harness.failure; }
+  workerDegraded(): readonly string[] { return this.harness.takeDegraded(); }
 
   // --- the worker ---------------------------------------------------------------------------------
   startWorker({ step, attempt, effort, onEvent, resetWorkspace }: StartWorkerOptions): FakeAgent {
     const name = `${this.cfg.namePrefix}-agent-${String(step).padStart(2, "0")}-${attempt}`;
+    this.harness.reset();
+    this.harness.settle(this.harnessReply);
     let resolveExit: (result: { code: number } | undefined) => void = () => {};
     const exited = new Promise<{ code: number } | undefined>((r) => { resolveExit = r; });
     const agent: FakeAgent = {

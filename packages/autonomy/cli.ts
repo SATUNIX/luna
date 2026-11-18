@@ -2,7 +2,8 @@
 // pi-autonomy: the operator's CLI for bounded autonomous runs (docs/autonomy.md).
 //
 //   pi-autonomy templates                       what kinds of run exist
-//   pi-autonomy init --template <id> [--out run.json] [flags]   write a run contract (prompts on a terminal, flags otherwise)
+//   pi-autonomy init --template <id> [--out run.json] [flags]   write a run contract (prompts on a terminal, flags otherwise;
+//                                               dispatch takes --streams a,b --engineers x,y)
 //   pi-autonomy plan --config run.json [--authorise --by <name>]   validate, show the resolved boundary and its digest
 //   pi-autonomy start --config run.json [--yes] [--detach]        confirm the boundary, then run
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
@@ -31,7 +32,7 @@ import { type EngineCli, engineInfo, setupReport, setupText, unattendedLine } fr
 import { engineIsRootless } from "./lib/docker.ts";
 import { providerKey } from "./lib/runtime.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
-import { type ClaimBoardResult, claimBoardItem, readBoard, readBoardFile } from "./lib/board.ts";
+import { BoardLockBusy, type ClaimBoardResult, claimBoardItem, keepHostClaims, readBoard, readBoardFile, type StewardBoard, withBoardLock as withBoardFileLock } from "./lib/board.ts";
 import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
 import { resolveGateSlots } from "./lib/gate-slots.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
@@ -48,7 +49,7 @@ import { createRun } from "./lib/rundir.ts";
 import { type RunLock, type RunLockOptions, createRunLock } from "./lib/runlock.ts";
 import { type RunConfig, runtimeConfig } from "./lib/runcfg.ts";
 import { RunStore, listRuns } from "./lib/store.ts";
-import { describeTemplates, TEMPLATES } from "./lib/templates/index.ts";
+import { describeTemplates, isCycleTemplate, TEMPLATES } from "./lib/templates/index.ts";
 import { DockerRuntime } from "./lib/runtime.ts";
 import { type UnpublishedReport, unpublishedReport } from "./lib/unpublished.ts";
 import { array, boolean, isRecord, object, parseJson, parseJsonAs, string, unknownValue } from "../core/lib/guard.ts";
@@ -209,24 +210,10 @@ async function offline<T>(store: RunStore, deps: CliDeps, fn: () => Promise<T>):
   try { return await fn(); } finally { lock.release(); }
 }
 
-/** The board lock is short-lived but contended: a claimant waits for the current writer instead of failing. */
-const BOARD_LOCK_ATTEMPTS = 200;
-const BOARD_LOCK_DELAY_MS = 25;
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Serialise board writes (a claim and a `board --file` replacement) on control/board.lock. The run's
- * supervision lock is separate; this one only guards the host-owned board file.
- */
+/** Serialise board writes on control/board.lock (lib/board.ts withBoardLock); a lock held past the bounded wait is refused. */
 async function withBoardLock<T>(store: RunStore, deps: CliDeps, fn: () => T | Promise<T>): Promise<T> {
-  const lock = createRunLock({ file: path.join(store.p.control, "board.lock"), pid: deps.pid, ...deps.lockOptions });
-  let got = lock.acquire();
-  for (let attempt = 1; !got.acquired && attempt < BOARD_LOCK_ATTEMPTS; attempt++) {
-    await sleep(BOARD_LOCK_DELAY_MS);
-    got = lock.acquire();
-  }
-  if (!got.acquired) throw new CliError("refused", got.reason, { lock: "board" });
-  try { return await fn(); } finally { lock.release(); }
+  try { return await withBoardFileLock(store.p.control, fn, { pid: deps.pid, ...deps.lockOptions }); }
+  catch (e) { if (e instanceof BoardLockBusy) throw new CliError("refused", e.message, { lock: "board" }); throw e; }
 }
 
 /** state.json of a run openStore found; a run without one cannot be driven. */
@@ -411,7 +398,7 @@ interface InitDraft {
   effort?: string;
   model?: Record<string, string>;
   providerSettings?: Record<string, string>;
-  templateOptions?: { integration: { branch: string; review: boolean } };
+  templateOptions?: { integration: { branch: string; review: boolean }; dispatch?: { streams: string[]; engineers: string[] } };
   runtime?: Record<string, string>;
 }
 
@@ -431,21 +418,23 @@ const commands: Record<string, Command> = {
   },
 
   async init(argv, deps) {
-    const { opts } = parseArgs(argv, { values: ["template", "out", "run", "title", "spec", "spec-file", "repo", "repo-url", "ref", "budget-usd", "step-usd", "max-steps", "max-minutes", "effort", "model", "manager-model", "review-model", "provider", "upstream", "key-env", "promotion", "promotion-repo", "promotion-url", "promotion-branch", "integration-branch", "engine", "image"], lists: ["check", "backlog", "egress", "write-area", "service", "mount", "health", "credential"], flags: ["json", "force", "unattended", "attended", "no-review", "yes"] });
+    const { opts } = parseArgs(argv, { values: ["template", "out", "run", "title", "spec", "spec-file", "repo", "repo-url", "ref", "budget-usd", "step-usd", "max-steps", "max-minutes", "effort", "model", "manager-model", "review-model", "provider", "upstream", "key-env", "promotion", "promotion-repo", "promotion-url", "promotion-branch", "integration-branch", "engine", "image", "streams", "engineers"], lists: ["check", "backlog", "egress", "write-area", "service", "mount", "health", "credential"], flags: ["json", "force", "unattended", "attended", "no-review", "yes"] });
     const interactive = deps.isTTY && !opts.json && !opts.yes;
     let template = opts.template;
     if (!template && interactive) template = await deps.ask(`Template (${Object.keys(TEMPLATES).join(", ")})`, "implement");
     if (!isTemplateId(template)) throw new CliError("usage", `--template must be one of ${Object.keys(TEMPLATES).join(", ")} (see \`pi-autonomy templates\`)`);
     const ask = async <D extends string | undefined>(q: string, given: string | undefined, def: D): Promise<string | D> => given ?? (interactive ? await deps.ask(q, def) : def);
     const stamp = deps.now().toISOString().slice(0, 10).replace(/-/g, "");
+    const cycles = isCycleTemplate(template);
+    if ((opts.streams !== undefined || opts.engineers !== undefined) && template !== "dispatch") throw new CliError("usage", "--streams and --engineers are for --template dispatch");
     const run = await ask("Run id", opts.run, `${template === "self-improve" ? "improve" : template}-${stamp}-${randomSuffix(4)}`);
-    const title = await ask("Title", opts.title, template === "self-improve" ? "Improve the repository in reviewed cycles" : undefined);
+    const title = await ask("Title", opts.title, template === "self-improve" ? "Improve the repository in reviewed cycles" : template === "dispatch" ? "Work the steward board in reviewed cycles" : undefined);
     const rawBudget: Record<string, number> = {};
-    const raw: InitDraft = { schemaVersion: 1, run, template, objective: { title }, inputs: {}, acceptance: { checks: [], review: !opts["no-review"] }, permissions: { network: {}, unattended: {} }, budget: rawBudget, promotion: { policy: opts.promotion ?? (template === "self-improve" ? "local-branch" : "none") } };
+    const raw: InitDraft = { schemaVersion: 1, run, template, objective: { title }, inputs: {}, acceptance: { checks: [], review: !opts["no-review"] }, permissions: { network: {}, unattended: {} }, budget: rawBudget, promotion: { policy: opts.promotion ?? (cycles ? "local-branch" : "none") } };
     const spec = opts.spec;
     if (opts["spec-file"]) raw.objective.specFile = opts["spec-file"];
     else if (spec !== undefined) raw.objective.spec = spec;
-    else if (interactive && template !== "self-improve") raw.objective.spec = await deps.ask("Specification (one line, or use --spec-file)", "");
+    else if (interactive && !cycles) raw.objective.spec = await deps.ask("Specification (one line, or use --spec-file)", "");
     const repoPath = await ask("Repository path (blank for an empty start)", opts.repo, "");
     if (repoPath) raw.inputs.repository = { path: repoPath, ref: opts.ref ?? "main" };
     else if (opts["repo-url"]) raw.inputs.repository = { url: opts["repo-url"], ref: opts.ref ?? "main" };
@@ -488,9 +477,14 @@ const commands: Record<string, Command> = {
     if (opts.effort) raw.effort = opts.effort;
     if (opts.model || opts.provider || opts["manager-model"] || opts["review-model"]) raw.model = { ...(opts.provider ? { provider: opts.provider } : {}), ...(opts.model ? { worker: opts.model } : {}), ...(opts["manager-model"] ? { manager: opts["manager-model"] } : {}), ...(opts["review-model"] ? { review: opts["review-model"] } : {}) };
     if (opts.upstream || opts["key-env"]) raw.providerSettings = { ...(opts.upstream ? { upstream: opts.upstream } : {}), ...(opts["key-env"] ? { apiKeyEnv: opts["key-env"] } : {}) };
-    if (raw.promotion.policy === "local-branch") raw.promotion.destinations = [{ kind: "local-branch", ...(opts["promotion-repo"] ? { repo: opts["promotion-repo"] } : {}), branch: opts["promotion-branch"] ?? opts["integration-branch"] ?? (template === "self-improve" ? "pi-autonomy/integration" : `pi/${run}`) }];
+    if (raw.promotion.policy === "local-branch") raw.promotion.destinations = [{ kind: "local-branch", ...(opts["promotion-repo"] ? { repo: opts["promotion-repo"] } : {}), branch: opts["promotion-branch"] ?? opts["integration-branch"] ?? (cycles ? "pi-autonomy/integration" : `pi/${run}`) }];
     if (raw.promotion.policy === "push") raw.promotion.destinations = [{ kind: "git-remote", url: opts["promotion-url"], branch: opts["promotion-branch"] ?? `pi/${run}` }];
-    if (template === "self-improve") raw.templateOptions = { integration: { branch: opts["integration-branch"] ?? "pi-autonomy/integration", review: !opts["no-review"] } };
+    if (cycles) raw.templateOptions = { integration: { branch: opts["integration-branch"] ?? "pi-autonomy/integration", review: !opts["no-review"] } };
+    if (raw.templateOptions && template === "dispatch") {
+      // Comma lists; the contract resolver checks the names (lib/dispatch.ts).
+      const names = (list: string): string[] => list.split(",").map((name) => name.trim()).filter(Boolean);
+      raw.templateOptions.dispatch = { streams: names(await ask("Board streams (comma-separated)", opts.streams, "")), engineers: names(await ask("Engineers (comma-separated agent names)", opts.engineers, "")) };
+    }
     if (opts.engine || opts.image) raw.runtime = { ...(opts.engine ? { engine: opts.engine } : {}), ...(opts.image ? { image: opts.image } : {}) };
     const out = path.resolve(opts.out ?? "run.json");
     const r = resolveContract(raw, { baseDir: path.dirname(out), effort: deps.effort, checkFs: false });
@@ -672,9 +666,7 @@ const commands: Record<string, Command> = {
     if (claim && rest.length !== 2) throw new CliError("usage", "board claim needs exactly one item id");
     const store = openStore(opts.run, deps);
     const state = readState(store);
-    // `dispatch` is the second template that works a steward board (registered by the follow-up change).
-    const boardTemplates: readonly string[] = ["self-improve", "dispatch"];
-    if (!boardTemplates.includes(state.template)) throw new CliError("refused", "board is for self-improve and dispatch cycles");
+    if (!isCycleTemplate(state.template)) throw new CliError("refused", "board is for self-improve and dispatch cycles");
     if (claim) {
       const id = rest[1] ?? "";
       const by = opts.by?.trim();
@@ -708,8 +700,18 @@ const commands: Record<string, Command> = {
       let board;
       try { board = readBoardFile(path.resolve(opts.file)); }
       catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
-      await withBoardLock(store, deps, () => writeJsonAtomic(path.join(store.p.control, "board.json"), board, { mode: 0o600 }));
-      return { data: { run: state.run, board }, text: "steward board saved for the next cycle prompt" };
+      const incoming = board;
+      // Claims written since the steward read the board (`board claim`, a dispatch cycle's claim or
+      // submission) survive a replacement that leaves them out (lib/board.ts keepHostClaims).
+      const saved = await withBoardLock(store, deps, () => {
+        let current: StewardBoard;
+        try { current = readBoard(store.p.control); }
+        catch (e) { throw new CliError("invalid", e instanceof Error ? e.message : String(e)); }
+        const merged = keepHostClaims(current, incoming);
+        writeJsonAtomic(path.join(store.p.control, "board.json"), merged.board, { mode: 0o600 });
+        return merged;
+      });
+      return { data: { run: state.run, board: saved.board, keptClaims: saved.kept }, text: `steward board saved for the next cycle prompt${saved.kept.length ? `; kept the claims on ${saved.kept.join(", ")} that the file left out` : ""}` };
     }
     let board;
     try { board = readBoard(store.p.control); }
@@ -734,7 +736,7 @@ const commands: Record<string, Command> = {
     }
     const store = openStore(opts.run, deps);
     const state = readState(store);
-    if (state.template !== "self-improve") throw new CliError("refused", "inbox is for self-improve cycles");
+    if (!isCycleTemplate(state.template)) throw new CliError("refused", "inbox is for self-improve and dispatch cycles");
     if (opts.file && opts.answer) throw new CliError("usage", "--file and --answer cannot be combined");
     if (opts.value !== undefined && !opts.answer) throw new CliError("usage", "--value is only valid with --answer");
     if (opts.answer !== undefined && !opts.value?.trim()) throw new CliError("usage", "--answer <card-id> requires a non-empty --value <text>");
@@ -785,7 +787,7 @@ const commands: Record<string, Command> = {
     const store = openStore(opts.run, deps);
     const state = readState(store);
     if (isTerminal(state.status)) throw new CliError("refused", `run ${state.run} is ${state.status}`);
-    if (state.template !== "self-improve") throw new CliError("refused", "backlog is for self-improve cycles");
+    if (!isCycleTemplate(state.template)) throw new CliError("refused", "backlog is for self-improve and dispatch cycles");
     store.enqueue("backlog", { message: message.slice(0, 2000) });
     return { data: { run: state.run, delivered: "inbox" }, text: "backlog item queued for the next cycle prompt" };
   },
@@ -966,6 +968,7 @@ async function probeOnly(contract: RunContract, deps: CliDeps): Promise<Boundary
 const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any command)
   templates                              what kinds of run exist
   init --template <id> [--out run.json]  write a run contract (prompts on a terminal; flags otherwise)
+  init --template dispatch --streams <a,b> --engineers <x,y>   a dispatch run: cycles claim the board's items as these engineers
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   status [--run <id>]                    one run, or all runs

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import * as gm from "./gitmirror.ts";
 import type { HostGit, IngestResult } from "./gitmirror.ts";
 import { pathsOutsideAreas } from "./glob.ts";
+import { isPublishableTag } from "./mirror.ts";
 import { readReviewDiff, type ReviewDiffRead, type ReviewRecordScope } from "./review.ts";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -221,7 +222,7 @@ export class HostRepo {
     const g = this.git();
     g(["update-ref", "refs/promote/head", sha]);
     const specs = [`refs/promote/head:refs/heads/${branch}`];
-    if (tags) for (const t of (g(["for-each-ref", "--format=%(refname)", `refs/tags/${cfg.tagPrefix}`], { allowFail: true }) ?? "").split("\n").filter(Boolean)) specs.push(`${t}:${t}`);
+    if (tags) for (const t of (g(["for-each-ref", "--format=%(refname)", `refs/tags/${cfg.tagPrefix}`], { allowFail: true }) ?? "").split("\n").filter(Boolean)) if (isPublishableTag(t.slice(`refs/tags/${cfg.tagPrefix}`.length))) specs.push(`${t}:${t}`);
     gm.scanPush(g, url, specs, `refs/base/${cfg.baseRef}`);
     g(["push", "--quiet", "--porcelain", url, ...specs]);
     return { status: "pushed", to: sha };

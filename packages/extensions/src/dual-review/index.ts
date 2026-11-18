@@ -37,6 +37,23 @@ function reviewHint(lines: number): string | null {
   }
 }
 
+/**
+ * Make tools registered inactive callable again (the pattern third_party/subagent uses for
+ * workflow_status: pi 1.x honours `defaultActive: false`, an older pi leaves them active). A pi
+ * without tool control, or a tool that is not registered, is skipped.
+ */
+function wakeTools(pi: ExtensionAPI, names: string[]): void {
+  try {
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return;
+    const current = pi.getActiveTools();
+    const registered = typeof pi.getAllTools === "function" ? pi.getAllTools().map((tool) => tool.name) : names;
+    const missing = names.filter((name) => !current.includes(name) && registered.includes(name));
+    if (missing.length > 0) pi.setActiveTools([...current, ...missing]);
+  } catch {
+    /* activation is an optimisation; the tools stay inactive */
+  }
+}
+
 export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, runExecFile: typeof execFile = execFile) {
   let epoch = 0;
   const pending = new Set<() => void>();
@@ -143,6 +160,7 @@ export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, run
   pi.registerCommand("review", {
     description: "Spawn a reviewer agent on the current git diff. Optionally pass a path argument.",
     handler: async (args, ctx) => {
+      wakeTools(pi, ["dual_review"]);
       ctx.ui.notify("dual-review: running git diff…", "info");
       let diff: string;
       try {
@@ -170,6 +188,7 @@ export default function (pi: ExtensionAPI, spawnChild: typeof spawn = spawn, run
   pi.registerTool({
     name: "dual_review",
     label: "Dual review",
+    defaultActive: false, // woken by /review, so a session that never reviews does not carry its text
     description: "Run a second-agent review on a diff or file. Returns immediately; review arrives as a displayed result without starting another turn.",
     parameters: Type.Object({
       content: Type.String({ description: "Diff or code to review" }),

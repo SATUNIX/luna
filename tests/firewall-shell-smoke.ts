@@ -10,11 +10,11 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { loadModule, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import type * as Classify from "../packages/extensions/src/tool-firewall/classify.ts";
-import type * as Shell from "../packages/extensions/src/tool-firewall/shell.ts";
+import type * as Shell from "../packages/core/shared/shell.ts";
 
 const restoreIsolation = isolateKitEnv();
 const C = await loadModule<typeof Classify>("extensions/tool-firewall/classify.ts");
-const S = await loadModule<typeof Shell>("extensions/tool-firewall/shell.ts");
+const S = await loadModule<typeof Shell>("extensions/tool-firewall/shared/shell.ts");
 
 const WS = "/work/repo";
 const env: Classify.ClassifyEnv = { cwd: WS, workspace: WS, home: "/home/op", tmpRoots: ["/tmp", "/var/tmp"], knownHosts: new Set(["ms01", "buildbox"]), policy: "coding" };

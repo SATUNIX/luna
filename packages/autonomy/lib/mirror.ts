@@ -12,6 +12,18 @@ export interface PublishConfig {
   readonly publishTags?: boolean | undefined;
 }
 
+/**
+ * Tags under `<tagPrefix>refused/` hold cycles the leak scan refused at close-out
+ * (lib/templates/self-improve.ts): they travel to the worker as attempts branches so it can reword
+ * them, and are never published (tests/autonomy-selfimprove-smoke.ts).
+ */
+export const REFUSED_TAGS = "refused/";
+
+/** Whether a run tag (its name after the tag prefix) may leave the machine. */
+export function isPublishableTag(tail: string): boolean {
+  return !tail.startsWith(REFUSED_TAGS) && isSafeRefTail(tail);
+}
+
 /** Refspecs to push, from `git for-each-ref` output lines "<sha> <refname>". */
 export function publishRefspecs(forEachRef: string, cfg: PublishConfig): string[] {
   const branch = `refs/heads/${cfg.integrationBranch}`;
@@ -20,7 +32,7 @@ export function publishRefspecs(forEachRef: string, cfg: PublishConfig): string[
   for (const line of forEachRef.split("\n")) {
     const ref = line.trim().split(/\s+/)[1];
     if (!ref) continue;
-    if (ref === branch || (cfg.publishTags !== false && ref.startsWith(tagPrefix) && isSafeRefTail(ref.slice(tagPrefix.length)))) specs.push(`${ref}:${ref}`);
+    if (ref === branch || (cfg.publishTags !== false && ref.startsWith(tagPrefix) && isPublishableTag(ref.slice(tagPrefix.length)))) specs.push(`${ref}:${ref}`);
   }
   return specs;
 }

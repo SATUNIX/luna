@@ -224,6 +224,7 @@ await check("mirror: only the integration branch and the run's exp/<run>/ tags l
     "d refs/tags/exp/perpetual-test/cycle-01",
     "e refs/tags/v9.9.9",
     "f refs/tags/exp/perpetual-test/../../heads/main",
+    "h refs/tags/exp/perpetual-test/refused/cycle-02", // a cycle the close-out leak scan refused: kept locally, never published
   ].join("\n");
   assert.deepEqual(publishRefspecs(refs, cfg), [
     "refs/heads/experimental/main:refs/heads/experimental/main",

@@ -289,6 +289,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   segments, or the field key or rule name; a digest for bash). No block became an allow.
   `tests/firewall-refusal-record.ts`.
 
+- **`check-all --for-changed` plans the smokes that cover security paths.** The tool firewall, the
+  shared redaction table, the leak scan and its exceptions, the installer's guided mode and the
+  autonomy gate-slot and unpublished-work modules mapped only to the always-on checks, so a cycle's
+  verify plan listed their covering smokes as skipped (the host gate still ran everything). Each now
+  plans its smokes (`tests/autonomy-selfimprove-smoke.ts`).
 - **A stop while an autonomous run waits for a gate slot is no longer ignored.** The host-wide
   gate-slot wait polled until a slot was free and never looked at STOP, a signal, a pause or a
   cancel, so a run waiting behind two other gates could not be stopped until it got its turn. The

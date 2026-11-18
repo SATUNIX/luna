@@ -1936,6 +1936,23 @@ await check("check-map: a changed-path diff implies the host gate's checks, and 
   const commonSource = checksForChangedPaths(["packages/autonomy/lib/templates/common.ts"]);
   assert.ok(commonSource.includes("smoke:workflow-notify"), "the other copy-pair source plans smoke:workflow-notify");
 
+  // DE-102: security paths and the autonomy modules other smokes pin plan those smokes.
+  const covered: Array<[string, readonly string[]]> = [
+    ["packages/extensions/src/tool-firewall/index.ts", ["smoke:tool-firewall", "smoke:firewall-gate", "smoke:firewall-unattended"]],
+    ["packages/core/shared/redact.ts", ["smoke:redaction-corpus", "smoke:fuzz-redaction"]],
+    ["packages/core/lib/leak-scan.ts", ["smoke:prepush-scan"]],
+    ["packages/core/prepush-scan.ts", ["smoke:prepush-scan"]],
+    ["packages/core/leak-scan-exceptions.json", ["smoke:prepush-scan"]],
+    ["packages/core/install.ts", ["smoke:install-guided", "smoke:clean-install"]],
+    ["packages/core/lib/install-guide.ts", ["smoke:install-guided"]],
+    ["packages/autonomy/lib/gate-slots.ts", ["smoke:autonomy-lifecycle"]],
+    ["packages/autonomy/lib/unpublished.ts", ["smoke:autonomy-cli"]],
+  ];
+  for (const [file, needed] of covered) {
+    const planned = checksForChangedPaths([file]);
+    for (const name of needed) assert.ok(planned.includes(name), `${name} is planned for a change to ${file}`);
+  }
+
   const docs = checksForChangedPaths(["docs/guide.md"]);
   assert.ok(docs.includes("docs:check"), "docs changes need docs:check");
   for (const name of ["smoke:eval-footprint", "smoke:subagent-roles-isolation", "smoke:new-extension", "smoke:workflow-notify"]) {

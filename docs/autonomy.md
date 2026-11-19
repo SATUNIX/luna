@@ -715,6 +715,7 @@ Read these files under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-aut
 | `meter/*.jsonl` | Inference usage and spend | `tests/autonomy-run-smoke.ts` |
 | `steps/NN/summary.json`, `cycle.json`, `review.json`, check evidence | Per-step outcome, committed head, gate and independent review | `tests/autonomy-selfimprove-smoke.ts` |
 | `steps/NN/salvaged-report.json` | Host close-out when the worker died before its report | `tests/autonomy-selfimprove-smoke.ts` |
+| `steps/NN/checks/<id>.json`, `steps/NN/checks/<id>.logs/` | One check's verdict with the last 4000 characters of its output (`tail`) and `logs`, the paths of its full gate logs. The gate's scratch directory (`gate-work/`) is wiped before every check, so the copies under `<id>.logs/` are the only lasting record: regular `.log` and `.json` files only, links never followed, at most 16 files of 8 MiB each (a longer log keeps its end) | `tests/autonomy-smoke.ts` |
 
 Suggested monitoring policy: flag a work heartbeat older than **2 minutes or four ticks**, whichever
 is longer (`runtime.mirrorSeconds` sets the tick interval). This is an investigation threshold, not

@@ -53,16 +53,21 @@ were not adopted.
 | `pi-readseek` | 0.4.26 | long-horizon, self-improving, engagement, lite | `@jarkkojs/readseek` native CLI and xxhash-wasm | MIT. Hash-anchored reads and edits. 0.12.0 replaces the tool surface with 16 new tools beside the built-ins, takes `@path` rule files the firewall's path checks do not see, and was not adopted. |
 | `pi-lean-ctx` | 3.11.4 | **none (opt-in)** | The external `lean-ctx` Rust CLI, not bundled | Apache-2.0. Registers extra shell, read and edit tools that the firewall does not classify as shell and `secret-guard` does not inspect. Installed by `install.ts --all` only when its CLI is on `PATH`. Its vendored MCP client bundle is built from `@modelcontextprotocol/sdk` 1.32, which audit tools cannot see. |
 
-The container image installs `pi-mcp-adapter@6.0.0` (and pi) at build time with `npm ci
+The container image installs `pi-mcp-adapter@7.0.1` (and pi) at build time with `npm ci
 --ignore-scripts` from `packages/container/tools/package-lock.json`, and the overlay
 (`packages/container/overlays/pi/settings.json`) registers that baked copy by path, so nothing is
 fetched from npm at start; `validate-engagement-env.sh` checks the pins agree. See the review below.
 
 ### pi-mcp-adapter review
 
-The pin is based on the unpacked 6.0.0 tarball, an npm install of it, and the adapter loaded into
-pi 1.4.0 in the built container image. This check was run by hand; no test in Luna loads the
-adapter (`packages/container/README.md` describes what the image configures).
+The pin is based on the unpacked 7.0.1 tarball compared with 6.0.0's, its changelog, and an
+`npm ci` of `packages/container/tools` loaded into pi 1.4.0 with the image's overlay
+(`settings.json`, `mcp-adapter.json`) and environment (`PI_MCP_CONFIG_MODE=exclusive`,
+`MCP_DIRECT_TOOLS=__none__`), driven by a local stand-in model: the model was offered `read`,
+`bash`, `edit`, `write` and `mcp` only, an `mcp` call to `pi_system_governance_state_summary`
+reached the governance server and returned its summary, and the adapter printed nothing. These
+checks were run by hand, outside a built image; no test in Luna loads the adapter
+(`packages/container/README.md` describes what the image configures).
 
 - **Manifest and install.** MIT, Node >=20, one pi extension (`index.ts`) and a `pi-mcp-adapter`
   CLI. The package's only lifecycle script is `prepack`, which npm does not run on install, and no
@@ -70,15 +75,20 @@ adapter (`packages/container/README.md` describes what the image configures).
   installed tree.
 - **Native and remote parts.** `@napi-rs/keyring` (a platform `.node` binary) holds OAuth and API
   keys in the operating system credential store; `recheck` 4.6.0-beta.3 brings a platform binary
-  and a JAR as optional dependencies, as it did in 2.8.0. `@typesafe-ai/sdk` is the client for
-  Jev semantic tool search on `api.typesafe.ai`, used only with an API key; the overlay sets
-  `jev: false`. Executor (`executor.sh`) support runs only for a server configured as one.
+  and a JAR as optional dependencies, as it did in 2.8.0. 7.0.0 drops `@typesafe-ai/sdk` and the
+  adapter's own key store: semantic tool search now ranks tools with a classifier model through
+  Pi's own credentials, and is on for every configured server unless `settings.semanticSearch` is
+  `false`; `settings.jev: false` no longer turns it off. Typed extraction (`mcp({ extract })`)
+  sends tool results to Cloudflare Workers AI, and is off unless `settings.extraction` names
+  servers. The overlay sets both to `false` and has no `jev` key, and
+  `validate-engagement-env.sh` and `validate-runtime-readiness.py` fail otherwise. Executor
+  (`executor.sh`) support runs only for a server configured as one.
 - **Peer ranges.** pi-ai `^0.84.1 || … || ^1.0.0`, pi-tui, typebox and zod are peers, so the
   adapter runs on pi's own copies. 2.8.0 installed its own pi-ai, pi-tui and typebox as
   dependencies, which pi 1.4.0 warns can bypass the host's copies. From 2.21.1 to 5.0.0 the pi-ai
   peer range excludes pi 1.x, and 2.20.0 to 5.1.0 pin `@modelcontextprotocol/client` 2.0.0, which
   GHSA-6qxp-vccf-f47h affects (fixed in 2.2.0; the adapter pins 2.3.1 from 5.2.0).
-- **Tools and firewall.** By default 6.0.0 registers, beside the `mcp` proxy, an `mcp__<server>`
+- **Tools and firewall.** By default 6.0.0 and 7.0.1 register, beside the `mcp` proxy, an `mcp__<server>`
   proxy per server and a deferred `mcp__<server>__<tool>` tool per server tool, and runs each `mcp`
   call as a nested call to that tool. In the image with the 2.8.0 settings, every MCP call was
   then blocked by `engagement-governance`'s MCP-only mode, and the `settings` block in Pi's
@@ -94,6 +104,18 @@ adapter (`packages/container/README.md` describes what the image configures).
   first start, which the overlay already does. The `mcp` tool's `args` field takes a JSON string,
   as in 2.8.0, and the governance and memory tools keep their `<server>_<tool>` names, so
   `engagement/tool-policy.json` is unchanged.
+- **Changes in 7.0.0 and 7.0.1.** Besides the search change above: the same tools, commands and
+  event hooks are registered as in 6.0.0, and `PI_MCP_CONFIG_MODE` and `MCP_DIRECT_TOOLS` are read
+  as before. Task-augmented calls, which return at once and deliver the result later, need
+  `"protocolVersion": "auto"` on a server, which the overlay does not set. A denied call's result
+  now says it was blocked by an approval gate rather than that the user declined. Tool names over
+  64 characters are shortened with a hash, which affects only direct tools (off here). An unknown
+  `mcp` action is now an error rather than a silent fallback. The first session after an upgrade
+  shows the release highlights from the package's own `CHANGELOG.md` once and records the version
+  in `mcp-last-seen-version.json` in the agent directory; nothing is fetched. The tree drops
+  `@typesafe-ai/sdk`, moves `@modelcontextprotocol/ext-tasks` from 0.1.0 to 0.2.3 (Apache-2.0)
+  and `jose` from 6.2.13 to 6.2.17, and keeps `@modelcontextprotocol/client` at 2.3.1;
+  `npm audit` reports nothing.
 
 Native-binary risk is contained by exact version pins, `reference` (not bundle) mode, and the
 `review` field per source. A Luna release that changes a pin moves companions on the next

@@ -45,6 +45,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
   installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
   not rerun `npm ci`, and only a newer release raises the start-up notice.
+- **An autonomous run writes a post-mortem when it fails (PG-05).** Finding: when a run failed,
+  `state.json` kept only a failure code, so the cause had to be pieced together from the host event
+  log and `supervisor.log`. Fix: whenever the supervisor records a failure (the run fails, or it stops
+  on a supervisor error or boundary violation), it writes `postmortem.json` in the run directory
+  (schema version 1, mode 0600). It holds the failure code and detail, status, template, step, phase,
+  cycle, usage and budget, the worker, the failing required checks, the last fatal error, the run's
+  last 20 host events and the last 20 lines of `supervisor.log`, with free text redacted. Writing is
+  best effort and never changes the run's outcome. Verified by `tests/autonomy-lifecycle-smoke.ts`.
+
 - **The web console has a read-only Autonomy view.** Finding: the console had no autonomy
   awareness, so following unattended runs from a browser was not possible. Fix: an authenticated
   `GET /api/autonomy` (schema version 1; other methods 405) answers with the runs under the
@@ -179,6 +188,35 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/firewall-must-block-corpus-smoke.ts`, in `test:security`.
 
 ### Changed
+
+- **The container image runs pi-mcp-adapter 7.0.1, with semantic search and extraction pinned off.**
+  Finding: Dependabot's 6.0.0 to 7.0.1 bump (#129) failed the container checks, which pin the
+  version in the Dockerfile, `capability/env/defaults.env` and both compose files. 7.0.0 also
+  replaced `settings.jev` with `settings.semanticSearch` and no longer treats `jev: false` as off:
+  semantic tool search is on for every configured server unless `semanticSearch` is `false`, and it
+  sends tool names and descriptions to a classifier model through Pi's credentials. A plain bump
+  would have turned it back on in the image. Fix: the image pins 7.0.1 everywhere. The overlay's
+  `mcp-adapter.json` sets `semanticSearch: false` and `extraction: false` (7.0.0's typed extraction
+  sends tool results to Cloudflare; it is off by default, now pinned off) and drops `jev`.
+  `validate-engagement-env.sh` and `validate-runtime-readiness.py` require both settings, and the
+  first refuses an overlay that still relies on `jev`. Verified by `tests/container-static-smoke.ts`
+  (a `jev`-only overlay fails, and the adapter pin case no longer names a version), and by hand:
+  pi 1.4.0 with 7.0.1 and the image's overlay and environment offered the model only `mcp` beside
+  the built-in tools, and an `mcp` call reached the governance server
+  (`docs/supply-chain.md` has the review).
+
+- **The container MCP servers take `@modelcontextprotocol/sdk` 1.32.2, and the SDK pin check follows
+  the type mirror.** Finding: Dependabot's 1.32.1 to 1.32.2 bump could never pass
+  `smoke:container-static`, because `scripts/validate-governance-mcp-server.sh` required the literal
+  1.32.1, so every SDK bump needed a hand edit of the validator as well as of the type mirror. Fix:
+  the governance and memory-mcp servers pin 1.32.2 (package.json and lockfile). The validator now
+  reads the version `mcp-servers/types/mcp-sdk.d.ts` says it mirrors and requires both servers to pin
+  exactly that version in package.json, the lockfile root and the locked package, so a bump still
+  cannot land without the mirror being reviewed and moved with it, and the check now covers
+  memory-mcp too. The mirror was checked against 1.32.2's published types: only `Transport`'s
+  optional handlers changed (each now also allows `undefined`), and the mirror follows. Verified by
+  `tests/container-static-smoke.ts`, which now breaks the mirror's version, loosens each server's
+  pin to a range and drifts each lockfile, and expects the validator to fail each time.
 
 - **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
   line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do

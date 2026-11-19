@@ -3,7 +3,7 @@ FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f8
 # pi and pi-mcp-adapter come from tools/package-lock.json (npm ci, below); these two pins must match
 # it, and the build fails when they do not (scripts/validate-engagement-env.sh checks the same).
 ARG PI_CODING_AGENT_VERSION=1.4.0
-ARG PI_MCP_ADAPTER_VERSION=6.0.0
+ARG PI_MCP_ADAPTER_VERSION=7.0.1
 # The npm the base image bundles carries known advisories in its own dependencies (brace-expansion,
 # undici, http-cache-semantics); this release does not.
 ARG NPM_VERSION=12.2.1

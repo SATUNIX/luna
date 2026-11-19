@@ -21,10 +21,28 @@ SERVER_DIR="mcp-servers/governance"
 python3 -m json.tool "$SERVER_DIR/package.json" >/dev/null
 python3 -m json.tool "$SERVER_DIR/package-lock.json" >/dev/null
 
-grep -Fq '"@modelcontextprotocol/sdk": "1.32.1"' "$SERVER_DIR/package.json" || {
-  echo "Governance MCP server must pin @modelcontextprotocol/sdk 1.32.1" >&2
-  exit 1
-}
+# The SDK is typed by a hand-kept mirror (mcp-servers/types/mcp-sdk.d.ts) that names the version it was
+# checked against. Each server must pin exactly that version, in package.json and in its lockfile, so a
+# bump cannot land without the mirror being reviewed and its stated version moved with it.
+SDK_MIRROR="mcp-servers/types/mcp-sdk.d.ts"
+python3 -I - "$SDK_MIRROR" mcp-servers/governance mcp-servers/memory-mcp <<'PY' || exit 1
+import json, re, sys
+mirror, servers = sys.argv[1], sys.argv[2:]
+m = re.search(r"^// This file mirrors @modelcontextprotocol/sdk (\d+\.\d+\.\d+) ", open(mirror, encoding="utf-8").read(), re.M)
+if not m:
+    sys.exit(f"{mirror} must state the @modelcontextprotocol/sdk version it mirrors")
+want = m.group(1)
+bad = []
+for d in servers:
+    pin = json.load(open(f"{d}/package.json", encoding="utf-8")).get("dependencies", {}).get("@modelcontextprotocol/sdk")
+    lock = json.load(open(f"{d}/package-lock.json", encoding="utf-8")).get("packages", {})
+    locked = lock.get("node_modules/@modelcontextprotocol/sdk", {}).get("version")
+    root = lock.get("", {}).get("dependencies", {}).get("@modelcontextprotocol/sdk")
+    if pin != want or root != want or locked != want:
+        bad.append(f"{d}: package.json {pin!r}, lockfile root {root!r}, locked {locked!r}")
+if bad:
+    sys.exit(f"MCP servers must pin @modelcontextprotocol/sdk exactly {want} (the version {mirror} mirrors); update and review the mirror with the pin:\n  " + "\n  ".join(bad))
+PY
 
 grep -Fq '"zod": "4.6.7"' "$SERVER_DIR/package.json" || {
   echo "Governance MCP server must pin zod 4.6.7" >&2

@@ -23,7 +23,8 @@ export function stdoutIsFile(filePath: string): boolean {
 export function writeJsonAtomic(file: string, value: unknown, { mode }: { mode?: number } = {}): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomSuffix(6)}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, mode ? { mode } : undefined);
+  // Created exclusively (O_EXCL: never an existing file or a link at the name), so `mode` always applies.
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", ...(mode ? { mode } : {}) });
   fs.renameSync(tmp, file);
 }
 

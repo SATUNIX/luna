@@ -113,13 +113,13 @@ grep -Fq "ARG PI_CODING_AGENT_VERSION=1.4.0" Dockerfile || {
   exit 1
 }
 
-grep -Fq "ARG PI_MCP_ADAPTER_VERSION=6.0.0" Dockerfile || {
-  echo "Dockerfile must pin PI_MCP_ADAPTER_VERSION to 6.0.0" >&2
+grep -Fq "ARG PI_MCP_ADAPTER_VERSION=7.0.1" Dockerfile || {
+  echo "Dockerfile must pin PI_MCP_ADAPTER_VERSION to 7.0.1" >&2
   exit 1
 }
 
-grep -Fq "PI_MCP_ADAPTER_VERSION=6.0.0" capability/env/defaults.env || {
-  echo "capability/env/defaults.env must pin PI_MCP_ADAPTER_VERSION=6.0.0" >&2
+grep -Fq "PI_MCP_ADAPTER_VERSION=7.0.1" capability/env/defaults.env || {
+  echo "capability/env/defaults.env must pin PI_MCP_ADAPTER_VERSION=7.0.1" >&2
   exit 1
 }
 
@@ -143,13 +143,18 @@ grep -Fq "/srv/data/pi-system" capability/compose/compose.yaml || {
 }
 
 # MCP client hardening: no direct or namespace tools, no automatic sampling, auth or elicitation, no
-# agent-added servers or script tools, no remote semantic search.
-for setting in 'directTools": false' '"namespaceProxyTools": false' 'samplingAutoApprove": false' '"autoAuth": false' '"elicitation": false' '"elicitationAutoOpenUrls": false' '"allowInstall": false' '"allowScriptToolSave": false' '"jev": false' '"pi_system_governance"'; do
+# agent-added servers or script tools, no semantic search or typed extraction (both send MCP data to a
+# model provider), and no legacy `jev` key (7.x ignores `jev: false`, so it would only look like a guard).
+for setting in 'directTools": false' '"namespaceProxyTools": false' 'samplingAutoApprove": false' '"autoAuth": false' '"elicitation": false' '"elicitationAutoOpenUrls": false' '"allowInstall": false' '"allowScriptToolSave": false' '"semanticSearch": false' '"extraction": false' '"pi_system_governance"'; do
   grep -Fq "$setting" overlays/pi/mcp-adapter.json || {
     echo "overlays/pi/mcp-adapter.json must keep: $setting" >&2
     exit 1
   }
 done
+if grep -Fq '"jev"' overlays/pi/mcp-adapter.json; then
+  echo "overlays/pi/mcp-adapter.json must not set jev: pi-mcp-adapter 7 ignores it; use semanticSearch: false" >&2
+  exit 1
+fi
 
 grep -Fq 'directTools: false' engagement/mcp-servers.example.yaml || {
   echo "engagement/mcp-servers.example.yaml must keep directTools false" >&2

@@ -38,19 +38,105 @@ autonomy CLI's commands that change a run (`start`, `up`, `plan --authorise`, `p
 the classifier does not know) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
 script run directly or through `env`, by an interpreter or a package runner (`npx tsx`, `npx
 pi-autonomy`, `npm exec pi-autonomy --`), or by a path relative to a `cd` (`tests/firewall-unattended-smoke.ts`).
-Two matchers decide. The broad one finds anything that could be the CLI (a word naming `pi-autonomy` or an
-autonomy/cli script, expanded or not, with spaces or not, run as the program or by an interpreter or package
-runner) and only adds findings: a control or unknown command is high, `report`, `key-limit`, `export`,
+Two matchers decide. The broad one finds anything that could be the CLI and only adds findings. It looks at a
+word naming `pi-autonomy`, an autonomy/cli script or the legacy entry point `autonomy/supervisor.ts` (which
+passes every command to the CLI; its `boundary` probes), expanded or not, with spaces or not; a word that holds
+a whole command (`pm2 start "pi-autonomy promote"`, `pm2 start "eslint . ; pi-autonomy promote"`, `npm exec
+--call '...'`, `c='pi-autonomy promote'; $c`), whose command it reads from the same word whatever precedes the
+name in it; an option=value word under any option name (`--exec="pi-autonomy promote"`, `-c=...`,
+`--setup=...`, `--node-options=--require=...`), whose value it reads as a command, as it reads the space form; a
+short option with its value attached (`-xpi-auto*`, `-r./packages/autonomy/cli.ts`, `-c"pi-autonomy promote"`),
+read by its value the same way when that value holds a letter or digit (`-x*` is not); a variable this command line set (`c=pi-autonomy; $c promote`); a
+glob that could expand to it (`node packages/auto*/cli.ts`, `pi-auto*`, `./node_modules/.bin/pi-auto*`; a
+bracket class it cannot evaluate counts as a match); and a computed command name
+(`$(echo pi-autonomy) promote`). It counts the word when it is the program, or an operand of an interpreter,
+a package runner, a node-family alias (`nodejs`, `esno`, `ts-node`), a version manager or launcher (`nvm`,
+`fnm exec`, `volta run`, `nodenv`/`pyenv`/`rbenv exec`, `rustup run`, `corepack <pm>`, `asdf`, `mise`,
+`cross-env`), a coverage tool (`c8`, `nyc`), a watcher or supervisor (`nodemon`, `pm2`), or any program the
+classifier has no rule for, or of any program given by a path outside `/usr/bin`, `/bin`, `/usr/local/bin`,
+`/sbin`, `/opt`, `/nix` and mise's install directory (`./eslint`, `scripts/git`, `node_modules/.bin/tsc`,
+`env ./eslint`, `./docker`), whose own rule is not consulted because the file is whatever it is, not the tool
+its name suggests (`./ssh pi-autonomy promote`, which the parser reads as ssh, is rated as a launch with unseen
+operands). That path is judged once normalised and resolved against the working directory, so a `..` that
+leaves a system directory (`/usr/bin/../../tmp/eslint`) is not exempt. Every program is a launcher when `PATH` is
+set on the command or earlier in the line to anything but system directories and the inherited `$PATH`
+(`PATH=.:$PATH eslint pi-autonomy promote`, `export PATH=.:$PATH; eslint ...`; `PATH=/usr/bin:$PATH grep`
+is not), when it calls a shell function defined on the line (`eslint() { ./x "$@"; }; eslint ...`), and when it
+is `source` or `.` with operands after the file, which the file reads as `$1`, `$2`, …. When a word holds a command it rates every command in the word that names the CLI, split on `&&`,
+`||`, `;`, `|`, `&` and newlines (`--exec="pi-autonomy status; pi-autonomy promote"`), the word's tokens after
+the CLI together with the operands after the word, and, when the CLI's command is inside the word, the
+operands after the word on their own (`--exec="pi-autonomy status" promote`); the worst reading stands, and an
+operator stuck to a token ends it (`"pi-autonomy status; echo done"` is a reading command). A word is split
+into tokens on the shell's IFS (space, tab, newline), so `"pi-autonomy status\rpi-autonomy promote"` names
+the unknown command `status\rpi-autonomy` (high), and on any whitespace too, since the program that receives
+the word may split it that way: each split is a reading. Inline code that names the CLI or its library (`node -e`, `node -pe`, `node --eval=`, `npx tsx -e`,
+a heredoc or here-string fed to an interpreter, an awk program that calls `system()` or a pipe) is high, a
+reading command included, because what it calls cannot be read; so `node -e "console.log('pi-autonomy')"` is
+high too. What only mentions the CLI is not a launch: inline code that is one bare word (`node -c
+packages/autonomy/cli.ts`, node's syntax check), an awk program that only matches text, and an operand of a
+program with no rule followed only by options the CLI does not accept (`somecustomtool packages/autonomy/cli.ts --lint`). When `xargs` or `parallel` appends arguments that cannot be seen, the command is
+rated as if they were its worst options. Its findings: a control or unknown command is high, `report`, `key-limit`, `export`,
 `doctor --setup` and `boundary --probe` are medium, and the files its options read (`--config`, `--file`,
 `--ntfy-token-file`, `--spec-file`, `--repo`, `--prs-file`) and write (`--out`, `--alert-state`) are
 classified like any other read or write, so `report --ntfy-token-file ~/.ssh/id_ed25519` is a credential read
 however it is launched. The narrow one makes a reading command (`status`, `top`, `events`, `templates`,
 `inbox`, `board --run <id> --json`, `plan`, `init`, `draft`) routine, in place of the ordinary rules, only for
 an exact, fully literal, direct launch with every option one the CLI accepts: `pi-autonomy <command>`, or the
-workspace's autonomy CLI script run as the program or as a plain interpreter's first operand. Everything else
-(inline code, a stdin script, a package runner, an interpreter option, another program whose path ends in the
-name) falls through to the ordinary rules, so the autonomy rule never rates a command lower than it would be
-without it. `tests/firewall-shell-smoke.ts` checks that as a property over 28 launch forms and 25 commands.
+workspace's autonomy CLI script run as the program or as the first operand of `node`, `tsx` or `bun`. It
+refuses the launch when any of these holds: an assignment on the command (`PATH=/tmp/x pi-autonomy status`);
+any variable set or exported earlier in the line; a shell function of the same name; a wrapper other than
+`exec`, `nohup`, `setsid`, `stdbuf`, `watch`, `env -S`, `script -c`, `entr -s` or `sh -c` (so `pnpm exec`,
+`find -exec`, `xargs`, `parallel`, `fnm exec`, `volta run` and `corepack pnpm exec` are refused); no command at
+all (`pi-autonomy`); or the program is anything but `pi-autonomy` or the script itself (`nodejs` and the
+launchers above are refused). Everything else (inline code, a stdin script, a package runner, an interpreter
+option, another program whose path ends in the name) falls through to the ordinary rules, so the autonomy rule
+never rates a command lower than it would be without it. `tests/firewall-shell-smoke.ts` checks that as a
+property over about 2,800 cases (100 launch forms by 25 commands, the `xargs`/`parallel` forms that append the
+command, and 12 inline-code forms), and has one named row per guard that fails when that guard alone is
+reverted.
+
+Not covered:
+
+- A name that does not appear in the text: `$AUTONOMY promote` with a variable from the environment, `pi-$X`,
+  `c=$(printf pi-%s autonomy); $c`, or a path built inside code (`'./packages/auto'+'nomy/cli.ts'`). These keep
+  the ordinary rules' rating (a dynamic command name is medium).
+- The parser does not look inside `fnm exec`, `volta run`, `nodenv`/`pyenv`/`rbenv exec`, `rustup run`, `c8`,
+  `nyc` or `corepack <pm>`: a control command through one is high, but another command through one keeps the
+  launcher's own rating (`fnm exec rm -rf ~` is low).
+- `NODE_OPTIONS=--require`/`--import` loader injection outside the autonomy rule is low in the ordinary rules.
+- Array-form subprocess calls in inline code drop their arguments (`spawnSync('rm', ['-rf', ...])` is low), and
+  the bodies of `node -pe` and `npx tsx -e` are not run through the ordinary inline-code rules.
+- `docker run <image> pi-autonomy ...` and `npm run <script>` bodies are not resolved.
+- Programs with a rule of their own whose options or operands run a command or load a module: `git rebase
+  --exec`/`-x`, `git bisect run`, `mocha`/`jest`/`vitest` `--require`, `-r` (also attached, `mocha
+  -rpi-autonomy`), `--setupFiles`, `--file` and `--config`, `npx eslint --rulesdir`, `npm run <script>
+  --script-shell=<file>`, `vim -c "!..."`, `emacs --eval`, `screen -dm`, `docker exec`, `make CMD="..."`,
+  `just --command`, `task --exec`, `husky run`, `lint-staged --shell`, and `turbo`/`nx`/`lerna` `exec` and
+  `run` keep that program's rating (low or medium), whatever the command names.
+- `PATH` changed by anything but an assignment or `export`/`declare`/`local` in the same line (`typeset` and
+  `readonly`, which the shared shell parser does not record, `hash -p ./x eslint`,
+  `alias eslint=./x`, a `PATH` set by an earlier tool call or a sourced file), a function defined by an earlier
+  tool call, and a system directory reached through a symlink are not seen.
+- Positional parameters handed to `sh -c` (`sh -c 'exec "$@"' sh pi-autonomy promote`, `sh -c '"$@"' tsc
+  pi-autonomy promote`) are a computed command name (medium); a `cd` to a glob
+  (`cd packages/auto* && node cli.ts promote`, whose directory is unknown) and a runner's directory option
+  (`pnpm -C packages/autonomy exec node cli.ts promote`, `npm --prefix`) keep the ordinary rules' rating
+  (medium or low).
+- A glob behind a path made only of wildcards (`./* promote`) is not taken as the bin name.
+- Still rated as a launch (fail closed, false positives): a word naming the CLI after an interpreter's script,
+  a test runner or a static tool (`node scripts/gen.ts pi-autonomy docs/out.md`, `npx vitest run
+  packages/autonomy/cli.ts --coverage`, `npm test -- --grep pi-autonomy tests`, `npx eslint
+  packages/autonomy/cli.ts --fix`, `pnpm eslint packages/autonomy/cli.ts --max-warnings 0`) is high when another
+  word follows it, because the tool's name could be a trampoline file or package script that runs the rest; an
+  option word or a quoted word naming the CLI with more after it (`node --test
+  --test-name-pattern="pi-autonomy promote" tests/`, `node scripts/x.ts --notes "pi-autonomy (promote)"`,
+  `pm2 start "echo pi-autonomy promote"`) is high, because what a program does with an option's value or a
+  quoted word is not known; a program given by path with the CLI's name and another word after it
+  (`./tools/grep pi-autonomy README.md`, `./node_modules/.bin/eslint packages/autonomy/cli.ts packages/x.ts`)
+  is high, because the file may be a trampoline; an operand after a word holding a reading command
+  (`nodemon --exec "pi-autonomy status" --watch src`) is high, because which program reads it is not known; and
+  an attached option value that is a short glob (`mytool -lp* foo`) is high, because it could expand to
+  `pi-autonomy`.
 
 The full description is in `docs/autonomy-gate.md`.
 

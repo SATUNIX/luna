@@ -53,6 +53,8 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
   const env: Record<string, string> = {};
   let json = false;
   let prompt: string | undefined;
+  // After `--` the one remaining word is the prompt, read literally (even one that looks like an option, or "-").
+  let literal = false;
   const value = (i: number): string | undefined => {
     const v = argv[i + 1];
     return v === undefined || (v.startsWith("--") && v.length > 2) ? undefined : v;
@@ -81,6 +83,12 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
         }
         break;
       }
+      case "--":
+        if (prompt !== undefined || i + 2 !== argv.length) return "give exactly one prompt after --";
+        prompt = argv[i + 1] ?? "";
+        literal = true;
+        i = argv.length;
+        break;
       case "--help": case "-h": return "help";
       default:
         if (arg.startsWith("--") && arg.length > 2) return `unknown option ${arg}`;
@@ -91,7 +99,7 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
   if (prompt === undefined) return "no prompt given";
   // A headless run is a script: never ask for a login or a reload, and keep startup network work off.
   env.PI_KIT_AUTO_PROFILE = "0";
-  const stdinPrompt = prompt === "-";
+  const stdinPrompt = !literal && prompt === "-";
   if (!stdinPrompt) piArgs.push("--", prompt);
   return { piArgs, env, json, stdinPrompt };
 }

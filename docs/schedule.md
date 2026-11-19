@@ -69,11 +69,11 @@ refused. `remove` stops and deletes the timer or the tagged line, then the spec.
 
 ## How a job runs
 
-- **At most one at a time.** `run-now` holds a lock for the schedule while the job runs: on Linux a
-  listening socket in the abstract namespace, which the kernel releases when the process exits, so
-  a crashed or killed run never leaves a stale lock; elsewhere a socket file in the state directory
-  that is taken over when nothing answers on it. A run that finds the lock held exits 75 and is
-  skipped.
+- **At most one at a time.** `run-now` holds a lock for the schedule while the job runs: a
+  listening socket file in the operator-only state directory (mode 0600), which the kernel releases
+  when the process exits, so a crashed or killed run never leaves a live lock; a socket file nothing
+  answers on is taken over. A file rather than the abstract namespace keeps another local user from
+  binding or connecting to it. A run that finds the lock held exits 75 and is skipped.
 - **Stopped when it overruns.** The systemd service has `TimeoutStartSec` and `RuntimeMaxSec` of the
   job's `--timeout` plus five minutes (ten minutes for an autonomy schedule, whose `up` returns once
   the run has started). Under crontab the job's own `--timeout` ends it.
@@ -113,5 +113,5 @@ Pinned by `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`), which never ca
   unit file or crontab line, digest included; the digest protects against an edited spec, not
   against a rewritten unit.
 - **Missed runs.** A timer's runs missed while the machine was off are not caught up.
-- **Other systems.** Windows has neither backend. On macOS (crontab) the lock is a socket file, and
-  two runs that both find a stale one at the same moment can both take it.
+- **Other systems.** Windows has neither backend. The lock is a socket file on every platform; two
+  runs that both find a stale one at the same moment can both take it.

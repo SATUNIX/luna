@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fakePi, loadExtension, setEnv } from "../packages/core/eval/harness.ts";
-import { addSchedule, CAP_MAXIMA, checkAdd, JOB_ENV, listSpecs, parseWhen, readSpec, removeSchedule, scheduleDir, specDigest, takeRunLock, type RunResult, type ScheduleDeps } from "../packages/core/lib/schedule.ts";
+import { addSchedule, CAP_MAXIMA, checkAdd, JOB_ENV, listSpecs, parseWhen, readSpec, removeSchedule, scheduleDir, specDigest, takeRunLock, type RunResult, type ScheduleDeps, type ScheduleSpec } from "../packages/core/lib/schedule.ts";
 import { runScheduleCli, type ScheduleIO } from "../packages/core/lib/schedule-cli.ts";
 
 const ok = (m: string): void => console.log(`  OK: ${m}`);
@@ -78,6 +78,12 @@ try {
     assert.deepEqual(w.calls.map((c) => [c.cmd, ...c.args].join(" ")), ["systemctl --user disable --now luna-schedule-nightly.timer", "systemctl --user daemon-reload"]);
     assert.ok(!fs.existsSync(path.join(w.units, "luna-schedule-nightly.timer")) && !fs.existsSync(path.join(w.units, "luna-schedule-nightly.service")) && readSpec(w.deps, "nightly") === null);
     assert.equal(removeSchedule(w.deps, "nightly").ok, false);
+    // A schemaVersion 1 spec (no pinned node/luna paths) predates the digest; remove must still clean it.
+    const legacy = path.join(scheduleDir(w.deps), "legacy.json");
+    fs.writeFileSync(legacy, JSON.stringify({ schemaVersion: 1, id: "legacy", when: "hourly", kind: "exec", prompt: "old", cwd: w.work, backend: "systemd", createdAt: "2026-01-01T00:00:00Z" }));
+    assert.equal(readSpec(w.deps, "legacy"), null, "a v1 spec is not runnable");
+    assert.equal(removeSchedule(w.deps, "legacy").ok, true, "remove cleans a v1 spec");
+    assert.ok(!fs.existsSync(legacy));
     ok("systemd: spec 0600, service and timer written, timer enabled; the prompt never reaches a unit file; remove undoes it all");
   }
 
@@ -200,6 +206,9 @@ try {
     assert.equal(listSpecs(w.deps).length, 2, "nothing changed");
     const release = await takeRunLock(w.deps, "daily-review");
     assert.ok(release);
+    const lockFile = path.join(scheduleDir(w.deps), "daily-review.lock.sock");
+    assert.equal(fs.statSync(lockFile).mode & 0o777, 0o600, "the run lock is an owner-only file in the state directory, not the abstract namespace");
+    assert.ok(fs.statSync(lockFile).isSocket());
     out.length = 0;
     assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 75, "a run while another holds the lock is skipped");
     assert.match(out.join(""), /already running; this run is skipped/);
@@ -236,6 +245,13 @@ try {
     out.length = 0;
     assert.equal(await runScheduleCli(["run-now", "daily-review", "--digest", "0".repeat(64)], w.deps, io(false)), 1, "a digest that does not match is refused");
     assert.match(out.join(""), /was changed since it was added/);
+    // A digest supplied on the command line is never trusted: otherwise an edited spec could run.
+    const tamperedSpec = { ...(JSON.parse(original) as ScheduleSpec), prompt: "run something else" };
+    fs.writeFileSync(specPath, JSON.stringify(tamperedSpec));
+    out.length = 0;
+    assert.equal(await runScheduleCli(["run-now", "daily-review", "--digest", specDigest(tamperedSpec)], w.deps, io(false)), 1, "an argv digest cannot authorise an edited spec");
+    assert.match(out.join(""), /was changed since it was added/);
+    fs.writeFileSync(specPath, original);
     fs.rmSync(path.join(w.units, "luna-schedule-daily-review.service"));
     out.length = 0;
     assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 1, "without its unit there is no pinned digest");

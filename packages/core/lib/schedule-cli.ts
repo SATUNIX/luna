@@ -15,7 +15,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { runExec } from "./headless.ts";
-import { addSchedule, checkAdd, defaultDeps, describeAdd, formatList, jobArgv, JOB_ENV, listSpecs, removeSchedule, takeRunLock, trustedSpec, type AddRequest, type ScheduleDeps } from "./schedule.ts";
+import { addSchedule, checkAdd, defaultDeps, describeAdd, formatList, installedDigest, jobArgv, JOB_ENV, listSpecs, removeSchedule, takeRunLock, trustedSpec, type AddRequest, type ScheduleDeps } from "./schedule.ts";
 
 export const SCHEDULE_USAGE = `usage: luna schedule add <name> --at "<when>" (--prompt <text> | --config <run.json>) [--cwd <dir>] [--max-turns N] [--max-cost USD] [--timeout D] [--backend systemd|cron] [--yes]
        luna schedule list
@@ -95,11 +95,14 @@ export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps
       return r.ok ? 0 : 1;
     }
     case "run-now": {
-      const pinned = rest.length === 3 && rest[1] === "--digest" ? rest[2] : undefined;
-      if (rest.length !== 1 && pinned === undefined) return fail(SCHEDULE_USAGE);
+      // The unit or crontab line carries --digest for compatibility, but its value is never trusted:
+      // a digest supplied on this command line would let an edited spec run (DE-118).
+      const digestArgument = rest.length === 3 && rest[1] === "--digest" ? rest[2] : undefined;
+      if (rest.length !== 1 && digestArgument === undefined) return fail(SCHEDULE_USAGE);
       // The spec is not trusted: it must hash to the digest pinned at add, in the unit or crontab line.
-      const trusted = trustedSpec(deps, rest[0] ?? "", pinned);
+      const trusted = trustedSpec(deps, rest[0] ?? "");
       if (!trusted.ok) return fail(trusted.error, 1);
+      if (digestArgument !== undefined && digestArgument !== installedDigest(deps, trusted.spec.id, trusted.spec.backend)) return fail(`schedule ${trusted.spec.id} was changed since it was added (the --digest argument does not match the digest pinned in its ${trusted.spec.backend === "systemd" ? "unit file" : "crontab line"}); it does not run: remove it and add it again`, 1);
       const spec = trusted.spec;
       const release = await takeRunLock(deps, spec.id);
       if (!release) return fail(`schedule ${spec.id} is already running; this run is skipped`, 75);

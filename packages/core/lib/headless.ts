@@ -183,8 +183,8 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
     return 2;
   }
   const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"));
-  if (ceilingRequested && readOverrides(path.join(globalAgentDir(), "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) {
-    err.write("luna exec: a ceiling was requested but overrides.json switches off goal-core, which enforces it; remove it from extensions.remove or drop the limits\n");
+  if (ceilingRequested && ceilingGuardDisabled()) {
+    err.write("luna exec: a ceiling was requested but goal-core, which enforces it, is switched off (overrides.json or the installed extension list); re-enable it or drop the limits\n");
     return 2;
   }
   const args = [...plan.piArgs];
@@ -209,6 +209,19 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
   if (reader.answer) out.write(reader.answer.endsWith("\n") ? reader.answer : `${reader.answer}\n`);
   if (code === 0 && reader.failed) { err.write("luna exec: the run ended with an error before an answer\n"); return 1; }
   return code;
+}
+
+/**
+ * True when the global install does not load goal-core: overrides.json removes it, or the install
+ * marker lists the extensions it selected and goal-core is not among them (an --only/custom install).
+ * An absent or stale marker is unknown, not a refusal; pendingDisables still handles overrides.
+ */
+export function ceilingGuardDisabled(agentDir: string = globalAgentDir()): boolean {
+  if (readOverrides(path.join(agentDir, "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) return true;
+  let marker: unknown;
+  try { marker = parseJson(fs.readFileSync(path.join(agentDir, ".pi-kit.json"), "utf8")); } catch { return false; }
+  if (!isRecord(marker) || marker.scope === "project" || !Array.isArray(marker.extensions)) return false;
+  return !marker.extensions.includes("goal-core");
 }
 
 /** Extension names in overrides.json `extensions.remove` that the install marker still lists as loaded. */

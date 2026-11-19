@@ -445,6 +445,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **Naming the autonomy CLI no longer makes a package command routine (DE-114).** Finding: since the
+  previous change to the autonomy CLI's control commands, `npm install left-pad pi-autonomy`, `npx left-pad
+  pi-autonomy` and `npx pi-autonomy status` were low instead of medium (install, or fetch and run), and
+  `npx -p pi-autonomy pi-autonomy pause` ran unasked; `node /opt/x/evil.js pi-autonomy status` had been low
+  before that. Cause: the CLI was matched in any argument after an interpreter or a package runner, and its
+  reading commands were rated low before the package rules ran. Fix: the CLI is recognised only as the program
+  a command runs (a runner's first operand after its options and `--`, or an interpreter's script, also behind
+  `npx tsx`); its reading commands are routine only when run by name, directly or by an interpreter, and a
+  control command still asks however it is reached. Verification: `tests/firewall-shell-smoke.ts`.
+
 - **The operator can delegate named autonomy-control verbs to one program (F-02, part 2).** Finding: the
   firewall had no way to express the owner's delegation of day-to-day run control to the manager session:
   every `pause`, `steer` or `status` through the operator's wrapper opened an approval card (10 high

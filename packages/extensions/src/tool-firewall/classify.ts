@@ -782,17 +782,19 @@ function classifySegment(c: Ctx): void {
 
   // The autonomous-run CLI: whoever runs `start`, `plan --authorise`, `promote` and the like is the person who
   // authorises the run's boundary and spends its budget, so from an agent's shell that is the operator's call.
-  // The CLI is recognised by its script, however it is reached: run directly (`./cli.ts`, through `env`), by an
-  // interpreter or a package runner (`npx tsx`, `npx pi-autonomy`, `npm exec pi-autonomy --`), and by a path
-  // relative to the directory the command runs in (`cd packages/autonomy && node cli.ts`).
+  // The CLI is recognised by its script when it is the program actually run: directly (`./cli.ts`, through
+  // `env`), as an interpreter's script, as a package runner's program (`npx pi-autonomy`, `npm exec
+  // pi-autonomy --`, `npx tsx packages/autonomy/cli.ts`), and by a path relative to the directory the command
+  // runs in (`cd packages/autonomy && node cli.ts`). Only the first two make a reading command routine: through a
+  // runner the package rules decide (it may fetch the package). A control command asks however it is reached.
   const autonomyScript = (a: string): boolean => {
     if (/(?:^|\/)autonomy\/cli\.(?:ts|mjs)$/.test(a) || /(?:^|\/)pi-autonomy$/.test(a)) return true;
     if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(a)) return false;
     const base = seg.cwd ?? c.env.cwd;
     return /\/autonomy\/cli\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${base}/${a}`));
   };
-  const autonomyAt = exe === "pi-autonomy" || autonomyScript(argv[0] ?? "") ? 0 : INTERPRETERS.has(exe) || CLI_RUNNERS.has(exe) ? argv.findIndex((a, i) => i > 0 && autonomyScript(a)) : -1;
-  if (autonomyAt >= 0) { autonomyCli(c, argv.slice(autonomyAt + 1)); return; }
+  const autonomy = autonomyLaunch(argv, exe, autonomyScript);
+  if (autonomy && (autonomy.control || !autonomy.viaRunner)) { autonomyCli(c, autonomy.args); return; }
 
   // Agent CLIs are recognised by identity (name, script path or package), not by the name typed.
   const agent = agentIdentity(seg);
@@ -964,15 +966,58 @@ function stdinExec(c: Ctx): void {
 }
 
 const AUTONOMY_CONTROL = new Set(["start", "supervise", "resume", "steer", "cancel", "pause", "promote", "reconfigure"]);
-// Package runners that run a package's CLI or a script named in their arguments.
-const CLI_RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bunx"]);
+// Package runners: the words before the program they run (`npx <program>`, `npm exec <program>`).
+const CLI_RUNNERS: Record<string, number> = { npx: 1, bunx: 1, pnpx: 1, "npm exec": 2, "npm x": 2, "pnpm exec": 2, "pnpm dlx": 2, "yarn exec": 2, "yarn dlx": 2, "bun x": 2, yarn: 1, pnpm: 1 };
+// Interpreter options whose value is the next word (`node --import tsx cli.ts`): not the script.
+const INTERPRETER_VALUE_OPTS = /^(?:-r|--require|--import|--loader|--experimental-loader|-C|--conditions)$/;
+
+function autonomyControl(args: string[]): boolean {
+  const sub = args.find((a) => !a.startsWith("-"));
+  return sub !== undefined && (AUTONOMY_CONTROL.has(sub) || (sub === "plan" && args.some((a) => a === "--authorise" || a === "--authorize")));
+}
+
+// The autonomy CLI as the program a command runs, with its arguments, or null. `viaRunner`: reached through a
+// package runner. `control`: a control command. An interpreter whose own script is something else (`node x.js
+// pi-autonomy status`) is not the CLI, but a control command named after the CLI anywhere in its arguments
+// still counts, so an interpreter option this parser does not know cannot hide `pause` or `promote`.
+function autonomyLaunch(argv: string[], exe: string, isCli: (a: string) => boolean): { args: string[]; viaRunner: boolean; control: boolean } | null {
+  const found = (args: string[], viaRunner: boolean) => ({ args, viaRunner, control: autonomyControl(args) });
+  if (exe === "pi-autonomy" || isCli(argv[0] ?? "")) return found(argv.slice(1), false);
+  const interpreted = (from: number, interp: string, viaRunner: boolean) => {
+    if (interp === "deno" && argv[from] === "run" || interp === "bun" && argv[from] === "run") from++;
+    for (let i = from; i < argv.length; i++) {
+      const a = argv[i] ?? "";
+      if (INTERPRETER_VALUE_OPTS.test(a)) { i++; continue; }
+      if (a.startsWith("-")) continue;
+      if (isCli(a)) return found(argv.slice(i + 1), viaRunner);
+      break;
+    }
+    const k = argv.findIndex((a, i) => i >= from && isCli(a) && autonomyControl(argv.slice(i + 1)));
+    return k >= 0 ? found(argv.slice(k + 1), viaRunner) : null;
+  };
+  if (INTERPRETERS.has(exe)) return interpreted(1, exe, false);
+  const runner = Object.hasOwn(CLI_RUNNERS, `${exe} ${argv[1] ?? ""}`) ? `${exe} ${argv[1] ?? ""}` : Object.hasOwn(CLI_RUNNERS, exe) ? exe : null;
+  if (runner === null) return null;
+  for (let i = CLI_RUNNERS[runner] ?? 1; i < argv.length; i++) {
+    const a = argv[i] ?? "";
+    if (a === "--") continue;
+    // `npx -p <pkg> <program>`: the package option's value is not the program.
+    if (/^(?:-p|--package|-c|--call)$/.test(a)) { i++; continue; }
+    if (a.startsWith("-")) continue;
+    if (isCli(a)) return found(argv.slice(i + 1), true);
+    // `npx tsx packages/autonomy/cli.ts`: the runner's program is an interpreter running the CLI.
+    const interp = basenameOf(a);
+    return INTERPRETERS.has(interp) ? interpreted(i + 1, interp, true) : null;
+  }
+  return null;
+}
 
 // `pi-autonomy <command>`: commands that authorise, start, steer or promote a run are high and never learned
 // (each one asks the operator); an unattended worker may not run them at all. Reading or preparing is routine.
 function autonomyCli(c: Ctx, args: string[]): void {
   const sub = args.find((a) => !a.startsWith("-"));
   const authorising = args.some((a) => a === "--authorise" || a === "--authorize");
-  if (sub && (AUTONOMY_CONTROL.has(sub) || (sub === "plan" && authorising))) {
+  if (sub && autonomyControl(args)) {
     add(c, "high", "security_control", "autonomy_control", `pi-autonomy ${sub}${authorising ? " --authorise" : ""} authorises, starts, steers or promotes an autonomous run: only the operator does that`, `autonomy ${sub}${authorising ? " authorise" : ""}`); return;
   }
   add(c, sub === "boundary" && args.includes("--probe") ? "medium" : "low", "code_exec", "autonomy_cli", `pi-autonomy ${sub ?? ""}`.trim());

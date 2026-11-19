@@ -37,6 +37,9 @@ autonomy CLI's control commands (`start`, `plan --authorise`, `promote`, `resume
 the like) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
 script run directly or through `env`, by an interpreter or a package runner (`npx tsx`, `npx
 pi-autonomy`, `npm exec pi-autonomy --`), or by a path relative to a `cd` (`tests/firewall-unattended-smoke.ts`).
+Its reading commands are routine only when the CLI is the program actually run, by name, directly or as an
+interpreter's script; a package runner or installer that names it keeps that command's own tier, since it may
+fetch and run a package (`tests/firewall-shell-smoke.ts`).
 
 The full description is in `docs/autonomy-gate.md`.
 

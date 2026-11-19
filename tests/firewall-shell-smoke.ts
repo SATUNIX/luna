@@ -498,6 +498,23 @@ for (const [cmd, manual, autoTier = manual] of rows) {
 assert.equal(failures, 0, `${failures} classification regressions`);
 console.log(`  OK: ${rows.length - 1} commands classified as expected (manual/auto)`);
 
+// The autonomy CLI is routine only when it is the program actually run, directly or as an interpreter's script.
+// A package runner or installer that merely names it keeps the package rules' tier (it may fetch and run a
+// package), and a control command asks however it is reached (tests/firewall-unattended-smoke.ts has the rest).
+{
+  const RANK = { low: 0, medium: 1, high: 2, critical: 3 } as const;
+  const tier = (cmd: string) => C.effectiveTier(C.classifyCommand(cmd, env), false);
+  for (const cmd of [
+    "npm install left-pad pi-autonomy", "npx left-pad pi-autonomy", "npx pi-autonomy status", "npx -y pi-autonomy status", "bunx left-pad pi-autonomy",
+    "pnpm add left-pad pi-autonomy", "npm exec left-pad -- pi-autonomy status", "npm exec pi-autonomy -- status", "node /opt/x/evil.js pi-autonomy status",
+  ]) assert.ok(RANK[tier(cmd)] >= RANK.medium, `${cmd}: at least medium (got ${tier(cmd)})`);
+  for (const cmd of ["npx -p pi-autonomy pi-autonomy pause", "pnpx pi-autonomy pause", "yarn dlx pi-autonomy promote --run r1", "node --stack-size 100 packages/autonomy/cli.ts pause"]) {
+    assert.ok(C.classifyCommand(cmd, env).findings.some((f) => f.code === "autonomy_control" && f.tier === "high"), `${cmd}: a control command asks`);
+  }
+  for (const cmd of ["node packages/autonomy/cli.ts status", "pi-autonomy status", "node --import tsx packages/autonomy/cli.ts status"]) assert.equal(tier(cmd), "low", `${cmd}: routine`);
+  console.log("  OK: the autonomy CLI is recognised only as the program run; a runner or install naming it keeps its tier");
+}
+
 // Parser details the classifier relies on.
 {
   const p = S.parseShell("ssh -p 2222 ms01 'cd /srv && sudo -n ls /root' && echo done", { cwd: WS, home: "/home/op" });

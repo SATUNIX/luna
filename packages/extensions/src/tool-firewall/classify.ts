@@ -1104,6 +1104,8 @@ function globCouldName(c: Ctx, word: string): boolean {
 // The shell splits unquoted words on its default IFS (space, tab, newline) only: \r, \v, \f and Unicode spaces are
 // part of a word, so `status\rpi-autonomy` is one (unknown) command, not two.
 const ifsWords = (s: string) => s.split(/[ \t\n]+/).filter(Boolean);
+// Drop shell operator characters (&&, ||, ;, |, &) stuck to the end of a token, without a regex (no backtracking).
+const trimOperators = (t: string) => { let e = t.length; while (e > 0 && (t[e - 1] === "&" || t[e - 1] === "|" || t[e - 1] === ";")) e--; return t.slice(0, e); };
 // The separators other languages split on besides \s (U+001C-U+001F, U+0085), read as spaces.
 const anySpace = (s: string) => Array.from(s, (ch) => { const n = ch.codePointAt(0) ?? 0; return (n >= 0x1c && n <= 0x1f) || n === 0x85 ? " " : ch; }).join("");
 
@@ -1201,7 +1203,7 @@ function autonomyBroad(c: Ctx): boolean {
       // `--exec="pi-autonomy status; pi-autonomy promote"`); and, when the CLI sits inside the word, the operands
       // after it alone (`--exec="pi-autonomy status" promote`), since what the launcher does with them is not known.
       // A shell operator stuck to a token (`status;`) ends that token, as the shell reads it.
-      const readings: string[][] = [at >= 0 ? [...toks.slice(at + 1).map((t) => t.replace(/(?:&&|\|\||[;|&])+$/, "")).filter(Boolean), ...rest] : rest];
+      const readings: string[][] = [at >= 0 ? [...toks.slice(at + 1).map(trimOperators).filter(Boolean), ...rest] : rest];
       if (at >= 0) {
         const parts = strip(text).split(/&&|\|\||[;|&\n]/);
         parts.forEach((part, i) => {

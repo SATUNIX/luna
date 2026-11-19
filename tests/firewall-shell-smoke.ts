@@ -800,6 +800,14 @@ console.log(`  OK: ${rows.length - 1} commands classified as expected (manual/au
   // N5: a word is split on the shell's IFS (space, tab, newline), and on any whitespace too: each split is a reading.
   for (const cmd of ["mytool \"pi-autonomy status\rpi-autonomy promote\"", "mytool \"pi-autonomy status\vpi-autonomy promote\"", "mytool \"pi-autonomy status pi-autonomy promote\"",
     "mytool \"pi-autonomy\rpromote\"", "mytool \"pi-autonomy\u0085promote\"", "mytool \"pi-autonomy\x1cpromote\"", "mytool --exec=\"pi-autonomy\x1fpromote\""]) expect(cmd, "high", "autonomy_control", "a word split two ways");
+  // A long run of operators stuck to a token is trimmed in linear time (CodeQL js/redos on the regex it replaced):
+  // the word still reads as a control launch, and classifying it stays fast.
+  {
+    const started = Date.now();
+    expect(`mytool --exec="pi-autonomy promote${"&&".repeat(20000)}!"`, "high", "autonomy_control", "a long && chain");
+    expect(`mytool "pi-autonomy status${"&&".repeat(20000)}"`, "medium", null, "a long && chain after a read verb");
+    assert.ok(Date.now() - started < 5000, `a long && chain took ${Date.now() - started} ms`);
+  }
   // The other side: a system program by a path that stays in its directory, PATH made only of system directories
   // and the inherited $PATH, and a sourced file with no operands keep their rating.
   for (const cmd of ["/usr/bin/grep pi-autonomy README.md", "/usr/bin/../bin/grep pi-autonomy README.md", "PATH=/usr/bin:/bin grep pi-autonomy README.md", "PATH=/usr/bin:$PATH grep pi-autonomy README.md",

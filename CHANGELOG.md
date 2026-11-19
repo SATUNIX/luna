@@ -424,6 +424,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Trimming shell operators stuck to a token no longer backtracks (DE-116 follow-up).** CodeQL `js/redos`
+  flagged `/(?:&&|\|\||[;|&])+$/` in the autonomy CLI rule: a token ending in a long `&&` run took exponential
+  time. It is now a plain loop over the trailing characters; a 40,000-character `&&` chain classifies at once and
+  still rates high (`tests/firewall-shell-smoke.ts`).
+
 - **The autonomy CLI rule no longer trusts launches it cannot vouch for (DE-116).** Finding: the narrow
   matcher rated a reading command routine (low) where the ordinary rules give medium for
   `PATH=/tmp/x pi-autonomy status`, `export PATH=/tmp/x; pi-autonomy status`, a shell function named

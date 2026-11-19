@@ -10,6 +10,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`pi-autonomy draft --goal` and `pi-autonomy up` set a run up from a goal (V5-10, PG-43).**
+  Finding: an agent asked to start a containerised run toward a goal had to drive `init` through many
+  flags, and starting one took dozens of turns of help reads, trial inits and sleep polls. Fix:
+  `draft --goal <text>` writes a contract with closed defaults (no egress, services or credentials;
+  local-branch promotion; attended unless asked; a $5 budget, at most $20) and prints the boundary
+  digest; it authorises nothing. `up --config run.json --json` starts only a contract already
+  authorised for that digest, checks the host as `doctor --setup` does, starts the supervisor in the
+  background and prints one JSON line (`runId`, `pid`, `status`), or a `blocker` and starts nothing.
+  Verified by `tests/autonomy-cli-smoke.ts`.
+
 - **An autonomous run writes a post-mortem when it fails (PG-05).** Finding: when a run failed,
   `state.json` kept only a failure code, so the cause had to be pieced together from the host event
   log and `supervisor.log`. Fix: whenever the supervisor records a failure (the run fails, or it stops

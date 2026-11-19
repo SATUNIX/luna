@@ -6,6 +6,8 @@
 //                                               dispatch takes --streams a,b --engineers x,y)
 //   pi-autonomy plan --config run.json [--authorise --by <name>]   validate, show the resolved boundary and its digest
 //   pi-autonomy start --config run.json [--yes] [--detach]        confirm the boundary, then run
+//   pi-autonomy draft --goal <text> [--repo <path>] [--out run.json]   a contract from a goal, closed defaults, not authorised
+//   pi-autonomy up --config run.json --json     start an authorised contract detached; one JSON line {runId, pid, status}
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
 //   pi-autonomy events [--since <ISO|2h>] [--run <id>] [--type <t>] [--limit N]   the host event log, oldest first
 //   pi-autonomy promote --run <id>              carry out an approval-gated promotion
@@ -428,6 +430,24 @@ const NamedSchema = object({ name: string() });
 /** The part of a run's boundary.json (the last live probe) the text of `boundary --run` reads; --json prints the file whole. */
 const ProbeSummarySchema = object({ at: string(), checks: array(object({ ok: boolean() })) });
 
+/** What this host can do for a run (`doctor --setup`, and `up` before it starts anything): engine, image, key. */
+function hostSetup(contract: RunContract | null, deps: CliDeps, over: { engine?: string | undefined; image?: string | undefined } = {}): ReturnType<typeof setupReport> {
+  const engine = over.engine ?? contract?.runtime.engine ?? "podman";
+  if (engine !== "podman" && engine !== "docker") throw new CliError("usage", '--engine must be "podman" or "docker"');
+  let keyPresent: boolean | null = null;
+  if (contract) { try { providerKey(contract, deps.env); keyPresent = true; } catch { keyPresent = false; } }
+  return setupReport({ engine, image: over.image ?? contract?.runtime.image ?? "pi-autonomy:local", kitVersion: kitVersion(), unattendedRequested: contract?.permissions.unattended.authorised ?? false, keyPresent, cli: deps.engineCli });
+}
+
+/**
+ * `draft`'s closed defaults: what a run drafted from a goal may do until the operator changes the
+ * contract and authorises it. No egress, no services or credentials, promotion to a local branch
+ * only, attended unless asked, and a budget no larger than DRAFT_MAX_USD.
+ */
+export const DRAFT_BUDGET = { totalUsd: 5, perStepUsd: 1, maxSteps: 20, maxMinutes: 120 } as const;
+export const DRAFT_MAX_USD = 20;
+export const DRAFT_TEMPLATES: readonly TemplateId[] = ["implement", "self-improve"];
+
 // --- commands -----------------------------------------------------------------------------------------
 const commands: Record<string, Command> = {
   async templates(argv) {
@@ -513,6 +533,41 @@ const commands: Record<string, Command> = {
     return { data: { path: out, run, template, valid: r.ok, problems: r.problems, contract: raw, next: [`pi-autonomy plan --config ${out}`, `pi-autonomy start --config ${out}`] }, text: `wrote ${out}${r.problems.length ? `\n${formatProblems(r.problems)}` : ""}\nnext: pi-autonomy plan --config ${out}   (shows exactly what the run may touch, and its digest)` };
   },
 
+  /**
+   * A run contract from a goal, with the closed defaults (DRAFT_BUDGET). It is `init` with fewer
+   * choices: no egress, service, credential or promotion flags exist here. It prints the boundary's
+   * digest and authorises nothing; the operator reviews it with `plan` and authorises that digest.
+   */
+  async draft(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["goal", "template", "out", "run", "repo", "ref", "budget-usd", "model", "effort"], lists: ["check"], flags: ["json", "force", "unattended"] });
+    const goal = oneVisibleLine(opts.goal ?? "").trim();
+    if (!goal) throw new CliError("usage", "draft needs --goal <text>: what the run should achieve");
+    const template = opts.template ?? "implement";
+    if (!(DRAFT_TEMPLATES as readonly string[]).includes(template)) throw new CliError("usage", `--template must be one of ${DRAFT_TEMPLATES.join(", ")} for a draft`);
+    const budgetUsd = num(opts["budget-usd"], "budget-usd") ?? DRAFT_BUDGET.totalUsd;
+    if (!(budgetUsd > 0) || budgetUsd > DRAFT_MAX_USD) throw new CliError("refused", `a drafted run's budget must be above $0 and at most $${String(DRAFT_MAX_USD)} (asked $${String(budgetUsd)}); raise it in the contract by hand, where the operator sees it`);
+    const title = goal.length > 80 ? `${goal.slice(0, 79)}…` : goal;
+    const initArgv = [
+      "--template", template, "--title", title, "--spec", goal, "--promotion", "local-branch", "--yes", "--json",
+      "--budget-usd", String(budgetUsd), "--step-usd", String(Math.min(DRAFT_BUDGET.perStepUsd, budgetUsd)), "--max-steps", String(DRAFT_BUDGET.maxSteps), "--max-minutes", String(DRAFT_BUDGET.maxMinutes),
+      opts.unattended ? "--unattended" : "--attended",
+      ...(opts.out ? ["--out", opts.out] : []), ...(opts.run ? ["--run", opts.run] : []), ...(opts.repo ? ["--repo", opts.repo] : []), ...(opts.ref ? ["--ref", opts.ref] : []),
+      ...(opts.model ? ["--model", opts.model] : []), ...(opts.effort ? ["--effort", opts.effort] : []), ...(opts.force ? ["--force"] : []),
+      ...(opts.check ?? []).flatMap((c) => ["--check", c]),
+    ];
+    const init = commands["init"];
+    if (!init) throw new CliError("error", "init is missing");
+    const wrote = await init(initArgv, { ...deps, isTTY: false });
+    const file = isRecord(wrote.data) && typeof wrote.data.path === "string" ? wrote.data.path : path.resolve(opts.out ?? "run.json");
+    const cfg = loadConfig(file, deps);
+    const digest = cfg.contract ? renderBoundary(cfg.contract, { effort: effortFor(deps) }).digest : null;
+    const next = [`pi-autonomy plan --config ${file}`, `pi-autonomy plan --config ${file} --authorise --digest ${digest ?? "<digest>"} --by <operator>`, `pi-autonomy up --config ${file} --json`];
+    return {
+      data: { path: file, run: cfg.contract?.run ?? opts.run ?? null, template, goal, valid: cfg.ok, problems: cfg.problems, digest, authorised: false, defaults: { egress: [], promotion: "local-branch", budget: { ...DRAFT_BUDGET, totalUsd: budgetUsd, perStepUsd: Math.min(DRAFT_BUDGET.perStepUsd, budgetUsd) }, unattended: Boolean(opts.unattended) }, next },
+      text: `drafted ${file} (not authorised)${cfg.problems.length ? `\n${formatProblems(cfg.problems)}` : ""}\nboundary digest: ${digest ?? "none (the contract has errors)"}\nno egress; promotion to a local branch; budget $${String(budgetUsd)}${opts.unattended ? "; unattended requested" : ""}\nnext: ${next.join("\n      ")}`,
+    };
+  },
+
   async plan(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["config", "by", "digest"], flags: ["json", "authorise", "authorize", "yes"] });
     const cfg = loadConfig(opts.config, deps);
@@ -589,6 +644,32 @@ const commands: Record<string, Command> = {
     return { data: { run: cfg.contract.run, started: true, detached: false, status: state.status, outcome: state.outcome, root: store.p.root }, text: `run ${state.run}: ${state.status}${state.outcome ? ` (${state.outcome.reason})` : ""}\nresults: pi-autonomy export --run ${state.run}`, exit: exitFor(state.status) };
   },
 
+  /**
+   * One step for an agent: validate, check the host, start detached, report. It never asks and
+   * never authorises: the contract must already carry the operator's authorisation of this exact
+   * boundary (`plan --authorise`), as `start` without a terminal requires. A refusal names its
+   * `blocker` and starts nothing. With --json the answer is one line.
+   */
+  async up(argv, deps) {
+    const { opts } = parseArgs(argv, { values: ["config"], flags: ["json"] });
+    const cfg = loadConfig(opts.config, deps);
+    if (!cfg.ok || !cfg.contract) throw new CliError("invalid", `the contract has errors:\n${formatProblems(cfg.problems)}`, { blocker: "invalid_contract", problems: cfg.problems });
+    if (cfg.legacy) throw new CliError("refused", "a deprecated v0 config cannot be started with up; write a schemaVersion 1 contract (`draft` or `init`)", { blocker: "legacy_config" });
+    const b = renderBoundary(cfg.contract, { effort: effortFor(deps) });
+    const decision = decideStart({ contract: cfg.contract, digest: b.digest, yes: false, isTTY: false });
+    if (decision.action !== "start") throw new CliError("refused", decision.action === "refuse" ? decision.message : "not authorised", { blocker: decision.action === "refuse" ? decision.code : "authorisation_required", digest: b.digest });
+    const setup = hostSetup(cfg.contract, deps);
+    if (!setup.ok) {
+      const failing = setup.findings.filter((f) => f.status === "fail");
+      throw new CliError("refused", `this host cannot start the run: ${failing.map((f) => `${f.id}: ${f.detail}`).join("; ")}`, { blocker: "host_setup", failing: failing.map((f) => f.id) });
+    }
+    let store: RunStore;
+    try { store = createRun({ contract: cfg.contract, authorisation: decision.authorisation, home: deps.home, now: deps.now, boundaryEffort: effortFor(deps) }); } catch (e) { throw new CliError("refused", String(messageOf(e)), { blocker: "run_exists" }); }
+    const pid = deps.spawnSupervisor(cfg.contract.run, store);
+    const status = readState(store).status;
+    return { data: { runId: cfg.contract.run, pid, status, digest: b.digest, root: store.p.root, log: store.p.log }, text: `run ${cfg.contract.run} started (supervisor pid ${String(pid)}, status ${status}); follow it with: pi-autonomy status --run ${cfg.contract.run}` };
+  },
+
   /** Internal: become the supervisor of an existing run (used by --detach and by resume). */
   async supervise(argv, deps) {
     const { opts } = parseArgs(argv, { values: ["run"], flags: ["json"] });
@@ -654,12 +735,7 @@ const commands: Record<string, Command> = {
     if (opts.setup) {
       const cfg = opts.config ? loadConfig(opts.config, deps) : null;
       if (cfg && !cfg.ok) throw new CliError("invalid", formatProblems(cfg.problems), { problems: cfg.problems });
-      const contract = cfg?.ok ? cfg.contract : null;
-      const engine = opts.engine ?? contract?.runtime.engine ?? "podman";
-      if (engine !== "podman" && engine !== "docker") throw new CliError("usage", '--engine must be "podman" or "docker"');
-      let keyPresent: boolean | null = null;
-      if (contract) { try { providerKey(contract, deps.env); keyPresent = true; } catch { keyPresent = false; } }
-      const report = setupReport({ engine, image: opts.image ?? contract?.runtime.image ?? "pi-autonomy:local", kitVersion: kitVersion(), unattendedRequested: contract?.permissions.unattended.authorised ?? false, keyPresent, cli: deps.engineCli });
+      const report = hostSetup(cfg?.ok ? cfg.contract : null, deps, { engine: opts.engine, image: opts.image });
       return { data: { ...report }, text: setupText(report), exit: report.ok ? 0 : 3 };
     }
     const ahead = unpublishedRuns(deps).filter(({ u }) => u.state === "ahead");
@@ -1011,6 +1087,9 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   init --template dispatch --streams <a,b> --engineers <x,y>   a dispatch run: cycles claim the board's items as these engineers
   plan --config run.json [--authorise --by <name> --yes]   validate; show the resolved boundary and its digest
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
+  draft --goal <text> [--template implement|self-improve] [--repo <path>] [--out run.json] [--budget-usd n] [--check id=cmd] [--unattended]
+                                         a contract from a goal: no egress, local-branch promotion, budget at most $20; authorises nothing
+  up --config run.json [--json]          start an authorised contract detached after checking the host; one JSON line with --json
   status [--run <id>]                    one run, or all runs
   top [--run <id>]                       every run, and whether it has merged work not yet published
   events [--since <ISO|2h>] [--run <id>] [--type <type|family>] [--limit n]   the host event log, oldest first
@@ -1039,7 +1118,8 @@ export async function main(argv: readonly string[], overrides: Partial<CliDeps> 
   const deps: CliDeps = { ...defaultDeps(), ...overrides };
   const [cmd, ...rest] = argv;
   const json = rest.includes("--json");
-  const emit = (obj: Record<string, unknown>): void => { deps.stdout.write(`${JSON.stringify(obj, null, 2)}\n`); };
+  // `up` answers in one line, for an agent to read in one go; every other command pretty-prints.
+  const emit = (obj: Record<string, unknown>): void => { deps.stdout.write(`${cmd === "up" ? JSON.stringify(obj) : JSON.stringify(obj, null, 2)}\n`); };
   if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") { deps.stdout.write(`${USAGE}\n`); return cmd ? 0 : 2; }
   const command = Object.hasOwn(commands, cmd) ? commands[cmd] : undefined;
   if (!command) { const msg = `unknown command ${cmd}`; if (json) emit({ ok: false, error: msg, code: "usage" }); else deps.stderr.write(`${msg}\n${USAGE}\n`); return EXIT.usage; }

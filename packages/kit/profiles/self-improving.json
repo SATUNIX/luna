@@ -22,7 +22,7 @@
     "verifier-board", "provider-router",
     "memory-mem0", "dual-review", "dirty-repo-guard", "plan-mode",
     "skill-forge", "self-improvement",
-    "caveman", "pi-lens", "pi-readseek",
+    "caveman", "pi-readseek",
     "orchestrator"
   ]
 }

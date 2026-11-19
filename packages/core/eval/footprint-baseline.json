@@ -1,26 +1,6 @@
 {
   "schemaVersion": 1,
   "companions": {
-    "pi-lens": {
-      "source": "npm:pi-lens@4.4.4",
-      "toolText": 18800,
-      "promptText": 0,
-      "tools": {
-        "ast_grep_outline": 1665,
-        "ast_grep_replace": 1913,
-        "ast_grep_search": 1738,
-        "effective_config": 725,
-        "lens_diagnostic_mark": 1341,
-        "lens_diagnostics": 2241,
-        "lsp_navigation": 2616,
-        "module_report": 1813,
-        "pi_lens_activate_tools": 421,
-        "project_report": 879,
-        "read_enclosing": 1211,
-        "read_symbol": 864,
-        "symbol_search": 1373
-      }
-    },
     "pi-readseek": {
       "source": "npm:pi-readseek@0.4.26",
       "toolText": 6472,

@@ -37,6 +37,20 @@
           }
         }
       }
+    },
+    "retired": {
+      "type": "array",
+      "description": "Companions the kit no longer ships. The installer (and so /update and /profile) unregisters one only when the install marker records that the kit added it; one the user registered is kept.",
+      "items": {
+        "type": "object",
+        "required": ["name", "package", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "package": { "type": "string", "description": "The npm package name; any `npm:<package>@<version>` source of it matches." },
+          "reason": { "type": "string" }
+        }
+      }
     }
   }
 }

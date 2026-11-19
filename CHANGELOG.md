@@ -189,6 +189,23 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **BREAKING: Luna no longer ships the `pi-lens` companion (V5-01).** Finding: pi-lens's 13 tools
+  added about 18,800 characters to every request in `balanced`, `long-horizon`, `self-improving` and
+  `engagement`, nearly three times `balanced`'s own tool text, and its diagnostics duplicate the
+  verify gate. Fix: it leaves `sources.json` `external` and the four profiles, and `sources.json`
+  gains a `retired` list. The next install, `/profile` switch or `/update` that re-applies a profile
+  runs `pi remove` for a retired companion only when the install marker records that Luna added it,
+  and the marker forgets it; one the user registered stays, and the installer prints the command
+  that removes it. The footprint baseline drops its pi-lens record. The autonomy image no longer
+  installs pi-lens's linters and language servers, and its entrypoint passes pi-lens's
+  `--no-autoformat --no-autofix` only when the kit it runs still registers pi-lens (pi refuses an
+  unknown flag). Not covered: an `/update` of a `custom` or `--all` install does not re-run the
+  installer, so it keeps pi-lens until the next install; the firewall entries, the web console's
+  lens panel and the control centre's lens row are separate changes. Verification:
+  `tests/install-marker-smoke.ts` (a kit-added pi-lens is removed and forgotten, a dry run removes
+  nothing, a user-added one is kept), `tests/companion-integrity-smoke.ts`,
+  `tests/profile-safety-smoke.ts`, `tests/distribution-smoke.ts`.
+
 - **The container image runs pi-mcp-adapter 7.0.1, with semantic search and extraction pinned off.**
   Finding: Dependabot's 6.0.0 to 7.0.1 bump (#129) failed the container checks, which pin the
   version in the Dockerfile, `capability/env/defaults.env` and both compose files. 7.0.0 also

@@ -26,7 +26,11 @@ export const ExternalSourceSchema = object({
 });
 export type ExternalSource = Infer<typeof ExternalSourceSchema>;
 
-export const SourcesSchema = object({ external: array(ExternalSourceSchema) });
+/** A companion the kit no longer ships: unregistered where the install marker says the kit added it. */
+export const RetiredSourceSchema = object({ name: string(), package: string(), reason: string() });
+export type RetiredSource = Infer<typeof RetiredSourceSchema>;
+
+export const SourcesSchema = object({ external: array(ExternalSourceSchema), retired: optional(array(RetiredSourceSchema)) });
 export type Sources = Infer<typeof SourcesSchema>;
 
 // Read packages/core/sources.json, or any similarly-shaped file. A missing file, invalid

@@ -43,7 +43,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveProfile, type ResolvedExtension } from "./lib/resolve.ts";
 import { readSources } from "./lib/sources.ts";
-import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot } from "./lib/companions.ts";
+import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piNpmRoot, retiredCompanionPlan } from "./lib/companions.ts";
 import { applyCompanionFilters, mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
@@ -467,6 +467,31 @@ function removeMigratedSource(): void {
   }
 }
 
+// Companions the kit no longer ships (sources.json `retired`). One the previous install marker records was
+// added by the kit, so it is unregistered; one the user registered is kept, with a note. Under --settings-only
+// it runs after the commit, like removeMigratedSource. The marker write below drops a removed source.
+const retiredPlan = retiredCompanionPlan(
+  (readSettings(settingsPath).packages ?? []).map(packageEntrySource),
+  readMarkerFile()?.companions ?? [],
+  readSources(SOURCES_PATH).retired ?? [],
+);
+const retiring = new Set(retiredPlan.filter((p) => p.action === "remove").map((p) => p.source));
+function retireCompanions(): void {
+  for (const { source, companion, action } of retiredPlan) {
+    if (action === "keep") {
+      console.log(`[install] ${companion.name} is no longer part of Luna (${companion.reason}). You registered ${source} yourself, so it stays; \`pi remove ${source}\` removes it.`);
+      continue;
+    }
+    if (dryRun) { console.log(`[install] Dry run: would remove the retired companion ${source} (${companion.reason}).`); continue; }
+    try {
+      runPiCommand(["remove", source, ...scopeArgs]);
+      console.log(`[install] Removed the retired companion ${companion.name} (${companion.reason}).`);
+    } catch {
+      console.warn(`[install] Could not run \`pi remove ${source}\`; run it yourself to finish removing ${companion.name}.`);
+    }
+  }
+}
+
 // pi is run with an argument vector (lib/pi-cli.ts): a source string is data, never shell text.
 // The marker line lets /profile tell a configuration-only rollback from one that left package changes.
 function recordPackageChange(args: string[]): number {
@@ -770,6 +795,7 @@ if (!dryRun) {
   // stays until then, because pi removes a package only while settings.json still lists it.
   if (!settingsOnly) removeMigratedSource();
   removeOtherKitEntries(settingsPath, kitSource, settingsOnly ? sourceMigration?.from ?? null : null);
+  if (!settingsOnly) retireCompanions();
 }
 
 // Companion sources this install is responsible for, recorded in the state marker so
@@ -955,7 +981,7 @@ if (!dryRun) {
   const settingsNow = readSettings(settingsPath);
   const carriedCompanions = (readMarkerFile()?.companions ?? []).flatMap((source) => {
     const entry = settingsNow.packages?.[findPackageEntry(settingsNow, source, settingsPath)];
-    return entry === undefined ? [] : [packageEntrySource(entry)];
+    return entry === undefined || retiring.has(packageEntrySource(entry)) ? [] : [packageEntrySource(entry)];
   });
   const marker: KitMarker = {
     kitSource,
@@ -1004,6 +1030,7 @@ if (settingsOnly && sourceMigration && !dryRun) {
   removeMigratedSource();
   removeOtherKitEntries(settingsPath, kitSource);
 }
+if (settingsOnly) retireCompanions();
 
 // pi compiles every extension on its first start and draws nothing meanwhile, which looks like a
 // hang. Do that once here, where the wait is visible. Only for an interactive install: a scripted

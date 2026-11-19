@@ -6,7 +6,7 @@ A pi setup has three parts that update separately:
 |---|---|---|
 | **pi** | The agent binary, TUI and session model | `@earendil-works/pi-coding-agent` on npm |
 | **Luna** | The package: extensions, skills, prompts, profiles, themes | Its public git repository, `github.com/SATUNIX/luna`, on a channel |
-| **Linked packages** | Other pi packages in your settings, including Luna's companions (`pi-lens`, `pi-readseek`, ...) | npm |
+| **Linked packages** | Other pi packages in your settings, including Luna's companions (`pi-readseek`, ...) | npm |
 
 A **profile** is not a part: it is a setting that chooses what loads from Luna (see
 [Profiles](profiles.md)). Updates keep your profile and your hand edits.

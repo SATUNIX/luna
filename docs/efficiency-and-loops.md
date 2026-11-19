@@ -147,7 +147,7 @@ profile against a fake pi in a temp HOME, fires its `session_start` handler and 
 things: the name, description and parameter schema of every tool it registers; the one-line
 snippets and guideline rules those tools add to pi's system prompt; and what the profile's
 `before_agent_start` handlers add to the system prompt on a first turn (the effort block and the
-caveman style). Companion packages (`pi-readseek`, `pi-lens`) register tools that reach the model
+caveman style). Companion packages (`pi-readseek`) register tools that reach the model
 in every request but cannot be loaded offline, so the baseline records their measured cost
 (`companions`, taken from a real pi with the pinned release and tied to its `source`: a version
 bump fails until it is measured again) and the report adds it. pi's own base prompt is left out. The derived token figure is `ceil(chars / 4)`; `--json`
@@ -170,9 +170,8 @@ error (exit 2) and is left untouched, so remove the file to regenerate it.
 
 `lite` has a hard ceiling on the kit's tool text plus its companions' (`totalCeiling`, 9,000
 characters; `pi-readseek` is most of it), and registers no delegation or workflow tool
-(nothing in the test suite pins either; the meter reports them). `pi-lens` adds 18,800 characters to every other profile, which
-is why their companion-inclusive totals are several times the kit-only figure: that cost is
-reported, not yet reduced.
+(nothing in the test suite pins either; the meter reports them). `balanced` loads no companion;
+`long-horizon`, `self-improving` and `engagement` add `pi-readseek`'s 6,472 characters.
 
 Every shipped profile has a baseline row (tools, snippets and guidelines, system additions), not
 only `balanced` and `lite`. The meter is a development tool: no test pins its figures, the prompt

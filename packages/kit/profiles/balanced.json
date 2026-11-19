@@ -17,7 +17,7 @@
     "context-sieve", "guidelines", "spec-plan", "verify-gate",
     "autonomous-loop", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "remote-control",
     "handoff", "trace-ledger", "tool-capture", "progress-guard",
-    "caveman", "pi-lens",
+    "caveman",
     "subagent", "orchestrator", "goal-core"
   ]
 }

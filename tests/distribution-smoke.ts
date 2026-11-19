@@ -150,7 +150,7 @@ const tests = {
     const dir = scratch("pi-kit-dist-settings-");
     try {
       const settingsPath = path.join(dir, "settings.json");
-      writeJson(settingsPath, { packages: [`${GIT}@v0.2.1-beta.0`, "git:github.com/example/other-tool", "npm:pi-lens@3.8.63"] });
+      writeJson(settingsPath, { packages: [`${GIT}@v0.2.1-beta.0`, "git:github.com/example/other-tool", "npm:pi-readseek@0.4.26"] });
       const settings = parseJsonAs(SettingsSchema, fs.readFileSync(settingsPath, "utf8"), settingsPath);
       assert.equal(findPackageEntry(settings, GIT, settingsPath), 0, "next and a release tag are the same package");
       assert.equal(findPackageEntry(settings, "git:git@github.com:SATUNIX/luna@v9.0.0", settingsPath), 0, "ssh and https forms are the same package");
@@ -271,8 +271,8 @@ const tests = {
     // pi stub: logs each call; fails a companion install when FAIL_COMPANION is set; like pi, a
     // `remove` exits 1 ("No matching package found") when settings.json no longer lists the source.
     const settingsFile = path.join(agent, "settings.json");
-    fs.writeFileSync(path.join(bin, "pi"), `#!/bin/sh\necho "$*" >> "${log}"\ncase "$*" in *pi-lens*) [ -n "$FAIL_COMPANION" ] && exit 1;; remove*) grep -qF "\\"$2\\"" "${settingsFile}" || exit 1;; esac\nexit 0\n`, { mode: 0o755 });
-    const run = (args: string[], env: Record<string, string> = {}) => spawnSync(process.execPath, [installer, "--profile", "balanced", "--yes", "--mode", "git", "--settings-only", ...args], {
+    fs.writeFileSync(path.join(bin, "pi"), `#!/bin/sh\necho "$*" >> "${log}"\ncase "$*" in *pi-readseek*) [ -n "$FAIL_COMPANION" ] && exit 1;; remove*) grep -qF "\\"$2\\"" "${settingsFile}" || exit 1;; esac\nexit 0\n`, { mode: 0o755 });
+    const run = (args: string[], env: Record<string, string> = {}) => spawnSync(process.execPath, [installer, "--profile", "long-horizon", "--yes", "--mode", "git", "--settings-only", ...args], {
       encoding: "utf8",
       env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_KIT_DELIVERY: "", PI_SYSTEM_GIT_SOURCE: "", PI_LEAN_CTX_BIN: path.join(bin, "none"), PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, ...env },
     });
@@ -286,7 +286,7 @@ const tests = {
       assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
       assert.ok(!calls().some((c) => c.startsWith("remove")), `the retired copy is not removed by a run that rolls back: ${calls().join(" | ")}`);
       assert.equal(fs.readFileSync(path.join(agent, "settings.json"), "utf8"), settings, "settings.json is restored, and the copy it names still exists");
-      assert.match(failed.stderr, /NOT the package operations pi already ran: pi install npm:pi-lens@\S+ \(failed part-way\)\./);
+      assert.match(failed.stderr, /NOT the package operations pi already ran: pi install npm:pi-readseek@\S+ \(failed part-way\)\./);
       // /profile passes --no-migrate: its rollback restores files only, so the move is refused before any change.
       fs.rmSync(log, { force: true });
       const refused = run(["--no-externals", "--no-migrate"]);

@@ -10,7 +10,6 @@ import type { AgentSource } from "./agents.ts";
 import type { AgentInput, deleteAgent } from "./agentstore.ts";
 import type { AutonomyEvent, AutonomyResponse, AutonomyRun, AutonomyStatus } from "./autonomy.ts";
 import type { ConfigInfo, KitEntry } from "./configinfo.ts";
-import type { SessionLens } from "./lens.ts";
 import type { ModelList, ProviderInfo } from "./models.ts";
 import type {
 	AbortResponse,
@@ -20,7 +19,6 @@ import type {
 	CwdsResponse,
 	ForkResponse,
 	HealthResponse,
-	LensResponse,
 	ModelResponse,
 	PromptResponse,
 	PromptsResponse,
@@ -74,8 +72,6 @@ export type Checks = [
 	Assert<Fits<SessionStats, Wire.SessionStats>>,
 	Assert<Fits<StatsResponse, Wire.StatsResponse>>,
 	Assert<Fits<TodoList, Wire.TodosResponse>>,
-	Assert<Fits<SessionLens, Wire.SessionLens>>,
-	Assert<Fits<LensResponse, Wire.LensResponse>>,
 	Assert<Fits<PromptResponse, Wire.PromptResponse>>,
 	Assert<Fits<AbortResponse, Wire.AbortResponse>>,
 	Assert<Fits<StopResponse, Wire.StopResponse>>,

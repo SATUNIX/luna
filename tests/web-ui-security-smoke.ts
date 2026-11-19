@@ -77,7 +77,6 @@ try {
     ["DELETE", `/api/sessions/${FIXTURE_ID}`],
     ["GET", `/api/sessions/${FIXTURE_ID}/stats`],
     ["GET", `/api/sessions/${FIXTURE_ID}/todos`],
-    ["GET", `/api/sessions/${FIXTURE_ID}/lens`],
     ["GET", `/api/sessions/${FIXTURE_ID}/events`],
     ["POST", `/api/sessions/${FIXTURE_ID}/prompt`],
     ["POST", `/api/sessions/${FIXTURE_ID}/abort`],
@@ -145,7 +144,7 @@ try {
     assert.equal(sessions.status, 200);
     assert.ok((sessions.json() as SessionsBody).sessions.some((s) => s.id === FIXTURE_ID), "fixture session listed");
     for (const route of ["/api/prompts", "/api/skills", "/api/models", "/api/cwds", "/api/agents", "/api/auth", "/api/autonomy",
-      `/api/sessions/${FIXTURE_ID}`, `/api/sessions/${FIXTURE_ID}/stats`, `/api/sessions/${FIXTURE_ID}/todos`, `/api/sessions/${FIXTURE_ID}/lens`]) {
+      `/api/sessions/${FIXTURE_ID}`, `/api/sessions/${FIXTURE_ID}/stats`, `/api/sessions/${FIXTURE_ID}/todos`]) {
       const res = await auth(route);
       assert.equal(res.status, 200, `${route} -> ${res.status} ${res.text.slice(0, 120)}`);
     }
@@ -420,13 +419,13 @@ try {
 
   await check("session ids are validated: path-like ids are 400 and never reach the filesystem", async () => {
     for (const id of ["..%2f..%2fetc%2fpasswd", "%2e%2e", "..", ".hidden", "a%2fb", "a%5cb", "a%00b", "a%20b", "x".repeat(201), "%E9", "%zz"]) {
-      for (const suffix of ["", "/lens", "/stats", "/todos", "/events"]) {
+      for (const suffix of ["", "/stats", "/todos", "/events"]) {
         const res = await auth(`/api/sessions/${id}${suffix}`);
         assert.ok([400, 404].includes(res.status), `/api/sessions/${id}${suffix} -> ${res.status}`);
         assert.notEqual(res.status, 200);
       }
     }
-    const res = await auth("/api/sessions/..%2f..%2fetc%2fpasswd/lens");
+    const res = await auth("/api/sessions/..%2f..%2fetc%2fpasswd/stats");
     assert.equal(res.status, 400);
   });
 

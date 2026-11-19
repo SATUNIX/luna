@@ -7,7 +7,7 @@ import { SessionStream } from "./sse.js";
 import { ActivityWheel, formatElapsed, toolLabel, } from "./activity.js";
 import { AgentEditor } from "./agentui.js";
 import { asRecord, byId, errorMessage, toText } from "./guards.js";
-import { renderConfig, renderLens, renderResourceList, renderStats, renderTodos, } from "./panels.js";
+import { renderConfig, renderResourceList, renderStats, renderTodos, } from "./panels.js";
 import { ChatRenderer, el, renderAgents, renderSessions } from "./render.js";
 import { oneAtATime, renderAutonomy, renderAutonomyError } from "./autonomy.js";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -19,7 +19,7 @@ function isView(value) {
     return value === "sessions" || value === "agents" || value === "autonomy" || value === "config";
 }
 function isInspectorPanel(value) {
-    return value === "stats" || value === "todos" || value === "lens";
+    return value === "stats" || value === "todos";
 }
 const state = {
     view: "sessions",
@@ -329,16 +329,11 @@ function setPanel(panel) {
     }
     dom.panelStats.classList.toggle("hidden", panel !== "stats");
     dom.panelTodos.classList.toggle("hidden", panel !== "todos");
-    dom.panelLens.classList.toggle("hidden", panel !== "lens");
 }
 async function refreshInspector() {
     if (!state.activeId) {
         dom.statsBody.replaceChildren(el("p", { class: "muted", text: "Open a session to see statistics." }));
         dom.todosList.replaceChildren(el("li", { class: "muted", text: "Open a session to see its todos." }));
-        dom.lensBody.replaceChildren(el("p", {
-            class: "muted",
-            text: "Open a session to see pi-lens diagnostics.",
-        }));
         return;
     }
     const id = state.activeId;
@@ -360,14 +355,6 @@ async function refreshInspector() {
         }
         catch (err) {
             dom.todosList.replaceChildren(el("li", { class: "muted", text: errorMessage(err) }));
-        }
-    }
-    else {
-        try {
-            renderLens(dom.lensBody, (await api.sessionLens(id)).lens);
-        }
-        catch (err) {
-            dom.lensBody.replaceChildren(el("p", { class: "muted", text: errorMessage(err) }));
         }
     }
 }
@@ -656,8 +643,6 @@ function cacheDom() {
         statsBody: byId("stats-body", HTMLElement),
         panelTodos: byId("panel-todos", HTMLElement),
         todosList: byId("todos-list", HTMLElement),
-        panelLens: byId("panel-lens", HTMLElement),
-        lensBody: byId("lens-body", HTMLElement),
         inspectorClose: byId("inspector-close", HTMLButtonElement),
         footerHealth: byId("footer-health", HTMLElement),
         footerCount: byId("footer-count", HTMLElement),

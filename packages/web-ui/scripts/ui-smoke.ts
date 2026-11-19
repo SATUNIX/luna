@@ -210,8 +210,7 @@ const CONFIG_STUB = {
 		theme: "t",
 		packages: 3,
 	},
-	paths: { kitRoot: "/k", agentDirs: ["/u", "/p"], lensDir: "/l" },
-	lens: { present: true, sessionCount: 2, turn: { cycles: 1, files: 4 } },
+	paths: { kitRoot: "/k", agentDirs: ["/u", "/p"] },
 	models: [{ name: "ollama", models: [{ id: "m" }] }],
 };
 
@@ -459,7 +458,6 @@ interface ApiModule {
 interface PanelsModule {
 	renderStats: (target: Node, stats: unknown, summary: unknown) => void;
 	renderTodos: (target: Node, data: unknown) => void;
-	renderLens: (target: Node, lens: unknown) => void;
 	renderConfig: (target: Node, config: unknown) => void;
 }
 
@@ -476,7 +474,6 @@ const API = { api: "object", setUnauthorizedHandler: "function" } as const;
 const PANELS = {
 	renderStats: "function",
 	renderTodos: "function",
-	renderLens: "function",
 	renderConfig: "function",
 } as const;
 
@@ -1010,7 +1007,7 @@ try {
 
 // Re-render panels against live-ish shapes to prove the render paths do not throw.
 try {
-	const { renderStats, renderTodos, renderLens, renderConfig } = await loadModule<PanelsModule>(
+	const { renderStats, renderTodos, renderConfig } = await loadModule<PanelsModule>(
 		"panels.js",
 		PANELS,
 	);
@@ -1083,15 +1080,6 @@ try {
 	});
 	ok("renderTodos");
 
-	renderLens(target, {
-		available: true,
-		savedAt: new Date().toISOString(),
-		files: [{ filePath: "/a/b/c.ts", errors: 1, warnings: 2, blocking: 0 }],
-		totals: { blocking: 0, errors: 1, warnings: 2 },
-		cache: { qualityWarnings: 3, findings: 1 },
-	});
-	ok("renderLens");
-
 	renderConfig(target, {
 		app: {
 			version: "0.1.0",
@@ -1114,8 +1102,7 @@ try {
 			theme: "t",
 			packages: 3,
 		},
-		paths: { kitRoot: "/k", agentDirs: ["/u", "/p"], lensDir: "/l" },
-		lens: { present: true, sessionCount: 2, turn: { cycles: 1, files: 4 } },
+		paths: { kitRoot: "/k", agentDirs: ["/u", "/p"] },
 		models: [{ name: "ollama", models: [1] }],
 	});
 	ok("renderConfig");

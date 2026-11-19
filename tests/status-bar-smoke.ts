@@ -538,6 +538,47 @@ const tests = {
       rmWorkspace(ws);
     }
   },
+
+  hidesControlCharactersInRepositoryText() {
+    // UX-SEC-1: the todo text and the branch are repository-controlled, so an escape sequence must
+    // not reach the terminal. The visible text survives the filter.
+    const ws = tmpWorkspace("pi-kit-footer-ctrl-");
+    const osc = "\x1b]52;c;eA==\x07";
+    const hostile = `visible ${osc}text\u009b2J\u202eend`;
+    fs.writeFileSync(path.join(ws, "TODO.md"), `# TODO\n\n- [ ] #1: ${hostile}\n`);
+    fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(ws, ".git", "HEAD"), `ref: refs/heads/br${osc}\u009b2J\u202eanch\n`);
+    const colour: Theme = { fg: (c, s) => `\x1b[3${c.length % 8}m${s}\x1b[0m`, bold: (s) => `\x1b[1m${s}\x1b[0m` };
+    // SGR colour (CSI ... m) is the only control sequence allowed through: the theme adds it.
+    const ESC = String.fromCharCode(27);
+    const withoutSgr = (s: string): string => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+    try {
+      const todos = footer.readTodoItems(ws);
+      assert.equal(todos.length, 1, "the legacy TODO.md is read");
+      const branch = dataMod.readBranch(ws);
+      assert.ok(branch, "the hostile branch is read from .git/HEAD");
+      const state: FooterState = {
+        cwd: ws, branch, sessionName: `s${osc}\u202eession`, model: "test-model",
+        totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }, partial: false, cost: { kind: "unknown" },
+        statuses: [], todos, now: 0, running: true,
+      };
+      const outputs: Array<[string, string]> = [
+        ["todo widget", footer.renderTodoWidget(todos, colour).join("\n")],
+        ["footer", footer.renderFooter(state, colour, 200, "default").join("\n")],
+      ];
+      for (const [label, out] of outputs) {
+        const plainText = withoutSgr(out);
+        for (const line of plainText.split("\n")) assert.ok(!/[\p{Cc}\p{Cf}]/u.test(line), `${label}: no control or format code point survives: ${JSON.stringify(line)}`);
+      }
+      const widget = withoutSgr(outputs[0]?.[1] ?? "");
+      assert.match(widget, /visible/, "the visible text before the escape survives");
+      assert.match(widget, /end/, "the visible text after the escape survives");
+      const bar = withoutSgr(outputs[1]?.[1] ?? "");
+      assert.match(bar, /anch/, "the visible branch text survives");
+    } finally {
+      rmWorkspace(ws);
+    }
+  },
 };
 
 let failed = 0;

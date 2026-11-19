@@ -1324,6 +1324,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   GHSA-h7mg-cq63-vhpq, GHSA-4m76-xfj5-7975; fixed in 4.13.16), both transitive. Both lockfiles now
   resolve `@hono/node-server` 2.1.8 and `hono` 4.13.18 within the existing ranges; no direct dependency
   changed. The `osv-scanner` CI job pins this.
+- **The status bar and the todo checklist no longer print repository-controlled text as written.**
+  A `TODO.md` item and a branch from `.git/HEAD` reached the terminal verbatim, so an OSC 52
+  sequence, `ESC[2J`, a C1 CSI or a bidi override in either was executed by the terminal. The todo
+  item text, branch, project/cwd text and session name now pass through the kit's `oneVisibleLine`
+  (`third_party/custom-footer/shared/visible-text.ts`, a `gen-shared` copy of
+  `packages/core/shared/visible-text.ts`) before layout and width fitting, in both the bar and
+  `/footer status`; the theme's own SGR colour sequences are added afterwards and are unchanged.
+  Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
 
 - **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
   the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave

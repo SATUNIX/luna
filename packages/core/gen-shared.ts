@@ -139,6 +139,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/control-center/shared/visible-text.ts",
     "packages/extensions/src/autonomy-run/shared/visible-text.ts",
     "packages/extensions/third_party/subagent/shared/visible-text.ts",
+    "packages/extensions/third_party/custom-footer/shared/visible-text.ts",
   ],
 };
 

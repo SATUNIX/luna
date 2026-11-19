@@ -140,6 +140,15 @@ to $20; more is refused). It takes the `implement` or `self-improve` template, a
 egress, services, credentials or promotion: widening any of them means editing the contract, which
 changes the digest the operator authorises. It never writes an `authorisation` block.
 
+`draft --preset luna-self-improve --repo <luna checkout>` drafts a run that analyses and improves
+Luna itself: the `self-improve` template, a fixed goal (find one real defect, gap or inefficiency
+per cycle, fix it with a test, keep the docs current), and Luna's reference gate
+(`/opt/autonomy/gate.sh`, 60 minutes) as the acceptance check. `--goal` adds a focus to that goal.
+Every closed default above still applies, and the preset sets no permission: cycles that touch R3
+paths (the charter, CI, gate policy, the firewall, the autonomy boundary, release files; see the
+`self-improve` template's risk tiers) are still refused and proposed instead, because the preset
+never sets `allowControlChanges`.
+
 `up` never asks and never authorises. It starts only a contract that already carries an
 authorisation for its current digest, then checks the host as `doctor --setup` does (engine, image,
 inference key), creates the run and starts its supervisor in the background. With `--json` it prints
@@ -369,6 +378,31 @@ pins the `gate-wait` phase, the active minutes charged before the wait, the froz
 waiting, the return to `acceptance`, three supervisors never overlapping more than two gates, and a
 throwing gate restoring the previous phase, and a signal or a pause during `gate-wait` parking the run
 without running the gate.
+
+**One host, many runs: worker slots.** The same idea bounds the workers themselves, by count and by
+what they take together. Each bound is off until its variable is set:
+
+| Variable | Bounds | One worker takes |
+|---|---|---|
+| `PI_AUTONOMY_WORKER_SLOTS` | concurrent workers | 1 |
+| `PI_AUTONOMY_WORKER_CPUS` | CPUs | its container's `cpus`, rounded up |
+| `PI_AUTONOMY_WORKER_MEMORY` | memory (`16g`, `16384m`, or a number of GiB) | its container's `memory`, in whole GiB rounded up |
+| `PI_AUTONOMY_WORKER_USD` | per-step spend across running workers | the run's `budget.perStepUsd`, in whole dollars rounded up |
+
+Before a worker session starts (a task step, or a self-improve or dispatch cycle and its restarts),
+the supervisor takes the worker's share of every bound that is set, under
+`$PI_AUTONOMY_HOME/worker-slots`, and releases it when that worker exits, however it exits. It takes
+all of its share in one pass or none of it: while any bound is short it holds nothing, sets phase
+`worker-wait`, heartbeats and does not accrue wall-clock minutes, and control commands end the wait as
+in `gate-wait`. A worker that needs more than a bound allows can never start, so that is an error,
+not a wait. A value that does not parse, or a bound above 1024 units, stops the supervisor with an
+error naming the variable rather than meaning "no limit". The units are lock files the supervisor holds
+open, so a supervisor that dies frees them. The bound is on what the supervisors start, not on what the
+containers use: a worker's container is still limited by its own `cpus` and `memory`.
+`tests/autonomy-lifecycle-smoke.ts` pins the parsing, that the N+1th worker waits, the whole-or-nothing
+take across bounds, the refusal of a worker too large for a bound, that a killed holder frees its units,
+and the engine's `worker-wait` phase and release; `tests/autonomy-selfimprove-smoke.ts` pins that a
+self-improve worker starts inside a slot and releases it.
 
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see

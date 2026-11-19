@@ -2181,5 +2181,27 @@ await check("a note left by the previous cycle does not close the next one: the 
   assert.match(fs.readFileSync(path.join(h.store.p.steps, "01", "note.md"), "utf8"), /first/, "the first cycle's note was kept with its receipt");
 });
 
+await check("worker slots (V5-22): every self-improve worker session starts inside a host-wide worker slot, released when it exits", async () => {
+  const seen = { acquired: 0, released: 0, cancelled: false, phases: [] as Array<string | null> };
+  const h: Harness = harness(improveRaw(sourceRepo(), { run: "improve-wslots", budget: { totalUsd: 50, perStepUsd: 5, maxSteps: 1, maxMinutes: 5000 } }), {
+    // Once a worker has started inside a slot, end the run: the cancel stops the worker, which must release its slot.
+    hooks: { onSleep: () => { if (seen.acquired >= 1 && !seen.cancelled) { seen.cancelled = true; h.store.enqueue("cancel", { reason: "test done" }); } } },
+    script: async (t) => { t.write("AUDIT_OK", "1"); report(t, "successful"); t.commit("c"); },
+  });
+  const made = h.engine({
+    workerBounds: { slots: 1, cpus: 0, memoryGiB: 0, usd: 10 },
+    workerSlotAcquire: async (o) => {
+      seen.acquired += 1;
+      seen.phases.push(made.engine.state.phase);
+      assert.deepEqual(o.pools, [{ name: "worker", limit: 1, want: 1 }, { name: "usd", limit: 10, want: 5 }], "one worker and the run's $5 per-step budget");
+      return { units: { worker: 1 }, release: () => { seen.released += 1; } };
+    },
+  });
+  await made.engine.run({});
+  assert.ok(seen.acquired >= 1, "the cycle's worker went through the slot");
+  assert.ok(seen.phases.every((p) => p === "worker-wait"));
+  assert.equal(seen.released, seen.acquired, "every slot was released when its worker exited");
+});
+
 cleanup();
 done();

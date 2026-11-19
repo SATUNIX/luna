@@ -10,6 +10,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **User profiles: review findings closed (DE-119, AUTHORITY).**
+  - `install.ts --profile` and `loadProfileDef` take a name only, so `--profile ../../x` no longer
+    loads any JSON file as a shipped profile.
+  - `luna exec` refuses a ceiling when the installed kit entry does not load goal-core. Before, a blank
+    profile or a removed goal-core silently voided `--max-turns`, `--max-cost` and `--timeout`.
+  - User profiles are read with O_NOFOLLOW: no linked directory, owner and mode checks, one link, a
+    64 KiB cap.
+  - Add, remove and exclude lists take plain names only.
+  - A stub or experimental add is refused at switch time.
+
+  Verification: `tests/user-profiles-smoke.ts`, `tests/luna-cli-smoke.ts`; 14 guards proven by revert.
+
 - **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:
   the only way to change what a profile loads was overrides.json, which applies to every profile.
   There was no way to keep a named profile of your own. Fix: `<agent dir>/pi-kit/profiles/<name>.json`

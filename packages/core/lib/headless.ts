@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord, parseJson } from "./guard.ts";
-import { globalAgentDir } from "./settings.ts";
+import { findPackageEntry, globalAgentDir, readKitMarker, readSettings } from "./settings.ts";
 import { readOverrides } from "./profiles.ts";
 import { parseDuration } from "../shared/ceiling.ts";
 import { piSpawnPlan, type PiSpawnDeps } from "./pi-cli.ts";
@@ -155,6 +155,8 @@ export interface RunOptions {
   spawnDeps?: PiSpawnDeps;
   /** Injected for tests; defaults to `spawn`. */
   spawn?: typeof spawn;
+  /** The directory whose project install (.pi/.pi-kit.json) counts; defaults to process.cwd(). */
+  cwd?: string;
 }
 
 async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
@@ -162,6 +164,30 @@ async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
   stream.setEncoding("utf8");
   for await (const chunk of stream) text += String(chunk);
   return text;
+}
+
+/**
+ * Whether the Luna install in force loads goal-core, the extension that enforces the ceiling, or why
+ * that cannot be shown. The install is the project's when `<cwd>/.pi/.pi-kit.json` exists, else the
+ * global one; its kit entry in settings.json is what pi loads, so a profile, an override, a user
+ * profile or a hand edit that drops goal-core all count. A kit entry with no extension filter loads
+ * everything. tests/luna-cli-smoke.ts pins it.
+ */
+export function goalCoreProblem(cwd: string, agentDir: string): string | null {
+  const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
+  const project = fs.existsSync(projectMarker);
+  const markerFile = project ? projectMarker : path.join(agentDir, ".pi-kit.json");
+  const settingsFile = project ? path.join(cwd, ".pi", "settings.json") : path.join(agentDir, "settings.json");
+  const marker = readKitMarker(markerFile);
+  if (!marker?.kitSource) return `no Luna install was found (${markerFile}), so nothing would enforce it`;
+  let settings: ReturnType<typeof readSettings>;
+  try { settings = readSettings(settingsFile); } catch { return `${settingsFile} cannot be read, so it cannot be shown that goal-core, which enforces it, is loaded`; }
+  const at = findPackageEntry(settings, marker.kitSource, settingsFile);
+  const entry = at >= 0 ? settings.packages?.[at] : undefined;
+  if (entry === undefined) return `${settingsFile} has no Luna package entry, so goal-core, which enforces it, is not loaded`;
+  if (typeof entry === "string" || entry.extensions === undefined) return null;
+  const loaded = entry.extensions.some((p) => !p.startsWith("!") && !p.startsWith("-") && /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p));
+  return loaded ? null : `the installed profile does not load goal-core, which enforces it (${settingsFile}); switch to a profile that loads it or drop the limits`;
 }
 
 /** Run `luna exec`. Resolves to the process exit code. */
@@ -177,6 +203,11 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
   const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"));
   if (ceilingRequested && readOverrides(path.join(globalAgentDir(), "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) {
     err.write("luna exec: a ceiling was requested but overrides.json switches off goal-core, which enforces it; remove it from extensions.remove or drop the limits\n");
+    return 2;
+  }
+  const unenforced = ceilingRequested ? goalCoreProblem(options.cwd ?? process.cwd(), globalAgentDir()) : null;
+  if (unenforced) {
+    err.write(`luna exec: a ceiling was requested but ${unenforced}\n`);
     return 2;
   }
   const args = [...plan.piArgs];

@@ -48,6 +48,7 @@ import { applyCompanionFilters, mergePackageBlock, ensureQuietStartup, removeOth
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
 import { userProfileCoverageProblems } from "./lib/protection-coverage.ts";
+import { isProfileName } from "./shared/user-profile.ts";
 import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadAnyProfile, listAllProfiles, userProfilesDir, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
@@ -528,6 +529,7 @@ function resolveCommand(name: string): string | null {
 // A shipped profile, else the operator's own user profile (<agent dir>/pi-kit/profiles/<name>.json),
 // refused whole when it drops a mandatory protection (lib/profiles.ts loadAnyProfile).
 function loadProfile(name: string): Profile {
+  if (!isProfileName(name)) throw new Error(`[install] Profile not found: ${JSON.stringify(name)} is not a profile name (lower-case letters, digits and -)`);
   const shipped = path.join(PROFILES_DIR, `${name}.json`);
   const user = path.join(userProfilesDir(), `${name}.json`);
   if (!fs.existsSync(shipped) && !fs.existsSync(user)) throw new Error(`[install] ${renamedProfileMessage(name) ?? `Profile not found: ${shipped}`}`);

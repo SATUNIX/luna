@@ -25,7 +25,8 @@ import { array, object, optional, parseJsonAs, string, union, unknownValue } fro
 import { readRequiredProfileExtensions } from "../packages/core/lib/distribution.ts";
 import { listAllProfiles, listProfiles, loadAnyProfile, MANDATORY_PROTECTION_EXTENSIONS } from "../packages/core/lib/profiles.ts";
 import { userProfileCoverageProblems } from "../packages/core/lib/protection-coverage.ts";
-import { BLANK_INCLUDE, createUserProfile, MANDATORY_PROTECTIONS, parseUserProfile, resolveUserProfile, type UserProfile } from "../packages/core/shared/user-profile.ts";
+import { goalCoreProblem } from "../packages/core/lib/headless.ts";
+import { BLANK_INCLUDE, createUserProfile, loadUserProfile, MANDATORY_PROTECTIONS, parseUserProfile, resolveUserProfile, type UserProfile } from "../packages/core/shared/user-profile.ts";
 import { listProfiles as commandProfiles, profileDefinition } from "../packages/extensions/src/session-helpers/index.ts";
 import type * as SessionHelpers from "../packages/extensions/src/session-helpers/index.ts";
 
@@ -68,6 +69,10 @@ try {
   assert.match(problemsOf({ name: "mine", extends: "balanced", extensions: { add: ["todo", 3] } }).join("\n"), /extensions\.add must be a list of names/);
   assert.match(problemsOf({ name: "mine", extends: "balanced", skills: { exclude: [" "] } }).join("\n"), /skills\.exclude must be a list of names/);
   assert.match(problemsOf([]).join("\n"), /must be a JSON object/);
+  for (const bad of ["../third_party/x", "src/goal-core", "..", "Tool-Firewall"]) {
+    assert.match(problemsOf({ name: "mine", extends: "balanced", extensions: { add: [bad] } }).join("\n"), /extensions\.add names .*never a path/, `an added name is a name, not a path: ${bad}`);
+  }
+  assert.match(problemsOf({ name: "mine", extends: "balanced", skills: { exclude: ["../x"] } }).join("\n"), /skills\.exclude names/);
   console.log("  OK: parsing refuses unknown keys, a gate field, a wrong or shipped name, an unknown base and protection removals");
 
   // --- resolution ----------------------------------------------------------------------------------
@@ -124,7 +129,7 @@ try {
     const dir = tmp("pi-kit-uprof-");
     const agent = path.join(dir, "agent");
     const bin = path.join(dir, "bin");
-    fs.mkdirSync(path.join(agent, "pi-kit"), { recursive: true });
+    fs.mkdirSync(path.join(agent, "pi-kit"), { recursive: true, mode: 0o700 });
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, "pi"), '#!/bin/sh\ncase "$*" in *pi-readseek*) [ -n "$FAIL_READSEEK" ] && exit 1;; esac\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(path.join(agent, "settings.json"), JSON.stringify({ packages: [ROOT] }, null, 2));
@@ -146,7 +151,7 @@ try {
   };
   const write = (w: World, name: string, value: object): void => {
     fs.mkdirSync(w.profiles, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(w.profiles, `${name}.json`), JSON.stringify(value));
+    fs.writeFileSync(path.join(w.profiles, `${name}.json`), JSON.stringify(value), { mode: 0o600 });
   };
 
   {
@@ -170,6 +175,10 @@ try {
         const baseFw = base === "blank" ? {} : (loadAnyProfile(base, userProfileCoverageProblems, REQUIRED, PROFILES, w.profiles).firewall ?? {});
         assert.equal(fw.policy, baseFw.policy ?? "coding", `${name} keeps its base's firewall policy`);
       }
+      // The last switch was to my-blank, which has no goal-core: `luna exec` refuses its limits.
+      assert.match(goalCoreProblem(w.dir, w.agent) ?? "", /does not load goal-core/, "a blank profile does not silently void luna exec's limits");
+      assert.equal(install(w, "my-balanced", ["--no-externals"]).status, 0);
+      assert.equal(goalCoreProblem(w.dir, w.agent), null, "a profile that loads goal-core enforces them");
       assert.deepEqual(listAllProfiles(PROFILES, w.profiles), [...BASES, ...[...BASES, "blank"].map((b) => `my-${b}`).sort()], "shipped profiles first, then the operator's");
       console.log(`  OK: a profile created from each of ${BASES.join(", ")} and blank switches through the real installer`);
 
@@ -182,21 +191,79 @@ try {
       assert.deepEqual(digest(w), before, "and every file is as it was");
       console.log("  OK: a failed switch to a user profile rolls back byte for byte");
 
-      // A profile that removes the firewall is refused before anything is written.
+      // A profile that removes any mandatory protection is refused before anything is written.
+      for (const protection of MANDATORY_PROTECTIONS) {
+        write(w, "no-guard", { name: "no-guard", extends: "balanced", extensions: { remove: [protection] } });
+        const refusedGuard = install(w, "no-guard", ["--no-externals"]);
+        assert.equal(refusedGuard.status, 1, refusedGuard.stderr);
+        assert.match(refusedGuard.stderr, new RegExp(`FAIL: user profile "no-guard" is refused: .*mandatory protection "${protection}"`), `the installer refuses removing ${protection}`);
+        assert.deepEqual(digest(w), before, "nothing was changed");
+      }
+      fs.rmSync(path.join(w.profiles, "no-guard.json"));
       write(w, "no-fw", { name: "no-fw", extends: "balanced", extensions: { remove: ["tool-firewall"] } });
-      const refused = install(w, "no-fw", ["--no-externals"]);
-      assert.equal(refused.status, 1, refused.stderr);
-      assert.match(refused.stderr, /FAIL: user profile "no-fw" is refused: .*mandatory protection "tool-firewall"/);
+
+      // --profile is a name, never a path: a JSON file elsewhere is not loaded as a shipped profile.
+      const elsewhere = path.join(w.dir, "evil.json");
+      fs.writeFileSync(elsewhere, JSON.stringify({ name: "evil", include: ["todo"] }));
+      const traversal = install(w, path.relative(PROFILES, elsewhere).replace(/\.json$/, ""), ["--no-externals"]);
+      assert.equal(traversal.status, 2, traversal.stderr);
+      assert.match(traversal.stderr, /is not a profile name/);
       assert.deepEqual(digest(w), before, "nothing was changed");
+      assert.throws(() => loadAnyProfile("../x", userProfileCoverageProblems, REQUIRED, PROFILES, w.profiles), /is not a profile name/);
+
+      // An experimental extension needs an experimental base, at switch time too.
+      write(w, "trial", { name: "trial", extends: "balanced", extensions: { add: ["mcp-router"] } });
+      const trial = install(w, "trial", ["--no-externals"]);
+      assert.equal(trial.status, 1, trial.stderr);
+      assert.match(trial.stderr, /FAIL: user profile "trial" is refused: extensions\.add names the stub extension "mcp-router"/);
+      assert.deepEqual(digest(w), before, "nothing was changed");
+      fs.rmSync(path.join(w.profiles, "trial.json"));
       const check = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "profile-check.ts"), "--user", path.join(w.profiles, "no-fw.json")], { encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: w.agent } });
       assert.equal(check.status, 1, check.stdout);
       assert.match(check.stderr, /mandatory protection "tool-firewall"/, "profile-check --user refuses it too");
       const good = spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "profile-check.ts"), "--user", path.join(w.profiles, "my-lite.json")], { encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: w.agent } });
       assert.equal(good.status, 0, `${good.stdout}\n${good.stderr}`);
       assert.match(good.stdout, /user profile: .*my-lite\.json[\s\S]*load: (\d+)\/\1 in-repo extensions registered cleanly[\s\S]*\[profile-check\] OK/, "a valid user profile passes profile-check, lite's exemption included");
-      // Defence in depth: a base edited to drop a protection is caught by coverage, not only by `remove`.
-      assert.throws(() => loadAnyProfile("my-balanced", () => ["mandatory protection 'secret-guard' is missing"], REQUIRED, PROFILES, w.profiles), /user profile "my-balanced" is refused: mandatory protection 'secret-guard'/);
-      console.log("  OK: a profile that removes the firewall is refused by the installer and by profile-check");
+      // Defence in depth, through the real coverage check: a base without a protection and without a
+      // recorded exemption is refused, not only a `remove` of one.
+      const shipped = path.join(w.dir, "shipped");
+      fs.mkdirSync(shipped);
+      const balancedDef = readBase("balanced");
+      assert.ok(balancedDef !== null && typeof balancedDef === "object" && "include" in balancedDef && Array.isArray(balancedDef.include));
+      fs.writeFileSync(path.join(shipped, "plain.json"), JSON.stringify({ ...balancedDef, name: "plain", include: balancedDef.include.filter((n) => n !== "secret-guard") }));
+      write(w, "on-plain", { name: "on-plain", extends: "plain" });
+      assert.throws(() => loadAnyProfile("on-plain", userProfileCoverageProblems, REQUIRED, shipped, w.profiles), /user profile "on-plain" is refused: mandatory protection 'secret-guard' is missing/);
+      fs.rmSync(path.join(w.profiles, "on-plain.json"));
+
+      // The reader: no links (file or directory), no file or directory others can write, a size cap.
+      const reads = (name: string) => { const r = profileDefinitionCore(w, name); return r; };
+      fs.symlinkSync(path.join(w.profiles, "my-lite.json"), path.join(w.profiles, "linked.json"));
+      assert.match(reads("linked"), /linked\.json is a symbolic link/);
+      fs.rmSync(path.join(w.profiles, "linked.json"));
+      fs.linkSync(path.join(w.profiles, "my-lite.json"), path.join(w.profiles, "hard.json"));
+      assert.match(reads("hard"), /hard\.json has more than one link/);
+      fs.rmSync(path.join(w.profiles, "hard.json"));
+      write(w, "loose", { name: "loose", extends: "balanced" });
+      fs.chmodSync(path.join(w.profiles, "loose.json"), 0o620);
+      assert.match(reads("loose"), /loose\.json is writable by its group or by everyone/);
+      fs.rmSync(path.join(w.profiles, "loose.json"));
+      fs.writeFileSync(path.join(w.profiles, "huge.json"), JSON.stringify({ name: "huge", extends: "balanced", description: "x".repeat(70 * 1024) }), { mode: 0o600 });
+      assert.match(reads("huge"), /huge\.json is \d+ bytes; the limit is 65536/);
+      fs.rmSync(path.join(w.profiles, "huge.json"));
+      fs.chmodSync(w.profiles, 0o770);
+      assert.match(reads("my-lite"), /profiles is writable by its group or by everyone/);
+      fs.chmodSync(w.profiles, 0o700);
+      const real = path.join(w.dir, "real-profiles");
+      fs.renameSync(w.profiles, real);
+      fs.symlinkSync(real, w.profiles);
+      assert.match(reads("my-lite"), /profiles is a symbolic link; user profiles are not read through one/);
+      const viaLink = install(w, "my-lite", ["--no-externals"]);
+      assert.equal(viaLink.status, 1, "the installer refuses a profile read through a linked directory");
+      assert.deepEqual(digest(w), before);
+      fs.rmSync(w.profiles);
+      fs.renameSync(real, w.profiles);
+      assert.equal(reads("my-lite"), "ok");
+      console.log("  OK: removing any protection, a path as --profile, an experimental add, a base without coverage and unsafe reads are refused");
 
       // The /profile command reads the same files with the same code.
       process.env.PI_CODING_AGENT_DIR = w.agent;
@@ -236,6 +303,13 @@ try {
   }
 } finally {
   restoreEnv();
+}
+
+/** "ok", or the problems loadUserProfile reports for `name` in the world's profiles directory. */
+function profileDefinitionCore(w: { profiles: string }, name: string): string {
+  const r = loadUserProfile(w.profiles, name, BASES, readBase, REQUIRED);
+  if (r === null) return "absent";
+  return r.ok ? "ok" : r.problems.join("\n");
 }
 
 /** A user profile resolved exactly as shared/user-profile.ts does for the installer. */

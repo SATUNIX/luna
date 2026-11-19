@@ -52,6 +52,29 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes"]) assert.ok(recorded().args.includes(flag), `--bare passes ${flag}`);
   assert.deepEqual(recorded().args.slice(-2), ["--model", "x"]);
 
+  // A ceiling needs goal-core loaded by the install in force (lib/headless.ts goalCoreProblem): with no
+  // install, or a kit entry that does not load it (a blank user profile, a remove, a hand edit), the
+  // limits are refused before pi starts; an unfiltered kit entry loads everything.
+  const kit = { source: ROOT, extensions: ["packages/extensions/src/tool-firewall/index.ts", "packages/extensions/src/goal-core/index.ts"] };
+  const install = (entry: unknown, dir = agent) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, ".pi-kit.json"), JSON.stringify({ kitSource: ROOT, profile: "mine", scope: "global", mode: "local" }));
+    fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ packages: [entry] }));
+  };
+  const noInstall = luna(["exec", "--max-turns", "3", "p"]);
+  assert.equal(noInstall.status, 2);
+  assert.match(noInstall.stderr, /a ceiling was requested but no Luna install was found/);
+  install({ ...kit, extensions: ["packages/extensions/src/tool-firewall/index.ts"] });
+  const noGoalCore = luna(["exec", "--max-cost", "1", "p"]);
+  assert.equal(noGoalCore.status, 2, "a profile without goal-core voids no limit silently");
+  assert.match(noGoalCore.stderr, /does not load goal-core, which enforces it/);
+  install({ ...kit, extensions: ["!packages/extensions/src/goal-core/index.ts"] });
+  assert.equal(luna(["exec", "--timeout", "1m", "p"]).status, 2, "an exclusion pattern is not a load");
+  install(ROOT);
+  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 0, "an unfiltered kit entry loads goal-core");
+  assert.equal(luna(["exec", "p"]).status, 0, "no limits, no check");
+  install(kit);
+
   // exec: the final answer is the only thing on stdout; progress is on stderr.
   const run = luna(["exec", "--ephemeral", "--max-turns", "5", "--max-cost", "1.5", "--timeout", "2m", "do it"]);
   assert.equal(run.status, 0);

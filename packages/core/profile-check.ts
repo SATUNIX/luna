@@ -49,7 +49,7 @@ import { loadExtension, fakePi } from "./eval/harness.ts";
 import { requiredProfileExtensions } from "./distribution-contract.ts";
 import { protectionCoverageProblems, userProfileCoverageProblems } from "./lib/protection-coverage.ts";
 import { listProfiles } from "./lib/profiles.ts";
-import { loadUserProfile } from "./shared/user-profile.ts";
+import { isProfileName, loadUserProfile } from "./shared/user-profile.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, extensionRelPath } from "./lib/paths.ts";
 
 type ResolvedExtension = ReturnType<typeof resolveProfile>[number];
@@ -210,6 +210,10 @@ async function checkLoad(resolved: ResolvedExtension[], label: string): Promise<
 
 async function checkProfile(name: string): Promise<void> {
   console.log(`[profile-check] profile: ${name}`);
+  if (!isProfileName(name)) {
+    fail(`${JSON.stringify(name)} is not a profile name`);
+    return;
+  }
   const p = path.join(PROFILES_DIR, `${name}.json`);
   if (!fs.existsSync(p)) {
     fail(`profile ${name} not found`);

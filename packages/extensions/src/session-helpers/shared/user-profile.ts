@@ -56,7 +56,13 @@ export function userProfilesDir(agentDir: string): string {
   return path.join(agentDir, "pi-kit", "profiles");
 }
 
+/** A profile name, shipped or the operator's: never a path (the installer's --profile is checked with it). */
+export const isProfileName = (name: string): boolean => NAME.test(name);
 export const isUserProfileName = (name: string): boolean => NAME.test(name) && name !== BLANK;
+/** An extension, skill or prompt name: a plain name, never a path. */
+const ITEM = /^[a-z0-9][a-z0-9._-]{0,99}$/;
+/** The largest user profile file read. */
+export const USER_PROFILE_MAX_BYTES = 64 * 1024;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -64,6 +70,11 @@ function names(value: unknown, where: string, problems: string[]): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || !value.every((n): n is string => typeof n === "string" && n.trim() !== "")) {
     problems.push(`${where} must be a list of names`);
+    return [];
+  }
+  const bad = value.map((n) => n.trim()).filter((n) => !ITEM.test(n) || n.includes(".."));
+  if (bad.length) {
+    problems.push(`${where} names ${bad.map((n) => JSON.stringify(n)).join(", ")}: use plain names (lower-case letters, digits, . _ -), never a path`);
     return [];
   }
   return [...new Set(value.map((n) => n.trim()))];
@@ -177,16 +188,64 @@ export function loadUserProfile(
 ): { ok: true; profile: UserProfile; def: Record<string, unknown> } | { ok: false; problems: string[] } | null {
   if (!isUserProfileName(name)) return null;
   const file = path.join(dir, `${name}.json`);
-  let st: fs.Stats;
-  try { st = fs.lstatSync(file); } catch { return null; }
-  if (!st.isFile()) return { ok: false, problems: [`${file} is not a regular file`] };
+  const read = readOwnFile(dir, file);
+  if (read === null) return null;
+  if ("problem" in read) return { ok: false, problems: [read.problem] };
   let value: unknown;
-  try { value = JSON.parse(fs.readFileSync(file, "utf8")); } catch (error) {
+  try { value = JSON.parse(read.text); } catch (error) {
     return { ok: false, problems: [`${file} is not valid JSON (${error instanceof Error ? error.message : String(error)})`] };
   }
   const parsed = parseUserProfile(value, name, bases, required);
   if (!parsed.ok) return { ok: false, problems: parsed.problems.map((p) => `${file}: ${p}`) };
   return { ok: true, profile: parsed.profile, def: resolveUserProfile(parsed.profile, parsed.profile.extends === BLANK ? null : readBase(parsed.profile.extends)) };
+}
+
+const uid = (): number | null => (typeof process.getuid === "function" ? process.getuid() : null);
+
+/** Problems with a directory a profile is read from: a link, not a directory, another owner, writable by others. */
+function dirProblem(dir: string): string | null {
+  let st: fs.Stats;
+  try { st = fs.lstatSync(dir); } catch { return null; }
+  if (st.isSymbolicLink()) return `${dir} is a symbolic link; user profiles are not read through one`;
+  if (!st.isDirectory()) return `${dir} is not a directory`;
+  const me = uid();
+  if (me !== null && st.uid !== me) return `${dir} is owned by another user`;
+  if (me !== null && (st.mode & 0o022) !== 0) return `${dir} is writable by its group or by everyone`;
+  return null;
+}
+
+/**
+ * A user profile file's text, read without following links: the profiles directory and its parent
+ * must be real directories you own that neither your group nor others can write, and the file must
+ * be a regular file you own, writable by you alone, with one link and at most USER_PROFILE_MAX_BYTES. Null when absent.
+ */
+function readOwnFile(dir: string, file: string): { text: string } | { problem: string } | null {
+  try { fs.lstatSync(file); } catch { return null; }
+  for (const d of [path.dirname(dir), dir]) {
+    const problem = dirProblem(d);
+    if (problem) return { problem };
+  }
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    const code = isRecord(error) ? error.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    if (code === "ELOOP") return { problem: `${file} is a symbolic link; user profiles are not read through one` };
+    return { problem: `${file} cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) return { problem: `${file} is not a regular file` };
+    if (st.nlink !== 1) return { problem: `${file} has more than one link` };
+    if (st.size > USER_PROFILE_MAX_BYTES) return { problem: `${file} is ${String(st.size)} bytes; the limit is ${String(USER_PROFILE_MAX_BYTES)}` };
+    const me = uid();
+    if (me !== null && st.uid !== me) return { problem: `${file} is owned by another user` };
+    if (me !== null && (st.mode & 0o022) !== 0) return { problem: `${file} is writable by its group or by everyone` };
+    return { text: fs.readFileSync(fd, "utf8") };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** The user profile names in `dir`, sorted (files with a valid name only). */

@@ -145,14 +145,14 @@ Environment overrides:
   collapsible thinking blocks, tool calls with live output, and tool results.
 - **Session controls** — switch model and thinking level mid-session, fork, or reset in place.
 - **Inspector** — per-session stats (tokens in/out/cache, cost, context-window usage), the
-  session's own todo list, and pi-lens diagnostics for the files it touched.
+  session's own todo list.
 - **Thinking wheel** — an animated activity readout that rotates through status phrases
   (`Working`, `Triangulating`, …) and switches to concrete labels (`Reading server.ts`,
   `Running \`ls\``,`Delegating to a subagent`) as the agent works, plus an elapsed timer.
 - **Autonomy view** — read-only: the autonomous runs on this host, their recent host events and
   the reporting status file, polled while the view is shown (`docs/web-console.md`).
-- **Config view** — how this installation is set up: pi home, settings, models, paths, lens
-  status, prompt templates and skills.
+- **Config view** — how this installation is set up: pi home, settings, models, paths,
+  prompt templates and skills.
 - **Panel toggles** — three triangle buttons (top right) show/hide the sessions panel, the
   inspector, and the input bar, with smooth animated transitions (state is remembered).
 - **Abort / Stop** — abort the current run, or stop (kill) the session's child process.
@@ -179,7 +179,6 @@ Browser (public/)  ──HTTP──▶  server/server.ts  ──JSONL stdin/stdo
 | `server/tailer.ts` | follow a session file written by another process (live CLI sync) |
 | `server/stats.ts` | token/cost/context stats (live RPC, or computed from the session file) |
 | `server/todos.ts` | read Luna's per-session todo file |
-| `server/lens.ts` | pi-lens session diagnostics |
 | `server/configinfo.ts` | installation config + prompt templates + skills |
 | `server/routes.ts` | REST endpoints + SSE stream |
 | `server/server.ts` | HTTP server, static files, shutdown |
@@ -202,7 +201,7 @@ Cross-origin requests and requests with a foreign `Host` are refused.
 | --- | --- | --- |
 | GET | `/api/health` | liveness + uptime + `auth` mode (open; reveals nothing else) |
 | GET | `/api/auth` | 200 when the presented token is valid (used by the login prompt) |
-| GET | `/api/config` | installation configuration (paths, settings, models, lens) |
+| GET | `/api/config` | installation configuration (paths, settings, models) |
 | GET | `/api/prompts` | prompt templates shipped with Luna |
 | GET | `/api/skills` | skills shipped with Luna |
 | GET | `/api/agents` | discovered agents + the known tool list |
@@ -218,7 +217,6 @@ Cross-origin requests and requests with a foreign `Host` are refused.
 | GET | `/api/sessions/:id` | one session summary |
 | GET | `/api/sessions/:id/stats` | tokens, cost, context usage, message counts |
 | GET | `/api/sessions/:id/todos` | this session's todo list |
-| GET | `/api/sessions/:id/lens` | pi-lens diagnostics for this session |
 | POST | `/api/sessions/:id/prompt` | send a prompt (`message`, optional `streamingBehavior`) |
 | POST | `/api/sessions/:id/abort` | abort the current run |
 | POST | `/api/sessions/:id/model` | switch model (`provider`, `modelId`) |
@@ -246,7 +244,7 @@ node scripts/ui-smoke.ts                  # offline frontend wiring check (no br
 
 `smoke-test.sh` starts the server on an isolated port and an isolated session directory, then
 checks: health, discovery endpoints, static serving, a real spawn → prompt → streamed-reply →
-stop roundtrip, session stats/todos/lens, live-sync tailing of an externally-written session
+stop roundtrip, session stats/todos, live-sync tailing of an externally-written session
 file, the agent CRUD roundtrip (including a path-traversal attempt), and finally runs the
 offline UI wiring check. It must not touch your real sessions or agents.
 

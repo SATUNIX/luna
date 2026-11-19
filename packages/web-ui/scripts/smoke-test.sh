@@ -95,10 +95,9 @@ grep -q 'message_update\|message_end' "${SSE_FILE}" && ok "event stream carried 
 echo "[7] session appears in the list"
 curl -s "${AUTH[@]}" --max-time 10 "${BASE}/api/sessions" | grep -q "${SID}" && ok "session listed" || bad "session missing from list"
 
-echo "[8] session info while running (stats / todos / lens)"
+echo "[8] session info while running (stats / todos)"
 curl -s "${AUTH[@]}" --max-time 20 "${BASE}/api/sessions/${SID}/stats" | grep -q '\"tokens\"' && ok "/stats" || bad "/stats"
 curl -s "${AUTH[@]}" --max-time 10 "${BASE}/api/sessions/${SID}/todos" | grep -q '\"todos\"' && ok "/todos" || bad "/todos"
-curl -s "${AUTH[@]}" --max-time 10 "${BASE}/api/sessions/${SID}/lens" | grep -q '\"lens\"' && ok "/lens" || bad "/lens"
 
 echo "[9] stop session"
 curl -s "${AUTH[@]}" --max-time 10 -X DELETE -H 'Content-Type: application/json' "${BASE}/api/sessions/${SID}" | grep -q '"stopping":true' && ok "stop accepted" || bad "stop failed"

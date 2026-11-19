@@ -200,9 +200,11 @@ try {
   await check("the server never writes Pi session files (reads, streaming and a resume leave them byte-identical)", async () => {
     const before = snapshot(sandbox.sessionsDir);
     assert.ok(Object.keys(before).length >= 1);
-    for (const route of ["/api/sessions", `/api/sessions/${FIXTURE_ID}`, `/api/sessions/${FIXTURE_ID}/stats`, `/api/sessions/${FIXTURE_ID}/todos`, `/api/sessions/${FIXTURE_ID}/lens`, "/api/cwds", "/api/config"]) {
+    for (const route of ["/api/sessions", `/api/sessions/${FIXTURE_ID}`, `/api/sessions/${FIXTURE_ID}/stats`, `/api/sessions/${FIXTURE_ID}/todos`, "/api/cwds", "/api/config"]) {
       assert.equal((await authed(port, TOKEN, { path: route })).status, 200, route);
     }
+    // pi-lens is retired: its diagnostics endpoint is gone, not merely disabled.
+    assert.equal((await authed(port, TOKEN, { path: `/api/sessions/${FIXTURE_ID}/lens` })).status, 404);
     const sse = await openSse(port, `/api/sessions/${FIXTURE_ID}/events`, { Authorization: `Bearer ${TOKEN}` });
     assert.ok(await waitFor(() => sse.received().includes("observed_message")), "tailer replay");
     sse.close();

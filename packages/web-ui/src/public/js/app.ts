@@ -17,7 +17,6 @@ import { AgentEditor } from "./agentui.ts";
 import { asRecord, byId, errorMessage, toText } from "./guards.ts";
 import {
 	renderConfig,
-	renderLens,
 	renderResourceList,
 	renderStats,
 	renderTodos,
@@ -27,7 +26,7 @@ import { oneAtATime, renderAutonomy, renderAutonomyError } from "./autonomy.ts";
 import type * as Wire from "./wire.ts";
 
 type View = "sessions" | "agents" | "autonomy" | "config";
-type InspectorPanel = "stats" | "todos" | "lens";
+type InspectorPanel = "stats" | "todos";
 /** What the chat header reports: "watching" is a session another process runs. */
 type Status = "idle" | "running" | "watching";
 
@@ -69,7 +68,7 @@ function isView(value: string | null): value is View {
 }
 
 function isInspectorPanel(value: string | null): value is InspectorPanel {
-	return value === "stats" || value === "todos" || value === "lens";
+	return value === "stats" || value === "todos";
 }
 
 const state: AppState = {
@@ -399,7 +398,6 @@ function setPanel(panel: InspectorPanel): void {
 	}
 	dom.panelStats.classList.toggle("hidden", panel !== "stats");
 	dom.panelTodos.classList.toggle("hidden", panel !== "todos");
-	dom.panelLens.classList.toggle("hidden", panel !== "lens");
 }
 
 async function refreshInspector(): Promise<void> {
@@ -409,12 +407,6 @@ async function refreshInspector(): Promise<void> {
 		);
 		dom.todosList.replaceChildren(
 			el("li", { class: "muted", text: "Open a session to see its todos." }),
-		);
-		dom.lensBody.replaceChildren(
-			el("p", {
-				class: "muted",
-				text: "Open a session to see pi-lens diagnostics.",
-			}),
 		);
 		return;
 	}
@@ -438,14 +430,6 @@ async function refreshInspector(): Promise<void> {
 		} catch (err) {
 			dom.todosList.replaceChildren(
 				el("li", { class: "muted", text: errorMessage(err) }),
-			);
-		}
-	} else {
-		try {
-			renderLens(dom.lensBody, (await api.sessionLens(id)).lens);
-		} catch (err) {
-			dom.lensBody.replaceChildren(
-				el("p", { class: "muted", text: errorMessage(err) }),
 			);
 		}
 	}
@@ -735,8 +719,6 @@ function cacheDom() {
 		statsBody: byId("stats-body", HTMLElement),
 		panelTodos: byId("panel-todos", HTMLElement),
 		todosList: byId("todos-list", HTMLElement),
-		panelLens: byId("panel-lens", HTMLElement),
-		lensBody: byId("lens-body", HTMLElement),
 		inspectorClose: byId("inspector-close", HTMLButtonElement),
 		footerHealth: byId("footer-health", HTMLElement),
 		footerCount: byId("footer-count", HTMLElement),

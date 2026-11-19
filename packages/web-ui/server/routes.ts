@@ -22,7 +22,6 @@ import {
 	type AgentRecord,
 } from "./agentstore.ts";
 import { configInfo, listPrompts, listSkills, type KitEntry } from "./configinfo.ts";
-import { sessionLens, type SessionLens } from "./lens.ts";
 import { listModels } from "./models.ts";
 import { listCwds, listSessions } from "./sessions.ts";
 import {
@@ -138,7 +137,6 @@ export interface SessionsResponse { readonly sessions: SessionSummary[] }
 export interface SessionResponse { readonly session: SessionSummary }
 export interface StopResponse { readonly stopping: true }
 export interface StatsResponse { readonly stats: SessionStats }
-export interface LensResponse { readonly lens: SessionLens }
 export interface PromptResponse { readonly queued: true }
 export interface AbortResponse { readonly aborted: true }
 export interface ModelResponse { readonly model: unknown }
@@ -562,10 +560,6 @@ export async function handleApi(
 				return (
 					sendJson(res, 200, readTodos(summary.cwd || DEFAULT_CWD, id)), true
 				);
-			}
-
-			if (sub === "lens" && method === "GET") {
-				return sendJson(res, 200, { lens: sessionLens(id) } satisfies LensResponse), true;
 			}
 
 			if (sub === "prompt" && method === "POST") {

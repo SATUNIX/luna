@@ -55,6 +55,50 @@ records why it goes without it in `packages/core/lib/protection-coverage.ts`. `n
 fails a profile that drops a mandatory protection without a recorded exemption
 (`tests/profile-protections-smoke.ts`).
 
+## Your own profiles
+
+A user profile is your own profile, built from one of the shipped profiles or from blank. It lives in
+`~/.pi/agent/pi-kit/profiles/<name>.json`:
+
+```text
+/profile create mine balanced     write mine.json from balanced (or blank); nothing changes yet
+/profile mine                     switch to it, all-or-nothing, like any other profile
+```
+
+```json
+{
+  "name": "mine",
+  "extends": "balanced",
+  "extensions": { "add": ["todo"], "remove": ["notify"] },
+  "skills": { "exclude": ["patch-hygiene"] },
+  "prompts": { "exclude": [] }
+}
+```
+
+- `extends` names a shipped profile or `blank`. Blank loads only the extensions every install needs
+  plus the three mandatory protections: `tool-firewall`, `protected-paths`, `secret-guard`,
+  `delegation-guard`, `effort` and `session-helpers`.
+- The profile inherits its base's firewall policy and mode, security level and `settings` block, and
+  cannot set them, so it never runs with a weaker gate than its base. Blank takes the defaults
+  (firewall `coding`/`manual`, security `balanced`).
+- `skills.exclude` and `prompts.exclude` add to the base's exclusions. On a base with an `only` list
+  (`lite`) they take the name off that list.
+- A profile whose `remove` names a mandatory protection or a required extension is refused whole by
+  the installer, by `/profile` (before the installer runs) and by
+  `node packages/core/profile-check.ts --user <file>`. So is a profile with an unknown field, a name
+  other than its file's, a shipped profile's name, or an unknown base. A refused profile is never
+  applied without the offending part.
+- `/profile create` never overwrites a file, and writes it 0600 in a 0700 directory.
+- `/update` re-applies a user profile by name. If you delete the file, the next switch or update
+  stops with "Profile not found".
+
+`tests/user-profiles-smoke.ts` pins each rule. It creates a profile from each base and from blank,
+switches to each through the real installer, rolls back a failed switch byte for byte, and refuses a
+profile that removes the firewall. `/profile` is an operator command the model cannot call. The
+tool firewall rates an agent's write anywhere under `pi-kit/` as a high-tier security-control write,
+this directory included, but no test pins that rating for user profiles specifically. Not covered: a
+process running as you can still edit the files directly.
+
 ## The lite profile
 
 `lite` is for small local coding models. It loads:

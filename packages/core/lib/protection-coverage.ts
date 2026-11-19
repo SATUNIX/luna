@@ -52,3 +52,13 @@ export function protectionCoverageProblems(
   }
   return problems;
 }
+
+/**
+ * The coverage problems of a user profile (shared/user-profile.ts) built on `base` ("blank" has no
+ * exemptions): a protection the base goes without keeps its recorded exemption, and one the operator
+ * added back is not a stale exemption. tests/user-profiles-smoke.ts pins it.
+ */
+export function userProfileCoverageProblems(base: string, includes: readonly string[]): string[] {
+  const exemptions: ProtectionExemptions = Object.hasOwn(PROTECTION_EXEMPTIONS, base) ? { [base]: PROTECTION_EXEMPTIONS[base] ?? {} } : {};
+  return protectionCoverageProblems(base, includes, exemptions).filter((p) => !p.endsWith("remove the stale exemption"));
+}

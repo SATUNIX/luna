@@ -48,7 +48,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/orchestrate-implement-review` | `orchestrator` | Delegate the full plan → implement → review loop: /orchestrate-implement-review <task> | [agent-orchestration](agent-orchestration.md) |
 | `/orchestrate-plan` | `orchestrator` | Delegate planning only, no changes: /orchestrate-plan <task> | [agent-orchestration](agent-orchestration.md) |
 | `/plan` | `plan-mode` | Toggle plan mode (read-only exploration) | — |
-| `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
+| `/profile` | `session-helpers` | Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`, `/profile create <name> <base\|blank>` (your own profile in pi-kit/profiles/). Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart. | [security](security.md) |
 | `/remember` | `memory-vault` | Save a memory: /remember <text>. Prefix with 'global:' for a memory that applies in every project. | [memory](memory.md) |
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |

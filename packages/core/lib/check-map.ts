@@ -51,7 +51,7 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   { glob: "packages/autonomy/**", checks: ["smoke:autonomy", "smoke:autonomy-run", "smoke:autonomy-selfimprove"] },
   { glob: "packages/core/check-all.ts", checks: ["smoke:check-all-npm", "smoke:docs"] },
   { glob: "packages/core/lib/**", checks: ["smoke:check-all-npm", "smoke:docs"] },
-  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install", "smoke:install-guided"] },
+  { glob: "packages/core/install.ts", checks: ["smoke:install-marker", "smoke:install-filter", "smoke:profile-transaction", "smoke:clean-install", "smoke:install-guided", "smoke:user-profiles"] },
   { glob: "packages/core/lib/install-guide.ts", checks: ["smoke:install-guided", "smoke:clean-install"] },
   // Security paths plan the smokes that exercise them (DE-102), not only the always-on checks: the
   // firewall gate and unattended policy, the shared redaction table and its corpus, the leak scan
@@ -60,7 +60,12 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   { glob: "packages/core/shared/redact.ts", checks: ["smoke:redaction-corpus", "smoke:fuzz-redaction", "smoke:agent-mailbox"] },
   { glob: "packages/core/shared/agent-mailbox.ts", checks: ["smoke:agent-mailbox"] },
   { glob: "packages/core/shared/agent-state.ts", checks: ["smoke:agent-mailbox"] },
-  { glob: "packages/core/shared/safe-fs.ts", checks: ["smoke:agent-mailbox"] },
+  { glob: "packages/core/shared/safe-fs.ts", checks: ["smoke:agent-mailbox", "smoke:user-profiles"] },
+  { glob: "packages/core/shared/user-profile.ts", checks: ["smoke:user-profiles"] },
+  { glob: "packages/core/lib/profiles.ts", checks: ["smoke:user-profiles", "smoke:profile-safety"] },
+  { glob: "packages/core/lib/protection-coverage.ts", checks: ["smoke:user-profiles", "smoke:profile-protections"] },
+  { glob: "packages/core/profile-check.ts", checks: ["smoke:user-profiles"] },
+  { glob: "packages/extensions/src/session-helpers/**", checks: ["smoke:user-profiles", "smoke:profile-transaction"] },
   { glob: "packages/core/lib/leak-scan.ts", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },
   { glob: "packages/core/prepush-scan.ts", checks: ["smoke:prepush-scan"] },
   { glob: "packages/core/leak-scan-exceptions.json", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },

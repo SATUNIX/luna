@@ -24,6 +24,7 @@ import { array, boolean, isRecord, literal, object, optional, parseJson, parseJs
 import { globalAgentDir, readSettings, updateSettings, writeSettingsAtomic, type PackageObject } from "./settings.ts";
 import { PROFILES_DIR, WORKSPACE_ROOT } from "./paths.ts";
 import { FIREWALL_POLICIES, isFirewallPolicy, migrateStoredExtension, migrateStoredPolicy, renamedProfileMessage, type FirewallPolicy } from "../shared/profile-names.ts";
+import { listUserProfiles, loadUserProfile, MANDATORY_PROTECTIONS, userProfilesDir as userProfilesDirOf } from "../shared/user-profile.ts";
 
 export { FIREWALL_POLICIES, type FirewallPolicy };
 
@@ -70,7 +71,8 @@ export function readOverrides(file: string = overridesPath()): Overrides {
 // Extensions whose removal widens what the agent may do. An overrides.json that removes one of
 // these is refused (fail closed) instead of being applied: a hand-edit that drops a guard must be
 // made deliberately in pi's own settings, never carried silently across profile switches.
-export const MANDATORY_PROTECTION_EXTENSIONS: readonly string[] = ["tool-firewall", "secret-guard", "protected-paths"];
+// The list itself lives in shared/user-profile.ts, which the /profile command reads too.
+export const MANDATORY_PROTECTION_EXTENSIONS: readonly string[] = MANDATORY_PROTECTIONS;
 
 function errorCode(error: unknown): unknown {
   return isRecord(error) ? error.code : undefined;
@@ -312,6 +314,45 @@ export function loadProfileDef(name: string, dir: string = PROFILES_DIR): Profil
 
 export function listProfiles(dir: string = PROFILES_DIR): string[] {
   return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+}
+
+// --- user profiles (<agent dir>/pi-kit/profiles/<name>.json, shared/user-profile.ts) -------------
+
+/** Where the operator's own profiles live. */
+export function userProfilesDir(): string {
+  return userProfilesDirOf(globalAgentDir());
+}
+
+/** The shipped profiles, then the operator's own (a user profile cannot take a shipped name). */
+export function listAllProfiles(dir: string = PROFILES_DIR, userDir: string = userProfilesDir()): string[] {
+  const shipped = listProfiles(dir);
+  return [...shipped, ...listUserProfiles(userDir).filter((n) => !shipped.includes(n))];
+}
+
+/**
+ * A shipped profile by name, else the operator's user profile of that name resolved against its base.
+ * A user profile is refused whole when it cannot be parsed, removes a mandatory protection or a
+ * required extension (shared/user-profile.ts), or still misses a protection its base does not have a
+ * recorded exemption for (`coverage`, protection-coverage.ts's check, passed in to keep this file
+ * free of that import). Throws "Profile not found" when neither exists.
+ */
+export function loadAnyProfile(
+  name: string,
+  coverage: (base: string, include: readonly string[]) => string[],
+  required: readonly string[],
+  dir: string = PROFILES_DIR,
+  userDir: string = userProfilesDir(),
+): Profile {
+  if (fs.existsSync(path.join(dir, `${name}.json`))) return loadProfileDef(name, dir);
+  const bases = listProfiles(dir);
+  const found = loadUserProfile(userDir, name, bases, (base) => parseJson(fs.readFileSync(path.join(dir, `${base}.json`), "utf8")), required);
+  if (found === null) loadProfileDef(name, dir); // throws the usual not-found (or renamed) message
+  if (found === null) throw new Error(`Profile not found: ${name}`);
+  if (!found.ok) throw new Error(`user profile "${name}" is refused: ${found.problems.join("; ")}`);
+  const def = parseProfile(found.def, path.join(userDir, `${name}.json`));
+  const problems = coverage(found.profile.extends, def.include ?? []);
+  if (problems.length) throw new Error(`user profile "${name}" is refused: ${problems.join("; ")}`);
+  return def;
 }
 
 // Profile include list with operator overrides applied (order-preserving, de-duplicated).

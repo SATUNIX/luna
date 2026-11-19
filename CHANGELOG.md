@@ -10,6 +10,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:
+  the only way to change what a profile loads was overrides.json, which applies to every profile.
+  There was no way to keep a named profile of your own. Fix: `<agent dir>/pi-kit/profiles/<name>.json`
+  with `extends` (a shipped profile or `blank`) and add/remove lists, read by
+  `packages/core/shared/user-profile.ts` for both the installer and `/profile`. `/profile create
+  <name> <base|blank>` writes one; `/profile <name>` switches through the existing transaction with
+  rollback. A user profile inherits its base's firewall, security level and settings and cannot set
+  them. One that removes a mandatory protection or a required extension is refused whole, by the
+  installer, by `/profile` and by `profile-check --user`. Verification: `tests/user-profiles-smoke.ts`
+  (`smoke:user-profiles`, in `test:security`).
+
 - **An agent mailbox library (V5-16).** Finding: agents on the machine had no way to message each
   other; the agent-state files report status only. Fix: `packages/core/shared/agent-mailbox.ts`, one
   inbox per agent id beside the agent-state files. The sender and the reader must be the process

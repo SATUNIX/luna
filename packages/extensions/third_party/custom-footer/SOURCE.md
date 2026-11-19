@@ -67,8 +67,8 @@
     as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
-  - Pinned by `tests/tui-layout-smoke.ts`, which now asserts both this module's `displayWidth` and
-    pi-tui's `visibleWidth`.
+  - Pinned by `tests/status-bar-smoke.ts`, which sweeps the footer at widths 20 to 120 and asserts
+    `visibleWidth` fits, and keeps wide and emoji text in the Unicode bar.
 - 2026-11-18 ASCII status chips.
   - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
     ASCII with its name, or `?`, and keeps ANSI sequences.

@@ -140,9 +140,8 @@ width seen at mount. An ASCII theme ends the cut with `...`.
 The item text, the branch, the project path and the session name are repository-controlled, so each
 is reduced to one visible line (control and format characters, including C1 CSI and bidi overrides,
 removed) before the layout and width fit; the theme's colour sequences are added afterwards.
-`tests/tui-layout-smoke.ts` (`npm run smoke:tui-layout`) pins the cut at widths 20 to 120,
-including wide and emoji input; `tests/status-bar-smoke.ts` pins the component mount and a
-narrower render.
+`tests/status-bar-smoke.ts` pins the cut at widths 20 to 120 and the wide/emoji input, the ASCII
+and Unicode bars, the component mount and a narrower render.
 
 ## Where the tokens went: `/usage`
 

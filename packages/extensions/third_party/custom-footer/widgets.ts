@@ -5,6 +5,7 @@
 import path from "node:path";
 import { footerGlyphs } from "./render.ts";
 import { truncateDisplay } from "./width.ts";
+import { oneVisibleLine } from "./shared/visible-text.ts";
 import type { Theme, TodoItem } from "./render.ts";
 
 export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii = false, width?: number): string[] {
@@ -24,9 +25,11 @@ export function renderTodoWidget(items: TodoItem[], theme: Theme, max = 8, ascii
   const shown = order.slice(0, max).sort((a, b) => a.id - b.id);
   const lines = [`${header}${hint}`];
   for (const item of shown) {
-    if (item.state === "done") lines.push(`  ${theme.fg("success", glyphs.done)} ${theme.fg("dim", `#${item.id} ${item.text}`)}`);
-    else if (item.state === "active") lines.push(`  ${theme.fg("accent", glyphs.active)} ${theme.bold(theme.fg("text", `#${item.id} ${item.text}`))}`);
-    else lines.push(`  ${theme.fg("muted", glyphs.open)} ${theme.fg("text", `#${item.id} ${item.text}`)}`);
+    // TODO.md is repository-controlled: one line of visible text, never a raw escape sequence.
+    const text = `#${item.id} ${oneVisibleLine(item.text)}`;
+    if (item.state === "done") lines.push(`  ${theme.fg("success", glyphs.done)} ${theme.fg("dim", text)}`);
+    else if (item.state === "active") lines.push(`  ${theme.fg("accent", glyphs.active)} ${theme.bold(theme.fg("text", text))}`);
+    else lines.push(`  ${theme.fg("muted", glyphs.open)} ${theme.fg("text", text)}`);
   }
   if (items.length > shown.length) lines.push(theme.fg("dim", `  ${glyphs.more} ${items.length - shown.length} more`));
   return fit(lines);

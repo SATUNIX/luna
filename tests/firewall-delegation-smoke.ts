@@ -5,7 +5,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { loadExtension, loadModule, fakePi, setEnv, tmpWorkspace, rmWorkspace, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import type * as DelegationModule from "../packages/extensions/src/tool-firewall/delegation.ts";
 import { object, optional, parseJsonAs, string, unknownValue } from "../packages/core/lib/guard.ts";
 
 /** What the firewall's tool_call handler returns when it blocks a call. */
@@ -14,7 +15,7 @@ interface GateDecision {
   reason: string;
 }
 /** One line of the audit log. */
-const AuditRecord = object({ event: string(), decider: optional(string()), delegate: optional(unknownValue()), effects: optional(unknownValue()), command: optional(string()) });
+const AuditRecord = object({ event: string(), decider: optional(string()), delegate: optional(unknownValue()), effects: optional(unknownValue()), command: optional(string()), entries: optional(unknownValue()), warnings: optional(unknownValue()) });
 type AuditRecord = ReturnType<typeof AuditRecord.parse>;
 
 const ws = fs.realpathSync(tmpWorkspace("pi-kit-fw-delegation-"));
@@ -116,7 +117,7 @@ try {
 
   // --- Still the operator's: everything around the delegation.
   const asked = [
-    `${delegate} restart run1`, // delegable, but not in this entry
+    `${delegate} backlog run1 next`, // delegable, but not in this entry
     `${delegate} start run1`, `${delegate} promote run1`, `${delegate} cancel run1`, // never delegable
     delegate, `${delegate} --verbose pause run1`, // no verb first
     "node packages/autonomy/cli.ts pause --run run1", "pi-autonomy steer --run run1 --message x", "./packages/autonomy/cli.ts pause --run run1", // the raw CLI
@@ -169,6 +170,76 @@ try {
   assert.equal((await bash(pi, `${delegate} pause run1`, attended().ctx))?.block, true, "the engagement policy: not delegated");
   ok("a child session and the engagement policy never use a delegation");
 
+  // --- DE-115 (2): only day-to-day verbs, and never with an option that changes what the verb authorises or reads.
+  config({ delegations: [entry({ verbs: ["status", "pause", "steer", "backlog"] })] });
+  for (const command of [`${delegate} pause run1 --yes`, `${delegate} pause --approve run1`, `${delegate} steer run1 --file ${home}/.ssh/id_rsa`, `${delegate} status -y`, `${delegate} backlog run1 --answer=x`]) {
+    assert.equal((await bash(pi, command, attended().ctx))?.block, true, `${command}: an option is never delegated`);
+  }
+  for (const verb of ["resume", "restart", "answer", "raise-budget", "units", "tick", "board-push"]) {
+    config({ delegations: [entry({ verbs: ["pause", verb] })] });
+    const v = attended();
+    assert.equal((await bash(pi, `${delegate} pause run1`, v.ctx))?.block, true, `an entry naming ${verb} is dropped`);
+    await pi.commands.get("firewall").handler("status", v.ctx);
+    assert.ok(v.notes.some((n) => new RegExp(`never delegated: ${verb}`).test(n)), `${verb}: never delegable, and /firewall status says so`);
+  }
+  {
+    // Defence in depth at match time: an entry that somehow lists a never-delegable or unknown verb matches nothing.
+    const D = await loadModule<typeof DelegationModule>("extensions/tool-firewall/delegation.ts");
+    const forged = [{ operator: "op", path: delegate, verbs: ["resume", "start", "answer", "frob", "pause"], expires: isoIn(1) }];
+    for (const verb of ["resume", "start", "answer", "frob"]) assert.equal(D.matchDelegation(`${delegate} ${verb} run1`, repo, home, forged), null, `${verb}: never matched`);
+    assert.ok(D.matchDelegation(`${delegate} pause run1`, repo, home, forged), "a day-to-day verb still matches");
+  }
+  config({ delegations: [entry()] });
+  ok("delegation covers only status, pause, steer, backlog and metrics, never with an option; resume, restart, answer, raise-budget and the service verbs are refused");
+
+  // --- DE-115 (5): strict security, another finding above low and a delegate another user owns are not delegated.
+  {
+    const strict = setEnv("PI_KIT_SECURITY_LEVEL", "strict");
+    assert.equal((await bash(pi, `${delegate} pause run1`, attended().ctx))?.block, true, "strict security: not delegated");
+    strict();
+    const policyFile = path.join(ws, "ask-policy.json");
+    fs.writeFileSync(policyFile, JSON.stringify({ defaults: { unknown: "ask" }, tools: { bash: { decision: "allow" } }, command_rules: { deny: [], ask: [{ pattern: "\\bpause\\b", reason: "pauses need a person" }] } }));
+    const policy = setEnv("PI_KIT_FIREWALL_POLICY", policyFile);
+    assert.equal((await bash(pi, `${delegate} pause run1`, attended().ctx))?.block, true, "a call with another finding above low (the policy's own ask) is decided as usual");
+    policy();
+    const realUid = process.getuid;
+    assert.ok(typeof realUid === "function", "a POSIX process has a uid");
+    const myUid = realUid.call(process);
+    process.getuid = () => myUid + 4242;
+    try {
+      assert.equal((await bash(pi, `${delegate} pause run1`, attended().ctx))?.block, true, "a delegate owned by another user: not delegated");
+    } finally {
+      process.getuid = realUid;
+    }
+    assert.equal(await bash(pi, `${delegate} pause run1`, attended().ctx), undefined, "and with every guard satisfied it is");
+  }
+  ok("strict security, another finding above low and a delegate owned by another user each stop a delegation");
+
+  // --- firewall.json is part of the boundary wherever PI_KIT_FIREWALL_CONFIG puts it, and a change is audited.
+  {
+    const elsewhere = path.join(ws, "elsewhere", "firewall.json");
+    fs.mkdirSync(path.dirname(elsewhere), { recursive: true });
+    fs.copyFileSync(configFile, elsewhere);
+    const moved = setEnv("PI_KIT_FIREWALL_CONFIG", elsewhere);
+    try {
+      const v = attended();
+      assert.equal((await bash(pi, `echo '{}' > ${elsewhere}`, v.ctx))?.block, true, "writing the configured firewall.json is not run unasked");
+      const seen = auditLines().filter((l) => l.event === "tool_seen" && l.command?.includes("elsewhere")).at(-1);
+      assert.ok(Array.isArray(seen?.effects) && seen.effects.includes("security_control"), "it is a safety-control write");
+    } finally {
+      moved();
+    }
+    const changes = () => auditLines().filter((l) => l.event === "delegations_changed").length;
+    const before = changes();
+    config({ delegations: [entry({ verbs: ["status"] })] });
+    await bash(pi, `${delegate} status`, attended().ctx);
+    assert.equal(changes(), before + 1, "a changed delegation set is audited when it is loaded");
+    await bash(pi, `${delegate} status`, attended().ctx);
+    assert.equal(changes(), before + 1, "an unchanged one is not audited again");
+    config({ delegations: [entry()] });
+  }
+  ok("firewall.json is protected wherever it is configured, and each change of the delegations is audited");
+
   // --- Entries that are not honoured, each with a warning in /firewall status.
   const linkEntry = entry({ path: link });
   const writable = path.join(binDir, "runctl-gw");
@@ -178,6 +249,7 @@ try {
     ["an expired entry", entry({ expires: isoIn(-1) }), /expired/],
     ["an expiry too far ahead", entry({ expires: isoIn(400) }), /more than 90 days/],
     ["a never-delegable verb", entry({ verbs: ["pause", "start"] }), /never delegated: start/],
+    ["a verb that grants", entry({ verbs: ["pause", "resume"] }), /never delegated: resume/],
     ["a verb outside the delegable set", entry({ verbs: ["pause", "rm"] }), /outside the delegable set: rm/],
     ["a path that is a link", linkEntry, /is not its own real path/],
     ["a group-writable program", entry({ path: writable }), /writable by its group/],

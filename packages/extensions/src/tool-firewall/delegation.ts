@@ -8,17 +8,23 @@
 // NEVER_DELEGABLE, a path that is not its own realpath, a file another user owns or can write, and an expiry
 // in the past or more than MAX_DELEGATION_DAYS ahead drop that entry with a warning; nothing else changes.
 // A command is delegated only when it is exactly one simple command (no pipe, list, redirect, assignment,
-// substitution, wrapper or background) whose program resolves to the entry's path and whose first argument
-// is one of its verbs; the caller also requires every other finding to be low.
+// substitution, wrapper or background) whose program resolves to the entry's path, whose first argument is one
+// of its verbs and which carries no option at all (`--approve`, `--yes`, `--file` and the like change what the
+// verb authorises or reads); the caller also requires every other finding to be low.
 import fs from "node:fs";
 import path from "node:path";
 import { configPath, isRecord, stringList } from "./config.ts";
 import { parseShell } from "./shared/shell.ts";
 
-/** The verbs an operator may delegate: reading a run and its day-to-day control. */
-export const DELEGABLE_VERBS: ReadonlySet<string> = new Set(["status", "pause", "resume", "restart", "steer", "backlog", "board-push", "answer", "raise-budget", "units", "tick", "metrics"]);
-/** Verbs that authorise, create, end or reconfigure a run: never delegated, even if an entry names them. */
-export const NEVER_DELEGABLE: ReadonlySet<string> = new Set(["start", "supervise", "plan", "promote", "cancel", "reconfigure", "init", "recreate", "decide", "add-stream", "remove-stream", "start-streams"]);
+/** The verbs an operator may delegate: reading a run and day-to-day steering that grants nothing. */
+export const DELEGABLE_VERBS: ReadonlySet<string> = new Set(["status", "pause", "steer", "backlog", "metrics"]);
+/**
+ * Verbs that authorise, start, answer, fund, create, end or reconfigure a run, or change the machine: never
+ * delegated, even if an entry names them (`resume` can approve or start a run, `answer` answers its question,
+ * `raise-budget` spends money, `restart`, `units` and `tick` act on services and the integrator).
+ */
+export const NEVER_DELEGABLE: ReadonlySet<string> = new Set(["start", "supervise", "plan", "promote", "cancel", "reconfigure", "init", "recreate", "decide", "add-stream", "remove-stream", "start-streams",
+  "resume", "restart", "answer", "raise-budget", "units", "tick", "board-push"]);
 export const MAX_DELEGATION_DAYS = 90;
 
 export type Delegation = { operator: string; path: string; verbs: string[]; expires: string };
@@ -106,9 +112,11 @@ export function matchDelegation(command: string, cwd: string, home: string, entr
   if (seg.redirects.length || seg.assigns.length || seg.pipeIn || seg.pipeOut || seg.background || seg.via.length || seg.depth !== 0) return null;
   if (seg.remote !== undefined || seg.sudo !== undefined || seg.dynamicName || seg.obfuscatedName || seg.fnCall === true || seg.unknownArgs || seg.evalOf === true) return null;
   if (seg.words.some((w) => w.dynamic || w.subs.length > 0 || w.procSub)) return null;
-  // The program is the command's first word as typed: a wrapper the parser unwraps (`env`, `exec`, `nice`) is
-  // not part of what the operator delegated.
-  if (!command.trimStart().startsWith(seg.words[0]?.raw ?? "\u0000")) return null;
+  // The program is the command's first word as typed (the whole word, not a prefix of a longer one): a wrapper
+  // the parser unwraps (`env`, `exec`, `nice`) is not part of what the operator delegated.
+  const typedFirst = seg.words[0]?.raw;
+  const trimmed = command.trimStart();
+  if (typedFirst === undefined || !trimmed.startsWith(typedFirst) || !/^(?:\s|$)/.test(trimmed.slice(typedFirst.length))) return null;
   const program = seg.argv[0] ?? "";
   // The program is named by path; a bare name would be whatever PATH finds first. Of the tilde forms only `~/` is
   // read here: bash expands `~user/`, `~+/` and `~-/` to other directories.
@@ -122,7 +130,9 @@ export function matchDelegation(command: string, cwd: string, home: string, entr
     return null;
   }
   const verb = seg.argv[1];
-  if (verb === undefined || NEVER_DELEGABLE.has(verb)) return null;
+  if (verb === undefined || NEVER_DELEGABLE.has(verb) || !DELEGABLE_VERBS.has(verb)) return null;
+  // No option anywhere after the verb: an option can turn a delegated verb into one that grants or reads more.
+  if (seg.argv.slice(2).some((a) => a.startsWith("-"))) return null;
   const entry = entries.find((e) => e.path === real && e.verbs.includes(verb));
   if (!entry) return null;
   if (delegateFileProblem(real) !== null) return null;

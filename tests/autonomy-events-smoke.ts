@@ -18,7 +18,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { assert, makeChecker, rm, tempDir, type RawContract } from "./autonomy-helpers.ts";
+import { assert, hookedBareRemote, makeChecker, rm, tempDir, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, harness, NODE_EXIT, runOnce, simpleRaw, solve, type ScriptContext } from "./autonomy-harness.ts";
 import { main } from "../packages/autonomy/cli.ts";
 import { EVENTS_FILE, EVENTS_ROTATED, EVENTS_ROTATE_LOCK, MAX_LINE_BYTES, type EventInput, type HostEvent, appendEvent, parseEvent, readEvents, redactEventText } from "../packages/autonomy/lib/events.ts";
@@ -142,12 +142,9 @@ await check("a finite run writes its run events; a log that cannot be written ne
 await check("a publication that keeps failing writes one failed push event, not one per retry", async () => {
   const src = greenRepo();
   const bare = scratch();
-  git(bare, ["init", "--quiet", "--bare"]);
   // The remote refuses every push with the same message, counting them: the seed, the cycle start,
   // the cycle's ticks and the merge each retry the publication.
-  const hook = path.join(bare, "hooks", "pre-receive");
-  fs.writeFileSync(hook, `#!/bin/sh\necho refused >> "${bare}/refusals"\necho "remote refused" >&2\nexit 1\n`);
-  fs.chmodSync(hook, 0o755);
+  hookedBareRemote(bare, `#!/bin/sh\necho refused >> "${bare}/refusals"\necho "remote refused" >&2\nexit 1\n`);
   const raw: RawContract = {
     schemaVersion: 1, run: "events-push-1", template: "self-improve",
     objective: { title: "Improve", spec: "Fix what is broken.", backlog: [{ id: "B-1", title: "Add the marker", detail: "AUDIT_OK must say step 1." }] },

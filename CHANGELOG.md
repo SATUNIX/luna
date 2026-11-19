@@ -524,6 +524,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Security
 
+- **The autonomy CLI rule never lowers a rating (DE-115, round 2).** Finding (re-review of the first round):
+  the word guard added there made `node packages/$X/autonomy/cli.ts promote --run r1 --yes` low and
+  `node "$PWD/packages/autonomy/cli.ts" pause` medium, as with a path containing a space; a stdin script
+  (`curl ... | python3 - packages/autonomy/cli.ts status`) was rated as the trusted CLI; `report`'s medium
+  rating and its token-file read applied only to a direct launch, and `--prs-file` and `--alert-state` were not
+  classified; `~-` resolved outside home, so `rm -rf ~-` and writes to `~-/.pi/agent` missed the home rules;
+  a delegated `pause *` could expand into an option. Cause: one matcher served both control detection and the
+  routine rating. Fix: a broad matcher (any word that could be the CLI, expanded or not, as the program or
+  through an interpreter or runner) only adds findings; a narrow matcher (exact, fully literal, direct, every
+  option known) alone grants the routine rating; everything else takes the ordinary rules. `~-`, `$OLDPWD` and
+  a `~+` with no known directory are read as home, the stricter class. A delegated call with an unquoted glob
+  or brace word is decided as usual. Authority change: for operator review. Verification:
+  `tests/firewall-shell-smoke.ts` (a property over 700 launch forms and commands: never lower than without the
+  rule, every control command high; and the named rows), `tests/firewall-delegation-smoke.ts`; each of 22
+  guards was reverted and its test failed.
+
 - **Review fixes for the autonomy CLI rules and operator delegation (DE-115).** Finding (independent
   review of F-02 part 2 and DE-114): `node -e "...//pi-autonomy"` and `python3 -c "...#/pi-autonomy"` ran
   arbitrary code rated as the autonomy CLI's routine `status` (low); `/tmp/x/pi-autonomy status` was low

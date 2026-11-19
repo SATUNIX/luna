@@ -189,8 +189,16 @@ try {
     for (const verb of ["resume", "start", "answer", "frob"]) assert.equal(D.matchDelegation(`${delegate} ${verb} run1`, repo, home, forged), null, `${verb}: never matched`);
     assert.ok(D.matchDelegation(`${delegate} pause run1`, repo, home, forged), "a day-to-day verb still matches");
   }
+  // A glob could expand into an option (`pause *` beside a file named `--yes`); a quoted one is plain text.
+  config({ delegations: [entry({ verbs: ["status", "pause", "steer", "backlog"] })] });
+  fs.writeFileSync(path.join(repo, "--yes"), "");
+  for (const command of [`${delegate} pause *`, `${delegate} pause run?`, `${delegate} steer run1 [ab]`, `${delegate} backlog run1 {a,--yes}`]) {
+    assert.equal((await bash(pi, command, attended().ctx))?.block, true, `${command}: a glob or brace word is never delegated`);
+  }
+  assert.equal(await bash(pi, `${delegate} steer run1 'keep * and ? as text'`, attended().ctx), undefined, "a quoted glob character is plain text");
+  fs.rmSync(path.join(repo, "--yes"));
   config({ delegations: [entry()] });
-  ok("delegation covers only status, pause, steer, backlog and metrics, never with an option; resume, restart, answer, raise-budget and the service verbs are refused");
+  ok("delegation covers only status, pause, steer, backlog and metrics, never with an option or a glob; resume, restart, answer, raise-budget and the service verbs are refused");
 
   // --- DE-115 (5): strict security, another finding above low and a delegate another user owns are not delegated.
   {

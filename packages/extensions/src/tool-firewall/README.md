@@ -38,14 +38,19 @@ autonomy CLI's commands that change a run (`start`, `up`, `plan --authorise`, `p
 the classifier does not know) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
 script run directly or through `env`, by an interpreter or a package runner (`npx tsx`, `npx
 pi-autonomy`, `npm exec pi-autonomy --`), or by a path relative to a `cd` (`tests/firewall-unattended-smoke.ts`).
-Its reading commands (`status`, `top`, `events`, `templates`, `inbox`, `board --run <id> --json`, `plan`,
-`init`, `draft`) are routine, and `report`, `key-limit`, `export`, `doctor --setup` and `boundary --probe`
-are medium, only when the CLI is surely what runs: `pi-autonomy` by name, or the workspace's autonomy CLI
-script run directly or by an interpreter. Inline code (`node -e`), a package runner or installer that names it
-(it may fetch a package) and another program whose path ends in the name keep their own tier. The files its
-options read (`--config`, `--file`, `--ntfy-token-file`, `--spec-file`, `--repo`) and write (`--out`) are
-classified like any other read or write, so `report --ntfy-token-file ~/.ssh/id_ed25519` is a credential
-read (`tests/firewall-shell-smoke.ts`).
+Two matchers decide. The broad one finds anything that could be the CLI (a word naming `pi-autonomy` or an
+autonomy/cli script, expanded or not, with spaces or not, run as the program or by an interpreter or package
+runner) and only adds findings: a control or unknown command is high, `report`, `key-limit`, `export`,
+`doctor --setup` and `boundary --probe` are medium, and the files its options read (`--config`, `--file`,
+`--ntfy-token-file`, `--spec-file`, `--repo`, `--prs-file`) and write (`--out`, `--alert-state`) are
+classified like any other read or write, so `report --ntfy-token-file ~/.ssh/id_ed25519` is a credential read
+however it is launched. The narrow one makes a reading command (`status`, `top`, `events`, `templates`,
+`inbox`, `board --run <id> --json`, `plan`, `init`, `draft`) routine, in place of the ordinary rules, only for
+an exact, fully literal, direct launch with every option one the CLI accepts: `pi-autonomy <command>`, or the
+workspace's autonomy CLI script run as the program or as a plain interpreter's first operand. Everything else
+(inline code, a stdin script, a package runner, an interpreter option, another program whose path ends in the
+name) falls through to the ordinary rules, so the autonomy rule never rates a command lower than it would be
+without it. `tests/firewall-shell-smoke.ts` checks that as a property over 28 launch forms and 25 commands.
 
 The full description is in `docs/autonomy-gate.md`.
 
@@ -228,7 +233,7 @@ limited time, by adding an entry to `firewall.json` (never the shipped policy):
   assignment, substitution, background job or wrapper such as `env`, `sudo` or `bash -c`) whose program,
   named by path, resolves to the entry's `path`, whose first argument is one of its `verbs`, and which
   carries no option at all (`--approve`, `--yes`, `--file` and the like change what a verb grants or
-  reads). Every other finding must be low: a call that also reads a secret or writes a protected file is decided as
+  reads), and no unquoted glob or brace word, which bash could expand into one. Every other finding must be low: a call that also reads a secret or writes a protected file is decided as
   usual. The decision is audited as `tool_approved` with `decider: "delegate"` and the operator, path,
   verb and expiry; it writes no feedback and no approval, so it never teaches the judge or the learner.
 - **What never is.** Verbs outside the day-to-day set `status`, `pause`, `steer`, `backlog` and

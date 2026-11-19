@@ -103,6 +103,19 @@ export function readDelegations(now = Date.now()): DelegationView {
   return view;
 }
 
+/** True when a raw shell word has a glob or brace character outside quotes (bash would expand it). */
+function unquotedGlob(raw: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (quote) { if (ch === quote) quote = null; else if (ch === "\\" && quote === '"') i++; continue; }
+    if (ch === "\\") { i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === "*" || ch === "?" || ch === "[" || ch === "{") return true;
+  }
+  return false;
+}
+
 /** The delegation a bash command uses, or null when it is anything but one plain call of a delegate verb. */
 export function matchDelegation(command: string, cwd: string, home: string, entries: readonly Delegation[]): DelegatedCall | null {
   if (entries.length === 0) return null;
@@ -132,7 +145,10 @@ export function matchDelegation(command: string, cwd: string, home: string, entr
   const verb = seg.argv[1];
   if (verb === undefined || NEVER_DELEGABLE.has(verb) || !DELEGABLE_VERBS.has(verb)) return null;
   // No option anywhere after the verb: an option can turn a delegated verb into one that grants or reads more.
+  // A glob or brace word is refused too, since bash may expand it into one (`pause *` beside a file named
+  // `--yes`); the raw word is checked, so a quoted `*` in a message is still a plain argument.
   if (seg.argv.slice(2).some((a) => a.startsWith("-"))) return null;
+  if (seg.words.slice(2).some((w) => unquotedGlob(w.raw))) return null;
   const entry = entries.find((e) => e.path === real && e.verbs.includes(verb));
   if (!entry) return null;
   if (delegateFileProblem(real) !== null) return null;

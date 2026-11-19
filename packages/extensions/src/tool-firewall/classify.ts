@@ -77,6 +77,8 @@ export type ClassifyEnv = {
   policy: "coding" | "engagement";
   // Files that are the boundary of an unattended run (the contract): a control surface like the kit's own state.
   boundaryPaths?: string[];
+  /** Tests only: false classifies without the autonomy-CLI rule, to check it never lowers a rating. */
+  autonomyRule?: boolean;
 };
 
 export const TIER_RANK: Record<Tier, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -128,9 +130,6 @@ const PERSIST_SYSTEM = [/^\/etc\/(?:systemd|cron|crontab|rc|init|profile|bash\.b
 
 const SAFE_ENV = new Set(["USER", "LOGNAME"]);
 
-/** Where `~-` (and `~+` with no known directory) resolve: a directory that is no workspace and no home. */
-const UNKNOWN_DIR = "/unknown-directory";
-
 export function resolvePath(p: string, cwd: string | null, env: ClassifyEnv, remote?: string, vars?: Record<string, string>): string | null {
   let s = p.trim();
   if (!s) return null;
@@ -139,7 +138,7 @@ export function resolvePath(p: string, cwd: string | null, env: ClassifyEnv, rem
   }
   if (/^[A-Za-z]:(?:[\\/]|[^\\/:]|$)/.test(s) || s.startsWith("\\\\")) return s.replace(/\\/g, "/").replace(/^([A-Za-z]:)(?!\/)/, "$1/"); // Windows absolute (a shell may have eaten the backslash)
   s = s.replace(/^\$\{?HOME\}?(?=\/|$)/, "~").replace(/^\$\{?TMPDIR\}?(?=\/|$)/, remote ? "/tmp" : env.tmpRoots[0] ?? "/tmp");
-  s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, cwd ?? "$PWD");
+  s = s.replace(/^\$\{?PWD\}?(?=\/|$)/, cwd ?? "$PWD").replace(/^\$\{?OLDPWD\}?(?=\/|$)/, "~-");
   // The agent and remote-state directories the session runs with: pi sets them in the bash tool's environment.
   if (!remote) for (const name of ["PI_CODING_AGENT_DIR", "PI_REMOTE_STATE_DIR"]) {
     const value = process.env[name]?.trim();
@@ -150,11 +149,11 @@ export function resolvePath(p: string, cwd: string | null, env: ClassifyEnv, rem
   if (/^~[A-Za-z]/.test(s)) return remote ? s : `/home/${s.slice(1)}`;
   // `~+` is the working directory and `~-` the previous one (OLDPWD): bash expands both, so neither is a
   // relative path named `~+`.
-  // OLDPWD is not tracked, and a `~+` with no known directory is unknown too: both resolve under a placeholder
-  // root that is outside every workspace, so a write there is a write outside and a credential file's name
-  // (`~-/.aws/credentials`) is still recognised.
+  // OLDPWD (`~-`, `$OLDPWD`) is not tracked, and a `~+` with no known directory is unknown too: either may be
+  // the home directory, so it is read as home, the stricter class (`cat ~-/.ssh/config` is a credential read,
+  // `rm -rf ~-` deletes home, `~-/.pi/agent/...` is the agent's own configuration).
   if ((s === "~+" || s.startsWith("~+/")) && cwd !== null) return normalize(cwd + s.slice(2));
-  if (s === "~+" || s.startsWith("~+/") || s === "~-" || s.startsWith("~-/")) return normalize(`${UNKNOWN_DIR}${s.slice(2)}`);
+  if (s === "~+" || s.startsWith("~+/") || s === "~-" || s.startsWith("~-/")) return remote ? normalize(`~${s.slice(2)}`) : normalize(env.home + s.slice(2));
   if (s.startsWith("/")) return normalize(s);
   if (cwd === null) return null;
   return normalize(`${cwd}/${s}`);
@@ -788,28 +787,30 @@ function classifySegment(c: Ctx): void {
 
   // The autonomous-run CLI: whoever runs `start`, `plan --authorise`, `promote` and the like is the person who
   // authorises the run's boundary and spends its budget, so from an agent's shell that is the operator's call.
-  // The CLI is recognised by its script when it is the program actually run: directly (`./cli.ts`, through
-  // `env`), as an interpreter's script, as a package runner's program (`npx pi-autonomy`, `npm exec
-  // pi-autonomy --`, `npx tsx packages/autonomy/cli.ts`), and by a path relative to the directory the command
-  // runs in (`cd packages/autonomy && node cli.ts`). Only the first two make a reading command routine: through a
-  // runner the package rules decide (it may fetch the package). A control command asks however it is reached.
-  const autonomyScript = (a: string): boolean => {
-    // A word with spaces, quotes or shell punctuation is code or text (an `-e` value), never a path to the CLI.
-    if (!a || /[\s'"`;|&()<>{}$\\]/.test(a)) return false;
-    if (/(?:^|\/)autonomy\/cli\.(?:ts|mjs)$/.test(a) || /(?:^|\/)pi-autonomy$/.test(a)) return true;
-    if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(a)) return false;
-    const base = seg.cwd ?? c.env.cwd;
-    return /\/autonomy\/cli\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${base}/${a}`));
-  };
-  const autonomy = autonomyLaunch(argv, exe, autonomyScript);
-  if (autonomy) {
-    // A control command asks however it is reached (fail closed: a lookalike path or an unknown option only
-    // makes it ask more). Any other command gets the CLI's own rating only when the CLI is surely what runs:
-    // the `pi-autonomy` command by name, or the workspace's autonomy/cli script run directly or by an
-    // interpreter, never inline code (`node -e`), a runner (which may fetch a package) or another program
-    // whose path merely ends in the name. Otherwise the ordinary rules decide, plus the file options below.
-    if (autonomy.verb === "control" || (!autonomy.viaRunner && trustedAutonomyCli(c, autonomy.word))) { autonomyCli(c, autonomy.args); return; }
-    autonomyFileOptions(c, autonomy.args);
+  // Two matchers (DE-115). The BROAD one finds anything that could be the CLI: any word naming `pi-autonomy` or
+  // an autonomy/cli script, expanded or not, run as the program or by an interpreter or package runner; it only
+  // ever adds findings (a control or unknown command is high, a network or export command medium, its file
+  // options are reads and writes) and never ends the analysis. The NARROW one grants the CLI's routine rating,
+  // and skips the ordinary rules, only for an exact, fully literal, direct launch with every argument
+  // understood: `pi-autonomy <command>` or the workspace's autonomy/cli script run as the program or as a plain
+  // interpreter's first operand. Anything else falls through to the interpreter, stdin, inline-code and package
+  // rules, so the rule never rates a command lower than it would be without it.
+  if (c.env.autonomyRule !== false) {
+    const isCandidate = (a: string): boolean => {
+      if (a.includes("pi-autonomy") || /autonomy\/cli\.(?:ts|mjs)/.test(a)) return true;
+      if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(a)) return false;
+      return /\/autonomy\/cli\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${seg.cwd ?? c.env.cwd}/${a}`));
+    };
+    const launchContext = INTERPRETERS.has(exe) || AUTONOMY_RUNNERS.has(exe);
+    const raws = seg.words.map((w) => w.raw);
+    let found = false;
+    argv.forEach((a, k) => {
+      if (k > 0 && !launchContext) return;
+      if (!isCandidate(a) && !isCandidate(raws[k] ?? "")) return;
+      found = true;
+      autonomyFindings(c, argv.slice(k + 1));
+    });
+    if (found && narrowAutonomyLaunch(c)) return;
   }
 
   // Agent CLIs are recognised by identity (name, script path or package), not by the name typed.
@@ -988,10 +989,17 @@ function stdinExec(c: Ctx): void {
 const AUTONOMY_READ = new Set(["templates", "status", "top", "events", "doctor", "init", "draft", "plan", "boundary", "inbox", "board", "help"]);
 const AUTONOMY_MEDIUM = new Set(["report", "key-limit", "export"]);
 // Options whose value is a file the CLI reads, or one it writes.
-const AUTONOMY_READ_OPTS = new Set(["--config", "--file", "--ntfy-token-file", "--spec-file", "--repo"]);
-const AUTONOMY_WRITE_OPTS = new Set(["--out"]);
-// The inline-code flags devTool reads (`node -e`, `python3 -c`): with one, the interpreter runs that code.
-const INLINE_CODE_FLAG = /^(?:-c|-e|--eval|-p|--print|-E|-r|--command|-x)$/;
+const AUTONOMY_READ_OPTS = new Set(["--config", "--file", "--ntfy-token-file", "--spec-file", "--repo", "--prs-file"]);
+const AUTONOMY_WRITE_OPTS = new Set(["--out", "--alert-state"]);
+// Programs that run a package's CLI named in their arguments: an autonomy word after one is a launch.
+const AUTONOMY_RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bunx", "bun", "deno"]);
+// Every option the CLI's argument parser accepts (packages/autonomy/cli.ts); anything else is not understood.
+const AUTONOMY_OPTIONS = new Set(["alert-state", "answer", "approve", "attended", "authorise", "authorize", "backlog", "budget-usd", "by", "check", "check-minutes", "config", "credential",
+  "deny", "detach", "digest", "digest-hour", "effort", "effort-cap", "egress", "engine", "engineers", "file", "force", "gh-repo", "goal", "hard-restarts", "health", "help", "image",
+  "integration-branch", "json", "key-env", "limit", "manager-model", "max-attempts", "max-minutes", "max-steps", "message", "model", "mount", "no-review", "ntfy-token-file", "ntfy-url",
+  "out", "preset", "probe", "promotion", "promotion-branch", "promotion-repo", "promotion-url", "provider", "prs-file", "reason", "ref", "repo", "repo-url", "review-model", "run",
+  "service", "setup", "since", "soft-nudges", "spec", "spec-file", "step-usd", "streams", "template", "test-event", "time-zone", "title", "type", "unattended", "upstream", "value",
+  "write-area", "yes"].map((o) => `--${o}`));
 
 type AutonomyVerb = "read" | "medium" | "control";
 function autonomyVerb(args: readonly string[]): AutonomyVerb {
@@ -1025,73 +1033,43 @@ function autonomyFileOptions(c: Ctx, args: readonly string[]): void {
   for (const file of optionValues(args, AUTONOMY_WRITE_OPTS)) writePath(c, file, "writes");
 }
 
-// The autonomy CLI surely: the `pi-autonomy` command by name, or an autonomy/cli script inside the workspace.
-function trustedAutonomyCli(c: Ctx, word: string): boolean {
-  if (word === "pi-autonomy") return true;
+// The workspace's autonomy/cli script, named literally.
+function trustedAutonomyScript(c: Ctx, word: string): boolean {
+  if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(word)) return false;
   if (!/(?:^|\/)autonomy\/cli\.(?:ts|mjs)$/.test(normalize(word.startsWith("/") ? word : `${c.seg.cwd ?? c.env.cwd}/${word}`))) return false;
   const cls = pathOf(c, word).cls;
   return cls === "workspace" || cls === "workspace_root" || cls === "workspace_derived";
 }
-// Package runners: the words before the program they run (`npx <program>`, `npm exec <program>`).
-const CLI_RUNNERS: Record<string, number> = { npx: 1, bunx: 1, pnpx: 1, "npm exec": 2, "npm x": 2, "pnpm exec": 2, "pnpm dlx": 2, "yarn exec": 2, "yarn dlx": 2, "bun x": 2, yarn: 1, pnpm: 1 };
-// Interpreter options whose value is the next word (`node --import tsx cli.ts`): not the script.
-const INTERPRETER_VALUE_OPTS = /^(?:-r|--require|--import|--loader|--experimental-loader|-C|--conditions)$/;
 
-// The autonomy CLI as the program a command runs, with its arguments, or null. `word`: the program or script
-// word that names it. `viaRunner`: reached through a package runner. An interpreter given inline code
-// (`node -e`) runs that code, so its operands are never the CLI. `verb`: what the command does (autonomyVerb). An interpreter whose own script
-// is something else (`node x.js pi-autonomy status`) is not the CLI, but a control command named after the CLI
-// anywhere in its arguments still counts, so an interpreter option this parser does not know cannot hide
-// `pause` or `promote`.
-type AutonomyLaunch = { args: string[]; word: string; viaRunner: boolean; verb: AutonomyVerb };
-function autonomyLaunch(argv: string[], exe: string, isCli: (a: string) => boolean): AutonomyLaunch | null {
-  const found = (args: string[], word: string, viaRunner: boolean): AutonomyLaunch => ({ args, word, viaRunner, verb: autonomyVerb(args) });
-  if (exe === "pi-autonomy" || isCli(argv[0] ?? "")) return found(argv.slice(1), argv[0] ?? "", false);
-  const interpreted = (from: number, interp: string, viaRunner: boolean): AutonomyLaunch | null => {
-    if (interp === "deno" && argv[from] === "run" || interp === "bun" && argv[from] === "run") from++;
-    const inline = argv.slice(from).some((a) => INLINE_CODE_FLAG.test(a));
-    if (!inline) {
-      for (let i = from; i < argv.length; i++) {
-        const a = argv[i] ?? "";
-        if (INTERPRETER_VALUE_OPTS.test(a)) { i++; continue; }
-        if (a.startsWith("-")) continue;
-        if (isCli(a)) return found(argv.slice(i + 1), a, viaRunner);
-        break;
-      }
-    }
-    const k = argv.findIndex((a, i) => i >= from && isCli(a) && autonomyVerb(argv.slice(i + 1)) === "control");
-    return k >= 0 ? found(argv.slice(k + 1), argv[k] ?? "", viaRunner) : null;
-  };
-  if (INTERPRETERS.has(exe)) return interpreted(1, exe, false);
-  const runner = Object.hasOwn(CLI_RUNNERS, `${exe} ${argv[1] ?? ""}`) ? `${exe} ${argv[1] ?? ""}` : Object.hasOwn(CLI_RUNNERS, exe) ? exe : null;
-  if (runner === null) return null;
-  for (let i = CLI_RUNNERS[runner] ?? 1; i < argv.length; i++) {
-    const a = argv[i] ?? "";
-    if (a === "--") continue;
-    // `npx -p <pkg> <program>`: the package option's value is not the program.
-    if (/^(?:-p|--package|-c|--call)$/.test(a)) { i++; continue; }
-    if (a.startsWith("-")) continue;
-    if (isCli(a)) return found(argv.slice(i + 1), a, true);
-    // `npx tsx packages/autonomy/cli.ts`: the runner's program is an interpreter running the CLI.
-    const interp = basenameOf(a);
-    return INTERPRETERS.has(interp) ? interpreted(i + 1, interp, true) : null;
-  }
-  return null;
-}
-
-// `pi-autonomy <command>`: control commands (autonomyVerb) are high and never learned (each one asks the
-// operator); an unattended worker may not run them at all. Reading or preparing is routine; network and export
-// commands are medium. The files its options read or write are classified as such.
-function autonomyCli(c: Ctx, args: string[]): void {
+// What any launch of the autonomy CLI adds, however it was reached (the broad matcher): its file options, and
+// a high finding for a control or unknown command or a medium one for a network or export command.
+function autonomyFindings(c: Ctx, args: string[]): void {
   const sub = args.find((a) => !a.startsWith("-"));
   const authorising = args.some((a) => a === "--authorise" || a === "--authorize");
   autonomyFileOptions(c, args);
   const verb = autonomyVerb(args);
   if (verb === "control") {
     const named = sub ?? args.join(" ");
-    add(c, "high", "security_control", "autonomy_control", `pi-autonomy ${named}${authorising ? " --authorise" : ""} authorises, starts, steers, answers or changes an autonomous run: only the operator does that`, `autonomy ${named}${authorising ? " authorise" : ""}`); return;
-  }
-  add(c, verb === "medium" ? "medium" : "low", "code_exec", "autonomy_cli", `pi-autonomy ${sub ?? ""}`.trim(), verb === "medium" ? `autonomy ${sub ?? ""}` : undefined);
+    add(c, "high", "security_control", "autonomy_control", `pi-autonomy ${named}${authorising ? " --authorise" : ""} authorises, starts, steers, answers or changes an autonomous run: only the operator does that`, `autonomy ${named}${authorising ? " authorise" : ""}`);
+  } else if (verb === "medium") add(c, "medium", "code_exec", "autonomy_cli", `pi-autonomy ${sub ?? ""}`.trim(), `autonomy ${sub ?? ""}`);
+}
+
+// The narrow matcher: an exact, fully literal, direct launch of the CLI with every argument understood. Only
+// then does the CLI's own rating stand in for the ordinary rules (a reading command is routine).
+function narrowAutonomyLaunch(c: Ctx): boolean {
+  const { seg, exe } = c;
+  const argv = seg.argv;
+  if (seg.words.some((w) => w.dynamic || w.subs.length > 0 || w.procSub) || seg.pipeIn || seg.stdinBody !== undefined) return false;
+  let args: string[];
+  if (argv[0] === "pi-autonomy" && seg.words[0]?.raw === "pi-autonomy") args = argv.slice(1);
+  else if (trustedAutonomyScript(c, argv[0] ?? "")) args = argv.slice(1);
+  else if (["node", "nodejs", "tsx", "bun"].includes(exe) && trustedAutonomyScript(c, argv[1] ?? "")) args = argv.slice(2);
+  else return false;
+  const understood = args.every((a, i) => !a.startsWith("-") || AUTONOMY_OPTIONS.has(a.replace(/=.*$/, "")) || a === "-h"
+    || (i > 0 && AUTONOMY_OPTIONS.has(args[i - 1] ?? "") && !a.startsWith("--")));
+  if (!understood) return false;
+  if (autonomyVerb(args) === "read") add(c, "low", "code_exec", "autonomy_cli", `pi-autonomy ${args.find((a) => !a.startsWith("-")) ?? ""}`.trim());
+  return true;
 }
 
 function inlineCode(c: Ctx, code: string): void {

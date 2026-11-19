@@ -37,7 +37,7 @@ import { providerKey } from "./lib/runtime.ts";
 import { randomSuffix, writeJsonAtomic } from "./lib/fsutil.ts";
 import { BoardLockBusy, type ClaimBoardResult, claimBoardItem, keepHostClaims, readBoard, readBoardFile, type StewardBoard, withBoardLock as withBoardFileLock } from "./lib/board.ts";
 import { applyOutcomes, readInbox, readInboxFile, settleInbox, writeInbox } from "./lib/inbox.ts";
-import { resolveGateSlots } from "./lib/gate-slots.ts";
+import { resolveGateSlots, resolveWorkerBounds } from "./lib/gate-slots.ts";
 import { type BoundaryReport, Engine, type Runtime, promoteRun } from "./lib/engine.ts";
 import { EVENT_FAMILIES, EVENT_TYPES, formatEvent, readEvents } from "./lib/events.ts";
 import { exportRun } from "./lib/export.ts";
@@ -1049,7 +1049,7 @@ export async function supervise(store: RunStore, deps: CliDeps, { runtime }: { r
   if (!got.acquired) throw new CliError("refused", got.reason);
   if (isTerminal(state.status) && !(state.status === "succeeded" && ["pending", "awaiting_approval"].includes(state.promotion.status))) { lock.release(); throw new CliError("refused", resumeAction(state).message); }
   const rt = runtime ?? deps.runtimeFactory({ contract, cfg, store, env: deps.env });
-  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, gateSlotsHome: deps.home, gateSlots: resolveGateSlots(deps.env), effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
+  const engine = new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, gateSlotsHome: deps.home, gateSlots: resolveGateSlots(deps.env), workerBounds: resolveWorkerBounds(deps.env), effortApi: effortFor(deps), deps: { exportRun: ({ engine: e, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: e.state, out }) } });
   const onSignal = () => { engine.signalled = true; };
   if (deps.signals) { process.on("SIGINT", onSignal); process.on("SIGTERM", onSignal); }
   try {

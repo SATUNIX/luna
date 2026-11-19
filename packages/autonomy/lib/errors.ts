@@ -12,7 +12,7 @@ export class BoundaryError extends Error {
  */
 export class GateWaitInterrupted extends Error {
   readonly code = "gate_wait_interrupted";
-  constructor() { super("stop requested while waiting for a gate slot"); }
+  constructor(what = "a gate slot") { super(`stop requested while waiting for ${what}`); }
 }
 
 /** Another supervisor now owns the run. The displaced one stops without touching state or containers. */

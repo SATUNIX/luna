@@ -521,13 +521,14 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
     },
     uiPolicy: contract.permissions.unattended,
     onAutoAnswer: () => { engine.uiAnswered++; },
-    startAgent: ({ attempt, onEvent, say }) => {
+    startAgent: async ({ attempt, onEvent, say }) => {
       const reset = resetPending;
       state.sessions = (state.sessions ?? 0) + 1;
       ctx.log(`cycle ${pad(n)} session ${attempt} starting${reset ? " (workspace reset to the branch)" : ""}`);
       const started = (ev: Parameters<typeof onEvent>[0]): void => { resetPending = false; onEvent(ev); };
       engine.reportDegraded(); // a previous session that died between ticks: report it before startWorker resets the check
-      const agent = rt.startWorker({ step: n, attempt: state.sessions, resetWorkspace: reset, effort: state.effort, onEvent: reset ? started : onEvent });
+      const sessions = state.sessions;
+      const agent = await engine.startWorkerInSlot(() => rt.startWorker({ step: n, attempt: sessions, resetWorkspace: reset, effort: state.effort, onEvent: reset ? started : onEvent }));
       engine.adoptAgent(agent, say);
       return agent;
     },

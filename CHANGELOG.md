@@ -10,6 +10,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **Worker slots bound how many autonomy workers run on one host, and what they take together
+  (V5-22).** Finding: only acceptance gates were bounded host-wide (gate slots), so several runs
+  on one host could start as many worker containers as they liked, whatever their CPUs, memory and
+  spend. Fix: the gate-slot mechanism is generalised to weighted bounds. `PI_AUTONOMY_WORKER_SLOTS`,
+  `PI_AUTONOMY_WORKER_CPUS`, `PI_AUTONOMY_WORKER_MEMORY` and `PI_AUTONOMY_WORKER_USD` each cap
+  running workers (by count, container CPUs, container memory and per-step budget). A worker takes
+  its whole share before it starts or waits in a new phase, `worker-wait`, and releases it when it
+  exits. Each bound is off until set, so a host that sets none behaves as before. Verified by
+  `tests/autonomy-lifecycle-smoke.ts` and `tests/autonomy-selfimprove-smoke.ts`.
+
 - **`pi-autonomy draft --goal` and `pi-autonomy up` set a run up from a goal (V5-10, PG-43).**
   Finding: an agent asked to start a containerised run toward a goal had to drive `init` through many
   flags, and starting one took dozens of turns of help reads, trial inits and sleep polls. Fix:

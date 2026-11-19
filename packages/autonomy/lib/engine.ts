@@ -28,7 +28,7 @@ import { currentTarget, decideRecovery, newlyPassing } from "./recovery.ts";
 import { planReconfigure } from "./reconfigure.ts";
 import { type Measured, type TakenNotebook, HIDDEN_CHARS, WORKER_NOTEBOOK, appendGeneration, readNotebook, renderNotebook, takeWorkerNotebook } from "./notebook.ts";
 import { clip } from "./templates/common.ts";
-import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
+import { type AcquireWorkerSlotOptions, acquireGateSlot, acquireWorkerSlot, resolveGateSlots, resolveWorkerBounds, type GateSlot, type WorkerBounds, type WorkerSlot, workerPools } from "./gate-slots.ts";
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
 import { type EventInput, appendEvent } from "./events.ts";
@@ -224,6 +224,9 @@ export interface EngineOptions {
   gateSlots?: number;
   gateSlotsHome?: string;
   gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
+  /** Host-wide worker bounds (V5-22); default from the PI_AUTONOMY_WORKER_* variables, all unbounded when unset. */
+  workerBounds?: WorkerBounds;
+  workerSlotAcquire?: (o: AcquireWorkerSlotOptions) => Promise<WorkerSlot>;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -332,9 +335,11 @@ export class Engine {
   gateSlotLimit: number;
   gateSlotHome: string;
   gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
+  workerBounds: WorkerBounds;
+  workerSlotAcquire: (o: AcquireWorkerSlotOptions) => Promise<WorkerSlot>;
   clockPaused = false;
 
-  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, log }: EngineOptions) {
+  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, workerBounds, workerSlotAcquire, log }: EngineOptions) {
     this.contract = contract;
     this.cfg = cfg;
     this.store = store;
@@ -347,6 +352,8 @@ export class Engine {
     this.gateSlotLimit = gateSlots ?? resolveGateSlots();
     this.gateSlotHome = gateSlotsHome ?? stateHome();
     this.gateSlotAcquire = gateSlotAcquire ?? acquireGateSlot;
+    this.workerBounds = workerBounds ?? resolveWorkerBounds();
+    this.workerSlotAcquire = workerSlotAcquire ?? acquireWorkerSlot;
     this.log = log ?? defaultEngineLog(store, rt);
   }
 
@@ -461,6 +468,46 @@ export class Engine {
     }
   }
 
+  /**
+   * Start a worker holding its share of the host-wide worker bounds (lib/gate-slots.ts worker
+   * slots): one worker, its CPUs and memory (the run's container limits) and its per-step budget.
+   * The share is released when the worker exits, however it exits. With no bound set this is a
+   * plain call. While waiting this sets phase `worker-wait`, heartbeats and does not accrue
+   * wall-clock minutes, and control commands apply as in a gate wait (GateWaitInterrupted).
+   */
+  async startWorkerInSlot<A extends WorkerAgent>(start: () => A): Promise<A> {
+    const pools = workerPools(this.workerBounds, { cpus: this.cfg.container.cpus, memory: this.cfg.container.memory, perStepUsd: this.state.limits.budget.perStepUsd });
+    if (!pools.length) return start();
+    const prevPhase = this.state.phase;
+    this.tick();
+    this.clockPaused = true;
+    let slot: WorkerSlot;
+    try {
+      this.state.phase = "worker-wait";
+      this.tick();
+      slot = await this.workerSlotAcquire({
+        home: this.gateSlotHome,
+        pools,
+        onWait: () => this.tick(),
+        shouldStop: async () => {
+          if (this.lockLost) throw new LockLost();
+          await this.applyControl();
+          return !this.active || this.stopRequested;
+        },
+      });
+      this.tick();
+    } finally {
+      this.clockPaused = false;
+      this.state.phase = prevPhase;
+    }
+    let agent: A;
+    try { agent = start(); } catch (e) { slot.release(); throw e; }
+    const held = slot;
+    void agent.exited.then(() => { held.release(); }, () => { held.release(); });
+    this.log(`worker slot held: ${Object.entries(held.units).map(([k, v]) => `${k} ${String(v)}`).join(", ")}`);
+    return agent;
+  }
+
   /** Spend only ever goes up: the higher of what state recorded and what the meters show now. */
   async refreshUsage(): Promise<void> {
     const metered = await this.rt.usageUsd();
@@ -534,7 +581,7 @@ export class Engine {
       // applyControl already parked or ended the run; a stop that did not (it cannot be active here
       // after a STOP or signal, but never leave a run "running" with no supervisor) parks it.
       if (this.active) this.go("paused", { reason: this.signalled ? "signal" : "stop_file", by: "operator" });
-      this.log(`acceptance interrupted: ${error.message}; the run is ${this.status}`);
+      this.log(`wait interrupted: ${error.message}; the run is ${this.status}`);
       return;
     }
     if (error instanceof LockLost) { this.log("lock lost: another supervisor took over this run; stopping without touching state"); throw error; }
@@ -716,7 +763,7 @@ export class Engine {
   }
 
   // --- worker session ---------------------------------------------------------------------------
-  startSession({ step }: { step: number }): WorkerSession {
+  async startSession({ step }: { step: number }): Promise<WorkerSession> {
     const attempt = (this.state.sessions ?? 0) + 1;
     // The agent is attached once the runtime has started it; the closures below see it through `session`.
     const session: Omit<WorkerSession, "agent"> & { agent: WorkerAgent | null } = {
@@ -741,7 +788,7 @@ export class Engine {
     };
     // A generation without progress under resetOnNoProgress: the worker's branch already points at the accepted head; its workspace follows.
     const resetWorkspace = this.state.generations?.resetPending === true;
-    const live: WorkerSession = Object.assign(session, { agent: this.rt.startWorker({ step, attempt, resetWorkspace, effort: this.state.effort, onEvent }) });
+    const live: WorkerSession = Object.assign(session, { agent: await this.startWorkerInSlot(() => this.rt.startWorker({ step, attempt, resetWorkspace, effort: this.state.effort, onEvent })) });
     if (this.state.generations && resetWorkspace) this.state.generations.resetPending = false;
     void live.agent.exited.then((e) => { live.exited = e ?? { code: 1 }; live.dead = true; });
     this.state.sessions = attempt;
@@ -834,7 +881,7 @@ export class Engine {
         }
       }
       if (!(this.startReason === "first" && n === 1)) briefing = await this.briefing(this.startReason);
-      session = this.startSession({ step: n });
+      session = await this.startSession({ step: n });
       if (this.status === "recovering") this.go("running", { reason: "recovery session started" });
     }
     const { stepPrompt } = this.template;

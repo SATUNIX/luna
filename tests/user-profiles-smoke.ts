@@ -250,6 +250,17 @@ try {
       fs.writeFileSync(path.join(w.profiles, "huge.json"), JSON.stringify({ name: "huge", extends: "balanced", description: "x".repeat(70 * 1024) }), { mode: 0o600 });
       assert.match(reads("huge"), /huge\.json is \d+ bytes; the limit is 65536/);
       fs.rmSync(path.join(w.profiles, "huge.json"));
+      // A FIFO is refused without blocking (O_NONBLOCK, and it is never opened).
+      assert.equal(spawnSync("mkfifo", [path.join(w.profiles, "pipe.json")]).status, 0);
+      assert.match(reads("pipe"), /pipe\.json is not a regular file/);
+      const fifoInstall = install(w, "pipe", ["--no-externals"]);
+      assert.equal(fifoInstall.status, 1, fifoInstall.stderr);
+      fs.rmSync(path.join(w.profiles, "pipe.json"));
+      // The parent pi-kit/ directory is checked too.
+      const piKit = path.dirname(w.profiles);
+      fs.chmodSync(piKit, 0o770);
+      assert.match(reads("my-lite"), /pi-kit is writable by its group or by everyone/, "a group-writable pi-kit/ is refused");
+      fs.chmodSync(piKit, 0o700);
       fs.chmodSync(w.profiles, 0o770);
       assert.match(reads("my-lite"), /profiles is writable by its group or by everyone/);
       fs.chmodSync(w.profiles, 0o700);

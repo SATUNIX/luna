@@ -218,14 +218,18 @@ function dirProblem(dir: string): string | null {
  * be a regular file you own, writable by you alone, with one link and at most USER_PROFILE_MAX_BYTES. Null when absent.
  */
 function readOwnFile(dir: string, file: string): { text: string } | { problem: string } | null {
-  try { fs.lstatSync(file); } catch { return null; }
+  let first: fs.Stats;
+  try { first = fs.lstatSync(file); } catch { return null; }
+  // Not even opened unless it is a regular file: a FIFO would block the open, a device the read.
+  if (first.isSymbolicLink()) return { problem: `${file} is a symbolic link; user profiles are not read through one` };
+  if (!first.isFile()) return { problem: `${file} is not a regular file` };
   for (const d of [path.dirname(dir), dir]) {
     const problem = dirProblem(d);
     if (problem) return { problem };
   }
   let fd: number;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   } catch (error) {
     const code = isRecord(error) ? error.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") return null;

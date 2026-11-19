@@ -186,8 +186,31 @@ export function goalCoreProblem(cwd: string, agentDir: string): string | null {
   const entry = at >= 0 ? settings.packages?.[at] : undefined;
   if (entry === undefined) return `${settingsFile} has no Luna package entry, so goal-core, which enforces it, is not loaded`;
   if (typeof entry === "string" || entry.extensions === undefined) return null;
-  const loaded = entry.extensions.some((p) => !p.startsWith("!") && !p.startsWith("-") && /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p));
+  const loaded = goalCoreSelected(entry.extensions);
   return loaded ? null : `the installed profile does not load goal-core, which enforces it (${settingsFile}); switch to a profile that loads it or drop the limits`;
+}
+
+/**
+ * Whether pi's filter (package-manager.js applyPatterns: plain includes, then `!` excludes, then `+`
+ * exact force-includes, then `-` exact force-excludes) leaves goal-core's entry file loaded. A pattern
+ * with a glob character that could reach it cannot be decided without pi's matcher, so it counts
+ * against: the answer is true only when goal-core is provably in the resolved set.
+ */
+export function goalCoreSelected(patterns: readonly string[]): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+  const glob = (p: string) => /[*?[\]{}]/.test(p);
+  // A plain or `!` pattern also matches by base name (minimatch(name, pattern) in pi).
+  const hits = (p: string) => /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p) || /^index\.(?:ts|js)$/.test(p);
+  const exact = (p: string) => /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p);
+  const of = (prefix: string) => patterns.filter((p) => p.startsWith(prefix)).map((p) => norm(p.slice(1)));
+  const includes = patterns.filter((p) => !/^[!+-]/.test(p)).map(norm);
+  let selected: boolean | "unknown" = includes.length === 0 ? true : includes.some(hits) ? true : includes.some(glob) ? "unknown" : false;
+  const excludes = of("!");
+  if (excludes.some(hits)) selected = false;
+  else if (selected === true && excludes.some(glob)) selected = "unknown";
+  if (of("+").some(exact)) selected = true;
+  if (of("-").some(exact)) selected = false;
+  return selected === true;
 }
 
 /** Run `luna exec`. Resolves to the process exit code. */
@@ -200,7 +223,11 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
     err.write(`luna exec: ${plan}\n${EXEC_USAGE}\n`);
     return 2;
   }
-  const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"));
+  // A ceiling from the flags or already in the environment (PI_KIT_CEILING_* set by the caller):
+  // goal-core enforces both, so both need it loaded.
+  const inherited = options.env ?? process.env;
+  const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"))
+    || Object.keys(inherited).some((k) => k.startsWith("PI_KIT_CEILING_") && (inherited[k] ?? "").trim() !== "");
   if (ceilingRequested && readOverrides(path.join(globalAgentDir(), "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) {
     err.write("luna exec: a ceiling was requested but overrides.json switches off goal-core, which enforces it; remove it from extensions.remove or drop the limits\n");
     return 2;

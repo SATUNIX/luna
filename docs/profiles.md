@@ -94,8 +94,10 @@ A user profile is your own profile, built from one of the shipped profiles or fr
   profile, at switch time as well as by `profile-check`.
 - A user profile is read without following links. Both `profiles/` and `pi-kit/` must be real
   directories you own that neither your group nor anyone else can write. The file must be a regular
-  file you own, writable by you alone, with one link, and at most 64 KiB. Anything else is refused
-  with the reason.
+  file you own, writable by you alone, with one link, and at most 64 KiB. Anything else (a FIFO
+  included, which is never opened) is refused with the reason. With a umask of 002, `pi-kit/` or a
+  hand-made profile file can come out group-writable and is refused: `chmod 700` the directory and
+  `chmod 600` the file.
 - A blank profile, or one that removes `goal-core`, has no ceiling: `luna exec` refuses its
   `--max-turns`, `--max-cost` and `--timeout` instead of ignoring them ([Headless](headless.md)).
 - `/profile create` never overwrites a file, and writes it 0600 in a 0700 directory.

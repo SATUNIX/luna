@@ -20,7 +20,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   - Add, remove and exclude lists take plain names only.
   - A stub or experimental add is refused at switch time.
 
-  Verification: `tests/user-profiles-smoke.ts`, `tests/luna-cli-smoke.ts`; 14 guards proven by revert.
+  - Round 2:
+    - The goal-core check reads the kit entry in pi's filter order, so a later `-` or `!` exclusion
+      wins and a glob that may reach goal-core counts against it.
+    - A `PI_KIT_CEILING_*` variable already in the environment needs goal-core too.
+    - A FIFO profile file is refused without being opened (O_NONBLOCK as well).
+    - The `pi-kit/` parent check has its own row.
+
+  Verification: `tests/user-profiles-smoke.ts`, `tests/luna-cli-smoke.ts`; 23 guards proven by revert.
 
 - **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:
   the only way to change what a profile loads was overrides.json, which applies to every profile.

@@ -42,7 +42,11 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
     integrity;
   - `remove` removes only what the ledger recorded.
 
-  No model tool. Verification: `tests/user-packages-smoke.ts` (`smoke:user-packages`, in
+  No model tool. Add and remove run only in the operator's own terminal: `packages.ts` asks for a
+  typed `yes` and refuses without a TTY, so `--accept`-style flags from a model's shell cannot add a
+  package. `/packages` in pi only searches, reviews and shows the command. npm gets the reviewed
+  registry explicitly. Dependencies are stated as unpinned. A kit companion is never removed, even
+  with a ledger entry. Verification: `tests/user-packages-smoke.ts` (`smoke:user-packages`, in
   `test:security`), against a local fixture registry.
 
 - **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:

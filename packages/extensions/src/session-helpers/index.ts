@@ -18,7 +18,7 @@ import {
 import { isLocalBaseUrl } from "./model-fit.ts";
 import { PROBE_TOOL_NAME, probeFile, probeToolCalls, readProbes, withProbe } from "./tool-probe.ts";
 import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
-import { atRootTerminal, confirmLowering, promptTimeoutMs, securityFilePath, securityLowering } from "./security-guard.ts";
+import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
 import { KIT_PACKAGE_NAMES, isKitLocalPackageName, trustedMarkerKitRoot, type MarkerKitRoot } from "./shared/kit-source.ts";
 import { say, usageError } from "./shared/say.ts";
 import { appendFileSafe } from "./shared/safe-fs.ts";
@@ -1040,11 +1040,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   // /packages: the operator's own pi packages (packages/core/packages.ts, docs/packages.md). A slash
-  // command only: no tool lets the model add or remove a package. An add or a remove needs a choice
-  // at the terminal of an interactive root session, and an add passes the exact integrity the
-  // operator saw; success is read back from the ledger, never from the child's exit code.
+  // command only, and no tool lets the model add or remove a package. Search, review and list run here;
+  // an add or a remove is only shown: packages.ts asks for it at a real terminal, outside pi.
   pi.registerCommand("packages", {
-    description: "Your own pi packages, outside the kit's reviewed companions: `/packages search [words]`, `/packages review <name>[@version]`, `/packages add <name>[@version]` (shows the review, asks, pins the exact version and integrity, installs with scripts off), `/packages remove <name>` (only what /packages added), `/packages list`.",
+    description: "Your own pi packages, outside the kit's reviewed companions: `/packages search [words]`, `/packages review <name>[@version]`, `/packages add <name>[@version]` and `/packages remove <name>` (show the review and the terminal command that asks you, pins the exact version and integrity, installs with scripts off; nothing changes from here), `/packages list`.",
     getArgumentCompletions: (prefix: string) => ["search", "review", "add", "remove", "list"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, ctx) => {
       const c = ctx;
@@ -1069,46 +1068,16 @@ export default function (pi: ExtensionAPI) {
         say(c, "packages: usage: /packages search [words] | review <name>[@version] | add <name>[@version] | remove <name> | list. Nothing was changed.", "error");
         return;
       }
-      if (!atRootTerminal(c)) {
-        say(c, `packages: ${verb} needs a choice at the terminal of an interactive root session; refused in headless, RPC and delegated/child sessions. Nothing was changed.`, "warning");
+      // An add or a remove is asked at a real terminal by packages.ts itself (a TTY prompt), which pi's
+      // TUI cannot give a child process: here it shows the review and the command to run, and changes nothing.
+      const command = `node ${script} ${verb} ${rest[0]}`;
+      if (verb === "add") {
+        const reviewed = await run(["review", rest[0]]);
+        if (reviewed.code !== 0) { show(reviewed); return; }
+        say(c, `packages: ${reviewed.stdout.trim().split("\n").filter((l) => !l.startsWith("To add exactly this")).join("\n")}\n\nTo add it, run this in your own terminal (outside pi); it asks you there, then /reload:\n  ${command}\nNothing was changed.`, "info");
         return;
       }
-      const ledgerFile = path.join(agentDir(), "pi-kit", "user-packages.json");
-      const recorded = (name: string, integrity?: string) => {
-        const entries = prop(readJsonFile(ledgerFile), "packages");
-        return Array.isArray(entries) && entries.some((e) => prop(e, "name") === name && (integrity === undefined || prop(e, "integrity") === integrity));
-      };
-      const target = rest[0];
-      if (verb === "remove") {
-        const choice = await c.ui.select(`Remove ${target}, which /packages added?`, ["No, keep it", "Yes, remove it"], { timeout: promptTimeoutMs() });
-        if (choice !== "Yes, remove it") { say(c, "packages: kept; nothing was changed.", "info"); return; }
-        const r = await run(["remove", target]);
-        show({ ...r, code: recorded(target) ? 1 : r.code });
-        return;
-      }
-      const reviewed = await run(["review", target, "--json"]);
-      let parsed: unknown;
-      try { parsed = JSON.parse(reviewed.stdout); } catch { parsed = null; }
-      const review = prop(parsed, "review");
-      const name = prop(review, "name");
-      const version = prop(review, "version");
-      const integrity = prop(review, "integrity");
-      const lines = prop(parsed, "lines");
-      if (reviewed.code !== 0 || typeof name !== "string" || typeof version !== "string" || typeof integrity !== "string" || !Array.isArray(lines)) {
-        show({ ...reviewed, code: 1 });
-        return;
-      }
-      if (prop(parsed, "kit") === true) {
-        say(c, `packages: ${name} is a Luna companion or Luna itself; the kit pins it, so /packages does not add it. Nothing was changed.`, "error");
-        return;
-      }
-      const accept = `Yes, add ${name}@${version} with this integrity`;
-      const choice = await c.ui.select(`${lines.filter((l): l is string => typeof l === "string").join("\n")}\n\nAdd it?`, ["No, do not add it", accept], { timeout: promptTimeoutMs() });
-      if (choice !== accept) { say(c, "packages: not added; nothing was changed.", "info"); return; }
-      const r = await run(["add", `${name}@${version}`, "--accept", integrity]);
-      const ok = recorded(name, integrity);
-      show({ ...r, code: ok ? 0 : 1 });
-      if (ok) say(c, "packages: run /reload to load it.", "info");
+      say(c, `packages: to remove ${rest[0]}, run this in your own terminal (outside pi); it asks you there:\n  ${command}\nNothing was changed.`, "info");
     },
   });
 

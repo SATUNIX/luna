@@ -126,7 +126,8 @@ async function getJson(fetcher: Fetcher, url: URL): Promise<unknown> {
   return parseJson(Buffer.from(r.body).toString("utf8"));
 }
 
-const text = (v: unknown, max = 200): string => (typeof v === "string" ? v.replace(/[^\P{Cc}]/gu, " ").slice(0, max) : "");
+// Control and format characters (bidi overrides, zero-width) are replaced, so a review reads as stored.
+const text = (v: unknown, max = 200): string => (typeof v === "string" ? v.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, max) : "");
 
 export interface SearchHit {
   name: string;
@@ -208,7 +209,7 @@ export function formatReview(r: PackageReview): string[] {
     `  package:      ${r.name}@${r.version}${r.description ? ` - ${r.description}` : ""}`,
     `  published:    ${r.publishedAt ?? "unknown"}${r.ageDays === null ? "" : ` (${String(r.ageDays)} day(s) ago)`}`,
     `  maintainers:  ${r.maintainers.join(", ") || "none listed"}`,
-    `  dependencies: ${r.dependencies.length ? r.dependencies.join(", ") : "none"}`,
+    `  dependencies: ${r.dependencies.length ? `${r.dependencies.join(", ")} (resolved by range when installed: NOT pinned or verified by Luna)` : "none"}`,
     `  install scripts (not run: installs here have scripts off): ${scripts.length ? scripts.map(([k, v]) => `${k}: ${v}`).join("; ") : "none"}`,
     `  integrity:    ${r.integrity}`,
   ];
@@ -253,27 +254,34 @@ export async function addPackage(deps: PackageDeps, name: string, version: strin
   const review = await reviewPackage(name, version, deps.registry, deps.metadata, deps.now);
   if (review.integrity !== accepted) throw new Error(`${name}@${version}: the registry now serves integrity ${review.integrity}, not the ${accepted} you accepted; refusing it`);
   await verifyTarball(review, deps.registry, deps.tarballs);
-  deps.pi(["install", review.source], { npm_config_ignore_scripts: "true" });
+  // The registry that was reviewed is the one npm installs from: npm otherwise also reads .npmrc,
+  // including a scoped registry, which the environment variable alone does not override.
+  const scope = name.startsWith("@") ? name.slice(0, name.indexOf("/")) : null;
+  deps.pi(["install", review.source], { npm_config_ignore_scripts: "true", npm_config_registry: deps.registry.href, ...(scope ? { [`npm_config_${scope}:registry`]: deps.registry.href } : {}) });
   const checked = checkInstalledIntegrity(piNpmRoot("global", deps.agentDir, deps.agentDir), { name, source: review.source, integrity: review.integrity, mode: "reference" });
   if (!checked.ok) {
     deps.pi(["remove", review.source], {});
     throw new Error(`${checked.reason}; removed it again`);
   }
   const entry: UserPackage = { name, version: review.version, source: review.source, integrity: review.integrity, review: "user-accepted", acceptedAt: (deps.now ?? new Date()).toISOString() };
-  writeLedger(file, [...ledger, entry]);
+  try {
+    writeLedger(file, [...ledger, entry]);
+  } catch (error) {
+    // Never leave an installed package the ledger does not know about.
+    deps.pi(["remove", review.source], {});
+    throw new Error(`could not record ${review.source} in ${file} (${error instanceof Error ? error.message : String(error)}); removed it again`, { cause: error });
+  }
   return entry;
 }
 
 /** Remove a package /packages added. Anything the ledger did not record is refused. */
 export function removePackage(deps: Pick<PackageDeps, "agentDir" | "kitPackages" | "pi">, name: string): UserPackage {
+  // A kit companion is refused whatever the ledger says: a hand-edited entry cannot remove one.
+  if (deps.kitPackages.has(name)) throw new Error(`${name} is a Luna companion; /packages removes only what it added (change the profile instead)`);
   const file = userPackagesPath(deps.agentDir);
   const ledger = readLedger(file);
   const entry = ledger.find((p) => p.name === name);
-  if (!entry) {
-    throw new Error(deps.kitPackages.has(name)
-      ? `${name} is a Luna companion; /packages removes only what it added (change the profile instead)`
-      : `${name} was not added with /packages, so it is left alone`);
-  }
+  if (!entry) throw new Error(`${name} was not added with /packages, so it is left alone`);
   if (npmSpec(entry.source)?.name !== name) throw new Error(`${file}: the entry for ${name} names another source`);
   deps.pi(["remove", entry.source], {});
   writeLedger(file, ledger.filter((p) => p !== entry));

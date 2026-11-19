@@ -17,7 +17,7 @@ This extension fills those gaps. It changes nothing on its own except publishing
 | `/clear` | Starts a new session after a confirm. `/clear --handoff` appends the last asks and tools to `HANDOFF.md` first. `/compact` shrinks the context and keeps the thread instead. |
 | `/menu` | The cheatsheet of pi built-ins plus Luna helpers. |
 | `/profile` | Switch the profile, all-or-nothing (below). `/profile` picker, `/profile <name>`, `/profile list`, `/profile status`, `/profile create <name> <base\|blank>` (your own profile, `docs/profiles.md`). |
-| `/packages` | Your own pi packages: `search`, `review`, `add` (asks, pins version and sha512, scripts off), `remove` (only what it added), `list` (`docs/packages.md`). |
+| `/packages` | Your own pi packages: `search`, `review` and `list`; `add` and `remove` show the terminal command that does them, which asks you there (`docs/packages.md`). |
 | `/compaction` | `status` (default without a UI) shows whether pi auto-compaction is really on, at what token count it triggers, the kit trigger, and why it is degraded. `on` / `off` write pi's global `compaction.enabled` and reload; `trigger on\|off` toggles the kit's fixed-budget trigger. |
 
 ## Compaction: effective state, published, warned once

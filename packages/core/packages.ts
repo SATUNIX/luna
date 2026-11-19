@@ -6,14 +6,16 @@
  *
  *   node packages/core/packages.ts search [words]          read-only: npm keyword pi-package
  *   node packages/core/packages.ts review <name>[@version] [--json]   read-only: what an add would accept
- *   node packages/core/packages.ts add <name>@<version> --accept <sha512 integrity>
- *   node packages/core/packages.ts remove <name>
+ *   node packages/core/packages.ts add <name>@<version>    shows the review, asks at the terminal
+ *   node packages/core/packages.ts remove <name>           asks at the terminal
  *   node packages/core/packages.ts list
  *
- * `add` installs only with the exact integrity the operator accepted from `review` (the /packages
- * command asks, then passes it). User scope only: the packages go into pi's global settings.
+ * `add` and `remove` need a person at an interactive terminal: they ask there and refuse when standard
+ * input or output is not a TTY, so a model's shell (pipes) cannot run them. User scope only: the
+ * packages go into pi's global settings.
  */
 import path from "node:path";
+import readline from "node:readline/promises";
 import { globalAgentDir } from "./lib/settings.ts";
 import { readSources } from "./lib/sources.ts";
 import { npmSpec } from "./lib/companions.ts";
@@ -40,9 +42,27 @@ function splitSpec(spec: string): { name: string; version: string | undefined } 
   return at > 0 ? { name: spec.slice(0, at), version: spec.slice(at + 1) } : { name: spec, version: undefined };
 }
 
-const USAGE = "usage: packages.ts search [words] | review <name>[@version] | add <name>@<version> --accept <sha512> | remove <name> | list";
+const USAGE = "usage: packages.ts search [words] | review <name>[@version] | add <name>@<version> | remove <name> | list";
 
-export async function main(argv: readonly string[], log: (line: string) => void = console.log): Promise<number> {
+/** Asks a person: the question is shown and "yes" typed at an interactive terminal is the only yes. */
+export type Confirm = (question: string) => Promise<boolean>;
+
+/** The operator gate: refuses when standard input or output is not a terminal (a pipe, a model's shell). */
+function requireTty(): void {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("this needs a person at an interactive terminal: run it in your own shell, not through pi or a pipe");
+}
+
+export const ttyConfirm: Confirm = async (question) => {
+  requireTty();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(`${question} Type yes to continue: `)).trim().toLowerCase() === "yes";
+  } finally {
+    rl.close();
+  }
+};
+
+export async function main(argv: readonly string[], log: (line: string) => void = console.log, confirm: Confirm = ttyConfirm): Promise<number> {
   const [verb, ...rest] = argv;
   const agentDir = globalAgentDir();
   const pi = (args: readonly string[], env: Readonly<Record<string, string>>) => {
@@ -68,23 +88,36 @@ export async function main(argv: readonly string[], log: (line: string) => void 
       }
       for (const line of formatReview(review)) log(line);
       if (kitPackages().has(name)) log(`  note: ${name} is a Luna companion or Luna itself; the kit pins it, so /packages will not add it.`);
-      log(`To add exactly this: /packages add ${review.name}@${review.version} (it asks you first)`);
+      log(`To add exactly this, in your own terminal: node ${path.join("packages", "core", "packages.ts")} add ${review.name}@${review.version} (it asks you first)`);
       return 0;
     }
     case "add": {
-      const accept = rest.indexOf("--accept");
-      const integrity = accept >= 0 ? rest[accept + 1] : undefined;
-      const specs = accept >= 0 ? rest.filter((_, i) => i !== accept && i !== accept + 1) : rest;
-      if (specs.length !== 1 || !specs[0] || integrity === undefined) throw new Error(`${USAGE}\nadd needs --accept with the integrity the review showed: an add is never unattended.`);
-      const { name, version } = splitSpec(specs[0]);
+      if (confirm === ttyConfirm) requireTty(); // before any network work: nobody could answer
+      if (rest.length !== 1 || !rest[0]) throw new Error(USAGE);
+      const { name, version } = splitSpec(rest[0]);
       if (version === undefined) throw new Error(`name the exact version: ${name}@<version>`);
-      const entry = await addPackage({ agentDir, registry: registryUrl(), kitPackages: kitPackages(), pi }, name, version, integrity);
+      const kit = kitPackages();
+      if (kit.has(name)) throw new Error(`${name} is a Luna companion or Luna itself; the kit installs and pins it, /packages does not`);
+      const registry = registryUrl();
+      const review = await reviewPackage(name, version, registry);
+      for (const line of formatReview(review)) log(line);
+      if (!(await confirm(`Add ${review.source} from ${registry.origin} with this integrity?`))) {
+        log("Not added; nothing was changed.");
+        return 1;
+      }
+      const entry = await addPackage({ agentDir, registry, kitPackages: kit, pi }, name, review.version, review.integrity);
       log(`Added ${entry.source} (integrity verified, install scripts off). UNREVIEWED by Luna: you accepted it. Recorded in ${userPackagesPath(agentDir)}.`);
       return 0;
     }
     case "remove": {
+      if (confirm === ttyConfirm) requireTty();
       if (rest.length !== 1 || !rest[0]) throw new Error(USAGE);
-      const entry = removePackage({ agentDir, kitPackages: kitPackages(), pi }, rest[0]);
+      const target = rest[0];
+      if (!(await confirm(`Remove ${target}, which /packages added?`))) {
+        log("Kept; nothing was changed.");
+        return 1;
+      }
+      const entry = removePackage({ agentDir, kitPackages: kitPackages(), pi }, target);
       log(`Removed ${entry.source}.`);
       return 0;
     }

@@ -86,7 +86,6 @@ function isConfig(value) {
         isRecord(value.settings) &&
         isRecord(value.paths) &&
         Array.isArray(value.paths.agentDirs) &&
-        isRecord(value.lens) &&
         isArrayOf(value.models, isProvider));
 }
 function isKitEntry(value) {
@@ -167,12 +166,6 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 function isThinkingLevel(value) {
     return typeof value === "string" && THINKING_LEVELS.includes(value);
 }
-function isLens(value) {
-    return (isRecord(value) &&
-        isRecord(value.lens) &&
-        typeof value.lens.available === "boolean" &&
-        Array.isArray(value.lens.files));
-}
 function isAutonomyRun(value) {
     return isRecord(value) && typeof value.run === "string";
 }
@@ -213,7 +206,6 @@ export const api = {
     session: (id) => request("GET", `/api/sessions/${enc(id)}`, isSession),
     sessionStats: (id) => request("GET", `/api/sessions/${enc(id)}/stats`, isStats),
     sessionTodos: (id) => request("GET", `/api/sessions/${enc(id)}/todos`, isTodos),
-    sessionLens: (id) => request("GET", `/api/sessions/${enc(id)}/lens`, isLens),
     createSession: (config) => request("POST", "/api/sessions", isSession, config),
     prompt: (id, message, streamingBehavior) => request("POST", `/api/sessions/${enc(id)}/prompt`, isPromptAck, {
         message,

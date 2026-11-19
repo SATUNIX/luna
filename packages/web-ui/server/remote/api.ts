@@ -680,7 +680,7 @@ export function createApi({ console: pc, auth, devices, pairings, limiter, hub, 
 	}
 
 	// --------------------------------------------------------- terminal sessions ---
-	/** A phone's command for a terminal session; false when the route is pi-console's (stats, todos, lens). */
+	/** A phone's command for a terminal session; false when the route is pi-console's (stats, todos). */
 	// Every dialog a phone answers is audited with the device, and the terminal is told, so an
 	// approval given from a phone is never anonymous (SEC-5 compensating control).
 	function recordPhoneAnswer(device: DeviceRecord, session: string, dialogId: string, dialog: AnsweredDialog | undefined, answer: DialogAnswer): void {
@@ -738,7 +738,7 @@ export function createApi({ console: pc, auth, devices, pairings, limiter, hub, 
 		if ((sub === undefined && method === "DELETE") || sub === "fork" || sub === "new") {
 			throw new ApiError(409, "this session runs in a terminal: stop, fork or reset it there (or /remote detach)");
 		}
-		return false; // not handled here: stats, todos, lens fall through to pi-console
+		return false; // not handled here: stats and todos fall through to pi-console
 	}
 
 	function answerFrom(body: AnswerBody): DialogAnswer {

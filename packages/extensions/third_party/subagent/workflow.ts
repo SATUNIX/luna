@@ -51,6 +51,8 @@ export interface StepDef {
   maxRuntimeMs?: number | undefined;
   when?: { step: string; status: StepStatus | StepStatus[] };
   gate?: { pass: string; retry: string; maxLoops: number };
+  /** Set by `until`/`max_iterations` (V5-21): the gate is a loop over this step, at most this many runs. */
+  maxIterations?: number | undefined;
   continueOnError?: boolean;
   parallel?: StepDef[];
   // The step's answer is more steps, or its result (inline plans only; plan.ts).
@@ -74,8 +76,10 @@ export const MAX_ID_LENGTH = 41;
 const ID = /^[a-z][a-z0-9_-]{0,40}$/;
 export const MAX_GATE_LOOPS = 10;
 const DEFAULT_GATE_LOOPS = 2;
+/** A loop step's runs when `max_iterations` is not given. */
+const DEFAULT_ITERATIONS = 3;
 
-/** A step's fields, in the words the tool text and an expanding child both read. */
+/** A plan step's fields, in the words the tool text and an expanding child both read (a saved YAML step also takes until and max_iterations). */
 export const STEP_SHAPE = "{id?, agent?, task, tools?, skills?, outputs?, when?, gate?, continue_on_error?, expand?} or {parallel: [steps], gate?}";
 
 function parseDuration(value: unknown): number | undefined {
@@ -140,6 +144,23 @@ function parseStep(raw: unknown, where: string, errors: string[], inline: boolea
     if (!loopsOk) errors.push(`${where}: gate max_loops must be a whole number from 0 to ${String(MAX_GATE_LOOPS)}`);
     step.gate = { pass: toText(g.pass ?? g.expect ?? ""), retry: toText(g.retry ?? g.on_fail ?? ""), maxLoops: loopsOk ? maxLoops : DEFAULT_GATE_LOOPS };
     if (!step.gate.pass) errors.push(`${where}: gate needs pass: (text the verdict line, the last non-empty line, must be, or a /regex/ tested on the output tail)`);
+  }
+  // A plan loop (V5-21): run this step again until its answer passes `until` (matched as a gate's
+  // pass), at most `max_iterations` runs in all. It is a gate whose retry is the step itself.
+  const rawIterations = raw.max_iterations ?? raw.maxIterations;
+  if (raw.until !== undefined || rawIterations !== undefined) {
+    if (raw.gate) errors.push(`${where}: until is a gate that retries its own step; give the step until or gate, not both`);
+    else if (step.parallel) errors.push(`${where}: a parallel group cannot take until; put a gate on the group`);
+    else {
+      const until = toText(raw.until ?? "");
+      const n = typeof rawIterations === "number" || typeof rawIterations === "string" ? Number(rawIterations) : DEFAULT_ITERATIONS;
+      const ok = Number.isInteger(n) && n >= 1 && n <= MAX_GATE_LOOPS + 1;
+      if (!ok) errors.push(`${where}: max_iterations must be a whole number from 1 to ${String(MAX_GATE_LOOPS + 1)}`);
+      if (!until) errors.push(`${where}: max_iterations needs until: (what the last non-empty line must be, or a /regex/ tested on the output tail)`);
+      const iterations = ok ? n : DEFAULT_ITERATIONS;
+      step.gate = { pass: until, retry: id, maxLoops: iterations - 1 };
+      step.maxIterations = iterations;
+    }
   }
   return step;
 }
@@ -1365,7 +1386,9 @@ async function runSteps(w: WorkflowDef, state: RunState, opts: RunOptions, run: 
         const looped = used > 0 ? ` after ${used} retry loop(s)` : "";
         const seen = redactExecutionText(verdictText).replace(/\s+/g, " ").trim().slice(0, GATE_OUTPUT_EXCERPT_CHARS);
         const why = skipped ? "was skipped before its verdict" : `did not pass${looped} (needs "${gate.pass}")${seen ? `; it read: ${seen}` : ""}`;
-        if (!gate.retry || used >= gate.maxLoops) return finish({ error: `gate ${step.id} ${why}` });
+        if (!gate.retry || used >= gate.maxLoops) {
+          return finish({ error: step.maxIterations !== undefined ? `loop ${step.id} stopped at max_iterations ${String(step.maxIterations)}: its answer ${skipped ? "was skipped" : `did not pass until (needs "${gate.pass}")${seen ? `; it read: ${seen}` : ""}`}` : `gate ${step.id} ${why}` });
+        }
         state.loops[step.id] = used + 1;
         const gateAt = state.cursor;
         state.cursor = w.steps.findIndex((s) => s.id === gate.retry);

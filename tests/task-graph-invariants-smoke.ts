@@ -197,7 +197,64 @@ async function testTaskClearEmptiesTheGraph() {
   }
 }
 
+// V5-21: a failing verify check or a stall puts the claimed task at an impasse with one bounded subgoal.
+async function testFailingVerifyCreatesOneBoundedSubgoal() {
+  const ws = tmpWorkspace("pi-kit-taskgraph-impasse-");
+  try {
+    const pi = await loadGraph();
+    const impasses: unknown[] = [];
+    pi.api.events.on("luna:impasse", (d) => impasses.push(d));
+    await pi.handlers.get("session_start")({}, { cwd: ws });
+    // No graph yet: a failure changes nothing and writes nothing.
+    pi.api.events.emit("luna:attention", { kind: "failed", label: "npm test failed" });
+    assert.ok(!fs.existsSync(path.join(ws, ".pi", "task-graph.json")), "no graph is created by a failure");
+    await create(pi, ws, "build the importer");
+    await create(pi, ws, "ship it", ["t1"]);
+    // Nothing claimed: still nothing.
+    pi.api.events.emit("luna:attention", { kind: "failed", label: "npm test failed" });
+    const read = (): Array<{ id: string; status: string; parent?: string; impasse?: { reason: string } }> => (JSON.parse(fs.readFileSync(path.join(ws, ".pi", "task-graph.json"), "utf8")) as { tasks: Array<{ id: string; status: string; parent?: string; impasse?: { reason: string } }> }).tasks;
+    assert.equal(read().length, 2, "with no claimed task a failure adds nothing");
+    assert.match(textOf(await pi.tools.get("task_next").execute("c", {}, undefined, undefined, { cwd: ws })), /Next: t1/);
+    // An approval card (active: true/false) is not a failure.
+    pi.api.events.emit("luna:attention", { kind: "approval", active: true, label: "approve bash" });
+    assert.equal(read().length, 2, "an approval card is not an impasse");
+    pi.api.events.emit("luna:attention", { kind: "failed", label: "npm test failed" });
+    let tasks = read();
+    assert.equal(tasks.length, 3, "one subgoal is created");
+    assert.equal(tasks[0]?.status, "impasse");
+    assert.equal(tasks[0]?.impasse?.reason, "npm test failed");
+    assert.deepEqual([tasks[2]?.id, tasks[2]?.status, tasks[2]?.parent], ["t3", "pending", "t1"]);
+    assert.equal(impasses.length, 1, "the impasse is announced on luna:impasse");
+    // The same check failing again, and a stall, add nothing: one open subgoal per task.
+    pi.api.events.emit("luna:attention", { kind: "failed", label: "npm test failed" });
+    pi.api.events.emit("pi-kit:stall-seen", { signature: "s" });
+    assert.equal(read().length, 3, "a task with an open subgoal gets no second one");
+    const listed = textOf(await pi.tools.get("task_list").execute("c", {}, undefined, undefined, { cwd: ws }));
+    assert.match(listed, /t1 \[impasse\] build the importer \(impasse: npm test failed\)/);
+    assert.match(listed, /t3 \[pending\] Resolve the impasse in t1: npm test failed \(subgoal of t1\)/);
+    // The subgoal is next; its own failure nests one level, and no deeper than MAX_SUBGOAL_DEPTH.
+    assert.match(textOf(await pi.tools.get("task_next").execute("c", {}, undefined, undefined, { cwd: ws })), /Next: t3/);
+    pi.api.events.emit("pi-kit:stall-seen", { signature: "s" });
+    tasks = read();
+    assert.deepEqual([tasks[2]?.status, tasks[3]?.parent], ["impasse", "t3"], "a stall in the subgoal nests one more subgoal");
+    assert.match(textOf(await pi.tools.get("task_next").execute("c", {}, undefined, undefined, { cwd: ws })), /Next: t4/, "the deepest subgoal comes first");
+    pi.api.events.emit("luna:attention", { kind: "failed", label: "still failing" });
+    assert.equal(read().length, 4, "no subgoal below the depth limit");
+    assert.equal(read()[3]?.status, "in_progress", "the task at the depth limit stays claimed");
+    // Completing the subgoals unwinds the stack: each parent returns to pending.
+    assert.match(textOf(await pi.tools.get("task_complete").execute("c", { id: "t4" }, undefined, undefined, { cwd: ws })), /t3 is out of its impasse and pending again/);
+    assert.match(textOf(await pi.tools.get("task_next").execute("c", {}, undefined, undefined, { cwd: ws })), /Next: t3/);
+    assert.match(textOf(await pi.tools.get("task_update").execute("c", { id: "t3", status: "done" }, undefined, undefined, { cwd: ws })), /t1 is out of its impasse and pending again/);
+    tasks = read();
+    assert.deepEqual([tasks[0]?.status, tasks[0]?.impasse], ["pending", undefined]);
+    assert.match(textOf(await pi.tools.get("task_complete").execute("c", { id: "t2" }, undefined, undefined, { cwd: ws })), /Cannot complete t2: unfinished dependencies \(t1\)/, "a dependent still waits for the parent");
+  } finally {
+    rmWorkspace(ws);
+  }
+}
+
 const tests: Array<[name: string, fn: () => Promise<void>]> = [
+  ["a failing verify or a stall creates one bounded subgoal; completing it resumes the parent (V5-21)", testFailingVerifyCreatesOneBoundedSubgoal],
   ["task_next claims a task atomically, does not hand it out twice", testTaskNextClaimsAtomically],
   ["task_complete rejects completion with unfinished dependencies", testCompleteRejectsUnfinishedDependency],
   ["task_update rejects an invalid status value", testUpdateRejectsInvalidStatus],

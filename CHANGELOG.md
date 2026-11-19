@@ -27,6 +27,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   its whole share before it starts or waits in a new phase, `worker-wait`, and releases it when it
   exits. Each bound is off until set, so a host that sets none behaves as before. Verified by
   `tests/autonomy-lifecycle-smoke.ts` and `tests/autonomy-selfimprove-smoke.ts`.
+- **`/herdr`: a small herdr client for the operator (V5-19).** The herdr extension only notified
+  herdr. It now also registers `/herdr list`, `read <agent> [lines]`, `send <agent> <text>` and
+  `spawn <label> [dir]`, which run the `herdr` CLI on `PATH` (argument list, no shell, timeout) from
+  any session, not in a subagent child or with `PI_KIT_HERDR=off`. `send` never answers another
+  agent's dialog: it checks the agent's state first and refuses a blocked agent, and reports
+  herdr's own `agent_blocked` refusal. Nothing moves focus: `spawn` passes `--no-focus` and there is
+  no focus, keys or attach command. Read output has escapes and control characters removed and is
+  redacted. It is a command, not a model tool. Documented in `docs/herdr.md`; verified by
+  `tests/herdr-smoke.ts` against a fake `herdr` on `PATH`.
 
 - **`pi-autonomy draft --goal` and `pi-autonomy up` set a run up from a goal (V5-10, PG-43).**
   Finding: an agent asked to start a containerised run toward a goal had to drive `init` through many

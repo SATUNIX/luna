@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../core/schema/extension.schema.json",
+  "name": "schedule",
+  "summary": "/schedule: list, add, remove and run-now for scheduled Luna runs (luna schedule: systemd user timers, or crontab without systemd). Adding asks the operator through pi's confirm dialog first; a command, not a model tool.",
+  "category": "workflow",
+  "tier": "T3",
+  "layer": 3,
+  "entry": "index.ts",
+  "hooks": [],
+  "registers": { "tools": [], "commands": ["schedule"] },
+  "profiles": [],
+  "enabledByDefault": false,
+  "platforms": ["linux", "darwin"],
+  "runtime": {
+    "nodeBuiltins": ["node:child_process", "node:path", "node:url"],
+    "npm": [],
+    "piPeers": [],
+    "services": [],
+    "models": []
+  },
+  "pulls": [],
+  "env": [],
+  "provenance": { "origin": "custom" },
+  "homeRepo": null,
+  "status": "experimental"
+}

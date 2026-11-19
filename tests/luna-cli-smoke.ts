@@ -106,3 +106,6 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
+
+// `luna schedule` and /schedule (V5-14).
+await import("./schedule-checks.ts");

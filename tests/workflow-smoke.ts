@@ -334,6 +334,47 @@ steps:
     ok("declared outputs are enforced; artefacts flow through {{file:}}; when skips");
   }
 
+  // V5-21: a plan loop. `until` re-runs the step until its answer passes, at most max_iterations runs.
+  {
+    const loopDef = (n: string) => `
+name: loop
+steps:
+  - id: polish
+    agent: implementer
+    task: "polish"
+    until: DONE
+${n}
+  - id: after
+    agent: scout
+    task: "after"
+`;
+    let runs = 0;
+    const stops = await run(loopDef("    max_iterations: 3"), {}, (task) => (task.startsWith("polish") ? `try ${++runs}\nNOT YET` : "ok"));
+    assert.equal(stops.final.status, "failed");
+    assert.equal(stops.calls.filter((c) => c.startsWith("polish")).length, 3, "the loop runs the step exactly max_iterations times");
+    assert.ok(!stops.calls.some((c) => c.startsWith("after")), "the step after a stopped loop does not run");
+    assert.match(stops.final.steps.polish?.error ?? stops.final.error ?? "", /loop polish stopped at max_iterations 3: its answer did not pass until \(needs "DONE"\); it read: try 3 NOT YET/);
+    runs = 0;
+    const settles = await run(loopDef("    max_iterations: 5"), {}, (task) => (task.startsWith("polish") ? (++runs < 2 ? "NOT YET" : "Finished.\nDONE") : "ok"));
+    assert.equal(settles.final.status, "passed");
+    assert.equal(settles.calls.filter((c) => c.startsWith("polish")).length, 2, "the loop stops as soon as the answer passes until");
+    assert.ok(settles.calls.some((c) => c.startsWith("after")), "and the run goes on");
+    runs = 0;
+    const byDefault = await run(loopDef(""), {}, (task) => (task.startsWith("polish") ? "NOT YET" : "ok"));
+    assert.equal(byDefault.calls.filter((c) => c.startsWith("polish")).length, 3, "max_iterations defaults to 3");
+    for (const [extra, why] of [
+      ["    max_iterations: 0", /max_iterations must be a whole number from 1 to 11/],
+      ["    max_iterations: 12", /max_iterations must be a whole number from 1 to 11/],
+      ["    gate: { pass: DONE, retry: polish }", /give the step until or gate, not both/],
+    ] as const) {
+      const r = W.parseWorkflow(wf(loopDef(extra)), path.join(ws, "w.md"), "user");
+      assert.ok(r.errors.some((e) => why.test(e)), `${extra.trim()}: ${JSON.stringify(r.errors)}`);
+    }
+    const noUntil = W.parseWorkflow(wf(loopDef("    max_iterations: 2").replace("    until: DONE\n", "")), path.join(ws, "w.md"), "user");
+    assert.ok(noUntil.errors.some((e) => /max_iterations needs until/.test(e)), JSON.stringify(noUntil.errors));
+    ok("until re-runs a step until it passes and stops at max_iterations (default 3); bad loops are refused");
+  }
+
   // 7. Resume after interruption.
   {
     const def = `

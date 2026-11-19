@@ -8,7 +8,9 @@ import { openFileExclusive, writeFileSafe } from "./shared/safe-fs.ts";
 // The planner emits tasks (with dependencies); implementers claim the next unblocked task and mark
 // it done. Stored at .pi/task-graph.json so it survives subprocess boundaries and compaction.
 
-type Status = "pending" | "in_progress" | "done" | "blocked";
+// `impasse` (V5-21, after SOAR): the task cannot progress as it is; a subgoal under it (a task whose
+// `parent` is its id) is the way out, and completing the last open subgoal returns it to pending.
+type Status = "pending" | "in_progress" | "done" | "blocked" | "impasse";
 
 interface Task {
   id: string;
@@ -21,13 +23,22 @@ interface Task {
   // When task_next claimed the task (renewed by task_update while in_progress). A claim older
   // than the lease is handed out again, so a crashed implementer cannot hold a task forever.
   claimedAt?: string | undefined;
+  /** The task this one is a subgoal of: the goal stack is the chain of parents. */
+  parent?: string | undefined;
+  /** Why the task reached an impasse (a failed check, a stall), and when. */
+  impasse?: { reason: string; at: string } | undefined;
 }
 
 interface Graph {
   tasks: Task[];
 }
 
-const VALID_STATUSES: Status[] = ["pending", "in_progress", "done", "blocked"];
+const VALID_STATUSES: Status[] = ["pending", "in_progress", "done", "blocked", "impasse"];
+
+/** How deep subgoals may nest: a subgoal of a subgoal of a task, and no deeper. */
+export const MAX_SUBGOAL_DEPTH = 2;
+/** The most subgoals one graph may hold, so repeated failures cannot grow it without bound. */
+export const MAX_SUBGOALS = 20;
 
 // Claim lease: longer than a subagent's default 30-minute wall-clock bound, so a live implementer
 // keeps its task. Read per call; 0 disables expiry.
@@ -125,6 +136,8 @@ function load(cwd: string): Graph {
         if (typeof raw.description === "string") task.description = raw.description;
         if (typeof raw.notes === "string") task.notes = raw.notes;
         if (typeof raw.claimedAt === "string") task.claimedAt = raw.claimedAt;
+        if (typeof raw.parent === "string") task.parent = raw.parent;
+        if (isRecord(raw.impasse) && typeof raw.impasse.reason === "string" && typeof raw.impasse.at === "string") task.impasse = { reason: raw.impasse.reason, at: raw.impasse.at };
         tasks.push(task);
       }
       if (dropped > 0 || repaired > 0) {
@@ -199,11 +212,86 @@ function isUnblocked(g: Graph, t: Task): boolean {
   return t.dependsOn.every((d) => g.tasks.find((x) => x.id === d)?.status === "done");
 }
 
+/** How many parents a task has (0 for a top-level task). A broken or cyclic chain stops counting. */
+function depthOf(g: Graph, t: Task): number {
+  let depth = 0;
+  const seen = new Set<string>([t.id]);
+  for (let p = t.parent; p !== undefined && !seen.has(p); depth++) {
+    seen.add(p);
+    p = g.tasks.find((x) => x.id === p)?.parent;
+  }
+  return depth;
+}
+
+const openSubgoals = (g: Graph, id: string): Task[] => g.tasks.filter((x) => x.parent === id && x.status !== "done");
+
+/**
+ * Put the claimed task (the most recently claimed in_progress one) at an impasse and add one
+ * subgoal under it. Bounded: a task that already has an open subgoal gets no second one (repeated
+ * failures of the same check change nothing), subgoals nest at most MAX_SUBGOAL_DEPTH deep, and a
+ * graph holds at most MAX_SUBGOALS. Returns what happened, or null when no task is claimed.
+ */
+export function raiseImpasse(g: Graph, reason: string, now: Date): string | null {
+  const claimed = g.tasks.filter((t) => t.status === "in_progress").sort((a, b) => (b.claimedAt ?? "").localeCompare(a.claimedAt ?? ""))[0];
+  if (!claimed) return null;
+  const clean = reason.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 160) || "no progress";
+  if (openSubgoals(g, claimed.id).length > 0) return `${claimed.id} already has an open subgoal`;
+  const depth = depthOf(g, claimed);
+  if (depth >= MAX_SUBGOAL_DEPTH) return `${claimed.id} is a subgoal at the depth limit (${MAX_SUBGOAL_DEPTH}); no deeper subgoal`;
+  if (g.tasks.filter((t) => t.parent !== undefined).length >= MAX_SUBGOALS) return `the graph holds ${MAX_SUBGOALS} subgoals; no more`;
+  claimed.status = "impasse";
+  claimed.claimedAt = undefined;
+  claimed.impasse = { reason: clean, at: now.toISOString() };
+  const sub: Task = {
+    id: nextId(g),
+    title: `Resolve the impasse in ${claimed.id}: ${clean}`,
+    description: `Subgoal of ${claimed.id} (${claimed.title}). Find out why it is stuck and remove the cause; completing this task returns ${claimed.id} to pending.`,
+    dependsOn: [],
+    status: "pending",
+    createdAt: now.toISOString(),
+    parent: claimed.id,
+  };
+  g.tasks.push(sub);
+  return `${claimed.id} is at an impasse (${clean}); subgoal ${sub.id} created`;
+}
+
+/** When `done` was a subgoal and its parent has no other open subgoal, the parent returns to pending. */
+function resumeParent(g: Graph, done: Task): string {
+  if (done.parent === undefined) return "";
+  const parent = g.tasks.find((x) => x.id === done.parent);
+  if (parent?.status !== "impasse" || openSubgoals(g, parent.id).length > 0) return "";
+  parent.status = "pending";
+  parent.impasse = undefined;
+  return ` ${parent.id} is out of its impasse and pending again.`;
+}
+
 function text(t: string) {
   return { content: [{ type: "text" as const, text: t }], details: undefined };
 }
 
 export default function (pi: ExtensionAPI) {
+  // Impasses (V5-21): a failed verify check (verify-gate's `luna:attention` with kind "failed") or a
+  // progress-guard stall (`pi-kit:stall-seen`) puts the claimed task at an impasse with one subgoal.
+  // Only an existing graph with a claimed task changes; anything else is ignored.
+  let cwd: string | undefined;
+  pi.on("session_start", (_event, ctx) => { cwd = ctx.cwd; });
+  const onImpasse = (reason: string): void => {
+    const dir = cwd;
+    if (dir === undefined || !fs.existsSync(graphPath(dir))) return;
+    const result = withGraphLock(dir, () => {
+      const g = load(dir);
+      const outcome = raiseImpasse(g, reason, new Date());
+      if (outcome?.includes("subgoal t")) save(dir, g);
+      return outcome;
+    });
+    if (result.ok && result.value) pi.events?.emit("luna:impasse", { detail: result.value });
+  };
+  pi.events?.on("luna:attention", (data) => {
+    const d = isRecord(data) ? data : {};
+    if (d.kind === "failed" && d.active === undefined) onImpasse(typeof d.label === "string" ? d.label : "a check failed");
+  });
+  pi.events?.on("pi-kit:stall-seen", () => onImpasse("no progress (stall)"));
+
   pi.registerTool({
     name: "task_create",
     label: "Task: create",
@@ -239,10 +327,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_update",
     label: "Task: update",
-    description: "Update a task's status (pending|in_progress|done|blocked) and/or notes.",
+    description: "Update a task's status (pending|in_progress|done|blocked|impasse) and/or notes.",
     parameters: Type.Object({
       id: Type.String({ description: "Task ID" }),
-      status: Type.Optional(Type.String({ description: "pending | in_progress | done | blocked" })),
+      status: Type.Optional(Type.String({ description: "pending | in_progress | done | blocked | impasse" })),
       notes: Type.Optional(Type.String({ description: "Progress notes" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -267,8 +355,9 @@ export default function (pi: ExtensionAPI) {
         if (params.notes !== undefined) t.notes = params.notes;
         // Any update of an in_progress task is a sign of life: it renews the claim's lease.
         if (t.status === "in_progress") t.claimedAt = new Date().toISOString();
+        const resumed = t.status === "done" ? resumeParent(g, t) : "";
         save(ctx.cwd, g);
-        return text(`Updated ${t.id}: ${t.status}`);
+        return text(`Updated ${t.id}: ${t.status}${resumed}`);
       });
       return result.ok ? result.value : text(`Cannot update task graph: ${result.reason}`);
     },
@@ -285,7 +374,7 @@ export default function (pi: ExtensionAPI) {
       const g = load(ctx.cwd);
       const tasks = params.status ? g.tasks.filter((t) => t.status === params.status) : g.tasks;
       if (tasks.length === 0) return text("(no tasks)");
-      const lines = tasks.map((t) => `- ${t.id} [${t.status}] ${t.title}${depStatus(g, t)}`);
+      const lines = tasks.map((t) => `- ${t.id} [${t.status}] ${t.title}${depStatus(g, t)}${t.parent ? ` (subgoal of ${t.parent})` : ""}${t.status === "impasse" && t.impasse ? ` (impasse: ${t.impasse.reason})` : ""}`);
       return text(lines.join("\n"));
     },
   });
@@ -293,7 +382,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "task_next",
     label: "Task: next",
-    description: "Claim the next actionable task (pending, dependencies done) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.",
+    description: "Claim the next actionable task (pending, dependencies done; a subgoal of a task at an impasse first) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const result = withGraphLock(ctx.cwd, () => {
@@ -301,7 +390,8 @@ export default function (pi: ExtensionAPI) {
         const now = Date.now();
         const reclaimed = reclaimExpired(g, now);
         const note = reclaimed.length > 0 ? `Reclaimed expired claim(s): ${reclaimed.join(", ")}\n` : "";
-        const next = g.tasks.find((t) => t.status === "pending" && isUnblocked(g, t));
+        // The goal stack: the deepest pending subgoal comes first, then tasks in order.
+        const next = g.tasks.filter((t) => t.status === "pending" && isUnblocked(g, t)).sort((a, b) => depthOf(g, b) - depthOf(g, a))[0];
         if (!next) {
           if (reclaimed.length > 0) save(ctx.cwd, g);
           const remaining = g.tasks.filter((t) => t.status !== "done").length;
@@ -339,9 +429,10 @@ export default function (pi: ExtensionAPI) {
         }
         t.status = "done";
         t.claimedAt = undefined;
+        const resumed = resumeParent(g, t);
         save(ctx.cwd, g);
         const left = g.tasks.filter((x) => x.status !== "done").length;
-        return text(`Completed ${t.id}. ${left} task(s) remaining.`);
+        return text(`Completed ${t.id}. ${left} task(s) remaining.${resumed}`);
       });
       return result.ok ? result.value : text(`Cannot update task graph: ${result.reason}`);
     },

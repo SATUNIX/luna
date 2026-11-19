@@ -140,6 +140,15 @@ to $20; more is refused). It takes the `implement` or `self-improve` template, a
 egress, services, credentials or promotion: widening any of them means editing the contract, which
 changes the digest the operator authorises. It never writes an `authorisation` block.
 
+`draft --preset luna-self-improve --repo <luna checkout>` drafts a run that analyses and improves
+Luna itself: the `self-improve` template, a fixed goal (find one real defect, gap or inefficiency
+per cycle, fix it with a test, keep the docs current), and Luna's reference gate
+(`/opt/autonomy/gate.sh`, 60 minutes) as the acceptance check. `--goal` adds a focus to that goal.
+Every closed default above still applies, and the preset sets no permission: cycles that touch R3
+paths (the charter, CI, gate policy, the firewall, the autonomy boundary, release files; see the
+`self-improve` template's risk tiers) are still refused and proposed instead, because the preset
+never sets `allowControlChanges`.
+
 `up` never asks and never authorises. It starts only a contract that already carries an
 authorisation for its current digest, then checks the host as `doctor --setup` does (engine, image,
 inference key), creates the run and starts its supervisor in the background. With `--json` it prints

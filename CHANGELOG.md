@@ -10,6 +10,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`pi-autonomy draft --preset luna-self-improve` drafts a run that improves Luna itself
+  (V5-13).** Finding: a run aimed at Luna's own systems still meant choosing a template, a goal and
+  Luna's gate by hand. Fix: the preset fills in the `self-improve` template, a fixed goal and the
+  reference gate (`/opt/autonomy/gate.sh`, 60 minutes) under `draft`'s closed defaults. `--goal`
+  adds a focus, and `--repo` names the checkout. The preset sets no permission, so R3 (control)
+  paths are still refused. `init` gains `--check-minutes` for the checks it writes. Verified by
+  `tests/autonomy-cli-smoke.ts`.
+
 - **Worker slots bound how many autonomy workers run on one host, and what they take together
   (V5-22).** Finding: only acceptance gates were bounded host-wide (gate slots), so several runs
   on one host could start as many worker containers as they liked, whatever their CPUs, memory and

@@ -7,6 +7,7 @@
 //   pi-autonomy plan --config run.json [--authorise --by <name>]   validate, show the resolved boundary and its digest
 //   pi-autonomy start --config run.json [--yes] [--detach]        confirm the boundary, then run
 //   pi-autonomy draft --goal <text> [--repo <path>] [--out run.json]   a contract from a goal, closed defaults, not authorised
+//                                               (--preset luna-self-improve: Luna's own self-improve run)
 //   pi-autonomy up --config run.json --json     start an authorised contract detached; one JSON line {runId, pid, status}
 //   pi-autonomy status [--run <id>]  pause|resume|steer|cancel --run <id>   manage a run
 //   pi-autonomy events [--since <ISO|2h>] [--run <id>] [--type <t>] [--limit N]   the host event log, oldest first
@@ -448,6 +449,23 @@ export const DRAFT_BUDGET = { totalUsd: 5, perStepUsd: 1, maxSteps: 20, maxMinut
 export const DRAFT_MAX_USD = 20;
 export const DRAFT_TEMPLATES: readonly TemplateId[] = ["implement", "self-improve"];
 
+/**
+ * Goal presets for `draft --preset`: a template, a goal and acceptance checks, under the same
+ * closed defaults. A preset sets no permission: what a cycle may merge stays the template's rule,
+ * so R3 (control) paths are still refused (lib/risk.ts; allowControlChanges is never set here).
+ */
+export interface DraftPreset { template: TemplateId; title: string; goal: string; checks: readonly string[]; checkMinutes: number }
+export const DRAFT_PRESETS: Readonly<Record<string, DraftPreset>> = {
+  "luna-self-improve": {
+    template: "self-improve",
+    title: "Analyse and improve Luna's own systems",
+    goal: "Analyse Luna's own systems (the packages, their tests and the docs) and improve them in reviewed cycles: each cycle finds one real defect, gap or inefficiency, verified against the code, fixes it with a test that fails without the fix, and keeps the docs describing current behaviour.",
+    // The reference gate for this repository (packages/autonomy/image/gate.sh): its offline checks, check:all included.
+    checks: ['gate=["/opt/autonomy/gate.sh"]'],
+    checkMinutes: 60,
+  },
+};
+
 // --- commands -----------------------------------------------------------------------------------------
 const commands: Record<string, Command> = {
   async templates(argv) {
@@ -457,7 +475,7 @@ const commands: Record<string, Command> = {
   },
 
   async init(argv, deps) {
-    const { opts } = parseArgs(argv, { values: ["template", "out", "run", "title", "spec", "spec-file", "repo", "repo-url", "ref", "budget-usd", "step-usd", "max-steps", "max-minutes", "effort", "model", "manager-model", "review-model", "provider", "upstream", "key-env", "promotion", "promotion-repo", "promotion-url", "promotion-branch", "integration-branch", "engine", "image", "streams", "engineers"], lists: ["check", "backlog", "egress", "write-area", "service", "mount", "health", "credential"], flags: ["json", "force", "unattended", "attended", "no-review", "yes"] });
+    const { opts } = parseArgs(argv, { values: ["template", "out", "run", "title", "spec", "spec-file", "repo", "repo-url", "ref", "budget-usd", "step-usd", "max-steps", "max-minutes", "effort", "model", "manager-model", "review-model", "provider", "upstream", "key-env", "promotion", "promotion-repo", "promotion-url", "promotion-branch", "integration-branch", "engine", "image", "streams", "engineers", "check-minutes"], lists: ["check", "backlog", "egress", "write-area", "service", "mount", "health", "credential"], flags: ["json", "force", "unattended", "attended", "no-review", "yes"] });
     const interactive = deps.isTTY && !opts.json && !opts.yes;
     let template = opts.template;
     if (!template && interactive) template = await deps.ask(`Template (${Object.keys(TEMPLATES).join(", ")})`, "implement");
@@ -478,11 +496,13 @@ const commands: Record<string, Command> = {
     if (repoPath) raw.inputs.repository = { path: repoPath, ref: opts.ref ?? "main" };
     else if (opts["repo-url"]) raw.inputs.repository = { url: opts["repo-url"], ref: opts.ref ?? "main" };
     else raw.inputs.repository = null;
+    const checkMinutes = num(opts["check-minutes"], "check-minutes") ?? 15;
+    if (!Number.isInteger(checkMinutes) || checkMinutes < 1 || checkMinutes > 1440) throw new CliError("usage", "--check-minutes must be a whole number of minutes from 1 to 1440");
     for (const c of opts.check ?? []) {
       const i = c.indexOf("=");
       if (i < 1) throw new CliError("usage", `--check needs id=command (got ${JSON.stringify(c)})`);
       const cmd = c.slice(i + 1).trim();
-      raw.acceptance.checks.push({ id: c.slice(0, i), run: cmd.startsWith("[") ? parseJson(cmd) : cmd, timeoutMinutes: 15, required: true });
+      raw.acceptance.checks.push({ id: c.slice(0, i), run: cmd.startsWith("[") ? parseJson(cmd) : cmd, timeoutMinutes: checkMinutes, required: true });
     }
     if (!raw.acceptance.checks.length && interactive) {
       for (;;) { const c = await deps.ask("Acceptance check as id=command (blank to finish)", ""); if (!c) break; const i = c.indexOf("="); if (i > 0) raw.acceptance.checks.push({ id: c.slice(0, i), run: c.slice(i + 1).trim(), timeoutMinutes: 15, required: true }); }
@@ -539,21 +559,28 @@ const commands: Record<string, Command> = {
    * digest and authorises nothing; the operator reviews it with `plan` and authorises that digest.
    */
   async draft(argv, deps) {
-    const { opts } = parseArgs(argv, { values: ["goal", "template", "out", "run", "repo", "ref", "budget-usd", "model", "effort"], lists: ["check"], flags: ["json", "force", "unattended"] });
-    const goal = oneVisibleLine(opts.goal ?? "").trim();
-    if (!goal) throw new CliError("usage", "draft needs --goal <text>: what the run should achieve");
-    const template = opts.template ?? "implement";
+    const { opts } = parseArgs(argv, { values: ["goal", "preset", "template", "out", "run", "repo", "ref", "budget-usd", "model", "effort"], lists: ["check"], flags: ["json", "force", "unattended"] });
+    const focus = oneVisibleLine(opts.goal ?? "").trim();
+    const preset = opts.preset === undefined ? null : Object.hasOwn(DRAFT_PRESETS, opts.preset) ? DRAFT_PRESETS[opts.preset] ?? null : null;
+    if (opts.preset !== undefined && !preset) throw new CliError("usage", `--preset must be one of ${Object.keys(DRAFT_PRESETS).join(", ")}`);
+    if (preset && opts.template !== undefined && opts.template !== preset.template) throw new CliError("usage", `--preset ${String(opts.preset)} uses the ${preset.template} template`);
+    if (preset && !opts.repo) throw new CliError("usage", `--preset ${String(opts.preset)} needs --repo <path to the checkout to improve>`);
+    // With a preset, --goal is an optional focus added to the preset's goal.
+    const goal = preset ? (focus ? `${preset.goal} Focus: ${focus}` : preset.goal) : focus;
+    if (!goal) throw new CliError("usage", "draft needs --goal <text>: what the run should achieve (or --preset <name>)");
+    const template = preset?.template ?? opts.template ?? "implement";
     if (!(DRAFT_TEMPLATES as readonly string[]).includes(template)) throw new CliError("usage", `--template must be one of ${DRAFT_TEMPLATES.join(", ")} for a draft`);
     const budgetUsd = num(opts["budget-usd"], "budget-usd") ?? DRAFT_BUDGET.totalUsd;
     if (!(budgetUsd > 0) || budgetUsd > DRAFT_MAX_USD) throw new CliError("refused", `a drafted run's budget must be above $0 and at most $${String(DRAFT_MAX_USD)} (asked $${String(budgetUsd)}); raise it in the contract by hand, where the operator sees it`);
-    const title = goal.length > 80 ? `${goal.slice(0, 79)}…` : goal;
+    const title = preset ? preset.title : goal.length > 80 ? `${goal.slice(0, 79)}…` : goal;
     const initArgv = [
       "--template", template, "--title", title, "--spec", goal, "--promotion", "local-branch", "--yes", "--json",
       "--budget-usd", String(budgetUsd), "--step-usd", String(Math.min(DRAFT_BUDGET.perStepUsd, budgetUsd)), "--max-steps", String(DRAFT_BUDGET.maxSteps), "--max-minutes", String(DRAFT_BUDGET.maxMinutes),
       opts.unattended ? "--unattended" : "--attended",
       ...(opts.out ? ["--out", opts.out] : []), ...(opts.run ? ["--run", opts.run] : []), ...(opts.repo ? ["--repo", opts.repo] : []), ...(opts.ref ? ["--ref", opts.ref] : []),
       ...(opts.model ? ["--model", opts.model] : []), ...(opts.effort ? ["--effort", opts.effort] : []), ...(opts.force ? ["--force"] : []),
-      ...(opts.check ?? []).flatMap((c) => ["--check", c]),
+      ...[...(preset?.checks ?? []), ...(opts.check ?? [])].flatMap((c) => ["--check", c]),
+      ...(preset ? ["--check-minutes", String(preset.checkMinutes)] : []),
     ];
     const init = commands["init"];
     if (!init) throw new CliError("error", "init is missing");
@@ -563,7 +590,7 @@ const commands: Record<string, Command> = {
     const digest = cfg.contract ? renderBoundary(cfg.contract, { effort: effortFor(deps) }).digest : null;
     const next = [`pi-autonomy plan --config ${file}`, `pi-autonomy plan --config ${file} --authorise --digest ${digest ?? "<digest>"} --by <operator>`, `pi-autonomy up --config ${file} --json`];
     return {
-      data: { path: file, run: cfg.contract?.run ?? opts.run ?? null, template, goal, valid: cfg.ok, problems: cfg.problems, digest, authorised: false, defaults: { egress: [], promotion: "local-branch", budget: { ...DRAFT_BUDGET, totalUsd: budgetUsd, perStepUsd: Math.min(DRAFT_BUDGET.perStepUsd, budgetUsd) }, unattended: Boolean(opts.unattended) }, next },
+      data: { path: file, run: cfg.contract?.run ?? opts.run ?? null, template, preset: opts.preset ?? null, goal, valid: cfg.ok, problems: cfg.problems, digest, authorised: false, defaults: { egress: [], promotion: "local-branch", budget: { ...DRAFT_BUDGET, totalUsd: budgetUsd, perStepUsd: Math.min(DRAFT_BUDGET.perStepUsd, budgetUsd) }, unattended: Boolean(opts.unattended) }, next },
       text: `drafted ${file} (not authorised)${cfg.problems.length ? `\n${formatProblems(cfg.problems)}` : ""}\nboundary digest: ${digest ?? "none (the contract has errors)"}\nno egress; promotion to a local branch; budget $${String(budgetUsd)}${opts.unattended ? "; unattended requested" : ""}\nnext: ${next.join("\n      ")}`,
     };
   },
@@ -1089,6 +1116,7 @@ const USAGE = `usage: pi-autonomy <command> [options]   (add --json to any comma
   start --config run.json [--yes] [--detach]               confirm the boundary, then run
   draft --goal <text> [--template implement|self-improve] [--repo <path>] [--out run.json] [--budget-usd n] [--check id=cmd] [--unattended]
                                          a contract from a goal: no egress, local-branch promotion, budget at most $20; authorises nothing
+  draft --preset luna-self-improve --repo <luna checkout> [--goal <focus>]   the same, for improving Luna itself (self-improve, Luna's gate)
   up --config run.json [--json]          start an authorised contract detached after checking the host; one JSON line with --json
   status [--run <id>]                    one run, or all runs
   top [--run <id>]                       every run, and whether it has merged work not yet published

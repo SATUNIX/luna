@@ -587,6 +587,11 @@ SOFTWARE.
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Loop steps (2026-11-19):** `workflow.ts` `parseStep` reads `until` and `max_iterations` (1 to
+    11, default 3) on a saved YAML step as a gate whose retry is the step itself
+    (`maxLoops = max_iterations - 1`, `StepDef.maxIterations`), refused with `gate` or on a parallel
+    group; the exhausted loop fails with "loop <id> stopped at max_iterations N". `plan.ts` is
+    unchanged, so inline plans do not accept them (`tests/workflow-smoke.ts`).
   - **Missing declared outputs name what was written (2026-11-19):** `workflow.ts` snapshots the run
     directory before a step with `outputs` and, when one is missing, `missingOutputsError` names the
     missing paths, the files written while the step ran (or none) and `steps/<id>.md`. It never

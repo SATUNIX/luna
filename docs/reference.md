@@ -333,18 +333,18 @@ Extension `task-graph`. List tasks in the graph, optionally filtered by status.
 
 ### `task_next`
 
-Extension `task-graph`. Claim the next actionable task (pending, dependencies done) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
+Extension `task-graph`. Claim the next actionable task (pending, dependencies done; a subgoal of a task at an impasse first) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
 
 Parameters: none.
 
 ### `task_update`
 
-Extension `task-graph`. Update a task's status (pending\|in_progress\|done\|blocked) and/or notes.
+Extension `task-graph`. Update a task's status (pending\|in_progress\|done\|blocked\|impasse) and/or notes.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `id` | string | Task ID |
-| `status?` | string | pending \| in_progress \| done \| blocked |
+| `status?` | string | pending \| in_progress \| done \| blocked \| impasse |
 | `notes?` | string | Progress notes |
 
 ### `todo`

@@ -82,6 +82,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   its whole share before it starts or waits in a new phase, `worker-wait`, and releases it when it
   exits. Each bound is off until set, so a host that sets none behaves as before. Verified by
   `tests/autonomy-lifecycle-smoke.ts` and `tests/autonomy-selfimprove-smoke.ts`.
+- **Task-graph impasses and subgoals, and YAML loop steps (V5-21).** After SOAR: a task can now be
+  at an `impasse`, with subgoals under it (`parent`). When a verify check fails or progress-guard
+  sees a stall, task-graph puts the claimed task at an impasse and adds one pending subgoal; a task
+  with an open subgoal gets no second one, subgoals nest at most two deep and a graph holds at most
+  20. `task_next` hands out the deepest subgoal first, and completing the last open subgoal returns
+  the task to `pending`. No agent or workflow is started. A saved YAML workflow step can take
+  `until` and `max_iterations` (1 to 11, default 3): the step runs again until its answer passes
+  `until`, and the run fails with "loop <id> stopped at max_iterations N" when the runs are used
+  up. It reuses the gate loop (a gate whose retry is the step itself), so worst-case agent counts
+  include it. Verified by `tests/task-graph-invariants-smoke.ts` and `tests/workflow-smoke.ts`.
+
 - **`/herdr`: a small herdr client for the operator (V5-19).** The herdr extension only notified
   herdr. It now also registers `/herdr list`, `read <agent> [lines]`, `send <agent> <text>` and
   `spawn <label> [dir]`, which run the `herdr` CLI on `PATH` (argument list, no shell, timeout) from

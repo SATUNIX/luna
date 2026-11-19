@@ -122,6 +122,32 @@ succeeded, 10 failed, 11 cancelled, 12 budget exhausted, 13 parked (blocked, pau
 
 Working examples are in `packages/autonomy/examples/`.
 
+### From a goal: `draft` and `up`
+
+An agent (or you) can set a run up from a goal in two commands, with the operator's authorisation
+between them:
+
+```sh
+node packages/autonomy/cli.ts draft --goal "Analyse the supervisor's failure handling and fix one gap" \
+    --repo . --check unit="npm test" --out run.json   # prints the boundary digest; authorises nothing
+node packages/autonomy/cli.ts plan --config run.json --authorise --digest <digest> --by <operator>
+node packages/autonomy/cli.ts up --config run.json --json   # one line: {"ok":true,"runId":…,"pid":…,"status":…}
+```
+
+`draft` is `init` with closed defaults: no egress, no services or credentials, promotion to a local
+branch only, attended unless `--unattended` is given, and a budget of $5 (`--budget-usd` may set up
+to $20; more is refused). It takes the `implement` or `self-improve` template, and has no flags for
+egress, services, credentials or promotion: widening any of them means editing the contract, which
+changes the digest the operator authorises. It never writes an `authorisation` block.
+
+`up` never asks and never authorises. It starts only a contract that already carries an
+authorisation for its current digest, then checks the host as `doctor --setup` does (engine, image,
+inference key), creates the run and starts its supervisor in the background. With `--json` it prints
+one line; a refusal names a `blocker` (`invalid_contract`, `authorisation_required`,
+`digest_mismatch`, `host_setup` with the `failing` checks, or `run_exists`) and starts nothing. The
+`status` it reports is the run's state at that moment, usually `setup`: the supervisor moves it on.
+`tests/autonomy-cli-smoke.ts` pins both commands.
+
 ### From inside pi
 
 The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:

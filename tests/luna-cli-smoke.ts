@@ -79,8 +79,16 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.match(refused.stderr, /goal-core/);
   fs.rmSync(path.join(agent, "pi-kit"), { recursive: true });
 
-  for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], []]) {
+  for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], [], ["--"], ["--", "a", "b"], ["p", "--", "q"]]) {
     assert.equal(typeof planExec(bad), "string", `refused: ${bad.join(" ")}`);
+  }
+  // After --, the prompt is literal: an option-shaped prompt and "-" are prompts, not flags or stdin (DE-118).
+  for (const literal of ["--help", "-", "--max-turns 3"]) {
+    const plan = planExec(["--max-turns", "2", "--", literal]);
+    assert.ok(typeof plan === "object", `-- ${literal}: ${typeof plan === "string" ? plan : ""}`);
+    assert.equal(plan.stdinPrompt, false);
+    assert.deepEqual(plan.piArgs.slice(-2), ["--", literal]);
+    assert.equal(plan.env.PI_KIT_CEILING_TURNS, "2");
   }
 
   // Windows: pi is an npm .cmd shim that Node cannot start without a shell, and a shell splits the prompt.

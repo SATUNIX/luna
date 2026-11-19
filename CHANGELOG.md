@@ -71,8 +71,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   crontab line where `systemctl --user` is unavailable (`hourly`, `daily HH:MM`, `weekly <day>
   HH:MM`, `every Nm`, `every Nh`). The spec lives in `<state>/luna/schedules/<name>.json` (0600) and
   the timer or crontab line only runs `luna schedule run-now <name>`, so no prompt is ever quoted
-  into a unit file or shell line. Creating a schedule is operator-confirmed: the CLI asks on a
-  terminal or takes `--yes` and otherwise refuses; `/schedule add` (a new `experimental` extension
+  into a unit file or shell line. To create a schedule the CLI asks on a terminal or takes `--yes`
+  and otherwise refuses (so an agent that may run it with `--yes` can create one); `/schedule add` (a new `experimental` extension
   in no profile) asks through pi's confirm dialog and refuses without a UI. Not yet covered: the
   tool firewall does not classify schedule, unit-file or crontab writes as high (V5-15, guard).
   This reverses the roadmap's "scheduled runs: not planned". Documented in `docs/schedule.md`;
@@ -423,6 +423,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   without tool control.
 
 ### Fixed
+
+- **AUTHORITY: `luna schedule` review fixes (DE-118).** An independent review of V5-14 found it not
+  safe as documented. A prompt job now always carries `--max-turns`, `--max-cost` and `--timeout`
+  (defaults 50, $2, 30m; `run-now` refuses a spec without them); the systemd service is stopped
+  after the timeout (`TimeoutStartSec`, `RuntimeMaxSec`); two runs of one schedule never overlap (a
+  pid lock in `run-now`, for both backends); and a job runs with `LUNA_SCHEDULE_JOB`, under which the
+  CLI and `/schedule` refuse to add, remove or start schedules. Only the normalised `--at` reaches the
+  timer (a newline in it wrote a stray unit line), and the state directory, which the crontab log path
+  is built from, is checked like the other paths (`$(...)`, `%`, quotes and newlines are refused).
+  The prompt is passed after `--` (`luna exec` gained `--` end of options), so `--prompt --help`
+  runs as a prompt. The spec is created exclusively, the job's `PATH` starts with the directories of
+  `pi` and node recorded at `add` (a unit or cron `PATH` lacked them), and `/schedule` runs the CLI
+  under a real node binary. `docs/schedule.md` now says exactly what confirms a schedule. Verified by
+  `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`).
 
 - **A workflow step that misses a declared output says where it wrote instead (F-03).** Finding:
   two runs failed on the output contract after doing the work under another name (`board-report.md`

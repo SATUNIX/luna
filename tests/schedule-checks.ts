@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fakePi, loadExtension, setEnv } from "../packages/core/eval/harness.ts";
-import { addSchedule, checkAdd, listSpecs, parseWhen, readSpec, removeSchedule, scheduleDir, type RunResult, type ScheduleDeps } from "../packages/core/lib/schedule.ts";
+import { addSchedule, checkAdd, JOB_ENV, listSpecs, parseWhen, readSpec, removeSchedule, scheduleDir, takeRunLock, type RunResult, type ScheduleDeps } from "../packages/core/lib/schedule.ts";
 import { runScheduleCli, type ScheduleIO } from "../packages/core/lib/schedule-cli.ts";
 
 const ok = (m: string): void => console.log(`  OK: ${m}`);
@@ -22,27 +22,30 @@ const LUNA = path.resolve("packages/core/luna.ts");
 function world(name: string, answer: (cmd: string, args: readonly string[]) => RunResult) {
   const home = path.join(tmp, name);
   const work = path.join(home, "work dir");
+  const bin = path.join(home, "bin");
   fs.mkdirSync(work, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const calls: Array<{ cmd: string; args: string[]; input?: string }> = [];
   const deps: ScheduleDeps = {
-    env: { HOME: home, XDG_STATE_HOME: path.join(home, "state"), XDG_CONFIG_HOME: path.join(home, "config") },
+    env: { HOME: home, XDG_STATE_HOME: path.join(home, "state"), XDG_CONFIG_HOME: path.join(home, "config"), PATH: bin },
     run: (cmd, args, input) => { calls.push({ cmd, args: [...args], ...(input === undefined ? {} : { input }) }); return answer(cmd, args); },
     now: () => new Date("2026-11-19T00:00:00Z"),
     nodeBin: "/usr/bin/node",
     lunaBin: "/opt/luna/packages/core/luna.ts",
   };
-  return { home, work, calls, deps, units: path.join(home, "config", "systemd", "user") };
+  return { home, work, bin, calls, deps, units: path.join(home, "config", "systemd", "user") };
 }
 const okRun: RunResult = { status: 0, stdout: "", stderr: "" };
 
 try {
   // 1. The schedule language.
-  assert.deepEqual(parseWhen("hourly"), { calendar: "hourly", cron: "0 * * * *" });
-  assert.deepEqual(parseWhen("daily 2:05"), { calendar: "*-*-* 02:05:00", cron: "5 2 * * *" });
-  assert.deepEqual(parseWhen("Weekly SUN 23:59"), { calendar: "Sun *-*-* 23:59:00", cron: "59 23 * * 0" });
-  assert.deepEqual(parseWhen("weekly mon 09:30"), { calendar: "Mon *-*-* 09:30:00", cron: "30 9 * * 1" });
-  assert.deepEqual(parseWhen("every 15m"), { calendar: "*:0/15", cron: "*/15 * * * *" });
-  assert.deepEqual(parseWhen("every 6h"), { calendar: "0/6:00", cron: "0 */6 * * *" });
+  assert.deepEqual(parseWhen("hourly"), { calendar: "hourly", cron: "0 * * * *", normal: "hourly" });
+  assert.deepEqual(parseWhen("daily 2:05"), { calendar: "*-*-* 02:05:00", cron: "5 2 * * *", normal: "daily 02:05" });
+  assert.deepEqual(parseWhen("Weekly SUN 23:59"), { calendar: "Sun *-*-* 23:59:00", cron: "59 23 * * 0", normal: "weekly sun 23:59" });
+  assert.deepEqual(parseWhen("weekly mon 09:30"), { calendar: "Mon *-*-* 09:30:00", cron: "30 9 * * 1", normal: "weekly mon 09:30" });
+  assert.deepEqual(parseWhen("every 15m"), { calendar: "*:0/15", cron: "*/15 * * * *", normal: "every 15m" });
+  assert.deepEqual(parseWhen("every 6h"), { calendar: "0/6:00", cron: "0 */6 * * *", normal: "every 6h" });
   for (const bad of ["daily 24:00", "every 1m", "every 24h", "* * * * *", "daily 9:5", "weekly funday 10:00", "now; rm -rf /"]) assert.ok("error" in parseWhen(bad), bad);
   ok("hourly, daily, weekly and every N parse to systemd and cron times; anything else is refused");
 
@@ -61,6 +64,10 @@ try {
     assert.match(service, /^ExecStart="\/usr\/bin\/node" "\/opt\/luna\/packages\/core\/luna.ts" schedule run-now nightly$/m);
     assert.match(service, new RegExp(`^WorkingDirectory=${w.work.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}$`, "m"));
     assert.match(timer, /^OnCalendar=\*-\*-\* 02:00:00$/m);
+    assert.match(service, /^TimeoutStartSec=2100$/m, "the unit is stopped after the job's timeout (default 30m) and a margin");
+    assert.match(service, /^RuntimeMaxSec=2100$/m);
+    assert.deepEqual(spec?.limits, ["--max-turns", "20", "--max-cost", "2", "--timeout", "30m"], "the caps not given get their defaults");
+    assert.deepEqual(spec?.pathDirs, [w.bin, "/usr/bin"], "the job's PATH starts with pi's and node's directories");
     assert.ok(!service.includes("Summarise") && !timer.includes("Summarise"), "the prompt stays in the spec");
     assert.deepEqual(w.calls.map((c) => [c.cmd, ...c.args].join(" ")), ["systemctl --user show-environment", "systemctl --user daemon-reload", "systemctl --user enable --now luna-schedule-nightly.timer"]);
     assert.match(checkAdd(w.deps, { id: "nightly", when: "hourly", kind: "exec", prompt: "x", cwd: w.work }) ?? "", /already exists/);
@@ -106,11 +113,32 @@ try {
       [{ ...base, prompt: " " }, /needs a prompt/],
       [{ ...base, cwd: path.join(tmp, "missing") }, /does not exist/],
       [{ ...base, cwd: `${w.work}/a"b` }, /cannot carry safely/],
+      [{ ...base, cwd: `${w.work}/a%hb` }, /cannot carry safely/],
+      [{ ...base, cwd: `${w.work}/a\nExecStart=/bin/x` }, /cannot carry safely/],
+      [{ ...base, limits: ["--max-turns", "0"] }, /--max-turns needs a whole number/],
       [{ id: "a", when: "hourly", kind: "autonomy" as const, config: "relative.json", cwd: w.work }, /not an existing absolute path/],
     ] as const) assert.match(checkAdd(w.deps, req) ?? "", why, JSON.stringify(req));
+    for (const state of ["/tmp/s$(id)", "/tmp/s%h", "/tmp/s\"q", "/tmp/s\nx"]) {
+      const odd: ScheduleDeps = { ...w.deps, env: { ...w.deps.env, XDG_STATE_HOME: state } };
+      assert.match(checkAdd(odd, base) ?? "", /state directory [\s\S]* cannot carry safely/, `XDG_STATE_HOME=${JSON.stringify(state)}`);
+    }
     assert.equal(w.calls.length, 0);
     assert.deepEqual(listSpecs(w.deps), []);
-    ok("bad names, times, prompts, directories and paths are refused before anything is written");
+    // A newline in --at is normalised away: the timer carries only the normalised expression.
+    assert.ok(addSchedule(w.deps, { ...base, id: "nl", when: "daily\n02:00" }).ok);
+    const timer = fs.readFileSync(path.join(w.units, "luna-schedule-nl.timer"), "utf8");
+    assert.match(timer, /^Description=Luna schedule nl \(daily 02:00\)$/m);
+    assert.ok(!/^02:00$/m.test(timer), "no stray unit line");
+    assert.equal(readSpec(w.deps, "nl")?.when, "daily 02:00");
+    // A link planted where the spec goes is refused, and nothing is installed.
+    fs.mkdirSync(scheduleDir(w.deps), { recursive: true });
+    fs.symlinkSync(path.join(w.home, "elsewhere.json"), path.join(scheduleDir(w.deps), "planted.json"));
+    w.calls.length = 0;
+    const planted = addSchedule(w.deps, { ...base, id: "planted" });
+    assert.ok(!planted.ok && /could not create the spec/.test(planted.error), JSON.stringify(planted));
+    assert.ok(!fs.existsSync(path.join(w.home, "elsewhere.json")), "the link is not followed");
+    assert.ok(!w.calls.some((c) => c.args.includes("enable")), "no timer is enabled");
+    ok("bad names, times, prompts, caps, directories and state paths (newline, %, quote, $()) are refused; --at is normalised; a planted link is refused");
   }
 
   // 5. The CLI: add is operator-confirmed; run-now runs the stored job.
@@ -118,11 +146,12 @@ try {
     const w = world("cli", () => okRun);
     const out: string[] = [];
     const ran: Array<{ how: string; argv: string[]; cwd: string }> = [];
+    const envs: NodeJS.ProcessEnv[] = [];
     const io = (interactive: boolean, answer = ""): ScheduleIO => ({
       stdout: { write: (t: string) => out.push(t) }, stderr: { write: (t: string) => out.push(t) }, interactive,
       ask: () => Promise.resolve(answer),
-      exec: (argv, cwd) => { ran.push({ how: "exec", argv, cwd }); return Promise.resolve(0); },
-      autonomy: (argv, cwd) => { ran.push({ how: "autonomy", argv, cwd }); return 0; },
+      exec: (argv, cwd, env) => { ran.push({ how: "exec", argv, cwd }); envs.push(env); return Promise.resolve(0); },
+      autonomy: (argv, cwd, env) => { ran.push({ how: "autonomy", argv, cwd }); envs.push(env); return 0; },
     });
     const add = ["add", "daily-review", "--at", "daily 09:00", "--prompt", "review yesterday", "--cwd", w.work, "--max-turns", "10"];
     assert.equal(await runScheduleCli(add, w.deps, io(false)), 2);
@@ -133,7 +162,9 @@ try {
     assert.equal(await runScheduleCli(add, w.deps, io(true, "y")), 0);
     assert.equal(listSpecs(w.deps).length, 1);
     assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 0);
-    assert.deepEqual(ran, [{ how: "exec", argv: ["--max-turns", "10", "review yesterday"], cwd: w.work }], "run-now runs luna exec with the stored limits and prompt in the stored directory");
+    assert.deepEqual(ran, [{ how: "exec", argv: ["--max-turns", "10", "--max-cost", "2", "--timeout", "30m", "--", "review yesterday"], cwd: w.work }], "run-now runs luna exec with the caps, then the prompt after --, in the stored directory");
+    assert.equal(envs[0]?.[JOB_ENV], "daily-review", "the job runs marked as a scheduled job");
+    assert.equal(envs[0]?.PATH?.split(path.delimiter)[0], w.bin, "with pi's directory first on PATH");
     const config = path.join(w.work, "run.json");
     fs.writeFileSync(config, "{}");
     assert.equal(await runScheduleCli(["add", "loop", "--at", "weekly fri 18:00", "--config", config, "--cwd", w.work, "--yes"], w.deps, io(false)), 0, "--yes is the operator's confirmation");
@@ -145,6 +176,38 @@ try {
     out.length = 0;
     assert.equal(await runScheduleCli(["list"], w.deps, io(false)), 0);
     assert.match(out.join(""), /daily-review {2}daily 09:00 {2}systemd {2}exec "review yesterday"/);
+
+    // DE-118: a job cannot schedule a job; caps are required; two runs never overlap; an option-shaped prompt is a prompt.
+    const asJob: ScheduleDeps = { ...w.deps, env: { ...w.deps.env, [JOB_ENV]: "daily-review" } };
+    for (const verb of [["add", "x", "--at", "hourly", "--prompt", "p", "--cwd", w.work, "--yes"], ["remove", "daily-review"], ["run-now", "daily-review"]]) {
+      out.length = 0;
+      assert.equal(await runScheduleCli(verb, asJob, io(false)), 2, verb.join(" "));
+      assert.match(out.join(""), /a scheduled job cannot add, remove or start schedules/);
+    }
+    assert.equal(await runScheduleCli(["list"], asJob, io(false)), 0, "a job may list schedules");
+    assert.equal(listSpecs(w.deps).length, 2, "nothing changed");
+    const release = takeRunLock(w.deps, "daily-review");
+    assert.ok(release);
+    out.length = 0;
+    assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 75, "a run while another holds the lock is skipped");
+    assert.match(out.join(""), /already running; this run is skipped/);
+    release();
+    fs.writeFileSync(path.join(scheduleDir(w.deps), "daily-review.lock"), "999999999");
+    assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 0, "a stale lock (dead pid) is taken over");
+    const specPath = path.join(scheduleDir(w.deps), "daily-review.json");
+    const capless = JSON.parse(fs.readFileSync(specPath, "utf8")) as { limits?: string[] };
+    capless.limits = ["--max-turns", "10"];
+    fs.writeFileSync(specPath, JSON.stringify(capless));
+    out.length = 0;
+    const before = ran.length;
+    assert.equal(await runScheduleCli(["run-now", "daily-review"], w.deps, io(false)), 1);
+    assert.match(out.join(""), /has no --max-cost, --timeout/);
+    assert.equal(ran.length, before, "a spec without caps does not run");
+    assert.equal(await runScheduleCli(["add", "opt", "--at", "hourly", "--prompt", "--help", "--cwd", w.work, "--yes"], w.deps, io(false)), 0, "a prompt that looks like an option is accepted");
+    await runScheduleCli(["run-now", "opt"], w.deps, io(false));
+    assert.deepEqual(ran.at(-1)?.argv.slice(-2), ["--", "--help"], "and passed after --, so luna exec reads it as the prompt");
+    const noPi: ScheduleDeps = { ...w.deps, env: { ...w.deps.env, PATH: "/nonexistent" } };
+    assert.match(checkAdd(noPi, { id: "np", when: "hourly", kind: "exec", prompt: "p", cwd: w.work }) ?? "", /pi is not on PATH/);
     ok("the CLI refuses add without a terminal or --yes, honours a declined answer, and run-now runs the stored job");
   }
 
@@ -156,6 +219,7 @@ try {
     fs.mkdirSync(path.join(home, "work"), { recursive: true });
     fs.mkdirSync(bin);
     for (const name of ["systemctl", "crontab"]) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 0\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const env = { HOME: home, XDG_STATE_HOME: path.join(home, "state"), XDG_CONFIG_HOME: path.join(home, "config"), PATH: bin };
     const luna = (...args: string[]) => spawnSync(process.execPath, [LUNA, "schedule", ...args], { cwd: path.join(home, "work"), env, encoding: "utf8", timeout: 60_000 });
     const added = luna("add", "ping", "--at", "every 10m", "--prompt", "say hi", "--yes");
@@ -166,7 +230,10 @@ try {
     assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n"), ["systemctl --user show-environment", "systemctl --user daemon-reload", "systemctl --user enable --now luna-schedule-ping.timer", "systemctl --user disable --now luna-schedule-ping.timer", "systemctl --user daemon-reload"]);
     const refused = luna("add", "ping", "--at", "hourly", "--prompt", "x");
     assert.equal(refused.status, 2, "without a terminal and without --yes, add refuses");
-    ok("luna schedule add/list/remove as a process writes and removes the units through the fake systemctl only");
+    const asJob = spawnSync(process.execPath, [LUNA, "schedule", "add", "inner", "--at", "hourly", "--prompt", "x", "--yes"], { cwd: path.join(home, "work"), env: { ...env, [JOB_ENV]: "ping" }, encoding: "utf8" });
+    assert.equal(asJob.status, 2, "a process marked as a scheduled job cannot add a schedule");
+    assert.match(asJob.stderr, /a scheduled job cannot add, remove or start schedules/);
+    ok("luna schedule add/list/remove as a process writes and removes the units through the fake systemctl only; a job cannot add one");
   }
 
   // 7. /schedule asks through pi before it creates anything.
@@ -187,6 +254,16 @@ try {
     await handler("run-now nightly", ctx(true, true));
     await handler("add nightly", ctx(true, true));
     assert.deepEqual(runs, [["list"], ["add", "nightly", "--at", "daily 02:00", "--prompt", "Summarise the open TODOs", "--cwd", "/work", "--yes"], ["run-now", "nightly"]], "only a confirmed add reaches the CLI, and only then with --yes");
+    const inJob = setEnv(JOB_ENV, "nightly");
+    runs.length = 0;
+    await handler("add nightly daily 02:00 -- again", ctx(true, true));
+    assert.match(notes.at(-1) ?? "", /scheduled job: it cannot add, remove or start schedules/);
+    await handler("list", ctx(true, true));
+    inJob();
+    assert.deepEqual(runs, [["list"]], "inside a scheduled job only list reaches the CLI");
+    const ext = await import("../packages/extensions/src/schedule/index.ts");
+    assert.equal(ext.nodeBinary("/usr/local/bin/node"), "/usr/local/bin/node");
+    assert.equal(ext.nodeBinary("/opt/pi/bin/pi"), "node", "a compiled pi is not node: use node from PATH");
     const restore = setEnv("PI_SUBAGENT_CHILD", "1");
     const child = fakePi();
     mod(child.api, () => Promise.resolve({ code: 0, out: "" }));

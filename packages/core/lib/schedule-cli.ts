@@ -7,13 +7,14 @@
  *   luna schedule remove <name>
  *   luna schedule run-now <name>      run the job now (what the timer runs)
  *
- * `add` is operator-confirmed: it asks on a terminal, or takes `--yes`; without either it refuses.
- * Pinned by tests/schedule-smoke.ts.
+ * `add` asks on a terminal, or takes `--yes`; without either it refuses. Under LUNA_SCHEDULE_JOB (a
+ * scheduled job) add, remove and run-now are refused, so a job cannot schedule a job.
+ * Pinned by tests/luna-cli-smoke.ts (tests/schedule-checks.ts).
  */
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { runExec } from "./headless.ts";
-import { addSchedule, checkAdd, defaultDeps, describeAdd, formatList, jobArgv, listSpecs, readSpec, removeSchedule, type AddRequest, type ScheduleDeps } from "./schedule.ts";
+import { addSchedule, capsProblem, checkAdd, defaultDeps, describeAdd, formatList, jobArgv, JOB_ENV, listSpecs, readSpec, removeSchedule, takeRunLock, type AddRequest, type ScheduleDeps } from "./schedule.ts";
 
 export const SCHEDULE_USAGE = `usage: luna schedule add <name> --at "<when>" (--prompt <text> | --config <run.json>) [--cwd <dir>] [--max-turns N] [--max-cost USD] [--timeout D] [--backend systemd|cron] [--yes]
        luna schedule list
@@ -27,10 +28,10 @@ export interface ScheduleIO {
   /** True on a terminal, where `add` may ask. */
   interactive: boolean;
   ask: (question: string) => Promise<string>;
-  /** Runs `luna exec` with these arguments in `cwd`; the exit code. */
-  exec: (argv: string[], cwd: string) => Promise<number>;
-  /** Runs `pi-autonomy` with these arguments in `cwd`; the exit code. */
-  autonomy: (argv: string[], cwd: string) => number;
+  /** Runs `luna exec` with these arguments in `cwd` with `env`; the exit code. */
+  exec: (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
+  /** Runs `pi-autonomy` with these arguments in `cwd` with `env`; the exit code. */
+  autonomy: (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => number;
 }
 
 export function defaultIO(deps: ScheduleDeps): ScheduleIO {
@@ -44,10 +45,10 @@ export function defaultIO(deps: ScheduleDeps): ScheduleIO {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try { return await rl.question(""); } finally { rl.close(); }
     },
-    exec: async (argv, cwd) => { process.chdir(cwd); return runExec(argv); },
-    autonomy: (argv, cwd) => {
+    exec: async (argv, cwd, env) => { process.chdir(cwd); return runExec(argv, { env }); },
+    autonomy: (argv, cwd, env) => {
       const cli = path.join(path.dirname(path.dirname(deps.lunaBin)), "autonomy", "cli.ts");
-      const r = spawnSync(deps.nodeBin, [cli, ...argv], { cwd, stdio: "inherit" });
+      const r = spawnSync(deps.nodeBin, [cli, ...argv], { cwd, stdio: "inherit", env });
       return r.status ?? 1;
     },
   };
@@ -80,6 +81,8 @@ function parseFlags(args: readonly string[]): { flags: Map<string, string>; yes:
 export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps = defaultDeps(), io: ScheduleIO = defaultIO(deps)): Promise<number> {
   const [verb = "", ...rest] = argv;
   const fail = (message: string, code = 2): number => { io.stderr.write(`luna schedule: ${message}\n`); return code; };
+  const job = deps.env[JOB_ENV];
+  if (job && (verb === "add" || verb === "remove" || verb === "run-now")) return fail(`this is scheduled job ${job}: a scheduled job cannot add, remove or start schedules`);
   switch (verb) {
     case "list":
       if (rest.length) return fail(SCHEDULE_USAGE);
@@ -95,8 +98,17 @@ export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps
       if (rest.length !== 1) return fail(SCHEDULE_USAGE);
       const spec = readSpec(deps, rest[0] ?? "");
       if (!spec) return fail(`no schedule ${rest[0] ?? ""}`, 1);
-      const job = jobArgv(spec);
-      return job.kind === "exec" ? io.exec(job.argv, spec.cwd) : io.autonomy(job.argv, spec.cwd);
+      const caps = capsProblem(spec);
+      if (caps) return fail(caps, 1);
+      const release = takeRunLock(deps, spec.id);
+      if (!release) return fail(`schedule ${spec.id} is already running; this run is skipped`, 75);
+      try {
+        const env: NodeJS.ProcessEnv = { ...deps.env, [JOB_ENV]: spec.id, PATH: [...(spec.pathDirs ?? []), deps.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+        const run = jobArgv(spec);
+        return run.kind === "exec" ? await io.exec(run.argv, spec.cwd, env) : io.autonomy(run.argv, spec.cwd, env);
+      } finally {
+        release();
+      }
     }
     case "add": {
       const parsed = parseFlags(rest);

@@ -12,18 +12,25 @@ import { fileURLToPath } from "node:url";
  *   /schedule remove <name>
  *   /schedule run-now <name>
  *
- * Creating a schedule is operator-confirmed: `add` asks through pi's confirm dialog and refuses
- * without a UI, and only then passes `--yes` to the CLI. It is a command, not a model tool, and it
- * is not registered in a subagent or internal child session. Pinned by tests/schedule-smoke.ts.
+ * `add` asks through pi's confirm dialog and refuses without a UI, and only then passes `--yes` to
+ * the CLI. Inside a scheduled job (LUNA_SCHEDULE_JOB) only `list` works. It is a command, not a model
+ * tool, and it is not registered in a subagent or internal child session. The CLI runs under a real
+ * node binary: pi's own executable when it is node, otherwise `node` from PATH (a compiled pi is not
+ * node). Pinned by tests/luna-cli-smoke.ts (tests/schedule-checks.ts).
  */
 
 export type RunLuna = (args: readonly string[], cwd: string) => Promise<{ code: number; out: string }>;
+
+/** A node binary for the luna CLI: this process when it is node, else `node` from PATH. */
+export function nodeBinary(execPath: string = process.execPath): string {
+  return /^node(?:\.exe)?$/i.test(path.basename(execPath)) ? execPath : "node";
+}
 
 const LUNA = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "core", "luna.ts");
 
 export const runLuna: RunLuna = (args, cwd) =>
   new Promise((resolve) => {
-    execFile(process.execPath, [LUNA, "schedule", ...args], { cwd, timeout: 120_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    execFile(nodeBinary(), [LUNA, "schedule", ...args], { cwd, timeout: 120_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
       resolve({ code, out: `${stdout}${stderr}`.trim() });
     });
@@ -61,6 +68,7 @@ export default function (pi: ExtensionAPI, run: RunLuna = runLuna) {
       const cwd = ctx.cwd || process.cwd();
       const plan = scheduleArgs(typeof args === "string" ? args : "", cwd);
       if (!plan) { ctx.ui.notify(SCHEDULE_HELP, "info"); return; }
+      if (process.env.LUNA_SCHEDULE_JOB && plan.args[0] !== "list") { ctx.ui.notify("This session is a scheduled job: it cannot add, remove or start schedules.", "warning"); return; }
       if (plan.confirm !== undefined) {
         // The operator decides: no UI, no schedule.
         if (!ctx.hasUI) { ctx.ui.notify("/schedule add needs the operator to confirm in the terminal; nothing was created.", "warning"); return; }

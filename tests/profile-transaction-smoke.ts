@@ -231,7 +231,7 @@ async function installBalanced(world: World, scope = "global"): Promise<void> {
   const settingsPath = scope === "project" ? path.join(world.project, ".pi", "settings.json") : path.join(world.agent, "settings.json");
   const s = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as SettingsFile;
   s.theme = "solarized";
-  s.packages.push("npm:pi-lens@3.8.63");
+  s.packages.push("npm:example-lint@3.8.63");
   fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2) + "\n");
   fs.chmodSync(settingsPath, 0o600);
   fs.mkdirSync(path.join(world.agent, "pi-kit"), { recursive: true });
@@ -440,18 +440,18 @@ tests["rollback: package operations the installer already ran are named, never '
       exec: async () => ({ stdout, stderr: code ? "[install] FAIL: companion" : "", code }),
       command: process.execPath, args: [], cwd: world.root, timeoutMs: 1000, files: helpers.switchFiles(world.project), expectation,
     });
-    const change = "[install] Package change (a rollback cannot undo it): pi install npm:pi-lens@9.9.9\n";
+    const change = "[install] Package change (a rollback cannot undo it): pi install npm:example-lint@9.9.9\n";
     // The installer failed after a companion install (stage install) ...
     const failed = await run(change, 1);
     assert.equal(failed.stage, "install");
-    assert.match(failed.message, /restored byte-for-byte, so the previous profile's settings are back, but these package operations had already run and were NOT rolled back: pi install npm:pi-lens@9\.9\.9\./);
+    assert.match(failed.message, /restored byte-for-byte, so the previous profile's settings are back, but these package operations had already run and were NOT rolled back: pi install npm:example-lint@9\.9\.9\./);
     assert.doesNotMatch(failed.message, /Nothing was changed/);
     // ... or finished and the result did not verify (stage verify): the install still happened.
     const unverified = await run(`${change}[install] Done.\n`, 0);
     assert.equal(unverified.stage, "verify");
-    assert.match(unverified.message, /NOT rolled back: pi install npm:pi-lens@9\.9\.9/);
+    assert.match(unverified.message, /NOT rolled back: pi install npm:example-lint@9\.9\.9/);
     assert.deepEqual(hashAll(world), before, "the configuration files are still restored");
-    assert.deepEqual(txn.packageChangeLines(`x\n${change}${change}`, ""), ["pi install npm:pi-lens@9.9.9"], "each change is listed once");
+    assert.deepEqual(txn.packageChangeLines(`x\n${change}${change}`, ""), ["pi install npm:example-lint@9.9.9"], "each change is listed once");
   } finally { w.done(); }
 };
 
@@ -549,7 +549,7 @@ tests["/profile status prints the effective configuration"] = async () => {
     await installBalanced(w);
     fs.writeFileSync(path.join(w.agent, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { add: ["gamma"], remove: [] }, skills: { exclude: ["x"] } }));
     const marker = JSON.parse(fs.readFileSync(path.join(w.agent, ".pi-kit.json"), "utf8")) as MarkerFile;
-    marker.companions = ["npm:pi-lens@3.8.63", "npm:pi-readseek@1.0.0"];
+    marker.companions = ["npm:example-lint@3.8.63", "npm:pi-readseek@1.0.0"];
     marker.channel = "next";
     fs.writeFileSync(path.join(w.agent, ".pi-kit.json"), JSON.stringify(marker));
     const { handler } = loadCommand(w);
@@ -564,7 +564,7 @@ tests["/profile status prints the effective configuration"] = async () => {
     assert.match(text, /Firewall: policy coding · mode auto \(set with \/auto\)/);
     assert.match(text, /Compaction: pi auto ON \(default\) · earliest trigger 183\.6k · no kit trigger/);
     assert.match(text, /Overrides: extensions \+1\/-0, skills -1\/\+0, prompts -0\/\+0 \(.*overrides\.json\)/);
-    assert.match(text, /Companions: pi-lens@3\.8\.63, pi-readseek@1\.0\.0 \(not registered\)/);
+    assert.match(text, /Companions: example-lint@3\.8\.63, pi-readseek@1\.0\.0 \(not registered\)/);
   } finally { w.done(); }
 };
 

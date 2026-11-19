@@ -2,7 +2,8 @@
 //
 // ~/.pi/agent/pi-kit/firewall.json is written by the profile installer and by `/auto`:
 //   { "mode": "auto" | "manual", "policy": "coding" | "engagement", "judgeModel": "provider/id",
-//     "learn": true, "knownHosts": ["ms01"], "untrustedHosts": ["old-box"], "source": "profile" | "user" }
+//     "learn": true, "knownHosts": ["ms01"], "untrustedHosts": ["old-box"], "source": "profile" | "user",
+//     "delegations": [...] }   (operator delegation of named verbs to one program: delegation.ts)
 // Precedence for the mode: PI_KIT_AUTO_MODE env > a project .pi/auto-mode.json (legacy, which can
 // only downgrade to manual: a repo-carried file never turns auto mode on) > firewall.json > manual. For the policy: PI_KIT_FIREWALL_PROFILE env > firewall.json > coding.
 import fs from "node:fs";

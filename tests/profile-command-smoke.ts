@@ -370,7 +370,7 @@ const tests = {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-profile-npm-"));
     const settings = path.join(dir, "settings.json");
     try {
-      fs.writeFileSync(settings, JSON.stringify({ packages: ["npm:pi-lens@3.8.63", { source: "npm:@satunix/pi-system@next", extensions: ["packages/extensions/third_party/todo/index.ts", "packages/extensions/src/save/index.ts"] }] }));
+      fs.writeFileSync(settings, JSON.stringify({ packages: ["npm:example-lint@3.8.63", { source: "npm:@satunix/pi-system@next", extensions: ["packages/extensions/third_party/todo/index.ts", "packages/extensions/src/save/index.ts"] }] }));
       assert.deepEqual(loadedKitExtensions(settings, root), ["todo", "save"]);
       assert.equal(unfilteredKitEntry(settings), false);
       fs.writeFileSync(settings, JSON.stringify({ packages: ["npm:@satunix/pi-system"] }));
@@ -973,7 +973,7 @@ const tests = {
       fs.writeFileSync(path.join(root, "packages", "extensions", "src", n, "index.ts"), "");
     }
     const profiles = path.join(root, "packages", "kit", "profiles");
-    fs.writeFileSync(path.join(profiles, "balanced.json"), JSON.stringify({ name: "balanced", description: "d", include: ["alpha", "beta", "pi-lens"] }));
+    fs.writeFileSync(path.join(profiles, "balanced.json"), JSON.stringify({ name: "balanced", description: "d", include: ["alpha", "beta", "example-lint"] }));
     fs.writeFileSync(path.join(profiles, "long-horizon.json"), JSON.stringify({ name: "long-horizon", description: "d", include: ["alpha", "beta", "gamma"] }));
     const agent = makeAgentDir("long-horizon", { kitSource: root });
     fs.writeFileSync(path.join(agent, "settings.json"), JSON.stringify({ packages: [{ source: root, extensions: ["packages/extensions/src/alpha/index.ts", "packages/extensions/src/beta/index.ts"] }] }));

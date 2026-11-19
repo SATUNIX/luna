@@ -8,10 +8,10 @@
 | Profile | Task class | Tiers | Extensions |
 |---|---|---|---|
 | `lite` | Quick fixes / small local models | T0–T1 | 24 |
-| `balanced` | Daily coding | T0–T2 | 35 |
-| `long-horizon` | Multi-hour / multi-day / set-and-walk-away | T0–T3 | 43 |
-| `self-improving` | Full / self-improving (experimental) | T0–T4 | 48 |
-| `engagement` | Security engagement (strict) | T0–T3+ | 42 |
+| `balanced` | Daily coding | T0–T2 | 34 |
+| `long-horizon` | Multi-hour / multi-day / set-and-walk-away | T0–T3 | 42 |
+| `self-improving` | Full / self-improving (experimental) | T0–T4 | 47 |
+| `engagement` | Security engagement (strict) | T0–T3+ | 41 |
 
 ## Extension × profile
 
@@ -27,7 +27,6 @@
 | `trace-ledger` | execution | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `verifier-board` | execution | beta | ✓ | · | ✓ | ✓ | ✓ |
 | `verify-gate` | execution | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `pi-lens` | external | external | · | ✓ | ✓ | ✓ | ✓ |
 | `pi-readseek` | external | external | ✓ | · | ✓ | ✓ | ✓ |
 | `context-sieve` | memory | beta | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `memory-mem0` | memory | experimental | · | · | · | ✓ | · |

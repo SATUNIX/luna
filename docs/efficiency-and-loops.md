@@ -147,7 +147,7 @@ profile against a fake pi in a temp HOME, fires its `session_start` handler and 
 things: the name, description and parameter schema of every tool it registers; the one-line
 snippets and guideline rules those tools add to pi's system prompt; and what the profile's
 `before_agent_start` handlers add to the system prompt on a first turn (the effort block and the
-caveman style). Companion packages (`pi-readseek`, `pi-lens`) register tools that reach the model
+caveman style). Companion packages (`pi-readseek`) register tools that reach the model
 in every request but cannot be loaded offline, so the baseline records their measured cost
 (`companions`, taken from a real pi with the pinned release and tied to its `source`: a version
 bump fails until it is measured again) and the report adds it. pi's own base prompt is left out. The derived token figure is `ceil(chars / 4)`; `--json`
@@ -170,13 +170,49 @@ error (exit 2) and is left untouched, so remove the file to regenerate it.
 
 `lite` has a hard ceiling on the kit's tool text plus its companions' (`totalCeiling`, 9,000
 characters; `pi-readseek` is most of it), and registers no delegation or workflow tool
-(nothing in the test suite pins either; the meter reports them). `pi-lens` adds 18,800 characters to every other profile, which
-is why their companion-inclusive totals are several times the kit-only figure: that cost is
-reported, not yet reduced.
+(nothing in the test suite pins either; the meter reports them). `balanced` loads no companion;
+`long-horizon`, `self-improving` and `engagement` add `pi-readseek`'s 6,472 characters.
 
 Every shipped profile has a baseline row (tools, snippets and guidelines, system additions), not
 only `balanced` and `lite`. The meter is a development tool: no test pins its figures, the prompt
 prefix that survives a turn, or the CLI's output, because they change with every kit-text edit.
+
+## Measuring tokens per completed task
+
+The footprint is the cost of one request; `npm run eval:roi` (`packages/core/eval/roi.ts`) is the cost
+of finished work: input, cached and output tokens and USD per **passed** task, per profile. Everything
+a failed task spent counts against the passed ones, so a change that saves tokens but fails more
+tasks does not look cheaper.
+
+A task is one of two kinds of recorded evidence:
+
+- **An autonomous-run cycle**, read from the run's state home (`--from-runs <state home>...`). It
+  passes when it merged. Its usage is every row of the run's ledgers (`meter/usage.jsonl`,
+  `meter/manager.jsonl`, see [Autonomy](autonomy.md)) that names the cycle, or, for rows written
+  before the ledger carried attribution, whose time falls inside the cycle. Spend is split by role. A
+  cycle with no metered work is skipped, and rows in no cycle are reported as unattributed and left
+  out. The relay records prompt tokens without a cache split, so `cached` is unknown (`-`) for runs.
+- **A live evaluation case** (`--from-live <out dir>`, the output of `packages/core/eval/live/run.ts`).
+  It passes when its outcome is `passed`; one pending report review is left out of the pass rate.
+
+With no arguments the command prints the table from the committed fixtures
+(`packages/core/eval/roi/*.json`) offline and fails when it differs from
+`packages/core/eval/roi-baseline.json`; `--write-baseline` records a deliberate change and
+`--write-fixture <file> --source <text>` saves recorded evidence as a fixture. The baseline is five
+self-improvement runs on the `long-horizon` profile: 33 cycles, 16 merged, about 24.1 million tokens
+and $0.61 per merged cycle (`tests/eval-roi-smoke.ts` pins the arithmetic, both readers and that the
+fixtures reproduce the baseline).
+
+A live run needs Docker, a model and its credentials, so it is the operator's command, not a check:
+
+```bash
+node packages/core/eval/live/run.ts --variant lite --cases hello,clarification,coding --timeout 300
+npm run eval:roi -- --from-live .pi/live-eval/pi-eval-<run-id>
+```
+
+Not covered: the run baseline measures one profile, merging is a coarse pass signal (a cycle can
+merge a small change or none of its assigned work), and no fixed owner task set exists yet, so runs
+on different work are not directly comparable.
 
 ## Measuring Memento mode
 
@@ -236,3 +272,4 @@ been measured.
 | Tune sensitivity | `PI_KIT_GUARD_REPEAT`, `PI_KIT_GUARD_STALL`, `PI_KIT_GUARD_OSC` |
 | Auto-boost on autonomous runs | arm `/loop <goal>` (automatic) or `PI_KIT_GUARD_MODE=auto` |
 | Measure a profile's tool text and tokens | `node packages/core/eval/footprint.ts --profile <name> --json` |
+| Tokens and USD per passed task | `npm run eval:roi` |

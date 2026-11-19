@@ -8,9 +8,9 @@
  *   - after the install, the integrity npm recorded in pi's npm-root package-lock.json must equal
  *     the pin: a different value removes the package again and fails the install; a matching one
  *     passes; a root without a lockfile entry is a warning.
- *   - a skill filter declared for a companion in sources.json (`skills`, pi-lens's is `[]`) is written
- *     onto its settings.json entry, whether the run registered the companion or it was registered
- *     already, and an entry that has a filter of its own keeps it.
+ *   - each installed companion is registered with the skill filter sources.json declares for it (none
+ *     declares one today; tests/install-profile-filter-smoke.ts pins how a filter is applied), and one
+ *     already registered at its pin is not reinstalled.
  * Hermetic: the real install.ts runs against a fake `pi` that logs its argv and environment and
  * copies a prepared lockfile into the npm root. No network, no real npm.
  */
@@ -135,31 +135,23 @@ try {
   for (const l of good.log.filter((x) => !companionInstalls.includes(x))) assert.match(l, /\| ignore-scripts=unset$/, `only companion installs get the variable: ${l}`);
   assert.ok(!good.log.some((l) => l.startsWith("remove ")), "matching integrities remove nothing");
 
-  // The skill filter sources.json declares goes onto the registered entry: pi-lens loads none of its four
-  // bundled skills (they cost every first request about 420 tokens); a companion with no declared filter stays a bare source.
-  assert.deepEqual(external.find((e) => e.name === "pi-lens")?.skills, [], "sources.json declares pi-lens's skill filter as none");
+  // A companion with a declared skill filter is registered with it; one with none stays a bare source.
   const registeredIn = (agentDir: string): unknown[] => {
     const settings: unknown = parseJson(fs.readFileSync(path.join(agentDir, "settings.json"), "utf8"));
     return isRecord(settings) && Array.isArray(settings.packages) ? settings.packages : [];
   };
   const expectedEntry = (e: ExternalSource): unknown => (e.skills === undefined ? e.source : { source: e.source, skills: e.skills });
   assert.deepEqual(registeredIn(good.agentDir).filter((p) => installed.some((e) => (isRecord(p) ? p.source : p) === e.source)), installed.map(expectedEntry), "each installed companion is registered with the filter sources.json declares for it");
-  assert.match(good.result.stdout, /pi-lens: skill filter applied/);
 
-  // Registered before this run (a kit update re-applying its profile): no reinstall, but the filter is added.
-  const lens = installed.find((e) => e.name === "pi-lens");
-  assert.ok(lens);
-  const upgraded = installRun("upgrade", lockFor(installed.map(pinned)), { packages: [lens.source] });
+  // Registered before this run (a kit update re-applying its profile): no reinstall, and an entry the
+  // operator gave a filter of its own keeps it.
+  const first = installed[0];
+  assert.ok(first);
+  const optedIn = { source: first.source, skills: ["+skills/example"] };
+  const upgraded = installRun("upgrade", lockFor(installed.map(pinned)), { packages: [optedIn] });
   assert.equal(upgraded.result.status, 0, `${upgraded.result.stdout}\n${upgraded.result.stderr}`);
-  assert.ok(!upgraded.log.some((l) => l.startsWith(`install ${lens.source}`)), "a companion registered at its pin is not reinstalled");
-  assert.deepEqual(registeredIn(upgraded.agentDir).find((p) => isRecord(p) && p.source === lens.source), { source: lens.source, skills: [] }, "and still gets the filter");
-
-  // An entry that has a filter of its own keeps it: this is how an operator opts a companion's skills back in.
-  const optedIn = { source: lens.source, skills: ["+skills/pi-lens-ast-grep"] };
-  const kept = installRun("opted-in", lockFor(installed.map(pinned)), { packages: [optedIn] });
-  assert.equal(kept.result.status, 0, `${kept.result.stdout}\n${kept.result.stderr}`);
-  assert.deepEqual(registeredIn(kept.agentDir).find((p) => isRecord(p) && p.source === lens.source), optedIn, "an operator's own skills filter is left alone");
-  assert.doesNotMatch(kept.result.stdout, /pi-lens: skill filter applied/);
+  assert.ok(!upgraded.log.some((l) => l.startsWith(`install ${first.source}`)), "a companion registered at its pin is not reinstalled");
+  assert.deepEqual(registeredIn(upgraded.agentDir).find((p) => isRecord(p) && p.source === first.source), optedIn, "an operator's own skills filter is left alone");
 
   const target = installed[0];
   assert.ok(target);

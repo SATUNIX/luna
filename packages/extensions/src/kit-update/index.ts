@@ -309,6 +309,8 @@ export interface KitInstall {
   legacy?: boolean;
   /** git only: commits the branch head is ahead of the checked-out commit (best effort; 0 in sync, absent when it cannot be computed). */
   trunkAhead?: number;
+  /** local only: the checked-out branch, or null on a detached HEAD (filled in by checkForUpdates). */
+  branch?: string | null;
 }
 
 interface PackageEntry {
@@ -556,6 +558,12 @@ export interface UpdateReport {
     migrateSource?: string | null;
     /** A local checkout whose `origin` is a retired private source: it is never contacted, so it is never pulled. */
     legacyOrigin?: boolean;
+    /** A local checkout whose origin (or upstream remote) /update cannot classify: it is not contacted. */
+    originBlocked?: boolean;
+    /** A local kit root that is not the top level of its own git checkout: no git command is run against it. */
+    notOwnCheckout?: boolean;
+    /** A local checkout a fast-forward pull cannot update (detached, or no same-named upstream branch): what it can be moved to. */
+    localMove?: LocalMove;
   };
   packages: PackageStatus[];
   staleRoles: StaleRoleCopy[];
@@ -579,6 +587,260 @@ function kitPins(root: string | null): Map<string, string> {
 export function testedPiVersion(root: string | null): string | null {
   const pin = root ? str(field(field(readJson(path.join(root, "package.json")), "devDependencies"), PI_PACKAGE)) : undefined;
   return pin !== undefined && isExactVersion(pin) ? pin : null;
+}
+
+// --- moving a local checkout that a fast-forward pull cannot update ----------------
+
+/** The refs of origin a local checkout can be moved to; `latest` is the default, as for every install. */
+export type LocalChannel = "latest" | "next" | "trunk";
+const LOCAL_CHANNELS: readonly LocalChannel[] = ["latest", "next", "trunk"];
+
+export function localChannel(value: string): LocalChannel | null {
+  return LOCAL_CHANNELS.find((channel) => channel === value) ?? null;
+}
+
+/** One ref of origin: the newest release tag, or the head of main or of the trunk branch. */
+export interface LocalRef {
+  /** What the operator sees: the tag (`v0.4.0`) or the branch name. */
+  name: string;
+  /** The refspec fetched from origin: a tag into the same local tag (never forced), a branch into its remote-tracking ref, so the commit moved to is held by a ref. */
+  fetch: string;
+  /** The commit it points at (a tag is peeled to its commit). */
+  commit: string;
+  /** True when moving to it goes forward: the checkout does not contain it, a release is above the installed version, and a branch head is not known to be off the checkout's line. */
+  newer: boolean;
+  /** Why a ref the checkout does not contain is still not offered (a downgrade, or a move backwards or sideways), or null. */
+  behind: string | null;
+}
+
+export interface LocalMove {
+  /** The checked-out branch, or null on a detached HEAD. */
+  branch: string | null;
+  refs: Record<LocalChannel, LocalRef | null>;
+  /** Why no move can be planned (uncommitted changes, no origin, origin unreachable), naming what is left for the operator; null when one can. */
+  refusal: string | null;
+}
+
+/** The commit a tag points at, from `git ls-remote --tags` output: the peeled `^{}` line of an annotated tag, else the tag's own line. */
+export function tagCommit(lsRemote: string, tag: string): string | null {
+  let direct: string | null = null;
+  for (const line of lsRemote.split(/\r?\n/)) {
+    const [sha = "", ref = ""] = line.split("\t");
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) continue;
+    if (ref === `refs/tags/${tag}^{}`) return sha;
+    if (ref === `refs/tags/${tag}`) direct = sha;
+  }
+  return direct;
+}
+
+/** A step's command as one shell line (for messages that hand a command to the operator). */
+function shownCommand(step: Step): string {
+  const shown = [step.command, ...step.args].map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : JSON.stringify(a))).join(" ");
+  return step.cwd ? `(cd ${JSON.stringify(step.cwd)} && ${shown})` : shown;
+}
+
+function npmBinary(): string {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+/** Reinstall a moved checkout with its own installer, in local mode, for the recorded profile (a full install, not --settings-only). */
+function localReinstallStep(kit: KitInstall, cwd: string): Step | null {
+  const step = reconcileStep(kit, cwd, ["--mode", "local"], false);
+  if (step) step.label = `reinstall the checkout in local mode (${recordedProfile(cwd)} profile)`;
+  return step;
+}
+
+/** The commands that move the checkout by hand, for a refusal: fetch, detached checkout, npm ci, reinstall. */
+function localMoveCommands(kit: KitInstall, cwd: string, root: string, ref: LocalRef | null): string {
+  const reinstall = localReinstallStep(kit, cwd);
+  return [
+    ...(ref ? [`git -C "${root}" fetch --no-tags origin ${ref.fetch}`] : []),
+    `git -C "${root}" checkout --no-overwrite-ignore --detach ${ref ? ref.commit : "<release tag or commit>"}`,
+    `(cd "${root}" && npm ci)`,
+    reinstall ? shownCommand(reinstall) : `node "${path.join(root, "packages", "core", "install.ts")}" --profile <profile> --mode local --yes`,
+  ].join(", then ");
+}
+
+/** `/update kit` (latest) or `/update kit <channel>`, and where it moves the checkout. */
+function localOffers(move: LocalMove, except?: LocalChannel): string[] {
+  return LOCAL_CHANNELS.flatMap((channel) => {
+    const ref = move.refs[channel];
+    return ref?.newer && channel !== except ? [`${channel === "latest" ? "/update kit" : `/update kit ${channel}`} moves it to ${ref.name}@${ref.commit.slice(0, 7)}`] : [];
+  });
+}
+
+/**
+ * How /update treats a remote URL before contacting it: `ok` (a URL or scp address of a public host,
+ * or a local path), `legacy` (a retired private source: never contacted) or `unknown` (an address it
+ * cannot parse: not contacted either, so nothing unrecognised is ever reached). An scp address
+ * (`[user@]host:path`, no slash before the first colon) is read as `ssh://[user@]host/path`, so a
+ * retired host is recognised whatever the user name.
+ */
+export function classifyRemote(url: string, legacySources: string[] = BUILTIN_LEGACY_SOURCES): "ok" | "legacy" | "unknown" {
+  const value = url.trim();
+  // git's <transport>::<address> form (a remote helper) is not read here: fail closed.
+  if (/^[a-z][a-z0-9+.-]*::/i.test(value)) return "unknown";
+  let host: string;
+  let repoPath: string;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    if (/^file:\/\//i.test(value)) return "ok";
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return "unknown";
+    }
+    if (!parsed.hostname) return "unknown";
+    host = parsed.hostname;
+    try {
+      repoPath = decodeURIComponent(parsed.pathname);
+    } catch {
+      return "unknown"; // a malformed percent-escape
+    }
+  } else if (/^[A-Za-z]:[\\/]/.test(value)) {
+    return "ok"; // a Windows path
+  } else {
+    const colon = value.indexOf(":");
+    const slash = value.indexOf("/");
+    if (colon < 0 || (slash >= 0 && slash < colon)) return "ok"; // a local path, as git reads it
+    const scp = /^(?:[^@/:]+@)?([^@/:]+):(.*)$/.exec(value);
+    if (!scp) return "unknown";
+    const [, scpHost = "", rest = ""] = scp;
+    host = scpHost;
+    repoPath = rest;
+  }
+  // The same host/path key isLegacyGitSource compares, for any number of path segments.
+  // A fully qualified host (trailing dot) and any letter case name the same host.
+  host = host.replace(/\.+$/, "");
+  if (!host) return "unknown";
+  const key = `${host}/${repoPath.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/, "")}`.toLowerCase();
+  const legacy = legacySources.some((entry) => entry === key || entry === `sha256:${createHash("sha256").update(key).digest("hex")}`);
+  return legacy ? "legacy" : "ok";
+}
+
+/** The branch's configured upstream (`branch.<name>.remote` and `.merge`), or null when it has none. */
+async function upstreamOf(root: string, branch: string, git: GitLike): Promise<{ remote: string; ref: string } | null> {
+  const abbrev = (await git(["-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]))?.trim();
+  if (!abbrev) return null;
+  const [remote, merge] = await Promise.all([git(["-C", root, "config", "--get", `branch.${branch}.remote`]), git(["-C", root, "config", "--get", `branch.${branch}.merge`])]);
+  const r = remote?.trim();
+  const m = merge?.trim();
+  if (r && m) return { remote: r, ref: m };
+  const slash = abbrev.indexOf("/");
+  return slash > 0 ? { remote: abbrev.slice(0, slash), ref: `refs/heads/${abbrev.slice(slash + 1)}` } : { remote: "origin", ref: `refs/heads/${abbrev}` };
+}
+
+const IN_PROGRESS: ReadonlyArray<{ file: string; operation: string; finish: string }> = [
+  { file: "rebase-merge", operation: "rebase", finish: "rebase --continue, or git rebase --abort" },
+  { file: "rebase-apply", operation: "rebase or am", finish: "rebase --continue / am --continue, or --abort" },
+  { file: "MERGE_HEAD", operation: "merge", finish: "commit, or git merge --abort" },
+  { file: "CHERRY_PICK_HEAD", operation: "cherry-pick", finish: "cherry-pick --continue, or git cherry-pick --abort" },
+  { file: "REVERT_HEAD", operation: "revert", finish: "revert --continue, or git revert --abort" },
+  { file: "BISECT_LOG", operation: "bisect", finish: "bisect reset" },
+  // A multi-commit cherry-pick or revert keeps its remaining commits here even between CHERRY_PICK_HEAD files.
+  { file: "sequencer", operation: "multi-commit cherry-pick or revert", finish: "cherry-pick --continue / revert --continue, or --quit / --abort" },
+];
+
+/**
+ * Why HEAD must not be moved now, or null: an operation in progress (moving HEAD under a rebase makes
+ * the operator's later `--continue` drop or rewrite commits), or commits on a detached HEAD that no
+ * branch, tag or remote-tracking ref holds (moving away would orphan them). A check that cannot run
+ * blocks the move.
+ */
+export async function headMoveBlocker(root: string, git: GitLike): Promise<string | null> {
+  for (const { file, operation, finish } of IN_PROGRESS) {
+    const where = (await git(["-C", root, "rev-parse", "--git-path", file]))?.trim();
+    if (!where) return `/update could not check the checkout at ${root} for an operation in progress`;
+    if (fs.existsSync(path.resolve(root, where))) return `a ${operation} is in progress in the checkout at ${root}. Finish or abort it first (git -C "${root}" ${finish})`;
+  }
+  const loose = await git(["-C", root, "rev-list", "HEAD", "--not", "--branches", "--tags", "--remotes"]);
+  if (loose === null) return `/update could not check the checkout at ${root} for commits no branch holds`;
+  const commits = loose.split(/\r?\n/).filter(Boolean);
+  const tip = commits[0];
+  if (tip) return `the checkout at ${root} has ${commits.length} commit${commits.length === 1 ? "" : "s"} on its detached HEAD that no branch, tag or remote ref holds, and moving it would orphan them. Keep them first (git -C "${root}" branch luna-rescue ${tip})`;
+  return null;
+}
+
+/**
+ * Why /update undo must not move a local checkout back, or null: headMoveBlocker's reasons, and, when
+ * the undo resets the recorded branch (an update that pulled it), commits on that branch since the
+ * recorded commit that no remote-tracking ref or tag holds (the reset would drop them; a pull's own
+ * commits came from the remote, so they never block).
+ */
+export async function undoBlocker(journal: Journal, git: GitLike): Promise<string | null> {
+  const { root, branch, commit, localUpdate } = journal.kit;
+  if (!root) return null;
+  const blocker = await headMoveBlocker(root, git);
+  if (blocker) return blocker;
+  if (!branch || !commit || localUpdate === "move") return null;
+  const only = await git(["-C", root, "rev-list", `${commit}..refs/heads/${branch}`, "--not", "--remotes", "--tags"]);
+  if (only === null) return `/update could not check branch ${branch} in the checkout at ${root} for commits only it holds`;
+  const count = only.split(/\r?\n/).filter(Boolean).length;
+  return count ? `branch ${branch} in the checkout at ${root} has ${count} commit${count === 1 ? "" : "s"} since the update that only it holds, and returning it to ${commit.slice(0, 12)} would drop them. Keep them first (git -C "${root}" branch luna-rescue ${branch})` : null;
+}
+
+/**
+ * What a local checkout that a pull cannot update can be moved to: origin's newest release tag and
+ * the heads of main and the trunk branch. A ref is offered only when moving to it goes forward: the
+ * checkout does not contain it, a release is above the installed version, and a branch head is not
+ * known to be off the checkout's line (when its commit is not here yet, the fetch step checks it
+ * before anything moves). A move is refused when origin is missing or unreachable, when tracked
+ * files have uncommitted changes (untracked files do not count; the checkout step refuses to
+ * overwrite them, ignored ones included), and while an operation is in progress or the detached
+ * HEAD holds commits no ref keeps.
+ */
+async function checkLocalMove(kit: KitInstall, cwd: string, root: string, commit: string, branch: string | null, originUrl: string | null, dist: Distribution, git: GitLike): Promise<{ move: LocalMove; note: string; tags: Record<string, string> | null; offline: boolean }> {
+  const refuse = (refusal: string) => ({ move: { branch, refs: { latest: null, next: null, trunk: null }, refusal }, note: refusal, tags: null, offline: true });
+  if (!originUrl) {
+    const publicRepo = parseGitSource(dist.gitSource ?? PUBLIC_KIT_SOURCE)?.repo ?? PUBLIC_KIT_SOURCE;
+    return refuse(`the checkout at ${root} has no origin remote, so /update cannot look for newer releases. Add one (git -C "${root}" remote add origin ${publicRepo}) and run /update kit again, or move it by hand: ${localMoveCommands(kit, cwd, root, null)}`);
+  }
+  const remote = await git(["-C", root, "ls-remote", "--tags", "--heads", "origin"]);
+  if (remote === null) {
+    return refuse(`could not reach origin (${originUrl}) of the checkout at ${root} (git ls-remote failed: offline, or no git credentials for it). Check it with git -C "${root}" ls-remote origin, then run /update kit again`);
+  }
+  const version = latestRelease(releaseTags(remote, dist.tagPrefix));
+  const tag = version ? `${dist.tagPrefix}${version}` : null;
+  const mainHead = branchHead(remote, dist.branch);
+  const trunkHead = branchHead(remote, dist.trunkBranch);
+  const ref = async (name: string, fetch: string, sha: string | null, release: string | null): Promise<LocalRef | null> => {
+    if (!sha) return null;
+    // A commit this clone does not have yet is not contained, so the check fails and it counts as not contained.
+    const contained = sha === commit || (await git(["-C", root, "merge-base", "--is-ancestor", sha, "HEAD"])) !== null;
+    let behind: string | null = null;
+    if (!contained && release !== null) {
+      // A release is an update only above the installed version; anything else is a downgrade.
+      if (!kit.version || compareVersions(release, kit.version) <= 0) behind = `${name} is not above the installed version ${kit.version ?? "(unknown)"}`;
+    } else if (!contained && (await git(["-C", root, "cat-file", "-e", `${sha}^{commit}`])) !== null) {
+      // The commit is here, so whether it descends from HEAD is known: a head off the checkout's line is not offered.
+      const forward = (await git(["-C", root, "merge-base", "--is-ancestor", "HEAD", sha])) !== null;
+      if (!forward) behind = `${name} (${sha.slice(0, 7)}) does not descend from the checkout's commit, so moving to it would go backwards or sideways`;
+    }
+    return { name, fetch, commit: sha, newer: !contained && behind === null, behind };
+  };
+  const refs: Record<LocalChannel, LocalRef | null> = {
+    latest: tag ? await ref(tag, `refs/tags/${tag}:refs/tags/${tag}`, tagCommit(remote, tag), version) : null,
+    next: await ref(dist.branch, `+refs/heads/${dist.branch}:refs/remotes/origin/${dist.branch}`, mainHead, null),
+    trunk: await ref(dist.trunkBranch, `+refs/heads/${dist.trunkBranch}:refs/remotes/origin/${dist.trunkBranch}`, trunkHead, null),
+  };
+  const tags = { latest: version ?? "-", next: mainHead ? `${dist.branch}@${mainHead.slice(0, 7)}` : "-", trunk: trunkHead ? `${dist.trunkBranch}@${trunkHead.slice(0, 7)}` : "-" };
+  const move: LocalMove = { branch, refs, refusal: null };
+  const first = refs.latest?.newer ? refs.latest : LOCAL_CHANNELS.map((channel) => refs[channel]).find((r) => r?.newer) ?? null;
+  if (first) {
+    const blocker = await headMoveBlocker(root, git);
+    const status = blocker ? "" : await git(["-C", root, "status", "--porcelain", "--untracked-files=no"]);
+    if (blocker) {
+      move.refusal = `${blocker}, then run /update kit again`;
+    } else if (status?.trim() !== "") {
+      move.refusal = `the checkout at ${root} ${status === null ? "could not be checked for uncommitted changes" : "has uncommitted changes to tracked files"}, so /update does not move it (a move never discards work). ` +
+        `Commit or stash them (git -C "${root}" status shows them) and run /update kit again, or move it by hand: ${localMoveCommands(kit, cwd, root, first)}`;
+    }
+  }
+  const where = branch ? `on branch ${branch}, which has no upstream branch` : "on a detached HEAD";
+  const offers = localOffers(move);
+  const held = LOCAL_CHANNELS.flatMap((channel) => (refs[channel]?.behind ? [`not offered: ${refs[channel]?.behind}`] : []));
+  const note = move.refusal ?? `local checkout ${where}: ${offers.length ? `${offers.join("; ")} (fetch, detached checkout, npm ci, reinstall in local mode)` : "nothing newer to move to"}${held.length ? `. ${held.join("; ")}` : ""}`;
+  return { move, note, tags, offline: false };
 }
 
 export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersion: string = PI_VERSION, git: GitLike = runGit): Promise<UpdateReport> {
@@ -616,6 +878,10 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
   let commit: string | null = null;
   let trunkAhead: number | undefined;
   let legacyOrigin = false;
+  let localBranch: string | null = null;
+  let localMove: LocalMove | undefined;
+  let originBlocked = false;
+  let notOwnCheckout = false;
   if (migrateSource && !migrateTo) {
     available = true;
     target = `${migrateSource.replace(/^git:/, "")} (${kit.channel ?? "latest"})`;
@@ -681,27 +947,69 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     }
   } else if (kit.kind === "local") {
     note = "local checkout: /update kit pulls it with git (fast-forward only)";
-    if (kit.root) {
-      const [head, branch] = await Promise.all([git(["-C", kit.root, "rev-parse", "HEAD"]), git(["-C", kit.root, "rev-parse", "--abbrev-ref", "HEAD"])]);
+    // A copy without its own .git inside another repository would make every git command below act on
+    // the enclosing repository: only a checkout whose top level is the kit root itself is fetched,
+    // checked out or pulled.
+    const toplevel = kit.root ? (await git(["-C", kit.root, "rev-parse", "--show-toplevel"]))?.trim() || null : null;
+    if (kit.root && (!toplevel || !sameDir(toplevel, kit.root))) {
+      offline = true; // nothing was looked up, so the report must not read as "up to date"
+      notOwnCheckout = true;
+      note = toplevel
+        ? `${kit.root} is not the top level of its own git checkout (it lies inside ${toplevel}), so /update does not fetch, check out or pull it: that would change the enclosing repository. Update this copy by hand, or install Luna from its own clone`
+        : `${kit.root} is not a git checkout /update can read (git rev-parse --show-toplevel failed there), so /update does not fetch, check out or pull it. Update this copy by hand, or install Luna from its own clone`;
+    } else if (kit.root) {
+      // The branch is read as a ref (`symbolic-ref`), so a branch that shares its name with a tag is not recorded
+      // as `heads/<name>`; no symbolic ref is a detached HEAD.
+      const [head, branch] = await Promise.all([git(["-C", kit.root, "rev-parse", "HEAD"]), git(["-C", kit.root, "symbolic-ref", "-q", "HEAD"])]);
       commit = head?.trim() || null;
-      const name = branch?.trim();
-      // A checkout whose origin is a retired private source is never contacted (no ls-remote, no pull): the host may not exist
-      // for this machine, and "up to date" from a failed contact would be false. The operator re-points it or reinstalls.
-      const originUrl = (await git(["-C", kit.root, "remote", "get-url", "origin"]))?.trim() ?? null;
-      // `git remote get-url` may print a URL or the scp form (git@host:owner/repo), which parseGitSource reads with its `git:` prefix.
-      legacyOrigin = Boolean(originUrl && isLegacyGitSource(/^[a-z][a-z+.-]*:\/\//i.test(originUrl) ? originUrl : `git:${originUrl}`, dist.legacySources));
-      if (legacyOrigin) {
+      const ref = branch?.trim() ?? "";
+      localBranch = ref.startsWith("refs/heads/") && ref.length > "refs/heads/".length ? ref.slice("refs/heads/".length) : null;
+      // A checkout whose origin is a retired private source is never contacted (no ls-remote, no fetch, no pull): the host may not
+      // exist for this machine, and "up to date" from a failed contact would be false. The operator re-points it or reinstalls.
+      // An origin /update cannot classify is not contacted either (fail closed).
+      const originUrl = (await git(["-C", kit.root, "remote", "get-url", "origin"]))?.trim() || null;
+      const origin = originUrl ? classifyRemote(originUrl, dist.legacySources) : null;
+      const blocked = (url: string, kind: "legacy" | "unknown", name: string): void => {
         offline = true; // nothing was looked up, so the report must not read as "up to date"
-        note = `this checkout's origin (${originUrl}) is a retired private source, so /update does not contact it. Install from ${PUBLIC_KIT_SOURCE.replace(/^git:/, "")} (pi install ${PUBLIC_KIT_SOURCE}) or point origin at the public repository; see docs/migration.md`;
-      } else if (commit && name && name !== "HEAD") {
-        const remote = await git(["-C", kit.root, "ls-remote", "origin", `refs/heads/${name}`]);
-        const upstream = remote ? branchHead(remote, name) : null;
-        if (remote === null) offline = true;
-        // Behind only if upstream moved to a commit this checkout does not already contain.
-        const contained = upstream ? (await git(["-C", kit.root, "merge-base", "--is-ancestor", upstream, "HEAD"])) !== null : true;
-        if (upstream && upstream !== commit && !contained) {
-          available = true;
-          target = `${name}@${upstream.slice(0, 7)}`;
+        if (kind === "legacy") {
+          legacyOrigin = true;
+          note = `this checkout's ${name} (${url}) is a retired private source, so /update does not contact it. Install from ${PUBLIC_KIT_SOURCE.replace(/^git:/, "")} (pi install ${PUBLIC_KIT_SOURCE}) or point ${name} at the public repository; see docs/migration.md`;
+        } else {
+          originBlocked = true;
+          note = `this checkout's ${name} (${url}) is not a URL, scp-style address or local path /update recognises, so it is not contacted. Point it at the public repository (git -C "${kit.root}" remote set-url ${name} ${parseGitSource(dist.gitSource ?? PUBLIC_KIT_SOURCE)?.repo ?? PUBLIC_KIT_SOURCE}) and run /update kit again`;
+        }
+      };
+      if (originUrl && origin && origin !== "ok") {
+        blocked(originUrl, origin, "origin");
+      } else if (commit) {
+        // A branch with a configured upstream is pulled (fast-forward only), whatever the upstream branch is called.
+        const upstream = localBranch ? await upstreamOf(kit.root, localBranch, git) : null;
+        const upstreamUrl = upstream && upstream.remote !== "origin" && upstream.remote !== "." ? (await git(["-C", kit.root, "remote", "get-url", upstream.remote]))?.trim() || null : null;
+        const upstreamClass = upstreamUrl ? classifyRemote(upstreamUrl, dist.legacySources) : "ok";
+        if (upstream && upstreamUrl && upstreamClass !== "ok") {
+          blocked(upstreamUrl, upstreamClass, `remote ${upstream.remote}`);
+        } else if (localBranch && upstream) {
+          const remote = await git(["-C", kit.root, "ls-remote", upstream.remote, upstream.ref]);
+          if (remote === null) offline = true;
+          const head = remote && upstream.ref.startsWith("refs/heads/") ? branchHead(remote, upstream.ref.slice("refs/heads/".length)) : null;
+          // Behind only if upstream moved to a commit this checkout does not already contain.
+          const contained = head ? (await git(["-C", kit.root, "merge-base", "--is-ancestor", head, "HEAD"])) !== null : true;
+          if (head && head !== commit && !contained) {
+            available = true;
+            target = `${upstream.ref.slice("refs/heads/".length)}@${head.slice(0, 7)}`;
+          }
+        } else {
+          // A detached HEAD, or a branch with no upstream (an installed copy kept as a worktree on its own
+          // branch): a pull cannot move it, so it is moved to a ref of origin instead.
+          const checked = await checkLocalMove(kit, cwd, kit.root, commit, localBranch, originUrl, dist, git);
+          localMove = checked.move;
+          note = checked.note;
+          tags = checked.tags;
+          offline = offline || checked.offline;
+          const latest = localMove.refs.latest;
+          // A newer release is an update even when the move is refused: the report says why it cannot be applied, never "up to date".
+          available = Boolean(latest?.newer);
+          target = latest ? `${latest.name}@${latest.commit.slice(0, 7)}` : null;
         }
       }
     }
@@ -721,7 +1029,7 @@ export async function checkForUpdates(cwd: string, fetchImpl: FetchLike, piVersi
     return { source: e.source, name: npm.name, scope: e.scope, installed, kitPin, latest, action };
   });
 
-  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(trunkAhead !== undefined ? { trunkAhead } : {}), ...(legacyOrigin ? { legacyOrigin } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
+  return { cwd, checkedAt: new Date().toISOString(), pi, kit: { ...kit, commit, target, available, note, tags, migrateTo, migrateSource, ...(trunkAhead !== undefined ? { trunkAhead } : {}), ...(legacyOrigin ? { legacyOrigin } : {}), ...(originBlocked ? { originBlocked } : {}), ...(notOwnCheckout ? { notOwnCheckout } : {}), ...(kit.kind === "local" ? { branch: localBranch } : {}), ...(localMove ? { localMove } : {}) }, packages, staleRoles: detectStaleRoleCopies(agentDir(), kit.root), offline };
 }
 
 /** The state the trunk-ahead notice reads: the channel the install follows and the commit gap. */
@@ -771,6 +1079,7 @@ export function summaryLine(report: UpdateReport): string {
   const parts: string[] = [];
   if (report.kit.legacy) parts.push("Luna is on a retired private source and moves to the public one");
   else if (report.kit.migrateTo) parts.push(`Luna moves to ${report.kit.migrateTo} delivery`);
+  else if (report.kit.available && report.kit.localMove?.refusal) parts.push(`Luna ${report.kit.version} → ${report.kit.target}, which cannot be applied yet: ${report.kit.localMove.refusal}`);
   else if (report.kit.available) parts.push(`Luna ${report.kit.version} → ${report.kit.target}${report.kit.channel ? ` (${report.kit.channel})` : ""}`);
   if (report.pi.available) parts.push(`pi ${report.pi.current} → ${report.pi.latest}`);
   const pkgs = report.packages.filter((p) => p.action === "reconcile" || p.action === "update");
@@ -789,7 +1098,7 @@ export function formatReport(report: UpdateReport): string {
       : k.kind;
   const at = k.commit ? ` @${k.commit.slice(0, 7)}` : "";
   lines.push(`  Luna  ${k.version ?? "?"}${at}  [${kitWhere}${k.legacy ? ", retired private source" : ""}]${k.available ? `  →  ${k.target}` : (k.kind === "npm" || k.kind === "git") && k.target && !k.pinned ? "  (up to date)" : ""}`);
-  if (k.tags) lines.push(`             ${k.kind === "git" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}${k.tags.trunk !== undefined ? `, trunk ${k.tags.trunk}` : ""}`);
+  if (k.tags) lines.push(`             ${k.kind === "git" || k.kind === "local" ? "available" : "published"}: latest ${k.tags.latest ?? "-"}, next ${k.tags.next ?? "-"}${k.tags.trunk !== undefined ? `, trunk ${k.tags.trunk}` : ""}`);
   if (k.note) lines.push(`             ${k.note}`);
   const trunkGap = trunkNotice({ channel: TRUNK_CHANNEL, ahead: report.kit.trunkAhead ?? 0 });
   if (trunkGap) lines.push(`             ${trunkGap}`);
@@ -915,7 +1224,7 @@ function kitBefore(kit: KitInstall, switching = false): string {
   const was = `Luna ${kit.version ?? "(unknown version)"}${kit.channel ? ` on ${kit.channel}` : ""}${kit.commit ? ` (commit ${kit.commit.slice(0, 12)})` : ""}`;
   if (switching && kit.channel && isChannelName(kit.channel)) return `${was}; /update channel ${kit.channel} goes back`;
   if ((kit.kind === "npm" || (kit.kind === "git" && kit.channel !== "next")) && isExactVersion(kit.version)) return `${was}; /update channel ${kit.version} goes back to it`;
-  if (kit.kind === "local" && kit.root && kit.commit) return `${was}; git -C "${kit.root}" reset --keep ${kit.commit.slice(0, 12)} goes back to it`;
+  if (kit.kind === "local" && kit.root && kit.commit) return `${was}; ${kit.branch ? `git -C "${kit.root}" switch --no-overwrite-ignore --no-guess ${kit.branch} && ` : ""}git -C "${kit.root}" reset --keep ${kit.commit.slice(0, 12)} goes back to it`;
   return was;
 }
 
@@ -929,14 +1238,14 @@ function isProjectScoped(cwd: string, marker = readMarker(cwd)): boolean {
 }
 
 /** Re-apply the recorded profile with the (possibly just updated) kit installer. */
-function reconcileStep(kit: KitInstall, cwd: string, extraArgs: string[] = []): Step | null {
+function reconcileStep(kit: KitInstall, cwd: string, extraArgs: string[] = [], settingsOnly = true): Step | null {
   const marker = readMarker(cwd);
   const profile = typeof marker.profile === "string" && !["custom", "all"].includes(marker.profile) ? marker.profile : null;
   const root = kit.kind === "npm" ? (kit.root ?? null) : kit.root;
   if (!profile || !root) return null;
   const installer = kitInstaller(root);
   if (!installer) return null;
-  const args = [installer, "--profile", profile, "--yes", "--settings-only", ...extraArgs];
+  const args = [installer, "--profile", profile, "--yes", ...(settingsOnly ? ["--settings-only"] : []), ...extraArgs];
   const scope = effectiveScope(kit, marker);
   if (scope) args.push("--scope", scope);
   // install.ts derives the project settings/marker paths from process.cwd(), so a project
@@ -1012,13 +1321,18 @@ function verifyReconciled(cwd: string, startedAt: () => number): () => Promise<s
   };
 }
 
-export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "packages", pi_: ExtensionAPI | null = null, git: GitLike = runGit): { steps: Step[]; notes: string[] } {
+/**
+ * `localRef` is the ref of origin a local checkout that cannot be pulled moves to (`/update kit
+ * <latest|next|trunk>`); without one it moves to the newest release, as every install defaults to `latest`.
+ */
+export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "packages", pi_: ExtensionAPI | null = null, git: GitLike = runGit, localRef?: LocalChannel): { steps: Step[]; notes: string[] } {
   const steps: Step[] = [];
   const notes: string[] = [];
   const kit = report.kit;
   const pi = piBinary();
   const scopeFlag = kit.scope === "project" ? ["-l"] : [];
   let kitChanged = false;
+  let reinstalled = false;
   let planStart = Date.now();
   const startedAt = () => planStart;
 
@@ -1066,8 +1380,15 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
         steps.push({ label: `update Luna to ${kit.target}`, command: pi, args: ["install", gitSourceWithRef(kit.source, `${prefix}${kit.target}`), ...scopeFlag], verify: kit.target ? verifyKitVersion(report.cwd, kit.target) : undefined, changesKit: kitBefore(kit) });
       }
       kitChanged = true;
-    } else if (kit.kind === "local" && kit.legacyOrigin) {
+    } else if (kit.kind === "local" && (kit.legacyOrigin || kit.originBlocked || kit.notOwnCheckout)) {
       notes.push(`Luna: ${kit.note}`);
+    } else if (kit.kind === "local" && kit.root && kit.localMove) {
+      const moved = planLocalMove(report, kit.root, kit.localMove, localRef ?? "latest", what === "kit" || localRef !== undefined, git, startedAt);
+      steps.push(...moved.steps);
+      notes.push(...moved.notes);
+      reinstalled = moved.steps.some((s) => s.reapplies);
+    } else if (kit.kind === "local" && localRef) {
+      notes.push(`Luna: the checkout${kit.root ? ` at ${kit.root}` : ""} is on a branch with a configured upstream, so /update kit pulls it (fast-forward only). A ref (latest, next, trunk) applies only to a detached checkout or a branch with no upstream.`);
     } else if (kit.kind === "local" && kit.root && (kit.available || what === "kit")) {
       steps.push({ label: "pull the local checkout (fast-forward only)", command: "git", args: ["-C", kit.root, "pull", "--ff-only"], changesKit: kitBefore(kit) });
       kitChanged = true;
@@ -1079,7 +1400,8 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
     const unpinned = report.packages.filter((p) => p.action === "update");
     for (const p of unpinned) steps.push({ label: `update ${p.name} to ${p.latest}`, command: pi, args: ["update", p.source], verify: p.latest ? verifyPackageVersion(p.name, p.scope, report.cwd, p.latest) : undefined });
   }
-  const needsReconcile = kitChanged || ((what === "packages" || what === "all") && report.packages.some((p) => p.action === "reconcile"));
+  // A moved checkout's full reinstall already applies the profile and the companion pins.
+  const needsReconcile = !reinstalled && (kitChanged || ((what === "packages" || what === "all") && report.packages.some((p) => p.action === "reconcile")));
   if (needsReconcile) {
     const step = reconcileStep(kit, report.cwd);
     if (step) {
@@ -1094,6 +1416,67 @@ export function planUpdate(report: UpdateReport, what: "all" | "kit" | "pi" | "p
     notes.push(`pi: ${report.pi.latest} is newer than ${report.pi.tested}, the pi this Luna release is tested with, so /update leaves pi at ${report.pi.current}. Update Luna first, or run "pi update --self" yourself.`);
   }
   planStart = Date.now(); // the marker must be rewritten after planning, i.e. by a step that runs later
+  return { steps, notes };
+}
+
+/**
+ * After the fetch: the commit to move to must now be in the checkout's object store, and a branch
+ * head (`forward`) must descend from the checkout's commit. A failure stops the plan before the
+ * checkout moves, so a branch head off the checkout's line is never moved to without saying so.
+ */
+function verifyFetched(root: string, ref: LocalRef, forward: boolean, git: GitLike): () => Promise<string | null> {
+  return async () => {
+    if ((await git(["-C", root, "cat-file", "-e", `${ref.commit}^{commit}`])) === null) return `commit ${ref.commit.slice(0, 12)} is not in the checkout after the fetch`;
+    if (forward && (await git(["-C", root, "merge-base", "--is-ancestor", "HEAD", ref.commit])) === null) {
+      return `${ref.name} (${ref.commit.slice(0, 7)}) does not descend from the checkout's commit, so moving to it would go backwards or sideways; the checkout was not moved. To move anyway: git -C "${root}" checkout --no-overwrite-ignore --detach ${ref.commit}`;
+    }
+    return null;
+  };
+}
+
+/** After `npm ci`: it must have written the checkout's node_modules/.package-lock.json during this run. */
+function verifyDependencies(root: string, startedAt: () => number): () => Promise<string | null> {
+  return async () => {
+    try {
+      return fs.statSync(path.join(root, "node_modules", ".package-lock.json")).mtimeMs >= startedAt() - 1000 ? null : "npm ci did not rewrite node_modules/.package-lock.json";
+    } catch {
+      return "npm ci left no node_modules/.package-lock.json in the checkout";
+    }
+  };
+}
+
+/**
+ * Move a local checkout that a pull cannot update to a ref of origin: fetch it, check it out
+ * detached (`--no-overwrite-ignore`: it refuses to overwrite local changes and untracked or ignored
+ * files the target tracks; nothing here can discard work), `npm ci`, then reinstall with the moved checkout's own installer in local mode for the
+ * recorded profile. The step that moves the code records the commit and branch it left, so
+ * /update undo can return to them. `explicit`: say why nothing is planned when the ref is not newer.
+ */
+function planLocalMove(report: UpdateReport, root: string, move: LocalMove, channel: LocalChannel, explicit: boolean, git: GitLike, startedAt: () => number): { steps: Step[]; notes: string[] } {
+  if (move.refusal) return { steps: [], notes: [`Luna: ${move.refusal}`] };
+  const kit = report.kit;
+  const ref = move.refs[channel];
+  const others = localOffers(move, channel);
+  if (!ref?.newer) {
+    if (!explicit) return { steps: [], notes: [] };
+    const dist = readDistribution(root);
+    const missing = channel === "latest" ? `release tags (${dist.tagPrefix}X.Y.Z)` : `${channel === "next" ? dist.branch : dist.trunkBranch} branch`;
+    const why = !ref ? `origin of the checkout at ${root} has no ${missing}: nothing to move to on ${channel}`
+      : ref.behind ? `${ref.behind}: nothing to move to on ${channel} (to move anyway: ${localMoveCommands(kit, report.cwd, root, ref)})`
+      : `the checkout at ${root} already contains ${ref.name} (${ref.commit.slice(0, 7)}): nothing newer to move to on ${channel}`;
+    return { steps: [], notes: [`Luna: ${why}${others.length ? `. ${others.join("; ")}.` : ", so nothing remains to run."}`] };
+  }
+  const steps: Step[] = [
+    { label: `fetch ${ref.name} from origin`, command: "git", args: ["-C", root, "fetch", "--no-tags", "origin", ref.fetch], verify: verifyFetched(root, ref, channel !== "latest", git) },
+    { label: `move the local checkout to ${ref.name} (${ref.commit.slice(0, 7)}, detached HEAD)`, command: "git", args: ["-C", root, "checkout", "--no-overwrite-ignore", "--detach", ref.commit], verify: verifyKitCommit(root, `${ref.name}@${ref.commit}`, git), changesKit: kitBefore(kit) },
+    { label: "install the checkout's dependencies (npm ci)", command: npmBinary(), args: ["ci"], cwd: root, verify: verifyDependencies(root, startedAt) },
+  ];
+  const notes: string[] = [];
+  const reinstall = localReinstallStep(kit, report.cwd);
+  if (reinstall) {
+    reinstall.verify = verifyReconciled(report.cwd, startedAt);
+    steps.push(reinstall);
+  } else notes.push(`No recorded profile to reinstall the checkout with; run node "${path.join(root, "packages", "core", "install.ts")}" --profile <name> --mode local --yes so new extensions and companion pins load.`);
   return { steps, notes };
 }
 
@@ -1172,7 +1555,20 @@ export function planUndo(journal: Journal, cwd: string, git: GitLike = runGit): 
     const ref = moving ? k.commit : k.version ? `${readDistribution(k.root).tagPrefix}${k.version}` : null;
     if (ref) steps.push({ label: `return Luna to ${moving ? `commit ${ref.slice(0, 12)}` : ref}`, command: piBinary(), args: ["install", gitSourceWithRef(k.source, ref), ...scopeFlag], verify: moving ? verifyKitCommit(k.root, `kit@${ref}`, git) : k.version ? verifyKitVersion(cwd, k.version) : undefined });
   } else if (k.kind === "local" && k.root && k.commit) {
-    steps.push({ label: `return the local checkout to ${k.commit.slice(0, 12)}`, command: "git", args: ["-C", k.root, "reset", "--keep", k.commit], verify: verifyKitCommit(k.root, `kit@${k.commit}`, git) });
+    // Undo moves only what the update moved. A detached move never touched a branch: it goes back by
+    // checking out the recorded branch, or by detaching at the recorded commit when it started detached.
+    // Only a pull moved a branch, and only then is that branch reset (undoBlocker refuses when the
+    // reset would drop commits only that branch holds).
+    const root = k.root;
+    const branch = k.branch;
+    const commit = k.commit;
+    if (branch === undefined) {
+      // A journal from before the branch was recorded: undo as it always did, resetting the checked-out branch.
+      steps.push({ label: `return the local checkout to ${commit.slice(0, 12)}`, command: "git", args: ["-C", root, "reset", "--keep", commit], verify: verifyKitCommit(root, `kit@${commit}`, git) });
+    } else if (branch) steps.push({ label: `return the local checkout to branch ${branch}`, command: "git", args: ["-C", root, "switch", "--no-overwrite-ignore", "--no-guess", branch], verify: async () => ((await git(["-C", root, "symbolic-ref", "-q", "HEAD"]))?.trim() === `refs/heads/${branch}` ? null : `the checkout is not on branch ${branch}`) });
+    else steps.push({ label: `return the local checkout to ${commit.slice(0, 12)} (detached HEAD)`, command: "git", args: ["-C", root, "checkout", "--no-overwrite-ignore", "--detach", commit], verify: verifyKitCommit(root, `kit@${commit}`, git) });
+    if (branch && k.localUpdate !== "move") steps.push({ label: `return branch ${branch} to ${commit.slice(0, 12)}`, command: "git", args: ["-C", root, "reset", "--keep", commit], verify: verifyKitCommit(root, `kit@${commit}`, git) });
+    notes.push(`The checkout's dependencies are not rolled back: run (cd "${root}" && npm ci) if they changed.`);
   }
   if (steps.length === 0) notes.push(`The kit itself cannot be returned automatically (it was ${before}); only the configuration files will be restored.`);
   notes.push(`pi is not rolled back (it was ${journal.pi || "an unknown version"}) and neither are linked packages: run "pi update --self" only forward, or reinstall a package by hand.`);
@@ -1208,8 +1604,7 @@ export async function runPlan(pi: ExtensionAPI, cwd: string, steps: Step[], ui?:
   const mixed = (index: number): Pick<StepOutcome, "kitChanged"> => {
     const reapply = steps.slice(index).find((s) => s.reapplies);
     if (!kitChanged || !reapply) return {};
-    const shown = [reapply.command, ...reapply.args].map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : JSON.stringify(a))).join(" ");
-    return { kitChanged: { ...kitChanged, reapply: reapply.cwd ? `(cd ${JSON.stringify(reapply.cwd)} && ${shown})` : shown } };
+    return { kitChanged: { ...kitChanged, reapply: shownCommand(reapply) } };
   };
   for (const [index, step] of steps.entries()) {
     ui?.setStatus("kit-update", `${step.label}...`);
@@ -1276,6 +1671,15 @@ async function undoUpdate(pi: ExtensionAPI, c: ExtensionCommandContext): Promise
     return;
   }
   const plan = planUndo(journal, cwd);
+  // Moving HEAD back must not orphan commits made on a detached HEAD since, nor run under a rebase or merge,
+  // nor reset a branch past commits only it holds.
+  if (journal.kit.kind === "local" && journal.kit.root && plan.steps.length) {
+    const blocker = await undoBlocker(journal, runGit);
+    if (blocker) {
+      say(c, `update: /update undo does not move the checkout: ${blocker}. Then run /update undo again; nothing was changed.`, "error");
+      return;
+    }
+  }
   if (c.hasUI) {
     const ok = await c.ui.confirm("Undo the last update?", [...plan.steps.map((s) => `• ${s.label}`), `• restore ${journal.files.length} configuration file(s) as of ${journal.createdAt} (changes made to them since, such as a profile switch or a default model, are lost)`, ...plan.notes.map((n) => `Note: ${n}`)].join("\n"));
     if (!ok) return;
@@ -1335,9 +1739,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("update", {
     description:
-      "Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update channel <latest|next|trunk|X.Y.Z>`.",
+      "Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all|kit|pi|packages`, `/update kit latest|next|trunk` (a local checkout), `/update channel <latest|next|trunk|X.Y.Z>`.",
     getArgumentCompletions: (prefix: string) =>
-      ["status", "undo", "all", "kit", "pi", "packages", "channel latest", "channel next", "channel trunk"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
+      ["status", "undo", "all", "kit", "kit latest", "kit next", "kit trunk", "pi", "packages", "channel latest", "channel next", "channel trunk"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
     handler: async (args, c) => {
       const cwd = c.cwd ?? process.cwd();
       let arg = args.trim().toLowerCase();
@@ -1367,7 +1771,13 @@ export default function (pi: ExtensionAPI) {
         if (hasUpdates(report)) options.push({ label: "Update everything", value: "all" });
         if (report.kit.migrateTo) options.push({ label: `Move Luna to ${report.kit.migrateTo} delivery`, value: "kit" });
         else if (report.kit.available && report.kit.kind !== "local") options.push({ label: `Luna ${report.kit.version} → ${report.kit.target}`, value: "kit" });
-        if (report.kit.kind === "local") options.push({ label: `Pull the local Luna checkout (git, fast-forward only)${report.kit.available ? ` → ${report.kit.target}` : ""}`, value: "kit" });
+        const move = report.kit.localMove;
+        if (report.kit.kind === "local" && move) {
+          for (const channel of LOCAL_CHANNELS) {
+            const ref = move.refs[channel];
+            if (ref?.newer && move.refusal === null) options.push({ label: `Move the local Luna checkout to ${channel === "latest" ? "release " : ""}${ref.name}@${ref.commit.slice(0, 7)} (fetch, detached checkout, npm ci, reinstall)`, value: channel === "latest" ? "kit" : `kit ${channel}` });
+          }
+        } else if (report.kit.kind === "local") options.push({ label: `Pull the local Luna checkout (git, fast-forward only)${report.kit.available ? ` → ${report.kit.target}` : ""}`, value: "kit" });
         if (report.pi.available) options.push({ label: `pi ${report.pi.current} → ${report.pi.latest}`, value: "pi" });
         if (pkgCount) options.push({ label: `${pkgCount} linked package${pkgCount === 1 ? "" : "s"}`, value: "packages" });
         const other = (report.kit.kind === "npm" || report.kit.kind === "git") && report.kit.channel === "next" ? "latest" : "next";
@@ -1395,6 +1805,17 @@ export default function (pi: ExtensionAPI) {
         plan = planChannelSwitch(report, channel);
       } else if (["all", "kit", "pi", "packages"].includes(arg)) {
         plan = planUpdate(report, arg as "all" | "kit" | "pi" | "packages", pi);
+      } else if (arg.startsWith("kit ")) {
+        const ref = localChannel(arg.slice("kit ".length).trim());
+        if (!ref) {
+          say(c, "update: usage: /update kit [latest|next|trunk] (the ref a local checkout moves to)", "error");
+          return;
+        }
+        if (report.kit.kind !== "local") {
+          say(c, `update: /update kit ${ref} chooses where a local checkout moves; this install is ${report.kit.kind === "none" ? "not registered" : `a ${report.kit.kind} install`}: /update channel ${ref} switches its channel.`, "error");
+          return;
+        }
+        plan = planUpdate(report, "kit", pi, runGit, ref);
       } else {
         say(c, `update: unknown option "${arg}". Use status, undo, all, kit, pi, packages or channel <name>.`, "error");
         return;
@@ -1422,7 +1843,7 @@ export default function (pi: ExtensionAPI) {
           steps: plan.steps.map((s) => s.label),
           pi: PI_VERSION,
           profile: readMarker(cwd).profile ?? null,
-          kit: { kind: report.kit.kind, source: report.kit.source, version: report.kit.version, commit: report.kit.commit ?? null, channel: report.kit.channel, root: report.kit.root, scope: report.kit.scope },
+          kit: { kind: report.kit.kind, source: report.kit.source, version: report.kit.version, commit: report.kit.commit ?? null, channel: report.kit.channel, root: report.kit.root, scope: report.kit.scope, ...(report.kit.kind === "local" ? { branch: report.kit.branch ?? null, localUpdate: report.kit.localMove ? "move" as const : "pull" as const } : {}) },
         });
       } catch (error) {
         say(c, `update: could not write the undo journal (${error instanceof Error ? error.message : String(error)}); nothing was changed.`, "error");

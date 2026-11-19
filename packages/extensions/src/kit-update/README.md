@@ -14,8 +14,9 @@ It checks three things:
   With **git delivery** (the current setting, `packages/core/distribution.json`), a release is a
   `vX.Y.Z` tag of Luna's repository, checked with `git ls-remote` using your own git
   credentials, and `next` is the repository's `main` branch. With **npm delivery**, the
-  channels are dist-tags of `@satunix/pi-system`. A local checkout is checked against its
-  upstream branch.
+  channels are dist-tags of `@satunix/pi-system`. A local checkout on a branch with an upstream
+  is checked against that upstream; a detached checkout, or one on a branch with no upstream,
+  is checked against origin's newest release tag and the heads of `main` and the trunk branch.
 - **pi** itself (`@earendil-works/pi-coding-agent`, from the npm registry).
 - **Linked packages**: the other npm packages in your pi settings. A companion that Luna pins
   (`packages/core/sources.json`) is moved to Luna's reviewed pin when Luna changes it.
@@ -29,6 +30,7 @@ It checks three things:
 | `/update status` | Show installed and available versions |
 | `/update all` | Update the kit, linked packages and pi, re-apply the profile, reload |
 | `/update kit` / `pi` / `packages` | Update one part |
+| `/update kit latest\|next\|trunk` | Move a local checkout that cannot be pulled to that ref of its origin |
 | `/update undo` | Return the kit and its configuration files to how they were before the last update (pi itself is not rolled back) |
 | `/update channel latest\|next\|trunk\|X.Y.Z` | Switch Luna's channel, or pin a release. From a checkout, this installs the released kit instead |
 
@@ -36,8 +38,18 @@ Updates go through pi's own package manager (`pi update`, `pi install`). A new r
 `latest` re-points Luna's registration to the new tag; `next` is pulled. After Luna or a
 companion changes, the recorded profile is re-applied with Luna's installer
 (`--settings-only`), so extensions a new release adds to your profile load. A pi update needs a
-restart of pi; everything else reloads in place. For a local checkout, `/update kit` runs
-`git pull --ff-only`.
+restart of pi; everything else reloads in place. For a local checkout on a branch with an
+upstream, `/update kit` runs `git pull --ff-only`. A detached checkout, or one on a branch with no
+upstream, is moved forward instead: `git fetch` of the ref, `git checkout --no-overwrite-ignore
+--detach` of its commit, `npm ci`, then the checkout's installer in local mode for the recorded
+profile, under one confirmation. It is refused, naming the commands left, when tracked files have
+uncommitted changes, an operation (rebase, merge, bisect, ...) is in progress, the detached HEAD
+holds commits no ref holds, origin is missing, unreachable, unrecognised or a retired private
+source, or nothing is newer; a newer release that cannot be applied yet is still reported as an
+update, with the reason. A copy that is not the top level of its own git checkout (one vendored
+inside another repository) is never fetched, checked out or pulled. `/update undo` moves back only what the update moved: after a move it
+checks the branch out again (or detaches at the recorded commit) and resets no branch. See
+[Updates](../../../../docs/updates.md#checkouts) (`tests/kit-update-local-smoke.ts`).
 
 pi is updated only up to the version Luna's `package.json` pins for its test suite. A newer pi
 is reported, not offered, because `pi update --self` always installs the newest pi (see

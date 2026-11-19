@@ -1,0 +1,753 @@
+{
+  "schemaVersion": 1,
+  "source": "five Luna self-improvement runs (core, fleet, guard, ops, ux lanes), long-horizon profile, November 2026; a cycle passes when it merged",
+  "tasks": [
+    {
+      "id": "luna-core-01#1",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 12935729,
+      "cached": null,
+      "output": 141382,
+      "usd": 0.463702,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.177909
+        },
+        "worker": {
+          "input": 12935729,
+          "cached": null,
+          "output": 141382,
+          "usd": 0.285793
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#2",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 9796880,
+      "cached": null,
+      "output": 164434,
+      "usd": 0.347523,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.013966
+        },
+        "worker": {
+          "input": 9796880,
+          "cached": null,
+          "output": 164434,
+          "usd": 0.333556
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#3",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 5956042,
+      "cached": null,
+      "output": 92549,
+      "usd": 0.311262,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.160449
+        },
+        "worker": {
+          "input": 5956042,
+          "cached": null,
+          "output": 92549,
+          "usd": 0.150813
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#4",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 10864052,
+      "cached": null,
+      "output": 115454,
+      "usd": 0.338247,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.020311
+        },
+        "worker": {
+          "input": 10864052,
+          "cached": null,
+          "output": 115454,
+          "usd": 0.317936
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#5",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 2610607,
+      "cached": null,
+      "output": 38590,
+      "usd": 0.093777,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001494
+        },
+        "worker": {
+          "input": 2610607,
+          "cached": null,
+          "output": 38590,
+          "usd": 0.092283
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#6",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 8397045,
+      "cached": null,
+      "output": 163157,
+      "usd": 0.258137,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001227
+        },
+        "worker": {
+          "input": 8397045,
+          "cached": null,
+          "output": 163157,
+          "usd": 0.25691
+        }
+      }
+    },
+    {
+      "id": "luna-core-01#7",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 6365270,
+      "cached": null,
+      "output": 101210,
+      "usd": 0.199499,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001872
+        },
+        "worker": {
+          "input": 6365270,
+          "cached": null,
+          "output": 101210,
+          "usd": 0.197627
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#1",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 17671368,
+      "cached": null,
+      "output": 170265,
+      "usd": 0.473531,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.002521
+        },
+        "worker": {
+          "input": 17671368,
+          "cached": null,
+          "output": 170265,
+          "usd": 0.471009
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#2",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 37069929,
+      "cached": null,
+      "output": 215780,
+      "usd": 0.671171,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001463
+        },
+        "worker": {
+          "input": 37069929,
+          "cached": null,
+          "output": 215780,
+          "usd": 0.669707
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#3",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 11109051,
+      "cached": null,
+      "output": 129892,
+      "usd": 0.349876,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.078729
+        },
+        "worker": {
+          "input": 11109051,
+          "cached": null,
+          "output": 129892,
+          "usd": 0.271147
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#4",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 8931256,
+      "cached": null,
+      "output": 141832,
+      "usd": 0.286768,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.007039
+        },
+        "worker": {
+          "input": 8931256,
+          "cached": null,
+          "output": 141832,
+          "usd": 0.279729
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#5",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 7431850,
+      "cached": null,
+      "output": 75939,
+      "usd": 0.218298,
+      "roles": {
+        "worker": {
+          "input": 7431850,
+          "cached": null,
+          "output": 75939,
+          "usd": 0.218298
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#6",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 216277,
+      "cached": null,
+      "output": 5165,
+      "usd": 0.011511,
+      "roles": {
+        "worker": {
+          "input": 216277,
+          "cached": null,
+          "output": 5165,
+          "usd": 0.011511
+        }
+      }
+    },
+    {
+      "id": "luna-fleet-01#7",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 20214280,
+      "cached": null,
+      "output": 167008,
+      "usd": 0.408184,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.004696
+        },
+        "worker": {
+          "input": 20214280,
+          "cached": null,
+          "output": 167008,
+          "usd": 0.403488
+        }
+      }
+    },
+    {
+      "id": "luna-guard-01#1",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 6183235,
+      "cached": null,
+      "output": 58657,
+      "usd": 0.190586,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.002626
+        },
+        "worker": {
+          "input": 6183235,
+          "cached": null,
+          "output": 58657,
+          "usd": 0.18796
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#1",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 13195654,
+      "cached": null,
+      "output": 184295,
+      "usd": 0.45286,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.004944
+        },
+        "worker": {
+          "input": 13195654,
+          "cached": null,
+          "output": 184295,
+          "usd": 0.447917
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#2",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 8669841,
+      "cached": null,
+      "output": 124694,
+      "usd": 0.256925,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.012275
+        },
+        "worker": {
+          "input": 8669841,
+          "cached": null,
+          "output": 124694,
+          "usd": 0.24465
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#3",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 1515795,
+      "cached": null,
+      "output": 37089,
+      "usd": 0.05364,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001962
+        },
+        "worker": {
+          "input": 1515795,
+          "cached": null,
+          "output": 37089,
+          "usd": 0.051678
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#4",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 6566363,
+      "cached": null,
+      "output": 93982,
+      "usd": 0.149853,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001246
+        },
+        "worker": {
+          "input": 6566363,
+          "cached": null,
+          "output": 93982,
+          "usd": 0.148607
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#5",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 7384093,
+      "cached": null,
+      "output": 123489,
+      "usd": 0.229425,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.009066
+        },
+        "worker": {
+          "input": 7384093,
+          "cached": null,
+          "output": 123489,
+          "usd": 0.220359
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#6",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 25055363,
+      "cached": null,
+      "output": 284154,
+      "usd": 0.657166,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.010271
+        },
+        "worker": {
+          "input": 25055363,
+          "cached": null,
+          "output": 284154,
+          "usd": 0.646895
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#7",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 5386414,
+      "cached": null,
+      "output": 98474,
+      "usd": 0.150686,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.005134
+        },
+        "worker": {
+          "input": 5386414,
+          "cached": null,
+          "output": 98474,
+          "usd": 0.145552
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#8",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 13975465,
+      "cached": null,
+      "output": 113353,
+      "usd": 0.23725,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.001796
+        },
+        "worker": {
+          "input": 13975465,
+          "cached": null,
+          "output": 113353,
+          "usd": 0.235454
+        }
+      }
+    },
+    {
+      "id": "luna-ops-01#9",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 14555763,
+      "cached": null,
+      "output": 115574,
+      "usd": 0.206513,
+      "roles": {
+        "worker": {
+          "input": 14555763,
+          "cached": null,
+          "output": 115574,
+          "usd": 0.206513
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#1",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 11723090,
+      "cached": null,
+      "output": 149001,
+      "usd": 0.427766,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.014451
+        },
+        "worker": {
+          "input": 11723090,
+          "cached": null,
+          "output": 149001,
+          "usd": 0.413315
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#2",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 23267002,
+      "cached": null,
+      "output": 131290,
+      "usd": 0.324861,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.002867
+        },
+        "worker": {
+          "input": 23267002,
+          "cached": null,
+          "output": 131290,
+          "usd": 0.321994
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#3",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 17834162,
+      "cached": null,
+      "output": 152925,
+      "usd": 0.466161,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.019446
+        },
+        "worker": {
+          "input": 17834162,
+          "cached": null,
+          "output": 152925,
+          "usd": 0.446715
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#4",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 5585170,
+      "cached": null,
+      "output": 61884,
+      "usd": 0.123413,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.009565
+        },
+        "worker": {
+          "input": 5585170,
+          "cached": null,
+          "output": 61884,
+          "usd": 0.113848
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#5",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 7007401,
+      "cached": null,
+      "output": 114134,
+      "usd": 0.223061,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.013091
+        },
+        "worker": {
+          "input": 7007401,
+          "cached": null,
+          "output": 114134,
+          "usd": 0.20997
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#6",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 5888880,
+      "cached": null,
+      "output": 90403,
+      "usd": 0.217186,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.013085
+        },
+        "worker": {
+          "input": 5888880,
+          "cached": null,
+          "output": 90403,
+          "usd": 0.204101
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#7",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 12338167,
+      "cached": null,
+      "output": 117907,
+      "usd": 0.379446,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.007653
+        },
+        "worker": {
+          "input": 12338167,
+          "cached": null,
+          "output": 117907,
+          "usd": 0.371793
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#8",
+      "profile": "long-horizon",
+      "passed": true,
+      "input": 11410928,
+      "cached": null,
+      "output": 129332,
+      "usd": 0.244461,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.003491
+        },
+        "worker": {
+          "input": 11410928,
+          "cached": null,
+          "output": 129332,
+          "usd": 0.240969
+        }
+      }
+    },
+    {
+      "id": "luna-ux-01#9",
+      "profile": "long-horizon",
+      "passed": false,
+      "input": 24223990,
+      "cached": null,
+      "output": 180184,
+      "usd": 0.357492,
+      "roles": {
+        "manager": {
+          "input": null,
+          "cached": null,
+          "output": null,
+          "usd": 0.000955
+        },
+        "worker": {
+          "input": 24223990,
+          "cached": null,
+          "output": 180184,
+          "usd": 0.356537
+        }
+      }
+    }
+  ],
+  "unattributed": {
+    "input": 20698568,
+    "cached": null,
+    "output": 208798,
+    "usd": 0.397442
+  }
+}

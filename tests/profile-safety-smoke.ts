@@ -152,8 +152,8 @@ function world(): World {
   const bin = path.join(dir, "bin");
   fs.mkdirSync(path.join(agent, "pi-kit"), { recursive: true });
   fs.mkdirSync(bin, { recursive: true });
-  // pi stub: succeeds, except when asked to install pi-lens or pi-readseek (companions) - used to inject a late failure.
-  fs.writeFileSync(path.join(bin, "pi"), '#!/bin/sh\ncase "$*" in *pi-lens*) [ -n "$FAIL_COMPANION" ] && exit 1;; *pi-readseek*) [ -n "$FAIL_READSEEK" ] && exit 1;; esac\nexit 0\n', { mode: 0o755 });
+  // pi stub: succeeds, except when asked to install pi-readseek (a companion) - used to inject a late failure.
+  fs.writeFileSync(path.join(bin, "pi"), '#!/bin/sh\ncase "$*" in *pi-readseek*) [ -n "$FAIL_READSEEK" ] && exit 1;; esac\nexit 0\n', { mode: 0o755 });
   fs.writeFileSync(path.join(agent, "settings.json"), JSON.stringify({ theme: "dark", packages: [ROOT] }, null, 2));
   return { dir, agent, bin, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -270,10 +270,10 @@ function testInstallerFailureLateInTheRunRollsBack(): void {
   try {
     assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
     const before = digest(w);
-    // balanced pulls the pi-lens companion; the stub fails that install AFTER settings.json was narrowed.
-    const r = install(w, "balanced", [], { FAIL_COMPANION: "1" });
+    // long-horizon pulls the pi-readseek companion; the stub fails that install AFTER settings.json was narrowed.
+    const r = install(w, "long-horizon", [], { FAIL_READSEEK: "1" });
     assert.notEqual(r.status, 0, "the companion failure must fail the run");
-    assert.match(r.stderr, /Rolled back \d+ configuration file\(s\), but NOT the package operations pi already ran: pi install npm:pi-lens@\S+ \(failed part-way\)\./);
+    assert.match(r.stderr, /Rolled back \d+ configuration file\(s\), but NOT the package operations pi already ran: pi install npm:pi-readseek@\S+ \(failed part-way\)\./);
     assert.deepEqual(digest(w), before, "settings.json, marker, firewall.json, overrides.json and .env are back as they were");
     assert.equal(extensionsOf(w).includes("guidelines"), false, "the narrowed extension list did not survive");
   } finally { w.done(); }
@@ -283,12 +283,16 @@ function testRollbackNamesPackageChangesItCannotUndo(): void {
   const w = world();
   try {
     assert.equal(install(w, "lite", ["--no-externals"]).status, 0);
+    // An override adds the opt-in pi-lean-ctx (its CLI present), which installs before pi-readseek.
+    fs.writeFileSync(path.join(w.agent, "pi-kit", "overrides.json"), JSON.stringify({ extensions: { add: ["pi-lean-ctx"] } }));
+    const leanCtx = path.join(w.dir, "lean-ctx");
+    fs.writeFileSync(leanCtx, "");
     const before = digest(w);
-    // long-horizon installs pi-lens (succeeds), then pi-readseek (fails): pi-lens stays installed.
-    const r = install(w, "long-horizon", [], { FAIL_READSEEK: "1" });
+    // long-horizon installs pi-lean-ctx (succeeds), then pi-readseek (fails): pi-lean-ctx stays installed.
+    const r = install(w, "long-horizon", [], { FAIL_READSEEK: "1", PI_LEAN_CTX_BIN: leanCtx });
     assert.notEqual(r.status, 0);
-    assert.match(r.stdout, /\[install\] Package change \(a rollback cannot undo it\): pi install npm:pi-lens@\S+$/m, "each package operation is announced for /profile");
-    assert.match(r.stderr, /NOT the package operations pi already ran: pi install npm:pi-lens@\S+; pi install npm:pi-readseek@\S+ \(failed part-way\)\./);
+    assert.match(r.stdout, /\[install\] Package change \(a rollback cannot undo it\): pi install npm:pi-lean-ctx@\S+$/m, "each package operation is announced for /profile");
+    assert.match(r.stderr, /NOT the package operations pi already ran: pi install npm:pi-lean-ctx@\S+; pi install npm:pi-readseek@\S+ \(failed part-way\)\./);
     assert.doesNotMatch(r.stderr, /nothing was changed/);
     assert.deepEqual(digest(w), before, "the configuration files are still restored");
   } finally { w.done(); }

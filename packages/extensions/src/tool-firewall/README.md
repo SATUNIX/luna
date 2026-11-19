@@ -33,10 +33,24 @@ mode** (`PI_KIT_UNATTENDED=1`, `PI_KIT_UNATTENDED_BOUNDARY=container` and a read
 and anything outside the zone are refused. The contract must be on a read-only mount (or be another
 user's unwritable file) and outside the workspace, so a file the agent wrote and `chmod`-ed does not
 count, and launching a child with those variables from a shell is a safety-setting override. The
-autonomy CLI's control commands (`start`, `plan --authorise`, `promote`, `resume`, `reconfigure` and
-the like) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
+autonomy CLI's commands that change a run (`start`, `up`, `plan --authorise`, `promote`, `resume`,
+`reconfigure`, `pause`, `steer`, `backlog`, `inbox --answer`, `board` other than reading it, and any command
+the classifier does not know) are high and never learned from an agent's shell, however the CLI is reached: by name, by its
 script run directly or through `env`, by an interpreter or a package runner (`npx tsx`, `npx
 pi-autonomy`, `npm exec pi-autonomy --`), or by a path relative to a `cd` (`tests/firewall-unattended-smoke.ts`).
+Two matchers decide. The broad one finds anything that could be the CLI (a word naming `pi-autonomy` or an
+autonomy/cli script, expanded or not, with spaces or not, run as the program or by an interpreter or package
+runner) and only adds findings: a control or unknown command is high, `report`, `key-limit`, `export`,
+`doctor --setup` and `boundary --probe` are medium, and the files its options read (`--config`, `--file`,
+`--ntfy-token-file`, `--spec-file`, `--repo`, `--prs-file`) and write (`--out`, `--alert-state`) are
+classified like any other read or write, so `report --ntfy-token-file ~/.ssh/id_ed25519` is a credential read
+however it is launched. The narrow one makes a reading command (`status`, `top`, `events`, `templates`,
+`inbox`, `board --run <id> --json`, `plan`, `init`, `draft`) routine, in place of the ordinary rules, only for
+an exact, fully literal, direct launch with every option one the CLI accepts: `pi-autonomy <command>`, or the
+workspace's autonomy CLI script run as the program or as a plain interpreter's first operand. Everything else
+(inline code, a stdin script, a package runner, an interpreter option, another program whose path ends in the
+name) falls through to the ordinary rules, so the autonomy rule never rates a command lower than it would be
+without it. `tests/firewall-shell-smoke.ts` checks that as a property over 28 launch forms and 25 commands.
 
 The full description is in `docs/autonomy-gate.md`.
 
@@ -205,6 +219,44 @@ runs. The limits it leaves open:
   destination alone by the classifier; `protected-paths` also resolves existing directories.
 - **Replaced parents.** Moving or linking a directory above a protected file is only caught where the
   parent is itself classified.
+
+## Operator delegation
+
+The operator can let a session run named day-to-day verbs of one wrapper program without a prompt, for a
+limited time, by adding an entry to `firewall.json` (never the shipped policy):
+
+```json
+"delegations": [{ "operator": "alex", "path": "/opt/ops/bin/runctl", "verbs": ["status", "pause", "steer"], "expires": "2027-01-31" }]
+```
+
+- **What is delegated.** A bash call that is exactly one plain command (no pipe, list, redirect,
+  assignment, substitution, background job or wrapper such as `env`, `sudo` or `bash -c`) whose program,
+  named by path, resolves to the entry's `path`, whose first argument is one of its `verbs`, and which
+  carries no option at all (`--approve`, `--yes`, `--file` and the like change what a verb grants or
+  reads), and no unquoted glob or brace word, which bash could expand into one. Every other finding must be low: a call that also reads a secret or writes a protected file is decided as
+  usual. The decision is audited as `tool_approved` with `decider: "delegate"` and the operator, path,
+  verb and expiry; it writes no feedback and no approval, so it never teaches the judge or the learner.
+- **What never is.** Verbs outside the day-to-day set `status`, `pause`, `steer`, `backlog` and
+  `metrics`; any of `start`, `supervise`, `plan`, `promote`, `cancel`, `reconfigure`, `init`,
+  `recreate`, `decide`, `add-stream`, `remove-stream`, `start-streams`, `resume` (it can approve or start
+  a run), `restart`, `answer`, `raise-budget`, `units`, `tick` and `board-push`, even when an entry lists
+  them (the entry is dropped); a call with any option; the same
+  verbs through the autonomy CLI itself or any other program; `systemctl enable`; and any session that
+  is unattended, a kit child, under the engagement policy or at strict security.
+- **How an entry is checked.** Strictly, on every call: `path` must be absolute, its own real path, a
+  regular file owned by the operator (or root) and not writable by its group or everyone; `expires` must
+  be a date in the future and at most 90 days ahead; unknown keys are refused. A bad entry is dropped with
+  a warning in `/firewall status`, which also lists the live ones; nothing else in `firewall.json`
+  changes. The file is read on every call, so an edit takes effect at once; each change of the live
+  delegations (and the first set seen) is an audit record, `delegations_changed`, and `firewall.json`
+  itself is in the protected boundary wherever `PI_KIT_FIREWALL_CONFIG` puts it. Every configured delegate path, valid or not, joins the protected boundary, so writing, moving
+  or `chmod`-ing it is a safety-control action even while its entry is dropped, and running any protected
+  file as a program or as an interpreter's script is never routine (`protected_exec`). Of the tilde forms
+  only `~/` names a delegate; `~user/`, `~+/` and `~-/` never do.
+- **Not covered.** The firewall cannot see what the delegate program does with a verb: the operator is
+  trusting that program, which runs with the session's permissions. Pinning its contents (a hash) is not
+  implemented; the ownership and mode checks, the boundary and the expiry are what bound it
+  (`tests/firewall-delegation-smoke.ts`).
 
 ## Audit
 

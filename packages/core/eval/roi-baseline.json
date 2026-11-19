@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    "five Luna self-improvement runs (core, fleet, guard, ops, ux lanes), long-horizon profile, November 2026; a cycle passes when it merged"
+  ],
+  "rows": [
+    {
+      "profile": "long-horizon",
+      "tasks": 33,
+      "passed": 16,
+      "undecided": 0,
+      "passRate": 0.4848,
+      "input": 381336412,
+      "cached": null,
+      "output": 4083478,
+      "usd": 9.780237,
+      "tokensPerPass": 24088743,
+      "usdPerPass": 0.611265
+    }
+  ]
+}

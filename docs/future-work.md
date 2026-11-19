@@ -51,8 +51,7 @@ Each is a limit of the delivered kernel, not a bug in a test.
 
 - **"No model too small" is a hypothesis.** The kit footprint meter shows the `balanced` kit tool
   text at 6,924 characters over 13 tools (two of them registered inactive) and the delegation tools at 3,089, under their ceilings, and
-  counts companions from a reviewed record: `pi-lens` adds 18,800 characters to every request in
-  `balanced`, nearly three times the kit's own text, and is not yet reduced; pi core is unmeasured. Nothing shows that data plans
+  counts companions from a reviewed record (`balanced` loads none); pi core is unmeasured. Nothing shows that data plans
   raise completion on a small model, and a syntactically valid plan can still be a bad one
   (nothing in the test suite pins the meter). The live `small-model/plan-valid-rate` fixture
   records a rate per model and never reaches a model in CI; running it, plus an outcome eval per
@@ -245,9 +244,9 @@ and nothing in the repository pins any of them.
 
 - **pi native tool deferral.** pi 1.x can register a tool as `exposure: "deferred"` and ship a
   built-in `tool_search`; Luna uses only `defaultActive: false` plus its own wake-up. Using the
-  native mechanism for the 22 of 44 tools that no measured session called (mostly pi-lens and
-  pi-readseek tools, 15.2k characters of schema) needs a measurement of pi-lens and pi-readseek in
-  a real session, which the meter cannot see (the pi floor is 1.4.0, which has both mechanisms).
+  native mechanism for tools that no measured session called (many of them `pi-readseek`'s) needs
+  a measurement of `pi-readseek` in a real session, which the meter cannot see (the pi floor is
+  1.4.0, which has both mechanisms).
 - **Action-style tool families.** Folding `workflow_run`, `workflow`, `workflow_status` and
   `workflow_control` (and the memory and task-graph families) into one tool per family with an
   `action` field would cut schema text further but renames tools the firewall policy, the delegation
@@ -280,8 +279,7 @@ and nothing in the repository pins any of them.
 - **The cold start is pi's loader.** The compile cache is in the temporary directory, which a
   reboot empties on a memory-backed `/tmp`. A persistent cache location is a pi loader option
   (`jiti` `fsCache`); Luna cannot set it from an extension. Precompiling does not help, because the
-  loader transforms JavaScript as well. Dropping or lazily loading `pi-lens` (3.8 s cold, 0.23 s
-  warm) would help most, and needs that companion to register its tools later.
+  loader transforms JavaScript as well.
 - **Extension load is sequential**, so every companion adds its import time to the first frame.
 
 ## Autonomous runs: durable tasks, integration and a flagship

@@ -5,21 +5,22 @@
  *                     [--max-turns N] [--max-cost USD] [--timeout D] [--backend systemd|cron] [--yes]
  *   luna schedule list
  *   luna schedule remove <name>
- *   luna schedule run-now <name>      run the job now (what the timer runs)
+ *   luna schedule run-now <name> [--digest <sha256>]   run the job now (the timer passes the digest)
  *
- * `add` asks on a terminal, or takes `--yes`; without either it refuses. Under LUNA_SCHEDULE_JOB (a
- * scheduled job) add, remove and run-now are refused, so a job cannot schedule a job.
+ * `add` asks on a terminal, or takes `--yes`; without either it refuses. `run-now` runs only a spec
+ * that still hashes to the digest pinned in its unit file or crontab line. Under LUNA_SCHEDULE_JOB
+ * add, remove and run-now are refused: a guard against accident, not enforcement (schedule.ts).
  * Pinned by tests/luna-cli-smoke.ts (tests/schedule-checks.ts).
  */
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { runExec } from "./headless.ts";
-import { addSchedule, capsProblem, checkAdd, defaultDeps, describeAdd, formatList, jobArgv, JOB_ENV, listSpecs, readSpec, removeSchedule, takeRunLock, type AddRequest, type ScheduleDeps } from "./schedule.ts";
+import { addSchedule, checkAdd, defaultDeps, describeAdd, formatList, jobArgv, JOB_ENV, listSpecs, removeSchedule, takeRunLock, trustedSpec, type AddRequest, type ScheduleDeps } from "./schedule.ts";
 
 export const SCHEDULE_USAGE = `usage: luna schedule add <name> --at "<when>" (--prompt <text> | --config <run.json>) [--cwd <dir>] [--max-turns N] [--max-cost USD] [--timeout D] [--backend systemd|cron] [--yes]
        luna schedule list
        luna schedule remove <name>
-       luna schedule run-now <name>
+       luna schedule run-now <name> [--digest <sha256>]
 <when>: hourly | daily HH:MM | weekly <mon..sun> HH:MM | every Nm (5-59) | every Nh (1-23)`;
 
 export interface ScheduleIO {
@@ -28,13 +29,13 @@ export interface ScheduleIO {
   /** True on a terminal, where `add` may ask. */
   interactive: boolean;
   ask: (question: string) => Promise<string>;
-  /** Runs `luna exec` with these arguments in `cwd` with `env`; the exit code. */
-  exec: (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
-  /** Runs `pi-autonomy` with these arguments in `cwd` with `env`; the exit code. */
-  autonomy: (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => number;
+  /** Runs `luna exec` with these arguments in `cwd` with `env`, starting pi from `piBin`; the exit code. */
+  exec: (argv: string[], cwd: string, env: NodeJS.ProcessEnv, piBin: string) => Promise<number>;
+  /** Runs `pi-autonomy` (`node <cli>`) with these arguments in `cwd` with `env`; the exit code. */
+  autonomy: (argv: string[], cwd: string, env: NodeJS.ProcessEnv, node: string, cli: string) => number;
 }
 
-export function defaultIO(deps: ScheduleDeps): ScheduleIO {
+export function defaultIO(): ScheduleIO {
   return {
     stdout: process.stdout,
     stderr: process.stderr,
@@ -45,10 +46,9 @@ export function defaultIO(deps: ScheduleDeps): ScheduleIO {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try { return await rl.question(""); } finally { rl.close(); }
     },
-    exec: async (argv, cwd, env) => { process.chdir(cwd); return runExec(argv, { env }); },
-    autonomy: (argv, cwd, env) => {
-      const cli = path.join(path.dirname(path.dirname(deps.lunaBin)), "autonomy", "cli.ts");
-      const r = spawnSync(deps.nodeBin, [cli, ...argv], { cwd, stdio: "inherit", env });
+    exec: async (argv, cwd, env, piBin) => { process.chdir(cwd); return runExec(argv, { env, piBin }); },
+    autonomy: (argv, cwd, env, node, cli) => {
+      const r = spawnSync(node, [cli, ...argv], { cwd, stdio: "inherit", env });
       return r.status ?? 1;
     },
   };
@@ -78,7 +78,7 @@ function parseFlags(args: readonly string[]): { flags: Map<string, string>; yes:
   return { flags, yes, words };
 }
 
-export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps = defaultDeps(), io: ScheduleIO = defaultIO(deps)): Promise<number> {
+export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps = defaultDeps(), io: ScheduleIO = defaultIO()): Promise<number> {
   const [verb = "", ...rest] = argv;
   const fail = (message: string, code = 2): number => { io.stderr.write(`luna schedule: ${message}\n`); return code; };
   const job = deps.env[JOB_ENV];
@@ -95,17 +95,20 @@ export async function runScheduleCli(argv: readonly string[], deps: ScheduleDeps
       return r.ok ? 0 : 1;
     }
     case "run-now": {
-      if (rest.length !== 1) return fail(SCHEDULE_USAGE);
-      const spec = readSpec(deps, rest[0] ?? "");
-      if (!spec) return fail(`no schedule ${rest[0] ?? ""}`, 1);
-      const caps = capsProblem(spec);
-      if (caps) return fail(caps, 1);
-      const release = takeRunLock(deps, spec.id);
+      const pinned = rest.length === 3 && rest[1] === "--digest" ? rest[2] : undefined;
+      if (rest.length !== 1 && pinned === undefined) return fail(SCHEDULE_USAGE);
+      // The spec is not trusted: it must hash to the digest pinned at add, in the unit or crontab line.
+      const trusted = trustedSpec(deps, rest[0] ?? "", pinned);
+      if (!trusted.ok) return fail(trusted.error, 1);
+      const spec = trusted.spec;
+      const release = await takeRunLock(deps, spec.id);
       if (!release) return fail(`schedule ${spec.id} is already running; this run is skipped`, 75);
       try {
-        const env: NodeJS.ProcessEnv = { ...deps.env, [JOB_ENV]: spec.id, PATH: [...(spec.pathDirs ?? []), deps.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
+        const env: NodeJS.ProcessEnv = { ...deps.env, [JOB_ENV]: spec.id };
         const run = jobArgv(spec);
-        return run.kind === "exec" ? await io.exec(run.argv, spec.cwd, env) : io.autonomy(run.argv, spec.cwd, env);
+        return run.kind === "exec"
+          ? await io.exec(run.argv, spec.cwd, env, spec.piBin ?? "")
+          : io.autonomy(run.argv, spec.cwd, env, spec.nodeBin, path.join(path.dirname(path.dirname(spec.lunaBin)), "autonomy", "cli.ts"));
       } finally {
         release();
       }

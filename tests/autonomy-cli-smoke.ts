@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assert, implementRaw, makeChecker, tempDir, rm, testEffort, type RawContract } from "./autonomy-helpers.ts";
-import { DRAFT_BUDGET, DRAFT_MAX_USD, main, type CliDeps as RealCliDeps, type RuntimeFactoryOptions } from "../packages/autonomy/cli.ts";
+import { DRAFT_BUDGET, DRAFT_MAX_USD, DRAFT_PRESETS, main, type CliDeps as RealCliDeps, type RuntimeFactoryOptions } from "../packages/autonomy/cli.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
@@ -928,6 +928,35 @@ await check("draft --goal writes a valid contract with the closed defaults and a
   assert.equal((await w.run("draft", "--goal", "x", "--out", path.join(scratch(), "e.json"), "--egress", "example.com", "--json")).code, 2);
   assert.equal((await w.run("draft", "--goal", "x", "--template", "deploy", "--json")).code, 2);
   assert.equal((await w.run("draft", "--goal", "again", "--repo", src, "--out", file, "--check", "unit=true", "--json")).code, 3, "an existing contract is not overwritten");
+});
+
+await check("draft --preset luna-self-improve drafts a valid self-improve contract with Luna's gate, closed defaults and R3 paths still refused", async () => {
+  const w = world();
+  const src = scratch();
+  assert.equal(spawnSync("git", ["init", "--quiet", src]).status, 0);
+  const file = path.join(scratch(), "luna.json");
+  const d = await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--goal", "the autonomy supervisor's failure paths", "--out", file, "--json");
+  assert.equal(d.code, 0, d.stdout + d.stderr);
+  const j = d.json();
+  assert.equal(j.valid, true, JSON.stringify(j.problems));
+  assert.equal(j.authorised, false);
+  const raw: unknown = parseJson(fs.readFileSync(file, "utf8"));
+  assert.equal(at(raw, "template"), "self-improve");
+  assert.equal(at(raw, "objective", "title"), "Analyse and improve Luna's own systems");
+  assert.match(String(at(raw, "objective", "spec")), /^Analyse Luna's own systems.*Focus: the autonomy supervisor's failure paths$/, "--goal is a focus added to the preset's goal");
+  assert.deepEqual(at(raw, "acceptance", "checks"), [{ id: "gate", run: ["/opt/autonomy/gate.sh"], timeoutMinutes: 60, required: true }], "Luna's reference gate");
+  assert.deepEqual(at(raw, "permissions", "network", "egress"), []);
+  assert.equal(at(raw, "promotion", "policy"), "local-branch");
+  assert.equal(at(raw, "budget", "totalUsd"), DRAFT_BUDGET.totalUsd);
+  assert.equal(at(raw, "authorisation"), undefined);
+  // R3 stays refused: the preset never sets allowControlChanges, and draft has no way to.
+  assert.equal(at(raw, "templateOptions", "integration", "allowControlChanges"), undefined);
+  assert.equal(DRAFT_PRESETS["luna-self-improve"]?.template, "self-improve");
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--allow-control-changes", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--json")).code, 2, "the checkout to improve is required");
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--template", "implement", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--preset", "nope", "--repo", src, "--json")).code, 2);
+  assert.equal((await w.run("up", "--config", file, "--json")).code, 3, "a drafted preset is not authorised either");
 });
 
 await check("up starts an authorised contract detached in one JSON line, and names the blocker when it cannot", async () => {

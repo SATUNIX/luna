@@ -39,6 +39,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
+| `/herdr` | `herdr` | herdr client: list agents, read one's output, send one a prompt, open a workspace (never answers a dialog or moves focus) | [herdr](herdr.md) |
 | `/improve` | `self-improvement` | Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md. | [control-center](control-center.md) |
 | `/loop` | `autonomous-loop` | Enable autonomous loop: /loop <goal> starts the loop; /loop stop ends it. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/memory` | `memory-vault` | Memory vault: /memory [status\|recent\|search <q>\|forget <id>\|migrate] | [memory](memory.md) |

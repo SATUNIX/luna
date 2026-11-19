@@ -18,7 +18,8 @@ herdr, so update it with herdr.
 
 Enabled by the `lite`, `balanced`, `long-horizon`, `self-improving` and `engagement` profiles. It does
 nothing unless pi runs inside a herdr pane (`HERDR_ENV=1`, `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`
-set), and never in a subagent child. It registers no tools or commands.
+set), and never in a subagent child. The one exception is the operator's `/herdr` command (below),
+which works from any session. It registers no tools.
 
 | Luna event | What herdr shows |
 | --- | --- |
@@ -39,6 +40,30 @@ herdr extension, so it can be removed or replaced without touching them.
 | --- | --- |
 | `PI_KIT_HERDR=off` | Disable the extension |
 | `PI_KIT_HERDR_NOTIFY_MIN_SECONDS` | Shortest run that raises "finished" (default 30, `0` for every run) |
+
+## The `/herdr` command
+
+A small client for the herdr server, for the operator. It runs the `herdr` CLI found on `PATH`
+(argument list, no shell, 10-second timeout) and works from any Luna session, inside a herdr pane
+or not. It is not registered in a subagent child or with `PI_KIT_HERDR=off`, and it is a command,
+not a tool: the model cannot call it.
+
+| Command | What it does |
+| --- | --- |
+| `/herdr list` | Every agent herdr knows: its name (or pane), kind, state and directory |
+| `/herdr read <agent> [lines]` | The agent's recent terminal output, 1 to 200 lines (default 40), with escape sequences and control characters removed, redacted, and capped at 8000 characters |
+| `/herdr send <agent> <text>` | Submits `<text>` as a prompt (`herdr agent prompt`), at most 4000 characters and no control characters |
+| `/herdr spawn <label> [dir]` | Opens a workspace in `dir` (default: the session's directory), always with `--no-focus` |
+
+It never answers another agent's dialog: `send` asks herdr for the agent's state first and refuses
+an agent that is `blocked` (waiting on an approval or a question), and herdr itself rejects a prompt
+to a blocked agent (`agent_blocked`), which `/herdr` reports with "Nothing was sent". It never moves
+focus: it has no focus, keys, attach or close command, and `spawn` passes `--no-focus`. A target
+must look like an agent name or herdr id, so it cannot be read as a CLI option. Pinned by
+`tests/herdr-smoke.ts` (`tests/herdr-client-checks.ts`) against a fake `herdr` on `PATH`.
+
+Not covered: `send` does not wait for the agent to finish, and the state check and the prompt are
+two calls, so an agent that becomes blocked between them is refused by herdr rather than by Luna.
 
 ## The agent-state file
 

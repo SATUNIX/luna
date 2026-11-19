@@ -10,6 +10,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **`npm run eval:roi`: tokens and USD per passed task, with a recorded baseline (V5-04).** Finding:
+  the footprint meter prices one request and the live evaluation records usage per case, but nothing
+  related spend to completed work, so a token cut could not be judged by its cost per finished task.
+  Fix: `packages/core/eval/roi.ts` reads autonomous-run ledgers (each cycle a task, passed when merged,
+  usage by cycle and role) and live evaluation output (each case a task), and prints input, cached and
+  output tokens and USD per passed task per profile. The committed fixture of five November runs
+  (33 cycles, 16 merged) is the first baseline: about 24.1 million tokens and $0.61 per merged cycle on
+  `long-horizon`; `eval:roi` fails when the fixtures and `roi-baseline.json` disagree. A live run stays
+  the operator's command. Not covered: one profile, merge as the pass signal, no fixed owner task set.
+  Verification: `tests/eval-roi-smoke.ts` (`smoke:eval-roi`).
+
 - **`/update` moves a local checkout that a pull cannot update.** Finding: for a checkout
   registered in local mode, `/update kit` always planned `git pull --ff-only`, which cannot work
   on a detached HEAD or on a branch with no upstream (an installed copy kept as its own git

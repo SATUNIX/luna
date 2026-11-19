@@ -44,7 +44,7 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   { glob: "packages/extensions/src/secret-guard/**", checks: ["smoke:secret-guard", "smoke:workflow-notify"] },
   { glob: "packages/autonomy/lib/templates/common.ts", checks: ["smoke:workflow-notify"] },
   { glob: "packages/extensions/**", checks: ["smoke:new-extension", "verify"] },
-  { glob: "packages/core/eval/**", checks: ["smoke:eval-footprint"] },
+  { glob: "packages/core/eval/**", checks: ["smoke:eval-footprint", "smoke:eval-roi"] },
   { glob: "packages/kit/**", checks: ["verify", "smoke:autonomy-selfimprove"] },
   { glob: "docs/**", checks: ["docs:check", "smoke:docs"] },
   { glob: "**/*.md", checks: ["smoke:docs"] },

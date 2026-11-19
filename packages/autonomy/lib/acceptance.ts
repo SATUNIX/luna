@@ -103,8 +103,8 @@ const GATE_LOG_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.(?:log|json)$/;
 /**
  * Copy the gate's top-level log and result files out of its scratch directory (one shared directory,
  * wiped before every check) into `to`, so a later gate cannot destroy them. The gate container ran
- * the worker's code and wrote `from`, so only regular files with a plain name are taken, a symlink
- * is never followed (lstat, then O_NOFOLLOW), and each copy is bounded. Returns the files written.
+ * the worker's code and wrote `from`, so only regular files with a plain name are taken (judged on
+ * the open descriptor), a symlink is never followed (O_NOFOLLOW), and each copy is bounded. Returns the files written.
  */
 export function keepGateLogs(from: string, to: string, maxBytes = GATE_LOG_MAX_BYTES): string[] {
   let names: string[];
@@ -112,14 +112,15 @@ export function keepGateLogs(from: string, to: string, maxBytes = GATE_LOG_MAX_B
   fs.rmSync(to, { recursive: true, force: true });
   const kept: string[] = [];
   for (const name of names) {
-    const src = path.join(from, name);
+    // Open first, then judge the descriptor: a stat of the path before the open could describe a
+    // different file than the one opened. O_NOFOLLOW refuses a link, O_NONBLOCK keeps a FIFO from
+    // blocking the open, and fstat on the descriptor refuses anything but a regular file.
     let fd: number;
+    try { fd = fs.openSync(path.join(from, name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { continue; }
     try {
-      if (!fs.lstatSync(src).isFile()) continue;
-      fd = fs.openSync(src, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    } catch { continue; }
-    try {
-      const size = fs.fstatSync(fd).size;
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) continue;
+      const size = st.size;
       const length = Math.min(size, maxBytes);
       const buf = Buffer.alloc(length);
       const read = length > 0 ? fs.readSync(fd, buf, 0, length, size - length) : 0;

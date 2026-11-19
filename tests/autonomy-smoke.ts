@@ -1115,7 +1115,7 @@ await check("acceptance: a later gate does not destroy an earlier step's or chec
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
-await check("acceptance: keepGateLogs takes only bounded regular files and never follows a link out of the gate dir", () => {
+await check("acceptance: keepGateLogs takes only bounded regular files, judged on the open descriptor; a link or FIFO is skipped", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-gatelogs-"));
   try {
     const gate = path.join(tmp, "gate");
@@ -1129,9 +1129,14 @@ await check("acceptance: keepGateLogs takes only bounded regular files and never
     fs.writeFileSync(path.join(gate, ".hidden.log"), "hidden");
     fs.writeFileSync(path.join(gate, "big.log"), `HEAD${"y".repeat(5000)}TAIL`);
     fs.writeFileSync(path.join(gate, "gate.log"), "ok");
+    // A FIFO with a log's name: opening it without O_NONBLOCK would block until a writer appears.
+    const fifo = spawnSync("mkfifo", [path.join(gate, "pipe.log")]);
+    assert.equal(fifo.status, 0, `mkfifo: ${String(fifo.stderr)}`);
+    const t0 = Date.now();
     fs.mkdirSync(out); fs.writeFileSync(path.join(out, "stale.log"), "from an earlier evaluation");
     const kept = keepGateLogs(gate, out, 1000);
-    assert.deepEqual(kept.map((f) => path.basename(f)), ["big.log", "gate.log"], "only plain-named regular .log/.json files");
+    assert.ok(Date.now() - t0 < 5000, "a FIFO does not block the copy");
+    assert.deepEqual(kept.map((f) => path.basename(f)), ["big.log", "gate.log"], "only plain-named regular .log/.json files: the symlink, FIFO and directory are skipped");
     assert.deepEqual(fs.readdirSync(out).sort(), ["big.log", "gate.log"], "a stale copy is replaced, not mixed in");
     const big = fs.readFileSync(path.join(out, "big.log"), "utf8");
     assert.ok(big.startsWith("...[4008 bytes cut; the last 1000 kept]...\n") && big.endsWith("TAIL") && !big.includes("HEAD"), "an oversized log keeps its last part");

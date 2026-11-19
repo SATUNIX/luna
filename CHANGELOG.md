@@ -286,7 +286,9 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   or a later one, destroyed the earlier log, so a failure from an older step could no longer be read
   in full. Fix: after each check the runtime copies the gate's top-level `.log` and `.json` files
   to `steps/NN/checks/<id>.logs/`, and the evidence file lists them as `logs`. The gate ran the
-  worker's code, so only regular files with a plain name are copied, a link is never followed, and
+  worker's code, so only regular files with a plain name are copied (judged with `fstat` on the
+  descriptor opened with `O_NOFOLLOW|O_NONBLOCK`, never by a stat before the open), a link or FIFO
+  is skipped, and
   each copy is capped (16 files of 8 MiB; a longer log keeps its end). A failed copy is logged and
   never changes the verdict. Verified by `tests/autonomy-smoke.ts`: two steps of two checks share
   one wiped scratch directory, and step 1's first log survives in full; links, directories, odd

@@ -65,6 +65,19 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
   installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
   not rerun `npm ci`, and only a newer release raises the start-up notice.
+- **AUTHORITY: scheduled runs, `luna schedule` and `/schedule` (V5-14).** `luna schedule add
+  <name> --at "<when>" (--prompt <text> | --config <run.json>)`, `list`, `remove` and `run-now` run
+  a headless `luna exec` or `pi-autonomy up --config` from a systemd user timer, or from a tagged
+  crontab line where `systemctl --user` is unavailable (`hourly`, `daily HH:MM`, `weekly <day>
+  HH:MM`, `every Nm`, `every Nh`). The spec lives in `<state>/luna/schedules/<name>.json` (0600) and
+  the timer or crontab line only runs `luna schedule run-now <name>`, so no prompt is ever quoted
+  into a unit file or shell line. Creating a schedule is operator-confirmed: the CLI asks on a
+  terminal or takes `--yes` and otherwise refuses; `/schedule add` (a new `experimental` extension
+  in no profile) asks through pi's confirm dialog and refuses without a UI. Not yet covered: the
+  tool firewall does not classify schedule, unit-file or crontab writes as high (V5-15, guard).
+  This reverses the roadmap's "scheduled runs: not planned". Documented in `docs/schedule.md`;
+  verified by `tests/luna-cli-smoke.ts`, which never calls the real `systemctl` or `crontab`.
+
 - **`pi-autonomy draft --preset luna-self-improve` drafts a run that improves Luna itself
   (V5-13).** Finding: a run aimed at Luna's own systems still meant choosing a template, a goal and
   Luna's gate by hand. Fix: the preset fills in the `self-improve` template, a fixed goal and the

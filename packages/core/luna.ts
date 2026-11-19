@@ -6,16 +6,21 @@
  *   luna --bare [pi args]     pi with no Luna extensions, skills, prompts or themes: the way to tell whether
  *                             a misbehaving session is Luna's doing
  *   luna exec <prompt | ->    one headless run, see docs/headless.md
+ *   luna schedule ...         scheduled runs (systemd user timers or crontab), see docs/schedule.md
  *
  * Everything else is pi's own command line, passed through untouched.
  */
 import { spawnSync } from "node:child_process";
 import { applyPendingDisables, BARE_ARGS, runExec } from "./lib/headless.ts";
+import { runScheduleCli } from "./lib/schedule-cli.ts";
 
 const argv = process.argv.slice(2);
 if (argv[0] === "exec") {
   applyPendingDisables();
   process.exitCode = await runExec(argv.slice(1));
+} else if (argv[0] === "schedule") {
+  if (argv[1] === "run-now") applyPendingDisables();
+  process.exitCode = await runScheduleCli(argv.slice(1));
 } else {
   const bare = argv[0] === "--bare";
   const rest = bare ? argv.slice(1) : argv;

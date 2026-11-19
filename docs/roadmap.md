@@ -28,7 +28,8 @@ In rough priority order:
    the security work.
 3. **Companion packages.** Review `pi-readseek` 0.12.x as a whole, with a real-terminal check,
    and adopt it or record why not ([Supply chain](supply-chain.md)).
-4. **Wider coverage in CI.** The full suite on Windows and macOS, and on Node 24.
+4. **Wider coverage in CI.** The full suite on Windows and macOS (Linux runs it on Node 26 and,
+   in the pi-compat lane, on the Node 24 floor).
 5. **Firewall and approvals.** Extend [Security level](security-level.md) with authenticated
    operator events and verified off-boundary attestation; implement content screening, the
    OpenAPPA flow engine, intent ledger and detector before advertising their protection.
@@ -44,11 +45,15 @@ In rough priority order:
    [Future work](future-work.md#delegation-and-recovery)).
 7. **Standalone extensions.** Promote proven extensions into their own repositories only when
    ownership or release cadence requires it (`npm run extract`).
+8. **Scheduled runs.** `luna schedule` and `/schedule` run a headless `luna exec` or an
+   authorised autonomous run from a systemd user timer or crontab ([Scheduled runs](schedule.md)).
+   What remains: the tool firewall classifying schedule, unit and crontab writes as high, and
+   whether `/schedule` loads in a profile.
 
 ## Not planned
 
 - Turning the firewall into a sandbox. Containment is the container's job; Luna offers a
   hardened container for autonomous runs and documents what it does and does not stop.
 - Treating effort as a security control. It is a cost and behaviour policy.
-- Scheduled or routine runs inside pi itself: pi has no native trigger. An external scheduler
-  starting a pi or autonomous run is the supported shape.
+- A scheduler inside pi itself: pi has no native trigger. `luna schedule` hands the timing to the
+  operating system's own scheduler (systemd user timers or crontab), which starts the run.

@@ -280,6 +280,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **Each check's full gate log is kept with its step (F-05).** Finding: an acceptance check's gate
+  ran in one shared scratch directory (`gate-work/`) that the runtime wiped before every check, and
+  the evidence file kept only the last 4000 characters (`tail`). The next check, in the same step
+  or a later one, destroyed the earlier log, so a failure from an older step could no longer be read
+  in full. Fix: after each check the runtime copies the gate's top-level `.log` and `.json` files
+  to `steps/NN/checks/<id>.logs/`, and the evidence file lists them as `logs`. The gate ran the
+  worker's code, so only regular files with a plain name are copied (judged with `fstat` on the
+  descriptor opened with `O_NOFOLLOW|O_NONBLOCK`, never by a stat before the open), a link or FIFO
+  is skipped, and
+  each copy is capped (16 files of 8 MiB; a longer log keeps its end). A failed copy is logged and
+  never changes the verdict. Verified by `tests/autonomy-smoke.ts`: two steps of two checks share
+  one wiped scratch directory, and step 1's first log survives in full; links, directories, odd
+  names and oversized files are handled.
+
 - **A missing optional harness command degrades an autonomous run instead of killing it (PG-01).**
   Finding: the supervisor's start-of-session `get_commands` check required all six harness
   commands, so when `/subagents` was renamed two runs failed with `worker_unavailable` and stayed

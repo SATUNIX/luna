@@ -37,7 +37,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { VERSION, type ExtensionAPI, type ExtensionContext, type ThemeColor } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { controlRun, runControls, skipRunAgent, type ControlResult } from "./control.ts";
 import { runRegistry, type AgentRecord, type AgentStatus, type PhaseRecord, type PhaseStatus, type RunRegistry, type RunSnapshot, type RunStatus, type WorkflowEvent } from "./run-model.ts";
@@ -852,14 +852,6 @@ export class WorkflowPanel {
 
 // --- registration -----------------------------------------------------------------------------
 
-// Copied from control-center/hub.ts (extensions stay self-contained); workflow-panel-smoke checks
-// the two agree.
-/** True when the running pi has the overlay `done()` fix (1.3.0 or newer). */
-export function supportsOverlay(version: string = VERSION): boolean {
-  const parts = version.replace(/^[^0-9]*/, "").split(/[.\-+]/).map((p) => Number(p));
-  const [major = 0, minor = 0] = parts;
-  return major > 1 || (major === 1 && minor >= 3);
-}
 
 /** Open the panel (TUI) or print its text (any other mode). */
 export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, registry: RunRegistry = runRegistry, narration: Narrator = narrator): Promise<void> {
@@ -920,7 +912,7 @@ export async function openWorkflowPanel(ctx: ExtensionContext, runId?: string, r
             dispose: cleanup,
           };
         }, done),
-      supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined,
+      { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } },
     ),
   );
 }

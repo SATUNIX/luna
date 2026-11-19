@@ -203,12 +203,9 @@ export function textOf(result: Pick<AgentToolResult<unknown>, "content">, index 
   return item.text;
 }
 
-/**
- * A command an extension registered, with `handler` widened to accept the tests' fake contexts.
- * `args` may also be a word array: older pi versions passed one, and kit commands accept both.
- */
+/** A command an extension registered, with `handler` widened to accept the tests' fake contexts. */
 export type FakeCommand = Omit<RegisteredCommand, "name" | "sourceInfo" | "handler"> & {
-  handler: (args: string | string[], ctx?: unknown) => Promise<void>;
+  handler: (args: string, ctx?: unknown) => Promise<void>;
 };
 
 /**

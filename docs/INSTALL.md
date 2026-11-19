@@ -10,9 +10,9 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ## Requirements
 
-- Node.js 22.19 or newer and npm (pi's own requirement)
+- Node.js 24 or newer and npm
 - git
-- pi 0.85.1 or newer (`npm install -g @earendil-works/pi-coding-agent`)
+- pi 1.4.0 or newer (`npm install -g @earendil-works/pi-coding-agent`)
 
 ## The one install path
 
@@ -74,7 +74,7 @@ Run the installer with `--guided` to be asked instead of passing flags:
 node packages/core/install.ts --guided
 ```
 
-It prints what it detected (Node against the 22.19 floor, git, pi, a container, CI, a terminal,
+It prints what it detected (Node against the Node 24 floor, git, pi, a container, CI, a terminal,
 whether the current directory is a git repository, and the profile already installed), lists the
 shipped profiles with the installed one (or `balanced`) as the default, and asks for a profile by
 number or name, then the scope (unless `--scope` is given), then `Proceed? [Y/n]`. A retired profile

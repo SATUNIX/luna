@@ -72,8 +72,8 @@ For documentation changes also run `python -m mkdocs build --strict` and `npm ru
 ## Dependencies
 
 - `devDependencies` pin the pi version the whole suite is tested against; `peerDependencies`
-  state the floor. CI's `pi-compat` matrix runs the suite at the floor and at the newest release
-  looked at. Widening either is a reviewed change with evidence, not a Dependabot bump.
+  state the floor (pi 1.4.0, with Node 24 as the `engines` floor). CI's `pi-compat` job runs the
+  suite at both floors. Moving either is a reviewed change with evidence, not a Dependabot bump.
 - Companion packages in `packages/core/sources.json` are pinned exactly and reviewed. Verify a
   candidate against its tarball (and, if it loads into pi, in a real TUI with a scratch agent
   directory) before adopting it, and record the review in `sources.json`.

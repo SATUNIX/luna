@@ -145,7 +145,7 @@ function boot({ hasUI = true }: { hasUI?: boolean } = {}) {
   const notes: Note[] = [];
   const ctx: EffortCtx = { hasUI, cwd: process.cwd(), ui: { notify: (m, l) => notes.push({ m, l }), select: async (_t, opts) => opts[2], setStatus() {} }, sessionManager: { getSessionId: () => "sess1" } };
   const registry = (): EffortModule.EffortRegistry => (globalThis as Record<symbol, unknown>)[REGISTRY_KEY] as EffortModule.EffortRegistry;
-  return { pi, ctx, notes, registry, start: async (reason = "startup"): Promise<unknown> => pi.handlers.get("session_start")({ reason }, ctx), turn: async (prompt = "BASE"): Promise<{ systemPrompt: string }> => (await pi.handlers.get("before_agent_start")({ systemPrompt: prompt }, ctx)) as { systemPrompt: string }, command: (args: string): Promise<unknown> => pi.commands.get("effort").handler(args, ctx) };
+  return { pi, ctx, notes, registry, start: async (reason = "startup"): Promise<unknown> => pi.handlers.get("session_start")({ reason }, ctx), turn: async (prompt = "BASE"): Promise<{ systemPrompt: string }> => (await pi.handlers.get("before_agent_start")({ systemPrompt: prompt, messageType: "user", prompt: "go" }, ctx)) as { systemPrompt: string }, command: (args: string): Promise<unknown> => pi.commands.get("effort").handler(args, ctx) };
 }
 
 const tests: Record<string, () => void | Promise<void>> = {
@@ -1013,22 +1013,6 @@ const tests: Record<string, () => void | Promise<void>> = {
       assert.equal(codeOf(reg.openRunScope("plan-6", { planned: 1 })), "plan-allowance", "nor does a reload");
       await b.pi.handlers.get("before_agent_start")({ systemPrompt: "", messageType: "user", prompt: "go" }, b.ctx);
       assert.ok(reg.openRunScope("plan-7", { planned: 8 }).ok, "a user turn renews it");
-    } finally { w.cleanup(); }
-  },
-
-  // pi before 1.2.0 (the floor and a CI lane) reports no messageType, and starts this event only from a prompt.
-  "a pi that reports no messageType renews the plan allowance on each prompt": async () => {
-    const w = world();
-    try {
-      const b = boot();
-      saveDefault("standard");
-      await b.start();
-      await b.turn();
-      const reg = b.registry();
-      assert.ok(reg.openRunScope("floor-1", { planned: 8 }).ok, "the first request plans its allowance");
-      assert.equal(codeOf(reg.openRunScope("floor-2", { planned: 1 })), "plan-allowance", "and it is used up");
-      await b.turn();
-      assert.ok(reg.openRunScope("floor-3", { planned: 8 }).ok, "the next prompt renews it");
     } finally { w.cleanup(); }
   },
 

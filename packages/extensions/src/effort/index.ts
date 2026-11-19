@@ -753,9 +753,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!policy) return undefined;
     // A workflow's completion message that starts a turn while idle is a wake; your message ends the chain.
-    // Before pi 1.2.0 the field is absent and this event starts only from a prompt, so that is a user turn.
-    const messageType: unknown = event.messageType;
-    const userTurn = messageType === "user" || messageType === undefined;
+    const userTurn = event.messageType === "user";
     if (event.messageType === "custom" && event.message.customType === WORKFLOW_RESULT_TYPE) wakeChain++;
     else if (userTurn) {
       wakeChain = 0;

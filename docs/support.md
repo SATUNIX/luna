@@ -33,8 +33,8 @@ curated selections of one package, not independent releases. See [Profiles](prof
 ## Compatibility and support tiers
 
 Node.js must satisfy `engines.node`. Node ESM is the runtime; extensions use TypeScript through
-Pi's loader. CI runs the whole suite at the development pin and at the Pi versions listed in the
-`pi-compat` job of `.github/workflows/ci.yml`, which include the supported floor. A green pin does
+Pi's loader. CI runs the whole suite at the development pin and, in the `pi-compat` job of
+`.github/workflows/ci.yml`, at the supported floors (pi 1.4.0 on Node 24). A green pin does
 not certify every version in the open peer range. A compatibility change requires the full gate
 against the proposed version and review of Pi's API changes before changing pins.
 

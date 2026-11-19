@@ -131,6 +131,6 @@ export function nodeRuntime(options: NodeRuntimeOptions = {}): NodeRuntime {
   const host = hostIsBun ? `bun (${execPath}), which cannot provide node's permission model` : `${execPath}, which is not a JavaScript runtime (a compiled pi)`;
   return {
     ok: false,
-    reason: `pi is running as ${host}, and no ${nodeOnly ? "real node binary" : "node"} was found on PATH. Install Node.js >= 22.19 on PATH or set ${NODE_OVERRIDE_ENV}=/absolute/path/to/node`,
+    reason: `pi is running as ${host}, and no ${nodeOnly ? "real node binary" : "node"} was found on PATH. Install Node.js >= 24 on PATH or set ${NODE_OVERRIDE_ENV}=/absolute/path/to/node`,
   };
 }

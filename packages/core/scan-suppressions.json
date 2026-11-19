@@ -5,7 +5,7 @@
       "file": ".github/workflows/ci.yml",
       "marker": "zizmor: ignore",
       "lineSha256": "4b70d37c58d6cc44fe8b4f99889201d8423e2e51ea3091c8ac7e5192aa624bf6",
-      "reason": "pi-compat installs a pi version outside the lockfile on purpose; the version is a matrix literal passed through the environment"
+      "reason": "pi-compat installs the floor pi outside the lockfile on purpose; the version is a literal passed through the environment"
     },
     {
       "file": "apps/android/app/src/main/AndroidManifest.xml",

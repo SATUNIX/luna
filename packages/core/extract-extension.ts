@@ -95,7 +95,7 @@ export function extractExtension(name: string | undefined, { firstPartyDir = FIR
     type: "module",
     license: "MIT",
     pi: { extensions: [`extensions/${name}/index.ts`] },
-    peerDependencies: { "@earendil-works/pi-coding-agent": ">=0.85.1", typebox: "*" },
+    peerDependencies: { "@earendil-works/pi-coding-agent": ">=1.4.0", typebox: "*" },
   };
   fs.writeFileSync(path.join(dst, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
 

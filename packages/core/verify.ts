@@ -292,8 +292,8 @@ function packageVersion(file: string): string | undefined {
 
 // The pi version root package.json pins in devDependencies, and the one installed in node_modules.
 // The kit compiles against pi's .d.ts files, which change between releases, so the type check only
-// means something against the pin. The pi-compat CI lane installs other pi versions over the pinned
-// tree; there verify skips tsc (the verify job type-checks the pin). Either value missing (a fixture
+// means something against the pin. The pi-compat CI lane installs the floor pi over the pinned
+// tree when the two differ; there verify skips tsc (the verify job type-checks the pin). Either value missing (a fixture
 // tree, no node_modules) runs tsc as before.
 function piVersionMismatch(): { installed: string; pinned: string } | undefined {
   const pi = "@earendil-works/pi-coding-agent";

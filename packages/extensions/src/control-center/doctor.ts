@@ -19,7 +19,7 @@ export interface DoctorInput {
   kitVersion?: string | undefined;
   /** The pi version the kit pins in devDependencies. */
   kitTestedPin?: string | undefined;
-  /** The peer range floor (e.g. ">=0.85.1"). */
+  /** The peer range floor (e.g. ">=1.4.0"). */
   kitFloor?: string | undefined;
   /** The pi settings.json holding the registered packages. */
   settingsFile: string;

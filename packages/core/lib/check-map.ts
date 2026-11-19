@@ -57,7 +57,10 @@ export const CHANGED_PATH_CHECKS: readonly CheckRule[] = [
   // firewall gate and unattended policy, the shared redaction table and its corpus, the leak scan
   // and its exceptions, and the autonomy modules whose behaviour another smoke pins.
   { glob: "packages/extensions/src/tool-firewall/**", checks: ["smoke:tool-firewall", "smoke:firewall-gate", "smoke:firewall-unattended"] },
-  { glob: "packages/core/shared/redact.ts", checks: ["smoke:redaction-corpus", "smoke:fuzz-redaction"] },
+  { glob: "packages/core/shared/redact.ts", checks: ["smoke:redaction-corpus", "smoke:fuzz-redaction", "smoke:agent-mailbox"] },
+  { glob: "packages/core/shared/agent-mailbox.ts", checks: ["smoke:agent-mailbox"] },
+  { glob: "packages/core/shared/agent-state.ts", checks: ["smoke:agent-mailbox"] },
+  { glob: "packages/core/shared/safe-fs.ts", checks: ["smoke:agent-mailbox"] },
   { glob: "packages/core/lib/leak-scan.ts", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },
   { glob: "packages/core/prepush-scan.ts", checks: ["smoke:prepush-scan"] },
   { glob: "packages/core/leak-scan-exceptions.json", checks: ["smoke:prepush-scan", "smoke:codeowners-coverage"] },

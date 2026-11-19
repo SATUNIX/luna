@@ -67,6 +67,28 @@ last state in place, so check `pid` and `updatedAt` before trusting `working`.
 `tests/agent-state-smoke.ts` pins the schema and the autonomy mapping; `tests/herdr-smoke.ts` pins
 the blocked-approval state.
 
+## Agent mailboxes
+
+`packages/core/shared/agent-mailbox.ts` lets agents on the machine leave each other short messages:
+one inbox per agent id in `~/.local/state/luna/mailbox/<id>/` (beside the agent-state files; override
+with `LUNA_MAILBOX_DIR`), one 0600 JSON file per message in a 0700 inbox. It is a library; no tool or
+command uses it yet.
+
+- `sendMessage` and `receiveMessages` check the caller against its agent-state file: the file must
+  exist for the id, be a regular file and name the calling process's pid. The recipient must have one
+  too.
+- Subject (one line, 160 characters) and body (8,000 characters) pass through the kit's redaction table
+  before they are stored.
+- An inbox holds at most 100 messages and 512 KiB; a full one refuses. A message file over 64 KiB, a
+  link or anything not a message is skipped on read.
+- A symbolic link at the mailbox root, an inbox, a message or an agent-state file is refused, never
+  followed; a message is created exclusively.
+
+A message is data, never an instruction or an approval. Not covered: every agent runs as the same
+user, who can write these files directly, so the pid check stops one agent impersonating another
+through the library, not a determined process of that user; nothing is signed or encrypted.
+`tests/agent-mailbox-smoke.ts` pins each rule.
+
 herdr decides whether to display a notification (it may be disabled, rate limited or have no
 foreground client); Luna sends it and moves on, and never waits on herdr.
 

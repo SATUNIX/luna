@@ -10,6 +10,15 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **An agent mailbox library (V5-16).** Finding: agents on the machine had no way to message each
+  other; the agent-state files report status only. Fix: `packages/core/shared/agent-mailbox.ts`, one
+  inbox per agent id beside the agent-state files. The sender and the reader must be the process
+  their agent-state file names; the recipient must exist; subject and body are redacted; messages are
+  0600, created exclusively without following links, and capped (8,000-character body, 100 messages
+  and 512 KiB per inbox); links are refused. A message is data, never an approval. Library only: the
+  tools come separately. Not covered: same-user processes can write the files directly. Verification:
+  `tests/agent-mailbox-smoke.ts` (`smoke:agent-mailbox`, in `test:security`).
+
 - **`npm run eval:roi`: tokens and USD per passed task, with a recorded baseline (V5-04).** Finding:
   the footprint meter prices one request and the live evaluation records usage per case, but nothing
   related spend to completed work, so a token cut could not be judged by its cost per finished task.

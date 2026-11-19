@@ -215,16 +215,14 @@ tests.push([
 // --- registration ------------------------------------------------------------------------------
 
 tests.push([
-  "nothing is filtered outside the TUI, and pi without ctx.mode falls back to hasUI",
+  "nothing is filtered outside the TUI (ctx.mode decides; hasUI alone does not)",
   async () => {
     for (const [mode, hasUI] of [["rpc", true], ["json", false], ["print", false]] as const) {
       const fake = await startWith(mode, hasUI, process.cwd(), COMMANDS);
       assert.equal(fake.providers.length, 0, `${mode} must not register an autocomplete provider`);
     }
-    const older = await startWith(undefined, true, process.cwd(), COMMANDS);
-    assert.equal(older.providers.length, 1, "older pi without ctx.mode uses hasUI");
-    const noUi = await startWith(undefined, false, process.cwd(), COMMANDS);
-    assert.equal(noUi.providers.length, 0, "older pi without a UI registers nothing");
+    const tui = await startWith("tui", true, process.cwd(), COMMANDS);
+    assert.equal(tui.providers.length, 1, "the TUI registers the provider");
   },
 ]);
 

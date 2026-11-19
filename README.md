@@ -12,8 +12,8 @@
   <a href="https://www.bestpractices.dev/projects/15949"><img src="https://www.bestpractices.dev/projects/15949/badge" alt="OpenSSF Best Practices"></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.4.0--beta.1-blue" alt="version 0.4.0-beta.1"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="licence MIT"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A50.85.1-8A2BE2" alt="pi 0.85.1 or newer"></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A522.19-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22.19 or newer"></a> <br>
+  <a href="package.json"><img src="https://img.shields.io/badge/pi-%E2%89%A51.4.0-8A2BE2" alt="pi 1.4.0 or newer"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%E2%89%A524-339933?logo=nodedotjs&logoColor=white" alt="Node.js 24 or newer"></a> <br>
   <a href="https://gitdiagram.com/satunix/luna?utm_source=readme&utm_medium=badge"><img src="https://gitdiagram.com/diagram-badge.svg" alt="diagram"></a>
 
 </p>
@@ -42,7 +42,7 @@ variables are unchanged.
 
 ## Install
 
-Requirements: Node.js 22.19 or newer, git, and pi.
+Requirements: Node.js 24 or newer, git, and pi 1.4.0 or newer.
 
 ```sh
 npm install -g @earendil-works/pi-coding-agent

@@ -32,7 +32,7 @@ goes to standard error, prefixed `[update]`.
 
 **Luna is "registered from a retired private source".** See [Migration](migration.md).
 
-**Node or pi is too old.** Luna needs Node 22.19 or newer and pi 0.85.1 or newer. `node
+**Node or pi is too old.** Luna needs Node 24 or newer and pi 1.4.0 or newer. `node
 --version` and `pi --version` show what you have.
 
 ## Profiles

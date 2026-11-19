@@ -10,7 +10,7 @@ import fs from "node:fs";
 import { loadProfileDef, listProfiles } from "./profiles.ts";
 
 /** Node's floor for Luna (package.json `engines`). */
-export const MIN_NODE: readonly [number, number] = [22, 19];
+export const MIN_NODE: readonly [number, number] = [24, 0];
 /** How many invalid answers to one question are tolerated before the guided run gives up. */
 export const MAX_ATTEMPTS = 3;
 

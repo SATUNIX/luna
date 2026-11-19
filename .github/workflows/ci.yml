@@ -169,37 +169,28 @@ jobs:
           PROFILE: ${{ matrix.profile }}
 
   # Version pin discipline. devDependencies pin the tested version (the `verify` job runs against
-  # it); this matrix runs the whole check suite, in four shards per version, at the supported FLOOR
-  # and at the last pi 0.x release (both must pass: pi 1.x dropped its shrinkwrap and changed
-  # extension events, so the pre-1.0 line is checked explicitly). These lanes run on Node 22, the
-  # engines floor, while `verify` and `profile-regression` run on the newest Node line. An advisory
-  # lane returns when a pi release newer than the pin is under review; its failure is the signal to
-  # review before the pin moves.
+  # it on the newest Node line); this job runs the whole check suite, in four shards, at the
+  # supported FLOORS: pi at the peerDependencies floor and Node at the engines floor. It must pass.
+  # The pi version is one literal, which tests/pi-host-peers-smoke.ts keeps equal to the peer
+  # floor, so the lane keeps testing the floor after the pin moves past it.
   pi-compat:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    continue-on-error: ${{ matrix.advisory }}
     strategy:
       fail-fast: false
       matrix:
-        pi: ["0.85.1", "0.99.2"]
         shard: [1, 2, 3, 4]
-        include:
-          - pi: "0.85.1"
-            advisory: false
-          - pi: "0.99.2"
-            advisory: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      # Installing outside the lockfile is the point of this job: it runs the suite against a pi version other than the pinned one.
-      # The version is a literal from the matrix above, passed through the environment rather than spliced into the script.
+      # Installing outside the lockfile is the point of this job: it runs the suite against the floor pi, which can differ
+      # from the pinned one. The version is a literal passed through the environment rather than spliced into the script.
       # Every pi package the kit imports is named, so npm puts this version's copy at the root; one left out stays
       # at the pinned version or is nested under pi and pruned from the root (tests/pi-host-peers-smoke.ts).
       - run: >- # zizmor: ignore[adhoc-packages]
@@ -208,10 +199,9 @@ jobs:
           "@earendil-works/pi-ai@${PI_VERSION}"
           "@earendil-works/pi-tui@${PI_VERSION}"
         env:
-          PI_VERSION: ${{ matrix.pi }}
-      # The tarball check does not depend on the pi version. Type checking and lint read pi's type
-      # declarations, whose exported names change between releases; the verify job runs them against
-      # the pinned version. Extensions load as erased TypeScript, so everything else runs here.
+          PI_VERSION: "1.4.0"
+      # The tarball check, type checking and lint do not depend on the Node line and run in `verify`
+      # against the pinned pi. Extensions load as erased TypeScript, so everything else runs here.
       - run: npm run -s check:all -- --shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package,test:typecheck,test:lint --check-timeout=600
 
   # The Android companion app (apps/android). The Gradle wrapper jar must be the one Gradle

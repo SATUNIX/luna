@@ -78,3 +78,5 @@
   - `renderFooter` folds every line of an ASCII bar the same way, so a path, branch, model or
     session name with non-ASCII text cannot reach a tty/iso/ansi/ascii terminal
     (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
+  - `commandArgs` takes the command argument as the string pi 1.4.0 and newer pass; the word-array
+    form older pi passed is no longer accepted (`tests/cat-status-smoke.ts`, `tests/status-bar-smoke.ts`).

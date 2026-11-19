@@ -182,17 +182,17 @@ const tests = {
     try {
       const h = s.pi.commands.get("footer").handler;
       const file = path.join(s.agent, "pi-kit", "ui.json");
-      await h(["cat", "off"], s.ctx);
+      await h("cat off", s.ctx);
       assert.equal(parseJsonAs(UiFile, fs.readFileSync(file, "utf8")).cat, false);
       await s.fire("agent_start");
       assert.equal(s.debug.state().cat, undefined, "off shows no cat");
       await s.fire("agent_end", { messages: [] });
       assert.equal(s.debug.catTimerActive(), false, "off arms no timer");
       const before = fs.readFileSync(file, "utf8");
-      await h(["cat", "maybe"], s.ctx);
+      await h("cat maybe", s.ctx);
       assert.equal(fs.readFileSync(file, "utf8"), before, "an invalid argument changes nothing");
       assert.equal(notes.at(-1)?.l, "error");
-      await h(["cat", "on"], s.ctx);
+      await h("cat on", s.ctx);
       assert.equal(parseJsonAs(UiFile, fs.readFileSync(file, "utf8")).cat, true);
     } finally { await s.done(); }
   },

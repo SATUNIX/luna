@@ -325,25 +325,22 @@ prints a warning (seen in a static review of the package; no Luna test runs it).
 
 ## pi versions
 
-Luna supports `@earendil-works/pi-coding-agent` **0.85.1 and newer** (its `peerDependencies`
-floor) on Node 22.19 or newer, which is pi's own requirement. The dev dependency pins the version
-the whole suite is tested against, **1.4.0**. CI's `pi-compat` matrix runs the check suite at the
-floor, **0.85.1**, and at the last pi 0.x release, **0.99.2**; both must pass. The lane installs
-`pi-coding-agent`, `pi-ai` and `pi-tui` at its version over the pinned tree. All three are named
-because npm would otherwise keep the pinned copy at the root or, when the pinned copy does not
-satisfy the new pi's range, nest the new copy under pi and prune the root one, so a native import
-from the repository root finds no package (`tests/pi-host-peers-smoke.ts` checks the install step
-names every `@earendil-works/*` peer). Type checking and
-lint run only against the pin, because they read pi's type declarations and older releases export
-fewer type names; the extensions load as erased TypeScript, so the rest of the suite is what
-establishes that an older pi works. `npm run verify` follows the same rule: when the installed pi
-is not the pinned version, its type-check step prints `SKIP: installed pi X is not the pinned Y`
-instead of running `tsc`, and when either version cannot be read it runs `tsc` as before
-(`tests/new-extension-smoke.ts`, which runs verify on a fresh scaffold in each `pi-compat` lane).
-When a pi
-release newer than the pin is under review, it runs there as an advisory lane first: its failure
-is the signal to review before the pin moves. Moving the pin or the floor is a reviewed change;
-Dependabot does not bump pi minors or TypeScript majors.
+Luna supports `@earendil-works/pi-coding-agent` **1.4.0 and newer** (its `peerDependencies`
+floor) on **Node 24 or newer** (its `engines` floor; pi 1.4.0 itself needs 22.19). The dev
+dependency pins the version the whole suite is tested against, also **1.4.0** today. CI's
+`pi-compat` job runs the whole check suite, in four shards, at both floors: pi at the peer floor on
+Node 24. It must pass (`ci-complete` needs it). The lane installs `pi-coding-agent`, `pi-ai` and
+`pi-tui` at the floor version over the pinned tree, so it keeps testing the floor after the pin
+moves past it. All three are named because npm would otherwise keep the pinned copy at the root or,
+when the pinned copy does not satisfy the new pi's range, nest the new copy under pi and prune the
+root one, so a native import from the repository root finds no package. `tests/pi-host-peers-smoke.ts`
+checks that the install step names every `@earendil-works/*` peer, and that the lane's pi version
+and Node line equal the `peerDependencies` and `engines` floors. Type checking and lint run in the
+`verify` job against the pin, because they read pi's type declarations. `npm run verify` follows
+the same rule: when the installed pi is not the pinned version, its type-check step prints
+`SKIP: installed pi X is not the pinned Y` instead of running `tsc`, and when either version cannot
+be read it runs `tsc` as before (`tests/new-extension-smoke.ts`). Moving the pin or the floor is a
+reviewed change; Dependabot does not bump pi minors or TypeScript majors.
 
 The TypeScript compiler is pinned exactly at **6.0.3**, the newest release `typescript-eslint`
 supports (its peer range is `>=4.8.4 <6.1.0`). TypeScript 7 is not used. Its 7.0.2 package exports

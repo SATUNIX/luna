@@ -8,7 +8,7 @@ This is a **beta**. See [Beta status](beta.md) for what that means.
 
 ## 1. Requirements
 
-- Node.js **22.19 or newer** (pi's own requirement) and npm
+- Node.js **24 or newer** and npm
 - git
 - pi itself:
 
@@ -16,7 +16,7 @@ This is a **beta**. See [Beta status](beta.md) for what that means.
 npm install -g @earendil-works/pi-coding-agent
 ```
 
-Luna supports pi **0.85.1 and newer**; the version it is tested against is pinned in
+Luna supports pi **1.4.0 and newer**; the version it is tested against is pinned in
 `package.json` (currently 1.4.0). See [Supply chain](supply-chain.md#pi-versions).
 
 ## 2. Install Luna

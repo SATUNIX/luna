@@ -15,7 +15,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isolateKitEnv } from "../packages/core/eval/harness.ts";
-import { detectEnvironment, MAX_ATTEMPTS, parseChoice, parseConfirm, parseScope, profileChoices, recommendProfile, runGuide, streamIO, summarizeChanges, versionAtLeast, type Environment, type GuideIO } from "../packages/core/lib/install-guide.ts";
+import { detectEnvironment, MAX_ATTEMPTS, MIN_NODE, parseChoice, parseConfirm, parseScope, profileChoices, recommendProfile, runGuide, streamIO, summarizeChanges, versionAtLeast, type Environment, type GuideIO } from "../packages/core/lib/install-guide.ts";
 import { readKitMarker } from "../packages/core/lib/settings.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 
@@ -49,18 +49,20 @@ assert.ok(choices.every((c) => c.summary.length > 0 && !c.summary.includes(". ")
   assert.equal(recommendProfile(null, choices), "balanced");
   assert.ok(versionAtLeast("v22.19.0", [22, 19]) && versionAtLeast("v24.1.0", [22, 19]));
   assert.ok(!versionAtLeast("v22.18.9", [22, 19]) && !versionAtLeast("garbage", [22, 19]));
+  assert.deepEqual(MIN_NODE, [24, 0], "the guided check uses the engines floor, Node 24");
+  assert.ok(versionAtLeast("v24.0.0", MIN_NODE) && !versionAtLeast("v23.11.1", MIN_NODE) && !versionAtLeast("v22.19.0", MIN_NODE), "Node 22 and 23 are below the floor");
   const before = new Map([["a", Buffer.from("1")], ["b", undefined], ["c", Buffer.from("same")], ["d", Buffer.from("x")]]);
   const after = new Map([["a", Buffer.from("2")], ["b", Buffer.from("new")], ["c", Buffer.from("same")], ["d", undefined]]);
   assert.deepEqual(summarizeChanges(before, after), ["  changed a", "  created b", "  removed d"]);
   const env = detectEnvironment({
-    nodeVersion: "v22.10.0",
+    nodeVersion: "v22.19.0",
     env: { CI: "true", container: "podman" },
     exists: () => false,
     run: (cmd, args) => (cmd === "git" && args[0] === "--version" ? "git version 2.47.0" : null),
     tty: false,
     installedProfile: null,
   });
-  assert.deepEqual(env, { node: "v22.10.0", nodeOk: false, git: "git version 2.47.0", pi: null, container: true, ci: true, tty: false, gitRepo: false, installedProfile: null });
+  assert.deepEqual(env, { node: "v22.19.0", nodeOk: false, git: "git version 2.47.0", pi: null, container: true, ci: true, tty: false, gitRepo: false, installedProfile: null });
   ok("profile, scope and confirmation parsing, the recommendation, the change summary and detection");
 }
 

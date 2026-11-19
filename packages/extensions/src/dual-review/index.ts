@@ -38,9 +38,9 @@ function reviewHint(lines: number): string | null {
 }
 
 /**
- * Make tools registered inactive callable again (the pattern third_party/subagent uses for
- * workflow_status: pi 1.x honours `defaultActive: false`, an older pi leaves them active). A pi
- * without tool control, or a tool that is not registered, is skipped.
+ * Make tools registered inactive (`defaultActive: false`) callable again, the pattern
+ * third_party/subagent uses for workflow_status. A host without tool control (a test fake), or a
+ * tool that is not registered, is skipped.
  */
 function wakeTools(pi: ExtensionAPI, names: string[]): void {
   try {

@@ -264,7 +264,7 @@ const sorted = (names: readonly string[]): string[] => [...new Set(names)].sort(
 
 /**
  * At the pinned pi the copy must match exactly: that is the signal to refresh it after a pi
- * upgrade. At any other supported pi (the compat lanes install 0.85.1 and 0.99.2 over the pin)
+ * upgrade. At any other supported pi (the pi-compat lane installs the floor over the pin)
  * the installed names must be a subset of the copy, so that a kit command shadowing a built-in on
  * any supported pi is still rejected; a pi that adds a built-in the copy lacks still fails.
  */

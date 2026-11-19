@@ -182,6 +182,18 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **BREAKING: Luna needs pi 1.4.0 or newer and Node.js 24 or newer (V5-27).** The
+  `peerDependencies` floor moves from 0.85.1 to 1.4.0 and `engines.node` from 22.19.0 to 24.0.0 in
+  every package, and the guided installer and the web console installer check Node 24. Upgrade pi
+  (`npm install -g @earendil-works/pi-coding-agent`) and Node before updating Luna. CI's `pi-compat`
+  matrix (pi 0.85.1 and 0.99.2 on Node 22, eight shards) is now one required floor lane: pi 1.4.0 on
+  Node 24, four shards, still gated by `ci-complete`; `tests/pi-host-peers-smoke.ts` keeps its pi
+  version and Node line equal to the declared floors, and `continue-on-error` is no longer allowed
+  in any workflow. Code kept only for older pi is removed: the hub and workflow panel always open
+  as overlays (no `supportsOverlay` check), the `/menu` header and filter read `ctx.mode` with no
+  `hasUI` fallback, `effort` treats only a `messageType: "user"` turn as the user's, and command
+  handlers take the argument string only (no word arrays). Required check names are unchanged.
+
 - **The container image runs pi-mcp-adapter 7.0.1, with semantic search and extraction pinned off.**
   Finding: Dependabot's 6.0.0 to 7.0.1 bump (#129) failed the container checks, which pin the
   version in the Dockerfile, `capability/env/defaults.env` and both compose files. 7.0.0 also

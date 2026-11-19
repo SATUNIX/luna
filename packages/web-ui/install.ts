@@ -7,7 +7,7 @@
  *   - the `web-console` extension the `/console` slash command
  *
  * This script:
- *   1. checks prerequisites (Node >= 22.19, the pi CLI, the server files)
+ *   1. checks prerequisites (Node >= 24, the pi CLI, the server files)
  *   2. registers the `web-console` extension with pi via the kit installer when no
  *      kit is installed yet, and explains how to enable it when one already is
  *   3. prints how to start the UI
@@ -115,14 +115,9 @@ function profilesWithWebConsole(): string[] {
 console.log("[web-ui] Pi Console installer\n");
 
 // 1. Prerequisites
-const [nodeMajor, nodeMinor] = process.versions.node.split(".").map((part) => Number.parseInt(part, 10));
-if (
-  nodeMajor === undefined ||
-  !Number.isFinite(nodeMajor) ||
-  nodeMajor < 22 ||
-  (nodeMajor === 22 && !(nodeMinor !== undefined && nodeMinor >= 19))
-) {
-  problems.push(`Node.js >= 22.19 is required, because pi needs it (found ${process.version}).`);
+const [nodeMajor] = process.versions.node.split(".").map((part) => Number.parseInt(part, 10));
+if (nodeMajor === undefined || !Number.isFinite(nodeMajor) || nodeMajor < 24) {
+  problems.push(`Node.js >= 24 is required (Luna's engines floor; found ${process.version}).`);
 }
 if (!fs.existsSync(path.join(WEB_UI_DIR, "server", "server.ts"))) {
   problems.push(`Server entrypoint missing: ${path.join(WEB_UI_DIR, "server", "server.ts")}`);

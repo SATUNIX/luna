@@ -53,6 +53,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
+| `/schedule` | `schedule` | Scheduled Luna runs: list, add (asks first), remove, run-now (systemd user timers or crontab) | [schedule](schedule.md) |
 | `/security` | `tool-firewall` | /security [off\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
 | `/skills` | `skill-router` | List installed skills: which are listed in the prompt, which are on-demand (skill_search / hints), and their triggers. | [control-center](control-center.md) |
 | `/status` | `control-center` | Show what is installed and running, one line each with the command for detail | [control-center](control-center.md) |

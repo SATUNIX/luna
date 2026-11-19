@@ -27,6 +27,7 @@ nav:
       - Updates: updates.md
       - Migration: migration.md
       - Headless and Safe Mode: headless.md
+      - Scheduled runs: schedule.md
       - Troubleshooting: troubleshooting.md
       - Security Model: security.md
       - Threat Model: threat-model.md

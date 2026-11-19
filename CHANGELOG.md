@@ -71,8 +71,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   crontab line where `systemctl --user` is unavailable (`hourly`, `daily HH:MM`, `weekly <day>
   HH:MM`, `every Nm`, `every Nh`). The spec lives in `<state>/luna/schedules/<name>.json` (0600) and
   the timer or crontab line only runs `luna schedule run-now <name>`, so no prompt is ever quoted
-  into a unit file or shell line. Creating a schedule is operator-confirmed: the CLI asks on a
-  terminal or takes `--yes` and otherwise refuses; `/schedule add` (a new `experimental` extension
+  into a unit file or shell line. To create a schedule the CLI asks on a terminal or takes `--yes`
+  and otherwise refuses (so an agent that may run it with `--yes` can create one); `/schedule add` (a new `experimental` extension
   in no profile) asks through pi's confirm dialog and refuses without a UI. Not yet covered: the
   tool firewall does not classify schedule, unit-file or crontab writes as high (V5-15, guard).
   This reverses the roadmap's "scheduled runs: not planned". Documented in `docs/schedule.md`;
@@ -423,6 +423,25 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   without tool control.
 
 ### Fixed
+
+- **AUTHORITY: `luna schedule` review fixes (DE-118).** Two independent reviews of V5-14 found it not
+  safe as documented. The spec is no longer trusted at run time: `add` resolves the absolute `pi`,
+  node and luna paths, the directory, kind, prompt or config and caps into the spec and pins its
+  SHA-256 in the unit file or crontab line (`run-now <name> --digest <sha256>`); `run-now` refuses a
+  spec that no longer matches, and pi is started by the pinned absolute path, never through a `PATH`
+  the spec supplies. A prompt job always carries `--max-turns`, `--max-cost` and `--timeout`, with
+  defaults (50, $2, 30m) and maxima (500, $50, 12h) checked at add and at run; the systemd service is
+  stopped after the timeout (`TimeoutStartSec`, `RuntimeMaxSec`); two runs of one schedule never
+  overlap, through a lock the kernel releases when its holder exits (an abstract socket on Linux), so a
+  killed run leaves no stale lock; `/schedule run-now` starts the job detached instead of under a
+  120-second command timeout. Only the normalised `--at` reaches the timer, and every path in a unit or
+  crontab line (the state directory included) is limited to letters and digits of any script, space
+  and `_./@+-`, so a non-ASCII home works and a newline, `%`, quote or `$` is refused. The prompt is
+  passed after `--` (`luna exec` gained `--` end of options). A job runs with `LUNA_SCHEDULE_JOB`, under
+  which the CLI and `/schedule` refuse to change schedules: a guard against accident, not enforcement;
+  the enforcement against a job scheduling a job is the firewall rule (V5-15) plus the headless refusal
+  of ask-rated actions. `docs/schedule.md` says what confirms a schedule and what is not covered.
+  Verified by `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`).
 
 - **A workflow step that misses a declared output says where it wrote instead (F-03).** Finding:
   two runs failed on the output contract after doing the work under another name (`board-report.md`

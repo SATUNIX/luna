@@ -45,6 +45,16 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
   installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
   not rerun `npm ci`, and only a newer release raises the start-up notice.
+- **`pi-autonomy draft --goal` and `pi-autonomy up` set a run up from a goal (V5-10, PG-43).**
+  Finding: an agent asked to start a containerised run toward a goal had to drive `init` through many
+  flags, and starting one took dozens of turns of help reads, trial inits and sleep polls. Fix:
+  `draft --goal <text>` writes a contract with closed defaults (no egress, services or credentials;
+  local-branch promotion; attended unless asked; a $5 budget, at most $20) and prints the boundary
+  digest; it authorises nothing. `up --config run.json --json` starts only a contract already
+  authorised for that digest, checks the host as `doctor --setup` does, starts the supervisor in the
+  background and prints one JSON line (`runId`, `pid`, `status`), or a `blocker` and starts nothing.
+  Verified by `tests/autonomy-cli-smoke.ts`.
+
 - **An autonomous run writes a post-mortem when it fails (PG-05).** Finding: when a run failed,
   `state.json` kept only a failure code, so the cause had to be pieced together from the host event
   log and `supervisor.log`. Fix: whenever the supervisor records a failure (the run fails, or it stops
@@ -331,6 +341,20 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   without tool control.
 
 ### Fixed
+
+- **Each check's full gate log is kept with its step (F-05).** Finding: an acceptance check's gate
+  ran in one shared scratch directory (`gate-work/`) that the runtime wiped before every check, and
+  the evidence file kept only the last 4000 characters (`tail`). The next check, in the same step
+  or a later one, destroyed the earlier log, so a failure from an older step could no longer be read
+  in full. Fix: after each check the runtime copies the gate's top-level `.log` and `.json` files
+  to `steps/NN/checks/<id>.logs/`, and the evidence file lists them as `logs`. The gate ran the
+  worker's code, so only regular files with a plain name are copied (judged with `fstat` on the
+  descriptor opened with `O_NOFOLLOW|O_NONBLOCK`, never by a stat before the open), a link or FIFO
+  is skipped, and
+  each copy is capped (16 files of 8 MiB; a longer log keeps its end). A failed copy is logged and
+  never changes the verdict. Verified by `tests/autonomy-smoke.ts`: two steps of two checks share
+  one wiped scratch directory, and step 1's first log survives in full; links, directories, odd
+  names and oversized files are handled.
 
 - **A missing optional harness command degrades an autonomous run instead of killing it (PG-01).**
   Finding: the supervisor's start-of-session `get_commands` check required all six harness

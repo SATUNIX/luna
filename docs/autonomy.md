@@ -122,6 +122,32 @@ succeeded, 10 failed, 11 cancelled, 12 budget exhausted, 13 parked (blocked, pau
 
 Working examples are in `packages/autonomy/examples/`.
 
+### From a goal: `draft` and `up`
+
+An agent (or you) can set a run up from a goal in two commands, with the operator's authorisation
+between them:
+
+```sh
+node packages/autonomy/cli.ts draft --goal "Analyse the supervisor's failure handling and fix one gap" \
+    --repo . --check unit="npm test" --out run.json   # prints the boundary digest; authorises nothing
+node packages/autonomy/cli.ts plan --config run.json --authorise --digest <digest> --by <operator>
+node packages/autonomy/cli.ts up --config run.json --json   # one line: {"ok":true,"runId":…,"pid":…,"status":…}
+```
+
+`draft` is `init` with closed defaults: no egress, no services or credentials, promotion to a local
+branch only, attended unless `--unattended` is given, and a budget of $5 (`--budget-usd` may set up
+to $20; more is refused). It takes the `implement` or `self-improve` template, and has no flags for
+egress, services, credentials or promotion: widening any of them means editing the contract, which
+changes the digest the operator authorises. It never writes an `authorisation` block.
+
+`up` never asks and never authorises. It starts only a contract that already carries an
+authorisation for its current digest, then checks the host as `doctor --setup` does (engine, image,
+inference key), creates the run and starts its supervisor in the background. With `--json` it prints
+one line; a refusal names a `blocker` (`invalid_contract`, `authorisation_required`,
+`digest_mismatch`, `host_setup` with the `failing` checks, or `run_exists`) and starts nothing. The
+`status` it reports is the run's state at that moment, usually `setup`: the supervisor moves it on.
+`tests/autonomy-cli-smoke.ts` pins both commands.
+
 ### From inside pi
 
 The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
@@ -715,6 +741,7 @@ Read these files under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-aut
 | `meter/*.jsonl` | Inference usage and spend | `tests/autonomy-run-smoke.ts` |
 | `steps/NN/summary.json`, `cycle.json`, `review.json`, check evidence | Per-step outcome, committed head, gate and independent review | `tests/autonomy-selfimprove-smoke.ts` |
 | `steps/NN/salvaged-report.json` | Host close-out when the worker died before its report | `tests/autonomy-selfimprove-smoke.ts` |
+| `steps/NN/checks/<id>.json`, `steps/NN/checks/<id>.logs/` | One check's verdict with the last 4000 characters of its output (`tail`) and `logs`, the paths of its full gate logs. The gate's scratch directory (`gate-work/`) is wiped before every check, so the copies under `<id>.logs/` are the only lasting record: regular `.log` and `.json` files only, links never followed, at most 16 files of 8 MiB each (a longer log keeps its end) | `tests/autonomy-smoke.ts` |
 
 Suggested monitoring policy: flag a work heartbeat older than **2 minutes or four ticks**, whichever
 is longer (`runtime.mirrorSeconds` sets the tick interval). This is an investigation threshold, not

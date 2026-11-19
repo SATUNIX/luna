@@ -19,7 +19,7 @@ it.
 | The autonomous runner on rootless Podman, on macOS and Windows, and in a run of hours or days | `smoke:autonomy-container` ran on Docker only, in a disposable sandbox; the in-container boundary probe (`packages/autonomy/tests/boundary-probe.ts`) is manual-only | An operator, per [Autonomous runs](autonomy.md) |
 | A full autonomous run against a real model provider | The relay talks to a local fake upstream in every test | An operator with a provider key and a small budget |
 | The web console's Content-Security-Policy in a browser | No browser was used | Anyone with a browser: open the console and check the progress bars render |
-| The full check suite on Windows and on Node 24 | CI runs the suite on Linux with Node 26, and the pi-compat lanes with Node 22; Windows runs the per-profile install check only | CI matrix extension |
+| The full check suite on Windows | CI runs the suite on Linux with Node 26, and the pi-compat lane with Node 24; Windows runs the per-profile install check only | CI matrix extension |
 | `git` and `npm` delivery for `/profile` and for the update path against the real public repository | No release tag exists yet, and local mode is what the suites can exercise | The first release, then a run of `/update` from an install of it |
 | Interactive use on pi 1.x | The suites drive pi's runtime without a terminal; pi 1.0 made the fullscreen TUI the default and that was not exercised by hand | An operator, running each profile interactively on pi 1.3 |
 
@@ -246,9 +246,8 @@ and nothing in the repository pins any of them.
 - **pi native tool deferral.** pi 1.x can register a tool as `exposure: "deferred"` and ship a
   built-in `tool_search`; Luna uses only `defaultActive: false` plus its own wake-up. Using the
   native mechanism for the 22 of 44 tools that no measured session called (mostly pi-lens and
-  pi-readseek tools, 15.2k characters of schema) needs a reviewed raise of the pi floor
-  (`peerDependencies` is 0.85.1 and `defaultActive` is ignored below pi 1.x), and a measurement
-  of pi-lens and pi-readseek in a real session, which the meter cannot see.
+  pi-readseek tools, 15.2k characters of schema) needs a measurement of pi-lens and pi-readseek in
+  a real session, which the meter cannot see (the pi floor is 1.4.0, which has both mechanisms).
 - **Action-style tool families.** Folding `workflow_run`, `workflow`, `workflow_status` and
   `workflow_control` (and the memory and task-graph families) into one tool per family with an
   `action` field would cut schema text further but renames tools the firewall policy, the delegation

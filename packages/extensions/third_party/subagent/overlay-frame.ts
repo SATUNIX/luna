@@ -11,8 +11,8 @@
  * expose it, or an overlay frame is already installed, the wrapper only frames.
  *
  * Extensions are self-contained, so the vendor copy of this file
- * (`packages/extensions/third_party/subagent/overlay-frame.ts`) is byte-identical to this one, like
- * `supportsOverlay`. Nothing checks that the two copies match: change both together.
+ * (`packages/extensions/third_party/subagent/overlay-frame.ts`) is byte-identical to this one.
+ * Nothing checks that the two copies match: change both together.
  */
 import {
   stripTerminalSequences,

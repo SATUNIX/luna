@@ -13,7 +13,8 @@
  * - each host package imported from `packages/extensions` or `tests` is a peer dependency;
  * - each `@earendil-works/*` peer is a dev dependency pinned to the same version as pi itself;
  * - the ci.yml pi-compat job installs each `@earendil-works/*` peer at the lane's pi version, so
- *   the lane tests the copy that version brings rather than the pinned one.
+ *   the lane tests the copy that version brings rather than the pinned one, and that version and
+ *   the lane's Node line are the peerDependencies and engines floors.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -123,6 +124,13 @@ const tests: Record<string, () => void> = {
     for (const name of earendilPeers) {
       assert.ok(install.includes(`"${name}@\${PI_VERSION}"`), `pi-compat must install "${name}@\${PI_VERSION}"; otherwise npm nests the lane's copy under pi and prunes the root one`);
     }
+    const lane = job.match(/^\s+PI_VERSION:\s*"([^"]+)"\s*$/m)?.[1];
+    const floor = /^>=(\d+\.\d+\.\d+)$/.exec(peers["@earendil-works/pi-coding-agent"] ?? "")?.[1];
+    assert.ok(floor !== undefined, `the pi-coding-agent peer range is a plain floor (>=x.y.z): ${String(peers["@earendil-works/pi-coding-agent"])}`);
+    assert.equal(lane, floor, "the pi-compat lane runs the suite at the peerDependencies floor");
+    const node = job.match(/node-version:\s*"(\d+)"/)?.[1];
+    const engines = /^>=(\d+)(?:\.0\.0)?$/.exec(String((JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")) as { engines?: { node?: string } }).engines?.node))?.[1];
+    assert.equal(node, engines, "the pi-compat lane runs on the engines.node floor");
   },
 
 };

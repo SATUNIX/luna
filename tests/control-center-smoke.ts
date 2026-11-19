@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initTheme, type Theme, VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { fakePi, isolateKitEnv, loadModule, rmWorkspace, setEnv, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type { OverlayTheme } from "../packages/extensions/src/control-center/overlay-frame.ts";
@@ -26,7 +26,7 @@ import type * as ControlsModule from "../packages/extensions/src/control-center/
 import type * as ModelModule from "../packages/extensions/src/control-center/model.ts";
 import type * as ValuesModule from "../packages/extensions/src/control-center/values.ts";
 import type * as DoctorModule from "../packages/extensions/src/control-center/doctor.ts";
-import { headerLine, openHub, rowsForPage, supportsOverlay, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
+import { headerLine, openHub, rowsForPage, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
 import type { HubRow } from "../packages/extensions/src/control-center/model.ts";
 import type { HubValues } from "../packages/extensions/src/control-center/values.ts";
 import { PI_BUILTIN_SLASH_COMMANDS as CORE_BUILTINS } from "../packages/core/lib/pi-builtins.ts";
@@ -730,15 +730,7 @@ tests.push([
     const ctx = { mode: "tui" as const, hasUI: true, cwd: process.cwd(), ui: recorded.ui };
     await openHub(makeDeps({ model, commands: [], ctx }));
     assert.equal(recorded.customCalls.length, 1, "the TUI renderer opened one custom component");
-    // The installed pi decides: the compat lanes run this file on pi below 1.3.0 too.
-    assert.equal(
-      recorded.customCalls[0]?.overlay === true,
-      supportsOverlay(PI_VERSION),
-      `pi ${PI_VERSION} opens the hub as an overlay only if it is 1.3.0 or newer`,
-    );
-    // Both branches of the gate, whatever pi is installed.
-    for (const v of ["1.3.0", "1.3.1-beta.1", "1.4.0", "2.0.0", "v1.3.0"]) assert.equal(supportsOverlay(v), true, `supportsOverlay(${v})`);
-    for (const v of ["1.2.9", "1.2.0", "0.99.2", "0.85.1"]) assert.equal(supportsOverlay(v), false, `supportsOverlay(${v})`);
+    assert.equal(recorded.customCalls[0]?.overlay, true, "the hub opens as an overlay (every supported pi has the overlay done() fix)");
   },
 ]);
 

@@ -21,7 +21,7 @@
     "url": "https://github.com/SATUNIX/luna/issues"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   },
   "publishConfig": {
     "access": "public"
@@ -83,9 +83,9 @@
     "quickjs-wasi": "3.6.4"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.85.1",
-    "@earendil-works/pi-coding-agent": ">=0.85.1",
-    "@earendil-works/pi-tui": ">=0.85.1",
+    "@earendil-works/pi-ai": ">=1.4.0",
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "@earendil-works/pi-tui": ">=1.4.0",
     "typebox": "*"
   },
   "devDependencies": {

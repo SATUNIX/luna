@@ -7,10 +7,9 @@
  * skipped for shadowing a built-in, so this module keeps a copy keyed to the pi version the
  * repository pins in `devDependencies`.
  *
- * The lists are the union of the built-ins across every supported pi (0.85.1 and newer), so the
- * shadowing rule is the strictest one: 0.85.1 lacks `/bug` (added in 0.86.0) and `/mcp`, and a
- * kit command with either name would still shadow it on a newer pi. If a future pin drops a name
- * an older supported pi still registers, keep that name here.
+ * The lists are the union of the built-ins across every supported pi (the peerDependencies floor,
+ * 1.4.0, and newer), so the shadowing rule is the strictest one. If a future pin drops a name a
+ * supported pi still registers, keep that name here.
  *
  * `tests/command-contract-smoke.ts` re-reads the installed dist on every run. At the pinned pi
  * the names must match exactly, which is the deliberate signal to update this copy after a pi
@@ -53,7 +52,7 @@ export const PI_BUILTIN_SLASH_COMMANDS: readonly string[] = [
 
 /**
  * Commands pi's always-loaded built-in extensions register, which are also built-in for the
- * shadowing rule: `/mcp` (dist/extensions/mcp/index.js, not in 0.85.1) and `/llama`
+ * shadowing rule: `/mcp` (dist/extensions/mcp/index.js) and `/llama`
  * (dist/extensions/llama).
  */
 export const PI_BUILTIN_EXTENSION_COMMANDS: readonly string[] = ["mcp", "llama"];

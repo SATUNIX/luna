@@ -99,9 +99,8 @@ function warnInvalidHubKey(): void {
 /**
  * Install the launch screen on the existing `session_start` handler. Only a real TUI gets it:
  * RPC and print have no header, a child session stays quiet, and `launchScreen: "off"` in
- * `pi-kit/ui.json` disables it. The caller passes the same `isTui` predicate it uses for the menu,
- * so older pi without `ctx.mode` gets the header too when `hasUI` is true. The menu command is
- * `/menu`.
+ * `pi-kit/ui.json` disables it. The caller passes the same `isTui` predicate it uses for the menu.
+ * The menu command is `/menu`.
  */
 function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boolean, hubKey: KeyId): void {
   if (!isTui) return;
@@ -151,7 +150,7 @@ function installLaunchHeader(pi: ExtensionAPI, ctx: ExtensionContext, isTui: boo
 
 /**
  * Register the curated `/` menu in the TUI. Only a terminal gets a provider: over RPC and in print
- * or json mode the base menu is left alone, and older pi without `ctx.mode` falls back to `hasUI`.
+ * or json mode the base menu is left alone.
  * The provider hides the kit commands that moved into the hub while leaving every built-in, prompt
  * and skill command visible (`commandMenu: "all"` turns the filter off entirely).
  */
@@ -159,8 +158,7 @@ function registerCommandMenu(pi: ExtensionAPI, hubKey: KeyId): void {
   // Re-run for every session: pi clears the autocomplete wrappers and the extension header when a
   // session is replaced (/new, /resume, /fork), so a one-shot guard would silently drop both.
   pi.on("session_start", (_event, ctx) => {
-    const mode: string | undefined = ctx.mode;
-    const isTui = mode === undefined ? ctx.hasUI : mode === "tui";
+    const isTui = ctx.mode === "tui";
     if (!isTui) return;
     installLaunchHeader(pi, ctx, isTui, hubKey);
     const settings = readCommandMenuSettings();
@@ -180,9 +178,8 @@ function registerCommandMenu(pi: ExtensionAPI, hubKey: KeyId): void {
 }
 
 /** The first word of the command's argument, when it names a page. */
-function pageArg(args: string | string[] | undefined): string {
-  const text = Array.isArray(args) ? args.join(" ") : (args ?? "");
-  return text.trim().split(/\s+/)[0] ?? "";
+function pageArg(args: string | undefined): string {
+  return (args ?? "").trim().split(/\s+/)[0] ?? "";
 }
 
 function thinkingLevelOf(pi: ExtensionAPI): string | undefined {
@@ -250,7 +247,7 @@ export default function controlCenter(pi: ExtensionAPI): void {
   });
   const hubKey = readHubKey();
 
-  const open = async (args: string | string[], ctx: ExtensionCommandContext): Promise<void> => {
+  const open = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
     const cwd = ctx.cwd || process.cwd();
     const commands = pi.getCommands().map((command) => command.name);
     const build = () => {

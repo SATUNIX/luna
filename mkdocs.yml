@@ -22,6 +22,7 @@ nav:
       - Concepts: concepts.md
       - Support and Compatibility: support.md
       - Profiles: profiles.md
+      - Your Own Packages: packages.md
       - Effort: effort.md
       - Security Level: security-level.md
       - Updates: updates.md

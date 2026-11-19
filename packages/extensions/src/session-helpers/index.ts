@@ -18,7 +18,7 @@ import {
 import { isLocalBaseUrl } from "./model-fit.ts";
 import { PROBE_TOOL_NAME, probeFile, probeToolCalls, readProbes, withProbe } from "./tool-probe.ts";
 import { transactionalSwitch, type SwitchOutcome } from "./profile-switch.ts";
-import { confirmLowering, securityFilePath, securityLowering } from "./security-guard.ts";
+import { atRootTerminal, confirmLowering, promptTimeoutMs, securityFilePath, securityLowering } from "./security-guard.ts";
 import { KIT_PACKAGE_NAMES, isKitLocalPackageName, trustedMarkerKitRoot, type MarkerKitRoot } from "./shared/kit-source.ts";
 import { say, usageError } from "./shared/say.ts";
 import { appendFileSafe } from "./shared/safe-fs.ts";
@@ -1036,6 +1036,79 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       say(c, `compaction: unknown option "${arg}". Use status, on, off, trigger on, trigger off.`, "error");
+    },
+  });
+
+  // /packages: the operator's own pi packages (packages/core/packages.ts, docs/packages.md). A slash
+  // command only: no tool lets the model add or remove a package. An add or a remove needs a choice
+  // at the terminal of an interactive root session, and an add passes the exact integrity the
+  // operator saw; success is read back from the ledger, never from the child's exit code.
+  pi.registerCommand("packages", {
+    description: "Your own pi packages, outside the kit's reviewed companions: `/packages search [words]`, `/packages review <name>[@version]`, `/packages add <name>[@version]` (shows the review, asks, pins the exact version and integrity, installs with scripts off), `/packages remove <name>` (only what /packages added), `/packages list`.",
+    getArgumentCompletions: (prefix: string) => ["search", "review", "add", "remove", "list"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
+    handler: async (args, ctx) => {
+      const c = ctx;
+      const kitRoot = findKitRoot(c.cwd ?? process.cwd(), (message) => say(c, message, "warning"));
+      const script = kitRoot ? ["packages.ts", "packages.js"].map((n) => path.join(kitRoot, "packages", "core", n)).find((f) => fs.existsSync(f)) : undefined;
+      if (!kitRoot || !script) {
+        say(c, "packages: could not locate the kit's packages/core/packages.ts. Set PI_KIT_ROOT to the kit path, or reinstall it (docs/INSTALL.md)", "error");
+        return;
+      }
+      const run = (argv: string[]) => pi.exec(nodeBinary(), [script, ...argv], { cwd: kitRoot, timeout: 300_000 });
+      const words = args.trim().split(/\s+/).filter(Boolean);
+      const [verb = "search", ...rest] = words;
+      const show = (r: { stdout: string; stderr: string; code: number }) => {
+        const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
+        say(c, `packages: ${out || "(no output)"}`, r.code === 0 ? "info" : "error");
+      };
+      if (verb === "search" || verb === "list" || (verb === "review" && rest.length === 1)) {
+        show(await run([verb, ...rest]));
+        return;
+      }
+      if ((verb !== "add" && verb !== "remove") || rest.length !== 1 || !rest[0]) {
+        say(c, "packages: usage: /packages search [words] | review <name>[@version] | add <name>[@version] | remove <name> | list. Nothing was changed.", "error");
+        return;
+      }
+      if (!atRootTerminal(c)) {
+        say(c, `packages: ${verb} needs a choice at the terminal of an interactive root session; refused in headless, RPC and delegated/child sessions. Nothing was changed.`, "warning");
+        return;
+      }
+      const ledgerFile = path.join(agentDir(), "pi-kit", "user-packages.json");
+      const recorded = (name: string, integrity?: string) => {
+        const entries = prop(readJsonFile(ledgerFile), "packages");
+        return Array.isArray(entries) && entries.some((e) => prop(e, "name") === name && (integrity === undefined || prop(e, "integrity") === integrity));
+      };
+      const target = rest[0];
+      if (verb === "remove") {
+        const choice = await c.ui.select(`Remove ${target}, which /packages added?`, ["No, keep it", "Yes, remove it"], { timeout: promptTimeoutMs() });
+        if (choice !== "Yes, remove it") { say(c, "packages: kept; nothing was changed.", "info"); return; }
+        const r = await run(["remove", target]);
+        show({ ...r, code: recorded(target) ? 1 : r.code });
+        return;
+      }
+      const reviewed = await run(["review", target, "--json"]);
+      let parsed: unknown;
+      try { parsed = JSON.parse(reviewed.stdout); } catch { parsed = null; }
+      const review = prop(parsed, "review");
+      const name = prop(review, "name");
+      const version = prop(review, "version");
+      const integrity = prop(review, "integrity");
+      const lines = prop(parsed, "lines");
+      if (reviewed.code !== 0 || typeof name !== "string" || typeof version !== "string" || typeof integrity !== "string" || !Array.isArray(lines)) {
+        show({ ...reviewed, code: 1 });
+        return;
+      }
+      if (prop(parsed, "kit") === true) {
+        say(c, `packages: ${name} is a Luna companion or Luna itself; the kit pins it, so /packages does not add it. Nothing was changed.`, "error");
+        return;
+      }
+      const accept = `Yes, add ${name}@${version} with this integrity`;
+      const choice = await c.ui.select(`${lines.filter((l): l is string => typeof l === "string").join("\n")}\n\nAdd it?`, ["No, do not add it", accept], { timeout: promptTimeoutMs() });
+      if (choice !== accept) { say(c, "packages: not added; nothing was changed.", "info"); return; }
+      const r = await run(["add", `${name}@${version}`, "--accept", integrity]);
+      const ok = recorded(name, integrity);
+      show({ ...r, code: ok ? 0 : 1 });
+      if (ok) say(c, "packages: run /reload to load it.", "info");
     },
   });
 

@@ -28,6 +28,22 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
     - The `pi-kit/` parent check has its own row.
 
   Verification: `tests/user-profiles-smoke.ts`, `tests/luna-cli-smoke.ts`; 23 guards proven by revert.
+- **`/packages`: search, review, add and remove your own pi packages with a pin ledger (V5-06,
+  AUTHORITY).** Finding: the only way to add a pi package outside Luna's companions was
+  `pi install` by hand, with no record, no pin and lifecycle scripts on. Fix:
+  `packages/core/lib/user-packages.ts`, `packages/core/packages.ts` and the `/packages` command
+  (session-helpers):
+  - search and review only read the registry;
+  - an add shows install scripts, dependencies, maintainers and age, asks at an interactive root
+    terminal, and pins the exact version and sha512 into `pi-kit/user-packages.json`
+    (`review: user-accepted`);
+  - it refuses a changed pin, a tampered tarball, another origin, a Luna companion or an existing
+    entry before pi runs, then installs at user scope with scripts off and verifies npm's recorded
+    integrity;
+  - `remove` removes only what the ledger recorded.
+
+  No model tool. Verification: `tests/user-packages-smoke.ts` (`smoke:user-packages`, in
+  `test:security`), against a local fixture registry.
 
 - **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:
   the only way to change what a profile loads was overrides.json, which applies to every profile.

@@ -503,10 +503,18 @@ const agents: AgentConfig[] = [{ name: "scout", description: "fixture", tools: [
 
 {
   // A recorded orphan: a live process whose registry row outlived its parent. `cli.js` in the
-  // command line is what stopRecordedRun's PID-reuse guard asks for on Linux.
+  // command line is what stopRecordedRun's PID-reuse guard asks for on Linux, so wait until the
+  // child has exec'd that script: spawn() returns at fork, and stopping before exec makes the
+  // guard see this test's own command line and skip the orphan (the check then flakes under load).
   const cli = path.join(ws, "orphan", "cli.js");
-  writeFile(cli, "setTimeout(() => {}, 60000);\n");
+  const ready = path.join(ws, "orphan", "ready");
+  writeFile(cli, `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready");\nsetTimeout(() => {}, 60000);\n`);
   const orphan = spawn(process.execPath, [cli], { stdio: "ignore" });
+  const deadline = Date.now() + 5000;
+  while (!fs.existsSync(ready)) {
+    assert.ok(orphan.exitCode === null && Date.now() < deadline, "the orphan fixture starts its cli.js before it is stopped");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   process.once("exit", () => orphan.kill()); // a failing case must not leave the fixture running
   const exited = new Promise<string>((resolve) => orphan.once("exit", (code, signal) => resolve(signal ?? String(code))));
   writeFile(

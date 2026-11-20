@@ -16,9 +16,12 @@ import { STATES, TERMINAL, TRANSITIONS, IllegalTransition, applyResultsToBoard a
 import { assessLock, createRunLock as createLock, type RunLockOptions } from "../packages/autonomy/lib/runlock.ts";
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
 import { runPaths } from "../packages/autonomy/lib/paths.ts";
-import { GATE_SLOTS_ENV, acquireGateSlot, resolveGateSlots, type GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
+import { GATE_SLOTS_ENV, WORKER_CPUS_ENV, WORKER_MEMORY_ENV, WORKER_SLOTS_ENV, WORKER_USD_ENV, acquireGateSlot, acquireWorkerSlot, resolveGateSlots, resolveWorkerBounds, type GateSlot, type WorkerSlot, workerPools } from "../packages/autonomy/lib/gate-slots.ts";
 import { GateWaitInterrupted } from "../packages/autonomy/lib/errors.ts";
-import { nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import { array, nullable, number, object, parseJsonAs, string } from "../packages/core/lib/guard.ts";
+import { cleanup, harness, runOnce, simpleRaw, solve } from "./autonomy-harness.ts";
+import { HARNESS_COMMANDS } from "../packages/autonomy/lib/rpc.ts";
+import { POSTMORTEM_EVENTS, POSTMORTEM_LOG_LINES, POSTMORTEM_SCHEMA_VERSION } from "../packages/autonomy/lib/postmortem.ts";
 
 
 const { check, done } = makeChecker("autonomy-lifecycle-smoke");
@@ -515,5 +518,155 @@ await check("gate slots: a non-contention flock failure rejects loudly instead o
     rm(home);
   }
 });
+
+// --- host-wide worker slots (V5-22) --------------------------------------------------------
+const waitFor = async (cond: () => boolean): Promise<void> => { for (let i = 0; i < 250 && !cond(); i++) await new Promise((r) => setTimeout(r, 20)); };
+/** A worker slot within `ms`, or null; the attempt really stops (a raced loop left polling would take the next freed units). */
+const slotWithin = async (home: string, pools: ReturnType<typeof workerPools>, ms: number): Promise<WorkerSlot | null> => {
+  const until = Date.now() + ms;
+  try { return await acquireWorkerSlot({ home, pools, pollMs: 20, shouldStop: () => Date.now() >= until }); } catch (e) { if (e instanceof GateWaitInterrupted) return null; throw e; }
+};
+
+await check("worker slots: the bounds parse (unset is unbounded), a bad or huge value throws naming its variable, and needs round up", () => {
+  assert.deepEqual(resolveWorkerBounds({}), { slots: 0, cpus: 0, memoryGiB: 0, usd: 0 });
+  assert.deepEqual(resolveWorkerBounds({ [WORKER_SLOTS_ENV]: "3", [WORKER_CPUS_ENV]: "8", [WORKER_MEMORY_ENV]: "16g", [WORKER_USD_ENV]: "10" }), { slots: 3, cpus: 8, memoryGiB: 16, usd: 10 });
+  assert.equal(resolveWorkerBounds({ [WORKER_MEMORY_ENV]: "12" }).memoryGiB, 12, "a bare number of memory is GiB");
+  assert.equal(resolveWorkerBounds({ [WORKER_MEMORY_ENV]: "2048m" }).memoryGiB, 2);
+  for (const [name, raw] of [[WORKER_SLOTS_ENV, "two"], [WORKER_SLOTS_ENV, "1.5"], [WORKER_CPUS_ENV, "-1"], [WORKER_MEMORY_ENV, "lots"], [WORKER_USD_ENV, "5000"]] as const) {
+    assert.throws(() => resolveWorkerBounds({ [name]: raw }), new RegExp(name), `${name}=${raw}`);
+  }
+  assert.deepEqual(workerPools({ slots: 0, cpus: 0, memoryGiB: 0, usd: 0 }, { cpus: "2", memory: "4g", perStepUsd: 1 }), [], "nothing bounded, nothing to take");
+  assert.deepEqual(workerPools({ slots: 4, cpus: 8, memoryGiB: 16, usd: 10 }, { cpus: "2.5", memory: "3584m", perStepUsd: 1.2 }), [
+    { name: "worker", limit: 4, want: 1 }, { name: "cpu", limit: 8, want: 3 }, { name: "memory", limit: 16, want: 4 }, { name: "usd", limit: 10, want: 2 },
+  ]);
+});
+
+await check("worker slots: with N slots, N workers start and the N+1th waits until one exits", async () => {
+  const home = tempDir("autonomy-wslots-");
+  const pools = workerPools({ slots: 2, cpus: 0, memoryGiB: 0, usd: 0 }, { cpus: 1, memory: "1g", perStepUsd: 1 });
+  const a = await acquireWorkerSlot({ home, pools, pollMs: 20 });
+  const b = await acquireWorkerSlot({ home, pools, pollMs: 20 });
+  const pending: { slot: WorkerSlot | null } = { slot: null };
+  void acquireWorkerSlot({ home, pools, pollMs: 20 }).then((s) => { pending.slot = s; });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(pending.slot === null, true, "the third worker waits while two hold slots");
+  a.release();
+  a.release();
+  await waitFor(() => pending.slot !== null);
+  assert.ok(pending.slot, "it starts once one exits");
+  b.release();
+  pending.slot.release();
+  rm(home);
+});
+
+await check("worker slots: weighted bounds are taken whole or not at all, and a worker larger than a bound is refused, not queued", async () => {
+  const home = tempDir("autonomy-wslots-cpu-");
+  const big = workerPools({ slots: 0, cpus: 4, memoryGiB: 0, usd: 0 }, { cpus: 3, memory: "1g", perStepUsd: 1 });
+  const small = workerPools({ slots: 0, cpus: 4, memoryGiB: 0, usd: 0 }, { cpus: 1, memory: "1g", perStepUsd: 1 });
+  const first = await acquireWorkerSlot({ home, pools: big, pollMs: 20 });
+  assert.deepEqual(first.units, { cpu: 3 });
+  let asked = 0;
+  await assert.rejects(acquireWorkerSlot({ home, pools: big, pollMs: 20, shouldStop: () => { asked += 1; return asked >= 3; } }), (e: unknown) => e instanceof GateWaitInterrupted && /worker slot/.test(e.message));
+  // The waiter held nothing while it waited: the one free CPU is still free for a one-CPU worker.
+  const one = await slotWithin(home, small, 3_000);
+  assert.ok(one, "a one-CPU worker takes the remaining CPU");
+  const none = await slotWithin(home, small, 300);
+  assert.equal(none, null, "with all four CPUs taken a further worker waits");
+  first.release();
+  one.release();
+  await assert.rejects(acquireWorkerSlot({ home, pools: workerPools({ slots: 0, cpus: 4, memoryGiB: 0, usd: 0 }, { cpus: 6, memory: "1g", perStepUsd: 1 }) }), /can never start/);
+  // Several bounds at once: memory short blocks the start even with CPUs free.
+  const mixed = workerPools({ slots: 0, cpus: 4, memoryGiB: 2, usd: 0 }, { cpus: 1, memory: "2g", perStepUsd: 1 });
+  const m1 = await acquireWorkerSlot({ home, pools: mixed, pollMs: 20 });
+  const m2 = await slotWithin(home, mixed, 300);
+  assert.equal(m2, null, "memory is the binding bound");
+  m1.release();
+  rm(home);
+});
+
+await check("worker slots: a killed supervisor's units free themselves", async () => {
+  const home = tempDir("autonomy-wslots-kill-");
+  const marker = path.join(home, "held");
+  const mod = pathToFileURL(path.resolve("packages/autonomy/lib/gate-slots.ts")).href;
+  const pools = workerPools({ slots: 1, cpus: 2, memoryGiB: 0, usd: 0 }, { cpus: 2, memory: "1g", perStepUsd: 1 });
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    const { acquireWorkerSlot } = await import(${JSON.stringify(mod)});
+    const fs = await import("node:fs");
+    await acquireWorkerSlot({ home: process.env.SLOT_HOME, pools: JSON.parse(process.env.SLOT_POOLS), pollMs: 20 });
+    fs.writeFileSync(process.env.SLOT_MARKER, "1");
+    setInterval(() => {}, 1000); // a held slot is only open files: keep the process alive, as a supervisor is
+  `], { env: { ...process.env, SLOT_HOME: home, SLOT_MARKER: marker, SLOT_POOLS: JSON.stringify(pools) } });
+  await waitFor(() => fs.existsSync(marker));
+  assert.ok(fs.existsSync(marker), "the child holds the only worker slot");
+  const blocked = await slotWithin(home, pools, 300);
+  assert.equal(blocked, null);
+  child.kill("SIGKILL");
+  const slot = await slotWithin(home, pools, 5_000);
+  assert.ok(slot, "the killed holder's units are freed");
+  slot.release();
+  rm(home);
+});
+
+await check("worker slots: the engine waits in phase worker-wait, takes the run's own share, and frees the slot when the worker exits", async () => {
+  const seen: { pools: unknown; phase: string | null; released: number } = { pools: null, phase: null, released: 0 };
+  const h = harness(simpleRaw({ run: "wslots-1" }), { script: solve });
+  const made = h.engine({
+    workerBounds: { slots: 1, cpus: 0, memoryGiB: 0, usd: 0 },
+    workerSlotAcquire: async (o) => {
+      seen.pools = o.pools;
+      seen.phase = made.engine.state.phase;
+      return { units: { worker: 1 }, release: () => { seen.released += 1; } };
+    },
+  });
+  await made.engine.run({});
+  assert.equal(h.state().status, "succeeded");
+  assert.deepEqual(seen.pools, [{ name: "worker", limit: 1, want: 1 }]);
+  assert.equal(seen.phase, "worker-wait");
+  assert.ok(seen.released >= 1, "the slot is released once the worker exits");
+  assert.match(fs.readFileSync(h.store.p.log, "utf8"), /worker slot held: worker 1/);
+  // Unbounded (the default): no acquire at all.
+  const free = harness(simpleRaw({ run: "wslots-2" }), { script: solve });
+  let called = 0;
+  await free.engine({ workerSlotAcquire: async () => { called += 1; return { units: {}, release: () => {} }; } }).engine.run({});
+  assert.equal(free.state().status, "succeeded");
+  assert.equal(called, 0, "nothing bounded, nothing acquired");
+});
+
+await check("a run failure writes postmortem.json: the code, the run's last events, usage and a redacted log tail; a clean run writes none", async () => {
+  const reply = (names: readonly string[]) => ({ type: "response", id: "harness-check", data: { commands: names.map((name) => ({ name })) } });
+  const h = harness(simpleRaw({ run: "postmortem-1" }), { script: solve });
+  const rt = h.runtime(solve);
+  rt.harnessReply = reply(HARNESS_COMMANDS.filter((c) => c !== "verify")); // a core command missing: the run fails
+  const secret = "ghp" + "_" + "c".repeat(36); // the synthetic token tests/autonomy-events-smoke.ts uses
+  // A private key over several lines (as in a stack): the body lines must go too, not only the BEGIN line.
+  const key = "-----BEGIN " + "RSA PRIVATE KEY-----\nMIIB" + "j".repeat(40) + "\n" + "q".repeat(48) + "\n-----END " + "RSA PRIVATE KEY-----";
+  fs.appendFileSync(h.store.p.log, `token ${secret} from an earlier line\nfatal: ${key}\n`);
+  const done1 = await runOnce(h, { rt });
+  assert.equal(done1.state.status, "failed");
+  const file = h.store.p.postmortem;
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "the post-mortem is the user's alone");
+  const pm = parseJsonAs(object({
+    v: number(), run: string(), code: string(), detail: string(), status: string(), step: number(),
+    usage: object({ usd: number(), minutes: number(), steps: number() }), budgetUsd: number(),
+    events: array(object({ type: string(), run: string() })), logTail: array(string()), worker: nullable(string()),
+  }), fs.readFileSync(file, "utf8"), "postmortem.json");
+  assert.match(pm.worker ?? "", /-agent-01-1$/, "the worker is named although stopWorker cleared state.worker");
+  assert.deepEqual([pm.v, pm.run, pm.code, pm.status], [POSTMORTEM_SCHEMA_VERSION, "postmortem-1", "worker_unavailable", "failed"]);
+  assert.match(pm.detail, /missing commands: verify/);
+  assert.ok(pm.events.length >= 5, `at least 5 event records (got ${String(pm.events.length)})`);
+  assert.ok(pm.events.length <= POSTMORTEM_EVENTS);
+  assert.ok(pm.events.every((e) => e.run === "postmortem-1"), "only this run's events");
+  assert.equal(pm.events.at(-1)?.type, "failure", "the failure event itself is the last one");
+  assert.ok(pm.logTail.length > 0 && pm.logTail.length <= POSTMORTEM_LOG_LINES);
+  assert.ok(pm.logTail.some((l) => /state failed/.test(l)), pm.logTail.join("\n"));
+  const raw = fs.readFileSync(file, "utf8");
+  assert.ok(!raw.includes(secret), "a secret in the log is redacted");
+  assert.ok(!raw.includes("PRIVATE KEY") && !raw.includes("j".repeat(40)) && !raw.includes("q".repeat(48)), "a multi-line private key is redacted whole");
+
+  const ok = harness(simpleRaw({ run: "postmortem-2" }), { script: solve });
+  assert.equal((await runOnce(ok)).state.status, "succeeded");
+  assert.equal(fs.existsSync(ok.store.p.postmortem), false, "no failure, no post-mortem");
+});
+cleanup();
 rm(tmp);
 done();

@@ -299,10 +299,19 @@ export function isGuardEscalation(ev: RpcFrame): boolean {
  * worker profile (long-horizon) registers: every name here is a harness command, so a kit that
  * failed to load (a bad package path, a broken extension) is distinguishable from a bare pi. pi
  * still starts, bare; the supervisor checks this list against `get_commands` at the start of every
- * session and stops the run rather than cycle without the harness. The check fails closed: a
- * missing command, a malformed reply or no reply at all is a failure.
+ * session and stops the run rather than cycle without the core harness (goal, hand-off, the
+ * verification gate and the firewall). The check fails closed: a missing core command, a
+ * malformed reply or no reply at all is a failure.
  */
-export const HARNESS_COMMANDS: readonly string[] = ["goal", "handoff", "verify", "firewall", "orchestrate", "trace"];
+export const HARNESS_CORE: readonly string[] = ["goal", "handoff", "verify", "firewall"];
+/**
+ * Harness commands a cycle can do without (delegation and tracing). One missing degrades the
+ * session instead of failing the run: the supervisor logs it and writes a `harness.degraded` event.
+ * A renamed optional command (as /subagents once was) must not stop a run for want of it.
+ */
+export const HARNESS_OPTIONAL: readonly string[] = ["orchestrate", "trace"];
+/** Every harness command the worker profile registers: the core ones, then the optional ones. */
+export const HARNESS_COMMANDS: readonly string[] = [...HARNESS_CORE, ...HARNESS_OPTIONAL];
 
 /** How long a worker session is given to answer the start-up get_commands check before it fails closed. */
 export const HARNESS_CHECK_TIMEOUT_MS = 30_000;
@@ -319,35 +328,54 @@ export function missingHarness(response: unknown, required: readonly string[] = 
  * One worker session's harness verdict. The supervisor makes a fresh check per session (reset),
  * settles it on the get_commands reply, and expires it when no reply arrives in time. It fails
  * closed: pending and failed both leave `verified` false, and only a full reply verifies. The
- * verdict is per session, so a previous session's failure cannot latch onto the next one.
+ * verdict is per session, so a previous session's failure cannot latch onto the next one. A reply
+ * with every required command but not every optional one verifies, degraded.
  */
 export class HarnessCheck {
   readonly required: readonly string[];
+  readonly optional: readonly string[];
   private state: "pending" | "verified" | "failed" = "pending";
   private reason: string | null = null;
+  private missingOptional: readonly string[] = [];
+  private degradedReported = false;
 
-  constructor(required: readonly string[] = HARNESS_COMMANDS) {
+  constructor(required: readonly string[] = HARNESS_CORE, optional: readonly string[] = HARNESS_OPTIONAL) {
     this.required = required;
+    this.optional = optional;
   }
 
   /** Start a new session: pending, with no verdict yet. */
   reset(): void {
     this.state = "pending";
     this.reason = null;
+    this.missingOptional = [];
+    this.degradedReported = false;
   }
 
-  /** Settle the check on a get_commands reply: true when every required command is present. Once settled (including by `expire()`), a later reply must not overwrite the verdict. */
+  /** Settle the check on a get_commands reply: true when every required command is present (optional ones may be missing: see `degraded`). Once settled (including by `expire()`), a later reply must not overwrite the verdict. */
   settle(response: unknown): boolean {
     if (this.state !== "pending") return this.state === "verified";
     const missing = missingHarness(response, this.required);
+    const missingOptional = missingHarness(response, this.optional);
     if (missing.length === 0) {
       this.state = "verified";
       this.reason = null;
+      this.missingOptional = missingOptional;
       return true;
     }
     this.state = "failed";
-    this.reason = `the kit harness did not load (missing commands: ${missing.join(", ")})`;
+    this.reason = `the kit harness did not load (missing commands: ${[...missing, ...missingOptional].join(", ")})`;
     return false;
+  }
+
+  /** The optional commands this verified session lacks (empty when none, or while pending or failed). */
+  get degraded(): readonly string[] { return this.state === "verified" ? this.missingOptional : []; }
+
+  /** `degraded` once per session, for the one event that reports it; empty afterwards and until the next reset. */
+  takeDegraded(): readonly string[] {
+    if (this.degradedReported || this.degraded.length === 0) return [];
+    this.degradedReported = true;
+    return this.degraded;
   }
 
   /** Fail closed when the reply has not arrived in time. A no-op once the check has settled. */

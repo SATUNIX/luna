@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assert, implementRaw, makeChecker, tempDir, rm, testEffort, type RawContract } from "./autonomy-helpers.ts";
-import { main, type CliDeps as RealCliDeps, type RuntimeFactoryOptions } from "../packages/autonomy/cli.ts";
+import { DRAFT_BUDGET, DRAFT_MAX_USD, DRAFT_PRESETS, main, type CliDeps as RealCliDeps, type RuntimeFactoryOptions } from "../packages/autonomy/cli.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 import { RunStore, listRuns } from "../packages/autonomy/lib/store.ts";
@@ -68,6 +68,10 @@ interface CliJson {
   matchesAuthorisation: boolean;
   authorisedDigest: string;
   runs: Array<{ legacy?: boolean; [key: string]: unknown }>;
+  path: string;
+  authorised: boolean;
+  runId: string;
+  failing: string[];
 }
 
 /** The CLI's --json output text, in the one shape the commands share. */
@@ -884,6 +888,111 @@ await check("plan: a run that asks for unattended operation is told whether the 
   assert.match(open, /unattended: enforced/);
   const closed = (await world().run("plan", "--config", taskFile(scratch(), { permissions: { unattended: { authorised: false, autoApprove: false } } }))).stdout;
   assert.doesNotMatch(closed, /unattended:/, "a closed contract has nothing to enforce, so no engine is asked");
+});
+
+/** `up`'s refusal reason (its JSON `blocker`; a run's `blocker` in other commands is a record). */
+const upBlocker = (r: CliResult): unknown => { const v: unknown = JSON.parse(r.stdout); return isRecord(v) ? v["blocker"] : undefined; };
+
+await check("draft --goal writes a valid contract with the closed defaults and authorises nothing", async () => {
+  const w = world();
+  const src = scratch();
+  assert.equal(spawnSync("git", ["init", "--quiet", src]).status, 0);
+  const file = path.join(scratch(), "goal.json");
+  assert.equal((await w.run("draft", "--json")).code, 2, "a goal is required");
+  const d = await w.run("draft", "--goal", "Analyse the supervisor's failure handling and fix one gap", "--repo", src, "--out", file, "--check", "unit=true", "--json");
+  assert.equal(d.code, 0, d.stdout + d.stderr);
+  const j = d.json();
+  assert.equal(j.valid, true, JSON.stringify(j.problems));
+  assert.equal(j.authorised, false);
+  assert.match(j.digest, /^[0-9a-f]{64}$/);
+  const raw: unknown = parseJson(fs.readFileSync(file, "utf8"));
+  assert.equal(at(raw, "authorisation"), undefined, "drafting writes no authorisation");
+  assert.deepEqual(at(raw, "permissions", "network", "egress"), [], "no egress");
+  assert.equal(at(raw, "permissions", "network", "services"), undefined, "no services");
+  assert.equal(at(raw, "permissions", "credentials"), undefined, "no credentials");
+  assert.equal(at(raw, "permissions", "unattended", "authorised"), false, "attended unless asked");
+  assert.equal(at(raw, "promotion", "policy"), "local-branch");
+  assert.equal(at(raw, "budget", "totalUsd"), DRAFT_BUDGET.totalUsd);
+  assert.equal(at(raw, "objective", "spec"), "Analyse the supervisor's failure handling and fix one gap");
+  assert.equal((await w.run("plan", "--config", file, "--json")).json().digest, j.digest, "the printed digest is the one plan shows");
+  // Drafting is not consent: neither start without a terminal nor up will run it.
+  const start = await w.run("start", "--config", file, "--detach", "--json");
+  assert.equal(start.code, 3);
+  assert.equal(start.json().refusal, "authorisation_required");
+  const up = await w.run("up", "--config", file, "--json");
+  assert.equal(up.code, 3);
+  assert.equal(upBlocker(up), "authorisation_required");
+  assert.deepEqual(w.spawned, [], "nothing started");
+  // The closed defaults cannot be opened from draft: a large budget is refused, egress is not an option.
+  assert.equal((await w.run("draft", "--goal", "x", "--out", path.join(scratch(), "b.json"), "--budget-usd", String(DRAFT_MAX_USD + 1), "--json")).code, 3);
+  assert.equal((await w.run("draft", "--goal", "x", "--out", path.join(scratch(), "e.json"), "--egress", "example.com", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--goal", "x", "--template", "deploy", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--goal", "again", "--repo", src, "--out", file, "--check", "unit=true", "--json")).code, 3, "an existing contract is not overwritten");
+});
+
+await check("draft --preset luna-self-improve drafts a valid self-improve contract with Luna's gate, closed defaults and R3 paths still refused", async () => {
+  const w = world();
+  const src = scratch();
+  assert.equal(spawnSync("git", ["init", "--quiet", src]).status, 0);
+  const file = path.join(scratch(), "luna.json");
+  const d = await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--goal", "the autonomy supervisor's failure paths", "--out", file, "--json");
+  assert.equal(d.code, 0, d.stdout + d.stderr);
+  const j = d.json();
+  assert.equal(j.valid, true, JSON.stringify(j.problems));
+  assert.equal(j.authorised, false);
+  const raw: unknown = parseJson(fs.readFileSync(file, "utf8"));
+  assert.equal(at(raw, "template"), "self-improve");
+  assert.equal(at(raw, "objective", "title"), "Analyse and improve Luna's own systems");
+  assert.match(String(at(raw, "objective", "spec")), /^Analyse Luna's own systems.*Focus: the autonomy supervisor's failure paths$/, "--goal is a focus added to the preset's goal");
+  assert.deepEqual(at(raw, "acceptance", "checks"), [{ id: "gate", run: ["/opt/autonomy/gate.sh"], timeoutMinutes: 60, required: true }], "Luna's reference gate");
+  assert.deepEqual(at(raw, "permissions", "network", "egress"), []);
+  assert.equal(at(raw, "promotion", "policy"), "local-branch");
+  assert.equal(at(raw, "budget", "totalUsd"), DRAFT_BUDGET.totalUsd);
+  assert.equal(at(raw, "authorisation"), undefined);
+  // R3 stays refused: the preset never sets allowControlChanges, and draft has no way to.
+  assert.equal(at(raw, "templateOptions", "integration", "allowControlChanges"), undefined);
+  assert.equal(DRAFT_PRESETS["luna-self-improve"]?.template, "self-improve");
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--allow-control-changes", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--json")).code, 2, "the checkout to improve is required");
+  assert.equal((await w.run("draft", "--preset", "luna-self-improve", "--repo", src, "--template", "implement", "--json")).code, 2);
+  assert.equal((await w.run("draft", "--preset", "nope", "--repo", src, "--json")).code, 2);
+  assert.equal((await w.run("up", "--config", file, "--json")).code, 3, "a drafted preset is not authorised either");
+});
+
+await check("up starts an authorised contract detached in one JSON line, and names the blocker when it cannot", async () => {
+  const version = (parseJson(fs.readFileSync(path.join(HERE, "..", "packages", "autonomy", "package.json"), "utf8")) as { version: string }).version;
+  const keyEnv = "PI_AUTONOMY_TEST_UP_KEY";
+  process.env[keyEnv] = "synthetic-key-value-0123456789";
+  try {
+    const file = taskFile(scratch(), { providerSettings: { apiKeyEnv: keyEnv } });
+    const bad = path.join(scratch(), "bad.json");
+    fs.writeFileSync(bad, "{}");
+    const invalid = await world().run("up", "--config", bad, "--json");
+    assert.equal(invalid.code, 2);
+    assert.equal(upBlocker(invalid), "invalid_contract");
+    const down = world({ engineCli: scriptedEngine({ rootless: false, kitRef: `v${version}`, up: false }) });
+    await authorised(down, file);
+    const blocked = await down.run("up", "--config", file, "--json");
+    assert.equal(blocked.code, 3);
+    assert.equal(blocked.stdout.trim().split("\n").length, 1, "one line");
+    assert.equal(upBlocker(blocked), "host_setup");
+    assert.ok(blocked.json().failing.includes("engine"));
+    assert.deepEqual(down.spawned, [], "a blocked up starts nothing");
+    assert.deepEqual((await down.run("status", "--json")).json().runs, [], "and creates no run");
+    const w = world({ engineCli: scriptedEngine({ rootless: false, kitRef: `v${version}` }) });
+    const r = await w.run("up", "--config", file, "--json");
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(r.stdout.trim().split("\n").length, 1, "one line");
+    const j = r.json();
+    assert.equal(j.ok, true);
+    assert.equal(j.pid, 4242);
+    assert.deepEqual(w.spawned, [j.runId]);
+    assert.equal(typeof j.status, "string");
+    assert.ok(fs.existsSync(path.join(w.home, j.runId, "state.json")), "the run directory and state exist");
+    assert.equal(upBlocker(await w.run("up", "--config", file, "--json")), "run_exists", "a second up refuses");
+  } finally {
+    Reflect.deleteProperty(process.env, keyEnv);
+  }
 });
 
 for (const d of dirs) rm(d);

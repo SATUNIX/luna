@@ -105,4 +105,7 @@ try {
   restoreIsolation();
 }
 fs.rmSync(stateDir, { recursive: true, force: true });
+
+// The /herdr client (V5-19), against a fake herdr binary on PATH.
+await import("./herdr-client-checks.ts");
 console.log("herdr-smoke: OK");

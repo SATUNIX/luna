@@ -115,13 +115,39 @@ function decodeAnsiC(body: string): string {
   });
 }
 
-// Scan a balanced $( … ) / <( … ) body starting just after the opening paren.
+// Scan a balanced $( … ) / <( … ) body starting just after the opening paren. A `case` statement inside is
+// followed: `case`, `in` and `esac` count only as the words bash reads them as (`case` and `esac` in command
+// position, `in` as the word after the subject), and in a pattern `(` and `)` delimit the pattern, not a nesting.
 function scanParen(src: string, i: number): { body: string; end: number } | null {
   let depth = 1;
   let j = i;
+  const cases: Array<{ depth: number; stage: "subject" | "pattern" | "body"; words: number }> = [];
+  const delim = (ch: string | undefined): boolean => ch === undefined || /[\s;&|()<>]/.test(ch);
+  const wordAt = (k: number, word: string): boolean => src.startsWith(word, k) && (k === i || delim(src[k - 1])) && delim(src[k + word.length]);
+  // Command position: the start of the body, after a control operator or newline, or after a reserved word.
+  const atCommand = (k: number): boolean => {
+    let m = k - 1;
+    while (m >= i && (src[m] === " " || src[m] === "\t")) m--;
+    if (m < i || /[\n;&|()]/.test(src.charAt(m))) return true;
+    return /(?:^|[\s;&|()])(?:then|do|else|elif|if|while|until|coproc|\{|!|time)$/.test(src.slice(i, m + 1));
+  };
   while (j < src.length) {
     const c = src[j];
+    const top = cases[cases.length - 1];
+    const here = top?.depth === depth ? top : undefined;
     if (c === "\\") { j += 2; continue; }
+    // A comment runs to the end of the line; bash reads no `)` or `esac` inside it.
+    if (c === "#" && (j === i || delim(src[j - 1]))) { const nl = src.indexOf("\n", j); if (nl < 0) return null; j = nl; continue; }
+    if (here?.stage === "subject" && !delim(c) && (j === i || delim(src[j - 1]))) {
+      if (here.words === 1 && wordAt(j, "in")) { here.stage = "pattern"; j += 2; continue; }
+      here.words++;
+    }
+    if (here?.stage !== "pattern" && here?.stage !== "subject" && atCommand(j) && wordAt(j, "case")) { cases.push({ depth, stage: "subject", words: 0 }); j += 4; continue; }
+    if (here && here.stage !== "subject" && atCommand(j) && wordAt(j, "esac")) { cases.pop(); j += 4; continue; }
+    if (here?.stage === "body" && src.startsWith(";;", j)) { here.stage = "pattern"; j += src.startsWith(";;&", j) ? 3 : 2; continue; }
+    if (here?.stage === "body" && src.startsWith(";&", j)) { here.stage = "pattern"; j += 2; continue; }
+    if (here?.stage === "pattern" && c === "(") { j++; continue; }
+    if (here?.stage === "pattern" && c === ")") { here.stage = "body"; j++; continue; }
     if (c === "'") { const e = src.indexOf("'", j + 1); if (e < 0) return null; j = e + 1; continue; }
     if (c === '"') {
       j++;
@@ -338,7 +364,20 @@ function tokenize(src: string, opaque: string[]): Tok[] {
       if (r?.k === "redir") r.body = body;
       if (delimTok?.k === "w" && !delimTok.w.quoted && /\$\(|`/.test(body)) {
         // An unquoted heredoc still runs substitutions.
-        for (const m of body.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) delimTok.w.subs.push(m[1] ?? m[2] ?? "");
+        for (let k = 0; k < body.length; k++) {
+          if (body[k] === "\\") { k++; continue; }
+          if (body[k] === "$" && body[k + 1] === "(" && body[k + 2] !== "(") {
+            const sub = scanParen(body, k + 2);
+            if (sub === null) { opaque.push("unterminated command substitution in a heredoc"); break; }
+            delimTok.w.subs.push(sub.body);
+            k = sub.end - 1;
+          } else if (body[k] === "`") {
+            const sub = scanBacktick(body, k + 1);
+            if (sub === null) { opaque.push("unterminated backquote in a heredoc"); break; }
+            delimTok.w.subs.push(sub.body);
+            k = sub.end - 1;
+          }
+        }
       }
     }
   };
@@ -420,9 +459,11 @@ function tokenize(src: string, opaque: string[]): Tok[] {
       i = j + 1;
       continue;
     }
-    if (c === '"') {
+    if (c === '"' || (c === "$" && src[i + 1] === '"')) {
       if (w.raw.length > 0) w.fragmented = true;
       const start = i;
+      // `$"…"` is a locale-translated string: bash runs it as "…". The command name stays obfuscated, as `$'…'`.
+      if (c === "$") { w.ansiC = true; i++; }
       i++;
       let closed = false;
       while (i < n) {
@@ -594,6 +635,9 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
   env = { ...env, vars };
   const cwdStack: (string | null)[] = [];
   let caseMode = 0;
+  // True where a case pattern is expected (after `case WORD in` or `;;`): only there does `)` end a pattern, so a
+  // subshell in an arm (`x) (cmd);;`) is read as commands.
+  let casePattern = false;
   let raw: Raw = { words: [], redirects: [], pipeIn: false, pipeOut: false, background: false, cwd };
   let prevInPipe: Segment | null = null;
 
@@ -627,6 +671,9 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
     const tok = toks[t];
     if (tok === undefined) break;
     if (tok.k === "op") {
+      if (tok.v === ";;" && caseMode > 0) casePattern = true;
+      // `(pattern)`: the optional opening paren, after `case WORD in` or `;;`.
+      if (tok.v === "(" && casePattern && (raw.words.length === 0 || (raw.words.length === 3 && raw.words[0]?.text === "case" && raw.words[2]?.text === "in"))) continue;
       if (tok.v === "(") {
         // `name ()` function definition or a subshell.
         const after = toks[t + 1];
@@ -642,7 +689,8 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
         continue;
       }
       if (tok.v === ")") {
-        if (caseMode > 0 && raw.words.length) {
+        if (caseMode > 0 && casePattern && raw.words.length) {
+          casePattern = false;
           // A case pattern (`case x in $(cmd)) …`) is expanded before it is matched: its substitutions run.
           for (const w of raw.words) for (const s of w.subs) parseInto(s, { ...env, cwd, via: [...(env.via ?? []), "case"], depth: depth + 1 }, out, opaque);
           raw = { ...raw, words: [], redirects: [] };
@@ -670,9 +718,12 @@ function parseInto(src: string, env: ParseEnv, out: Segment[], opaque: string[])
     const w = tok.w;
     if (raw.words.length === 0 && !w.quoted) {
       if (w.text === "case") { caseMode++; }
-      if (w.text === "esac") { caseMode = Math.max(0, caseMode - 1); continue; }
+      if (w.text === "esac") { caseMode = Math.max(0, caseMode - 1); casePattern = false; continue; }
     }
     raw.words.push(w);
+    if (caseMode > 0 && raw.words.length === 3 && raw.words[0]?.text === "case" && !raw.words[0].quoted && w.text === "in" && !w.quoted) {
+      casePattern = true;
+    }
   }
   finish(null);
 }
@@ -690,6 +741,7 @@ function buildSegments(r: Raw, env: ParseEnv, cwd: string | null, out: Segment[]
     const w = words[0];
     if (w === undefined) break;
     if (!w.quoted && w.text === "coproc") coproc = true;
+    if (!w.quoted && w.text === "time") { words.shift(); while (words[0] !== undefined && !words[0].quoted && (words[0].text === "-p" || words[0].text === "--")) words.shift(); continue; }
     if (!w.quoted && RESERVED_SKIP.has(w.text)) { words.shift(); continue; }
     if (!w.quoted && RESERVED_END.has(w.text)) { words.shift(); continue; }
     if (ASSIGN_RE.test(w.raw)) { assigns.push(w.text); assignWords.push(w); words.shift(); continue; }
@@ -791,7 +843,7 @@ function takeOptions(argv: string[], start: number, withArg: Set<string>, longWi
   return i;
 }
 
-const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "busybox"]);
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "pdksh", "ash", "yash", "fish", "busybox"]);
 // A script operand that is really standard input.
 const STDIN_PATH = /^(?:-|\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0)$/;
 export function isStdinPath(p: string): boolean {
@@ -805,19 +857,21 @@ export function isStdinPath(p: string): boolean {
 // `sub` names the subcommand that runs the command (`uv run`), `positional` the operands before it
 // (`chroot NEWROOT`), `priv` marks a change of user, `ns` a namespace or root-directory launcher, and
 // `dashdash` a wrapper whose command only follows `--`.
-type WrapSpec = { flags?: string; withArg?: string; long?: string[]; longArg?: string[]; sub?: string; positional?: number; priv?: boolean; ns?: boolean; dashdash?: boolean; longEq?: boolean };
+// `chdir` matches an option that moves the directory the wrapped command runs in (its `cwd` becomes unknown).
+// `optArg` holds short options whose value is optional and only ever attached (`nsenter -r`, `-rDIR`).
+type WrapSpec = { flags?: string; withArg?: string; optArg?: string; long?: string[]; longArg?: string[]; sub?: string; positional?: number; priv?: boolean; ns?: boolean; dashdash?: boolean; longEq?: boolean; chdir?: RegExp };
 const WRAPPERS: Record<string, WrapSpec> = {
   pkexec: { long: ["--disable-internal-agent", "--keep-cwd"], longArg: ["--user"], priv: true },
-  run0: { withArg: "ugD", long: ["--no-ask-password", "--slice-inherit", "--empty-environment", "--pty", "--pipe", "--lightweight"], longArg: ["--user", "--group", "--nice", "--chdir", "--setenv", "--property", "--description", "--slice", "--unit", "--machine", "--background", "--shell-prompt-prefix", "--area"], priv: true },
+  run0: { chdir: /^(?:-[a-zA-Z]*D|--chdir)/, withArg: "ugD", long: ["--no-ask-password", "--slice-inherit", "--empty-environment", "--pty", "--pipe", "--lightweight"], longArg: ["--user", "--group", "--nice", "--chdir", "--setenv", "--property", "--description", "--slice", "--unit", "--machine", "--background", "--shell-prompt-prefix", "--area"], priv: true },
   gosu: { positional: 1, priv: true },
   "su-exec": { positional: 1, priv: true },
   setuidgid: { positional: 1, priv: true },
   chroot: { long: ["--skip-chdir"], longArg: ["--userspec", "--groups"], positional: 1, ns: true },
-  unshare: { flags: "muinpUCTfrc", withArg: "SGRwl", long: ["--mount", "--uts", "--ipc", "--net", "--pid", "--user", "--cgroup", "--time", "--fork", "--map-root-user", "--map-current-user", "--map-auto", "--mount-proc", "--mount-binfmt", "--kill-child", "--keep-caps"], longArg: ["--setuid", "--setgid", "--root", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic", "--boottime", "--load-interp"], ns: true },
-  nsenter: { flags: "amuinpCUTFZ", withArg: "tSGNrw", long: ["--all", "--mount", "--uts", "--ipc", "--net", "--pid", "--cgroup", "--user", "--time", "--no-fork", "--preserve-credentials", "--follow-context", "--user-parent", "--keep-caps", "--join-cgroup"], longArg: ["--target", "--setuid", "--setgid", "--net-socket", "--root", "--wd", "--env"], ns: true },
+  unshare: { chdir: /^(?:-[a-zA-Z]*[Rw]|--(?:wd|root)(?:=|$))/, flags: "muinpUCTfrc", withArg: "SGRwl", long: ["--mount", "--uts", "--ipc", "--net", "--pid", "--user", "--cgroup", "--time", "--fork", "--map-root-user", "--map-current-user", "--map-auto", "--mount-proc", "--mount-binfmt", "--kill-child", "--keep-caps"], longArg: ["--setuid", "--setgid", "--root", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic", "--boottime", "--load-interp"], ns: true },
+  nsenter: { chdir: /^(?:-[a-zA-Z]*[rw]|--(?:wd|root)(?:=|$))/, flags: "amuinpCUTFZ", withArg: "tSGN", optArg: "rw", long: ["--all", "--mount", "--uts", "--ipc", "--net", "--pid", "--cgroup", "--user", "--time", "--no-fork", "--preserve-credentials", "--follow-context", "--user-parent", "--keep-caps", "--join-cgroup", "--root", "--wd"], longArg: ["--target", "--setuid", "--setgid", "--net-socket", "--env"], ns: true },
   setpriv: { flags: "d", long: ["--dump", "--nnp", "--no-new-privs", "--clear-groups", "--keep-groups", "--init-groups", "--reset-env"], longArg: ["--ruid", "--euid", "--rgid", "--egid", "--reuid", "--regid", "--groups", "--inh-caps", "--ambient-caps", "--bounding-set", "--securebits", "--pdeathsig", "--selinux-label", "--apparmor-profile", "--landlock-access", "--landlock-rule", "--seccomp-filter"], ns: true },
-  "flatpak-spawn": { long: ["--host", "--clear-env", "--watch-bus", "--expose-pids", "--share-pids", "--no-network", "--sandbox", "--latest-version", "--verbose"], longArg: ["--env", "--unset-env", "--directory", "--forward-fd", "--sandbox-expose", "--sandbox-expose-ro", "--sandbox-expose-path", "--sandbox-expose-path-ro", "--sandbox-flag", "--app-path", "--usr-path"], ns: true },
-  "systemd-run": { flags: "qGPSrt", withArg: "pEuHMd", long: ["--user", "--system", "--scope", "--wait", "--pipe", "--pty", "--quiet", "--collect", "--no-block", "--no-ask-password", "--same-dir", "--shell", "--remain-after-exit", "--send-sighup", "--service-type", "--expand-environment"], longArg: ["--unit", "--property", "--description", "--slice", "--setenv", "--host", "--machine", "--uid", "--gid", "--nice", "--working-directory", "--on-active", "--on-boot", "--on-startup", "--on-unit-active", "--on-unit-inactive", "--on-calendar", "--on-timezone-change", "--on-clock-change", "--timer-property", "--path-property", "--socket-property", "--service-type", "--wait-for"] },
+  "flatpak-spawn": { chdir: /^--directory(?:=|$)/, long: ["--host", "--clear-env", "--watch-bus", "--expose-pids", "--share-pids", "--no-network", "--sandbox", "--latest-version", "--verbose"], longArg: ["--env", "--unset-env", "--directory", "--forward-fd", "--sandbox-expose", "--sandbox-expose-ro", "--sandbox-expose-path", "--sandbox-expose-path-ro", "--sandbox-flag", "--app-path", "--usr-path"], ns: true },
+  "systemd-run": { chdir: /^(?:--working-directory(?:=|$)|(?:-p|--property=)?WorkingDirectory=)/, flags: "qGPSrtd", withArg: "pEuHM", long: ["--user", "--system", "--scope", "--wait", "--pipe", "--pty", "--quiet", "--collect", "--no-block", "--no-ask-password", "--same-dir", "--shell", "--remain-after-exit", "--send-sighup", "--service-type", "--expand-environment"], longArg: ["--unit", "--property", "--description", "--slice", "--setenv", "--host", "--machine", "--uid", "--gid", "--nice", "--working-directory", "--on-active", "--on-boot", "--on-startup", "--on-unit-active", "--on-unit-inactive", "--on-calendar", "--on-timezone-change", "--on-clock-change", "--timer-property", "--path-property", "--socket-property", "--service-type", "--wait-for"] },
   fakeroot: { flags: "uhv", withArg: "lsib", long: ["--unknown-is-real"], longArg: ["--lib", "--faked"] },
   faketime: { flags: "mf", withArg: "p", long: ["--exclude-monotonic"], longArg: ["--date-prog"], positional: 1 },
   "dbus-launch": { long: ["--exit-with-session", "--exit-with-x11", "--sh-syntax", "--csh-syntax", "--binary-syntax", "--close-stderr", "--autolaunch"], longArg: ["--config-file"] },
@@ -831,16 +885,16 @@ const WRAPPERS: Record<string, WrapSpec> = {
   valgrind: { flags: "qvh", longEq: true },
   rlwrap: { flags: "AcEhimNnorRUvWXt", withArg: "abCDefFgHlOpPqsSwz" },
   entr: { flags: "acdnprz" },
-  "uv run": { sub: "run", flags: "qvnmsU", withArg: "wpfP", long: ["--module", "--script", "--gui-script", "--no-sync", "--locked", "--frozen", "--isolated", "--active", "--no-active", "--no-project", "--all-extras", "--no-dev", "--dev", "--all-packages", "--all-groups", "--no-default-groups", "--only-dev", "--no-editable", "--exact", "--inexact", "--upgrade", "--reinstall", "--no-build", "--no-binary", "--no-build-isolation", "--compile-bytecode", "--offline", "--no-cache", "--quiet", "--verbose", "--no-progress", "--native-tls", "--no-config", "--no-python-downloads", "--managed-python", "--no-managed-python", "--no-env-file", "--no-index", "--preview", "--no-install-project", "--no-install-workspace", "--no-install-local", "--refresh"], longArg: ["--with", "--with-editable", "--with-requirements", "--python", "--package", "--extra", "--no-extra", "--group", "--no-group", "--only-group", "--env-file", "--directory", "--project", "--index", "--default-index", "--index-url", "--extra-index-url", "--find-links", "--cache-dir", "--config-file", "--color", "--prerelease", "--resolution", "--exclude-newer", "--refresh-package", "--reinstall-package", "--upgrade-package", "--python-preference", "--index-strategy", "--keyring-provider", "--link-mode", "--config-setting", "--allow-insecure-host"] },
-  "poetry run": { sub: "run", flags: "qvnhV", withArg: "CP", long: ["--quiet", "--verbose", "--no-ansi", "--ansi", "--no-interaction", "--no-plugins", "--no-cache"], longArg: ["--directory", "--project"] },
+  "uv run": { chdir: /^--(?:directory|project)(?:=|$)/, sub: "run", flags: "qvnmsU", withArg: "wpfP", long: ["--module", "--script", "--gui-script", "--no-sync", "--locked", "--frozen", "--isolated", "--active", "--no-active", "--no-project", "--all-extras", "--no-dev", "--dev", "--all-packages", "--all-groups", "--no-default-groups", "--only-dev", "--no-editable", "--exact", "--inexact", "--upgrade", "--reinstall", "--no-build", "--no-binary", "--no-build-isolation", "--compile-bytecode", "--offline", "--no-cache", "--quiet", "--verbose", "--no-progress", "--native-tls", "--no-config", "--no-python-downloads", "--managed-python", "--no-managed-python", "--no-env-file", "--no-index", "--preview", "--no-install-project", "--no-install-workspace", "--no-install-local", "--refresh"], longArg: ["--with", "--with-editable", "--with-requirements", "--python", "--package", "--extra", "--no-extra", "--group", "--no-group", "--only-group", "--env-file", "--directory", "--project", "--index", "--default-index", "--index-url", "--extra-index-url", "--find-links", "--cache-dir", "--config-file", "--color", "--prerelease", "--resolution", "--exclude-newer", "--refresh-package", "--reinstall-package", "--upgrade-package", "--python-preference", "--index-strategy", "--keyring-provider", "--link-mode", "--config-setting", "--allow-insecure-host"] },
+  "poetry run": { chdir: /^(?:-[a-zA-Z]*[CP]|--(?:directory|project)(?:=|$))/, sub: "run", flags: "qvnhV", withArg: "CP", long: ["--quiet", "--verbose", "--no-ansi", "--ansi", "--no-interaction", "--no-plugins", "--no-cache"], longArg: ["--directory", "--project"] },
   "pdm run": { sub: "run", flags: "vqgsl", withArg: "p", long: ["--verbose", "--quiet", "--global", "--site-packages", "--list", "--json", "--recreate"], longArg: ["--project", "--venv"] },
   "pipenv run": { sub: "run" },
   "hatch run": { sub: "run" },
   "rye run": { sub: "run", flags: "l", long: ["--list"], longArg: ["--pyproject"] },
   "pixi run": { sub: "run", flags: "vq", withArg: "e", long: ["--frozen", "--locked", "--clean-env", "--force-activate", "--no-install", "--verbose", "--quiet"], longArg: ["--manifest-path", "--environment", "--color"] },
-  "conda run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
-  "mamba run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
-  "micromamba run": { sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--attach", "--detach", "--clean-env"], longArg: ["--name", "--prefix", "--cwd", "--env"] },
+  "conda run": { chdir: /^--cwd(?:=|$)/, sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
+  "mamba run": { chdir: /^--cwd(?:=|$)/, sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--debug-wrapper-scripts", "--no-capture-output", "--live-stream", "--dev"], longArg: ["--name", "--prefix", "--cwd"] },
+  "micromamba run": { chdir: /^--cwd(?:=|$)/, sub: "run", flags: "v", withArg: "np", long: ["--verbose", "--attach", "--detach", "--clean-env"], longArg: ["--name", "--prefix", "--cwd", "--env"] },
   "bundle exec": { sub: "exec", long: ["--keep-file-descriptors"], longArg: ["--gemfile"] },
   "bundler exec": { sub: "exec", long: ["--keep-file-descriptors"], longArg: ["--gemfile"] },
   "asdf exec": { sub: "exec" },
@@ -881,6 +935,7 @@ function wrapperStart(argv: string[], from: number, spec: WrapSpec): number | nu
     for (let k = 1; k < a.length; k++) {
       const ch = a.charAt(k);
       if (withArg.includes(ch)) { consumed = k === a.length - 1 ? 2 : 1; break; }
+      if (spec.optArg?.includes(ch) === true) break; // its value is attached or absent
       if (!flags.includes(ch)) return null;
     }
     i += consumed;
@@ -945,6 +1000,9 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
         if (ui >= 0) user = rest[ui + 1];
         const at = takeOptions(seg.argv, 1, SUDO_ARG_OPTS, new Set(["--user", "--group", "--prompt", "--chdir", "--close-from", "--role", "--type", "--other-user", "--host"]));
         seg.sudo = { nonInteractive: nonInteractive || (seg.sudo?.nonInteractive ?? false), user };
+        // `sudo -D dir` / `--chdir` runs the command in another directory.
+        // getopt also takes an unambiguous prefix (`--chd`); `-R` / `--chroot` moves the root as well.
+        if (seg.argv.slice(1, at).some((a) => /^-[A-Za-z]*[DR]/.test(a) || /^--chd(?:ir?)?(?:=|$)/.test(a) || /^--chr(?:o(?:ot?)?)?(?:=|$)/.test(a))) seg.cwd = null;
         seg.via = [...seg.via, "sudo"];
         if (at >= seg.argv.length || flags.some((f) => /^-[A-Za-z]*[is]/.test(f) && !/^-[A-Za-z]*[CDghpRrtTUu]/.test(f))) {
           if (at >= seg.argv.length) {
@@ -1055,17 +1113,20 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
         continue;
       }
       case "watch": {
-        const i = takeOptions(seg.argv, 1, new Set(["n", "d", "g"]), new Set(["--interval", "--differences"]));
+        // -d / --differences take only an attached value and -g none, so the next word is the command.
+        const i = takeOptions(seg.argv, 1, new Set(["n", "q"]), new Set(["--interval", "--equexit"]));
         if (i >= seg.argv.length) break;
         parseInto(seg.argv.slice(i).join(" "), { ...env, cwd: seg.cwd, remote: seg.remote, sudo: seg.sudo, via: [...seg.via, "watch"], depth: seg.depth + 1, assigns: seg.assigns }, out, opaque);
         return null;
       }
       case "xargs":
       case "parallel": {
-        const i = takeOptions(seg.argv, 1, new Set(["I", "i", "n", "P", "d", "E", "L", "l", "s", "a", "j"]), new Set(["--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--jobs"]));
+        // -i and -l take a value only when it is attached (`-i{}`, `-l1`); the next word is the command.
+        const i = takeOptions(seg.argv, 1, new Set(["I", "n", "P", "d", "E", "L", "s", "a", "j"]), new Set(["--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace", "--jobs"]));
         seg.via = [...seg.via, exe];
         seg.unknownArgs = true;
-        if (i >= seg.argv.length) { seg.argv = ["echo"]; seg.words = []; out.push(seg); return seg; }
+        // With no command, xargs runs echo, but GNU parallel runs each input line as a command.
+        if (i >= seg.argv.length) { seg.argv = [exe === "parallel" ? "parallel" : "echo"]; seg.words = []; out.push(seg); return seg; }
         setArgv(i);
         continue;
       }
@@ -1281,6 +1342,7 @@ function unwrap(seg: Segment, env: ParseEnv, out: Segment[], opaque: string[]): 
         }
         if (at < seg.argv.length) {
           if (spec.priv) seg.sudo = { nonInteractive: seg.sudo?.nonInteractive ?? false, user: undefined };
+          if (spec.chdir && seg.argv.slice(spec.sub ? 2 : 1, at).some((a) => spec.chdir?.test(a) === true)) seg.cwd = null;
           seg.via = [...seg.via, key];
           setArgv(at);
           continue;

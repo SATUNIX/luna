@@ -29,6 +29,10 @@ export interface JournalKit {
   channel: string | null;
   root: string | null;
   scope: "user" | "project";
+  /** local only: the branch the checkout was on, or null when it was detached or the recorded value is not a valid branch name. Absent (undefined) in journals from before it was recorded, which undo as they always did. */
+  branch?: string | null;
+  /** local only: how the update moved the checkout. `pull` moved the branch; `move` detached HEAD and left every branch alone. Absent in older journals (treated as a pull). */
+  localUpdate?: "pull" | "move";
 }
 
 export interface JournalFile {
@@ -112,6 +116,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
+/** A commit id (SHA-1 or SHA-256 hex), or null: the journal's commit reaches git and pi arguments. */
+function commitId(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value) ? value : null;
+}
+
+/**
+ * A branch name that satisfies git's ref-name rules (`git check-ref-format --branch`), or null. It
+ * reaches `git checkout` on /update undo, so a value such as `-f` must never read as an option.
+ */
+export function branchName(value: unknown): string | null {
+  if (typeof value !== "string" || value === "" || value === "@" || value.startsWith("-")) return null;
+  // No control characters, space, ~ ^ : ? * [ \ or DEL; no "..", "@{" or "//"; no leading or trailing "/" or trailing ".".
+  if (Array.from({ length: value.length }, (_, i) => value.charCodeAt(i)).some((code) => code <= 0x20 || code === 0x7f || "~^:?*[\\".includes(String.fromCharCode(code))) || value.includes("..") || value.includes("@{") || value.includes("//")) return null;
+  if (value.startsWith("/") || value.endsWith("/") || value.endsWith(".")) return null;
+  if (value.split("/").some((part) => part.startsWith(".") || part.endsWith(".lock"))) return null;
+  return value;
+}
+
 /** The journal, or null when there is none or it cannot be trusted (wrong version, wrong shape). */
 export function readJournal(): Journal | null {
   let raw: unknown;
@@ -138,10 +160,11 @@ export function readJournal(): Journal | null {
       kind,
       source: text(raw.kit.source),
       version: text(raw.kit.version),
-      commit: text(raw.kit.commit),
+      commit: commitId(raw.kit.commit),
       channel: text(raw.kit.channel),
       root: text(raw.kit.root),
       scope: raw.kit.scope === "project" ? "project" : "user",
+      ...(kind === "local" ? { ...("branch" in raw.kit ? { branch: branchName(raw.kit.branch) } : {}), ...(raw.kit.localUpdate === "pull" || raw.kit.localUpdate === "move" ? { localUpdate: raw.kit.localUpdate } : {}) } : {}),
     },
     files,
     complete: raw.complete === true,

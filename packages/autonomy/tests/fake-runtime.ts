@@ -15,9 +15,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { array, number, object, optional, parseJsonAs, string, union } from "../../core/lib/guard.ts";
+import { keepGateLogs } from "../lib/acceptance.ts";
 import type { AcceptanceCheck, RunContract } from "../lib/contract.ts";
 import { HostRepo } from "../lib/hostrepo.ts";
 import type { Complete } from "../lib/manager.ts";
+import { HARNESS_COMMANDS, HarnessCheck } from "../lib/rpc.ts";
 import { BARE_REPO_CONFIG } from "../lib/mirror.ts";
 import type { RunPaths } from "../lib/paths.ts";
 import type { TaskReview, TaskReviewBundle } from "../lib/review.ts";
@@ -232,11 +234,17 @@ export class FakeRuntime implements Runtime {
     return removed;
   }
 
-  workerProblem(): string | null { return this.workerProblemText; }
+  /** Each session's harness verdict, settled at start on `harnessReply` (the real check; the default reply has every command). */
+  readonly harness = new HarnessCheck();
+  harnessReply: unknown = { type: "response", id: "harness-check", data: { commands: HARNESS_COMMANDS.map((name) => ({ name })) } };
+  workerProblem(): string | null { return this.workerProblemText ?? this.harness.failure; }
+  workerDegraded(): readonly string[] { return this.harness.takeDegraded(); }
 
   // --- the worker ---------------------------------------------------------------------------------
   startWorker({ step, attempt, effort, onEvent, resetWorkspace }: StartWorkerOptions): FakeAgent {
     const name = `${this.cfg.namePrefix}-agent-${String(step).padStart(2, "0")}-${attempt}`;
+    this.harness.reset();
+    this.harness.settle(this.harnessReply);
     let resolveExit: (result: { code: number } | undefined) => void = () => {};
     const exited = new Promise<{ code: number } | undefined>((r) => { resolveExit = r; });
     const agent: FakeAgent = {
@@ -345,7 +353,7 @@ export class FakeRuntime implements Runtime {
   }
 
   // --- trusted checks ---------------------------------------------------------------------------------
-  async runCheck({ check, sha }: { check: AcceptanceCheck; sha: string }): Promise<CheckOutcome> {
+  async runCheck({ check, sha, logDir }: { check: AcceptanceCheck; sha: string; logDir?: string | undefined }): Promise<CheckOutcome> {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-fake-check-"));
     const started = Date.now();
     try {
@@ -378,7 +386,15 @@ export class FakeRuntime implements Runtime {
         child.stdout.on("data", (c: Buffer) => { if (out.length < 2e6) out += c.toString(); });
         child.stderr.on("data", (c: Buffer) => { if (out.length < 2e6) out += c.toString(); });
         child.on("error", (e: Error) => { clearTimeout(timer); resolve({ exitCode: 127, timedOut: false, tail: e.message, seconds: 0 }); });
-        child.on("close", (code: number | null) => { clearTimeout(timer); resolve({ exitCode: code ?? 1, timedOut, tail: out.slice(-4000), seconds: Math.round((Date.now() - started) / 1000) }); });
+        child.on("close", (code: number | null) => {
+          clearTimeout(timer);
+          // As the real gate: the full output goes to a log in a scratch dir, kept beside the evidence.
+          const gate = path.join(tmp, "gate");
+          fs.mkdirSync(gate, { recursive: true });
+          fs.writeFileSync(path.join(gate, "check.log"), out);
+          const logs = logDir ? keepGateLogs(gate, logDir) : undefined;
+          resolve({ exitCode: code ?? 1, timedOut, tail: out.slice(-4000), seconds: Math.round((Date.now() - started) / 1000), logs });
+        });
       });
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }

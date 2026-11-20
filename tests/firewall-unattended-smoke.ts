@@ -488,8 +488,11 @@ try {
     zone.close();
     // (e3) The autonomy CLI: whoever runs start / plan --authorise / promote authorises the boundary and spends the
     // budget, so from an agent's shell that is the operator's call (asked, never learned), and a worker may not at all.
-    const controls = ["pi-autonomy start --config run.json --yes", "node packages/autonomy/cli.ts plan --config run.json --authorise --yes", "node ./packages/autonomy/cli.mjs promote --run r1 --yes", "bash -c 'pi-autonomy resume --run r1 --detach'", "pi-autonomy reconfigure --run r1 --budget-usd 500 --yes"];
-    const reads = ["pi-autonomy templates", "node packages/autonomy/cli.ts status", "node packages/autonomy/cli.ts plan --config run.json", "pi-autonomy init --template implement --out run.json"];
+    const controls = ["pi-autonomy start --config run.json --yes", "node packages/autonomy/cli.ts plan --config run.json --authorise --yes", "node ./packages/autonomy/cli.mjs promote --run r1 --yes", "bash -c 'pi-autonomy resume --run r1 --detach'", "pi-autonomy reconfigure --run r1 --budget-usd 500 --yes",
+      // The CLI however it is reached: run directly, through env, relative to a cd, through a package runner.
+      "./packages/autonomy/cli.ts pause --run r1", "env ./packages/autonomy/cli.ts pause --run r1", "cd packages/autonomy && node cli.ts pause --run r1", "cd packages/autonomy && ./cli.ts steer --run r1 --message x",
+      "npx tsx packages/autonomy/cli.ts pause --run r1", "npx pi-autonomy steer --run r1 --message x", "npm exec pi-autonomy -- pause --run r1", "node node_modules/@satunix/autonomy/cli.ts pause --run r1"];
+    const reads = ["pi-autonomy templates", "node packages/autonomy/cli.ts status", "node packages/autonomy/cli.ts plan --config run.json", "pi-autonomy init --template implement --out run.json", "cd packages/autonomy && node cli.ts status"];
     const cli = await boot({});
     for (const command of controls) {
       const v = interactive(cli, [undefined]);
@@ -774,8 +777,18 @@ console.log(JSON.stringify({ ro: held?.ro === true, active: st.active, why: st.w
     assert.equal(pendingRequests(), 0, "no console request either");
     assert.equal(b.judged.length, 0);
     assert.equal((await bash(b, "rm -rf ~", headless(b)))?.block, true);
+    // An operator delegation never applies in an unattended run (DE-115): the delegate's verb fails closed too.
+    const delegateDir = fs.mkdtempSync(path.join(root, "delegate-"));
+    const delegate = path.join(fs.realpathSync(delegateDir), "runctl");
+    fs.writeFileSync(delegate, "#!/bin/sh\n", { mode: 0o755 });
+    fs.chmodSync(delegate, 0o755);
+    config({ delegations: [{ operator: "op", path: delegate, verbs: ["pause"], expires: new Date(Date.now() + 86_400_000).toISOString() }] });
+    const delegated = await bash(b, `${delegate} pause run1`, headless(b));
+    assert.equal(delegated?.block, true, "a delegated verb is not run in an unattended run without auto-approval");
+    assert.ok(!audit().some((l) => (l as { decider?: unknown }).decider === "delegate"), "and no call is decided by a delegation");
+    config({});
     b.close();
-    ok("authorised without autoApprove: low runs, everything above fails closed at once (no prompt, no console, no judge)");
+    ok("authorised without autoApprove: low runs, everything above fails closed at once (no prompt, no console, no judge), a delegation included");
   }
 
   // 9b. What the policy itself says a person must decide fails closed: nobody can be asked in an unattended run. ------

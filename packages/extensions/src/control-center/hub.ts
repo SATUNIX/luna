@@ -2,8 +2,7 @@
  * The hub: dispatch a row, and render the model by mode.
  *
  * - TUI: `ctx.ui.custom()` hosting pi-tui's `SettingsList` (searchable, Enter/Space cycles or opens,
- *   Esc goes back). It opens as an overlay only on pi 1.3.0 or newer, where the overlay `done()` bug
- *   is fixed.
+ *   Esc goes back), opened as an overlay (pi 1.3.0 fixed the overlay `done()` bug; the floor is 1.4.0).
  * - RPC (hasUI, not TUI): a chain of `ctx.ui.select` dialogs. Every dialog carries a `timeout`, and
  *   a timeout counts as cancel, so a dialog nobody answers does not hold the session.
  * - print / json (no UI): a text page with every row's value and typed command, written to stderr.
@@ -16,7 +15,6 @@
  * Self-containment rule: import only pi peers and sibling modules.
  */
 import {
-  VERSION,
   getSettingsListTheme,
   type ExtensionContext,
   type ExtensionUIContext,
@@ -344,17 +342,9 @@ function rowLabel(row: HubRow): string {
   return `${row.label}${value}${typedSuffix(row)}${unavailable}`;
 }
 
-/** True when the running pi has the overlay `done()` fix (1.3.0 or newer). */
-export function supportsOverlay(version: string = VERSION): boolean {
-  const parts = version.replace(/^[^0-9]*/, "").split(/[.\-+]/).map((p) => Number(p));
-  const [major = 0, minor = 0] = parts;
-  return major > 1 || (major === 1 && minor >= 3);
-}
-
 function tuiRenderer(deps: HubDeps): Renderer {
   return {
     async show(input: PageInput): Promise<PageChoice> {
-      const overlay = supportsOverlay();
       const result = await deps.ctx.ui.custom<PageChoice>(
         (tui, theme, _keybindings, done) =>
           withOverlayFrame(tui, theme, (finish) => {
@@ -439,7 +429,7 @@ function tuiRenderer(deps: HubDeps): Renderer {
               },
             };
           }, done),
-        overlay ? { overlay: true } : undefined,
+        { overlay: true },
       );
       return result;
     },

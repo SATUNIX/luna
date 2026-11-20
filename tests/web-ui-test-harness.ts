@@ -126,7 +126,6 @@ export interface SandboxDirs {
   home: string;
   agentDir: string;
   sessionsDir: string;
-  lensDir: string;
   projectAgents: string;
   runtimeDir: string;
   cwd: string;
@@ -151,14 +150,13 @@ export function makeSandbox(prefix = "pi-web-ui-sec-"): Sandbox {
     home: path.join(root, "home"),
     agentDir: path.join(root, "home", ".pi", "agent"),
     sessionsDir: path.join(root, "sessions"),
-    lensDir: path.join(root, "lens"),
     projectAgents: path.join(root, "project-agents"),
     runtimeDir: path.join(root, "runtime"),
     cwd: path.join(root, "cwd"),
     bin: path.join(root, "bin"),
     stubLog: path.join(root, "stub.jsonl"),
   };
-  for (const key of ["agentDir", "sessionsDir", "lensDir", "projectAgents", "runtimeDir", "cwd", "bin"] as const) {
+  for (const key of ["agentDir", "sessionsDir", "projectAgents", "runtimeDir", "cwd", "bin"] as const) {
     fs.mkdirSync(dirs[key], { recursive: true });
   }
   const stub = path.join(dirs.bin, "pi-stub");
@@ -230,7 +228,6 @@ export function baseEnv(sandbox: Sandbox, extra: NodeJS.ProcessEnv = {}): NodeJS
     USERPROFILE: sandbox.home,
     PI_CODING_AGENT_DIR: sandbox.agentDir,
     PI_CODING_AGENT_SESSION_DIR: sandbox.sessionsDir,
-    PI_LENS_DIR: sandbox.lensDir,
     PI_CONSOLE_PROJECT_AGENTS: sandbox.projectAgents,
     PI_CONSOLE_RUNTIME_DIR: sandbox.runtimeDir,
     PI_CONSOLE_DEFAULT_CWD: sandbox.cwd,

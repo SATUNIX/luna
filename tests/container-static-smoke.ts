@@ -50,11 +50,41 @@ try {
 
   const tools = path.join(cdir, "tools", "package.json");
   const toolsOriginal = fs.readFileSync(tools, "utf8");
-  fs.writeFileSync(tools, toolsOriginal.replace('"pi-mcp-adapter": "6.0.0"', '"pi-mcp-adapter": "^6.0.0"'));
+  const loosenedTools = toolsOriginal.replace(/"pi-mcp-adapter": "(\d+\.\d+\.\d+)"/, '"pi-mcp-adapter": "^$1"');
+  assert.notEqual(loosenedTools, toolsOriginal, "tools/package.json pins pi-mcp-adapter exactly");
+  fs.writeFileSync(tools, loosenedTools);
   const badTools = validate();
   assert.notEqual(badTools.status, 0, "a tools manifest that stops pinning the adapter exactly (or drifts from its lockfile) must fail");
   assert.match(badTools.stderr, /pi-mcp-adapter/);
   fs.writeFileSync(tools, toolsOriginal);
+
+  // The MCP SDK pin is coupled to the version the hand-kept type mirror names, not to a literal.
+  const validateMcp = () => spawnSync("sh", ["scripts/validate-governance-mcp-server.sh"], { cwd: cdir, encoding: "utf8" });
+  assert.equal(validateMcp().status, 0, "the copy's MCP servers validate before they are broken");
+  const sdkMirror = path.join(cdir, "mcp-servers", "types", "mcp-sdk.d.ts");
+  const sdkMirrorOriginal = fs.readFileSync(sdkMirror, "utf8");
+  const mirrored = /mirrors @modelcontextprotocol\/sdk (\d+\.\d+\.\d+) /.exec(sdkMirrorOriginal)?.[1];
+  assert.ok(mirrored !== undefined, "the SDK type mirror states the version it mirrors");
+  fs.writeFileSync(sdkMirror, sdkMirrorOriginal.replace(`mirrors @modelcontextprotocol/sdk ${mirrored} `, "mirrors @modelcontextprotocol/sdk 0.0.1 "));
+  const staleMirror = validateMcp();
+  assert.notEqual(staleMirror.status, 0, "an SDK pin that differs from the version the type mirror names must fail");
+  assert.match(staleMirror.stderr, /@modelcontextprotocol\/sdk exactly 0\.0\.1/);
+  fs.writeFileSync(sdkMirror, sdkMirrorOriginal);
+  for (const server of ["governance", "memory-mcp"]) {
+    for (const file of ["package.json", "package-lock.json"]) {
+      const target = path.join(cdir, "mcp-servers", server, file);
+      const before = fs.readFileSync(target, "utf8");
+      const loosened = file === "package.json"
+        ? before.replace(`"@modelcontextprotocol/sdk": "${mirrored}"`, `"@modelcontextprotocol/sdk": "^${mirrored}"`)
+        : before.replace(`"version": "${mirrored}"`, `"version": "0.0.1"`);
+      assert.notEqual(loosened, before, `${server}/${file} carries the mirrored SDK version`);
+      fs.writeFileSync(target, loosened);
+      const drifted = validateMcp();
+      assert.notEqual(drifted.status, 0, `${server}/${file}: a loosened or drifted SDK pin must fail`);
+      assert.match(drifted.stderr, new RegExp(`mcp-servers/${server}:`));
+      fs.writeFileSync(target, before);
+    }
+  }
   const settingsOverlay = path.join(cdir, "overlays", "pi", "settings.json");
   const settingsOriginal = fs.readFileSync(settingsOverlay, "utf8");
   fs.writeFileSync(settingsOverlay, settingsOriginal.replace('"/opt/pi-agent/tools/node_modules/pi-mcp-adapter"', '"npm:pi-mcp-adapter@6.0.0"'));
@@ -68,6 +98,11 @@ try {
   const badFlag = validate();
   assert.notEqual(badFlag.status, 0, "turning an MCP hardening flag on must fail");
   assert.match(badFlag.stderr, /autoAuth/);
+  // pi-mcp-adapter 7 ignores `jev: false` and turns semantic search on unless semanticSearch is false.
+  fs.writeFileSync(mcp, mcpOriginal.replace('"semanticSearch": false', '"jev": false'));
+  const legacySearch = validate();
+  assert.notEqual(legacySearch.status, 0, "an overlay that turns search off only with the legacy jev key must fail");
+  assert.match(legacySearch.stderr, /semanticSearch/);
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
@@ -161,4 +196,4 @@ try {
   fs.rmSync(rt, { recursive: true, force: true });
 }
 
-console.log("[container-static-smoke] OK (preflight passes; a drifted pin and a loosened MCP flag are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR and restores mcp-adapter.json each start, readiness fails on a drifted live config, and --check needs no server)");
+console.log("[container-static-smoke] OK (preflight passes; a drifted pin, an MCP SDK pin off its type mirror, a loosened MCP flag and a legacy jev-only search switch are each caught; pi-agent fails closed, the entrypoint seeds PI_CODING_AGENT_DIR and restores mcp-adapter.json each start, readiness fails on a drifted live config, and --check needs no server)");

@@ -19,7 +19,7 @@ it.
 | The autonomous runner on rootless Podman, on macOS and Windows, and in a run of hours or days | `smoke:autonomy-container` ran on Docker only, in a disposable sandbox; the in-container boundary probe (`packages/autonomy/tests/boundary-probe.ts`) is manual-only | An operator, per [Autonomous runs](autonomy.md) |
 | A full autonomous run against a real model provider | The relay talks to a local fake upstream in every test | An operator with a provider key and a small budget |
 | The web console's Content-Security-Policy in a browser | No browser was used | Anyone with a browser: open the console and check the progress bars render |
-| The full check suite on Windows and on Node 24 | CI runs the suite on Linux with Node 26, and the pi-compat lanes with Node 22; Windows runs the per-profile install check only | CI matrix extension |
+| The full check suite on Windows | CI runs the suite on Linux with Node 26, and the pi-compat lane with Node 24; Windows runs the per-profile install check only | CI matrix extension |
 | `git` and `npm` delivery for `/profile` and for the update path against the real public repository | No release tag exists yet, and local mode is what the suites can exercise | The first release, then a run of `/update` from an install of it |
 | Interactive use on pi 1.x | The suites drive pi's runtime without a terminal; pi 1.0 made the fullscreen TUI the default and that was not exercised by hand | An operator, running each profile interactively on pi 1.3 |
 
@@ -51,8 +51,7 @@ Each is a limit of the delivered kernel, not a bug in a test.
 
 - **"No model too small" is a hypothesis.** The kit footprint meter shows the `balanced` kit tool
   text at 6,924 characters over 13 tools (two of them registered inactive) and the delegation tools at 3,089, under their ceilings, and
-  counts companions from a reviewed record: `pi-lens` adds 18,800 characters to every request in
-  `balanced`, nearly three times the kit's own text, and is not yet reduced; pi core is unmeasured. Nothing shows that data plans
+  counts companions from a reviewed record (`balanced` loads none); pi core is unmeasured. Nothing shows that data plans
   raise completion on a small model, and a syntactically valid plan can still be a bad one
   (nothing in the test suite pins the meter). The live `small-model/plan-valid-rate` fixture
   records a rate per model and never reaches a model in CI; running it, plus an outcome eval per
@@ -103,13 +102,13 @@ Each is a limit of the delivered kernel, not a bug in a test.
 
 ### Known issues
 
-- **`protected-paths` still has its own text readers.** Patch writers are read both by the shared
-  text walker in `packages/core/shared/inline-guard.ts` and by the firewall's parser, now shared as
-  `packages/core/shared/shell.ts`, and protected-paths refuses what either finds. Its other write
-  targets (`directWriteTargets`, redirects, `cp`/`mv`/`sed -i` and the like) are still read with
-  its own regular expressions, so a shell shape fixed in the firewall's classifier must be fixed
-  there too, and the walker remains the firewall's catch-all for patch writers it cannot place
-  (board item A-90). `tests/protected-paths-corpus-smoke.ts` covers the shapes both hooks read today.
+- **`protected-paths` still reads its other write targets as text.** Patch writers are read by
+  both hooks with the firewall's parser (`packages/core/shared/shell.ts`) through one shared rule,
+  with the shared text walker kept beside it as a fail-closed backstop until the parser covers the
+  forms only the walker catches (board item A-90). protected-paths' other write targets (`directWriteTargets`, redirects, `cp`/`mv`/`sed -i` and
+  the like) are still read with its own regular expressions, so a shell shape fixed in the
+  firewall's classifier must be fixed there too (board item PG-26).
+  `tests/protected-paths-corpus-smoke.ts` covers the shapes both hooks read today.
 - **`smoke:workflow-resume` flaked once in a sandbox.** It failed once and passed on rerun; the
   cause was not established and no reproduction is recorded. Re-run it after a failure, and treat
   a repeat as a defect.
@@ -245,10 +244,9 @@ and nothing in the repository pins any of them.
 
 - **pi native tool deferral.** pi 1.x can register a tool as `exposure: "deferred"` and ship a
   built-in `tool_search`; Luna uses only `defaultActive: false` plus its own wake-up. Using the
-  native mechanism for the 22 of 44 tools that no measured session called (mostly pi-lens and
-  pi-readseek tools, 15.2k characters of schema) needs a reviewed raise of the pi floor
-  (`peerDependencies` is 0.85.1 and `defaultActive` is ignored below pi 1.x), and a measurement
-  of pi-lens and pi-readseek in a real session, which the meter cannot see.
+  native mechanism for tools that no measured session called (many of them `pi-readseek`'s) needs
+  a measurement of `pi-readseek` in a real session, which the meter cannot see (the pi floor is
+  1.4.0, which has both mechanisms).
 - **Action-style tool families.** Folding `workflow_run`, `workflow`, `workflow_status` and
   `workflow_control` (and the memory and task-graph families) into one tool per family with an
   `action` field would cut schema text further but renames tools the firewall policy, the delegation
@@ -281,8 +279,7 @@ and nothing in the repository pins any of them.
 - **The cold start is pi's loader.** The compile cache is in the temporary directory, which a
   reboot empties on a memory-backed `/tmp`. A persistent cache location is a pi loader option
   (`jiti` `fsCache`); Luna cannot set it from an extension. Precompiling does not help, because the
-  loader transforms JavaScript as well. Dropping or lazily loading `pi-lens` (3.8 s cold, 0.23 s
-  warm) would help most, and needs that companion to register its tools later.
+  loader transforms JavaScript as well.
 - **Extension load is sequential**, so every companion adds its import time to the first frame.
 
 ## Autonomous runs: durable tasks, integration and a flagship
@@ -383,6 +380,30 @@ number look better.
   trade-off is accepted by the owner, then a seven day observation; otherwise investment stops, the
   learning is kept and a regressing feature is reverted. Not covered: the targets are goals for an
   experiment, not measured results.
+
+## Renaming the package and its identities
+
+Luna keeps the `pi-system` identities listed in [Branding](branding.md) because each is an external
+contract. Renaming them is a proposal for an operator decision and a major version, not something
+the code does today. Each identity needs its own migration:
+
+1. **npm package and bin names.** Publish `@satunix/luna` as the package, keep `@satunix/pi-system`
+   as a deprecated alias that depends on it for one major version, and ship `luna`,
+   `luna-install` and `luna-verify` bins beside the old ones. `packages/core/lib/identity.ts`
+   already accepts `@satunix/luna`.
+2. **Environment variables.** Read `LUNA_*` first and fall back to `PI_SYSTEM_*` with a deprecation
+   notice; document both until the next major version drops the old names.
+3. **Install and data paths.** Move `/srv/data/pi-system*` and `/opt/pi-system` to `luna` paths
+   with a one-time migration that leaves a compatibility symlink at the old path, and teach
+   `secret-guard` and `engagement-governance` both paths until the symlink is removed.
+4. **Compose project, containers and image.** Rename the compose project and image tag, and give
+   operators a release note with the `docker exec` and `docker inspect` names that change.
+5. **Global symbols and the run-contract URN.** Accept both `Symbol.for` keys during a transition,
+   and bump the URN to a new version (`urn:luna:autonomy:run-contract:2`) with a reader for the
+   old one, because stored contracts name it.
+6. **`CAPABILITY_ID`, the governance server name and the TLS organisation.** Changing these changes
+   ledger records, MCP client configuration and every generated certificate; each needs a dated
+   cut-over and a note for downstream consumers that compare the values.
 
 ## Related records
 

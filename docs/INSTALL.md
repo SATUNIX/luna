@@ -10,9 +10,9 @@ load; there are no separate packages per profile. It is delivered from its publi
 
 ## Requirements
 
-- Node.js 22.19 or newer and npm (pi's own requirement)
+- Node.js 24 or newer and npm
 - git
-- pi 0.85.1 or newer (`npm install -g @earendil-works/pi-coding-agent`)
+- pi 1.4.0 or newer (`npm install -g @earendil-works/pi-coding-agent`)
 
 ## The one install path
 
@@ -55,7 +55,7 @@ Run it from the clone root: the installer path is relative to the current direct
 | `--yes` | Accepted for scripts. Only `--guided` prompts; every other run is non-interactive. |
 | `--dry-run` | Print what would change; change nothing. |
 | `--verify` | Run the repository's verify gate before registering a checkout. It runs by default only in a development checkout (`npm ci` done); in a plain clone it is skipped with a line saying so, because it needs the development dependencies (`tests/install-marker-smoke.ts`). |
-| `--no-externals` | Skip companion packages such as `pi-lens`. |
+| `--no-externals` | Skip companion packages such as `pi-readseek`. |
 | `--uninstall` | Remove Luna and the companions this installer registered. A companion you had already registered at Luna's pin before installing is not recorded, so uninstall leaves it (`tests/install-marker-smoke.ts`). |
 | `--help` / `-h` | Print the usage line to stdout and exit 0 before any install work (`tests/install-marker-smoke.ts`). |
 
@@ -74,7 +74,7 @@ Run the installer with `--guided` to be asked instead of passing flags:
 node packages/core/install.ts --guided
 ```
 
-It prints what it detected (Node against the 22.19 floor, git, pi, a container, CI, a terminal,
+It prints what it detected (Node against the Node 24 floor, git, pi, a container, CI, a terminal,
 whether the current directory is a git repository, and the profile already installed), lists the
 shipped profiles with the installed one (or `balanced`) as the default, and asks for a profile by
 number or name, then the scope (unless `--scope` is given), then `Proceed? [Y/n]`. A retired profile

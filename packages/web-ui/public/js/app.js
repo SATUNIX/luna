@@ -7,18 +7,19 @@ import { SessionStream } from "./sse.js";
 import { ActivityWheel, formatElapsed, toolLabel, } from "./activity.js";
 import { AgentEditor } from "./agentui.js";
 import { asRecord, byId, errorMessage, toText } from "./guards.js";
-import { renderConfig, renderLens, renderResourceList, renderStats, renderTodos, } from "./panels.js";
+import { renderConfig, renderResourceList, renderStats, renderTodos, } from "./panels.js";
 import { ChatRenderer, el, renderAgents, renderSessions } from "./render.js";
+import { oneAtATime, renderAutonomy, renderAutonomyError } from "./autonomy.js";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 /** A select's value as a thinking level; anything else is not sent. */
 function isThinkingLevel(value) {
     return THINKING_LEVELS.includes(value);
 }
 function isView(value) {
-    return value === "sessions" || value === "agents" || value === "config";
+    return value === "sessions" || value === "agents" || value === "autonomy" || value === "config";
 }
 function isInspectorPanel(value) {
-    return value === "stats" || value === "todos" || value === "lens";
+    return value === "stats" || value === "todos";
 }
 const state = {
     view: "sessions",
@@ -37,7 +38,7 @@ const state = {
     stats: null,
     panels: { sidebar: true, inspector: true, composer: true },
     inspectorPanel: "stats",
-    timers: { sessions: null, stats: null, elapsed: null, health: null },
+    timers: { sessions: null, stats: null, elapsed: null, health: null, autonomy: null },
 };
 // Assigned once by init() before anything reads it.
 let dom;
@@ -303,6 +304,23 @@ async function loadResources() {
         console.error("failed to load resources", err);
     }
 }
+// ------------------------------------------------------------- autonomy -----
+/**
+ * Read-only: the runs and recent host events under the autonomy state home. One request at a
+ * time (the poll skips a tick while one is pending), and an answer that arrives after the user
+ * left the view is not rendered.
+ */
+const loadAutonomy = oneAtATime(async () => {
+    try {
+        const data = await api.autonomy();
+        if (state.view === "autonomy")
+            renderAutonomy(dom.autonomyBody, data);
+    }
+    catch (err) {
+        if (state.view === "autonomy")
+            renderAutonomyError(dom.autonomyBody, errorMessage(err) || "request failed");
+    }
+});
 // ----------------------------------------------------------- inspector ------
 function setPanel(panel) {
     state.inspectorPanel = panel;
@@ -311,16 +329,11 @@ function setPanel(panel) {
     }
     dom.panelStats.classList.toggle("hidden", panel !== "stats");
     dom.panelTodos.classList.toggle("hidden", panel !== "todos");
-    dom.panelLens.classList.toggle("hidden", panel !== "lens");
 }
 async function refreshInspector() {
     if (!state.activeId) {
         dom.statsBody.replaceChildren(el("p", { class: "muted", text: "Open a session to see statistics." }));
         dom.todosList.replaceChildren(el("li", { class: "muted", text: "Open a session to see its todos." }));
-        dom.lensBody.replaceChildren(el("p", {
-            class: "muted",
-            text: "Open a session to see pi-lens diagnostics.",
-        }));
         return;
     }
     const id = state.activeId;
@@ -342,14 +355,6 @@ async function refreshInspector() {
         }
         catch (err) {
             dom.todosList.replaceChildren(el("li", { class: "muted", text: errorMessage(err) }));
-        }
-    }
-    else {
-        try {
-            renderLens(dom.lensBody, (await api.sessionLens(id)).lens);
-        }
-        catch (err) {
-            dom.lensBody.replaceChildren(el("p", { class: "muted", text: errorMessage(err) }));
         }
     }
 }
@@ -587,9 +592,12 @@ function setView(view) {
     }
     dom.sessionsView.classList.toggle("hidden", view !== "sessions");
     dom.agentsView.classList.toggle("hidden", view !== "agents");
+    dom.autonomyView.classList.toggle("hidden", view !== "autonomy");
     dom.configView.classList.toggle("hidden", view !== "config");
     if (view !== "sessions" && dom.sidebar.classList.contains("is-open"))
         closeDrawer();
+    if (view === "autonomy")
+        void loadAutonomy();
 }
 // ---------------------------------------------------------------- init ------
 /** The page's elements, looked up once by id (camel-cased: "chat-log" is `chatLog`). */
@@ -622,6 +630,8 @@ function cacheDom() {
         agentsView: byId("agents-view", HTMLElement),
         newAgent: byId("new-agent", HTMLButtonElement),
         agentGrid: byId("agent-grid", HTMLElement),
+        autonomyView: byId("autonomy-view", HTMLElement),
+        autonomyBody: byId("autonomy-body", HTMLElement),
         configView: byId("config-view", HTMLElement),
         configGrid: byId("config-grid", HTMLElement),
         promptsCount: byId("prompts-count", HTMLElement),
@@ -633,8 +643,6 @@ function cacheDom() {
         statsBody: byId("stats-body", HTMLElement),
         panelTodos: byId("panel-todos", HTMLElement),
         todosList: byId("todos-list", HTMLElement),
-        panelLens: byId("panel-lens", HTMLElement),
-        lensBody: byId("lens-body", HTMLElement),
         inspectorClose: byId("inspector-close", HTMLButtonElement),
         footerHealth: byId("footer-health", HTMLElement),
         footerCount: byId("footer-count", HTMLElement),
@@ -814,6 +822,11 @@ async function init() {
     state.timers.sessions = setInterval(() => {
         if (state.view === "sessions" && !document.hidden)
             void loadSessions();
+    }, 5000);
+    // Polled only while the Autonomy view is the one shown and the tab is visible.
+    state.timers.autonomy = setInterval(() => {
+        if (state.view === "autonomy" && !document.hidden)
+            void loadAutonomy();
     }, 5000);
     state.timers.stats = setInterval(() => {
         if (state.activeId && !document.hidden)

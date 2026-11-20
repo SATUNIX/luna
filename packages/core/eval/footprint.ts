@@ -8,7 +8,7 @@
  * same commit, an accidental one fails `smoke:eval-footprint`. The ceilings (7,500 characters for
  * `balanced`, 3,200 for its delegation tools, 9,000 for `lite` counting companions) live in the baseline.
  *
- * Companion packages (pi-readseek, pi-lens) register tools of their own that reach the model in every
+ * Companion packages (pi-readseek) register tools of their own that reach the model in every
  * request, and they cannot be loaded offline here. Their cost is a reviewed record in the baseline's
  * `companions`, measured against the pinned release in a real pi (the active tools a scratch agent
  * directory reports, name + description + parameter JSON, the same arithmetic as the kit's), and tied

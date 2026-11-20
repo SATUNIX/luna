@@ -70,24 +70,24 @@ redesigned freely (`launch-screen.ts` draws, `boot-status.ts` decides what is on
 
 ### Startup time
 
-Measured with pi 1.5.1 in a scratch home and agent directory, installed the way a user installs
-(the installer, with the `pi-lens` and `pi-readseek` companions), `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi`
-in a pty. Read your own the same way; the "Startup Timings: extensions" table lists every extension.
+Measured with pi 1.5.1 in a scratch home and agent directory, installed the way a user installs,
+using `PI_TIMING=1 PI_STARTUP_BENCHMARK=1 pi` in a pty. Read your own the same way; the
+"Startup Timings: extensions" table lists every extension. The companion rows are not re-measured
+since the companion set changed; the figures below are the historical Luna-only measurements.
 
 | State | Time to pi's first frame |
 | --- | --- |
 | Warm: pi alone | about 0.16 s |
 | Warm: Luna, 36 extensions, no companions | about 0.4 s |
-| Warm: Luna plus `pi-lens` and `pi-readseek` | 0.7 to 1.0 s on an idle machine |
+| Warm: Luna plus companion extensions | not re-measured since the companion set changed |
 | Cold: the first start after an install, an update or a reboot | 8 to 13 s |
 
-Warm, Luna's own extensions are about 170 ms of the load; `pi-lens` is about 230 ms and
-`pi-readseek` about 190 ms, so companions are most of it. Cold, almost all of the time is pi's
-loader compiling every extension's TypeScript or JavaScript (`pi-lens` 3.8 s, Luna's extensions
-2.2 s, `pi-readseek` 0.7 s) into a cache in the operating system's temporary directory. A reboot
-empties that directory on systems where it is a memory filesystem (the Debian default), and every
-update changes the files, so the slow start returns each time. Precompiling Luna's extensions would
-not remove it: pi's loader transforms plain JavaScript too, as the `pi-lens` figure shows.
+Warm, Luna's own extensions are about 170 ms of the load, and companion extensions add most of the
+rest. Cold, almost all of the time is pi's loader compiling every extension's TypeScript or
+JavaScript (Luna's extensions 2.2 s) into a cache in the operating system's temporary directory. A
+reboot empties that directory on systems where it is a memory filesystem (the Debian default), and
+every update changes the files, so the slow start returns each time. Precompiling Luna's extensions
+would not remove it: pi's loader transforms plain JavaScript too.
 
 Nothing Luna runs does network work or directory scans before the first paint: a start with the
 network namespace removed takes the same time. pi's own first-run download of `fd` and `ripgrep`

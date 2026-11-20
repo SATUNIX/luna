@@ -521,12 +521,14 @@ function cycleRuntime(ctx: StepContext, { n, resume, startSha, dir, onSalvage }:
     },
     uiPolicy: contract.permissions.unattended,
     onAutoAnswer: () => { engine.uiAnswered++; },
-    startAgent: ({ attempt, onEvent, say }) => {
+    startAgent: async ({ attempt, onEvent, say }) => {
       const reset = resetPending;
       state.sessions = (state.sessions ?? 0) + 1;
       ctx.log(`cycle ${pad(n)} session ${attempt} starting${reset ? " (workspace reset to the branch)" : ""}`);
       const started = (ev: Parameters<typeof onEvent>[0]): void => { resetPending = false; onEvent(ev); };
-      const agent = rt.startWorker({ step: n, attempt: state.sessions, resetWorkspace: reset, effort: state.effort, onEvent: reset ? started : onEvent });
+      engine.reportDegraded(); // a previous session that died between ticks: report it before startWorker resets the check
+      const sessions = state.sessions;
+      const agent = await engine.startWorkerInSlot(() => rt.startWorker({ step: n, attempt: sessions, resetWorkspace: reset, effort: state.effort, onEvent: reset ? started : onEvent }));
       engine.adoptAgent(agent, say);
       return agent;
     },
@@ -657,7 +659,16 @@ export async function runStep(ctx: StepContext): Promise<void> {
       sync = { state: "ahead", head: local };
     }
     if (sync.state === "diverged") {
-      const rec = gm.reconcileIntegration(g, cfg, sync);
+      let rec: gm.ReconcileResult;
+      try { rec = gm.reconcileIntegration(g, cfg, sync); }
+      catch (e) {
+        // A host git failure while reconciling (worktree add, the update-ref compare-and-swap, rev-parse) parks
+        // the run on a named question instead of escaping as a supervisor error that a restart would resume
+        // into. Git output can carry untrusted text, so it goes to the log, not into the question.
+        log(`reconciling ${cfg.integrationBranch} with the destination failed: ${errorMessage(e).slice(0, 500)}`);
+        await engine.enterBlocked({ kind: "external", id: "integration-reconcile-failed", method: "integration", question: `${cfg.integrationBranch} at the destination (${sync.remote.slice(0, 12)}) and here (${sync.head.slice(0, 12)}) have diverged, and reconciling them failed with a host git error (see the supervisor log); inspect the run's mirror, then answer to retry, or stop the run`, options: ["Mirror checked; retry", "Stop the run"] });
+        return;
+      }
       if (rec.state === "conflict") {
         await engine.enterBlocked({ kind: "external", id: "integration-diverged", method: "integration", question: `${cfg.integrationBranch} at the destination (${rec.remote.slice(0, 12)}) and here (${rec.head.slice(0, 12)}) have diverged and the automatic rebase conflicts; reconcile them by hand, then answer to resume, or stop the run`, options: ["Reconciled by hand; resume", "Stop the run"] });
         return;

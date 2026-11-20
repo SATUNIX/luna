@@ -26,6 +26,9 @@
         <button class="nav-item" type="button" data-view="agents">
           Agents
         </button>
+        <button class="nav-item" type="button" data-view="autonomy">
+          Autonomy
+        </button>
         <button class="nav-item" type="button" data-view="config">
           Config
         </button>
@@ -215,6 +218,19 @@
           <div id="agent-grid" class="agent-grid"></div>
         </div>
 
+        <!-- ---------------------------------------------------- autonomy -->
+        <div id="autonomy-view" class="view view-scroll hidden">
+          <div class="view-head">
+            <h1 class="view-title">Autonomy</h1>
+            <p class="view-sub">
+              Autonomous runs on this host, their recent events and the
+              reporting status file. Read-only: control runs with
+              <code>/autonomy</code> or <code>pi-autonomy</code>.
+            </p>
+          </div>
+          <div id="autonomy-body" class="autonomy-body"></div>
+        </div>
+
         <!-- ------------------------------------------------------ config -->
         <div id="config-view" class="view hidden">
           <div class="view-head">
@@ -248,7 +264,6 @@
             Stats
           </button>
           <button class="tab" type="button" data-panel="todos">Todos</button>
-          <button class="tab" type="button" data-panel="lens">Lens</button>
           <button
             id="inspector-close"
             class="tab tab-close"
@@ -263,9 +278,6 @@
         </div>
         <div id="panel-todos" class="panel hidden">
           <ul id="todos-list" class="todo-list"></ul>
-        </div>
-        <div id="panel-lens" class="panel hidden">
-          <div id="lens-body" class="kv"></div>
         </div>
       </aside>
     </main>

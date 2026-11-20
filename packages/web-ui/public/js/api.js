@@ -86,7 +86,6 @@ function isConfig(value) {
         isRecord(value.settings) &&
         isRecord(value.paths) &&
         Array.isArray(value.paths.agentDirs) &&
-        isRecord(value.lens) &&
         isArrayOf(value.models, isProvider));
 }
 function isKitEntry(value) {
@@ -167,11 +166,23 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 function isThinkingLevel(value) {
     return typeof value === "string" && THINKING_LEVELS.includes(value);
 }
-function isLens(value) {
+function isAutonomyRun(value) {
+    return isRecord(value) && typeof value.run === "string";
+}
+function isAutonomyEvent(value) {
     return (isRecord(value) &&
-        isRecord(value.lens) &&
-        typeof value.lens.available === "boolean" &&
-        Array.isArray(value.lens.files));
+        typeof value.at === "string" &&
+        typeof value.run === "string" &&
+        typeof value.type === "string");
+}
+function isAutonomy(value) {
+    return (isRecord(value) &&
+        value.schemaVersion === 1 &&
+        typeof value.at === "string" &&
+        isArrayOf(value.runs, isAutonomyRun) &&
+        isArrayOf(value.events, isAutonomyEvent) &&
+        (value.status === null || isRecord(value.status)) &&
+        isRecord(value.skipped));
 }
 // ------------------------------------------------------------------- api ---
 const enc = encodeURIComponent;
@@ -185,6 +196,7 @@ export const api = {
     skills: () => request("GET", "/api/skills", isSkills),
     models: () => request("GET", "/api/models", isModels),
     cwds: () => request("GET", "/api/cwds", isCwds),
+    autonomy: () => request("GET", "/api/autonomy", isAutonomy),
     agents: () => request("GET", "/api/agents", isAgents),
     agent: (name, source) => request("GET", agentPath(name, source), isAgent),
     createAgent: (payload) => request("POST", "/api/agents", isAgent, payload),
@@ -194,7 +206,6 @@ export const api = {
     session: (id) => request("GET", `/api/sessions/${enc(id)}`, isSession),
     sessionStats: (id) => request("GET", `/api/sessions/${enc(id)}/stats`, isStats),
     sessionTodos: (id) => request("GET", `/api/sessions/${enc(id)}/todos`, isTodos),
-    sessionLens: (id) => request("GET", `/api/sessions/${enc(id)}/lens`, isLens),
     createSession: (config) => request("POST", "/api/sessions", isSession, config),
     prompt: (id, message, streamingBehavior) => request("POST", `/api/sessions/${enc(id)}/prompt`, isPromptAck, {
         message,

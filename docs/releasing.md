@@ -173,8 +173,7 @@ them with every other operator-only step. In short:
 
 The whole repository at the tag. pi runs `npm install --omit=dev --legacy-peer-deps` in its copy,
 which fetches Luna's one runtime dependency from the npm registry ([Supply chain](supply-chain.md), "What
-installing Luna pulls in"). Companion packages (`pi-lens`,
-`pi-readseek`) are separate pi packages from npm, registered by the installer at Luna's
+installing Luna pulls in"). Companion packages (`pi-readseek`) are separate pi packages from npm, registered by the installer at Luna's
 reviewed pins in `packages/core/sources.json`.
 
 `npm run smoke:package` (part of `check:all`) packs the repository exactly as `npm publish`

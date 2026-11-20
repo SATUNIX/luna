@@ -12,7 +12,7 @@
     "autonomous-loop", "trigger-compact", "session-helpers", "control-center", "kit-update", "effort", "delegation-guard", "compress", "save", "custom-footer", "web-console", "handoff", "trace-ledger", "tool-capture", "progress-guard", "recovery-orchestrator",
     "goal-core", "task-graph", "subagent", "branch-lab",
     "verifier-board", "provider-router",
-    "caveman", "pi-lens", "pi-readseek",
+    "caveman", "pi-readseek",
     "orchestrator", "conductor"
   ]
 }

@@ -115,9 +115,8 @@ function saveSettings(settings: UiSettings): string | null {
   }
 }
 
-/** Lower-cased words of a command argument (a string, or an array pi may pass). */
+/** Lower-cased words of a command argument (pi passes a string). */
 export function commandArgs(args: unknown): string[] {
-  if (Array.isArray(args)) return args.map((a) => String(a).trim().toLowerCase()).filter(Boolean);
   if (typeof args === "string") return args.trim().split(/\s+/).filter(Boolean).map((a) => a.toLowerCase());
   return [];
 }

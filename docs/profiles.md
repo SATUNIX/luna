@@ -88,9 +88,16 @@ calls the `pi_system_governance` MCP tools only when that server is available
 
 ## Companion packages
 
-Some profiles use npm packages that are not part of Luna (`pi-lens`, `pi-readseek`). The
+Some profiles use npm packages that are not part of Luna (`pi-readseek`). The
 installer registers them as their own pi packages, at the exact version Luna has reviewed
 (`packages/core/sources.json`). `/update` moves them when a Luna release changes a pin.
+
+A companion Luna no longer ships is listed under `retired` in `sources.json` (`pi-lens`). The next
+install, `/profile` switch or `/update` that re-applies a profile runs `pi remove` for it when the
+install marker records that Luna added it; one you registered yourself stays, and the installer
+prints the `pi remove` command that drops it (`tests/install-marker-smoke.ts`). Not covered: an
+`/update` of a `custom` (`--only`) or `--all` install does not re-run the installer, so it keeps a
+retired companion until the next install.
 `pi-lean-ctx` is in no profile: it is opt-in, registered by `install.ts --all` only when its
 `lean-ctx` binary is on `PATH`, and its extra shell and edit tools sit outside the firewall's shell
 and secret classification (see [Supply chain](supply-chain.md)).

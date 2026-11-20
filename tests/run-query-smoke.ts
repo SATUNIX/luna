@@ -449,12 +449,15 @@ const lines = (text: string): string[] => text.split("\n");
   const seen: string[] = [];
   await workflows.handler("", { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
   assert.ok(seen.join("\n").includes(SCRIPT_ID), "/workflows lists script runs");
-  await workflows.handler(`status ${SCRIPT_ID}`, { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
-  assert.match(seen.at(-1) ?? "", /Format: script/);
+  // Every format the bare list shows resolves through `status <id>` to its own description (V-42).
+  for (const [id, format] of [[SCRIPT_ID, "script"], [YAML_ID, "yaml"], [SUBAGENT_ID, "subagent"], [AUTONOMY_LIVE_ID, "autonomy"], [AUTONOMY_BLOCKED_ID, "autonomy"]] as const) {
+    await workflows.handler(`status ${id}`, { cwd: ws, hasUI: true, ui: { notify: (m: string) => seen.push(m) } });
+    assert.ok((seen.at(-1) ?? "").startsWith(`Format: ${format} · run ${id}`), `status ${id} describes the ${format} run:\n${seen.at(-1) ?? ""}`);
+  }
   // `panel` still reaches the live view, now through the one command.
   await workflows.handler("panel", cmdCtx);
   assert.match(notes.at(-1) ?? "", /^Workflows \(/);
-  ok("/workflows lists past runs, status <id> shows a past run, and panel opens the live view");
+  ok("/workflows lists past runs, status <id> describes a run of every format, and panel opens the live view");
 }
 
 // 5. stop: a background subagent by id, then all live children and recorded orphans.

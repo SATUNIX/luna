@@ -15,8 +15,8 @@
  * the verify gate, --all skips the package-narrowing path, so the only external
  * effect under test is the marker write and the `pi install` calls.
  *
- * Pre-seeding settings.json with the kit entry and one companion (pi-lens) also
- * exercises the already-registered branch: pi-lens was registered by the operator,
+ * Pre-seeding settings.json with the kit entry and one companion (pi-readseek) also
+ * exercises the already-registered branch: pi-readseek was registered by the operator,
  * not by this run, so the marker must NOT record it and uninstall must leave it,
  * while the genuinely missing companions are installed and recorded (TOO-6).
  */
@@ -55,7 +55,9 @@ const { external } = parseJsonAs(Sources, fs.readFileSync(SOURCES, "utf8"), "sou
 const EXPECTED_COMPANIONS = external
   .filter((e) => e.mode === "reference" && e.name !== "pi-lean-ctx")
   .map((e) => e.source);
-assert.ok(EXPECTED_COMPANIONS.length >= 2, "sources.json should have reference companions");
+assert.ok(EXPECTED_COMPANIONS.length >= 1, "sources.json should have reference companions");
+const LEAN_CTX = external.find((e) => e.name === "pi-lean-ctx")?.source;
+if (LEAN_CTX === undefined) throw new Error("sources.json has no pi-lean-ctx entry");
 
 // B-022: uninstall is already non-interactive, so `--yes` is documented and forwarded
 // (install.ts passes it through) but must not produce a dead binding again.
@@ -459,9 +461,8 @@ function testNoExternalsRecordsNoCompanions() {
 
 // B-028: switching to a profile that no longer selects a companion must not drop it
 // from the marker, otherwise a later uninstall orphans the still-registered package.
-// `lite` does not include pi-lens, and its only own companion (pi-lean-ctx) is dropped
-// by the absent-CLI gate, so the fresh selection is empty while the prior marker holds
-// pi-lens. The marker must retain it and uninstall must still remove it.
+// `balanced` selects no companion, so the fresh selection is empty while the prior marker
+// holds pi-readseek. The marker must retain it and uninstall must still remove it.
 function testPreviousCompanionsRetained() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-retain-"));
   const agentDir = path.join(dir, "agent");
@@ -482,7 +483,7 @@ function testPreviousCompanionsRetained() {
     assert.match(priorCompanion, /^npm:[^@]+@/, "the first reference companion is a pinned npm source");
     const staleVersion = priorCompanion.replace(/@[^@]+$/, "@0.0.1");
     const goneCompanion = "npm:pi-kit-test-gone-companion@1.0.0";
-    // Prior state: kit + pi-lens registered, and the marker already tracks pi-lens.
+    // Prior state: kit + pi-readseek registered, and the marker already tracks pi-readseek.
     fs.writeFileSync(
       path.join(agentDir, "settings.json"),
       JSON.stringify({ packages: [ROOT, priorCompanion] }, null, 2),
@@ -492,7 +493,7 @@ function testPreviousCompanionsRetained() {
       JSON.stringify({ kitSource: ROOT, scope: "global", profile: "long-horizon", companions: [staleVersion, priorCompanion, goneCompanion] }, null, 2),
     );
 
-    run(process.execPath, [INSTALL, "--profile", "lite", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(agentDir, binDir, logPath));
+    run(process.execPath, [INSTALL, "--profile", "balanced", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(agentDir, binDir, logPath));
 
     const marker = readMarker(path.join(agentDir, ".pi-kit.json"));
     assert.ok(
@@ -513,6 +514,50 @@ function testPreviousCompanionsRetained() {
     );
 
     console.log("  OK: a companion from the previous profile stays recorded at its registered pin and is removed on uninstall");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// A retired companion (sources.json `retired`, pi-lens) is unregistered by the next install or /update
+// only when the previous marker records it (the kit added it); one the user registered stays, with a note.
+function testRetiredCompanion() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-kit-marker-retired-"));
+  const binDir = path.join(dir, "bin");
+  try {
+    fs.mkdirSync(binDir, { recursive: true });
+    const fakePi = path.join(binDir, "pi");
+    fs.writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PI_FAKE_LOG"\nexit 0\n`);
+    fs.chmodSync(fakePi, 0o755);
+    const lens = "npm:pi-lens@4.4.4";
+    const world = (name: string, recorded: string[]) => {
+      const agentDir = path.join(dir, name);
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [ROOT, lens] }, null, 2));
+      fs.writeFileSync(path.join(agentDir, ".pi-kit.json"), JSON.stringify({ kitSource: ROOT, scope: "global", profile: "balanced", companions: recorded }, null, 2));
+      const logPath = path.join(dir, `${name}.log`);
+      const install = (...extra: string[]) => run(process.execPath, [INSTALL, "--profile", "balanced", "--settings-only", "--mode", "local", "--scope", "global", ...extra], baseEnv(agentDir, binDir, logPath));
+      const log = () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "");
+      return { agentDir, install, log };
+    };
+
+    // Added by the kit (an older pin recorded, as before a kit update): removed, and the marker forgets it.
+    const ours = world("ours", ["npm:pi-lens@4.4.3", "npm:pi-kit-test-other@1.0.0"]);
+    const dry = ours.install("--dry-run");
+    assert.match(dry.stdout, /Dry run: would remove the retired companion npm:pi-lens@4\.4\.4/);
+    assert.ok(!ours.log().includes("remove npm:pi-lens"), "a dry run removes nothing");
+    const done = ours.install();
+    assert.ok(ours.log().split("\n").includes(`remove ${lens}`), `the kit-added pi-lens is removed:\n${ours.log()}`);
+    assert.match(done.stdout, /Removed the retired companion pi-lens/);
+    assert.ok(!readMarker(path.join(ours.agentDir, ".pi-kit.json")).companions.some((c) => c.startsWith("npm:pi-lens@")), "the marker no longer records it");
+
+    // Registered by the user (the marker does not record it): kept, with a note naming the command.
+    const theirs = world("theirs", []);
+    const kept = theirs.install();
+    assert.ok(!theirs.log().includes("remove npm:pi-lens"), `a user-added pi-lens is kept:\n${theirs.log()}`);
+    assert.match(kept.stdout, /pi-lens is no longer part of Luna .* You registered npm:pi-lens@4\.4\.4 yourself, so it stays; `pi remove npm:pi-lens@4\.4\.4` removes it\./);
+
+    console.log("  OK: a retired companion the kit added is removed on update (and forgotten); one the user added is kept");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1097,40 +1142,48 @@ try {
   fs.writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$PI_FAKE_LOG"\nexit 0\n`);
   fs.chmodSync(fakePi, 0o755);
 
-  // Pre-seed: kit already registered (local checkout) and pi-lens already installed.
+  // A skipped companion (pi-lean-ctx without its CLI) is never recorded.
+  {
+    const skipDir = path.join(dir, "skip");
+    fs.mkdirSync(skipDir, { recursive: true });
+    fs.writeFileSync(path.join(skipDir, "settings.json"), JSON.stringify({ packages: [ROOT] }, null, 2));
+    run(process.execPath, [INSTALL, "--all", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(skipDir, binDir, path.join(dir, "skip.log")));
+    const skipped = readMarker(path.join(skipDir, ".pi-kit.json"));
+    assert.deepEqual(skipped.companions, EXPECTED_COMPANIONS, "without its CLI pi-lean-ctx is skipped and not recorded");
+  }
+
+  // Pre-seed: kit already registered (local checkout) and pi-readseek already installed by the
+  // operator. pi-lean-ctx's CLI is present, so it is the companion this run installs.
   fs.writeFileSync(
     path.join(agentDir, "settings.json"),
-    JSON.stringify({ packages: [ROOT, EXPECTED_COMPANIONS[0]] }, null, 2),
+    JSON.stringify({ packages: [ROOT, ...EXPECTED_COMPANIONS] }, null, 2),
   );
+  const leanCtxBin = path.join(dir, "lean-ctx");
+  fs.writeFileSync(leanCtxBin, "");
+  const withLeanCtx = { ...baseEnv(agentDir, binDir, logPath), PI_LEAN_CTX_BIN: leanCtxBin };
 
-  run(process.execPath, [INSTALL, "--all", "--settings-only", "--mode", "local", "--scope", "global"], baseEnv(agentDir, binDir, logPath));
+  run(process.execPath, [INSTALL, "--all", "--settings-only", "--mode", "local", "--scope", "global"], withLeanCtx);
 
   const marker = readMarker(path.join(agentDir, ".pi-kit.json"));
   assert.ok(Array.isArray(marker.companions), "marker must record a companions array");
-  const preRegistered = EXPECTED_COMPANIONS[0];
-  const installedHere = EXPECTED_COMPANIONS.slice(1);
+  const installedHere = [LEAN_CTX];
   assert.deepEqual(marker.companions, installedHere, "marker.companions must list exactly the companions this run installed, in sources.json order");
-  assert.ok(preRegistered && !marker.companions.includes(preRegistered), "a companion registered before the install must not be recorded as the installer's");
-  const leanCtx = external.find((e) => e.name === "pi-lean-ctx");
-  if (!leanCtx) throw new Error("sources.json has no pi-lean-ctx entry");
-  assert.ok(!marker.companions.includes(leanCtx.source), "a skipped companion must not be recorded");
+  for (const preRegistered of EXPECTED_COMPANIONS) assert.ok(!marker.companions.includes(preRegistered), "a companion registered before the install must not be recorded as the installer's");
 
   const installLog = fs.readFileSync(logPath, "utf8");
-  assert.ok(!installLog.includes(`install ${EXPECTED_COMPANIONS[0]}`), "an already-registered companion must not be reinstalled");
-  for (const src of EXPECTED_COMPANIONS.slice(1)) {
-    assert.ok(installLog.includes(`install ${src}`), `missing companion ${src} must be installed`);
-  }
+  for (const src of EXPECTED_COMPANIONS) assert.ok(!installLog.includes(`install ${src}`), "an already-registered companion must not be reinstalled");
+  assert.ok(installLog.includes(`install ${LEAN_CTX}`), `missing companion ${LEAN_CTX} must be installed`);
 
   // Uninstall reads the same marker and must remove each recorded companion.
   // The no-op install stub above does not write registrations; model that state
   // here so removal assertions concern installed companions.
-  fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [ROOT, ...EXPECTED_COMPANIONS] }));
+  fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [ROOT, LEAN_CTX, ...EXPECTED_COMPANIONS] }));
   run(process.execPath, [UNINSTALL, "--scope", "global", "--yes"], baseEnv(agentDir, binDir, logPath));
   const uninstallLog = fs.readFileSync(logPath, "utf8");
   for (const src of installedHere) {
     assert.ok(uninstallLog.includes(`remove ${src}`), `uninstall must pass "${src}" to pi remove`);
   }
-  assert.ok(!uninstallLog.includes(`remove ${preRegistered}`), "uninstall must leave the operator's own pre-existing companion registered");
+  for (const preRegistered of EXPECTED_COMPANIONS) assert.ok(!uninstallLog.includes(`remove ${preRegistered}`), "uninstall must leave the operator's own pre-existing companion registered");
   assert.ok(uninstallLog.includes(`remove ${ROOT}`), "uninstall must still remove the kit itself");
 
   console.log(`  OK: marker records the ${marker.companions.length} companion(s) it installed, not the pre-registered one; uninstall removes only those`);
@@ -1144,6 +1197,7 @@ try {
   testFailedUninstallPreservesMarker();
   testRealPiPartialUninstallRetry();
   testPreviousCompanionsRetained();
+  testRetiredCompanion();
   testNullSettingsFile();
   testCaptureOverridesCustomProfile();
   testDryRunSkipsVerifyGate();

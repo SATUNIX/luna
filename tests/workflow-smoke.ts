@@ -314,10 +314,65 @@ steps:
     const bad = await run(def, {}, () => "ok");
     assert.equal(bad.final.status, "failed");
     assert.ok((bad.final.error ?? "").includes(path.join(bad.dir, "report.md")), `the failure names the absolute output path: ${bad.final.error}`);
-    assert.match(bad.final.error ?? "", /declared output\(s\) not written in .*: .*report\.md$/);
+    assert.equal(bad.final.steps.write?.error, `declared output(s) not written in ${bad.dir}: ${path.join(bad.dir, "report.md")}; it wrote no file in the run directory; its final answer is in ${path.join(bad.dir, "steps", "write.md")}`, "an answer with no file fails, naming the path, that nothing was written, and where the answer is");
+    assert.equal(fs.readFileSync(path.join(bad.dir, "steps", "write.md"), "utf8"), "ok", "the answer is kept where the error says");
+    assert.ok(!fs.existsSync(path.join(bad.dir, "report.md")), "the runner does not write the declared output from the answer");
+    // F-03: the step did the work under another name (board-report.md for board-changes.md).
+    const renamed = await run(def.replace("outputs: [report.md]", "outputs: [board-changes.md]").replace("{{file:report.md}}", "{{file:board-changes.md}}"), {}, (task, runDir) => {
+      if (task.startsWith("write")) {
+        fs.writeFileSync(path.join(runDir, "board-report.md"), "THE-WORK");
+        fs.mkdirSync(path.join(runDir, "notes"), { recursive: true });
+        fs.writeFileSync(path.join(runDir, "notes", "scratch.md"), "x");
+      }
+      return "Report written to board-report.md";
+    });
+    assert.equal(renamed.final.status, "failed");
+    assert.equal(renamed.final.steps.write?.error, `declared output(s) not written in ${renamed.dir}: ${path.join(renamed.dir, "board-changes.md")}; it wrote ${path.join(renamed.dir, "board-report.md")}, ${path.join(renamed.dir, "notes", "scratch.md")} instead; its final answer is in ${path.join(renamed.dir, "steps", "write.md")}`, "the failure names the declared path and where the step wrote instead");
+    assert.ok(renamed.calls.some((c) => c.startsWith("write") && c.includes(path.join(renamed.dir, "board-changes.md")) && c.includes("exact file is absent")), "the step's task named the exact declared path before it started");
     assert.ok(bad.calls.some((c) => c.includes(path.join(bad.dir, "report.md")) && c.includes("exact file is absent")), `the failing task names the absolute output path: ${JSON.stringify(bad.calls)}`);
     assert.equal(bad.calls.filter((c) => c.startsWith("write")).length, 1, "a missing output does not re-run an agent");
     ok("declared outputs are enforced; artefacts flow through {{file:}}; when skips");
+  }
+
+  // V5-21: a plan loop. `until` re-runs the step until its answer passes, at most max_iterations runs.
+  {
+    const loopDef = (n: string) => `
+name: loop
+steps:
+  - id: polish
+    agent: implementer
+    task: "polish"
+    until: DONE
+${n}
+  - id: after
+    agent: scout
+    task: "after"
+`;
+    let runs = 0;
+    const stops = await run(loopDef("    max_iterations: 3"), {}, (task) => (task.startsWith("polish") ? `try ${++runs}\nNOT YET` : "ok"));
+    assert.equal(stops.final.status, "failed");
+    assert.equal(stops.calls.filter((c) => c.startsWith("polish")).length, 3, "the loop runs the step exactly max_iterations times");
+    assert.ok(!stops.calls.some((c) => c.startsWith("after")), "the step after a stopped loop does not run");
+    assert.match(stops.final.steps.polish?.error ?? stops.final.error ?? "", /loop polish stopped at max_iterations 3: its answer did not pass until \(needs "DONE"\); it read: try 3 NOT YET/);
+    runs = 0;
+    const settles = await run(loopDef("    max_iterations: 5"), {}, (task) => (task.startsWith("polish") ? (++runs < 2 ? "NOT YET" : "Finished.\nDONE") : "ok"));
+    assert.equal(settles.final.status, "passed");
+    assert.equal(settles.calls.filter((c) => c.startsWith("polish")).length, 2, "the loop stops as soon as the answer passes until");
+    assert.ok(settles.calls.some((c) => c.startsWith("after")), "and the run goes on");
+    runs = 0;
+    const byDefault = await run(loopDef(""), {}, (task) => (task.startsWith("polish") ? "NOT YET" : "ok"));
+    assert.equal(byDefault.calls.filter((c) => c.startsWith("polish")).length, 3, "max_iterations defaults to 3");
+    for (const [extra, why] of [
+      ["    max_iterations: 0", /max_iterations must be a whole number from 1 to 11/],
+      ["    max_iterations: 12", /max_iterations must be a whole number from 1 to 11/],
+      ["    gate: { pass: DONE, retry: polish }", /give the step until or gate, not both/],
+    ] as const) {
+      const r = W.parseWorkflow(wf(loopDef(extra)), path.join(ws, "w.md"), "user");
+      assert.ok(r.errors.some((e) => why.test(e)), `${extra.trim()}: ${JSON.stringify(r.errors)}`);
+    }
+    const noUntil = W.parseWorkflow(wf(loopDef("    max_iterations: 2").replace("    until: DONE\n", "")), path.join(ws, "w.md"), "user");
+    assert.ok(noUntil.errors.some((e) => /max_iterations needs until/.test(e)), JSON.stringify(noUntil.errors));
+    ok("until re-runs a step until it passes and stops at max_iterations (default 3); bad loops are refused");
   }
 
   // 7. Resume after interruption.

@@ -17,7 +17,13 @@ the `packages/autonomy` CLI (`pi-autonomy`): it runs that CLI as a child process
 /autonomy export <run> [dir]                     results, evidence, usage, decisions, the work
 /autonomy inbox [run] [--file <path>] [--answer <card> --value <text>]   owner cards, or waiting runs
 /autonomy reconfigure <run> --effort E4 ...      the only way effort or budgets change for a run
+/autonomy watch [on|off]                         the live run widget: check it now, or turn it off
 ```
+
+While a run is active, a widget above the editor lists the runs (cycle, phase, spend against
+budget, last-event age), refreshed every 2 seconds while a run can change on its own and hidden
+when no run is active
+(docs/autonomy.md, "From inside pi"; `tests/autonomy-command-smoke.ts`).
 
 For a run with generations (Memento mode), `/autonomy status <run>` also shows generation n/N, the
 last rotation reason and the latest notebook (redacted), and sets the footer status line to

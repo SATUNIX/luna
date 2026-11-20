@@ -44,7 +44,8 @@ header and followed by session events such as `agent_start`, `message_end`, `too
 `message_end` whose `role` is `assistant`.
 
 `luna exec` applies the `overrides.json` disable list as `luna` does, and exits 2 when a ceiling is requested but
-the list switches off `goal-core`, the extension that enforces it.
+`goal-core`, the extension that enforces it, is not loaded: it is removed in `overrides.json`, or the
+install marker's extension list (an `--only`/custom install) does not include it.
 
 ### Not covered
 

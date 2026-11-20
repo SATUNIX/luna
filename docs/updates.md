@@ -6,7 +6,7 @@ A pi setup has three parts that update separately:
 |---|---|---|
 | **pi** | The agent binary, TUI and session model | `@earendil-works/pi-coding-agent` on npm |
 | **Luna** | The package: extensions, skills, prompts, profiles, themes | Its public git repository, `github.com/SATUNIX/luna`, on a channel |
-| **Linked packages** | Other pi packages in your settings, including Luna's companions (`pi-lens`, `pi-readseek`, ...) | npm |
+| **Linked packages** | Other pi packages in your settings, including Luna's companions (`pi-readseek`, ...) | npm |
 
 A **profile** is not a part: it is a setting that chooses what loads from Luna (see
 [Profiles](profiles.md)). Updates keep your profile and your hand edits.
@@ -37,6 +37,7 @@ separate and may still appear.
 | `/update status` | Installed and available versions for every part |
 | `/update all` | Update Luna and linked packages, re-apply your profile, reload; then update pi, up to the tested version (below) |
 | `/update kit`, `/update pi`, `/update packages` | Update one part |
+| `/update kit latest` / `next` / `trunk` | Move a local checkout that cannot be pulled to that ref of its origin ([Checkouts](#checkouts)) |
 | `/update undo` | Return Luna and its configuration files to how they were before the last update |
 | `/update channel latest` / `next` / `trunk` / `X.Y.Z` | Follow the other channel, or pin a release |
 
@@ -92,7 +93,7 @@ delivered, its source, version, commit and channel, the pi version, the recorded
 the configuration files an update can change (`settings.json`, the install markers, `firewall.json`,
 `security.json`, `overrides.json`, `profile-settings.json`; never `.env`). If the journal cannot be
 written, the update does not start. `/update undo` reinstalls the recorded Luna version (or commit, or
-resets a local checkout with `git reset --keep`) and then puts those files back byte for byte, removing
+returns a local checkout to its recorded branch and commit, see [Checkouts](#checkouts)) and then puts those files back byte for byte, removing
 one the update created. It offers itself when a step fails, and after a successful update. When the run
 stops after Luna was replaced and before the profile was re-applied, the message also names the exact
 installer command that finishes the job instead. Pinned by `tests/kit-update-smoke.ts` (the journal
@@ -161,10 +162,108 @@ To find the newest release tag: `git ls-remote --tags https://github.com/SATUNIX
 
 ## Checkouts
 
-A **checkout** registered in place for development: `/update kit` runs `git pull --ff-only`,
-re-applies the profile and reloads. Uncommitted work blocks nothing: a fast-forward either
-applies cleanly or fails without changing anything. It is reported as behind only when its
-upstream branch has commits the checkout does not contain.
+A **checkout** registered in place (`node packages/core/install.ts --mode local`) is updated in
+one of two ways, depending on whether its branch has an upstream. Either way the kit root must be
+the top level of its own git checkout (`git rev-parse --show-toplevel`). A copy of Luna without its
+own `.git` inside another repository (for example `proj/vendor/luna`) is reported as not
+updatable, naming the enclosing repository, and `/update` runs no git command against it: fetching,
+checking out or pulling there would change the enclosing repository.
+
+**On a branch with a configured upstream** (any name: `work` tracking `origin/main` counts).
+`/update kit` runs `git pull --ff-only`, re-applies the profile and reloads. Uncommitted work
+blocks nothing: a fast-forward either applies cleanly or fails without changing anything. It is
+reported as behind only when the upstream branch has commits the checkout does not contain.
+
+**On a detached HEAD, or on a branch with no upstream** (for example an installed copy kept as its
+own git worktree on its own branch). A pull cannot move it, so `/update` moves it to a ref of
+origin instead. The check reads origin's refs with `git ls-remote` and reports, under
+`/update status`, the newest release tag, the head of `main` and the head of the trunk branch
+(`git.tagPrefix`, `git.branch` and `git.trunkBranch` in `packages/core/distribution.json`). A ref
+is offered only when moving to it goes forward:
+
+- the checkout does not already contain it;
+- for a release, its version is above the installed one (a lower or equal release is a downgrade,
+  and is reported as not offered);
+- for a branch head, it descends from the checkout's commit. When that commit is already in the
+  checkout, a head off the checkout's line is reported as not offered; when it is not, the fetch
+  step checks it and stops the plan, before anything moves, with the command to move anyway.
+
+Pick the ref like this:
+
+| Command | Moves the checkout to |
+|---|---|
+| `/update kit` (and `/update all`) | The newest release tag, the same default as the `latest` channel |
+| `/update kit next` | The head of `main` |
+| `/update kit trunk` | The head of the trunk branch (opt-in, never the default) |
+
+The bare `/update` list offers each newer ref as its own entry. Only a newer release counts as an
+available update for the start-up notice; a newer `main` or trunk head shows in `/update status`.
+After one confirmation, the plan runs these steps in order, each checked before the next:
+
+1. `git -C <checkout> fetch --no-tags origin <refspec>`: a release tag into the same local tag
+   (never forced), a branch into its remote-tracking ref, so the commit moved to is always held by
+   a ref (checked: the commit is now present and, for a branch head, descends from `HEAD`).
+2. `git -C <checkout> checkout --no-overwrite-ignore --detach <commit>`, which refuses to
+   overwrite local changes and untracked or ignored files the target tracks (checked: `HEAD` is
+   that commit). The branch the checkout was on is not moved.
+3. `npm ci` in the checkout (checked: it rewrote `node_modules/.package-lock.json`).
+4. The moved checkout's own installer in local mode for the recorded profile,
+   `node packages/core/install.ts --profile <profile> --yes --mode local` (with `--scope` when
+   one is recorded): a full install, so the repository verify gate (`npm ci` installed what it
+   needs), companions and pins all run (checked: the install marker was rewritten).
+
+Nothing in the plan runs `git reset --hard`, `git checkout -f` or `git clean`. Instead of moving,
+`/update` refuses, and says which commands are left for you, when:
+
+- tracked files have uncommitted changes (commit or stash them; untracked files do not count);
+- a rebase, merge, cherry-pick or revert (including one of several commits, mid-sequence), `am` or
+  bisect is in progress (finish or abort it);
+- the detached `HEAD` holds commits that no branch, tag or remote-tracking ref holds (the message
+  names `git branch luna-rescue <commit>` to keep them);
+- origin is a retired private source, in any URL or scp form (`git@host:path`, `user@host:path`,
+  `host:path`, `ssh://` with a port): it is never contacted; see [Migration](migration.md);
+- origin, or the remote a branch's upstream names, is not a URL, scp address or local path that
+  `/update` can read: it is not contacted either;
+- there is no `origin` remote (the message names the `git remote add origin` command);
+- origin cannot be reached (offline, or no git credentials for it);
+- the checkout already contains the chosen ref, or it is not offered (the message says why and
+  names any other ref that is newer).
+
+A newer release whose move is refused for a local reason (uncommitted changes, an operation in
+progress, commits only the detached `HEAD` holds) is still reported as an update: the start-up
+notice, the bare `/update` title and `/update status` name the release and say why it cannot be
+applied yet, never "up to date".
+
+Any well-formed URL (`scheme://host[/path]`, any number of path segments) or scp address
+(`[user@]host:path`) that is not a retired source is an ordinary remote. A host is compared
+without letter case and without a trailing dot, so `LEGACY.example.` still names a retired host.
+An address `/update` does not cleanly understand is left uncontacted: one that cannot be read as a
+URL, scp address or local path (`https://bad host/luna.git`, `ssh://`), git's
+`<transport>::<address>` form, and a URL with a malformed percent-escape.
+
+`/update undo` moves back only what the update moved. The journal records whether the update
+pulled the branch or moved the checkout:
+
+- after a move that started on a branch, undo checks that branch out again
+  (`git switch --no-overwrite-ignore --no-guess <branch>`, which takes the name only as a branch, even
+  when a tag shares it) and does not reset it: the move never changed
+  it, so commits made on it since are kept;
+- after a move that started on a detached `HEAD`, undo detaches at the recorded commit
+  (`git checkout --no-overwrite-ignore --detach <commit>`) and resets no branch;
+- after a pull, undo checks the branch out and returns it to the recorded commit with
+  `git reset --keep`. It refuses when the branch has commits
+  since that commit that no remote-tracking ref or tag holds (they would be dropped), naming
+  `git branch luna-rescue <branch>` to keep them; the pulled commits came from the remote, so they
+  never block;
+- for a journal written before the branch was recorded (no `branch` entry), undo does what it
+  always did: `git reset --keep <commit>` on the checked-out branch.
+
+Undo also refuses, changing nothing, while an operation is in progress or while the detached
+`HEAD` holds commits no ref holds, naming `git branch luna-rescue <commit>`. The journal's branch
+must be a valid git branch name and its commit a commit id; anything else is dropped, so the undo
+cannot run a git option. Undo does not run `npm ci` again: run it yourself if
+the dependencies changed. Pinned by `tests/kit-update-local-smoke.ts`, which uses a real temporary
+git repository as origin and a worktree of a clone as the installed copy.
 
 `/update channel latest` (or `next`) from a checkout registers the released Luna instead of the
 checkout. The installer keeps exactly one registered copy of Luna: any other copy (another

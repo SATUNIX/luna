@@ -1,9 +1,9 @@
 // Generated from packages/web-ui/src/public/js/panels.ts by `npm run build:web` (internal/docs/adr/0002).
 // Edit the TypeScript source, not this file.
-// panels.ts — renderers for the inspector (stats / todos / lens) and the Config view.
+// panels.ts — renderers for the inspector (stats / todos) and the Config view.
 import { clear, el } from "./render.js";
 import { formatCost, formatTokens } from "./activity.js";
-import { asRecord, displayText, isArray, isObject, toText } from "./guards.js";
+import { asRecord, displayText, isArray, toText } from "./guards.js";
 function kv(rows) {
     const list = el("dl", { class: "kv" });
     for (const row of rows) {
@@ -96,72 +96,6 @@ export function renderTodos(listNode, data) {
         ]));
     }
 }
-/** pi-lens diagnostics for this session. */
-/** A lens timestamp (ISO string or epoch ms) as a local time. */
-function lensTime(value) {
-    if (!value || (typeof value !== "string" && typeof value !== "number"))
-        return "—";
-    return new Date(value).toLocaleTimeString();
-}
-export function renderLens(bodyNode, lens) {
-    clear(bodyNode);
-    if (!lens?.available) {
-        bodyNode.append(el("p", {
-            class: "muted",
-            text: "No pi-lens state recorded for this session yet.",
-        }));
-        return;
-    }
-    const totals = asRecord(lens.totals);
-    const files = isArray(lens.files) ? lens.files : [];
-    const cache = asRecord(lens.cache);
-    bodyNode.append(kv([
-        {
-            k: "captured",
-            v: lensTime(lens.savedAt),
-        },
-        { k: "files", v: String(files.length) },
-        { section: "diagnostics" },
-        {
-            k: "blocking",
-            v: displayText(totals.blocking || 0),
-            className: totals.blocking ? "warn" : "good",
-        },
-        {
-            k: "errors",
-            v: displayText(totals.errors || 0),
-            className: totals.errors ? "warn" : "good",
-        },
-        {
-            k: "warnings",
-            v: displayText(totals.warnings || 0),
-            className: totals.warnings ? "warn" : "good",
-        },
-        { section: "cache" },
-        {
-            k: "quality files",
-            v: displayText(cache.qualityWarnings || 0),
-        },
-        { k: "findings", v: displayText(cache.findings || 0) },
-    ]));
-    const dirty = files
-        .filter(isObject)
-        .filter((f) => f.blocking || f.errors || f.warnings);
-    if (dirty.length) {
-        bodyNode.append(el("div", { class: "kv-section", text: "files with findings" }));
-        const list = el("ul", { class: "todo-list" });
-        for (const file of dirty.slice(0, 40)) {
-            list.append(el("li", { class: "todo-item" }, [
-                el("span", { class: "todo-mark", text: `${displayText(file.errors || 0)}E` }),
-                el("span", {
-                    class: "todo-text",
-                    text: `${displayText(file.filePath).split("/").slice(-2).join("/")}  (${displayText(file.warnings || 0)}W)`,
-                }),
-            ]));
-        }
-        bodyNode.append(list);
-    }
-}
 /** Installation configuration cards. */
 export function renderConfig(gridNode, config) {
     clear(gridNode);
@@ -184,8 +118,6 @@ export function renderConfig(gridNode, config) {
     const settings = asRecord(config.settings);
     const paths = asRecord(config.paths);
     const agentDirs = isArray(paths.agentDirs) ? paths.agentDirs : [];
-    const lens = asRecord(config.lens);
-    const turn = lens.turn ? asRecord(lens.turn) : null;
     const models = isArray(config.models) ? config.models : [];
     gridNode.append(card("console", [
         ["version", app.version],
@@ -208,12 +140,6 @@ export function renderConfig(gridNode, config) {
         ["kit root", paths.kitRoot],
         ["user agents", agentDirs[0]],
         ["project agents", agentDirs[1]],
-        ["lens", paths.lensDir],
-    ]), card("pi-lens", [
-        ["present", lens.present ? "yes" : "no"],
-        ["session files", lens.sessionCount],
-        ["turn cycles", turn ? turn.cycles : "—"],
-        ["tracked files", turn ? turn.files : "—"],
     ]), card("models", models.map((p) => {
         const provider = asRecord(p);
         return [toText(provider.name), isArray(provider.models) ? provider.models.length : undefined];

@@ -137,8 +137,11 @@ commands that are loaded. The checklist above the editor is read from `TODO.md` 
 columns instead of wrapping onto extra rows. The checklist is mounted as a component and re-cut
 on every render at the width pi passes, so a terminal resize is handled rather than frozen at the
 width seen at mount. An ASCII theme ends the cut with `...`.
-`tests/status-bar-smoke.ts` pins the component mount and a
-narrower render.
+The item text, the branch, the project path and the session name are repository-controlled, so each
+is reduced to one visible line (control and format characters, including C1 CSI and bidi overrides,
+removed) before the layout and width fit; the theme's colour sequences are added afterwards.
+`tests/status-bar-smoke.ts` pins the cut at widths 20 to 120 and the wide/emoji input, the ASCII
+and Unicode bars, the component mount and a narrower render.
 
 ## Where the tokens went: `/usage`
 

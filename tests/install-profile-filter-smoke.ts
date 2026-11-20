@@ -148,12 +148,12 @@ function testRemoveOtherKitEntriesForCheckout() {
     const staleSurface = path.relative(baseDir, path.join(ROOT, "dist", "pi-kit-lite"));
     const root = path.relative(baseDir, ROOT);
     fs.writeFileSync(settingsPath, JSON.stringify({
-      packages: ["npm:pi-lens@3.8.63", staleSurface, "npm:@satunix/pi-system@next", { source: root, extensions: ["packages/extensions/third_party/todo/index.ts"] }, "npm:other-package"],
+      packages: ["npm:example-lint@3.8.63", staleSurface, "npm:@satunix/pi-system@next", { source: root, extensions: ["packages/extensions/third_party/todo/index.ts"] }, "npm:other-package"],
     }, null, 2));
 
     assert.equal(removeOtherKitEntries(settingsPath, ROOT), 2);
     assert.deepEqual(readSettings(settingsPath).packages, [
-      "npm:pi-lens@3.8.63",
+      "npm:example-lint@3.8.63",
       { source: root, extensions: ["packages/extensions/third_party/todo/index.ts"] },
       "npm:other-package",
     ]);
@@ -167,12 +167,12 @@ function testRemoveOtherKitEntriesForNpm() {
     const root = path.relative(baseDir, ROOT);
     const kit = { source: "npm:@satunix/pi-system@next", extensions: ["packages/extensions/third_party/todo/index.ts"] };
     fs.writeFileSync(settingsPath, JSON.stringify({
-      packages: [{ source: root, extensions: [] }, "git:github.com/satunix/pi-system@v0.2.0", kit, "npm:@satunix/pi-balanced", "npm:pi-lens@3.8.63"],
+      packages: [{ source: root, extensions: [] }, "git:github.com/satunix/pi-system@v0.2.0", kit, "npm:@satunix/pi-balanced", "npm:example-lint@3.8.63"],
     }, null, 2));
 
     // The npm entry on another channel is the same package, not a duplicate.
     assert.equal(removeOtherKitEntries(settingsPath, "npm:@satunix/pi-system"), 3);
-    assert.deepEqual(readSettings(settingsPath).packages, [kit, "npm:pi-lens@3.8.63"]);
+    assert.deepEqual(readSettings(settingsPath).packages, [kit, "npm:example-lint@3.8.63"]);
   });
 }
 
@@ -180,11 +180,11 @@ function testRemoveOtherKitEntriesForNpm() {
 // identity, so a profile switch finds (and narrows) the entry whatever channel it tracks.
 function testNpmEntryMatchesAcrossChannels() {
   withTempSettings((settingsPath) => {
-    fs.writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:pi-lens@3.8.63", "npm:@satunix/pi-system@next"] }, null, 2));
+    fs.writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:example-lint@3.8.63", "npm:@satunix/pi-system@next"] }, null, 2));
     const settings = readSettings(settingsPath);
     assert.equal(findPackageEntry(settings, "npm:@satunix/pi-system", settingsPath), 1);
     assert.equal(findPackageEntry(settings, "npm:@satunix/pi-system@0.2.1-beta.0", settingsPath), 1);
-    assert.equal(findPackageEntry(settings, "npm:pi-lens@3.9.0", settingsPath), 0);
+    assert.equal(findPackageEntry(settings, "npm:example-lint@3.9.0", settingsPath), 0);
     assert.equal(findPackageEntry(settings, "npm:@satunix/pi-system-lite", settingsPath), -1);
 
     mergePackageBlock(settingsPath, "npm:@satunix/pi-system", resolveProfile(["todo"]), { skills: ["!packages/kit/skills/memory/SKILL.md"] });
@@ -304,12 +304,12 @@ function testProfileSkillAndOverrideResolution() {
 }
 
 function testCaptureDrift() {
-  const profile = { include: ["todo", "notify", "pi-lens"], skills: { excludeCategories: ["engagement"] } };
+  const profile = { include: ["todo", "notify", "example-lint"], skills: { excludeCategories: ["engagement"] } };
   const entry = {
     extensions: ["packages/extensions/third_party/todo/index.ts", "packages/extensions/src/task-graph/index.ts"],
     skills: ["!packages/kit/skills/api-testing/SKILL.md", "!packages/kit/skills/patch-hygiene/SKILL.md"],
   };
-  const drift = captureDrift(entry, profile, (n: string) => n !== "pi-lens");
+  const drift = captureDrift(entry, profile, (n: string) => n !== "example-lint");
   assert.deepEqual(drift.extensions, { add: ["task-graph"], remove: ["notify"] }, "externals are never reported as removed");
   assert.deepEqual(drift.skills.exclude, ["patch-hygiene"], "exclusions the profile already applies are not captured");
 }
@@ -391,7 +391,7 @@ function testIdentityBridgeCleanup() {
 // is never replaced (so the operator can opt the skills back in), and a companion that declares
 // no filter, or is not registered, is left alone.
 function testApplyCompanionFilters() {
-  const lens = "npm:pi-lens@4.4.4";
+  const lens = "npm:example-lint@4.4.4";
   withTempSettings((settingsPath) => {
     fs.writeFileSync(settingsPath, JSON.stringify({ defaultModel: "keep-me", packages: ["some-other-pkg", lens, "npm:pi-readseek@0.4.26"] }, null, 2));
     const companions = [{ source: lens, skills: [] as string[] }, { source: "npm:pi-readseek@0.4.26" }, { source: "npm:not-registered@1.0.0", skills: [] as string[] }];
@@ -405,12 +405,12 @@ function testApplyCompanionFilters() {
   });
   withTempSettings((settingsPath) => {
     // The entry is on another pinned version, as after a kit update: it is still the same package.
-    const entry = { source: "npm:pi-lens@4.4.3", autoload: false, extensions: ["!extensions/legacy.ts"] };
+    const entry = { source: "npm:example-lint@4.4.3", autoload: false, extensions: ["!extensions/legacy.ts"] };
     fs.writeFileSync(settingsPath, JSON.stringify({ packages: [entry] }, null, 2));
     assert.deepEqual(applyCompanionFilters(settingsPath, [{ source: lens, skills: [] }]), [lens]);
     assert.deepEqual(readSettings(settingsPath).packages, [{ ...entry, skills: [] }], "keys the installer does not own are kept");
   });
-  for (const own of [["+skills/pi-lens-ast-grep"], ["!skills/other"], []]) {
+  for (const own of [["+skills/example-lint-ast-grep"], ["!skills/other"], []]) {
     withTempSettings((settingsPath) => {
       const entry = { source: lens, skills: own };
       fs.writeFileSync(settingsPath, JSON.stringify({ packages: [entry] }, null, 2));

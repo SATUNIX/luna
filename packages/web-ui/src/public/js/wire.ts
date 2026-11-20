@@ -78,14 +78,8 @@ export interface ConfigResponse {
 	readonly paths: {
 		readonly agentDirs: readonly string[];
 		readonly kitRoot: string;
-		readonly lensDir: string | null;
 	};
 	readonly models: readonly ProviderInfo[];
-	readonly lens: {
-		readonly present: boolean;
-		readonly sessionCount: number;
-		readonly turn: { readonly files: number; readonly cycles?: number } | null;
-	};
 }
 
 /** A prompt template or a skill shipped in the kit. */
@@ -248,27 +242,6 @@ export interface TodosResponse {
 	readonly todos: readonly TodoItem[];
 }
 
-export interface LensFile {
-	readonly filePath: string | null;
-	readonly blocking: number;
-	readonly errors: number;
-	readonly warnings: number;
-}
-
-export interface SessionLens {
-	readonly available: boolean;
-	/** An ISO date string, or null when nothing was captured. */
-	readonly savedAt: string | null;
-	readonly files: readonly LensFile[];
-	readonly totals: { readonly blocking: number; readonly errors: number; readonly warnings: number };
-	readonly cache: { readonly qualityWarnings: number; readonly findings: number };
-}
-
-/** GET /api/sessions/:id/lens. */
-export interface LensResponse {
-	readonly lens: SessionLens;
-}
-
 // Acknowledgements of session actions. The client reads nothing from them, so every field is
 // optional: they are narrowed to "a JSON object" and no further.
 /** POST /api/sessions/:id/prompt. */
@@ -299,6 +272,50 @@ export interface ForkResponse {
 /** POST /api/sessions/:id/new: pi's own answer, unchecked. */
 export interface ResetResponse {
 	readonly reset?: unknown;
+}
+
+// ---------------------------------------------------------------- autonomy ---
+// GET /api/autonomy (read-only): the runs, host events and status file under the autonomy state
+// home. Every string in it can carry worker-influenced text, so it is only ever shown as text.
+
+export interface AutonomyRun {
+	readonly run: string;
+	readonly template: string | null;
+	readonly status: string | null;
+	readonly updatedAt: string | null;
+	readonly outcome: { readonly status: string; readonly reason: string } | null;
+	readonly spentUsd: number | null;
+	readonly budgetUsd: number | null;
+	readonly step: number | null;
+	readonly blocker: { readonly kind: string; readonly question: string } | null;
+	readonly lastEventAt: string | null;
+}
+
+export type AutonomyEventField = string | number | boolean | null | readonly string[];
+
+/** One host event log line: the envelope plus its type's own fields. */
+export interface AutonomyEvent {
+	readonly at: string;
+	readonly run: string;
+	readonly type: string;
+	readonly [field: string]: AutonomyEventField;
+}
+
+/** The parts of the reporting status file the panel shows. */
+export interface AutonomyStatus {
+	readonly generatedAt: string;
+	readonly spend: Readonly<Record<string, { readonly todayUsd: number; readonly monthUsd: number }>>;
+	readonly openPrs: readonly { readonly number: number; readonly title: string; readonly ci: string }[] | null;
+}
+
+export interface AutonomyResponse {
+	readonly schemaVersion: 1;
+	readonly at: string;
+	readonly runs: readonly AutonomyRun[];
+	readonly runsTotal: number;
+	readonly events: readonly AutonomyEvent[];
+	readonly status: AutonomyStatus | null;
+	readonly skipped: { readonly runs: number; readonly events: number; readonly status: number };
 }
 
 // ------------------------------------------------------------ event stream ---

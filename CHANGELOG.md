@@ -10,6 +10,153 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **An agent mailbox library (V5-16).** Finding: agents on the machine had no way to message each
+  other; the agent-state files report status only. Fix: `packages/core/shared/agent-mailbox.ts`, one
+  inbox per agent id beside the agent-state files. The sender and the reader must be the process
+  their agent-state file names; the recipient must exist; subject and body are redacted; messages are
+  0600, created exclusively without following links, and capped (8,000-character body, 100 messages
+  and 512 KiB per inbox); links are refused. A message is data, never an approval. Library only: the
+  tools come separately. Not covered: same-user processes can write the files directly. Verification:
+  `tests/agent-mailbox-smoke.ts` (`smoke:agent-mailbox`, in `test:security`).
+
+- **`npm run eval:roi`: tokens and USD per passed task, with a recorded baseline (V5-04).** Finding:
+  the footprint meter prices one request and the live evaluation records usage per case, but nothing
+  related spend to completed work, so a token cut could not be judged by its cost per finished task.
+  Fix: `packages/core/eval/roi.ts` reads autonomous-run ledgers (each cycle a task, passed when merged,
+  usage by cycle and role) and live evaluation output (each case a task), and prints input, cached and
+  output tokens and USD per passed task per profile. The committed fixture of five November runs
+  (33 cycles, 16 merged) is the first baseline: about 24.1 million tokens and $0.61 per merged cycle on
+  `long-horizon`; `eval:roi` fails when the fixtures and `roi-baseline.json` disagree. A live run stays
+  the operator's command. Not covered: one profile, merge as the pass signal, no fixed owner task set.
+  Verification: `tests/eval-roi-smoke.ts` (`smoke:eval-roi`).
+
+- **`/update` moves a local checkout that a pull cannot update.** Finding: for a checkout
+  registered in local mode, `/update kit` always planned `git pull --ff-only`, which cannot work
+  on a detached HEAD or on a branch with no upstream (an installed copy kept as its own git
+  worktree on its own branch); the check compared only origin's branch of the same name, so it
+  never saw a newer release, and updating meant a manual worktree move, `npm ci` and a reinstall.
+  Cause: the local path knew only "pull the tracked branch". Fix: a branch with a configured
+  upstream (any name) keeps the fast-forward pull; otherwise the check reads origin's refs and
+  reports the newest release tag and the heads of `main` and the trunk branch, offering one only
+  when the move goes forward (a release above the installed version, a branch head that descends
+  from the checkout). `/update kit` (and `/update all`) moves to the newest release,
+  `/update kit next|trunk` to a branch head, and the `/update` list offers each newer ref. The
+  plan, under one confirmation, is `git fetch` of the ref into a local tag or remote-tracking ref,
+  `git checkout --no-overwrite-ignore --detach` of its commit, `npm ci` and the checkout's own
+  installer in local mode for the recorded profile, each step verified; it never runs
+  `reset --hard`, `checkout -f` or `clean`. It refuses, naming the commands left, when tracked
+  files have uncommitted changes, a rebase, merge, cherry-pick, revert, `am` or bisect is in
+  progress, the detached HEAD holds commits no ref holds, origin is missing, unreachable, a retired
+  private source in any URL or scp form, or an address it cannot parse (never contacted), or
+  nothing is newer; a newer release whose move is refused is still reported as an update, with
+  the reason, never "up to date". Any well-formed URL or scp address that is not a retired source
+  is an ordinary remote; an address it does not cleanly understand (unparseable, git's
+  `transport::address` form, a malformed percent-escape) is not contacted, and a retired host is
+  recognised whatever its letter case or trailing dot. A kit root that is not the top level of its
+  own git checkout (a copy vendored inside another repository) gets no git command at all, so the
+  enclosing repository is never fetched, checked out or pulled. `/update undo` moves back only what the update moved: the journal now
+  records the branch (validated as a git branch name), the commit (validated as a commit id) and
+  whether the update pulled or moved. After a move it checks the branch out again, or detaches at
+  the recorded commit, and resets no branch; after a pull it resets the branch with
+  `git reset --keep`, refusing when that would drop commits only the branch holds; a journal from
+  before the branch was recorded is undone as before (`git reset --keep` on the checked-out
+  branch). Undo has the
+  same in-progress and orphaned-commit refusals. Verified by `tests/kit-update-local-smoke.ts`
+  (a real temporary origin with release tags and the trunk branch, a worktree of a clone as the
+  installed copy, one regression check per refusal); see `docs/updates.md`. Not covered: undo does
+  not rerun `npm ci`, and only a newer release raises the start-up notice.
+- **AUTHORITY: scheduled runs, `luna schedule` and `/schedule` (V5-14).** `luna schedule add
+  <name> --at "<when>" (--prompt <text> | --config <run.json>)`, `list`, `remove` and `run-now` run
+  a headless `luna exec` or `pi-autonomy up --config` from a systemd user timer, or from a tagged
+  crontab line where `systemctl --user` is unavailable (`hourly`, `daily HH:MM`, `weekly <day>
+  HH:MM`, `every Nm`, `every Nh`). The spec lives in `<state>/luna/schedules/<name>.json` (0600) and
+  the timer or crontab line only runs `luna schedule run-now <name>`, so no prompt is ever quoted
+  into a unit file or shell line. To create a schedule the CLI asks on a terminal or takes `--yes`
+  and otherwise refuses (so an agent that may run it with `--yes` can create one); `/schedule add` (a new `experimental` extension
+  in no profile) asks through pi's confirm dialog and refuses without a UI. Not yet covered: the
+  tool firewall does not classify schedule, unit-file or crontab writes as high (V5-15, guard).
+  This reverses the roadmap's "scheduled runs: not planned". Documented in `docs/schedule.md`;
+  verified by `tests/luna-cli-smoke.ts`, which never calls the real `systemctl` or `crontab`.
+
+- **`pi-autonomy draft --preset luna-self-improve` drafts a run that improves Luna itself
+  (V5-13).** Finding: a run aimed at Luna's own systems still meant choosing a template, a goal and
+  Luna's gate by hand. Fix: the preset fills in the `self-improve` template, a fixed goal and the
+  reference gate (`/opt/autonomy/gate.sh`, 60 minutes) under `draft`'s closed defaults. `--goal`
+  adds a focus, and `--repo` names the checkout. The preset sets no permission, so R3 (control)
+  paths are still refused. `init` gains `--check-minutes` for the checks it writes. Verified by
+  `tests/autonomy-cli-smoke.ts`.
+
+- **Worker slots bound how many autonomy workers run on one host, and what they take together
+  (V5-22).** Finding: only acceptance gates were bounded host-wide (gate slots), so several runs
+  on one host could start as many worker containers as they liked, whatever their CPUs, memory and
+  spend. Fix: the gate-slot mechanism is generalised to weighted bounds. `PI_AUTONOMY_WORKER_SLOTS`,
+  `PI_AUTONOMY_WORKER_CPUS`, `PI_AUTONOMY_WORKER_MEMORY` and `PI_AUTONOMY_WORKER_USD` each cap
+  running workers (by count, container CPUs, container memory and per-step budget). A worker takes
+  its whole share before it starts or waits in a new phase, `worker-wait`, and releases it when it
+  exits. Each bound is off until set, so a host that sets none behaves as before. Verified by
+  `tests/autonomy-lifecycle-smoke.ts` and `tests/autonomy-selfimprove-smoke.ts`.
+- **Task-graph impasses and subgoals, and YAML loop steps (V5-21).** After SOAR: a task can now be
+  at an `impasse`, with subgoals under it (`parent`). When a verify check fails or progress-guard
+  sees a stall, task-graph puts the claimed task at an impasse and adds one pending subgoal; a task
+  with an open subgoal gets no second one, subgoals nest at most two deep and a graph holds at most
+  20. `task_next` hands out the deepest subgoal first, and completing the last open subgoal returns
+  the task to `pending`. No agent or workflow is started. A saved YAML workflow step can take
+  `until` and `max_iterations` (1 to 11, default 3): the step runs again until its answer passes
+  `until`, and the run fails with "loop <id> stopped at max_iterations N" when the runs are used
+  up. It reuses the gate loop (a gate whose retry is the step itself), so worst-case agent counts
+  include it. Verified by `tests/task-graph-invariants-smoke.ts` and `tests/workflow-smoke.ts`.
+
+- **`/herdr`: a small herdr client for the operator (V5-19).** The herdr extension only notified
+  herdr. It now also registers `/herdr list`, `read <agent> [lines]`, `send <agent> <text>` and
+  `spawn <label> [dir]`, which run the `herdr` CLI on `PATH` (argument list, no shell, timeout) from
+  any session, not in a subagent child or with `PI_KIT_HERDR=off`. `send` never answers another
+  agent's dialog: it checks the agent's state first and refuses a blocked agent, and reports
+  herdr's own `agent_blocked` refusal. Nothing moves focus: `spawn` passes `--no-focus` and there is
+  no focus, keys or attach command. Read output has escapes and control characters removed and is
+  redacted. It is a command, not a model tool. Documented in `docs/herdr.md`; verified by
+  `tests/herdr-smoke.ts` against a fake `herdr` on `PATH`.
+
+- **`pi-autonomy draft --goal` and `pi-autonomy up` set a run up from a goal (V5-10, PG-43).**
+  Finding: an agent asked to start a containerised run toward a goal had to drive `init` through many
+  flags, and starting one took dozens of turns of help reads, trial inits and sleep polls. Fix:
+  `draft --goal <text>` writes a contract with closed defaults (no egress, services or credentials;
+  local-branch promotion; attended unless asked; a $5 budget, at most $20) and prints the boundary
+  digest; it authorises nothing. `up --config run.json --json` starts only a contract already
+  authorised for that digest, checks the host as `doctor --setup` does, starts the supervisor in the
+  background and prints one JSON line (`runId`, `pid`, `status`), or a `blocker` and starts nothing.
+  Verified by `tests/autonomy-cli-smoke.ts`.
+
+- **An autonomous run writes a post-mortem when it fails (PG-05).** Finding: when a run failed,
+  `state.json` kept only a failure code, so the cause had to be pieced together from the host event
+  log and `supervisor.log`. Fix: whenever the supervisor records a failure (the run fails, or it stops
+  on a supervisor error or boundary violation), it writes `postmortem.json` in the run directory
+  (schema version 1, mode 0600). It holds the failure code and detail, status, template, step, phase,
+  cycle, usage and budget, the worker, the failing required checks, the last fatal error, the run's
+  last 20 host events and the last 20 lines of `supervisor.log`, with free text redacted. Writing is
+  best effort and never changes the run's outcome. Verified by `tests/autonomy-lifecycle-smoke.ts`.
+
+- **The web console has a read-only Autonomy view.** Finding: the console had no autonomy
+  awareness, so following unattended runs from a browser was not possible. Fix: an authenticated
+  `GET /api/autonomy` (schema version 1; other methods 405) answers with the runs under the
+  autonomy state home (at most 200, with the fields `pi-autonomy status` lists and each run's
+  last-event time), the newest 50 host events and the reporting `status.json` when it is in the
+  state home. A malformed run state, event line or status file is skipped and counted, never
+  fatal. Every string sent passes through the kit's redaction table and is made one visible line,
+  and a FIFO at a file name is skipped rather than waited on. The new **Autonomy** tab lists them
+  as text and polls every 5 seconds while it is shown, one request at a time.
+  The server reads the files with its own parsers, because `packages/autonomy` is not in the
+  published package; type checks tie them to the library's types. No run control. Verified by
+  `tests/web-ui-api-smoke.ts`, `tests/web-ui-security-smoke.ts` and
+  `packages/web-ui/scripts/ui-smoke.ts`; see `docs/web-console.md`.
+- **`/autonomy` shows a live run widget.** Finding: `/autonomy status` printed the run list once
+  and the only persistent surface was a one-line footer, so following a run meant re-running the
+  command. Fix: while a run is active, the `autonomy-run` extension shows a widget with one line
+  per run (id, template, cycle, phase from the host event log, spend against budget, last-event
+  age), cut to the terminal's width and refreshed every 2 seconds through the CLI while a run can
+  change on its own (starting, running or recovering) and for a minute after `/autonomy start` or
+  `resume`; a paused run alone is drawn once, not polled. It hides itself when no run is active,
+  and `/autonomy watch [on|off]` checks it now or turns it off for the session. Verified by
+  `tests/autonomy-command-smoke.ts`.
 - **A host event log for autonomous runs.** Finding: the per-step `events.jsonl` files were a run's
   own detail, and nothing recorded the sequence of what every run on a host did in one place for a
   live view to read. Fix: each supervisor appends `run.started`, `run.status`, `cycle.started`,
@@ -123,6 +270,63 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Changed
 
+- **BREAKING: Luna no longer ships the `pi-lens` companion (V5-01).** Finding: pi-lens's 13 tools
+  added about 18,800 characters to every request in `balanced`, `long-horizon`, `self-improving` and
+  `engagement`, nearly three times `balanced`'s own tool text, and its diagnostics duplicate the
+  verify gate. Fix: it leaves `sources.json` `external` and the four profiles, and `sources.json`
+  gains a `retired` list. The next install, `/profile` switch or `/update` that re-applies a profile
+  runs `pi remove` for a retired companion only when the install marker records that Luna added it,
+  and the marker forgets it; one the user registered stays, and the installer prints the command
+  that removes it. The footprint baseline drops its pi-lens record. The autonomy image no longer
+  installs pi-lens's linters and language servers, and its entrypoint passes pi-lens's
+  `--no-autoformat --no-autofix` only when the kit it runs still registers pi-lens (pi refuses an
+  unknown flag). Not covered: an `/update` of a `custom` or `--all` install does not re-run the
+  installer, so it keeps pi-lens until the next install; the firewall entries, the web console's
+  lens panel and the control centre's lens row are separate changes. Verification:
+  `tests/install-marker-smoke.ts` (a kit-added pi-lens is removed and forgotten, a dry run removes
+  nothing, a user-added one is kept), `tests/companion-integrity-smoke.ts`,
+  `tests/profile-safety-smoke.ts`, `tests/distribution-smoke.ts`.
+- **BREAKING: Luna needs pi 1.4.0 or newer and Node.js 24 or newer (V5-27).** The
+  `peerDependencies` floor moves from 0.85.1 to 1.4.0 and `engines.node` from 22.19.0 to 24.0.0 in
+  every package, and the guided installer and the web console installer check Node 24. Upgrade pi
+  (`npm install -g @earendil-works/pi-coding-agent`) and Node before updating Luna. CI's `pi-compat`
+  matrix (pi 0.85.1 and 0.99.2 on Node 22, eight shards) is now one required floor lane: pi 1.4.0 on
+  Node 24, four shards, still gated by `ci-complete`; `tests/pi-host-peers-smoke.ts` keeps its pi
+  version and Node line equal to the declared floors, and `continue-on-error` is no longer allowed
+  in any workflow. Code kept only for older pi is removed: the hub and workflow panel always open
+  as overlays (no `supportsOverlay` check), the `/menu` header and filter read `ctx.mode` with no
+  `hasUI` fallback, `effort` treats only a `messageType: "user"` turn as the user's, and command
+  handlers take the argument string only (no word arrays). Required check names are unchanged.
+
+- **The container image runs pi-mcp-adapter 7.0.1, with semantic search and extraction pinned off.**
+  Finding: Dependabot's 6.0.0 to 7.0.1 bump (#129) failed the container checks, which pin the
+  version in the Dockerfile, `capability/env/defaults.env` and both compose files. 7.0.0 also
+  replaced `settings.jev` with `settings.semanticSearch` and no longer treats `jev: false` as off:
+  semantic tool search is on for every configured server unless `semanticSearch` is `false`, and it
+  sends tool names and descriptions to a classifier model through Pi's credentials. A plain bump
+  would have turned it back on in the image. Fix: the image pins 7.0.1 everywhere. The overlay's
+  `mcp-adapter.json` sets `semanticSearch: false` and `extraction: false` (7.0.0's typed extraction
+  sends tool results to Cloudflare; it is off by default, now pinned off) and drops `jev`.
+  `validate-engagement-env.sh` and `validate-runtime-readiness.py` require both settings, and the
+  first refuses an overlay that still relies on `jev`. Verified by `tests/container-static-smoke.ts`
+  (a `jev`-only overlay fails, and the adapter pin case no longer names a version), and by hand:
+  pi 1.4.0 with 7.0.1 and the image's overlay and environment offered the model only `mcp` beside
+  the built-in tools, and an `mcp` call reached the governance server
+  (`docs/supply-chain.md` has the review).
+
+- **The container MCP servers take `@modelcontextprotocol/sdk` 1.32.2, and the SDK pin check follows
+  the type mirror.** Finding: Dependabot's 1.32.1 to 1.32.2 bump could never pass
+  `smoke:container-static`, because `scripts/validate-governance-mcp-server.sh` required the literal
+  1.32.1, so every SDK bump needed a hand edit of the validator as well as of the type mirror. Fix:
+  the governance and memory-mcp servers pin 1.32.2 (package.json and lockfile). The validator now
+  reads the version `mcp-servers/types/mcp-sdk.d.ts` says it mirrors and requires both servers to pin
+  exactly that version in package.json, the lockfile root and the locked package, so a bump still
+  cannot land without the mirror being reviewed and moved with it, and the check now covers
+  memory-mcp too. The mirror was checked against 1.32.2's published types: only `Transport`'s
+  optional handlers changed (each now also allows `undefined`), and the mirror follows. Verified by
+  `tests/container-static-smoke.ts`, which now breaks the mirror's version, loosens each server's
+  pin to a range and drifts each lockfile, and expects the validator to fail each time.
+
 - **A plain-text workflow gate must be the whole verdict line.** `gatePasses` used to accept a last
   line that merely contained the pass text, so a bare `PASS` gate passed "VERDICT: FAIL, the tests do
   not pass". The last non-empty line must now equal the pass text, ignoring case, surrounding
@@ -218,7 +422,148 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
   without tool control.
 
+### Removed
+
+- **The web console no longer surfaces the retired pi-lens companion (V5-03).** Finding: pi-lens is
+  under `retired` in `packages/core/sources.json`, but the console still read `~/.pi-lens`, served
+  `GET /api/sessions/:id/lens`, rendered a Lens inspector tab and a pi-lens Config card, and the
+  control centre still listed a `lens.health` action. Fix: removed `server/lens.ts` and the lens
+  route, config fields, wire types, client API, panel, tab and control-centre row, with the web-ui
+  smokes and harness updated. The route now answers 404 and `tests/web-ui-rpc-smoke.ts` asserts it;
+  `scripts/ui-smoke.ts` no longer renders the removed panel. `docs/control-center.md` no longer
+  reports a pi-lens startup figure.
+
 ### Fixed
+
+- **AUTHORITY: `luna schedule` review fixes (DE-118).** Two independent reviews of V5-14 found it not
+  safe as documented. The spec is no longer trusted at run time: `add` resolves the absolute `pi`,
+  node and luna paths, the directory, kind, prompt or config and caps into the spec and pins its
+  SHA-256 in the unit file or crontab line (`run-now <name> --digest <sha256>`); `run-now` refuses a
+  spec that no longer matches, and pi is started by the pinned absolute path, never through a `PATH`
+  the spec supplies. A prompt job always carries `--max-turns`, `--max-cost` and `--timeout`, with
+  defaults (50, $2, 30m) and maxima (500, $50, 12h) checked at add and at run; the systemd service is
+  stopped after the timeout (`TimeoutStartSec`, `RuntimeMaxSec`); two runs of one schedule never
+  overlap, through a lock the kernel releases when its holder exits (an abstract socket on Linux), so a
+  killed run leaves no stale lock; `/schedule run-now` starts the job detached instead of under a
+  120-second command timeout. Only the normalised `--at` reaches the timer, and every path in a unit or
+  crontab line (the state directory included) is limited to letters and digits of any script, space
+  and `_./@+-`, so a non-ASCII home works and a newline, `%`, quote or `$` is refused. The prompt is
+  passed after `--` (`luna exec` gained `--` end of options). A job runs with `LUNA_SCHEDULE_JOB`, under
+  which the CLI and `/schedule` refuse to change schedules: a guard against accident, not enforcement;
+  the enforcement against a job scheduling a job is the firewall rule (V5-15) plus the headless refusal
+  of ask-rated actions. `docs/schedule.md` says what confirms a schedule and what is not covered.
+  Verified by `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`).
+- **Trimming shell operators stuck to a token no longer backtracks (DE-116 follow-up).** CodeQL `js/redos`
+  flagged `/(?:&&|\|\||[;|&])+$/` in the autonomy CLI rule: a token ending in a long `&&` run took exponential
+  time. It is now a plain loop over the trailing characters; a 40,000-character `&&` chain classifies at once and
+  still rates high (`tests/firewall-shell-smoke.ts`).
+
+- **The autonomy CLI rule no longer trusts launches it cannot vouch for (DE-116).** Finding: the narrow
+  matcher rated a reading command routine (low) where the ordinary rules give medium for
+  `PATH=/tmp/x pi-autonomy status`, `export PATH=/tmp/x; pi-autonomy status`, a shell function named
+  `pi-autonomy`, `pnpm exec`, `find -exec`, `xargs` and `parallel` launches, a bare `pi-autonomy` and
+  `nodejs packages/autonomy/cli.ts status`; and control commands were missed when the CLI was named through a
+  variable (`c=pi-autonomy; $c promote`), a computed name, a glob (`node packages/auto*/cli.ts promote`), a
+  launcher (`nvm exec`, `nodemon`, `pm2`, `cross-env`, `fnm exec`, `corepack pnpm exec`, `rustup run`, `c8`),
+  `xargs` with the command on its input, or inline code (`node -pe`, `npx tsx -e`, a heredoc, an awk program).
+  Cause: the narrow matcher did not check the command's environment, functions, wrappers or argument count,
+  and the broad matcher only looked at literal words after a fixed list of interpreters and runners. Fix
+  (`classify.ts` only): the narrow matcher refuses a launch with an assignment, any variable set in the line, a
+  shell function, a wrapper outside `exec`/`nohup`/`setsid`/`stdbuf`/`watch`/`env -S`/`script -c`/`entr -s`/`sh
+  -c`, no command, or `nodejs`; the broad matcher also runs for computed names, resolves variables the line
+  set, matches globs with a hand-written matcher (no pattern compiled from command text; a bracket class it
+  cannot evaluate matches), treats node-family aliases, version managers, coverage tools, supervisors and
+  programs with no rule as launchers, rates `xargs`/`parallel` launches as their worst options, and makes inline
+  code naming the CLI high. The broad matcher also recognises the legacy entry point
+  `packages/autonomy/supervisor.ts`, a word holding a whole command (`pm2 start "pi-autonomy promote"`,
+  `c='pi-autonomy promote'; $c`, `npm exec --call`) and a bin-name glob behind a path (`./pi-auto* promote`).
+  An option=value word under any option name is read by its value as a command, as its space form is
+  (`nodemon --exec="pi-autonomy promote"`, `npx -c='pi-autonomy promote'`, `hyperfine --setup="pi-autonomy
+  promote" true`, `mise exec --command="..."`), and the `=` form of an inline-code option (`node --eval="..."`)
+  is inline code. A program given by a path outside the system directories (`./eslint`, `scripts/git`,
+  `node_modules/.bin/tsc`, `env ./eslint`, `./docker`, `./ssh`) is a launcher whatever its name, since the file
+  may be a trampoline; every command in a word that names the CLI is rated (`--exec="pi-autonomy status;
+  pi-autonomy promote"`), and so are the operands after a word holding the CLI's command (`--exec="pi-autonomy
+  status" promote`), the worst reading standing; and a short option with its value attached is read by its
+  value (`-xpi-auto*`, `-r./packages/autonomy/cli.ts`). It no longer rates as a launch an awk program that only matches text, one-word inline code
+  (`node -c <cli>`, a syntax check), or an unknown program's operand followed only by options the CLI does not
+  accept. Fail closed, so these false positives are high (listed in the README): a static tool's operand
+  (`npx eslint packages/autonomy/cli.ts --fix`), an option word naming the CLI (`node --test
+  --test-name-pattern="pi-autonomy promote" tests/`) and a quoted word naming it with more after it (`--notes
+  "pi-autonomy (promote)"`), a path-qualified program with the CLI's name and another word after it
+  (`./tools/grep pi-autonomy README.md`), an operand after a word holding a reading command (`nodemon --exec
+  "pi-autonomy status" --watch src`) and a short attached glob (`mytool -lp* foo`). A program
+  path is judged once normalised (`/usr/bin/../../tmp/eslint` is not a system program); `PATH` set on the line
+  to anything but system directories and `$PATH` (`PATH=.:$PATH eslint pi-autonomy promote`), a call to a
+  function defined on the line, and `source`/`.` with operands after the file make any program a launcher; and
+  a word is split on the shell's IFS (space, tab, newline) as well as on any whitespace (including U+0085 and
+  the `\x1c`-`\x1f` separators other languages split on), the worst reading
+  standing (`mytool "pi-autonomy status\rpi-autonomy promote"` is high). Not covered (listed in the
+  tool-firewall README): `PATH` set by `typeset` or `readonly` (the shared shell parser does not record it;
+  core item DE-117), names absent from the
+  text, commands other than the CLI through `fnm exec`, `volta run`, `corepack <pm>` and similar launchers,
+  which the parser does not peel yet, `sh -c` positional parameters, a `cd` to a glob, runner directory
+  options, `screen`, and programs with their own rule whose options or operands run a command (`git rebase
+  --exec`, `git bisect run`, `mocha --require`, `jest --setupFiles`, `npm run x --script-shell=`, `vim -c`,
+  `emacs --eval`, `docker exec`, `make CMD=`, `turbo`/`nx`/`lerna` `exec` and `run`), and `PATH` or functions
+  changed outside the line (`hash -p`, `alias`, an earlier tool call). Verification: `tests/firewall-shell-smoke.ts` (the never-lower
+  property over about 2,800 cases, and one named row per guard that fails when that guard alone is
+  reverted).
+
+- **A workflow step that misses a declared output says where it wrote instead (F-03).** Finding:
+  two runs failed on the output contract after doing the work under another name (`board-report.md`
+  for `board-changes.md`, `verify.md` for `verification.md`). The error named only the missing path,
+  so the work had to be found and the workflow re-run by hand. (The step's task already names the
+  exact path.) Fix: the error now also lists the files written in the run directory while the step
+  ran, or says it wrote none, and names `steps/<id>.md`, where its final answer is kept. The runner
+  still never writes a declared output from the answer, which often only describes the report;
+  `docs/workflows.md` says so. Verified by `tests/workflow-smoke.ts` (a step that writes
+  `board-report.md` for `board-changes.md`, and one that writes nothing) and
+  `tests/workflow-plan-smoke.ts`.
+
+- **Each check's full gate log is kept with its step (F-05).** Finding: an acceptance check's gate
+  ran in one shared scratch directory (`gate-work/`) that the runtime wiped before every check, and
+  the evidence file kept only the last 4000 characters (`tail`). The next check, in the same step
+  or a later one, destroyed the earlier log, so a failure from an older step could no longer be read
+  in full. Fix: after each check the runtime copies the gate's top-level `.log` and `.json` files
+  to `steps/NN/checks/<id>.logs/`, and the evidence file lists them as `logs`. The gate ran the
+  worker's code, so only regular files with a plain name are copied (judged with `fstat` on the
+  descriptor opened with `O_NOFOLLOW|O_NONBLOCK`, never by a stat before the open), a link or FIFO
+  is skipped, and
+  each copy is capped (16 files of 8 MiB; a longer log keeps its end). A failed copy is logged and
+  never changes the verdict. Verified by `tests/autonomy-smoke.ts`: two steps of two checks share
+  one wiped scratch directory, and step 1's first log survives in full; links, directories, odd
+  names and oversized files are handled.
+
+- **A missing optional harness command degrades an autonomous run instead of killing it (PG-01).**
+  Finding: the supervisor's start-of-session `get_commands` check required all six harness
+  commands, so when `/subagents` was renamed two runs failed with `worker_unavailable` and stayed
+  down until they were recreated. Fix: the commands are split into core (`/goal`, `/handoff`,
+  `/verify`, `/firewall`: still fail closed, as do a malformed reply and a timeout) and optional
+  (`/orchestrate`, `/trace`): a session without an optional one continues, and the supervisor logs
+  it and writes a new `harness.degraded` host event once per session. A task step whose worker
+  failed the check is no longer accepted when it settles before the check is read. Verified by
+  `tests/autonomy-smoke.ts` and `tests/autonomy-events-smoke.ts`.
+- **The rename of the remaining `pi-system` identities is written down as a proposal (V-103).** Finding:
+  `docs/branding.md` said why the package, paths, compose names and other identities keep `pi-system` but
+  not how they could be renamed, and two placeholders still used the old name (the checkout path in
+  `packages/container/README.md` and the fallback repository in `packages/core/extract-extension.ts`, whose
+  last segment is never used). Fix: `docs/future-work.md` gains the migration steps per identity, linked
+  from the branding page, and both placeholders say `luna`. No identity, path, environment variable or
+  compose name changed. Not covered: the board item's repo-wide brand smoke, which the owner removed as a
+  presentation test; nothing pins the branding page.
+
+- **A host git failure while reconciling a diverged integration branch parks the run on a question
+  (PG-69).** Finding: `gm.reconcileIntegration` ran outside any error handling at cycle start, so a git
+  failure there (adding the worktree, the compare-and-swap `update-ref`, `rev-parse`) escaped the step and
+  paused the run as `supervisor_error`, which a restart resumes straight into the same failure. Cause: only
+  the fetch before it was guarded. Fix: the failure is logged and the run parks on an
+  `integration-reconcile-failed` question that names the branch and both heads (not git's own output);
+  answering retries the reconciliation. No cycle record was at risk: the reconciliation runs before a cycle
+  starts. Not covered: the journal backstop the board item also names (PG-49) is not in this tree, so only
+  the reconciliation half is pinned. Verification: `tests/autonomy-selfimprove-smoke.ts` blocks the mirror's
+  `git worktree add` while the destination has moved; the run parks on the question with the earlier cycle's
+  record and refs intact, and a restarted supervisor stays parked.
 
 - **A cycle the leak scan would refuse to publish is refused at close-out, not merged.** Finding: the
   pre-push leak scan ran only at publication, after the gate and the merge review, so a cycle whose
@@ -319,6 +664,108 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   behind, and about 5,400 had built up. Tests only; no product change.
 
 ### Security
+
+- **The autonomy CLI rule never lowers a rating (DE-115, round 2).** Finding (re-review of the first round):
+  the word guard added there made `node packages/$X/autonomy/cli.ts promote --run r1 --yes` low and
+  `node "$PWD/packages/autonomy/cli.ts" pause` medium, as with a path containing a space; a stdin script
+  (`curl ... | python3 - packages/autonomy/cli.ts status`) was rated as the trusted CLI; `report`'s medium
+  rating and its token-file read applied only to a direct launch, and `--prs-file` and `--alert-state` were not
+  classified; `~-` resolved outside home, so `rm -rf ~-` and writes to `~-/.pi/agent` missed the home rules;
+  a delegated `pause *` could expand into an option. Cause: one matcher served both control detection and the
+  routine rating. Fix: a broad matcher (any word that could be the CLI, expanded or not, as the program or
+  through an interpreter or runner) only adds findings; a narrow matcher (exact, fully literal, direct, every
+  option known) alone grants the routine rating; everything else takes the ordinary rules. `~-`, `$OLDPWD` and
+  a `~+` with no known directory are read as home, the stricter class. A delegated call with an unquoted glob
+  or brace word is decided as usual. Authority change: for operator review. Verification:
+  `tests/firewall-shell-smoke.ts` (a property over 700 launch forms and commands: never lower than without the
+  rule, every control command high; and the named rows), `tests/firewall-delegation-smoke.ts`; each of 22
+  guards was reverted and its test failed.
+
+- **Review fixes for the autonomy CLI rules and operator delegation (DE-115).** Finding (independent
+  review of F-02 part 2 and DE-114): `node -e "...//pi-autonomy"` and `python3 -c "...#/pi-autonomy"` ran
+  arbitrary code rated as the autonomy CLI's routine `status` (low); `/tmp/x/pi-autonomy status` was low
+  by its name alone; `up`, `inbox --answer`, `backlog` and `board` changes were not control commands, and
+  `pi-autonomy report --ntfy-token-file ~/.ssh/id_ed25519 --ntfy-url <any host>` sent a credential file
+  rated low; `cat ~-/.aws/credentials` lost its credential read; delegation allowed `resume` (which can
+  approve or start a run), `answer`, `raise-budget`, `restart`, `units`, `tick` and `board-push`, with
+  any option, so `resume --approve` was delegable; `firewall.json` at a `PI_KIT_FIREWALL_CONFIG` path was
+  not protected, and a delegation change left no audit record. Cause: the CLI was matched by suffix in any
+  operand, including inline code; control was a deny list; option values were not classified; `~-` resolved
+  to nothing; the delegable set was too wide and only the first argument was checked. Fix: inline code is
+  never the CLI and a word with spaces or shell punctuation is never a path to it; its routine and medium
+  ratings apply only to `pi-autonomy` by name or the workspace's CLI script; the CLI's commands are an
+  allow list (reading routine; `report`, `key-limit`, `export`, `doctor --setup`, `boundary --probe`
+  medium; everything else, unknown commands included, control); `--config`, `--file`,
+  `--ntfy-token-file`, `--spec-file` and `--repo` values are reads and `--out` a write; `~-` (and `~+`
+  with no known directory) resolve under a placeholder outside every workspace; delegation covers only
+  `status`, `pause`, `steer`, `backlog` and `metrics`, never with an option, with the grant-like verbs
+  never delegable; the program must be the whole first word; `firewall.json` joins the protected boundary
+  and each change of the delegations is audited as `delegations_changed`. Authority change: for operator
+  review. Verification: `tests/firewall-shell-smoke.ts`, `tests/firewall-delegation-smoke.ts`,
+  `tests/firewall-unattended-smoke.ts`; each of the 16 guards was reverted and its test failed.
+
+- **Naming the autonomy CLI no longer makes a package command routine (DE-114).** Finding: since the
+  previous change to the autonomy CLI's control commands, `npm install left-pad pi-autonomy`, `npx left-pad
+  pi-autonomy` and `npx pi-autonomy status` were low instead of medium (install, or fetch and run), and
+  `npx -p pi-autonomy pi-autonomy pause` ran unasked; `node /opt/x/evil.js pi-autonomy status` had been low
+  before that. Cause: the CLI was matched in any argument after an interpreter or a package runner, and its
+  reading commands were rated low before the package rules ran. Fix: the CLI is recognised only as the program
+  a command runs (a runner's first operand after its options and `--`, or an interpreter's script, also behind
+  `npx tsx`); its reading commands are routine only when run by name, directly or by an interpreter, and a
+  control command still asks however it is reached. Verification: `tests/firewall-shell-smoke.ts`.
+
+- **The operator can delegate named autonomy-control verbs to one program (F-02, part 2).** Finding: the
+  firewall had no way to express the owner's delegation of day-to-day run control to the manager session:
+  every `pause`, `steer` or `status` through the operator's wrapper opened an approval card (10 high
+  escalations, 9 prompts and 1,460 s of waiting in one 189-call session), and the wrapper passed only when
+  its text happened to be opaque to the classifier. Cause: `command_rules` can only deny or ask, and session
+  grants are exact-hash approvals, not delegations. Fix: a `delegations` entry in `firewall.json` names the
+  operator, the delegate program's real path, the verbs and an expiry (at most 90 days ahead); a bash call
+  that is one plain command of a listed verb of that program runs without a prompt in a root session under
+  the coding policy, and is audited as `decider: "delegate"` with the operator, path, verb and expiry. It
+  writes no feedback or approval. Never-delegable verbs, the raw autonomy CLI, `systemctl enable`, any other
+  program, chains, redirects, wrappers, and unattended, child, engagement and strict sessions still need the
+  operator; a malformed, expired, linked, foreign-owned or group-writable entry is dropped with a warning in
+  `/firewall status`. The delegate joins the protected boundary (every configured path, so a dropped entry's
+  delegate cannot be replaced and trusted again), running any protected file as a program or as an
+  interpreter's script is now medium (`protected_exec`) instead of low, and the classifier expands `~+` and
+  `~-` as bash does instead of reading them as relative paths; a `~user/` program never matches a delegation.
+  An adversarial review found these gaps (and two entries for one path honouring only the first) before it
+  landed. Authority change: for operator review before it reaches
+  `integration/luna`. Not covered: what the delegate itself does with a verb. Verification:
+  `tests/firewall-delegation-smoke.ts` (both sides, in `test:security`).
+
+- **The autonomy CLI's control commands ask the operator however the CLI is reached.** Finding: `pause`,
+  `steer`, `start` and the other control commands are high and never learned from an agent's shell, but only
+  when the CLI was typed as `pi-autonomy` or an interpreter running `autonomy/cli.ts`; eight other forms ran
+  unasked or at a learnable medium: `./packages/autonomy/cli.ts pause` (its shebang), `env …/cli.ts`,
+  `cd packages/autonomy && node cli.ts pause` or `./cli.ts`, `npx tsx …/cli.ts`, `npx pi-autonomy steer`,
+  `npm exec pi-autonomy -- pause`, and a copy under `node_modules`. Cause: the classifier matched the typed
+  command name and interpreter arguments only. Fix: the CLI is recognised by its script path, resolved
+  against the directory the command runs in, when run directly or through an interpreter or package runner.
+  Reading commands stay routine. Verification: `tests/firewall-unattended-smoke.ts` adds the eight forms
+  (asked attended, hard-denied in a worker) and a `cd … && node cli.ts status` read; they fail on the
+  earlier classifier. This is the first part of board item F-02, which needs the raw CLI to keep asking.
+
+- **Both guards read patch writers with one shell parser and one rule (A-90, part 3).** Finding: after part 2
+  the firewall rated many patch writers protected-paths refused only medium or low (a heredoc fed to
+  `parallel`, `yash`, `busybox ash` or `make -f -`, text handed to a shell through a substitution, a computed
+  command name, awk's `system()`, a pipe into `make -f -` or a bare `ssh`, a patch tool in `GIT_EDITOR` or
+  `git -c core.editor`); and the parser misread `time -p`, a `case` arm or nested parentheses inside a command
+  substitution (also in a heredoc), a subshell as a case arm, `parallel` with no command (GNU parallel runs its
+  input lines), `watch -d`/`-g`, `nsenter -r`/`-w`, `systemd-run -d`, `xargs -i`/`-l` and `$"git"`. Cause: the
+  firewall's patch reading came partly from the text walker, and these parser gaps. Fix: the parser reads all
+  of these, leaves the directory unknown behind a wrapper option that moves it (`sudo -D` and its prefixes,
+  `nsenter --wd`, `unshare -w`, `systemd-run --working-directory`, `run0 --chdir`, `conda run --cwd` and the
+  like), and treats pdksh and yash as shells; `patchCallsInParse` carries the walker's word-level catch-all
+  onto each parsed command (heredoc and here-string text included) and fails closed on runners fed by any
+  stdin source, scriptless shells after a pipe, process-substitution scripts and build files, run-variables
+  and `git -c` values naming a patch tool, and patch writers applied through ssh; both hooks apply this rule,
+  and the text walker stays beside it in both as a fail-closed backstop. The walker was removed and then
+  restored before this landed: two adversarial reviews of the parser-only reading found about thirty forms
+  only the walker's quote-blind reading caught, so removing it would have loosened both hooks. Verification:
+  `tests/protected-paths-corpus-smoke.ts` refuses all 356 patch forms in both hooks (the protected-paths-only
+  list is gone) and allows all 113 controls.
 
 - **protected-paths reads patch writers with the firewall's shell parser too (A-90, part 2).** Finding:
   protected-paths found patch writers only with a text walker, which read some commands differently from
@@ -888,6 +1335,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   GHSA-h7mg-cq63-vhpq, GHSA-4m76-xfj5-7975; fixed in 4.13.16), both transitive. Both lockfiles now
   resolve `@hono/node-server` 2.1.8 and `hono` 4.13.18 within the existing ranges; no direct dependency
   changed. The `osv-scanner` CI job pins this.
+- **The status bar and the todo checklist no longer print repository-controlled text as written.**
+  A `TODO.md` item and a branch from `.git/HEAD` reached the terminal verbatim, so an OSC 52
+  sequence, `ESC[2J`, a C1 CSI or a bidi override in either was executed by the terminal. The todo
+  item text, branch, project/cwd text and session name now pass through the kit's `oneVisibleLine`
+  (`third_party/custom-footer/shared/visible-text.ts`, a `gen-shared` copy of
+  `packages/core/shared/visible-text.ts`) before layout and width fitting, in both the bar and
+  `/footer status`; the theme's own SGR colour sequences are added afterwards and are unchanged.
+  Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
 
 - **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
   the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave

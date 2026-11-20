@@ -22,6 +22,7 @@ import * as dk from "./docker.ts";
 import type { BoundaryReport, Runtime, StartWorkerOptions, WorkerAgent, WorkerBundle, ZoneContext } from "./engine.ts";
 import { parseProxyConfig, proxyConfigFromContract, type ProxyConfig } from "./egress-proxy.ts";
 import { readJson, writeJsonAtomic } from "./fsutil.ts";
+import { keepGateLogs } from "./acceptance.ts";
 import { HostRepo } from "./hostrepo.ts";
 import type { RunState } from "./lifecycle.ts";
 import { MANAGER_MAX_OUTPUT_TOKENS, REVIEW_MAX_OUTPUT_TOKENS, openRouterComplete, type Complete } from "./manager.ts";
@@ -68,6 +69,8 @@ export interface CheckOutcome {
   tail: string;
   /** Per-step timings from the gate's result.json: written in the gate container, so unchecked. */
   steps?: unknown[] | undefined;
+  /** The gate's log files kept for this check (lib/acceptance.ts keepGateLogs). */
+  logs?: string[] | undefined;
 }
 
 /** A service health probe's answer. */
@@ -189,6 +192,7 @@ export class DockerRuntime implements Runtime {
   sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
   log(line: string): void { console.log(`${new Date().toISOString()} ${line}`); }
   workerProblem(): string | null { return this.harness.failure; }
+  workerDegraded(): readonly string[] { return this.harness.takeDegraded(); }
 
   /** The inference key; preflight() reads it before anything needs it. */
   key(): string {
@@ -516,6 +520,7 @@ export class DockerRuntime implements Runtime {
         clearTimeout(timer);
         const settled = this.harness.settle(msg);
         if (!settled) this.log(`HARNESS FAIL: ${this.harness.failure ?? "the kit harness did not load"}`);
+        else if (this.harness.degraded.length > 0) this.log(`HARNESS DEGRADED: optional commands missing (${this.harness.degraded.join(", ")}); the run continues without them`);
         else this.log("harness verified: kit commands registered");
         return;
       }
@@ -575,7 +580,7 @@ export class DockerRuntime implements Runtime {
   }
 
   // --- trusted checks ----------------------------------------------------------------------------------
-  async runCheck({ check, sha }: { check: AcceptanceCheck; sha: string }): Promise<CheckOutcome> {
+  async runCheck({ check, sha, logDir }: { check: AcceptanceCheck; sha: string; logDir?: string | undefined }): Promise<CheckOutcome> {
     const { p } = this;
     const bundle = path.join(p.bundles, `check-${check.id}.bundle`);
     this.repo.bundleBranch(bundle);
@@ -588,7 +593,12 @@ export class DockerRuntime implements Runtime {
     const read = (f: string): string => { try { return fs.readFileSync(path.join(p.gateWork, f), "utf8").slice(-4000); } catch { return ""; } };
     const detail = readJson(path.join(p.gateWork, "result.json"), null);
     const steps = isRecord(detail) ? detail["steps"] : undefined;
-    return { exitCode: r.code, timedOut: r.timedOut || r.code === 124, seconds: Math.round((Date.now() - started) / 1000), tail: read("gate.log") || read("check.log") || r.stderr.trim().slice(-2000), steps: Array.isArray(steps) ? steps as unknown[] : undefined };
+    // gate-work is wiped before the next check, so keep this check's full logs beside its evidence.
+    let logs: string[] | undefined;
+    if (logDir) {
+      try { logs = keepGateLogs(p.gateWork, logDir); } catch (error) { this.log(`keeping the gate logs of ${check.id} failed: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    return { logs, exitCode: r.code, timedOut: r.timedOut || r.code === 124, seconds: Math.round((Date.now() - started) / 1000), tail: read("gate.log") || read("check.log") || r.stderr.trim().slice(-2000), steps: Array.isArray(steps) ? steps as unknown[] : undefined };
   }
 
   // --- money and models ---------------------------------------------------------------------------------

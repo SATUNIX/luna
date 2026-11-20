@@ -18,11 +18,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { assert, makeChecker, rm, tempDir, type RawContract } from "./autonomy-helpers.ts";
+import { assert, hookedBareRemote, makeChecker, rm, tempDir, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, harness, NODE_EXIT, runOnce, simpleRaw, solve, type ScriptContext } from "./autonomy-harness.ts";
 import { main } from "../packages/autonomy/cli.ts";
 import { EVENTS_FILE, EVENTS_ROTATED, EVENTS_ROTATE_LOCK, MAX_LINE_BYTES, type EventInput, type HostEvent, appendEvent, parseEvent, readEvents, redactEventText } from "../packages/autonomy/lib/events.ts";
 import { UnsafePathError } from "../packages/core/shared/safe-fs.ts";
+import { HARNESS_COMMANDS } from "../packages/autonomy/lib/rpc.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
 
 const { check, done } = makeChecker("autonomy-events-smoke");
@@ -141,12 +142,9 @@ await check("a finite run writes its run events; a log that cannot be written ne
 await check("a publication that keeps failing writes one failed push event, not one per retry", async () => {
   const src = greenRepo();
   const bare = scratch();
-  git(bare, ["init", "--quiet", "--bare"]);
   // The remote refuses every push with the same message, counting them: the seed, the cycle start,
   // the cycle's ticks and the merge each retry the publication.
-  const hook = path.join(bare, "hooks", "pre-receive");
-  fs.writeFileSync(hook, `#!/bin/sh\necho refused >> "${bare}/refusals"\necho "remote refused" >&2\nexit 1\n`);
-  fs.chmodSync(hook, 0o755);
+  hookedBareRemote(bare, `#!/bin/sh\necho refused >> "${bare}/refusals"\necho "remote refused" >&2\nexit 1\n`);
   const raw: RawContract = {
     schemaVersion: 1, run: "events-push-1", template: "self-improve",
     objective: { title: "Improve", spec: "Fix what is broken.", backlog: [{ id: "B-1", title: "Add the marker", detail: "AUDIT_OK must say step 1." }] },
@@ -297,6 +295,42 @@ await check("a symbolic link at the log's name is refused by the writer and the 
   const r = await cli(home, ["events"]);
   assert.equal(r.code, 3, "refused");
   assert.match(r.err, /symbolic link/);
+});
+
+await check("a worker without an optional harness command degrades the run; one without a core command fails it", async () => {
+  const reply = (names: readonly string[]) => ({ type: "response", id: "harness-check", data: { commands: names.map((name) => ({ name })) } });
+  // /orchestrate missing (as /subagents once went missing by rename): the run goes on and says so once per session.
+  const degraded = harness(simpleRaw({ run: "harness-degraded-1" }), { script: solve });
+  const rt = degraded.runtime(solve);
+  rt.harnessReply = reply(HARNESS_COMMANDS.filter((c) => c !== "orchestrate"));
+  const done1 = await runOnce(degraded, { rt });
+  assert.equal(done1.state.status, "succeeded", "the run is not killed for an optional command");
+  const reported = readEvents(degraded.home, { types: ["harness.degraded"] }).events;
+  assert.equal(reported.length, 1, "one event for the session");
+  assert.ok(reported[0]?.type === "harness.degraded");
+  assert.deepEqual(reported[0].missing, ["orchestrate"]);
+  assert.match(fs.readFileSync(degraded.store.p.log, "utf8"), /harness degraded: optional commands missing \(orchestrate\)/);
+  assert.deepEqual(readEvents(degraded.home, { types: ["failure"] }).events, []);
+
+  // /verify (the gate) missing: fail closed, as before, and no degraded event.
+  const broken = harness(simpleRaw({ run: "harness-core-1" }), { script: solve });
+  const rt2 = broken.runtime(solve);
+  rt2.harnessReply = reply(HARNESS_COMMANDS.filter((c) => c !== "verify" && c !== "trace"));
+  const done2 = await runOnce(broken, { rt: rt2 });
+  assert.equal(done2.state.status, "failed");
+  const failure = readEvents(broken.home, { types: ["failure"] }).events.at(-1);
+  assert.ok(failure?.type === "failure");
+  assert.equal(failure.code, "worker_unavailable");
+  assert.match(failure.detail, /missing commands: verify, trace/);
+  assert.deepEqual(readEvents(broken.home, { types: ["harness.degraded"] }).events, []);
+
+  // A bare pi and a malformed reply still fail closed.
+  for (const [run, bad] of [["harness-bare-1", reply(["lens-health"])], ["harness-bad-1", { success: false }]] as const) {
+    const h = harness(simpleRaw({ run }), { script: solve });
+    const r = h.runtime(solve);
+    r.harnessReply = bad;
+    assert.equal((await runOnce(h, { rt: r })).state.status, "failed", run);
+  }
 });
 
 cleanup();

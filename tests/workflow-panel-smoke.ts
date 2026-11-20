@@ -11,10 +11,9 @@
 //   7. a real YAML run (the executor with a fake child) feeds the panel: description, agents,
 //      tokens, models and narration show.
 //   8. outside the TUI the panel prints text (notify in RPC, stderr without UI); in the TUI it
-//      opens a custom component (an overlay on pi 1.3.0 or newer) whose esc closes it and stops
+//      opens a custom component (an overlay) whose esc closes it and stops
 //      its timer. `/workflows panel [id]` is the command that opens it (workflow-tools.ts).
-//   9. the copied supportsOverlay agrees with control-center's and is true from 1.3.0 only; the
-//      extension registers /workflows, and not in a subagent child.
+//   9. the extension registers /workflows, and not in a subagent child.
 //  Script runs (E5 slice S10):
 //  10. render: a nested workflow() shows as a `▸ <name>` group in Phases (with its phases under it)
 //      and in Agents; a journal answer has the ◆ dot and a cached count; badges for
@@ -41,7 +40,6 @@ import type * as PanelModule from "../packages/extensions/third_party/subagent/w
 import type * as RunModelModule from "../packages/extensions/third_party/subagent/run-model.ts";
 import type * as ControlModule from "../packages/extensions/third_party/subagent/control.ts";
 import type * as WorkflowModule from "../packages/extensions/third_party/subagent/workflow.ts";
-import type * as HubModule from "../packages/extensions/src/control-center/hub.ts";
 import type * as EngineModule from "../packages/extensions/third_party/subagent/wf-engine.ts";
 import type * as SandboxModule from "../packages/extensions/third_party/subagent/wf-sandbox.ts";
 import type * as WorkflowToolsModule from "../packages/extensions/third_party/subagent/workflow-tools.ts";
@@ -129,7 +127,6 @@ try {
   const RM = await loadModule<typeof RunModelModule>("vendor/subagent/run-model.ts");
   const C = await loadModule<typeof ControlModule>("vendor/subagent/control.ts");
   const W = await loadModule<WorkflowView>("vendor/subagent/workflow.ts");
-  const H = await loadModule<typeof HubModule>("extensions/control-center/hub.ts");
   const keepalive = setInterval(() => {}, 1000);
 
   // A fixed clock the test moves by hand.
@@ -475,8 +472,7 @@ try {
       },
     };
     await P.openWorkflowPanel(tuiCtx, undefined, registry, narrator);
-    // An overlay only on pi 1.3.0 or newer: the compat lanes run this file on older pi too.
-    assert.deepEqual(options, P.supportsOverlay() ? { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } } : undefined);
+    assert.deepEqual(options, { overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" } });
     assert.ok(rendered.some((l) => l.includes("Workflows (1 run, 1 active)")));
     assert.ok((rendered[0] ?? "").includes("╭") && (rendered[0] ?? "").includes("╮"), "the panel opens inside a top border");
     assert.ok((rendered[rendered.length - 1] ?? "").includes("╰") && (rendered[rendered.length - 1] ?? "").includes("╯"), "the panel closes with a bottom border");
@@ -489,11 +485,8 @@ try {
     ok("text fallback (notify, stderr) and the TUI overlay (esc closes, listeners stop)");
   }
 
-  // 9. supportsOverlay parity; registration.
+  // 9. Registration.
   {
-    for (const v of ["1.4.0", "1.3.0", "1.2.9", "0.85.1", "2.0.0", "v1.3.1-beta.1"]) assert.equal(P.supportsOverlay(v), H.supportsOverlay(v), `supportsOverlay(${v})`);
-    for (const v of ["1.3.0", "1.4.0", "v1.3.1-beta.1"]) assert.equal(P.supportsOverlay(v), true, `supportsOverlay(${v})`);
-    for (const v of ["1.2.9", "0.99.2", "0.85.1"]) assert.equal(P.supportsOverlay(v), false, `supportsOverlay(${v})`);
     const I = await loadModule<{ default: (api: unknown) => void }>("vendor/subagent/index.ts");
     const pi = fakePi();
     I.default(pi.api);
@@ -511,7 +504,7 @@ try {
     for (const name of ["workflow_run", "workflow", "workflow_status", "workflow_control"]) {
       assert.equal(child.tools.find(name), undefined, `a subagent child has no ${name} tool`);
     }
-    ok("supportsOverlay matches control-center; /workflows registered, and neither it nor the workflow tools reach a child");
+    ok("/workflows registered, and neither it nor the workflow tools reach a child");
   }
 
 

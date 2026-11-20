@@ -28,10 +28,11 @@ import { currentTarget, decideRecovery, newlyPassing } from "./recovery.ts";
 import { planReconfigure } from "./reconfigure.ts";
 import { type Measured, type TakenNotebook, HIDDEN_CHARS, WORKER_NOTEBOOK, appendGeneration, readNotebook, renderNotebook, takeWorkerNotebook } from "./notebook.ts";
 import { clip } from "./templates/common.ts";
-import { acquireGateSlot, resolveGateSlots, type GateSlot } from "./gate-slots.ts";
+import { type AcquireWorkerSlotOptions, acquireGateSlot, acquireWorkerSlot, resolveGateSlots, resolveWorkerBounds, type GateSlot, type WorkerBounds, type WorkerSlot, workerPools } from "./gate-slots.ts";
 import { stateHome } from "./paths.ts";
 import { reportRun } from "./agent-report.ts";
 import { type EventInput, appendEvent } from "./events.ts";
+import { writePostmortem } from "./postmortem.ts";
 import { ceilingBreach } from "../../core/shared/ceiling.ts";
 import { BoundaryError, GateWaitInterrupted, LockLost } from "./errors.ts";
 import { stdoutIsFile, writeJsonAtomic } from "./fsutil.ts";
@@ -121,6 +122,8 @@ export interface Runtime extends AcceptanceRuntime {
   setBudgetCap?(usd: number): void;
   /** Why the worker cannot be used (e.g. the kit harness did not load), or null. */
   workerProblem?(): string | null;
+  /** The optional harness commands the current worker session lacks, reported once per session (empty otherwise). */
+  workerDegraded?(): readonly string[];
 }
 
 // --- templates ----------------------------------------------------------------------------------
@@ -221,6 +224,9 @@ export interface EngineOptions {
   gateSlots?: number;
   gateSlotsHome?: string;
   gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
+  /** Host-wide worker bounds (V5-22); default from the PI_AUTONOMY_WORKER_* variables, all unbounded when unset. */
+  workerBounds?: WorkerBounds;
+  workerSlotAcquire?: (o: AcquireWorkerSlotOptions) => Promise<WorkerSlot>;
   log?: ((line: string) => void) | undefined;
 }
 
@@ -329,9 +335,11 @@ export class Engine {
   gateSlotLimit: number;
   gateSlotHome: string;
   gateSlotAcquire: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
+  workerBounds: WorkerBounds;
+  workerSlotAcquire: (o: AcquireWorkerSlotOptions) => Promise<WorkerSlot>;
   clockPaused = false;
 
-  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, log }: EngineOptions) {
+  constructor({ contract, cfg, store, rt, template, lock = null, effortApi, deps = {}, gateSlots, gateSlotsHome, gateSlotAcquire, workerBounds, workerSlotAcquire, log }: EngineOptions) {
     this.contract = contract;
     this.cfg = cfg;
     this.store = store;
@@ -344,6 +352,8 @@ export class Engine {
     this.gateSlotLimit = gateSlots ?? resolveGateSlots();
     this.gateSlotHome = gateSlotsHome ?? stateHome();
     this.gateSlotAcquire = gateSlotAcquire ?? acquireGateSlot;
+    this.workerBounds = workerBounds ?? resolveWorkerBounds();
+    this.workerSlotAcquire = workerSlotAcquire ?? acquireWorkerSlot;
     this.log = log ?? defaultEngineLog(store, rt);
   }
 
@@ -369,7 +379,7 @@ export class Engine {
     this.log(`state ${to}${info.reason ? ` (${info.reason})` : ""}`);
     if (from === "ready" && to === "running") this.emit({ type: "run.started", run: this.store.run, template: this.contract.template });
     this.emit({ type: "run.status", run: this.store.run, from, to, reason: info.reason ?? null, ...(info.by ? { by: info.by } : {}) });
-    if (to === "failed") this.emit({ type: "failure", run: this.store.run, code: info.reason ?? "failed", detail: info.detail ?? "" });
+    if (to === "failed") this.recordFailure(info.reason ?? "failed", info.detail ?? "");
   }
 
   /** Append one event to the host event log (lib/events.ts). Best effort: a failure is logged, never thrown. */
@@ -377,13 +387,22 @@ export class Engine {
     appendEvent(this.store.home, event, this.log, { at: new Date(this.rt.now()).toISOString() });
   }
 
+  /** A failure: the `failure` host event, then <run>/postmortem.json (lib/postmortem.ts), which includes that event. Both best effort. */
+  recordFailure(code: string, detail: string): void {
+    this.emit({ type: "failure", run: this.store.run, code, detail });
+    writePostmortem(this.store, this.state, code, detail, new Date(this.rt.now()).toISOString(), this.log, this.lastWorker);
+  }
+
+  /** The worker container this supervisor last started, kept after stopWorker clears state.worker (for the post-mortem). */
+  lastWorker: string | null = null;
+
   get status(): RunStatus { return this.state.status; }
   get stopFile(): boolean { return fs.existsSync(path.join(this.store.p.root, "STOP")); }
   get stopRequested(): boolean { return this.signalled || this.stopFile; }
   get active(): boolean { return this.state.status === "running" || this.state.status === "recovering"; }
   stepDir(n: number = this.state.step): string { return path.join(this.store.p.steps, String(n).padStart(2, "0")); }
 
-  /** Accrue active minutes and check the contract has not changed under the run. */
+  /** Accrue active minutes, check the contract has not changed under the run, and report a degraded worker harness. */
   tick(): void {
     if (this.lockLost) throw new LockLost();
     const now = this.rt.now();
@@ -391,6 +410,15 @@ export class Engine {
     this.lastTickAt = now;
     this.verifyContractIntact();
     this.writeHeartbeat();
+    this.reportDegraded();
+  }
+
+  /** A worker session without its optional harness commands keeps running; say so once per session (rpc.ts HARNESS_OPTIONAL). */
+  reportDegraded(): void {
+    const missing = this.rt.workerDegraded?.() ?? [];
+    if (missing.length === 0) return;
+    this.log(`harness degraded: optional commands missing (${missing.join(", ")}); the run continues`);
+    this.emit({ type: "harness.degraded", run: this.store.run, missing: [...missing] });
   }
 
   writeHeartbeat(): void {
@@ -438,6 +466,46 @@ export class Engine {
       this.state.phase = prevPhase;
       slot?.release();
     }
+  }
+
+  /**
+   * Start a worker holding its share of the host-wide worker bounds (lib/gate-slots.ts worker
+   * slots): one worker, its CPUs and memory (the run's container limits) and its per-step budget.
+   * The share is released when the worker exits, however it exits. With no bound set this is a
+   * plain call. While waiting this sets phase `worker-wait`, heartbeats and does not accrue
+   * wall-clock minutes, and control commands apply as in a gate wait (GateWaitInterrupted).
+   */
+  async startWorkerInSlot<A extends WorkerAgent>(start: () => A): Promise<A> {
+    const pools = workerPools(this.workerBounds, { cpus: this.cfg.container.cpus, memory: this.cfg.container.memory, perStepUsd: this.state.limits.budget.perStepUsd });
+    if (!pools.length) return start();
+    const prevPhase = this.state.phase;
+    this.tick();
+    this.clockPaused = true;
+    let slot: WorkerSlot;
+    try {
+      this.state.phase = "worker-wait";
+      this.tick();
+      slot = await this.workerSlotAcquire({
+        home: this.gateSlotHome,
+        pools,
+        onWait: () => this.tick(),
+        shouldStop: async () => {
+          if (this.lockLost) throw new LockLost();
+          await this.applyControl();
+          return !this.active || this.stopRequested;
+        },
+      });
+      this.tick();
+    } finally {
+      this.clockPaused = false;
+      this.state.phase = prevPhase;
+    }
+    let agent: A;
+    try { agent = start(); } catch (e) { slot.release(); throw e; }
+    const held = slot;
+    void agent.exited.then(() => { held.release(); }, () => { held.release(); });
+    this.log(`worker slot held: ${Object.entries(held.units).map(([k, v]) => `${k} ${String(v)}`).join(", ")}`);
+    return agent;
   }
 
   /** Spend only ever goes up: the higher of what state recorded and what the meters show now. */
@@ -513,20 +581,20 @@ export class Engine {
       // applyControl already parked or ended the run; a stop that did not (it cannot be active here
       // after a STOP or signal, but never leave a run "running" with no supervisor) parks it.
       if (this.active) this.go("paused", { reason: this.signalled ? "signal" : "stop_file", by: "operator" });
-      this.log(`acceptance interrupted: ${error.message}; the run is ${this.status}`);
+      this.log(`wait interrupted: ${error.message}; the run is ${this.status}`);
       return;
     }
     if (error instanceof LockLost) { this.log("lock lost: another supervisor took over this run; stopping without touching state"); throw error; }
     if (error instanceof BoundaryError) {
       this.log(`BOUNDARY VIOLATION: ${error.message}`);
       try { await this.stopWorker("boundary violation"); } catch { /* ignore */ }
-      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.emit({ type: "failure", run: this.store.run, code: "boundary_violation", detail: error.message }); return; }
+      if (TERMINAL.includes(this.status) || this.status === "budget_exhausted") { this.save((s) => { s.lastError = error.message; }); this.recordFailure("boundary_violation", error.message); return; }
       this.go("failed", { reason: "boundary_violation", detail: error.message });
       return;
     }
     this.log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     try { this.save((s) => { s.lastError = errorText(error).slice(0, 1000); }); } catch { /* ignore */ }
-    this.emit({ type: "failure", run: this.store.run, code: "supervisor_error", detail: errorText(error) });
+    this.recordFailure("supervisor_error", errorText(error));
     if (this.active) this.go("paused", { reason: "supervisor_error", detail: errorText(error).slice(0, 1000) });
     throw error; // parked with the error recorded; can be resumed
   }
@@ -580,6 +648,7 @@ export class Engine {
         if ((["budget_exhausted", "succeeded", "failed", "cancelled"] as readonly RunStatus[]).includes(this.status)) return;
         continue;
       }
+      this.reportDegraded();
       const problem = this.rt.workerProblem?.();
       if (problem) { await this.stopWorker("worker unusable"); this.go("failed", { reason: "worker_unavailable", detail: problem }); return; }
       if (this.template.runStep) await this.template.runStep(this.ctx());
@@ -694,7 +763,7 @@ export class Engine {
   }
 
   // --- worker session ---------------------------------------------------------------------------
-  startSession({ step }: { step: number }): WorkerSession {
+  async startSession({ step }: { step: number }): Promise<WorkerSession> {
     const attempt = (this.state.sessions ?? 0) + 1;
     // The agent is attached once the runtime has started it; the closures below see it through `session`.
     const session: Omit<WorkerSession, "agent"> & { agent: WorkerAgent | null } = {
@@ -719,10 +788,11 @@ export class Engine {
     };
     // A generation without progress under resetOnNoProgress: the worker's branch already points at the accepted head; its workspace follows.
     const resetWorkspace = this.state.generations?.resetPending === true;
-    const live: WorkerSession = Object.assign(session, { agent: this.rt.startWorker({ step, attempt, resetWorkspace, effort: this.state.effort, onEvent }) });
+    const live: WorkerSession = Object.assign(session, { agent: await this.startWorkerInSlot(() => this.rt.startWorker({ step, attempt, resetWorkspace, effort: this.state.effort, onEvent })) });
     if (this.state.generations && resetWorkspace) this.state.generations.resetPending = false;
     void live.agent.exited.then((e) => { live.exited = e ?? { code: 1 }; live.dead = true; });
     this.state.sessions = attempt;
+    this.lastWorker = live.agent.name;
     this.save((s) => { s.worker = { container: live.agent.name, attempt, step, startedAt: new Date(this.rt.now()).toISOString() }; });
     this.session = live;
     return live;
@@ -735,6 +805,7 @@ export class Engine {
   adoptAgent(agent: WorkerAgent, say: ((message: string) => void) | null = null): WorkerSession {
     this.session = { attempt: this.state.sessions ?? 0, agent, settled: false, exited: null, blocker: null, dead: false, lastEventAt: this.rt.now(), activity: [], say };
     void agent.exited.then(() => { if (this.session?.agent === agent) this.session.dead = true; });
+    this.lastWorker = agent.name;
     this.save((s) => { s.worker = { container: agent.name, attempt: s.sessions ?? 0, step: s.step, startedAt: new Date(this.rt.now()).toISOString() }; });
     return this.session;
   }
@@ -763,14 +834,15 @@ export class Engine {
       const limit = this.limitReached();
       if (limit) return { end: "limit", limit };
       if (session.blocker) return { end: "blocked", blocker: session.blocker };
+      // Before `settled`: a session whose harness check failed is not trusted to have finished the step.
+      const problem = this.rt.workerProblem?.();
+      if (problem) return { end: "unusable", problem };
       if (session.exited) return { end: "exited", exit: session.exited };
       const box = this.generationBox();
       if (box) return { end: "generation", box };
       if (session.settled) return { end: "settled" };
       if (this.state.usage.usd - stepStartUsd >= this.state.limits.budget.perStepUsd) { session.agent.send({ type: "abort" }); return { end: "step_budget" }; }
       if ((this.rt.now() - session.lastEventAt) / 60_000 >= IDLE_MINUTES) return { end: "idle" };
-      const problem = this.rt.workerProblem?.();
-      if (problem) return { end: "unusable", problem };
     }
   }
 
@@ -809,7 +881,7 @@ export class Engine {
         }
       }
       if (!(this.startReason === "first" && n === 1)) briefing = await this.briefing(this.startReason);
-      session = this.startSession({ step: n });
+      session = await this.startSession({ step: n });
       if (this.status === "recovering") this.go("running", { reason: "recovery session started" });
     }
     const { stepPrompt } = this.template;

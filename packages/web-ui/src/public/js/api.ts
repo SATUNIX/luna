@@ -112,7 +112,6 @@ function isConfig(value: unknown): value is Wire.ConfigResponse {
 		isRecord(value.settings) &&
 		isRecord(value.paths) &&
 		Array.isArray(value.paths.agentDirs) &&
-		isRecord(value.lens) &&
 		isArrayOf(value.models, isProvider)
 	);
 }
@@ -227,12 +226,28 @@ function isThinkingLevel(value: unknown): value is Wire.ThinkingLevel {
 	return typeof value === "string" && THINKING_LEVELS.includes(value);
 }
 
-function isLens(value: unknown): value is Wire.LensResponse {
+function isAutonomyRun(value: unknown): value is Wire.AutonomyRun {
+	return isRecord(value) && typeof value.run === "string";
+}
+
+function isAutonomyEvent(value: unknown): value is Wire.AutonomyEvent {
 	return (
 		isRecord(value) &&
-		isRecord(value.lens) &&
-		typeof value.lens.available === "boolean" &&
-		Array.isArray(value.lens.files)
+		typeof value.at === "string" &&
+		typeof value.run === "string" &&
+		typeof value.type === "string"
+	);
+}
+
+function isAutonomy(value: unknown): value is Wire.AutonomyResponse {
+	return (
+		isRecord(value) &&
+		value.schemaVersion === 1 &&
+		typeof value.at === "string" &&
+		isArrayOf(value.runs, isAutonomyRun) &&
+		isArrayOf(value.events, isAutonomyEvent) &&
+		(value.status === null || isRecord(value.status)) &&
+		isRecord(value.skipped)
 	);
 }
 
@@ -252,6 +267,7 @@ export const api = {
 	skills: (): Promise<Wire.SkillsResponse> => request("GET", "/api/skills", isSkills),
 	models: (): Promise<Wire.ModelsResponse> => request("GET", "/api/models", isModels),
 	cwds: (): Promise<Wire.CwdsResponse> => request("GET", "/api/cwds", isCwds),
+	autonomy: (): Promise<Wire.AutonomyResponse> => request("GET", "/api/autonomy", isAutonomy),
 
 	agents: (): Promise<Wire.AgentsResponse> => request("GET", "/api/agents", isAgents),
 	agent: (name: string, source?: string | null): Promise<Wire.AgentResponse> =>
@@ -270,8 +286,6 @@ export const api = {
 		request("GET", `/api/sessions/${enc(id)}/stats`, isStats),
 	sessionTodos: (id: string): Promise<Wire.TodosResponse> =>
 		request("GET", `/api/sessions/${enc(id)}/todos`, isTodos),
-	sessionLens: (id: string): Promise<Wire.LensResponse> =>
-		request("GET", `/api/sessions/${enc(id)}/lens`, isLens),
 
 	createSession: (config: Wire.SpawnRequest): Promise<Wire.SessionResponse> =>
 		request("POST", "/api/sessions", isSession, config),

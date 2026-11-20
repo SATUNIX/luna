@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord, parseJson } from "./guard.ts";
-import type { ExternalSource } from "./sources.ts";
+import type { ExternalSource, RetiredSource } from "./sources.ts";
 
 /** An exact `npm:<name>@<version>` companion source, or null for anything else. */
 export function npmSpec(source: string): { name: string; version: string } | null {
@@ -22,6 +22,25 @@ export function npmSpec(source: string): { name: string; version: string } | nul
   const name = m?.[1];
   const version = m?.[2];
   return name !== undefined && version !== undefined ? { name, version } : null;
+}
+
+/** The retired companion an `npm:<package>[@<version>]` source belongs to, or null. */
+export function retiredCompanion(source: string, retired: readonly RetiredSource[]): RetiredSource | null {
+  const m = /^npm:((?:@[^/@]+\/)?[^@]+)(?:@.*)?$/.exec(source);
+  return m ? retired.find((r) => r.package === m[1]) ?? null : null;
+}
+
+/**
+ * What to do with each registered package of a retired companion: `remove` when the install marker
+ * records a source of the same package (the kit added it), `keep` when it does not (the user did).
+ */
+export function retiredCompanionPlan(registered: readonly string[], recorded: readonly string[], retired: readonly RetiredSource[]): { source: string; companion: RetiredSource; action: "remove" | "keep" }[] {
+  return registered.flatMap((source) => {
+    const companion = retiredCompanion(source, retired);
+    if (!companion) return [];
+    const ours = recorded.some((r) => retiredCompanion(r, [companion]) !== null);
+    return [{ source, companion, action: ours ? "remove" as const : "keep" as const }];
+  });
 }
 
 /** A sha512 Subresource Integrity string, as npm records it. */

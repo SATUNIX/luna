@@ -41,7 +41,8 @@ export interface CycleRuntime {
   now(): number;
   sleep(ms: number): Promise<void>;
   /** `say` delivers an operator message to this session (a steer while busy, a prompt when settled). */
-  startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void; say: (message: string) => void }): CycleAgent;
+  /** May wait (for a host-wide worker slot) before the worker starts. */
+  startAgent(o: { attempt: number; onEvent: (ev: RpcFrame) => void; say: (message: string) => void }): CycleAgent | Promise<CycleAgent>;
   headSha(): Promise<string>;
   /** True when the cycle's close-out exists: the worker's note in the state home (lib/receipt.ts), or a report on the branch from a worker that still writes one. */
   reportExists(): Promise<boolean>;
@@ -175,7 +176,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     if (line) { activity.push(line); if (activity.length > 200) activity.shift(); }
   };
 
-  const launch = (text: string): void => {
+  const launch = async (text: string): Promise<void> => {
     attempt++;
     settled = false;
     s.exited = null;
@@ -183,7 +184,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     s.lastEventAt = rt.now();
     followUps = 0;
     // An operator steer from outside the loop (engine.steer) starts a turn like any other message.
-    const started = rt.startAgent({ attempt, onEvent, say: (message) => { say(message); settled = false; } });
+    const started = await rt.startAgent({ attempt, onEvent, say: (message) => { say(message); settled = false; } });
     agent = started;
     void started.exited.then((e) => { if (agent === started) { s.exited = e; dead = true; settled = true; } });
     started.send({ type: "prompt", message: text });
@@ -241,7 +242,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
     return { outcome, reason, attempts: attempt, decisions, costUsd: s.costUsd, head: await rt.headSha(), ...(blocker ? { blocker } : {}) };
   };
 
-  launch(restartBriefing ? `${restartBriefing}\n\n${prompt}` : prompt);
+  await launch(restartBriefing ? `${restartBriefing}\n\n${prompt}` : prompt);
 
   for (;;) {
     await rt.sleep(rt.tickMs);
@@ -278,7 +279,7 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
       rt.onAutoRestart?.(autoRestarts);
       rt.log(`cycle ${NN} automatic restart ${autoRestarts} after session exit (${s.exited?.code ?? "unknown"})`);
       await agent?.stop();
-      launch(`The previous worker process exited. Check git status/log and ${WORKER_NOTE} if it exists; continue the unfinished work, verify, push and write your note.\n\n${prompt}`);
+      await launch(`The previous worker process exited. Check git status/log and ${WORKER_NOTE} if it exists; continue the unfinished work, verify, push and write your note.\n\n${prompt}`);
       continue;
     }
     // The agent finished its turn: done if the report is on the branch, otherwise ask it to finish.
@@ -348,12 +349,12 @@ export async function runCycle({ n, cfg, rt, prompt, restartBriefing, cycleDir, 
         s.extendedMinutes += d.extendMinutes;
         break;
       case "NUDGE":
-        if (s.exited) launch(`${d.message}\n\n${prompt}`);
+        if (s.exited) await launch(`${d.message}\n\n${prompt}`);
         else say(d.message);
         break;
       case "RESTART_SESSION":
         await agent?.stop();
-        launch(`${d.message}\n\n${prompt}`);
+        await launch(`${d.message}\n\n${prompt}`);
         break;
       case "NEW_CYCLE":
         return close("partial", `manager: ${d.reason}`);

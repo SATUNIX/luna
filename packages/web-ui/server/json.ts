@@ -1,4 +1,4 @@
-// json.ts — reading JSON files the console does not own (pi's settings and models, pi-lens state).
+// json.ts — reading JSON files the console does not own (pi's settings and models).
 //
 // Their contents are untrusted: they come back as `unknown` and are narrowed with guard.ts schemas.
 // Another program writes them, so one odd field must not hide the rest of the file: `lenient`

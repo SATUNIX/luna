@@ -234,7 +234,6 @@ export const ROWS: RowDef[] = [
   { id: "firewall.reload", label: "Reload firewall policy", page: "diagnostics", kind: "action", legacy: "/firewall reload" },
 
   // --- companions ---
-  { id: "lens.health", label: "pi-lens health", page: "companions", kind: "action", legacy: "/lens-health" },
   { id: "websearch", label: "Web search", page: "companions", kind: "action", legacy: "/websearch" },
   { id: "litellm.refresh", label: "LiteLLM refresh", page: "companions", kind: "action", legacy: "/litellm-refresh" },
 ];

@@ -12,6 +12,7 @@ import {
 	type Schema,
 } from "../../core/lib/guard.ts";
 import { listAgents, type AgentDefinition } from "./agents.ts";
+import { autonomyView, type AutonomyResponse } from "./autonomy.ts";
 import {
 	KNOWN_TOOLS,
 	createAgent,
@@ -21,7 +22,6 @@ import {
 	type AgentRecord,
 } from "./agentstore.ts";
 import { configInfo, listPrompts, listSkills, type KitEntry } from "./configinfo.ts";
-import { sessionLens, type SessionLens } from "./lens.ts";
 import { listModels } from "./models.ts";
 import { listCwds, listSessions } from "./sessions.ts";
 import {
@@ -137,7 +137,6 @@ export interface SessionsResponse { readonly sessions: SessionSummary[] }
 export interface SessionResponse { readonly session: SessionSummary }
 export interface StopResponse { readonly stopping: true }
 export interface StatsResponse { readonly stats: SessionStats }
-export interface LensResponse { readonly lens: SessionLens }
 export interface PromptResponse { readonly queued: true }
 export interface AbortResponse { readonly aborted: true }
 export interface ModelResponse { readonly model: unknown }
@@ -457,6 +456,13 @@ export async function handleApi(
 			return sendJson(res, 200, { cwds: listCwds() } satisfies CwdsResponse), true;
 		}
 
+		// Read-only: what the autonomy supervisors record under the state home. No run control.
+		if (section === "autonomy" && parts.length === 2) {
+			if (method !== "GET")
+				return sendJson(res, 405, { error: "the autonomy view is read-only" }, { Allow: "GET" }), true;
+			return sendJson(res, 200, autonomyView() satisfies AutonomyResponse), true;
+		}
+
 		// ------------------------------------------------------------- agents ----
 		if (section === "agents") {
 			if (parts.length === 2) {
@@ -554,10 +560,6 @@ export async function handleApi(
 				return (
 					sendJson(res, 200, readTodos(summary.cwd || DEFAULT_CWD, id)), true
 				);
-			}
-
-			if (sub === "lens" && method === "GET") {
-				return sendJson(res, 200, { lens: sessionLens(id) } satisfies LensResponse), true;
 			}
 
 			if (sub === "prompt" && method === "POST") {

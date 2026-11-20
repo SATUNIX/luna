@@ -33,7 +33,7 @@ parallel batch (`tests/check-all-npm-smoke.ts`). Under `--jobs` each check print
 after s seconds, with every process its script started (on POSIX the check runs in its own process
 group, which gets SIGTERM and then SIGKILL), and fails it as `timed out` with the output it printed
 so far, so a hung check is named in the log. The `verify` and `pi-compat` jobs in `ci.yml` run four shards each with
-`--jobs=2 --check-timeout=600` (`pi-compat` at each of its two pi versions), so the union of a
+`--jobs=2 --check-timeout=600` (`pi-compat` at the pi and Node floors), so the union of a
 matrix's shards is the same suite; the `coverage` job uses the same four-way shard split, one
 check at a time, and `coverage-merge` merges its raw data. `ci-complete` waits for every gating
 lane (`tests/workflow-policy-smoke.ts` checks each shard matrix, the coverage artifacts and report,
@@ -167,7 +167,7 @@ everything that reaches the Security tab ([Vulnerability management](vulnerabili
 
 | Control | Fails its job | Blocks a merge to `main` (declared) | Blocks a release | Reaches the Security tab |
 |---|---|---|---|---|
-| `check:all`, docs build, every profile on Linux and Windows, both pi-compat lanes, Android build | Yes | Yes, through the required `ci-complete` | Yes | No |
+| `check:all`, docs build, every profile on Linux and Windows, the pi-compat floor lane, Android build | Yes | Yes, through the required `ci-complete` | Yes | No |
 | CodeQL (`codeql` job) | When the analysis fails | Yes (`codeql`, and the code-scanning `CodeQL` check for new alerts in changed lines) | Yes | Yes, every alert |
 | Semgrep | ERROR severity | Yes (`semgrep`) | Yes | Yes, every unsuppressed result |
 | gitleaks, full history | Any finding | Yes (`gitleaks`) | Yes | No |
@@ -215,8 +215,7 @@ A scanner or check that cannot do its job fails; it never reports a pass over no
   with a checked assignment before looping (`tests/lockfile-check-smoke.ts`,
   `tests/scan-coverage-smoke.ts`).
 - OSV-Scanner fails on a scanner error (above).
-- No gating step uses `continue-on-error` (one reviewed exception: the advisory flag of a pi-compat
-  matrix lane, which is `false` on every lane), `|| true`, `|| :`, `|| exit 0`, `|| echo` or
+- No gating step uses `continue-on-error`, `|| true`, `|| :`, `|| exit 0`, `|| echo` or
   `set +e` (`tests/workflow-policy-smoke.ts`, from the shared list in `tests/ci-fail-open.ts`).
 - `ci-complete` treats any result but `success` of a job it needs, including `skipped` and
   `cancelled`, as a failure. It does not need the measure-only `coverage` or `coverage-merge`

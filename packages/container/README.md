@@ -50,7 +50,7 @@ applied on the next `pi-agent` launch without rebuilding.
 sh scripts/build.sh --dev
 
 # Run with local kit mount
-PI_KIT_PATH=/path/to/pi-system \
+PI_KIT_PATH=/path/to/luna \
 docker compose -f capability/compose/compose.yaml \
                -f capability/compose/compose.dev.yaml \
                --env-file capability/env/defaults.env \
@@ -90,7 +90,7 @@ fails while the live copy differs from the image's (`tests/container-static-smok
 
 ## MCP adapter
 
-The image runs `pi-mcp-adapter@6.0.0` and pi 1.4.0, both installed at build time with
+The image runs `pi-mcp-adapter@7.0.1` and pi 1.4.0, both installed at build time with
 `npm ci --omit=dev --ignore-scripts` from the committed `tools/package-lock.json` (exact versions
 and sha512 integrity for every package in the tree), owned by root. The build fails when the
 installed versions differ from the `PI_CODING_AGENT_VERSION` and `PI_MCP_ADAPTER_VERSION` build
@@ -105,21 +105,22 @@ from nothing else: the image sets `PI_MCP_CONFIG_MODE=exclusive`, so Pi's own `m
 not read. Add a server, such as the Burp bridge in `capability/docs/BURP_MCP.md`, to that file.
 The image also sets `MCP_DIRECT_TOOLS=__none__`, and `mcp-adapter.json` sets
 `namespaceProxyTools: false`, so the model sees one MCP tool, `mcp`, and every MCP call reaches
-`engagement-governance` under that name. Without them, 6.0.0 registers an `mcp__<server>` proxy
+`engagement-governance` under that name. Without them, the adapter registers an `mcp__<server>` proxy
 per server and a deferred `mcp__<server>__<tool>` tool per server tool, and runs each `mcp` call as
-a nested call to that tool, which MCP-only mode blocks. `allowInstall`, `allowScriptToolSave` and
-`jev` are off, so the model cannot add servers or script tools, and tool search never calls the
-remote Jev service.
+a nested call to that tool, which MCP-only mode blocks. `allowInstall` and `allowScriptToolSave` are
+off, so the model cannot add servers or script tools. `semanticSearch` and `extraction` are
+`false`, so tool search stays word-based and no tool list or tool result is sent to a model
+provider; the adapter ignores the older `jev: false`, so the overlay must not rely on it.
 
 `scripts/validate-engagement-env.sh` (run by `tests/container-static-smoke.ts`) fails when a pin
 drifts between the Dockerfile, `tools/package.json` and its lockfile, when the overlay registers the
 adapter from npm, or when one of these settings or one of the two environment variables changes. No
-automated test loads the adapter into pi: the tool surface above was checked by hand in a built
-image.
+automated test loads the adapter into pi: the tool surface above was checked by hand (see the
+pi-mcp-adapter review in `docs/supply-chain.md`).
 
 A data root seeded by an earlier image registers the adapter from npm (`npm:pi-mcp-adapter@...`)
 in its `settings.json`. At start the entrypoint replaces that entry with the image's path and adds
-`"-builtin:mcp"`, keeping every other setting. An earlier `mcp.json` is ignored by 6.0.0; add any
+`"-builtin:mcp"`, keeping every other setting. An earlier `mcp.json` is ignored by the adapter; add any
 server you need to `overlays/pi/mcp-adapter.json` and rebuild, since the live copy is replaced at
 every start.
 

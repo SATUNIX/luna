@@ -159,7 +159,8 @@ SOFTWARE.
     as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
-  - Nothing in the test suite pins this.
+  - Pinned by `tests/status-bar-smoke.ts`, which sweeps the footer at widths 20 to 120 and asserts
+    `visibleWidth` fits, and keeps wide and emoji text in the Unicode bar.
 - 2026-11-18 ASCII status chips.
   - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
     ASCII with its name, or `?`, and keeps ANSI sequences.
@@ -170,6 +171,17 @@ SOFTWARE.
   - `renderFooter` folds every line of an ASCII bar the same way, so a path, branch, model or
     session name with non-ASCII text cannot reach a tty/iso/ansi/ascii terminal
     (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
+  - `commandArgs` takes the command argument as the string pi 1.4.0 and newer pass; the word-array
+    form older pi passed is no longer accepted (`tests/cat-status-smoke.ts`, `tests/status-bar-smoke.ts`).
+- 2026-11-19 repository text is filtered to one visible line.
+  - The todo item text (`widgets.ts`), the branch, the project/cwd text and the session name
+    (`render.ts`, in the bar and in `/footer status`) are repository-controlled and were printed as
+    written, so an OSC 52 clipboard write, `ESC[2J`, a C1 CSI or a bidi override in `TODO.md` or
+    `.git/HEAD` reached the terminal. Each now passes through `oneVisibleLine` from
+    `shared/visible-text.ts` (a generated copy of `packages/core/shared/visible-text.ts`) before
+    layout and width fitting; the theme's colour sequences are added afterwards. Fitting, priority
+    and other extensions' status text are unchanged.
+  - Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
 
 ### `dirty-repo-guard`
 
@@ -285,6 +297,9 @@ SOFTWARE.
     file into `sudo -s`, `su`, `doas -s`, `at` or `batch` are now refused, as are a command name or `eval` text
     computed at run time whose own words name a patch tool, and, on a line naming one, commands fed to
     `make -f -` or a bare `ssh` (`tests/protected-paths-corpus-smoke.ts`)
+  - patch writers are read through the parser by the same rule tool-firewall uses, with the shared text walker
+    kept as a fail-closed backstop in both hooks; every form either reads as a patch write is refused by both
+    (`tests/protected-paths-corpus-smoke.ts`)
   - 2026-11-10: the patch-file reader checks and reads a patch through one file descriptor, and the
     wrapper pattern that finds a patch reader gives each `flock`, `taskset` and `chrt` token one reading,
     so a long line cannot make it backtrack exponentially (CodeQL `js/redos`, `js/file-system-race`)
@@ -582,6 +597,15 @@ SOFTWARE.
     `workerText()`, instead of its own hidden-character class and one-line logic. The 400-character
     cap and the output are unchanged, and the copy is checked by `npm run gen:shared`
     (`tests/run-query-smoke.ts`).
+  - **Loop steps (2026-11-19):** `workflow.ts` `parseStep` reads `until` and `max_iterations` (1 to
+    11, default 3) on a saved YAML step as a gate whose retry is the step itself
+    (`maxLoops = max_iterations - 1`, `StepDef.maxIterations`), refused with `gate` or on a parallel
+    group; the exhausted loop fails with "loop <id> stopped at max_iterations N". `plan.ts` is
+    unchanged, so inline plans do not accept them (`tests/workflow-smoke.ts`).
+  - **Missing declared outputs name what was written (2026-11-19):** `workflow.ts` snapshots the run
+    directory before a step with `outputs` and, when one is missing, `missingOutputsError` names the
+    missing paths, the files written while the step ran (or none) and `steps/<id>.md`. It never
+    writes a declared output from the answer (`tests/workflow-smoke.ts`, `tests/workflow-plan-smoke.ts`).
   - **Whole-line plain-text gate (2026-11-18):** `workflow.ts` `gatePasses` passes a plain-text gate
     only when the last non-empty line, without case, surrounding whitespace or markdown emphasis
     (`verdictKey`), equals the pass text; it was a substring of that line, so a bare `PASS` gate

@@ -123,8 +123,13 @@ fi
 # read-only contract at /run/contract.json) the tool firewall runs in-zone actions without prompts
 # and keeps its hard-deny rules; otherwise its normal prompts reach the supervisor's auto-operator.
 export PI_KIT_AUTO_MODE=0
-# pi-lens: no automatic formatting or fixing (it rewrites whole files the agent touched, which
-# the charter's scoped-diff rule forbids) and no language-server installs (offline).
-export PI_LENS_DISABLE_LSP_INSTALL=1
+# A kit release from before pi-lens was retired still registers it: then no automatic formatting or
+# fixing (it rewrites whole files the agent touched, which the charter's scoped-diff rule forbids) and no
+# language-server installs (offline). pi refuses those flags when pi-lens is not loaded.
+set --
+if grep -q '"npm:pi-lens@' /state/agent/settings.json; then
+  export PI_LENS_DISABLE_LSP_INSTALL=1
+  set -- --no-autoformat --no-autofix
+fi
 exec pi --mode rpc --no-approve --provider "$provider_name" --model "$PI_MODEL" --thinking "${PI_THINKING:-low}" --session-dir /state/sessions \
-  --no-autoformat --no-autofix 1>&3
+  "$@" 1>&3

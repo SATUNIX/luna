@@ -210,8 +210,7 @@ const CONFIG_STUB = {
 		theme: "t",
 		packages: 3,
 	},
-	paths: { kitRoot: "/k", agentDirs: ["/u", "/p"], lensDir: "/l" },
-	lens: { present: true, sessionCount: 2, turn: { cycles: 1, files: 4 } },
+	paths: { kitRoot: "/k", agentDirs: ["/u", "/p"] },
 	models: [{ name: "ollama", models: [{ id: "m" }] }],
 };
 
@@ -459,7 +458,6 @@ interface ApiModule {
 interface PanelsModule {
 	renderStats: (target: Node, stats: unknown, summary: unknown) => void;
 	renderTodos: (target: Node, data: unknown) => void;
-	renderLens: (target: Node, lens: unknown) => void;
 	renderConfig: (target: Node, config: unknown) => void;
 }
 
@@ -476,7 +474,6 @@ const API = { api: "object", setUnauthorizedHandler: "function" } as const;
 const PANELS = {
 	renderStats: "function",
 	renderTodos: "function",
-	renderLens: "function",
 	renderConfig: "function",
 } as const;
 
@@ -1010,7 +1007,7 @@ try {
 
 // Re-render panels against live-ish shapes to prove the render paths do not throw.
 try {
-	const { renderStats, renderTodos, renderLens, renderConfig } = await loadModule<PanelsModule>(
+	const { renderStats, renderTodos, renderConfig } = await loadModule<PanelsModule>(
 		"panels.js",
 		PANELS,
 	);
@@ -1083,15 +1080,6 @@ try {
 	});
 	ok("renderTodos");
 
-	renderLens(target, {
-		available: true,
-		savedAt: new Date().toISOString(),
-		files: [{ filePath: "/a/b/c.ts", errors: 1, warnings: 2, blocking: 0 }],
-		totals: { blocking: 0, errors: 1, warnings: 2 },
-		cache: { qualityWarnings: 3, findings: 1 },
-	});
-	ok("renderLens");
-
 	renderConfig(target, {
 		app: {
 			version: "0.1.0",
@@ -1114,8 +1102,7 @@ try {
 			theme: "t",
 			packages: 3,
 		},
-		paths: { kitRoot: "/k", agentDirs: ["/u", "/p"], lensDir: "/l" },
-		lens: { present: true, sessionCount: 2, turn: { cycles: 1, files: 4 } },
+		paths: { kitRoot: "/k", agentDirs: ["/u", "/p"] },
 		models: [{ name: "ollama", models: [1] }],
 	});
 	ok("renderConfig");
@@ -1149,6 +1136,108 @@ try {
 	ok("renderSessions");
 } catch (err) {
 	bad(`render paths: ${describeError(err, true)}`);
+}
+
+// The Autonomy view (GET /api/autonomy): runs, recent events and the status file, rendered as
+// text. Worker-influenced strings must stay text: no element is ever made from them.
+interface AutonomyModule {
+	renderAutonomy: (target: Node, data: unknown, now?: number) => void;
+	renderAutonomyError: (target: Node, message: string) => void;
+	formatAge: (at: unknown, now?: number) => string;
+	oneAtATime: (load: () => Promise<void>) => () => Promise<boolean>;
+}
+try {
+	const { renderAutonomy, renderAutonomyError, formatAge, oneAtATime } = await loadModule<AutonomyModule>("autonomy.js", {
+		renderAutonomy: "function",
+		renderAutonomyError: "function",
+		formatAge: "function",
+		oneAtATime: "function",
+	});
+	const now = Date.parse("2026-11-18T10:10:00.000Z");
+	const target = new Node();
+	const hostile = "<img src=x onerror=alert(1)>";
+	renderAutonomy(
+		target,
+		{
+			schemaVersion: 1,
+			at: "2026-11-18T10:10:00.000Z",
+			runs: [
+				{
+					run: "r-good", template: "implement", status: "blocked", updatedAt: null, outcome: null, step: 3,
+					spentUsd: 1.5, budgetUsd: 10, blocker: { kind: "question", question: hostile }, lastEventAt: "2026-11-18T10:05:00.000Z",
+				},
+			],
+			runsTotal: 1,
+			events: [
+				{ v: 1, at: "2026-11-18T10:09:00.000Z", run: "r-good", type: "gate.result", n: 1, green: false, failing: ["unit", "lint"] },
+				{ v: 1, at: "2026-11-18T10:09:30.000Z", run: "r-good", type: "failure", code: "boom", detail: hostile },
+			],
+			status: { generatedAt: "2026-11-18T10:00:00.000Z", spend: { openrouter: { todayUsd: 0.5, monthUsd: 4 } }, openPrs: [{ number: 7, title: "t", ci: "green" }] },
+			skipped: { runs: 1, events: 0, status: 0 },
+		},
+		now,
+	);
+	const shown = allText(target);
+	check(
+		["r-good", "implement", "blocked: question:", "$1.50 / $10.00", "5m ago", "failing=unit,lint", "openrouter", "#7", "skipped 1 unreadable run(s)"]
+			.every((part) => shown.includes(part)),
+		"autonomy view: runs, spend/budget, last-event age, events, status file and skips shown",
+		`autonomy view: missing text in ${shown}`,
+	);
+	check(
+		shown.includes(hostile) && findAll(target, isTag("img")).length === 0,
+		"autonomy view: worker text is shown as text, never parsed as markup",
+		"autonomy view: worker text became an element",
+	);
+	const rows = findAll(target, hasClass("autonomy-events"))[0];
+	const firstRow = rows ? findAll(rows, isTag("td"))[0] : undefined;
+	check(
+		firstRow?.textContent === "30s ago",
+		"autonomy view: events listed newest first",
+		`autonomy view: first event row is ${asText(firstRow?.textContent)}`,
+	);
+	check(
+		formatAge("not a time", now) === "—" && formatAge("2026-11-16T11:10:00.000Z", now) === "47h" && formatAge("2026-11-15T10:10:00.000Z", now) === "3d",
+		"autonomy view: ages are bounded words, unknown is a dash",
+		"autonomy view: age formatting is wrong",
+	);
+	renderAutonomy(target, { schemaVersion: 1, at: "2026-11-18T10:10:00.000Z", runs: [], runsTotal: 0, events: [], status: null, skipped: { runs: 0, events: 0, status: 0 } }, now);
+	check(
+		allText(target).includes("No runs in the autonomy state home."),
+		"autonomy view: an empty state home says so",
+		"autonomy view: no empty-state message",
+	);
+	renderAutonomyError(target, "access token required");
+	check(
+		allText(target).includes("access token required"),
+		"autonomy view: a failed read shows its reason",
+		"autonomy view: error not shown",
+	);
+	// The poll's guard: a tick while a read is pending is skipped, and the next one runs again.
+	let started = 0;
+	let finish: () => void = () => undefined;
+	const guarded = oneAtATime(() => { started += 1; return new Promise<void>((resolve) => { finish = resolve; }); });
+	const first = guarded();
+	const overlapped = await guarded();
+	finish();
+	const firstRan = await first;
+	const after = guarded();
+	finish();
+	check(
+		firstRan && !overlapped && (await after) && started === 2,
+		"autonomy view: polls never overlap (a tick while a read is pending is skipped)",
+		`autonomy view: overlapping polls (started ${started}, overlapped ran: ${String(overlapped)})`,
+	);
+	const appSource = fs.readFileSync(path.join(ROOT, "public", "js", "app.js"), "utf8");
+	check(
+		/const loadAutonomy = oneAtATime\(/.test(appSource) &&
+		/data-view="autonomy"/.test(html) && /id="autonomy-body"/.test(html) &&
+		/state\.view === "autonomy" && !document\.hidden/.test(appSource),
+		"autonomy view: in the navigation, polled only while shown and visible",
+		"autonomy view: not wired into the page",
+	);
+} catch (err) {
+	bad(`autonomy view: ${describeError(err, true)}`);
 }
 
 // The phone's dialog cards (mobile/js/chat.js render through render.js). A tap answers once:

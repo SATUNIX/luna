@@ -19,7 +19,7 @@ describes. Commands are for the operator: the model cannot call them.
 | Command | Extension | Description | Documented in |
 |---|---|---|---|
 | `/auto` | `tool-firewall` | Auto mode: /auto [status\|on\|off\|explain [n]\|learned\|forget <sig>\|learn on\|off\|stats\|profile [rebuild\|reset]\|check <command>] | [autonomy-gate](autonomy-gate.md) |
-| `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|inbox\|boundary\|reconfigure. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
+| `/autonomy` | `autonomy-run` | Start and manage autonomous runs in a hardened container: /autonomy templates\|init\|plan\|start\|status\|pause\|resume\|steer\|cancel\|promote\|export\|inbox\|boundary\|reconfigure\|watch. A run only starts after you confirm its boundary. | [autonomy](autonomy.md) |
 | `/away` | `tool-firewall` | /away [--for 2h] [--budget 5] \| off \| status. Automatic approvals for a bounded time and budget; anything that would need your approval is refused with the reason. Needs the terminal of an interactive session. | [autonomy](autonomy.md) |
 | `/boost` | `progress-guard` | Auto-boost control: /boost reassesses now; /boost [on\|off\|status]. 'on' auto-nudges on detected loops this session. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/capture` | `tool-capture` | Tool I/O capture: status, or `prune` to apply the disk budget now. | [tool-capture](tool-capture.md) |
@@ -39,6 +39,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/footer` | `custom-footer` | Status bar: /footer default\|light\|heavy, /footer on\|off, /footer status (every detail the bar drops when narrow), /footer reload, /footer todos on\|off, /footer ascii on\|off, /footer cat on\|off, /footer config | [troubleshooting](troubleshooting.md) |
 | `/goal` | `goal-core` | Set or clear the mission goal: /goal <description> \| /goal clear \| /goal show | [control-center](control-center.md) |
 | `/handoff` | `handoff` | Write a handoff note to HANDOFF.md. Usage: /handoff <note> | [control-center](control-center.md) |
+| `/herdr` | `herdr` | herdr client: list agents, read one's output, send one a prompt, open a workspace (never answers a dialog or moves focus) | [herdr](herdr.md) |
 | `/improve` | `self-improvement` | Self-improvement cycle: mine traces → propose a reviewable diff. `/improve arm [id]` applies a written proposal (default: the newest) to AGENTS.md. | [control-center](control-center.md) |
 | `/loop` | `autonomous-loop` | Enable autonomous loop: /loop <goal> starts the loop; /loop stop ends it. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/memory` | `memory-vault` | Memory vault: /memory [status\|recent\|search <q>\|forget <id>\|migrate] | [memory](memory.md) |
@@ -52,6 +53,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/remote` | `remote-control` | Drive this pi from the pi remote Android app: share this session, link phones, manage the host | [remote-control](remote-control.md) |
 | `/review` | `dual-review` | Spawn a reviewer agent on the current git diff. Optionally pass a path argument. | [control-center](control-center.md) |
 | `/save` | `save` | Write a check-in snapshot of this session to disk without compacting. Usage: /save [--project "Name"] [--no-update] [note] | [control-center](control-center.md) |
+| `/schedule` | `schedule` | Scheduled Luna runs: list, add (asks first), remove, run-now (systemd user timers or crontab) | [schedule](schedule.md) |
 | `/security` | `tool-firewall` | /security [off\|balanced\|guarded\|strict] \| status \| explain [level] \| reset. Changes apply immediately. Weakening needs a confirmation at the terminal of an interactive root session. off is unavailable. | [control-center](control-center.md) |
 | `/skills` | `skill-router` | List installed skills: which are listed in the prompt, which are on-demand (skill_search / hints), and their triggers. | [control-center](control-center.md) |
 | `/status` | `control-center` | Show what is installed and running, one line each with the command for detail | [control-center](control-center.md) |
@@ -60,7 +62,7 @@ describes. Commands are for the operator: the model cannot call them.
 | `/trace` | `trace-ledger` | Summarize the action ledger (.pi/trace.jsonl): call counts, errors, and repeated reads. | [efficiency-and-loops](efficiency-and-loops.md) |
 | `/trigger-compact` | `trigger-compact` | Trigger compaction immediately, optionally with custom instructions | — |
 | `/undo` | `git-checkpoint` | Put the working tree back to the latest checkpoint (or /undo <n>), showing what changes first | [profiles](profiles.md) |
-| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
+| `/update` | `kit-update` | Check for and apply updates to pi, Luna (on its latest/next/trunk channel, from git or npm) and linked packages: `/update`, `/update status`, `/update all\|kit\|pi\|packages`, `/update kit latest\|next\|trunk` (a local checkout), `/update channel <latest\|next\|trunk\|X.Y.Z>`. | [updates](updates.md) |
 | `/usage` | `trace-ledger` | Where this session's tokens and money went: by model, child and tool, cache hit rate, the largest results. | [status-bar-and-costs](status-bar-and-costs.md) |
 | `/verdicts` | `verifier-board` | Show the verifier board and what done means here. /verdicts clear resets the board. | `packages/extensions/src/verifier-board/README.md` |
 | `/verify` | `verify-gate` | Check that the goal, todos, and requests are done: runs the project check (if any) and an independent read-only reviewer. /verify [focus] | [INSTALL](INSTALL.md) |
@@ -332,18 +334,18 @@ Extension `task-graph`. List tasks in the graph, optionally filtered by status.
 
 ### `task_next`
 
-Extension `task-graph`. Claim the next actionable task (pending, dependencies done) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
+Extension `task-graph`. Claim the next actionable task (pending, dependencies done; a subgoal of a task at an impasse first) and mark it in_progress, so a second call never returns the same one. A claim not renewed by task_update within the lease (PI_KIT_TASK_GRAPH_LEASE_MS, default 1 hour) returns to pending.
 
 Parameters: none.
 
 ### `task_update`
 
-Extension `task-graph`. Update a task's status (pending\|in_progress\|done\|blocked) and/or notes.
+Extension `task-graph`. Update a task's status (pending\|in_progress\|done\|blocked\|impasse) and/or notes.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `id` | string | Task ID |
-| `status?` | string | pending \| in_progress \| done \| blocked |
+| `status?` | string | pending \| in_progress \| done \| blocked \| impasse |
 | `notes?` | string | Progress notes |
 
 ### `todo`

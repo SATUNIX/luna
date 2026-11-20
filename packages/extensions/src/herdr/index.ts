@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import net from "node:net";
 import { redact } from "./shared/redact.ts";
 import { agentStateDir, buildAgentState, writeAgentState, type AgentState, type AgentStateName } from "./shared/agent-state.ts";
+import { herdrCommand, runHerdrCli, type HerdrRun } from "./client.ts";
 
 /**
  * herdr bridge. Inside a herdr pane it tells herdr when Luna needs the operator, and says so with a
@@ -23,10 +24,15 @@ export type Attention = { kind: string; label: string; active?: boolean };
 const CONTROL = /\p{Cc}/gu;
 const clean = (text: unknown, max = 120): string => (typeof text === "string" ? text : "").replace(CONTROL, " ").replace(/\s+/g, " ").trim().slice(0, max);
 
-export function herdrSocket(env: NodeJS.ProcessEnv = process.env): string | undefined {
+/** False when PI_KIT_HERDR turns the integration off, and in a subagent or internal child session. */
+export function herdrEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const off = (env.PI_KIT_HERDR ?? "").trim().toLowerCase();
-  if (off === "0" || off === "off" || off === "false") return undefined;
-  if (env.PI_SUBAGENT_CHILD === "1" || env.PI_KIT_INTERNAL_CHILD === "1") return undefined;
+  if (off === "0" || off === "off" || off === "false") return false;
+  return !(env.PI_SUBAGENT_CHILD === "1" || env.PI_KIT_INTERNAL_CHILD === "1");
+}
+
+export function herdrSocket(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!herdrEnabled(env)) return undefined;
   return env.HERDR_ENV === "1" && env.HERDR_PANE_ID && env.HERDR_SOCKET_PATH ? env.HERDR_SOCKET_PATH : undefined;
 }
 
@@ -55,7 +61,15 @@ export function notificationRequest(title: string, body: string, sound: "done" |
   return { id: `luna:${Date.now()}:${Math.random().toString(36).slice(2)}`, method: "notification.show", params: { title, body, sound } };
 }
 
-export default function herdr(pi: ExtensionAPI, send: typeof sendToHerdr = sendToHerdr, stateDir: string = agentStateDir()) {
+export default function herdr(pi: ExtensionAPI, send: typeof sendToHerdr = sendToHerdr, stateDir: string = agentStateDir(), run: HerdrRun = runHerdrCli) {
+  if (!herdrEnabled()) return;
+  // The operator's client works from any session, inside a herdr pane or not (client.ts).
+  pi.registerCommand("herdr", {
+    description: "herdr client: list agents, read one's output, send one a prompt, open a workspace (never answers a dialog or moves focus)",
+    handler: async (args, ctx) => {
+      ctx.ui.notify(await herdrCommand(typeof args === "string" ? args : "", ctx.cwd || process.cwd(), run), "info");
+    },
+  });
   const socket = herdrSocket();
   if (!socket) return;
 

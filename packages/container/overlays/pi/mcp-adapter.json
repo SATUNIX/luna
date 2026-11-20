@@ -12,7 +12,8 @@
     "elicitationAutoOpenUrls": false,
     "allowInstall": false,
     "allowScriptToolSave": false,
-    "jev": false
+    "semanticSearch": false,
+    "extraction": false
   },
   "mcpServers": {
     "pi_system_governance": {

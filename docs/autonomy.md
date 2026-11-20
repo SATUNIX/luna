@@ -122,6 +122,41 @@ succeeded, 10 failed, 11 cancelled, 12 budget exhausted, 13 parked (blocked, pau
 
 Working examples are in `packages/autonomy/examples/`.
 
+### From a goal: `draft` and `up`
+
+An agent (or you) can set a run up from a goal in two commands, with the operator's authorisation
+between them:
+
+```sh
+node packages/autonomy/cli.ts draft --goal "Analyse the supervisor's failure handling and fix one gap" \
+    --repo . --check unit="npm test" --out run.json   # prints the boundary digest; authorises nothing
+node packages/autonomy/cli.ts plan --config run.json --authorise --digest <digest> --by <operator>
+node packages/autonomy/cli.ts up --config run.json --json   # one line: {"ok":true,"runId":…,"pid":…,"status":…}
+```
+
+`draft` is `init` with closed defaults: no egress, no services or credentials, promotion to a local
+branch only, attended unless `--unattended` is given, and a budget of $5 (`--budget-usd` may set up
+to $20; more is refused). It takes the `implement` or `self-improve` template, and has no flags for
+egress, services, credentials or promotion: widening any of them means editing the contract, which
+changes the digest the operator authorises. It never writes an `authorisation` block.
+
+`draft --preset luna-self-improve --repo <luna checkout>` drafts a run that analyses and improves
+Luna itself: the `self-improve` template, a fixed goal (find one real defect, gap or inefficiency
+per cycle, fix it with a test, keep the docs current), and Luna's reference gate
+(`/opt/autonomy/gate.sh`, 60 minutes) as the acceptance check. `--goal` adds a focus to that goal.
+Every closed default above still applies, and the preset sets no permission: cycles that touch R3
+paths (the charter, CI, gate policy, the firewall, the autonomy boundary, release files; see the
+`self-improve` template's risk tiers) are still refused and proposed instead, because the preset
+never sets `allowControlChanges`.
+
+`up` never asks and never authorises. It starts only a contract that already carries an
+authorisation for its current digest, then checks the host as `doctor --setup` does (engine, image,
+inference key), creates the run and starts its supervisor in the background. With `--json` it prints
+one line; a refusal names a `blocker` (`invalid_contract`, `authorisation_required`,
+`digest_mismatch`, `host_setup` with the `failing` checks, or `run_exists`) and starts nothing. The
+`status` it reports is the run's state at that moment, usually `setup`: the supervisor moves it on.
+`tests/autonomy-cli-smoke.ts` pins both commands.
+
 ### From inside pi
 
 The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
@@ -129,7 +164,34 @@ The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
 ```
 /autonomy templates | init <template> [flags] | plan <run.json> | start <run.json>
 /autonomy status [run] | pause | cancel | resume | steer | promote | export | inbox | reconfigure
+/autonomy watch [on|off]
 ```
+
+**Live run widget.** While a run is active (starting up in `setup` or `ready`, running,
+recovering, or paused after at least one cycle), pi shows a widget above the editor: a heading with the number of active and waiting runs,
+then one line per run that has not ended (active runs first, at most six, the rest counted) with
+its id, template, cycle, phase (from the newest host event: working, gate green or red, pushed, a
+failure code, or the run's status when it is not running), spend against budget and the age of its
+last event. Every line is cut to the terminal's width, so a narrow terminal never wraps it. The
+widget is refreshed every 2 seconds through the CLI (`pi-autonomy status --json` and
+`pi-autonomy events --json --limit 200`), skipping a refresh while the previous one is still
+running, but only while some run can change on its own (`setup`, `ready`, `running` or
+`recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. A paused or blocked
+run changes only when the operator acts, so with only such runs the widget is drawn once and not
+refreshed. It hides itself when no run is active. It is checked at session start, after
+`/autonomy start` starts a run in the background, after `/autonomy resume` and after
+`/autonomy status` with no run; `/autonomy watch` checks it now and `/autonomy watch off` hides it
+for the rest of the session. Pinned by `tests/autonomy-command-smoke.ts` (the renderer at 80 and
+120 columns and at narrow widths, which runs show and which keep it refreshing, showing a run
+still in `setup` after a background start, showing after resume, hiding and `watch off`).
+
+**Not covered:** the widget needs a screen and is not drawn in print or JSON mode; outside the
+terminal UI (RPC mode) its lines are rendered at 80 columns. Each refresh starts the CLI twice and
+reads the host event log in full, so a very large log makes each refresh slower. A run that becomes
+active from outside this session (another terminal or a timer), or a paused run resumed from
+outside it, shows only at the next check above. A run whose supervisor died during `setup` keeps
+the widget refreshing until the run is cancelled.
+No test draws the widget in a real terminal.
 
 `/autonomy inbox` lists a run's owner cards (or the fleet's runs waiting to be published) and
 `--answer <card> --value <text>` answers one; listing a run's cards settles its past-due ones, so
@@ -316,6 +378,31 @@ pins the `gate-wait` phase, the active minutes charged before the wait, the froz
 waiting, the return to `acceptance`, three supervisors never overlapping more than two gates, and a
 throwing gate restoring the previous phase, and a signal or a pause during `gate-wait` parking the run
 without running the gate.
+
+**One host, many runs: worker slots.** The same idea bounds the workers themselves, by count and by
+what they take together. Each bound is off until its variable is set:
+
+| Variable | Bounds | One worker takes |
+|---|---|---|
+| `PI_AUTONOMY_WORKER_SLOTS` | concurrent workers | 1 |
+| `PI_AUTONOMY_WORKER_CPUS` | CPUs | its container's `cpus`, rounded up |
+| `PI_AUTONOMY_WORKER_MEMORY` | memory (`16g`, `16384m`, or a number of GiB) | its container's `memory`, in whole GiB rounded up |
+| `PI_AUTONOMY_WORKER_USD` | per-step spend across running workers | the run's `budget.perStepUsd`, in whole dollars rounded up |
+
+Before a worker session starts (a task step, or a self-improve or dispatch cycle and its restarts),
+the supervisor takes the worker's share of every bound that is set, under
+`$PI_AUTONOMY_HOME/worker-slots`, and releases it when that worker exits, however it exits. It takes
+all of its share in one pass or none of it: while any bound is short it holds nothing, sets phase
+`worker-wait`, heartbeats and does not accrue wall-clock minutes, and control commands end the wait as
+in `gate-wait`. A worker that needs more than a bound allows can never start, so that is an error,
+not a wait. A value that does not parse, or a bound above 1024 units, stops the supervisor with an
+error naming the variable rather than meaning "no limit". The units are lock files the supervisor holds
+open, so a supervisor that dies frees them. The bound is on what the supervisors start, not on what the
+containers use: a worker's container is still limited by its own `cpus` and `memory`.
+`tests/autonomy-lifecycle-smoke.ts` pins the parsing, that the N+1th worker waits, the whole-or-nothing
+take across bounds, the refusal of a worker too large for a bound, that a killed holder frees its units,
+and the engine's `worker-wait` phase and release; `tests/autonomy-selfimprove-smoke.ts` pins that a
+self-improve worker starts inside a slot and releases it.
 
 **Effort inside a run.** The worker's effort tier is pinned from the contract and capped, so an
 in-session `/effort` cannot exceed the cap and its children never exceed their parent; see
@@ -688,6 +775,7 @@ Read these files under `$PI_AUTONOMY_HOME/<run>` (default `~/.local/state/pi-aut
 | `meter/*.jsonl` | Inference usage and spend | `tests/autonomy-run-smoke.ts` |
 | `steps/NN/summary.json`, `cycle.json`, `review.json`, check evidence | Per-step outcome, committed head, gate and independent review | `tests/autonomy-selfimprove-smoke.ts` |
 | `steps/NN/salvaged-report.json` | Host close-out when the worker died before its report | `tests/autonomy-selfimprove-smoke.ts` |
+| `steps/NN/checks/<id>.json`, `steps/NN/checks/<id>.logs/` | One check's verdict with the last 4000 characters of its output (`tail`) and `logs`, the paths of its full gate logs. The gate's scratch directory (`gate-work/`) is wiped before every check, so the copies under `<id>.logs/` are the only lasting record: regular `.log` and `.json` files only, links never followed, at most 16 files of 8 MiB each (a longer log keeps its end) | `tests/autonomy-smoke.ts` |
 
 Suggested monitoring policy: flag a work heartbeat older than **2 minutes or four ticks**, whichever
 is longer (`runtime.mirrorSeconds` sets the tick interval). This is an investigation threshold, not
@@ -1304,9 +1392,29 @@ version, 1), `at` (ISO time), `run` and `type`, plus the fields of its type:
 | `failure` | the run fails, or the supervisor stops on an error | `code` (the failure reason, `supervisor_error` or `boundary_violation`), `detail` |
 | `dispatch.claim` | a dispatch cycle claims or continues a board item | `n`, `item`, `engineer`, `outcome` |
 | `dispatch.submit` | a merged dispatch cycle records its item as submitted | `n`, `item`, `engineer`, `sha` |
+| `harness.degraded` | a worker session started without an optional harness command; the run continues (once per session) | `missing` (command names) |
 
 Cycle, gate, push and dispatch events come from the cycling templates (`self-improve`, `dispatch`);
-a finite run (`implement`, `deploy`) writes the `run.*` and `failure` events.
+a finite run (`implement`, `deploy`) writes the `run.*` and `failure` events. Any template can write
+`harness.degraded`.
+
+At the start of every worker session the supervisor asks pi for its registered commands to check
+the kit harness loaded (`HARNESS_CORE` and `HARNESS_OPTIONAL` in `packages/autonomy/lib/rpc.ts`). A
+missing core command (the goal, hand-off, verification and firewall commands), a malformed reply or
+no reply within 30 seconds fails the run with `worker_unavailable`. A missing optional command
+(orchestration or tracing) does not: the session goes on without it and the supervisor writes a
+`harness.degraded` event. `tests/autonomy-smoke.ts` and `tests/autonomy-events-smoke.ts` pin both
+outcomes.
+
+Whenever the supervisor writes a `failure` event it also writes `postmortem.json` in the run
+directory (mode 0600; `packages/autonomy/lib/postmortem.ts`), so the cause can be read in one place.
+It holds the failure `code` and `detail`, the run's status, template, step, phase and cycle, its
+usage and budget, the worker container this supervisor last started, the required acceptance checks failing in the
+latest evaluation, the last fatal error, the run's last 20 host events and the last 20 lines of
+`supervisor.log`. Free text and log lines are redacted as event text is. Each failure replaces the
+previous file, so only the latest is kept; the event log has them all. The file records no command
+lines: a failed command shows up only through the failing checks, the detail and the log tail.
+`tests/autonomy-lifecycle-smoke.ts` pins it.
 
 How the file is written:
 
@@ -1369,6 +1477,7 @@ is written to `~/.pi`.
 | `mirror.git`, `steps/`, `results/` | The host's copy of the work, each step's evidence, and exports. |
 | `egress/`, `meter/`, `boundary.json` | Proxy audit, spend records, the last boundary probe. |
 | `notebook.json` | The generations notebook (0600), when generations are on. |
+| `postmortem.json` | The latest failure's post-mortem (0600), written whenever the supervisor records a failure (see the event log section). |
 | `remote.git`, `work/`, `agent-state/` | The worker's side, written by the container. |
 | `outcome.md` | Written whenever the run stops working (succeeded, failed, cancelled, blocked, paused, budget exhausted): the status, the reason, what a blocked run waits for, what was spent and the next step. |
 

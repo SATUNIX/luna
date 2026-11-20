@@ -821,6 +821,24 @@ body.hide-composer .composer {
 	color: var(--cm3-success-text);
 }
 
+/* ---------- autonomy view ---------- */
+.autonomy-body {
+	padding: 12px 20px 24px;
+}
+.autonomy-section {
+	margin: 16px 0 0;
+	overflow-x: auto;
+}
+.autonomy-table {
+	width: 100%;
+}
+.autonomy-table td {
+	font-family: var(--font-mono);
+	font-size: 13px;
+	vertical-align: top;
+	overflow-wrap: anywhere;
+}
+
 /* ---------- config view ---------- */
 .config-grid {
 	display: grid;

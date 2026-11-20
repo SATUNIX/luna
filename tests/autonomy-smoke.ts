@@ -12,10 +12,11 @@ import { resolveConfig } from "../packages/autonomy/lib/config.ts";
 import { evaluate, runStop, reportOutcome, nothingFoundInARow } from "../packages/autonomy/lib/triggers.ts";
 import { isNewReport, itemShas, uncoveredCommits, unknownShas } from "../packages/autonomy/lib/ledger.ts";
 import { type ManagerBundle, type ManagerDecision, parseDecision, buildBundle, DECISIONS } from "../packages/autonomy/lib/manager.ts";
-import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
+import { providerLimitError, uiResponse, lineParser, isGuardEscalation, OPERATOR_ANSWER, missingHarness, HarnessCheck, HARNESS_COMMANDS, HARNESS_CORE, HARNESS_OPTIONAL, HARNESS_CHECK_TIMEOUT_MS } from "../packages/autonomy/lib/rpc.ts";
 import { registeredCommands } from "../packages/core/eval/footprint.ts";
 import { publishRefspecs } from "../packages/autonomy/lib/mirror.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
+import { keepGateLogs, runAcceptance, type AcceptanceRuntime } from "../packages/autonomy/lib/acceptance.ts";
 import { parseReview, reviewCycle, buildReviewBundle } from "../packages/autonomy/lib/review.ts";
 import { route, withUsage, screen, usageFrom, meteredUsd } from "../packages/autonomy/relay.ts";
 import { runCycle } from "../packages/autonomy/lib/cycle.ts";
@@ -809,6 +810,29 @@ await check("harness check: HarnessCheck is per-session, fails closed on missing
   assert.equal(check.verified, true);
 });
 
+await check("harness check: an optional command missing degrades the session; a core one fails it", () => {
+  assert.deepEqual([...HARNESS_CORE, ...HARNESS_OPTIONAL], [...HARNESS_COMMANDS]);
+  assert.ok(HARNESS_CORE.includes("firewall") && HARNESS_CORE.includes("verify"), "the firewall and the gate stay fail-closed");
+  const reply = (names: readonly string[]) => ({ type: "response", id: "harness-check", data: { commands: names.map((name) => ({ name })) } });
+  const check = new HarnessCheck();
+  assert.equal(check.settle(reply(HARNESS_COMMANDS.filter((c) => c !== "orchestrate"))), true);
+  assert.equal(check.verified, true);
+  assert.equal(check.failure, null);
+  assert.deepEqual(check.degraded, ["orchestrate"]);
+  assert.deepEqual(check.takeDegraded(), ["orchestrate"]);
+  assert.deepEqual(check.takeDegraded(), [], "reported once per session");
+  check.reset();
+  assert.deepEqual(check.degraded, [], "pending is not degraded");
+  check.settle(reply(HARNESS_CORE));
+  assert.deepEqual(check.takeDegraded(), [...HARNESS_OPTIONAL], "a new session reports again");
+  for (const core of HARNESS_CORE) {
+    check.reset();
+    assert.equal(check.settle(reply(HARNESS_COMMANDS.filter((c) => c !== core))), false, `/${core} missing fails`);
+    assert.match(check.failure ?? "", new RegExp(`missing commands: ${core}\\)$`));
+    assert.deepEqual(check.takeDegraded(), [], "a failed session is not degraded");
+  }
+});
+
 // --- the cycle loop against a fake runtime ---------------------------------------------------
 function fakeRuntime({ script, manager, gates = [], tickMin = 1, gaps }: FakeRuntimeOptions): { rt: CycleRuntime; sent: SentMessage[]; log: string[] } {
   let clock = 0; let head = "h0"; let report = false; let meter = 0; const sent: SentMessage[] = []; const log: string[] = [];
@@ -1055,6 +1079,70 @@ await check("hostile model output and malformed RPC lines fail closed", () => {
   assert.equal(bad.at(-1), 'handler:{"type":"agent_end"}');
   assert.deepEqual(missingHarness({ type: "response", data: { commands: [{ name: { toString: "goal" } }, "goal", null] } }), HARNESS_COMMANDS);
   assert.deepEqual(missingHarness("goal"), HARNESS_COMMANDS);
+});
+
+await check("acceptance: a later gate does not destroy an earlier step's or check's log (F-05)", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-gatelogs-"));
+  try {
+    const root = path.join(tmp, "run");
+    const gateWork = path.join(root, "gate-work");
+    let n = 0;
+    // As the real runtime: one shared scratch dir, wiped before every check, a full log written into it.
+    const rt: AcceptanceRuntime = {
+      now: () => Date.now(),
+      runCheck: ({ check, logDir }) => {
+        fs.rmSync(gateWork, { recursive: true, force: true });
+        fs.mkdirSync(gateWork, { recursive: true });
+        const full = `${check.id} run ${++n}: FAILING ASSERTION at line 1\n${"x".repeat(10_000)}\nend of ${check.id} run ${n}\n`;
+        fs.writeFileSync(path.join(gateWork, "check.log"), full);
+        fs.writeFileSync(path.join(gateWork, "result.json"), JSON.stringify({ steps: [] }));
+        return Promise.resolve({ exitCode: 1, tail: full.slice(-4000), logs: logDir ? keepGateLogs(gateWork, logDir) : undefined });
+      },
+      serviceHealth: () => Promise.resolve({ ok: true }),
+    };
+    const checks = [{ id: "unit", type: "command", run: "x", required: true, timeoutMinutes: 1 }, { id: "lint", type: "command", run: "y", required: true, timeoutMinutes: 1 }] as unknown as Parameters<typeof runAcceptance>[0]["contract"]["acceptance"]["checks"];
+    const contract = { acceptance: { checks } };
+    const first = await runAcceptance({ rt, contract, sha: "a".repeat(40), step: 1, dir: path.join(root, "steps", "01", "checks"), runRoot: root });
+    await runAcceptance({ rt, contract, sha: "b".repeat(40), step: 2, dir: path.join(root, "steps", "02", "checks"), runRoot: root });
+    const unit1 = first.results.find((r) => r.id === "unit");
+    assert.deepEqual(unit1?.logs, ["steps/01/checks/unit.logs/check.log", "steps/01/checks/unit.logs/result.json"], "the evidence names the kept logs, relative to the run directory");
+    const kept = fs.readFileSync(path.join(root, "steps", "01", "checks", "unit.logs", "check.log"), "utf8");
+    assert.ok(kept.startsWith("unit run 1: FAILING ASSERTION") && kept.endsWith("end of unit run 1\n") && kept.length > 10_000, "step 1's full log survives step 2's gates, beyond the 4000-character tail");
+    assert.match(fs.readFileSync(path.join(root, "steps", "01", "checks", "lint.logs", "check.log"), "utf8"), /^lint run 2:/, "and the second check of a step does not destroy the first's");
+    const evidence = JSON.parse(fs.readFileSync(path.join(root, "steps", "01", "checks", "unit.json"), "utf8")) as { logs?: unknown };
+    assert.deepEqual(evidence.logs, unit1?.logs, "the evidence file records them too");
+    assert.match(fs.readFileSync(path.join(gateWork, "check.log"), "utf8"), /^lint run 4:/, "the shared scratch dir holds only the last gate");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+await check("acceptance: keepGateLogs takes only bounded regular files, judged on the open descriptor; a link or FIFO is skipped", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autonomy-gatelogs-"));
+  try {
+    const gate = path.join(tmp, "gate");
+    const out = path.join(tmp, "kept");
+    fs.mkdirSync(path.join(gate, "home"), { recursive: true });
+    const secret = path.join(tmp, "operator-secret.log");
+    fs.writeFileSync(secret, "do not keep");
+    fs.symlinkSync(secret, path.join(gate, "evil.log"));
+    fs.mkdirSync(path.join(gate, "dir.log"));
+    fs.writeFileSync(path.join(gate, "notes.txt"), "not a log");
+    fs.writeFileSync(path.join(gate, ".hidden.log"), "hidden");
+    fs.writeFileSync(path.join(gate, "big.log"), `HEAD${"y".repeat(5000)}TAIL`);
+    fs.writeFileSync(path.join(gate, "gate.log"), "ok");
+    // A FIFO with a log's name: opening it without O_NONBLOCK would block until a writer appears.
+    const fifo = spawnSync("mkfifo", [path.join(gate, "pipe.log")]);
+    assert.equal(fifo.status, 0, `mkfifo: ${String(fifo.stderr)}`);
+    const t0 = Date.now();
+    fs.mkdirSync(out); fs.writeFileSync(path.join(out, "stale.log"), "from an earlier evaluation");
+    const kept = keepGateLogs(gate, out, 1000);
+    assert.ok(Date.now() - t0 < 5000, "a FIFO does not block the copy");
+    assert.deepEqual(kept.map((f) => path.basename(f)), ["big.log", "gate.log"], "only plain-named regular .log/.json files: the symlink, FIFO and directory are skipped");
+    assert.deepEqual(fs.readdirSync(out).sort(), ["big.log", "gate.log"], "a stale copy is replaced, not mixed in");
+    const big = fs.readFileSync(path.join(out, "big.log"), "utf8");
+    assert.ok(big.startsWith("...[4008 bytes cut; the last 1000 kept]...\n") && big.endsWith("TAIL") && !big.includes("HEAD"), "an oversized log keeps its last part");
+    assert.equal(fs.statSync(path.join(out, "gate.log")).mode & 0o777, 0o600);
+    assert.deepEqual(keepGateLogs(path.join(tmp, "missing"), out), [], "a missing gate dir keeps nothing");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 await check("export: a symlink inside the run directory cannot carry an outside file into the export", () => {

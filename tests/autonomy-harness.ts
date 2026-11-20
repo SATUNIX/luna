@@ -13,7 +13,7 @@ import { TEMPLATES } from "../packages/autonomy/lib/templates/index.ts";
 import { createRunLock } from "../packages/autonomy/lib/runlock.ts";
 import { exportRun } from "../packages/autonomy/lib/export.ts";
 import { type CycleScanRefusal, scanCycle } from "../packages/autonomy/lib/gitmirror.ts";
-import type { GateSlot } from "../packages/autonomy/lib/gate-slots.ts";
+import type { AcquireWorkerSlotOptions, GateSlot, WorkerBounds, WorkerSlot } from "../packages/autonomy/lib/gate-slots.ts";
 import { FakeEngine, FakeRuntime } from "../packages/autonomy/tests/fake-runtime.ts";
 import type { RunStore } from "../packages/autonomy/lib/store.ts";
 
@@ -64,6 +64,9 @@ export interface EngineOptions {
   gateSlots?: number;
   gateSlotsHome?: string;
   gateSlotAcquire?: (o: { home: string; limit: number; onWait: () => void; shouldStop: () => Promise<boolean> }) => Promise<GateSlot>;
+  /** Unbounded unless a test sets them: the host's PI_AUTONOMY_WORKER_* variables never reach a test. */
+  workerBounds?: WorkerBounds;
+  workerSlotAcquire?: (o: AcquireWorkerSlotOptions) => Promise<WorkerSlot>;
 }
 
 /** An engine built around the harness's run, with the runtime and lock it uses. */
@@ -142,10 +145,10 @@ export function harness(raw: RawContract, { script, review, boundary, tickMs, ho
     lock: (pid, alive = () => true, heartbeatMs = 3_600_000) => {
       return createRunLock({ file: store.p.lock, pid, host: "test-host", now: () => clock.now, isAlive: alive, startTimeOf: (p: number) => `start-${p}`, staleMs: 120_000, heartbeatMs });
     },
-    engine: ({ rt = h.runtime(), pid = 1001, lock = h.lock(pid), gateSlots = 0, gateSlotsHome, gateSlotAcquire } = {}) => {
+    engine: ({ rt = h.runtime(), pid = 1001, lock = h.lock(pid), gateSlots = 0, gateSlotsHome, gateSlotAcquire, workerBounds = { slots: 0, cpus: 0, memoryGiB: 0, usd: 0 }, workerSlotAcquire } = {}) => {
       const acquired = lock.acquire();
       if (!acquired.acquired) assert.fail(`the run lock was not acquired: ${acquired.reason}`);
-      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, gateSlots, ...(gateSlotsHome === undefined ? {} : { gateSlotsHome }), ...(gateSlotAcquire === undefined ? {} : { gateSlotAcquire }), deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }), ...(closeOutScan === true ? {} : { scanCycle: closeOutScanDep(closeOutScan, rt) }) } }), rt, lock, acquired };
+      return { engine: new Engine({ contract, cfg, store, rt, template: TEMPLATES[contract.template], lock, effortApi: testEffort, gateSlots, ...(gateSlotsHome === undefined ? {} : { gateSlotsHome }), ...(gateSlotAcquire === undefined ? {} : { gateSlotAcquire }), workerBounds, ...(workerSlotAcquire === undefined ? {} : { workerSlotAcquire }), deps: { exportRun: ({ engine, out }: { engine: Engine; out: string }) => exportRun({ store, repo: rt.repo, contract, state: engine.state, out }), ...(closeOutScan === true ? {} : { scanCycle: closeOutScanDep(closeOutScan, rt) }) } }), rt, lock, acquired };
     },
     state: (): RunState => { const s = store.readState(); assert.ok(s, "the run has a state.json"); return s; },
   };

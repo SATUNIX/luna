@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * Workflow policy. Rules every GitHub workflow keeps:
- *   - gating steps fail closed: no `continue-on-error: true` (one reviewed exception: the
- *     pi-compat matrix's advisory flag, while every lane is non-advisory) and none of the shell
+ *   - gating steps fail closed: no `continue-on-error` at all and none of the shell
  *     fail-open idioms in tests/ci-fail-open.ts (`|| true`, `|| :`, `|| exit 0`, `|| echo`,
  *     `set +e`), which the GitLab pipeline test shares;
  *   - a top-level `permissions:` block, a `timeout-minutes` on every job that runs steps, and
@@ -185,7 +184,7 @@ export function fileProblems(file: string, text: string): string[] {
   for (const [job, body] of jobsOf(text)) {
     for (const line of code(body)) {
       const coe = line.match(/^\s*continue-on-error:\s*(.+?)\s*$/)?.[1];
-      if (coe !== undefined && !(file === "ci.yml" && job === "pi-compat" && coe === "${{ matrix.advisory }}")) out.push(`${file} ${job}: continue-on-error (${coe}) lets a failing gate pass`);
+      if (coe !== undefined) out.push(`${file} ${job}: continue-on-error (${coe}) lets a failing gate pass`);
       for (const message of failOpen(line)) out.push(`${file} ${job}: ${message}`);
     }
     const isCall = /^ {4}uses:/m.test(body);
@@ -212,7 +211,6 @@ export function fileProblems(file: string, text: string): string[] {
       if (!/^ {4}if:\s*always\(\)\s*$/m.test(complete)) out.push("ci.yml ci-complete: must run with if: always()");
       if (!/join\(needs\.\*\.result/.test(complete) || !/!= "success"/.test(complete)) out.push("ci.yml ci-complete: must fail unless every needed job succeeded");
     }
-    if (/advisory: true/.test(jobs.get("pi-compat") ?? "")) out.push("ci.yml pi-compat: an advisory lane is not gated; record it before enabling one");
     if (!jobs.has("verify")) out.push(...verifyShardProblems(""));
     for (const [job, body] of jobs) {
       if (job === "verify" || runsCheckAll(body)) out.push(...shardProblems(job, body));
@@ -281,13 +279,13 @@ const mutations: Array<[string, string, string, RegExp]> = [
   ["a checkout that keeps credentials", "ci.yml", ci.replace("persist-credentials: false", "persist-credentials: true"), /persists credentials/],
   ["pull_request_target", "ci.yml", ci.replace("  pull_request:\n", "  pull_request_target:\n"), /pull_request_target/],
   ["a job without a timeout", "ci.yml", ci.replace(/(\n {2}docs-build:\n {4}runs-on: ubuntu-latest\n) {4}timeout-minutes: \d+\n/, "$1"), /docs-build: no timeout-minutes/],
-  ["an advisory lane", "ci.yml", ci.replace("advisory: false", "advisory: true"), /advisory lane is not gated/],
+  ["an advisory pi-compat lane", "ci.yml", ci.replace(/(\n {2}pi-compat:\n {4}runs-on: ubuntu-latest\n {4}timeout-minutes: \d+\n)/, "$1    continue-on-error: true\n"), /pi-compat: continue-on-error \(true\) lets a failing gate pass/],
   ["verify without --shard", "ci.yml", ci.replace(" --shard=${{ matrix.shard }}/4", ""), /verify: check:all is not given --shard/],
   ["a shard count that disagrees with the matrix", "ci.yml", ci.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]"), /does not match the 3 matrix shards/],
   ["a gap in the shard matrix", "ci.yml", ci.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 4, 5]"), /matrix.shard must be 1..n/],
   ["pi-compat without --shard", "ci.yml", ci.replace("--shard=${{ matrix.shard }}/4 --jobs=2 --skip=smoke:package", "--jobs=2 --skip=smoke:package"), /pi-compat: check:all is not given --shard/],
-  ["pi-compat shard count disagrees", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3]'), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
-  ["pi-compat without a shard axis", "ci.yml", ci.replace('pi: ["0.85.1", "0.99.2"]\n        shard: [1, 2, 3, 4]', 'pi: ["0.85.1", "0.99.2"]'), /pi-compat: no matrix\.shard list/],
+  ["pi-compat shard count disagrees", "ci.yml", ci.replace(/(\n {2}pi-compat:[\s\S]*?)shard: \[1, 2, 3, 4\]/, "$1shard: [1, 2, 3]"), /pi-compat: --shard=\.\.\.\/4 does not match the 3 matrix shards/],
+  ["pi-compat without a shard axis", "ci.yml", ci.replace(/(\n {2}pi-compat:[\s\S]*?)\n {6}matrix:\n {8}shard: \[1, 2, 3, 4\]/, "$1"), /pi-compat: no matrix\.shard list/],
   ["verify not running check:all", "ci.yml", ci.replace("- run: npm run -s check:all -- --shard", "- run: npm run -s verify -- --shard"), /verify: does not run npm run -s check:all/],
   ["ci.yml PRs without integration/**", "ci.yml", ci.replace('branches: [main, "integration/**"]', "branches: [main]"), /ci.yml: pull_request does not run on integration\/\*\*/],
   ["security.yml PRs without integration/**", "security.yml", security.replace('branches: [main, "integration/**"]', "branches: [main]"), /security.yml: pull_request does not run on integration\/\*\*/],

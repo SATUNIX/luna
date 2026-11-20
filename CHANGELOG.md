@@ -422,6 +422,17 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
   without tool control.
 
+### Removed
+
+- **The web console no longer surfaces the retired pi-lens companion (V5-03).** Finding: pi-lens is
+  under `retired` in `packages/core/sources.json`, but the console still read `~/.pi-lens`, served
+  `GET /api/sessions/:id/lens`, rendered a Lens inspector tab and a pi-lens Config card, and the
+  control centre still listed a `lens.health` action. Fix: removed `server/lens.ts` and the lens
+  route, config fields, wire types, client API, panel, tab and control-centre row, with the web-ui
+  smokes and harness updated. The route now answers 404 and `tests/web-ui-rpc-smoke.ts` asserts it;
+  `scripts/ui-smoke.ts` no longer renders the removed panel. `docs/control-center.md` no longer
+  reports a pi-lens startup figure.
+
 ### Fixed
 
 - **AUTHORITY: `luna schedule` review fixes (DE-118).** Two independent reviews of V5-14 found it not

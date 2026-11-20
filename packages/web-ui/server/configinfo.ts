@@ -21,7 +21,6 @@ import {
 import { listAgents, parseFrontmatter } from "./agents.ts";
 import { KNOWN_TOOLS } from "./agentstore.ts";
 import { listModels, readConsoleSettings, type ProviderInfo } from "./models.ts";
-import { lensStatus, LENS_DIR, type LensStatus } from "./lens.ts";
 import { kitVersion } from "./remote-version.ts";
 
 /** What /api/config returns: how this installation is configured. */
@@ -55,12 +54,10 @@ export interface ConfigInfo {
 		kitRoot: string;
 		promptsDir: string;
 		skillsDir: string;
-		lensDir: string | null;
 	};
 	models: ProviderInfo[];
 	agentCount: number;
 	tools: readonly string[];
-	lens: LensStatus;
 }
 
 /** A prompt template or a skill shipped in the kit. */
@@ -104,12 +101,10 @@ export function configInfo(): ConfigInfo {
 			kitRoot: KIT_ROOT,
 			promptsDir: PROMPTS_DIR,
 			skillsDir: SKILLS_DIR,
-			lensDir: LENS_DIR || null,
 		},
 		models: models.providers,
 		agentCount: listAgents().length,
 		tools: KNOWN_TOOLS,
-		lens: lensStatus(),
 	};
 }
 

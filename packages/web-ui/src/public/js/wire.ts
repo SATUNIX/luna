@@ -78,14 +78,8 @@ export interface ConfigResponse {
 	readonly paths: {
 		readonly agentDirs: readonly string[];
 		readonly kitRoot: string;
-		readonly lensDir: string | null;
 	};
 	readonly models: readonly ProviderInfo[];
-	readonly lens: {
-		readonly present: boolean;
-		readonly sessionCount: number;
-		readonly turn: { readonly files: number; readonly cycles?: number } | null;
-	};
 }
 
 /** A prompt template or a skill shipped in the kit. */
@@ -246,27 +240,6 @@ export interface TodoItem {
 export interface TodosResponse {
 	readonly exists: boolean;
 	readonly todos: readonly TodoItem[];
-}
-
-export interface LensFile {
-	readonly filePath: string | null;
-	readonly blocking: number;
-	readonly errors: number;
-	readonly warnings: number;
-}
-
-export interface SessionLens {
-	readonly available: boolean;
-	/** An ISO date string, or null when nothing was captured. */
-	readonly savedAt: string | null;
-	readonly files: readonly LensFile[];
-	readonly totals: { readonly blocking: number; readonly errors: number; readonly warnings: number };
-	readonly cache: { readonly qualityWarnings: number; readonly findings: number };
-}
-
-/** GET /api/sessions/:id/lens. */
-export interface LensResponse {
-	readonly lens: SessionLens;
 }
 
 // Acknowledgements of session actions. The client reads nothing from them, so every field is

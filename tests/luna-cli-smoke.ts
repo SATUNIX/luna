@@ -78,6 +78,14 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(refused.status, 2);
   assert.match(refused.stderr, /goal-core/);
   fs.rmSync(path.join(agent, "pi-kit"), { recursive: true });
+  // An --only/custom install whose marker does not list goal-core loads no ceiling guard.
+  fs.writeFileSync(path.join(agent, ".pi-kit.json"), JSON.stringify({ profile: "custom", scope: "global", extensions: ["effort"] }));
+  const unguarded = luna(["exec", "--max-turns", "3", "p"]);
+  assert.equal(unguarded.status, 2, "a ceiling without a loaded goal-core is refused");
+  assert.match(unguarded.stderr, /goal-core/);
+  fs.writeFileSync(path.join(agent, ".pi-kit.json"), JSON.stringify({ profile: "balanced", scope: "global", extensions: ["goal-core", "effort"] }));
+  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 0, "a marker that loads goal-core keeps the ceiling usable");
+  fs.rmSync(path.join(agent, ".pi-kit.json"));
 
   for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], [], ["--"], ["--", "a", "b"], ["p", "--", "q"]]) {
     assert.equal(typeof planExec(bad), "string", `refused: ${bad.join(" ")}`);

@@ -336,11 +336,25 @@ export function trustedSpec(deps: ScheduleDeps, id: string, pinned?: string): { 
   return { ok: true, spec };
 }
 
+/** The backend of a stored spec, for remove: schemaVersion 1 predates the pinned node/luna paths. */
+function storedBackend(deps: ScheduleDeps, id: string): Backend | null {
+  if (!ID.test(id)) return null;
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(specFile(deps, id), "utf8"));
+    if (typeof raw !== "object" || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if ((r.schemaVersion !== 1 && r.schemaVersion !== 2) || r.id !== id || (r.backend !== "systemd" && r.backend !== "cron")) return null;
+    return r.backend;
+  } catch {
+    return null;
+  }
+}
+
 /** Stop and delete the timer or crontab line, then the spec. */
 export function removeSchedule(deps: ScheduleDeps, id: string): { ok: boolean; message: string } {
-  const spec = readSpec(deps, id);
-  if (!spec) return { ok: false, message: `no schedule ${id}` };
-  if (spec.backend === "systemd") {
+  const backend = storedBackend(deps, id);
+  if (!backend) return { ok: false, message: `no schedule ${id}` };
+  if (backend === "systemd") {
     deps.run("systemctl", ["--user", "disable", "--now", `${UNIT(id)}.timer`]);
     for (const ext of ["timer", "service"]) fs.rmSync(path.join(unitDir(deps), `${UNIT(id)}.${ext}`), { force: true });
     deps.run("systemctl", ["--user", "daemon-reload"]);
@@ -356,14 +370,15 @@ export function removeSchedule(deps: ScheduleDeps, id: string): { ok: boolean; m
 
 /**
  * Hold the run lock of a schedule until `release` (or until this process exits, when the kernel drops
- * it): a listening socket on Linux's abstract namespace, which leaves no file and cannot go stale.
- * Elsewhere a socket file in the state directory, taken over when nothing answers on it. Null when a
- * live run holds it.
+ * it): a listening socket file in the operator-only state directory, mode 0600. The kernel releases
+ * the listener when the process exits, so a crashed or killed run never leaves a live lock; a socket
+ * file nothing answers on is taken over. A file, not the abstract namespace, keeps another local user
+ * from binding or connecting to the lock (DE-118). Null when a live run holds it.
  */
 export async function takeRunLock(deps: ScheduleDeps, id: string): Promise<(() => void) | null> {
-  const key = crypto.createHash("sha256").update(`${scheduleDir(deps)}\0${id}`).digest("hex").slice(0, 32);
-  const linux = process.platform === "linux";
-  const address = linux ? `\0luna-schedule-${key}` : path.join(scheduleDir(deps), `${id}.lock.sock`);
+  const dir = scheduleDir(deps);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const address = path.join(dir, `${id}.lock.sock`);
   const listen = (): Promise<net.Server | "busy"> => new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") resolve("busy"); else reject(error); });
@@ -374,14 +389,14 @@ export async function takeRunLock(deps: ScheduleDeps, id: string): Promise<(() =
     s.once("connect", () => { s.destroy(); resolve(true); });
     s.once("error", () => resolve(false));
   });
-  if (!linux) fs.mkdirSync(scheduleDir(deps), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const got = await listen();
     if (got !== "busy") {
+      fs.chmodSync(address, 0o600);
       got.unref();
-      return () => { got.close(); };
+      return () => { got.close(); fs.rmSync(address, { force: true }); };
     }
-    if (linux || (await alive())) return null;
+    if (await alive()) return null;
     fs.rmSync(address, { force: true });
   }
   return null;

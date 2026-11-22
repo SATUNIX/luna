@@ -177,6 +177,22 @@ await check("a publication that keeps failing writes one failed push event, not 
   assert.equal(state.selfImprove?.publishError?.includes("remote refused"), true);
 });
 
+await check("the hooked-remote fixture runs its pre-receive hook with the gate's global core.hooksPath=/dev/null (DE-120)", () => {
+  const src = greenRepo();
+  const bare = scratch();
+  hookedBareRemote(bare, `#!/bin/sh\ntouch "${bare}/refused"\nexit 1\n`);
+  // The Luna gate writes this to the global config (packages/autonomy/image/gate.sh). A fixture that
+  // relies on the default hooks directory would silently stop refusing pushes there, which is the
+  // ENOENT/seed-push failure DE-120 fixed; this check keeps the local override honest everywhere.
+  const globalCfg = path.join(scratch(), "gitconfig");
+  fs.writeFileSync(globalCfg, "[core]\n\thooksPath = /dev/null\n");
+  const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", src, "push", "--quiet", bare, "HEAD:refs/heads/main"], {
+    encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: globalCfg, GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  assert.notEqual(r.status, 0, "the pre-receive hook refused the push");
+  assert.ok(fs.existsSync(path.join(bare, "refused")), "the hook ran despite the global core.hooksPath=/dev/null");
+});
+
 const at = (minute: number): string => `2026-10-01T10:${String(minute).padStart(2, "0")}:00.000Z`;
 const statusEvent = (run: string, to: string): EventInput => ({ type: "run.status", run, from: "running", to, reason: null });
 

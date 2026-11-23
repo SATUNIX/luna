@@ -455,6 +455,23 @@ const lines = (text: string): string[] => text.split("\n");
     assert.ok((seen.at(-1) ?? "").startsWith(`Format: ${format} · run ${id}`), `status ${id} describes the ${format} run:\n${seen.at(-1) ?? ""}`);
   }
   // `panel` still reaches the live view, now through the one command.
+  const controlCompletions = async (prefix: string): Promise<Array<{ label: string }>> => {
+    const items = await (workflows.getArgumentCompletions?.(prefix) ?? []);
+    return items ?? [];
+  };
+  const stopIds = (await controlCompletions("stop ")).map((c) => c.label);
+  assert.ok(!stopIds.includes(AUTONOMY_LIVE_ID) && !stopIds.includes(AUTONOMY_BLOCKED_ID), `stop completion must not offer an autonomous run id it cannot control:\n${stopIds.join(", ")}`);
+  // The controllable set is every non-autonomy format, and a workflow run is the `yaml` format.
+  // Only live runs complete for a control verb, so the in-process yaml run started above must
+  // appear: this is what proves workflow runs are still offered after the autonomy filter.
+  assert.ok(stopIds.includes("2026-01-01T00-20-00-000Z-live-aaaa0002"), `stop completion still offers the live workflow (yaml) run:\n${stopIds.join(", ")}`);
+  assert.ok(!stopIds.includes(YAML_ID), "stop completion offers live runs only, not a finished workflow run");
+  const statusIds = (await controlCompletions("status ")).map((c) => c.label);
+  assert.ok(statusIds.includes(AUTONOMY_LIVE_ID) && statusIds.includes(AUTONOMY_BLOCKED_ID), `status completion reads every format, autonomy included:\n${statusIds.join(", ")}`);
+  for (const verb of ["pause", "skip", "resume"]) {
+    const labels = (await controlCompletions(`${verb} `)).map((c) => c.label);
+    assert.ok(labels.every((id) => id !== AUTONOMY_LIVE_ID && id !== AUTONOMY_BLOCKED_ID), `${verb} completion must not offer an autonomous run id:\n${labels.join(", ")}`);
+  }
   await workflows.handler("panel", cmdCtx);
   assert.match(notes.at(-1) ?? "", /^Workflows \(/);
   ok("/workflows lists past runs, status <id> describes a run of every format, and panel opens the live view");

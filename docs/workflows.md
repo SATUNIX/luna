@@ -29,6 +29,11 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `workflow_status` tool | The agent inspects runs of every format, including autonomous container runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
+Tab completion for `status` and `panel` offers runs of every format, autonomous container runs
+included. `pause`, `skip`, `resume` and `stop` offer only workflow, script and subagent runs: an
+autonomous run is read-only here and its id would answer "No live run" or "No run".
+`tests/run-query-smoke.ts` pins both lists.
+
 `workflow_status` and `workflow_control` are registered inactive and become callable once a run
 starts (a `workflow_run` or `workflow` call, a background `subagent`, a run started with a
 command, or a live or blocked autonomous run found when a prompt is sent), so

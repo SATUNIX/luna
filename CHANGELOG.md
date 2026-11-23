@@ -435,6 +435,13 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Fixed
 
+- **`/workflows` control completions no longer offer autonomous run ids.** Finding: after the run
+  list gained autonomous container rows, tab completion for `pause`, `skip`, `resume` and `stop`
+  offered their ids too, but those verbs act only on in-process and recorded subagent runs, so
+  choosing one answered "No live run" or "No run". `status` and `panel` still complete every
+  format, including autonomy, because they read it. Verified by `tests/run-query-smoke.ts`; see
+  `docs/workflows.md`.
+
 - **AUTHORITY: `luna schedule` review fixes (DE-118).** Two independent reviews of V5-14 found it not
   safe as documented. The spec is no longer trusted at run time: `add` resolves the absolute `pi`,
   node and luna paths, the directory, kind, prompt or config and caps into the spec and pins its

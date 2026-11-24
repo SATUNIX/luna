@@ -114,11 +114,57 @@ function assistantText(message: unknown): { text: string; failed: boolean } | nu
   return { text, failed: message.stopReason === "error" || message.stopReason === "aborted" };
 }
 
+/** The text a tool execution result carries, when it carries any. */
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (!isRecord(result)) return "";
+  const content = result.content;
+  if (typeof content === "string") return content;
+  return Array.isArray(content)
+    ? content.flatMap((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [])).join("")
+    : "";
+}
+
+/** The first non-empty line of a tool result, clipped so a status line stays one line. */
+function firstLine(text: string): string {
+  const line = text.split(/\r?\n/).map((part) => part.trim()).find((part) => part.length > 0) ?? "";
+  return line.length > 200 ? `${line.slice(0, 197)}...` : line;
+}
+
+/**
+ * A run launched by a tool (the autonomy CLI): name it and the state it reports, rather than a
+ * bare command outcome. Accepts the CLI's human line and its `--json` record.
+ */
+function autonomyStart(text: string): string | null {
+  const started = /\brun\s+([^\s;,(]+)\s+started\b[^\n]*?\b(?:status|state)\s*[:=]?\s*([A-Za-z][\w-]*)/i.exec(text);
+  if (started !== null) return `Run ${started[1]} started; state: ${started[2]}.`;
+  for (const raw of text.split(/\r?\n/)) {
+    let record: unknown;
+    try { record = parseJson(raw.trim()); } catch { continue; }
+    if (!isRecord(record)) continue;
+    const run = typeof record.runId === "string" ? record.runId : record.run;
+    if (typeof run === "string" && typeof record.status === "string" && record.started === true) return `Run ${run} started; state: ${record.status}.`;
+  }
+  return null;
+}
+
+/** The status line printed when tools ran but the model's final message carried no text. */
+function toolStatus(last: { name: string; text: string; failed: boolean } | null, startedName: string | null): string {
+  if (last === null) return `Tool ${startedName ?? "unknown"} did not finish before the session ended.`;
+  const run = autonomyStart(last.text);
+  if (run !== null) return run;
+  const detail = firstLine(last.text) || (last.failed ? "no error text" : "no output");
+  return `Tool ${last.name} ${last.failed ? "failed" : "finished"}: ${detail}`;
+}
+
 /** Reads pi's JSON event stream: progress lines for stderr and the final answer. */
 export class EventReader {
   answer = "";
   failed = false;
   private rest = "";
+  private sawTool = false;
+  private startedTool: string | null = null;
+  private lastTool: { name: string; text: string; failed: boolean } | null = null;
   private readonly progress: (line: string) => void;
   constructor(progress: (line: string) => void) {
     this.progress = progress;
@@ -136,6 +182,9 @@ export class EventReader {
   end(): void {
     if (this.rest.trim()) this.line(this.rest);
     this.rest = "";
+    // A model can end a tool-using session with an empty message. Printing nothing made success
+    // indistinguishable from silence, so report the last tool outcome instead (PG-41).
+    if (!this.failed && this.answer.trim() === "" && this.sawTool) this.answer = toolStatus(this.lastTool, this.startedTool);
   }
 
   private line(raw: string): void {
@@ -143,8 +192,14 @@ export class EventReader {
     let event: unknown;
     try { event = parseJson(raw); } catch { return; }
     if (!isRecord(event)) return;
-    if (event.type === "tool_execution_start" && typeof event.toolName === "string") this.progress(`luna: tool ${event.toolName}`);
-    else if (event.type === "turn_end") this.progress("luna: turn finished");
+    if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+      this.sawTool = true;
+      this.startedTool = event.toolName;
+      this.progress(`luna: tool ${event.toolName}`);
+    } else if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
+      this.sawTool = true;
+      this.lastTool = { name: event.toolName, text: toolResultText(event.result), failed: event.isError === true };
+    } else if (event.type === "turn_end") this.progress("luna: turn finished");
     else if (event.type === "message_end") {
       const a = assistantText(event.message);
       if (a !== null) { this.answer = a.text; this.failed = a.failed; }

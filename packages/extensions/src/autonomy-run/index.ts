@@ -247,6 +247,14 @@ const WIDGET_GRACE_MS = 60_000;
 const ENDED: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled", "budget_exhausted"]);
 const STATUS_WORD = /^[a-z_]{1,32}$/;
 
+/** What a blocked run waits on, narrowed from `status --json`'s `blocker`. */
+export interface WidgetBlocker {
+  kind: string;
+  question: string;
+  /** `waiting_budget` or `waiting_provider` when the supervisor parked the run, else null. */
+  waiting: "waiting_budget" | "waiting_provider" | null;
+}
+
 /** One run as the widget shows it, narrowed from `status --json`. */
 export interface WidgetRun {
   run: string;
@@ -255,6 +263,8 @@ export interface WidgetRun {
   step: number | null;
   spentUsd: number | null;
   budgetUsd: number | null;
+  /** Why a blocked run waits, or null when it records no blocker. */
+  blocker: WidgetBlocker | null;
   /** When the run's state last changed, in ms since the epoch; null when unknown. */
   updatedMs: number | null;
 }
@@ -277,6 +287,18 @@ const clipText = (value: unknown, max: number): string => {
 
 const nonNegative = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
 
+/** The blocker a run records, or null: a question is what the owner has to answer, so one without it is not shown. */
+function widgetBlocker(value: unknown): WidgetBlocker | null {
+  const question = field(value, "question");
+  if (typeof question !== "string" || !question.trim()) return null;
+  const waiting = field(value, "waiting");
+  return {
+    kind: clipText(field(value, "kind"), 20),
+    question: clipText(question, 120),
+    waiting: waiting === "waiting_budget" || waiting === "waiting_provider" ? waiting : null,
+  };
+}
+
 /** The runs of a no-run `status --json` report the widget can show; a malformed row is left out. */
 export function widgetRuns(report: unknown): WidgetRun[] {
   const runs = field(report, "runs");
@@ -294,6 +316,7 @@ export function widgetRuns(report: unknown): WidgetRun[] {
       step: nonNegative(field(r, "step")),
       spentUsd: nonNegative(field(r, "spentUsd")),
       budgetUsd: nonNegative(field(r, "budgetUsd")),
+      blocker: widgetBlocker(field(r, "blocker")),
       updatedMs: Number.isFinite(updatedMs) ? updatedMs : null,
     }];
   });
@@ -383,15 +406,17 @@ const column = (text: string, width: number): string => {
 /**
  * The widget's lines: a heading and one line per run that has not ended (active runs first, at most
  * WIDGET_MAX_RUNS), each giving the run, its template, cycle, phase, spend against budget and the
- * age of its last event. No line is wider than `width` columns. Empty (the widget is hidden) when no
- * run is active.
+ * age of its last event; then, when a run is blocked, what it waits on and the question to answer.
+ * No line is wider than `width` columns. Empty (the widget is hidden) when no run is active and
+ * none is blocked.
  */
 export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonly WidgetEvent[], now: number, width: number): string[] {
   const cols = Math.floor(width);
   if (!Number.isFinite(cols) || cols < 1) return [];
   const open = runs.filter((r) => !ENDED.has(r.status));
   const active = open.filter(isActiveRun);
-  if (active.length === 0) return [];
+  const blocked = open.filter((r) => r.status === "blocked");
+  if (active.length === 0 && blocked.length === 0) return [];
   const last = new Map<string, WidgetEvent>();
   const cycle = new Map<string, number>();
   for (const e of events) {
@@ -415,14 +440,21 @@ export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonl
     lines.push(`  ${column(r.run, idWidth)}  ${column(r.template, templateWidth)}  cycle ${n === null ? "-" : String(n)}  ${phase}  ${spend}  ${age}`);
   }
   if (ordered.length > listed.length) lines.push(`  +${ordered.length - listed.length} more (/autonomy status)`);
+  // Why it is blocked, as the fleet footer says it: the waiting reason and the owner's question.
+  const waitingRun = blocked.find((r) => r.blocker !== null);
+  if (waitingRun?.blocker) {
+    const reason = waitingRun.blocker.waiting === "waiting_budget" ? "waiting on budget: " : waitingRun.blocker.waiting === "waiting_provider" ? "waiting on provider: " : "";
+    lines.push(`  blocked: ${waitingRun.run} (${reason}${waitingRun.blocker.question})`);
+  }
   return lines.map((line) => fit(line, cols));
 }
 
 /**
  * The live run widget's poller for one session. A refresh reads the run list (`status --json`) and,
- * when a run is active, the newest host events (`events --json`), and shows the widget; with no
- * active run it hides the widget. It refreshes every WIDGET_POLL_MS on an unref'd timer while
- * widgetPolls says so, skipping a tick while the previous refresh is still running.
+ * when a run is active or blocked, the newest host events (`events --json`), and shows the widget;
+ * with nothing active and nothing blocked it hides the widget. It refreshes every WIDGET_POLL_MS on
+ * an unref'd timer while widgetPolls says so, skipping a tick while the previous refresh is still
+ * running.
  */
 function runWidget() {
   let ctx: ExtensionContext | undefined;
@@ -487,7 +519,8 @@ function runWidget() {
       const next = report?.ok === true ? widgetRuns(report) : [];
       if (ctx !== on || off) return;
       poll(widgetPolls(next, Date.now(), graceUntil));
-      if (!next.some(isActiveRun)) { hide(on); return; }
+      // A blocked run is shown (with its question) even though it does not poll: the owner has to answer it.
+      if (!next.some((r) => isActiveRun(r) || r.status === "blocked")) { hide(on); return; }
       const read = await runCli(["events", "--limit", String(WIDGET_EVENT_LIMIT)], { cwd: on.cwd, timeoutMs: WIDGET_CLI_TIMEOUT_MS });
       // A session that ended or a widget turned off while the CLI ran is not drawn on.
       if (ctx !== on || off) return;

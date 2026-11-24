@@ -99,6 +99,8 @@ export interface AutonomyRun {
 	readonly spentUsd: number | null;
 	readonly budgetUsd: number | null;
 	readonly step: number | null;
+	/** What the supervisor says the run is doing now (`state.phase`), or null when it records none. */
+	readonly phase: string | null;
 	readonly blocker: { readonly kind: string; readonly question: string; readonly waiting?: "waiting_budget" | "waiting_provider" } | null;
 	/** Written by the previous (v0) supervisor: listed, but it cannot be driven. */
 	readonly legacy?: true;
@@ -242,6 +244,7 @@ function runSummary(home: string, run: string): RunWithoutEvent | null | "skip" 
 		spentUsd: finite(usage?.usd),
 		budgetUsd: finite(budget?.totalUsd),
 		step: finite(s.step),
+		phase: text(s.phase, ID_MAX),
 		blocker,
 		...(s.schemaVersion === undefined ? { legacy: true as const } : {}),
 	};
@@ -454,6 +457,7 @@ export type AutonomyLibraryChecks = [
 	// A status file the library writes is one this reader's schema describes, and the reverse.
 	Assert<Fits<StatusReport, AutonomyStatus>>,
 	Assert<Fits<AutonomyStatus, StatusReport>>,
-	// The run summary keeps listRuns' field names.
-	Assert<Same<Exclude<keyof AutonomyRun, "lastEventAt">, keyof RunSummary>>,
+	// The run summary keeps listRuns' field names. `phase` is the one extra: listRuns() does not
+	// summarise it, and the console shows it so "what is it doing" is answerable from the panel.
+	Assert<Same<Exclude<keyof AutonomyRun, "lastEventAt" | "phase">, keyof RunSummary>>,
 ];

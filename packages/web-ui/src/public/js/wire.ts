@@ -287,6 +287,8 @@ export interface AutonomyRun {
 	readonly spentUsd: number | null;
 	readonly budgetUsd: number | null;
 	readonly step: number | null;
+	/** What the supervisor says the run is doing now (`state.phase`), or null when it records none. */
+	readonly phase: string | null;
 	/** `waiting` is what a parked run waits on: a budget or a provider refusal (lib/lifecycle.ts). */
 	readonly blocker: { readonly kind: string; readonly question: string; readonly waiting?: "waiting_budget" | "waiting_provider" } | null;
 	readonly lastEventAt: string | null;

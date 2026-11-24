@@ -116,12 +116,13 @@ export function renderAutonomy(target: Element, data: Wire.AutonomyResponse, now
 			section(
 				"Runs",
 				table(
-					["run", "template", "status", "step", "spend / budget", "last event"],
+					["run", "template", "status", "step", "doing", "spend / budget", "last event"],
 					data.runs.map((run) => [
 						displayText(run.run) + (run.legacy ? " (legacy)" : ""),
 						displayText(run.template ?? "—"),
 						statusText(run),
 						typeof run.step === "number" ? String(run.step) : "—",
+						typeof run.phase === "string" && run.phase ? displayText(run.phase) : "—",
 						spend(run),
 						run.lastEventAt ? ageText(run.lastEventAt, now) : "—",
 					]),

@@ -113,11 +113,12 @@ export function renderAutonomy(target, data, now = Date.now()) {
         target.append(section("Runs", el("p", { class: "muted", text: "No runs in the autonomy state home." })));
     }
     else {
-        target.append(section("Runs", table(["run", "template", "status", "step", "spend / budget", "last event"], data.runs.map((run) => [
+        target.append(section("Runs", table(["run", "template", "status", "step", "doing", "spend / budget", "last event"], data.runs.map((run) => [
             displayText(run.run) + (run.legacy ? " (legacy)" : ""),
             displayText(run.template ?? "—"),
             statusText(run),
             typeof run.step === "number" ? String(run.step) : "—",
+            typeof run.phase === "string" && run.phase ? displayText(run.phase) : "—",
             spend(run),
             run.lastEventAt ? ageText(run.lastEventAt, now) : "—",
         ]), "autonomy-runs")));

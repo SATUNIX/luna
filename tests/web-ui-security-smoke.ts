@@ -158,18 +158,54 @@ try {
     sse.close();
   });
 
-  await check("/api/autonomy answers its documented shape from the state home with the token, and is read-only", async () => {
+  await check("/api/autonomy answers its documented shape from library-written state, refuses without a token and is read-only", async () => {
     // The sandbox sets no PI_AUTONOMY_HOME, so the server uses $HOME/.local/state/pi-autonomy.
-    const runDir = path.join(sandbox.home, ".local", "state", "pi-autonomy", "fixture-run");
+    const { appendEvent } = await import("../packages/autonomy/lib/events.ts");
+    const { STATE_SCHEMA_VERSION } = await import("../packages/autonomy/lib/lifecycle.ts");
+    const stateHome = path.join(sandbox.home, ".local", "state", "pi-autonomy");
+    const runDir = path.join(stateHome, "fixture-run");
+    const at = "2026-11-18T10:30:00.000Z";
     fs.mkdirSync(runDir, { recursive: true });
-    fs.writeFileSync(path.join(runDir, "state.json"), JSON.stringify({ schemaVersion: 1, template: "implement", status: "running", step: 2 }));
+    fs.writeFileSync(path.join(runDir, "state.json"), JSON.stringify({
+      schemaVersion: STATE_SCHEMA_VERSION,
+      run: "fixture-run",
+      template: "implement",
+      status: "blocked",
+      step: 2,
+      updatedAt: at,
+      usage: { usd: 1.25 },
+      limits: { budget: { totalUsd: 10 } },
+      blocker: { kind: "question", question: "may I continue?", waiting: "waiting_budget" },
+    }));
+    appendEvent(
+      stateHome,
+      { type: "run.status", run: "fixture-run", from: "running", to: "blocked", reason: "budget parked" },
+      (line) => { throw new Error(`event not written: ${line}`); },
+      { at },
+    );
+
+    const denied = await get("/api/autonomy");
+    assert.equal(denied.status, 401);
+    assert.ok(!denied.text.includes("fixture-run"), "the refusal must not leak what is running");
+
     const res = await auth("/api/autonomy");
     assert.equal(res.status, 200, res.text.slice(0, 200));
     assert.match(res.headers["cache-control"] || "", /no-store/);
-    const body = res.json() as { schemaVersion: number; runs: Array<{ run: string; status: string }>; events: unknown[]; status: unknown; skipped: unknown };
+    const body = res.json() as {
+      schemaVersion: number;
+      runs: Array<{ run: string; template: string; status: string; step: number; spentUsd: number; budgetUsd: number; blocker: { kind: string; question: string; waiting?: string }; lastEventAt: string | null }>;
+      runsTotal: number;
+      events: Array<{ type: string; reason?: string }>;
+      status: unknown;
+      skipped: unknown;
+    };
     assert.equal(body.schemaVersion, 1);
-    assert.deepEqual(body.runs.map((r) => [r.run, r.status]), [["fixture-run", "running"]]);
-    assert.deepEqual([body.events, body.status, body.skipped], [[], null, { runs: 0, events: 0, status: 0 }]);
+    assert.equal(body.runsTotal, 1);
+    assert.deepEqual(body.runs.map((r) => [r.run, r.template, r.status, r.step, r.spentUsd, r.budgetUsd, r.blocker.kind, r.blocker.question, r.blocker.waiting, r.lastEventAt]), [
+      ["fixture-run", "implement", "blocked", 2, 1.25, 10, "question", "may I continue?", "waiting_budget", at],
+    ]);
+    assert.deepEqual(body.events.map((event) => [event.type, event.reason]), [["run.status", "budget parked"]]);
+    assert.deepEqual([body.status, body.skipped], [null, { runs: 0, events: 0, status: 0 }]);
     const post = await auth("/api/autonomy", { method: "POST", headers: JSON_HEADERS, body: "{}" });
     assert.equal(post.status, 405);
     assert.equal(post.headers.allow, "GET");

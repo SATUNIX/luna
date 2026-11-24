@@ -230,11 +230,17 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string, e
     }
   }
   dropWhere(1);
-  // 4. truncate what is left
+  // 4. truncate what is left. A critical segment on the right (a failing status chip) is never
+  //    dropped for the left context: the left side is cut to make room, and when the warning alone
+  //    is wider than the line the warning itself is cut rather than replaced by the context.
   const { lw, rw, total } = size();
   if (total > width) {
+    const criticalRight = r.some((s) => s.prio === 0);
     const leftRoom = width - (rw ? rw + 2 : 0);
-    if (rw && leftRoom >= 12) return `${truncateDisplay(join(l, sep), leftRoom, ellipsis)}  ${join(r, sep)}`;
+    if (rw && (leftRoom >= 12 || criticalRight)) {
+      if (leftRoom >= 0) return `${truncateDisplay(join(l, sep), leftRoom, ellipsis)}  ${join(r, sep)}`;
+      return truncateDisplay(join(r, sep), width, ellipsis);
+    }
     return truncateDisplay(join(l, sep), width, ellipsis);
   }
   if (!rw) return join(l, sep);

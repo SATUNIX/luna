@@ -467,6 +467,41 @@ const tests = {
     }
   },
 
+  singleCriticalRightChipSurvivesNarrowWidths() {
+    // DE-123: a lone priority-0 chip on the right (a blocked orchestrator) must survive a narrow
+    // terminal; only the left context gives up columns. The chip is wider than 20 columns, so below
+    // that width the chip itself is cut, never replaced by the context.
+    const state: FooterState = {
+      cwd: "/work/project",
+      totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
+      partial: false, cost: { kind: "unknown" }, context: { percent: 66, tokens: 660, contextWindow: 1000 },
+      statuses: [{ key: "orchestrator", text: "blocked: verify", ageMs: 0 }], todos: [], now: 0,
+    };
+    for (let width = 20; width <= 40; width++) {
+      const lines = renderMod.renderFooter(state, plain, width, "default");
+      for (const line of lines) assert.ok(renderMod.visibleWidth(line) <= width, `width ${width} fits: ${JSON.stringify(strip(line))}`);
+      const line2 = strip(lines[1] ?? "");
+      // The warning owns the line: it is shown in full once it fits (30 columns here), and as the
+      // longest prefix the line allows below that. The left context is what gives way, and it
+      // never appears while the warning is still cut.
+      if (width >= 30) {
+        assert.match(line2, /orchestrator blocked: verify/, `width ${width} shows the whole critical chip: ${JSON.stringify(line2)}`);
+      } else {
+        assert.match(line2, /^ *orchestrator block/, `width ${width} keeps the longest warning prefix: ${JSON.stringify(line2)}`);
+        assert.doesNotMatch(line2, /ctx/, `width ${width} drops the context before the warning: ${JSON.stringify(line2)}`);
+      }
+    }
+    // The narrowest line keeps the warning's leading words rather than the context.
+    const line20 = strip(renderMod.renderFooter(state, plain, 20, "default")[1] ?? "");
+    assert.equal(line20, "orchestrator blocke\u2026", "20 columns cut the warning, not the context");
+    // Wider narrow lines keep the left context too: only its tail is cut.
+    const line37 = strip(renderMod.renderFooter(state, plain, 37, "default")[1] ?? "");
+    assert.match(line37, /ctx .*66%/, "the left context survives where it fits");
+    // Without a critical chip the existing narrowing is unchanged: the context keeps the line.
+    const calm: FooterState = { ...state, statuses: [] };
+    const calm20 = strip(renderMod.renderFooter(calm, plain, 20, "default")[1] ?? "");
+    assert.match(calm20, /ctx .*66%/, "without a warning the context keeps the line");
+  },
   branchProfileAndPathHelpersAvoidSubprocesses() {
     const ws = tmpWorkspace("pi-kit-footer-git-");
     try {

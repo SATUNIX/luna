@@ -172,22 +172,25 @@ recovering, or paused after at least one cycle) or blocked, pi shows a widget ab
 heading with the number of active and waiting runs, then one line per run that has not ended (active
 runs first, at most six, the rest counted) with its id, template, cycle, phase (from the newest host
 event: working, gate green or red, pushed, a failure code, or the run's status when it is not
-running), spend against budget and the age of its last event. When a run is blocked, one more line
-says what it waits on and the question to answer, as the fleet footer does: `blocked: <run>
-(waiting on provider: <question>)`, or `(waiting on budget: <question>)` for a parked run. Every
+running), spend against budget and the age of its last event. For each blocked run that records a
+question, one more line says what it waits on and the question to answer, as the fleet footer does:
+`blocked: <run> (waiting on provider: <question>)`, or `(waiting on budget: <question>)` for a
+parked run (at most three such lines, the rest counted with `+N more blocked`). Every
 line is cut to the terminal's width, so a narrow terminal never wraps it. The
 widget is refreshed every 2 seconds through the CLI (`pi-autonomy status --json` and
 `pi-autonomy events --json --limit 200`), skipping a refresh while the previous one is still
-running, but only while some run can change on its own (`setup`, `ready`, `running` or
-`recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. A paused or blocked
-run changes only when the operator acts, so with only such runs the widget is drawn once and not
-refreshed. It hides itself when no run is active and none is blocked. It is checked at session
+running, while some run can change on its own (`setup`, `ready`, `running` or
+`recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. With blocked
+runs and none moving it still refreshes, every 30 seconds, so an answer given outside this session (the shell CLI,
+the web console, another pi) clears the line at the next refresh; a paused run alone is shown but
+not refreshed. It hides itself when no run is active and none is blocked. It is checked at session
 start, after
 `/autonomy start` starts a run in the background, after `/autonomy resume` and after
 `/autonomy status` with no run; `/autonomy watch` checks it now and `/autonomy watch off` hides it
 for the rest of the session. Pinned by `tests/autonomy-command-smoke.ts` (the renderer at 80 and
-120 columns and at narrow widths, which runs show and which keep it refreshing, a blocked run's
-question and waiting reason, showing a run
+120 columns and at narrow widths, which runs show and which keep it refreshing, every blocked
+run's question and waiting reason up to the cap, the slow poll of a blocked-only fleet and its
+refresh after an outside answer, showing a run
 still in `setup` after a background start, showing after resume, hiding and `watch off`).
 
 **Not covered:** the widget needs a screen and is not drawn in print or JSON mode; outside the

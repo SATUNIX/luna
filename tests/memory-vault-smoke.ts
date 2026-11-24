@@ -629,6 +629,28 @@ try {
     ok("the stemmer makes singular and plural forms meet in search");
   }
 
+  // 16b. The persisted index records the stemmer generation that produced its tokens. An index
+  //      written by an older stemmer must be re-tokenised even though the note's mtime did not
+  //      change, or a note whose current stems match the query stays invisible until edited.
+  {
+    const versionRoot = path.join(ws, "vault-stemmer-version");
+    const saved = vault.saveMemory(versionRoot, { title: "Config files layout", body: "Config files live under the etc directory.", project: "stem" });
+    const indexFile = path.join(versionRoot, ".pi-index", "index.json");
+    const index = parseJson(fs.readFileSync(indexFile, "utf8"));
+    assert.ok(isRecord(index) && isRecord(index.notes), "the index has a notes map");
+    const entry = index.notes[saved.rel];
+    assert.ok(isRecord(entry), "the saved note is indexed");
+    index.stemmer = 0;
+    index.notes[saved.rel] = { ...entry, tf: { staleword: 1 }, tokens: ["staleword"], titleTokens: ["staleword"] };
+    fs.writeFileSync(indexFile, JSON.stringify(index));
+    const hits = vault.searchMemories(versionRoot, "config file", { project: "stem" });
+    assert.ok(hits.some((h) => h.rel === saved.rel), "a note indexed by an older stemmer is re-tokenised and found");
+    const rebuilt = parseJson(fs.readFileSync(indexFile, "utf8"));
+    assert.ok(isRecord(rebuilt));
+    assert.equal(rebuilt.stemmer, search.STEMMER_VERSION, "the rebuilt index records the current stemmer generation");
+    ok("an index from an older stemmer is rebuilt instead of trusted by mtime");
+  }
+
   // 17. A throw during first-prompt recall must not consume the first-prompt flag. The handler
   //     accepts `event.prompt` without a type guard and passes it to searchMemories; a non-string
   //     prompt makes tokenize throw after the flag used to be cleared, and the catch returns

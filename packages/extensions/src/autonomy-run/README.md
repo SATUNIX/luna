@@ -24,6 +24,7 @@ While a run is active or blocked, a widget above the editor lists the runs (cycl
 against budget, last-event age) and, for each blocked run with a question, what it waits on and the
 question to answer (`blocked: <run> (waiting on provider: <question>)`, at most three, the rest
 counted). It is refreshed every 2 seconds while a run can change on its own, every 30 seconds while
+blocked runs remain and none is moving (so an answer given outside this session clears the line), and hidden when
 only blocked runs remain (so an answer given outside this session clears the line), and hidden when
 no run is active and none is blocked (docs/autonomy.md, "From inside pi";
 `tests/autonomy-command-smoke.ts`).

@@ -80,6 +80,7 @@ export type LandRefusalCode =
   | "verdict_mismatch"
   | "branch_moved"
   | "not_a_commit"
+  | "wrong_branch"
   | "clone_failed"
   | "merge_conflict"
   | "checks_failed"
@@ -127,6 +128,11 @@ function shaAt(git: LandGit, cwd: string, ref: string): string | null {
   return out !== null && SHA.test(out) ? out : null;
 }
 
+function currentBranch(git: LandGit, cwd: string): string | null {
+  const out = gitOut(git, cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return out === "" ? null : out;
+}
+
 function changedPaths(git: LandGit, cwd: string, from: string, to: string): string[] | null {
   const out = gitOut(git, cwd, ["diff", "--name-only", "--no-renames", from, to]);
   return out === null ? null : out.split("\n").map((line) => line.trim()).filter((line) => line !== "");
@@ -140,6 +146,12 @@ function abortMerge(git: LandGit, cwd: string): void {
   git(["merge", "--abort"], cwd);
 }
 
+/** Reset a merge that was not proven green, and report whether the branch is back at `tip`. */
+function resetTo(git: LandGit, repo: string, tip: string): boolean {
+  const reset = git(["reset", "--hard", tip], repo);
+  return reset.status === 0 && shaAt(git, repo, "HEAD") === tip;
+}
+
 /**
  * Land `reviewedSha` into `branch`, or refuse with the reason. The branch is changed only after
  * the clean-clone check is green, and put back when the post-merge check is red.
@@ -150,10 +162,12 @@ export async function landReviewed(request: LandRequest): Promise<LandResult> {
   try {
     if (!SHA.test(reviewedSha)) return refused("invalid_sha", `reviewed sha ${JSON.stringify(reviewedSha.slice(0, 64))} is not a 40-character commit`);
     if (verdict.verdict !== "PASS") return refused("no_pass", `the review verdict is ${String(verdict.verdict)}, not PASS`);
-    if (verdict.reviewer.trim() === "" || verdict.reviewer === author) return refused("self_review", `the PASS verdict is from the author ${JSON.stringify(author)}; a separate reviewer must judge it`);
+    const reviewer = verdict.reviewer.trim();
+    if (reviewer === "" || reviewer === author.trim()) return refused("self_review", `the PASS verdict is from the author ${JSON.stringify(author)}; a separate reviewer must judge it`);
     if (verdict.sha !== reviewedSha) return refused("verdict_mismatch", `the PASS verdict names ${verdict.sha}, not the submitted ${reviewedSha}`);
     if (!SHA.test(verdict.tip)) return refused("verdict_mismatch", `the verdict's branch tip ${JSON.stringify(verdict.tip.slice(0, 64))} is not a 40-character commit`);
 
+    if (currentBranch(git, repo) !== branch) return refused("wrong_branch", `the repository is not checked out on ${JSON.stringify(branch)}; the gate will not merge into another branch`);
     const tip = shaAt(git, repo, `refs/heads/${branch}`);
     if (tip === null) return refused("land_failed", `branch ${JSON.stringify(branch)} does not resolve to a commit in ${JSON.stringify(repo)}`);
     if (tip !== verdict.tip) return refused("branch_moved", `branch ${branch} moved from ${verdict.tip} to ${tip} after the verdict; review the new tip`);
@@ -180,6 +194,7 @@ export async function landReviewed(request: LandRequest): Promise<LandResult> {
     // Re-read the tip after the clone check: a commit that arrived meanwhile makes the verdict stale.
     const beforeLand = shaAt(git, repo, `refs/heads/${branch}`);
     if (beforeLand !== tip) return refused("branch_moved", `branch ${branch} moved from ${tip} to ${beforeLand ?? "nothing"} while the clone was checked`);
+    if (currentBranch(git, repo) !== branch) return refused("wrong_branch", `the repository left ${JSON.stringify(branch)} while the clone was checked; the gate will not merge into another branch`);
 
     const landed = git(mergeArgs(reviewedSha), repo);
     if (landed.status !== 0) {
@@ -189,11 +204,16 @@ export async function landReviewed(request: LandRequest): Promise<LandResult> {
     }
     const merged = shaAt(git, repo, "HEAD");
     log(`land: ${reviewedSha} merged into ${branch}; re-running checks on ${merged ?? "the merged branch"}`);
-    const second = await runChecks(repo);
+    let second: LandCheckResult;
+    try {
+      second = await runChecks(repo);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!resetTo(git, repo, tip)) return refused("reset_failed", `checks threw after the merge and the reset did not restore ${tip}; the branch may be red`);
+      return refused("second_checks_failed", `checks threw on the merged ${branch}: ${message.slice(0, 300)}; the merge was reset and the branch is unchanged`);
+    }
     if (!second.ok) {
-      const reset = git(["reset", "--hard", tip], repo);
-      const after = reset.status === 0 ? shaAt(git, repo, "HEAD") : null;
-      if (after !== tip) return refused("reset_failed", `checks are red after the merge and the reset did not restore ${tip} (HEAD is ${after ?? "unreadable"}); the branch may be red`);
+      if (!resetTo(git, repo, tip)) return refused("reset_failed", `checks are red after the merge and the reset did not restore ${tip}; the branch may be red`);
       return refused("second_checks_failed", `checks are red on the merged ${branch}${second.detail ? `: ${second.detail}` : ""}; the merge was reset and the branch is unchanged`);
     }
     if (merged === null) return refused("land_failed", `the merge left no readable HEAD on ${branch}`);

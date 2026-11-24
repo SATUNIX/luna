@@ -143,11 +143,48 @@ export async function runLandChecks(check: Check): Promise<void> {
       const self = await landReviewed({ repo: f.repo, clone: path.join(f.root, "clone"), branch: "main", reviewedSha: f.reviewed, author: "same-session", verdict: verdictFor(f, { reviewer: "same-session" }), git: asLandGit, runChecks: checks.run, lock: createLandLock() });
       assert.equal(self.outcome, "refused");
       if (self.outcome === "refused") assert.equal(self.code, "self_review");
+      const spaced = await landReviewed({ repo: f.repo, clone: path.join(f.root, "clone"), branch: "main", reviewedSha: f.reviewed, author: "worker-session", verdict: verdictFor(f, { reviewer: " worker-session " }), git: asLandGit, runChecks: checks.run, lock: createLandLock() });
+      assert.equal(spaced.outcome, "refused", "surrounding whitespace does not make the author someone else");
+      if (spaced.outcome === "refused") assert.equal(spaced.code, "self_review");
       const wrong = await landReviewed({ repo: f.repo, clone: path.join(f.root, "clone"), branch: "main", reviewedSha: f.reviewed, author: "worker-session", verdict: verdictFor(f, { sha: f.base }), git: asLandGit, runChecks: checks.run, lock: createLandLock() });
       assert.equal(wrong.outcome, "refused");
       if (wrong.outcome === "refused") assert.equal(wrong.code, "verdict_mismatch");
       assert.equal(head(f.repo), f.base);
       assert.equal(checks.calls.length, 0);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  await check("land: a check runner that throws after the merge resets it like a red run", async () => {
+    const f = fixture();
+    try {
+      let calls = 0;
+      const runChecks = (): LandCheckResult => {
+        calls++;
+        if (calls === 1) return { ok: true };
+        throw new Error("the check process could not start");
+      };
+      const lock = createLandLock();
+      const result = await landReviewed({ repo: f.repo, clone: path.join(f.root, "clone"), branch: "main", reviewedSha: f.reviewed, author: "worker-session", verdict: verdictFor(f), git: asLandGit, runChecks, lock });
+      assert.equal(result.outcome, "refused");
+      if (result.outcome === "refused") assert.equal(result.code, "second_checks_failed");
+      assert.equal(head(f.repo), f.base, "the unverified merge was reset");
+      assert.equal(fs.existsSync(path.join(f.repo, "feature.txt")), false, "the merge's tree is gone");
+      assert.equal(lock.tryAcquire(), true, "the lock is released after the reset");
+      lock.release();
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  await check("land: a repository checked out on another branch is refused before it can merge there", async () => {
+    const f = fixture();
+    try {
+      ok(f.repo, ["checkout", "-q", "review"]);
+      const checks = scripted([{ ok: true }, { ok: true }]);
+      const result = await landReviewed({ repo: f.repo, clone: path.join(f.root, "clone"), branch: "main", reviewedSha: f.reviewed, author: "worker-session", verdict: verdictFor(f), git: asLandGit, runChecks: checks.run, lock: createLandLock() });
+      assert.equal(result.outcome, "refused");
+      if (result.outcome === "refused") assert.equal(result.code, "wrong_branch");
+      assert.equal(head(f.repo), f.reviewed, "the checked-out branch is untouched");
+      assert.equal(ok(f.repo, ["rev-parse", "refs/heads/main"]), f.base, "the target branch is untouched");
+      assert.equal(checks.calls.length, 0, "no check ran for the wrong checkout");
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   });
 

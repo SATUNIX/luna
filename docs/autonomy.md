@@ -762,7 +762,7 @@ branch that moved after the verdict (`branch_moved`), and a reviewed change to a
 dispatcher themselves); protected paths return `owner_inbox` so the owner decides them. Otherwise
 it merges the sha into a clean temporary clone, runs the product's checks there, merges the same
 sha into the run's branch, and runs the checks again. A red clone check leaves the branch untouched;
-a red second check resets the merge with `git reset --hard` so the trunk is never left red. A
+a red second check, or a check runner that throws after the merge, resets the merge with `git reset --hard` so the trunk is never left red. The repository must be checked out on the branch being landed; a different checkout is refused as `wrong_branch` before any check so the merge cannot land on another branch. A
 second land that starts while one is running is refused as `busy`. Git runs through an argument
 array, never a shell. `tests/autonomy-land.ts`, run by `smoke:autonomy`, drives real git over a
 local fixture repository for each case. The CLI verb and the `workflow_run` step are not wired yet;

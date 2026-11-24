@@ -248,6 +248,21 @@ function runSummary(home: string, run: string): RunWithoutEvent | null | "skip" 
 }
 
 function listRunSummaries(home: string): { runs: RunWithoutEvent[]; skipped: number } {
+/**
+ * Newest first, as the run list documents. A run whose state records neither `updatedAt` nor
+ * `startedAt` has no time at all: comparing its `null` as text put it above every dated run, so
+ * the one run that cannot say when it last moved was top of "what is running". It sorts last
+ * instead, and runs with the same time (or none) by id, so the order is stable.
+ */
+function newestFirst(a: RunWithoutEvent, b: RunWithoutEvent): number {
+	const ta = a.updatedAt ? Date.parse(a.updatedAt) : Number.NaN;
+	const tb = b.updatedAt ? Date.parse(b.updatedAt) : Number.NaN;
+	const knownA = Number.isFinite(ta);
+	const knownB = Number.isFinite(tb);
+	if (knownA && knownB && ta !== tb) return tb - ta;
+	if (knownA !== knownB) return knownA ? -1 : 1;
+	return a.run.localeCompare(b.run);
+}
 	let names: string[];
 	try {
 		names = fs.readdirSync(home);
@@ -261,7 +276,7 @@ function listRunSummaries(home: string): { runs: RunWithoutEvent[]; skipped: num
 		if (summary === "skip") skipped += 1;
 		else if (summary) runs.push(summary);
 	}
-	runs.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+	runs.sort(newestFirst);
 	return { runs, skipped };
 }
 

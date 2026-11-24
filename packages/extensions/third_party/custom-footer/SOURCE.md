@@ -90,3 +90,13 @@
     layout and width fitting; the theme's colour sequences are added afterwards. Fitting, priority
     and other extensions' status text are unchanged.
   - Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
+- 2026-11-24 narrow terminals keep a lone critical right-side chip.
+  - `fitLine`'s final truncation only kept the right side when it had at least 12 columns of left
+    context, and merged criticals only when there were two or more. A single priority-0 chip on
+    the right (a blocked orchestrator, a failing status chip) was therefore dropped at about 37
+    columns or less, against the module's never-drop-a-warning contract. With a critical segment on
+    the right the left context is now cut to make room; when the warning alone is wider than the
+    line the warning itself is cut rather than replaced by context. Lines without a critical
+    right-side segment are unchanged.
+  - Pinned by `tests/status-bar-smoke.ts` (`singleCriticalRightChipSurvivesNarrowWidths`, widths
+    20 to 40).

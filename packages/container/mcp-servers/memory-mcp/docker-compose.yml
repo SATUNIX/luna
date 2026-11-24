@@ -10,7 +10,7 @@ name: pi-kit-memory-mcp
 # tests/compose-policy-smoke.ts checks these rules for every compose file in the repository.
 services:
   qdrant:
-    image: qdrant/qdrant:v1.20.0-unprivileged@sha256:8c215051dc7bc15221b5f89c100a84a4b04d0dd8497fb73e6fa86fc948d1a41d
+    image: qdrant/qdrant:v1.20.2-unprivileged@sha256:f60765106f26981dabc593d88fe4d0c8138893442c7c59d62257390891b65277
     ports:
       - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
     environment:

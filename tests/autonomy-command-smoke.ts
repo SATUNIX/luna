@@ -482,6 +482,9 @@ try {
     const pausedEarly = row("paused", 0);
     const pausedMid = row("paused", 2);
     assert.deepEqual(mod.renderAutonomyWidget([pausedEarly], [], now, 120), [], "a run paused before its first cycle does not show the widget");
+    const mixed = mod.renderAutonomyWidget([pausedEarly, row("running", 1), row("blocked", 3, { kind: "question", question: "ship it?", waiting: null })], [], now, 120);
+    assert.ok(!mixed.some((l) => l.includes(pausedEarly.run)), "a paused run before its first cycle is not listed beside an active or blocked run");
+    assert.match(at(mixed, 0, "heading"), /^autonomy: 1 active, 1 waiting/, "it is not counted as waiting either");
     // A blocked run is shown even when nothing is moving, with the question the owner has to answer.
     const blockedOnly = mod.renderAutonomyWidget([row("blocked", 3, { kind: "question", question: "ship it?", waiting: "waiting_budget" })], [], now, 120);
     assert.match(at(blockedOnly, 0, "heading"), /^autonomy: 0 active, 1 waiting/, "a blocked run alone is shown, counted as waiting, not active");

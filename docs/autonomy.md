@@ -1267,9 +1267,10 @@ In pi, `/autonomy status <run>` shows that text and, for a run with generations,
 status line to `memento <run>: gen n/N, <status>; last rotation: time box` (or `dollar box`, with
 `, no notebook` when none was appended). The line is cleared by `/autonomy status` of a run without
 generations. `/autonomy status` with no run sets a one-line fleet summary instead: how many runs
-there are, how many are in each status, and the first blocked run with the question it waits on;
-the line is cleared when there are no runs or a run's status is unusable. It is not changed without
-a screen. It is updated only
+there are, how many are in each status, and the first blocked run with the question it waits on and,
+when recorded, what it waits on (`waiting on budget` or `waiting on provider`); the line is cleared
+when there are no runs or a run's status is unusable. It is not changed without a screen. It is
+updated only
 when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
 
 **Not covered:** a question the worker asks during the grace period is not answered: the worker is

@@ -400,13 +400,13 @@ try {
     reset();
     const fleet = [
       { run: "demo-run-1", template: "implement", status: "running", outcome: null, step: 3, spentUsd: 1.5, budgetUsd: 10, blocker: null },
-      { run: "demo-blocked-1", template: "self-improve", status: "blocked", outcome: null, step: 2, spentUsd: 0.25, budgetUsd: 5, blocker: { kind: "question", question: "which database?" } },
+      { run: "demo-blocked-1", template: "self-improve", status: "blocked", outcome: null, step: 2, spentUsd: 0.25, budgetUsd: 5, blocker: { kind: "external", waiting: "waiting_provider", question: "which database?" } },
     ];
     const restoreFleet = setEnv("FAKE_FLEET", JSON.stringify(fleet));
     try {
       const s = session();
       await s.run("status");
-      assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (which database?)"]]);
+      assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (waiting on provider: which database?)"]]);
       assert.match(lastNote(s).message, /status ok/, "the CLI's own status text is still what is shown");
       // A run is running, so the live widget started polling (case 7d): stop it with the session.
       await s.pi.handlers.get("session_shutdown")({}, s.ctx);
@@ -428,6 +428,7 @@ try {
     const long = "x".repeat(100);
     assert.match(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "question", question: long } }] }) ?? "", /x{80}\u2026\)$/, "the question is truncated");
     assert.equal(mod.fleetStatusLine({ runs: [{ run: "a\u001b-1", status: "blocked", blocker: { kind: "question", question: "line1\nline2\u001b[2J" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (line1 line2[2J)", "worker text is collapsed to one visible line");
+    assert.equal(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "external", waiting: "waiting_budget", question: "why?" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (waiting on budget: why?)", "a budget-parked run says so, not just its question");
     ok("status with no run sets a one-line fleet footer, clears it when empty, and is untouched without a screen");
   }
 

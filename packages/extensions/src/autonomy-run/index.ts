@@ -215,10 +215,13 @@ export function fleetStatusLine(report: unknown): string | undefined {
   let blocked: string | undefined;
   for (const r of runs) {
     if (field(r, "status") !== "blocked") continue;
-    const question = field(field(r, "blocker"), "question");
+    const blocker = field(r, "blocker");
+    const question = field(blocker, "question");
     if (typeof question !== "string") continue;
+    const waiting = field(blocker, "waiting");
+    const reason = waiting === "waiting_budget" ? "waiting on budget: " : waiting === "waiting_provider" ? "waiting on provider: " : "";
     const line = oneLine(question);
-    blocked = `${oneLine(String(field(r, "run")))} (${line.length > 80 ? `${line.slice(0, 80)}\u2026` : line})`;
+    blocked = `${oneLine(String(field(r, "run")))} (${reason}${line.length > 80 ? `${line.slice(0, 80)}\u2026` : line})`;
     break;
   }
   return `autonomy: ${runs.length} run${runs.length === 1 ? "" : "s"} \u2014 ${ordered.map((s) => `${counts.get(s) ?? 0} ${s}`).join(", ")}${blocked ? `; blocked: ${blocked}` : ""}`;

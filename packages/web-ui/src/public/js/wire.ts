@@ -289,6 +289,8 @@ export interface AutonomyRun {
 	readonly step: number | null;
 	readonly blocker: { readonly kind: string; readonly question: string } | null;
 	readonly lastEventAt: string | null;
+	/** Written by the previous (v0) supervisor: listed, but it cannot be driven. */
+	readonly legacy?: true;
 }
 
 export type AutonomyEventField = string | number | boolean | null | readonly string[];

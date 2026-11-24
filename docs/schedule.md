@@ -103,12 +103,13 @@ Pinned by `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`), which never ca
 
 ## Not covered
 
-- **Agents with shell access.** The tool firewall does not yet rate `luna schedule add`, unit-file
-  or crontab writes, or the spec directory as operator-only (V5-15). Until it does, an agent allowed
-  to run `luna schedule add --yes` can create a schedule, and a scheduled job that is allowed to run
-  shell commands could do the same after unsetting `LUNA_SCHEDULE_JOB`. The digest stops an edited
-  spec from running; it does not stop a new schedule from being added. Run with the firewall asking
-  for shell commands.
+- **Agents with shell access.** The tool firewall already rates a systemd user unit write and a
+  crontab install high (pinned by `tests/firewall-must-block-corpus-smoke.ts`), but it does not yet
+  rate `luna schedule add`, `remove` or `run-now`, or the spec directory as operator-only (V5-15).
+  Until it does, an agent allowed to run `luna schedule add --yes` can create a schedule, and a
+  scheduled job that is allowed to run shell commands could do the same after unsetting
+  `LUNA_SCHEDULE_JOB`. The digest stops an edited spec from running; it does not stop a new
+  schedule from being added. Run with the firewall asking for shell commands.
 - **Same-user writes.** Every file involved belongs to you. A process running as you can rewrite a
   unit file or crontab line, digest included; the digest protects against an edited spec, not
   against a rewritten unit.

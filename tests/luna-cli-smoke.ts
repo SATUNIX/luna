@@ -82,6 +82,26 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(emptyAfterTool.status, 0);
   assert.equal(emptyAfterTool.stdout, "Tool bash finished: hello from tool\n");
 
+  // The tool text is raw tool output, so the fallback line must not echo a secret it holds (DE-124).
+  // The text comes from the shared redaction corpus, so no committed line holds a whole token shape.
+  const corpus = parseJsonAs(
+    object({ entries: array(object({ id: string(), text: array(string()), secret: array(string()) })) }),
+    fs.readFileSync(path.join(ROOT, "tests", "fixtures", "secret-corpus.json"), "utf8"),
+  );
+  const secretEntry = corpus.entries.find((entry) => entry.id === "env-db-password");
+  assert.ok(secretEntry !== undefined, "the redaction corpus fixture env-db-password exists");
+  const secretText = secretEntry.text.join("");
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: `${secretText}\ncurl: (22) the requested URL returned error` }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const secretAfterTool = luna(["exec", "go"]);
+  assert.equal(secretAfterTool.status, 0);
+  assert.ok(!secretAfterTool.stdout.includes(secretEntry.secret.join("")), "the status line does not echo the tool's secret");
+  assert.equal(secretAfterTool.stdout, `Tool bash finished: ${secretText.replace(secretEntry.secret.join(""), "[REDACTED]")}\n`);
+
   // The t5 shape: a tool starts an autonomy run, then the model answers with no text. Name the run and its state.
   fakePi([
     { type: "session", id: "x" },

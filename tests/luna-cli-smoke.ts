@@ -93,6 +93,18 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(startedRun.status, 0);
   assert.equal(startedRun.stdout, "Run todo-api-1 started; state: running.\n");
 
+  // `pi-autonomy up --json` returns {runId, pid, status, ...} without a `started` field, and the
+  // status line must still name the run. This is the shape the owner-bench t5 run produced.
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: JSON.stringify({ runId: "todo-api-1", pid: 123, status: "running", digest: "abc", root: "/tmp/run", log: "/tmp/run/supervisor.log" }) }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const startedRunJson = luna(["exec", "go"]);
+  assert.equal(startedRunJson.status, 0);
+  assert.equal(startedRunJson.stdout, "Run todo-api-1 started; state: running.\n");
+
   // An empty answer with no tool calls keeps today's behaviour: stdout stays empty.
   fakePi([
     { type: "session", id: "x" },

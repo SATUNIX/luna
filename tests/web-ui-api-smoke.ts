@@ -163,8 +163,8 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
       assert.deepEqual(full.runs.map((r) => r.run), ["r-good", "r-legacy"]);
       assert.equal(full.runsTotal, 2);
       assert.deepEqual(
-        [good?.template, good?.status, good?.step, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.lastEventAt],
-        ["implement", "blocked", 3, 1.5, 10, "question", at(29)],
+        [good?.template, good?.status, good?.step, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.blocker?.waiting, good?.lastEventAt],
+        ["implement", "blocked", 3, 1.5, 10, "question", "waiting_provider", at(29)],
       );
       assert.equal(legacy?.legacy, true);
       assert.deepEqual(legacy?.outcome, { status: "succeeded", reason: "done" });

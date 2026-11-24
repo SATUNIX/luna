@@ -287,7 +287,8 @@ export interface AutonomyRun {
 	readonly spentUsd: number | null;
 	readonly budgetUsd: number | null;
 	readonly step: number | null;
-	readonly blocker: { readonly kind: string; readonly question: string } | null;
+	/** `waiting` is what a parked run waits on: a budget or a provider refusal (lib/lifecycle.ts). */
+	readonly blocker: { readonly kind: string; readonly question: string; readonly waiting?: "waiting_budget" | "waiting_provider" } | null;
 	readonly lastEventAt: string | null;
 	/** Written by the previous (v0) supervisor: listed, but it cannot be driven. */
 	readonly legacy?: true;

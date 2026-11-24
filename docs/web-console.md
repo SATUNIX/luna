@@ -84,7 +84,8 @@ with. The answer is schema version 1:
 | `skipped` | `{runs, events, status}`: how many run states, event lines and status files could not be read or did not match, and were left out |
 
 The tab shows one row per run with its id, template, status (with the blocker question or the
-outcome reason), step, spend against budget and the age of its newest event. Below that it shows
+outcome reason, and for a parked run what it waits on: `waiting on budget` or `waiting on
+provider`), step, spend against budget and the age of its newest event. Below that it shows
 the recent events, newest first, and the spend and open pull requests from the status file.
 
 A malformed `state.json`, event line or status file is skipped and counted. It never fails the

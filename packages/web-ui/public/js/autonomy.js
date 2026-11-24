@@ -56,11 +56,22 @@ function spend(run) {
         ? usd(run.spentUsd)
         : `${usd(run.spentUsd)} / ${usd(run.budgetUsd)}`;
 }
+/** What a parked run waits on, in words the owner can act on; empty when it records none. */
+function waitingText(waiting) {
+    if (waiting === "waiting_budget")
+        return "waiting on budget";
+    if (waiting === "waiting_provider")
+        return "waiting on provider";
+    return "";
+}
 /** The status cell: the run's status, then what it waits on or why it ended. */
 function statusText(run) {
     const status = displayText(run.status ?? "unknown");
-    if (isObject(run.blocker))
-        return `${status}: ${displayText(run.blocker.kind)}: ${displayText(run.blocker.question)}`;
+    if (isObject(run.blocker)) {
+        const blocker = `${displayText(run.blocker.kind)}: ${displayText(run.blocker.question)}`;
+        const waiting = waitingText(run.blocker.waiting);
+        return `${status}: ${waiting ? `${waiting} (${blocker})` : blocker}`;
+    }
     if (isObject(run.outcome) && run.outcome.reason)
         return `${status}: ${displayText(run.outcome.reason)}`;
     return status;

@@ -27,6 +27,7 @@ import { modelEntries, agentModelsJson, WORKER_MAX_OUTPUT_TOKENS } from "../pack
 import { resolveContract } from "../packages/autonomy/lib/contract.ts";
 import { runtimeConfig } from "../packages/autonomy/lib/runcfg.ts";
 import { testEffort } from "./autonomy-helpers.ts";
+import { runLandChecks } from "./autonomy-land.ts";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -1168,4 +1169,5 @@ await check("export: a symlink inside the run directory cannot carry an outside 
   }
 });
 
+await runLandChecks(check);
 console.log(`\n[autonomy-smoke] all ${checks} checks passed`);

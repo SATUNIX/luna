@@ -16,6 +16,7 @@ import { isRecord, parseJson } from "./guard.ts";
 import { globalAgentDir } from "./settings.ts";
 import { readOverrides } from "./profiles.ts";
 import { parseDuration } from "../shared/ceiling.ts";
+import { redact } from "../shared/redact.ts";
 import { piSpawnPlan, type PiSpawnDeps } from "./pi-cli.ts";
 
 /** pi's flags for a session with no Luna: no extension discovery (so no companions either), skills, prompt templates or themes. */
@@ -152,12 +153,17 @@ function autonomyStart(text: string): string | null {
 }
 
 /** The status line printed when tools ran but the model's final message carried no text. */
+/**
+ * The status line printed when tools ran but the model's final message carried no text. The tool
+ * text is raw tool output, so the whole synthesised line goes through the one redaction table: a
+ * bash result whose first line holds a key must not echo it to stdout (DE-124).
+ */
 function toolStatus(last: { name: string; text: string; failed: boolean } | null, startedName: string | null): string {
-  if (last === null) return `Tool ${startedName ?? "unknown"} did not finish before the session ended.`;
+  if (last === null) return redact(`Tool ${startedName ?? "unknown"} did not finish before the session ended.`);
   const run = autonomyStart(last.text);
-  if (run !== null) return run;
+  if (run !== null) return redact(run);
   const detail = firstLine(last.text) || (last.failed ? "no error text" : "no output");
-  return `Tool ${last.name} ${last.failed ? "failed" : "finished"}: ${detail}`;
+  return redact(`Tool ${last.name} ${last.failed ? "failed" : "finished"}: ${detail}`);
 }
 
 /** Reads pi's JSON event stream: progress lines for stderr and the final answer. */

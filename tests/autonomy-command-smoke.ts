@@ -571,9 +571,9 @@ try {
       return handle as unknown as NodeJS.Timeout;
     }) as typeof setInterval;
     globalThis.clearInterval = ((handle: NodeJS.Timeout) => {
-      const t = byHandle.get(handle as unknown as object);
+      const t = byHandle.get(handle);
       if (t) t.cleared = true;
-      byHandle.delete(handle as unknown as object);
+      byHandle.delete(handle);
     }) as typeof clearInterval;
     const fleet = (status: string): string => JSON.stringify([{ run: "blocked-only-1", template: "implement", status, step: 2, spentUsd: 1, budgetUsd: 5, ...(status === "blocked" ? { blocker: { kind: "external", question: "answer me" } } : {}) }]);
     const restoreFleet = setEnv("FAKE_FLEET", fleet("blocked"));

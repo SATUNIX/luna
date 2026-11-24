@@ -77,15 +77,16 @@ with. The answer is schema version 1:
 | --- | --- |
 | `schemaVersion` | `1` |
 | `at` | when the answer was built (ISO time) |
-| `runs` | at most 200 runs, newest first by `updatedAt` (else `startedAt`); a run whose state records neither has no time and sorts last, then by run id. Each has `run`, `template`, `status`, `updatedAt`, `outcome` (`{status, reason}` or null), `spentUsd`, `budgetUsd`, `step`, `phase` (what the supervisor says the run is doing now, or null), `blocker` (`{kind, question, waiting?}` or null), `legacy` (only on a run the previous supervisor wrote) and `lastEventAt`. These are the fields `pi-autonomy status` lists. A figure the run did not record is `null` |
+| `runs` | at most 200 runs, newest first by `updatedAt` (else `startedAt`); a run whose state records neither has no time and sorts last, then by run id. Each has `run`, `template`, `status`, `updatedAt`, `outcome` (`{status, reason}` or null), `spentUsd`, `budgetUsd`, `step`, `phase` (what the supervisor says the run is doing now, or null), `blocker` (`{kind, question, waiting?, since?, options?}` or null), `legacy` (only on a run the previous supervisor wrote) and `lastEventAt`. These are the fields `pi-autonomy status` lists. `since` is when the run parked and `options` are the answers it offers (at most 20). A figure the run did not record is `null` |
 | `runsTotal` | how many runs there were before the cut at 200 |
 | `events` | the newest 50 events of the [host event log](autonomy.md#host-event-log), oldest first, each line as written (`v`, `at`, `run`, `type` and that type's own fields) |
 | `status` | the [reporting status file](autonomy.md#reporting-lines) `status.json` in the state home, when it is schema version 1, else `null`. `pi-autonomy report --out "$PI_AUTONOMY_HOME/status.json"` writes it there |
 | `skipped` | `{runs, events, status}`: how many run states, event lines and status files could not be read or did not match, and were left out |
 
 The tab shows one row per run with its id, template, status (with the blocker question or the
-outcome reason, and for a parked run what it waits on: `waiting on budget` or `waiting on
-provider`), step, what it is doing now (`phase`), spend against budget and the age of its newest event. Below that it shows
+outcome reason, for a parked run what it waits on: `waiting on budget` or `waiting on
+provider`, how long it has been parked and the choices it offers), step, what it is doing now
+(`phase`), spend against budget and the age of its newest event. Below that it shows
 the recent events, newest first, and the spend and open pull requests from the status file.
 
 A malformed `state.json`, event line or status file is skipped and counted. It never fails the

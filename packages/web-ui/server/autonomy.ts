@@ -101,7 +101,14 @@ export interface AutonomyRun {
 	readonly step: number | null;
 	/** What the supervisor says the run is doing now (`state.phase`), or null when it records none. */
 	readonly phase: string | null;
-	readonly blocker: { readonly kind: string; readonly question: string; readonly waiting?: "waiting_budget" | "waiting_provider" } | null;
+	/** `since` is when the run parked; `options` are the answers the run offers. */
+	readonly blocker: {
+		readonly kind: string;
+		readonly question: string;
+		readonly waiting?: "waiting_budget" | "waiting_provider";
+		readonly since?: string;
+		readonly options?: readonly string[];
+	} | null;
 	/** Written by the previous (v0) supervisor: listed, but it cannot be driven. */
 	readonly legacy?: true;
 	/** The time of this run's newest event in the part of the event log that was read, or null. */
@@ -229,10 +236,16 @@ function runSummary(home: string, run: string): RunWithoutEvent | null | "skip" 
 	let blocker: AutonomyRun["blocker"] = null;
 	if (isRecord(rawBlocker) && typeof rawBlocker.kind === "string" && typeof rawBlocker.question === "string") {
 		const { waiting } = rawBlocker;
+		const since = text(rawBlocker.since, 40);
+		const options = Array.isArray(rawBlocker.options)
+			? rawBlocker.options.slice(0, LIST_MAX).flatMap((option): string[] => (typeof option === "string" ? [line(option, TEXT_MAX)] : []))
+			: [];
 		blocker = {
 			kind: line(rawBlocker.kind, ID_MAX),
 			question: line(rawBlocker.question, TEXT_MAX),
 			...(waiting === "waiting_budget" || waiting === "waiting_provider" ? { waiting } : {}),
+			...(since ? { since } : {}),
+			...(options.length ? { options } : {}),
 		};
 	}
 	return {

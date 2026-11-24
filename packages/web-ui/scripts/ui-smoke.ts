@@ -1166,7 +1166,7 @@ try {
 			runs: [
 				{
 					run: "r-good", template: "implement", status: "blocked", updatedAt: null, outcome: null, step: 3, phase: "reviewing",
-					spentUsd: 1.5, budgetUsd: 10, blocker: { kind: "question", question: hostile, waiting: "waiting_budget" }, lastEventAt: "2026-11-18T10:05:00.000Z",
+					spentUsd: 1.5, budgetUsd: 10, blocker: { kind: "question", question: hostile, waiting: "waiting_budget", since: "2026-11-18T10:07:00.000Z", options: ["SQLite", "Postgres"] }, lastEventAt: "2026-11-18T10:05:00.000Z",
 				},
 				{ run: "r-old", template: "self-improve", status: "succeeded", updatedAt: null, outcome: null, step: null, phase: null, spentUsd: null, budgetUsd: null, blocker: null, lastEventAt: null, legacy: true },
 			],
@@ -1182,7 +1182,7 @@ try {
 	);
 	const shown = allText(target);
 	check(
-		["r-good", "r-old (legacy)", "implement", "blocked: waiting on budget (question:", "reviewing", "$1.50 / $10.00", "5m ago", "failing=unit,lint", "openrouter", "#7", "skipped 1 unreadable run(s)"]
+		["r-good", "r-old (legacy)", "implement", "blocked: waiting on budget (question:", "since 3m ago", "choices: SQLite | Postgres", "reviewing", "$1.50 / $10.00", "5m ago", "failing=unit,lint", "openrouter", "#7", "skipped 1 unreadable run(s)"]
 			.every((part) => shown.includes(part)),
 		"autonomy view: runs, spend/budget, last-event age, events, status file and skips shown",
 		`autonomy view: missing text in ${shown}`,

@@ -64,13 +64,15 @@ function waitingText(waiting) {
         return "waiting on provider";
     return "";
 }
-/** The status cell: the run's status, then what it waits on or why it ended. */
-function statusText(run) {
+/** The status cell: the run's status, then what it waits on, how long, what choices it offers, or why it ended. */
+function statusText(run, now) {
     const status = displayText(run.status ?? "unknown");
     if (isObject(run.blocker)) {
         const blocker = `${displayText(run.blocker.kind)}: ${displayText(run.blocker.question)}`;
         const waiting = waitingText(run.blocker.waiting);
-        return `${status}: ${waiting ? `${waiting} (${blocker})` : blocker}`;
+        const since = run.blocker.since ? ` · since ${ageText(run.blocker.since, now)}` : "";
+        const options = isArray(run.blocker.options) && run.blocker.options.length ? ` · choices: ${run.blocker.options.map((option) => displayText(option)).join(" | ")}` : "";
+        return `${status}: ${waiting ? `${waiting} (${blocker})` : blocker}${since}${options}`;
     }
     if (isObject(run.outcome) && run.outcome.reason)
         return `${status}: ${displayText(run.outcome.reason)}`;
@@ -116,7 +118,7 @@ export function renderAutonomy(target, data, now = Date.now()) {
         target.append(section("Runs", table(["run", "template", "status", "step", "doing", "spend / budget", "last event"], data.runs.map((run) => [
             displayText(run.run) + (run.legacy ? " (legacy)" : ""),
             displayText(run.template ?? "—"),
-            statusText(run),
+            statusText(run, now),
             typeof run.step === "number" ? String(run.step) : "—",
             typeof run.phase === "string" && run.phase ? displayText(run.phase) : "—",
             spend(run),

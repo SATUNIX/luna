@@ -144,7 +144,7 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
     writeState("r-good", {
       schemaVersion: STATE_SCHEMA_VERSION, run: "r-good", template: "implement", status: "blocked", step: 3, phase: "gate",
       updatedAt: at(30), usage: { usd: 1.5 }, limits: { budget: { totalUsd: 10 } }, outcome: null,
-      blocker: { kind: "question", question: "first\nsecond‮<img src=x onerror=alert(1)>", waiting: "waiting_provider" },
+      blocker: { kind: "question", question: "first\nsecond‮<img src=x onerror=alert(1)>", waiting: "waiting_provider", since: at(20), options: ["SQLite", "Postgres"] },
     });
     writeState("r-legacy", { status: "succeeded", updatedAt: at(1), phase: 7, outcome: { status: "succeeded", reason: "done" } });
     writeState("r-bad", "{not json");
@@ -163,8 +163,8 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
       assert.deepEqual(full.runs.map((r) => r.run), ["r-good", "r-legacy"]);
       assert.equal(full.runsTotal, 2);
       assert.deepEqual(
-        [good?.template, good?.status, good?.step, good?.phase, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.blocker?.waiting, good?.lastEventAt],
-        ["implement", "blocked", 3, "gate", 1.5, 10, "question", "waiting_provider", at(29)],
+        [good?.template, good?.status, good?.step, good?.phase, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.blocker?.waiting, good?.blocker?.since, good?.blocker?.options, good?.lastEventAt],
+        ["implement", "blocked", 3, "gate", 1.5, 10, "question", "waiting_provider", at(20), ["SQLite", "Postgres"], at(29)],
       );
       assert.equal(legacy?.legacy, true);
       // The phase is what the supervisor records: a missing or non-string one is null, never a guess.

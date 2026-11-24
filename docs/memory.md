@@ -58,7 +58,9 @@ stored user turn, and never put in the system prompt (that would break prompt ca
 drops what was carried, so it is offered again afterwards (`tests/memory-vault-smoke.ts`). Recall is scoped to the current project plus
 global memories. It is gated by relevance (BM25 with stopwords and stemming, a minimum score,
 and two matching terms for multi-word prompts); light stemming makes common inflections meet, so a
-note saved as "files" is recalled by "file" and vice versa. The same first-prompt recap recall
+note saved as "files" is recalled by "file" and vice versa. The index records the stemmer
+version that produced its tokens, so an upgraded stemmer re-tokenises cached notes even when
+their mtime did not change (`tests/memory-vault-smoke.ts`, check 16b). The same first-prompt recap recall
 runs in a headless `pi -p --mode json` session, which also writes `.pi-index/index.json` on its
 first recall even when the project has no memory notes yet (`tests/memory-vault-smoke.ts`, check
 18).

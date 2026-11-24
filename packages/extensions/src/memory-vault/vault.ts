@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bm25, jaccard, passesFloor, termFrequencies, tokenize, type Doc } from "./search.ts";
+import { bm25, jaccard, passesFloor, STEMMER_VERSION, termFrequencies, tokenize, type Doc } from "./search.ts";
 import { redactSecrets } from "./shared/redact.ts";
 
 export const MEMORY_TYPES = ["fact", "decision", "preference", "gotcha", "reference"] as const;
@@ -364,6 +364,8 @@ interface IndexEntry {
 
 interface IndexFile {
   version: 1;
+  /** The stem() generation that produced every entry's tokens. */
+  stemmer: number;
   notes: Record<string, IndexEntry>;
 }
 
@@ -427,10 +429,13 @@ function docTokens(meta: Pick<NoteMeta, "title" | "tags">, body: string): string
   return [...head, ...head, ...tokenize(stripBacklink(body))];
 }
 
-// Load the index, re-reading only notes whose mtime changed. Written back when it changed.
+// Load the index, re-reading a note when its mtime or the recorded stemmer generation changed.
+// Written back when it changed, so an upgraded stemmer re-tokenises every note once.
 export function loadIndex(root: string): Map<string, IndexEntry> {
   const file = path.join(indexDir(root), "index.json");
-  const cached = (readJson(file) as IndexFile | null)?.notes ?? {};
+  const stored = readJson(file);
+  const cacheFresh = isRecord(stored) && stored.stemmer === STEMMER_VERSION;
+  const cached = cacheFresh && isRecord(stored) && isRecord(stored.notes) ? stored.notes : {};
   const current = new Map<string, IndexEntry>();
   let changed = false;
   for (const abs of memoryFiles(root)) {
@@ -466,9 +471,9 @@ export function loadIndex(root: string): Map<string, IndexEntry> {
   }
   // Materialize the index on the first recall even when the vault has no memory notes yet
   // (a recap-only project): the index is the documented on-disk evidence and search cache.
-  if (changed || !fs.existsSync(file) || Object.keys(cached).length !== current.size) {
+  if (!cacheFresh || changed || !fs.existsSync(file) || Object.keys(cached).length !== current.size) {
     try {
-      writeAtomic(file, JSON.stringify({ version: 1, notes: Object.fromEntries(current) } satisfies IndexFile));
+      writeAtomic(file, JSON.stringify({ version: 1, stemmer: STEMMER_VERSION, notes: Object.fromEntries(current) } satisfies IndexFile));
     } catch {
       /* the index is a cache */
     }

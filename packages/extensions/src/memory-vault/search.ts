@@ -19,6 +19,10 @@ const STOPWORDS = new Set(
   ).split(" "),
 );
 
+// Bump whenever stem()'s output changes: the persisted index records this number and discards
+// cached tokenisations that came from an older stemmer, even when their note's mtime is unchanged.
+export const STEMMER_VERSION = 1;
+
 // Light suffix stripping so "commits"/"commit", "prefers"/"preferred"/"preference" and
 // "crashing"/"crash" meet. Deliberately conservative: a wrong merge costs recall precision.
 export function stem(t: string): string {

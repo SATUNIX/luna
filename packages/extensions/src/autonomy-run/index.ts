@@ -429,7 +429,10 @@ export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonl
   const open = runs.filter((r) => !ENDED.has(r.status));
   const active = open.filter(isActiveRun);
   const blocked = open.filter((r) => r.status === "blocked");
-  if (active.length === 0 && blocked.length === 0) return [];
+  // A paused run is visible only after its first cycle (isActiveRun); do not list one that is
+  // not moving merely because another run keeps the widget visible.
+  const visible = [...active, ...open.filter((r) => !isActiveRun(r) && r.status !== "paused")];
+  if (visible.length === 0) return [];
   const last = new Map<string, WidgetEvent>();
   const cycle = new Map<string, number>();
   for (const e of events) {
@@ -437,11 +440,11 @@ export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonl
     if (!prev || e.atMs >= prev.atMs) last.set(e.run, e);
     if (e.n !== null) cycle.set(e.run, Math.max(cycle.get(e.run) ?? 0, e.n));
   }
-  const ordered = [...active, ...open.filter((r) => !isActiveRun(r))];
+  const ordered = visible;
   const listed = ordered.slice(0, WIDGET_MAX_RUNS);
   const idWidth = Math.min(24, Math.max(...listed.map((r) => r.run.length)));
   const templateWidth = Math.min(14, Math.max(...listed.map((r) => r.template.length)));
-  const waiting = open.length - active.length;
+  const waiting = visible.length - active.length;
   const lines = [`autonomy: ${active.length} active${waiting ? `, ${waiting} waiting` : ""} (/autonomy status for detail, /autonomy watch off hides this)`];
   for (const r of listed) {
     const e = last.get(r.run);

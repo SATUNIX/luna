@@ -21,10 +21,12 @@ the `packages/autonomy` CLI (`pi-autonomy`): it runs that CLI as a child process
 ```
 
 While a run is active or blocked, a widget above the editor lists the runs (cycle, phase, spend
-against budget, last-event age) and, for a blocked run, what it waits on and the question to answer
-(`blocked: <run> (waiting on provider: <question>)`). It is refreshed every 2 seconds while a run
-can change on its own and hidden when no run is active and none is blocked
-(docs/autonomy.md, "From inside pi"; `tests/autonomy-command-smoke.ts`).
+against budget, last-event age) and, for each blocked run with a question, what it waits on and the
+question to answer (`blocked: <run> (waiting on provider: <question>)`, at most three, the rest
+counted). It is refreshed every 2 seconds while a run can change on its own, every 30 seconds while
+only blocked runs remain (so an answer given outside this session clears the line), and hidden when
+no run is active and none is blocked (docs/autonomy.md, "From inside pi";
+`tests/autonomy-command-smoke.ts`).
 
 For a run with generations (Memento mode), `/autonomy status <run>` also shows generation n/N, the
 last rotation reason and the latest notebook (redacted), and sets the footer status line to

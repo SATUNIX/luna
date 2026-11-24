@@ -15,7 +15,8 @@
 //   - the live run widget (renderAutonomyWidget) lists runs at 80 and 120 columns with no line
 //     wider than the terminal, is shown by `status` while a run is active, hides when none is,
 //     and `watch off` hides it; it shows a run still in `setup` after a background start and a
-//     run after `resume`; paused and blocked runs alone are not polled, and a run paused before
+//     run after `resume`; paused runs alone are not polled, a blocked-only fleet is polled slowly,
+//     and a run paused before its first cycle (step 0) does not show it; the only hooks are
 //     its first cycle (step 0) does not show it; the only hooks are session_start and
 //     session_shutdown;
 //   - `inbox` lists cards (or waiting runs) and answers with a literal --value (any text, even one
@@ -489,12 +490,18 @@ try {
     const noQuestion = mod.renderAutonomyWidget([row("blocked", 3)], [], now, 120);
     assert.match(at(noQuestion, 1, "the blocked run"), /r-blocked-3 +implement +cycle 3 +blocked +\$0\.00\/\$5\.00 +0s ago$/, "a blocked run that records no question is still listed");
     assert.equal(noQuestion.length, 2, "with no invented reason line");
+    const many = [1, 2, 3, 4].map((n) => row("blocked", n, { kind: "question", question: `question ${n}?`, waiting: null }));
+    const manyLines = mod.renderAutonomyWidget(many, [], now, 120);
+    assert.equal(manyLines.filter((l) => l.startsWith("  blocked: ")).length, 3, "each blocked question gets its own line up to the cap");
+    assert.equal(manyLines.at(-1), "  +1 more blocked (/autonomy status)", "and the rest of the blocked runs are counted");
     assert.match(at(mod.renderAutonomyWidget([pausedMid], [], now, 120), 0, "heading"), /^autonomy: 1 active/, "a run paused part-way through shows it");
     for (const status of ["setup", "ready", "running", "recovering"]) {
       assert.ok(mod.isActiveRun(row(status, 0)), `${status} is shown`);
       assert.ok(mod.widgetPolls([row(status, 0)], now, 0), `${status} changes on its own: the widget keeps refreshing`);
     }
-    assert.equal(mod.widgetPolls([pausedMid, pausedEarly, row("blocked", 3)], now, 0), false, "paused and blocked runs change only when the operator acts: no refreshing");
+    assert.equal(mod.widgetPollMs([pausedMid, pausedEarly, row("blocked", 3)], now, 0), mod.WIDGET_BLOCKED_POLL_MS, "a blocked-only fleet still refreshes, slowly, so an answer given outside this session clears the line");
+    assert.equal(mod.widgetPolls([pausedMid, pausedEarly, row("blocked", 3)], now, 0), true, "and keeps the widget polling");
+    assert.equal(mod.widgetPollMs([pausedMid, pausedEarly], now, 0), null, "paused runs alone do not refresh");
     assert.equal(mod.widgetPolls([], now, now + 1), true, "after start or resume it refreshes for a grace period");
     assert.equal(mod.widgetPolls([pausedMid], now, now), false, "and stops when the grace period is over");
     assert.deepEqual(mod.widgetRuns("not json"), []);
@@ -546,6 +553,59 @@ try {
       }
     } finally { restoreEvents(); restoreFleet(); }
     ok("the live run widget renders at 80 and 120 columns within the width, shows while a run is active and hides when none is");
+  }
+
+  // 7e. A blocked-only fleet keeps a slow poll, and the line clears when the run changes outside the session.
+  {
+    reset();
+    const realSet = globalThis.setInterval;
+    const realClear = globalThis.clearInterval;
+    interface Captured { fn: () => void; ms: number; unrefCalled: boolean; cleared: boolean }
+    const captured: Captured[] = [];
+    const byHandle = new Map<object, Captured>();
+    globalThis.setInterval = ((fn: () => void, ms?: number) => {
+      const t: Captured = { fn: () => fn(), ms: ms ?? 0, unrefCalled: false, cleared: false };
+      const handle = { unref: () => { t.unrefCalled = true; } };
+      byHandle.set(handle, t);
+      captured.push(t);
+      return handle as unknown as NodeJS.Timeout;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((handle: NodeJS.Timeout) => {
+      const t = byHandle.get(handle as unknown as object);
+      if (t) t.cleared = true;
+      byHandle.delete(handle as unknown as object);
+    }) as typeof clearInterval;
+    const fleet = (status: string): string => JSON.stringify([{ run: "blocked-only-1", template: "implement", status, step: 2, spentUsd: 1, budgetUsd: 5, ...(status === "blocked" ? { blocker: { kind: "external", question: "answer me" } } : {}) }]);
+    const restoreFleet = setEnv("FAKE_FLEET", fleet("blocked"));
+    const s = session();
+    try {
+      await s.run("status");
+      const timer = at(captured, 0, "the blocked fleet set a poll timer");
+      assert.equal(timer.ms, mod.WIDGET_BLOCKED_POLL_MS, "a blocked-only fleet refreshes slowly, not only once");
+      assert.ok(timer.unrefCalled, "the timer does not hold the process open");
+      const shown = s.widgets.at(-1)?.[1];
+      assert.ok(Array.isArray(shown) && shown.some((l) => typeof l === "string" && l.startsWith("  blocked: blocked-only-1 ")), "the blocked question is shown");
+      const statusCalls = (): number => calls().filter((c) => c[0] === "status").length;
+      const before = statusCalls();
+      const changed = setEnv("FAKE_FLEET", fleet("succeeded"));
+      try {
+        timer.fn();
+        timer.fn();
+        const deadline = Date.now() + 5000;
+        while (s.widgets.at(-1)?.[1] !== undefined) {
+          assert.ok(Date.now() < deadline, "the refresh after the run changed hides the widget");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally { changed(); }
+      assert.equal(statusCalls() - before, 1, "two ticks at once read the run list once (no overlap)");
+      assert.equal(captured.filter((t) => !t.cleared).length, 0, "with nothing active or blocked the poll timer is cleared");
+    } finally {
+      restoreFleet();
+      await s.pi.handlers.get("session_shutdown")({}, s.ctx);
+      globalThis.setInterval = realSet;
+      globalThis.clearInterval = realClear;
+    }
+    ok("a blocked-only fleet keeps a slow unref'd poll, refreshes without overlap, and hides the line when the run changes outside the session");
   }
 
   // 8. A missing CLI is a message, not a crash.

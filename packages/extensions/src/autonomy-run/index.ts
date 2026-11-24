@@ -233,10 +233,14 @@ export function fleetStatusLine(report: unknown): string | undefined {
 export const WIDGET_KEY = "autonomy";
 /** How often the widget refreshes while a run is active. */
 export const WIDGET_POLL_MS = 2_000;
+/** How often the widget refreshes while every open run is blocked: slowly, so an answer given outside this session still clears the line. */
+export const WIDGET_BLOCKED_POLL_MS = 30_000;
 /** The width the widget's lines are rendered at outside the terminal UI, which has no width to ask. */
 const WIDGET_FALLBACK_WIDTH = 80;
 /** The most runs the widget lists; the rest are counted on one line. */
 const WIDGET_MAX_RUNS = 6;
+/** The most blocked questions the widget lists; the rest are counted on one line. */
+const WIDGET_MAX_BLOCKED = 3;
 /** How many of the host event log's newest events one refresh reads. */
 const WIDGET_EVENT_LIMIT = 200;
 /** One refresh's CLI calls give up after this long; the next tick tries again. */
@@ -373,11 +377,19 @@ export const isMovingRun = (r: WidgetRun): boolean => MOVING.has(r.status);
 export const isActiveRun = (r: WidgetRun): boolean => isMovingRun(r) || (r.status === "paused" && r.step !== null && r.step > 0);
 
 /**
- * Whether the widget keeps refreshing: while a run can change on its own, or until `graceUntil`
- * (ms since the epoch) after a command that changed a run, whose new status the run list may not
- * show yet. A paused run alone is shown but not refreshed.
+ * How often the widget refreshes: WIDGET_POLL_MS while a run can change on its own or until
+ * `graceUntil` (ms since the epoch) after a command that changed a run, whose new status the run
+ * list may not show yet; WIDGET_BLOCKED_POLL_MS while every open run is blocked, so an answer given
+ * outside this session (shell CLI, web console, another pi) clears the line; null (stop) otherwise.
+ * A paused run alone is shown but not refreshed.
  */
-export const widgetPolls = (runs: readonly WidgetRun[], now: number, graceUntil: number): boolean => runs.some(isMovingRun) || now < graceUntil;
+export const widgetPollMs = (runs: readonly WidgetRun[], now: number, graceUntil: number): number | null => {
+  if (runs.some(isMovingRun) || now < graceUntil) return WIDGET_POLL_MS;
+  return runs.some((r) => r.status === "blocked") ? WIDGET_BLOCKED_POLL_MS : null;
+};
+
+/** Whether the widget keeps refreshing (see widgetPollMs for how often). */
+export const widgetPolls = (runs: readonly WidgetRun[], now: number, graceUntil: number): boolean => widgetPollMs(runs, now, graceUntil) !== null;
 
 const ageText = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -406,7 +418,8 @@ const column = (text: string, width: number): string => {
 /**
  * The widget's lines: a heading and one line per run that has not ended (active runs first, at most
  * WIDGET_MAX_RUNS), each giving the run, its template, cycle, phase, spend against budget and the
- * age of its last event; then, when a run is blocked, what it waits on and the question to answer.
+ * age of its last event; then, for each blocked run with a question, what it waits on and the
+ * question to answer (at most WIDGET_MAX_BLOCKED, the rest counted).
  * No line is wider than `width` columns. Empty (the widget is hidden) when no run is active and
  * none is blocked.
  */
@@ -440,25 +453,29 @@ export function renderAutonomyWidget(runs: readonly WidgetRun[], events: readonl
     lines.push(`  ${column(r.run, idWidth)}  ${column(r.template, templateWidth)}  cycle ${n === null ? "-" : String(n)}  ${phase}  ${spend}  ${age}`);
   }
   if (ordered.length > listed.length) lines.push(`  +${ordered.length - listed.length} more (/autonomy status)`);
-  // Why it is blocked, as the fleet footer says it: the waiting reason and the owner's question.
-  const waitingRun = blocked.find((r) => r.blocker !== null);
-  if (waitingRun?.blocker) {
-    const reason = waitingRun.blocker.waiting === "waiting_budget" ? "waiting on budget: " : waitingRun.blocker.waiting === "waiting_provider" ? "waiting on provider: " : "";
-    lines.push(`  blocked: ${waitingRun.run} (${reason}${waitingRun.blocker.question})`);
+  // Why each run is blocked, as the fleet footer says it: the waiting reason and the owner's question.
+  const asked = blocked.filter((r) => r.blocker !== null);
+  const listedBlocked = asked.slice(0, WIDGET_MAX_BLOCKED);
+  for (const r of listedBlocked) {
+    if (!r.blocker) continue;
+    const reason = r.blocker.waiting === "waiting_budget" ? "waiting on budget: " : r.blocker.waiting === "waiting_provider" ? "waiting on provider: " : "";
+    lines.push(`  blocked: ${r.run} (${reason}${r.blocker.question})`);
   }
+  if (asked.length > listedBlocked.length) lines.push(`  +${asked.length - listedBlocked.length} more blocked (/autonomy status)`);
   return lines.map((line) => fit(line, cols));
 }
 
 /**
  * The live run widget's poller for one session. A refresh reads the run list (`status --json`) and,
  * when a run is active or blocked, the newest host events (`events --json`), and shows the widget;
- * with nothing active and nothing blocked it hides the widget. It refreshes every WIDGET_POLL_MS on
- * an unref'd timer while widgetPolls says so, skipping a tick while the previous refresh is still
- * running.
+ * with nothing active and nothing blocked it hides the widget. It refreshes on an unref'd timer at
+ * the interval widgetPollMs gives (fast while a run can change, slow while only blocked runs
+ * remain), skipping a tick while the previous refresh is still running.
  */
 function runWidget() {
   let ctx: ExtensionContext | undefined;
   let timer: NodeJS.Timeout | undefined;
+  let timerMs = 0;
   let inFlight = false;
   let off = false;
   let shown = false;
@@ -470,13 +487,16 @@ function runWidget() {
   const stop = (): void => {
     if (timer) clearInterval(timer);
     timer = undefined;
+    timerMs = 0;
   };
 
-  /** Keep refreshing on the timer, or stop. */
-  const poll = (value: boolean): void => {
-    if (!value) { stop(); return; }
-    if (timer) return;
-    timer = setInterval(() => { void refresh(); }, WIDGET_POLL_MS);
+  /** Keep refreshing every `ms`, or stop at null. A changed interval replaces the one timer. */
+  const poll = (ms: number | null): void => {
+    if (ms === null) { stop(); return; }
+    if (timer && timerMs === ms) return;
+    if (timer) clearInterval(timer);
+    timerMs = ms;
+    timer = setInterval(() => { void refresh(); }, ms);
     timer.unref();
   };
 
@@ -518,7 +538,7 @@ function runWidget() {
       const report = statusReport === undefined ? (await runCli(["status"], { cwd: on.cwd, timeoutMs: WIDGET_CLI_TIMEOUT_MS })).json : statusReport;
       const next = report?.ok === true ? widgetRuns(report) : [];
       if (ctx !== on || off) return;
-      poll(widgetPolls(next, Date.now(), graceUntil));
+      poll(widgetPollMs(next, Date.now(), graceUntil));
       // A blocked run is shown (with its question) even though it does not poll: the owner has to answer it.
       if (!next.some((r) => isActiveRun(r) || r.status === "blocked")) { hide(on); return; }
       const read = await runCli(["events", "--limit", String(WIDGET_EVENT_LIMIT)], { cwd: on.cwd, timeoutMs: WIDGET_CLI_TIMEOUT_MS });

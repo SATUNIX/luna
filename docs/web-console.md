@@ -104,8 +104,9 @@ Type checks against the library's event, run and status types fail `npm run test
 the two drift apart. `tests/web-ui-api-smoke.ts` pins the shape against state written by the
 library itself: every event type, a malformed run, line and status file, the cut at 50 events,
 redaction and one-line strings in runs, events and the status file, a FIFO skipped, and 405 on
-other methods. `tests/web-ui-security-smoke.ts` pins the 401 without a token and the
-answer over real HTTP. `packages/web-ui/scripts/ui-smoke.ts` pins the rendering and that polls never overlap.
+other methods. `tests/web-ui-security-smoke.ts` pins the 401 without a token and the answer over
+real HTTP, from state written by the library, including a blocked run's `blocker.waiting`.
+`packages/web-ui/scripts/ui-smoke.ts` pins the rendering and that polls never overlap.
 
 **Not covered:**
 

@@ -133,7 +133,9 @@ function firstLine(text: string): string {
 
 /**
  * A run launched by a tool (the autonomy CLI): name it and the state it reports, rather than a
- * bare command outcome. Accepts the CLI's human line and its `--json` record.
+ * bare command outcome. Accepts the CLI's human line and its `--json` record. `up --json` returns
+ * `{runId, pid, status, ...}` with no `started` field, while `start --json` adds `started: true`;
+ * a bare `{run, status}` (status/query output) is not a start and stays a tool outcome.
  */
 function autonomyStart(text: string): string | null {
   const started = /\brun\s+([^\s;,(]+)\s+started\b[^\n]*?\b(?:status|state)\s*[:=]?\s*([A-Za-z][\w-]*)/i.exec(text);
@@ -142,8 +144,9 @@ function autonomyStart(text: string): string | null {
     let record: unknown;
     try { record = parseJson(raw.trim()); } catch { continue; }
     if (!isRecord(record)) continue;
-    const run = typeof record.runId === "string" ? record.runId : record.run;
-    if (typeof run === "string" && typeof record.status === "string" && record.started === true) return `Run ${run} started; state: ${record.status}.`;
+    const up = typeof record.runId === "string" && typeof record.status === "string";
+    const start = record.started === true && typeof record.run === "string" && typeof record.status === "string";
+    if (up || start) return `Run ${String(record.runId ?? record.run)} started; state: ${String(record.status)}.`;
   }
   return null;
 }

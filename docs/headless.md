@@ -37,9 +37,10 @@ rewrites settings. See [Autonomy gate](autonomy-gate.md) for how headless sessio
 
 A model can end a session that used tools with an empty final message. When that happens and the
 run did not fail, `exec` prints one status line from the last tool result instead of nothing: an
-autonomy start becomes `Run <id> started; state: <state>.`, anything else becomes
+autonomy start (the CLI's human line or its `--json` record, including `up --json` without a
+`started` field) becomes `Run <id> started; state: <state>.`, anything else becomes
 `Tool <name> finished: <first line>` (or `failed:` for an error). A session with no tool calls
-still prints nothing for an empty answer. `tests/luna-cli-smoke.ts` pins all three shapes.
+still prints nothing for an empty answer. `tests/luna-cli-smoke.ts` pins these shapes.
 
 ### The `--json` event stream
 

@@ -126,7 +126,20 @@ function projectOwner(root: string, key: string): string | null {
 
 /** The folder canonical root id already owns: one of the candidates, else any project folder (a symlinked name claimed earlier). */
 function ownedKey(root: string, candidates: readonly string[], id: string): string | undefined {
-  const owned = candidates.find((key) => projectOwner(root, key) === id);
+  // A folder can record the path alias that opened it (a symlinked temp directory, macOS
+  // /var -> /private/var) while the current cwd resolves to the canonical root. It still
+  // owns the same project; without resolving the record, recall claims a sibling and loses it.
+  const claims = (key: string): boolean => {
+    const owner = projectOwner(root, key);
+    if (!owner) return false;
+    if (owner === id) return true;
+    try {
+      return fs.realpathSync(owner) === id;
+    } catch {
+      return false;
+    }
+  };
+  const owned = candidates.find(claims);
   if (owned) return owned;
   let keys: string[] = [];
   try {
@@ -134,7 +147,7 @@ function ownedKey(root: string, candidates: readonly string[], id: string): stri
   } catch {
     /* no projects yet */
   }
-  return keys.find((key) => projectOwner(root, key) === id);
+  return keys.find(claims);
 }
 
 /**
@@ -451,7 +464,9 @@ export function loadIndex(root: string): Map<string, IndexEntry> {
       /* unreadable note: skip */
     }
   }
-  if (changed || Object.keys(cached).length !== current.size) {
+  // Materialize the index on the first recall even when the vault has no memory notes yet
+  // (a recap-only project): the index is the documented on-disk evidence and search cache.
+  if (changed || !fs.existsSync(file) || Object.keys(cached).length !== current.size) {
     try {
       writeAtomic(file, JSON.stringify({ version: 1, notes: Object.fromEntries(current) } satisfies IndexFile));
     } catch {

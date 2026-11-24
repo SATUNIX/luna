@@ -382,7 +382,9 @@ input, and that a run's files are redacted and have the right modes.
 
 Each step is an ordinary subagent run, so it also has a log under `.pi/subagent/`
 (`/workflows`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
-its id still shows its log and `workflow_control` can stop it. The step's run ids are recorded in
+its id still shows its last assistant message and tool (or its capped log tail when it has no
+message yet, or when the caller passes an explicit `tail`), and `workflow_control` can stop it.
+The step's run ids are recorded in
 `state.json`. A corrupt or wrong-shape `state.json` is ignored and not listed by
 `/workflows status`, rather than crashing the status listing. The persisted state must
 also carry a non-negative integer `cursor` and a finite `executions` count, or it is

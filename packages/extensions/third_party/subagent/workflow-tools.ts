@@ -725,13 +725,13 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
     label: "Workflow status",
     description:
       "List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. " +
-      "With id: YAML steps, script counters, a subagent's log tail, or an autonomous run's template, spend, blocker and liveness.",
+      "With id: YAML steps, script counters, a subagent's last assistant message and last tool (or its capped log tail when it has no message yet, or when tail is given), or an autonomous run's template, spend, blocker and liveness.",
     promptSnippet: "Inspect workflow, subagent and autonomy runs",
     defaultActive: false,
     parameters: Type.Object({
       id: Type.Optional(Type.String({ description: "One run's id; without it, the newest runs of every format" })),
       limit: Type.Optional(Type.Number({ description: "How many runs to list (default 20, max 100)" })),
-      tail: Type.Optional(Type.Number({ description: "Lines of a background subagent's log to show with id (default 40)" })),
+      tail: Type.Optional(Type.Number({ description: "Lines of a background subagent's raw log to show with id instead of the message summary (default 40 when there is no message)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, rawCtx) {
       const cwd = rawCtx.cwd ?? process.cwd();

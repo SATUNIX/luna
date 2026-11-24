@@ -899,8 +899,13 @@ export function registerWorkflowTools(pi: ExtensionAPI, deps: WorkflowToolDeps =
       return workflows.filter((w) => w.name.startsWith(words[1] ?? "")).map((w) => ({ value: `run ${w.name} `, label: w.name, description: w.description }));
     }
     if (["status", "panel", "pause", "skip", "resume", "stop"].includes(words[0] ?? "") && words.length === 2) {
+      // The list and `status`/`panel` read every format, autonomy included. Control verbs act only
+      // on the in-process registry and recorded subagents; an autonomy id there would answer
+      // "No live run" or "No run", so it is offered for reading only (not for control).
+      const controllable = words[0] === "status" || words[0] === "panel" ? null : new Set(["script", "yaml", "subagent"]);
       const ids = queryRuns(process.cwd())
         .filter((r) => r.id.startsWith(words[1] ?? ""))
+        .filter((r) => controllable === null || controllable.has(r.format))
         .map((r) => ({ value: `${words[0]} ${r.id}`, label: r.id, description: `${r.format}: ${r.name} (${r.status})` }));
       const all = words[0] === "stop" && "all".startsWith(words[1] ?? "") ? [{ value: "stop all", label: "all" }] : [];
       return [...all, ...ids];

@@ -149,6 +149,17 @@ export function listRuns(home: string = stateHome()): RunSummary[] {
       ? { kind: oneVisibleLine(rawBlocker.kind), question: oneVisibleLine(rawBlocker.question), ...(rawBlocker.waiting === "waiting_budget" || rawBlocker.waiting === "waiting_provider" ? { waiting: rawBlocker.waiting } : {}) }
       : null;
     return [{ run, template: s.template ?? "self-improve", status: s.status, updatedAt: s.updatedAt ?? s.startedAt, outcome: s.outcome, spentUsd: finite(usage?.usd), budgetUsd: finite(budget?.totalUsd), step: finite(s.step), blocker, ...(s.schemaVersion === undefined ? { legacy: true as const } : {}) }];
-  }).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  }).sort((a, b) => {
+    // Newest first. A state that records neither updatedAt nor startedAt has no time: comparing
+    // "null" as text put it above every dated run. It sorts last, ties broken by run id.
+    const time = (v: unknown): number => (typeof v === "string" ? Date.parse(v) : Number.NaN);
+    const ta = time(a.updatedAt);
+    const tb = time(b.updatedAt);
+    const knownA = Number.isFinite(ta);
+    const knownB = Number.isFinite(tb);
+    if (knownA && knownB && ta !== tb) return tb - ta;
+    if (knownA !== knownB) return knownA ? -1 : 1;
+    return a.run.localeCompare(b.run);
+  });
 }
 

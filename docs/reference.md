@@ -408,13 +408,13 @@ Extension `subagent`. Run subagent steps with a shared directory, gates and resu
 
 ### `workflow_status`
 
-Extension `subagent`. List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. With id: YAML steps, script counters, a subagent's last assistant message and last tool (or its capped log tail when it has no message yet, or when tail is given), or an autonomous run's template, spend, blocker and liveness.
+Extension `subagent`. List runs of every format — workflow YAML, workflow script, subagent and autonomous container — live or finished. With id: YAML steps, script counters, a subagent's last message and tool, or an autonomous run's template, spend, blocker and liveness.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `id?` | string | One run's id; without it, the newest runs of every format |
 | `limit?` | number | How many runs to list (default 20, max 100) |
-| `tail?` | number | Lines of a background subagent's raw log to show with id instead of the message summary (default 40 when there is no message) |
+| `tail?` | number | Raw log lines instead of the summary (default 40) |
 
 ## Environment variables
 

@@ -1144,13 +1144,15 @@ interface AutonomyModule {
 	renderAutonomy: (target: Node, data: unknown, now?: number) => void;
 	renderAutonomyError: (target: Node, message: string) => void;
 	formatAge: (at: unknown, now?: number) => string;
+	ageText: (at: unknown, now?: number) => string;
 	oneAtATime: (load: () => Promise<void>) => () => Promise<boolean>;
 }
 try {
-	const { renderAutonomy, renderAutonomyError, formatAge, oneAtATime } = await loadModule<AutonomyModule>("autonomy.js", {
+	const { renderAutonomy, renderAutonomyError, formatAge, ageText, oneAtATime } = await loadModule<AutonomyModule>("autonomy.js", {
 		renderAutonomy: "function",
 		renderAutonomyError: "function",
 		formatAge: "function",
+		ageText: "function",
 		oneAtATime: "function",
 	});
 	const now = Date.parse("2026-11-18T10:10:00.000Z");
@@ -1163,11 +1165,12 @@ try {
 			at: "2026-11-18T10:10:00.000Z",
 			runs: [
 				{
-					run: "r-good", template: "implement", status: "blocked", updatedAt: null, outcome: null, step: 3,
-					spentUsd: 1.5, budgetUsd: 10, blocker: { kind: "question", question: hostile }, lastEventAt: "2026-11-18T10:05:00.000Z",
+					run: "r-good", template: "implement", status: "blocked", updatedAt: null, outcome: null, step: 3, phase: "reviewing",
+					spentUsd: 1.5, budgetUsd: 10, blocker: { kind: "question", question: hostile, waiting: "waiting_budget", since: "2026-11-18T10:07:00.000Z", options: ["SQLite", "Postgres"] }, lastEventAt: "2026-11-18T10:05:00.000Z",
 				},
+				{ run: "r-old", template: "self-improve", status: "succeeded", updatedAt: null, outcome: null, step: null, phase: null, spentUsd: null, budgetUsd: null, blocker: null, lastEventAt: null, legacy: true },
 			],
-			runsTotal: 1,
+			runsTotal: 2,
 			events: [
 				{ v: 1, at: "2026-11-18T10:09:00.000Z", run: "r-good", type: "gate.result", n: 1, green: false, failing: ["unit", "lint"] },
 				{ v: 1, at: "2026-11-18T10:09:30.000Z", run: "r-good", type: "failure", code: "boom", detail: hostile },
@@ -1179,7 +1182,7 @@ try {
 	);
 	const shown = allText(target);
 	check(
-		["r-good", "implement", "blocked: question:", "$1.50 / $10.00", "5m ago", "failing=unit,lint", "openrouter", "#7", "skipped 1 unreadable run(s)"]
+		["r-good", "r-old (legacy)", "implement", "blocked: waiting on budget (question:", "since 3m ago", "choices: SQLite | Postgres", "reviewing", "$1.50 / $10.00", "5m ago", "failing=unit,lint", "openrouter", "#7", "skipped 1 unreadable run(s)"]
 			.every((part) => shown.includes(part)),
 		"autonomy view: runs, spend/budget, last-event age, events, status file and skips shown",
 		`autonomy view: missing text in ${shown}`,
@@ -1197,7 +1200,8 @@ try {
 		`autonomy view: first event row is ${asText(firstRow?.textContent)}`,
 	);
 	check(
-		formatAge("not a time", now) === "—" && formatAge("2026-11-16T11:10:00.000Z", now) === "47h" && formatAge("2026-11-15T10:10:00.000Z", now) === "3d",
+		formatAge("not a time", now) === "—" && formatAge("2026-11-16T11:10:00.000Z", now) === "47h" && formatAge("2026-11-15T10:10:00.000Z", now) === "3d" &&
+		ageText("not a time", now) === "—" && ageText("2026-11-18T10:05:00.000Z", now) === "5m ago",
 		"autonomy view: ages are bounded words, unknown is a dash",
 		"autonomy view: age formatting is wrong",
 	);

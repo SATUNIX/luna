@@ -400,13 +400,13 @@ try {
     reset();
     const fleet = [
       { run: "demo-run-1", template: "implement", status: "running", outcome: null, step: 3, spentUsd: 1.5, budgetUsd: 10, blocker: null },
-      { run: "demo-blocked-1", template: "self-improve", status: "blocked", outcome: null, step: 2, spentUsd: 0.25, budgetUsd: 5, blocker: { kind: "question", question: "which database?" } },
+      { run: "demo-blocked-1", template: "self-improve", status: "blocked", outcome: null, step: 2, spentUsd: 0.25, budgetUsd: 5, blocker: { kind: "external", waiting: "waiting_provider", question: "which database?" } },
     ];
     const restoreFleet = setEnv("FAKE_FLEET", JSON.stringify(fleet));
     try {
       const s = session();
       await s.run("status");
-      assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (which database?)"]]);
+      assert.deepEqual(s.statuses, [["autonomy", "autonomy: 2 runs \u2014 1 running, 1 blocked; blocked: demo-blocked-1 (waiting on provider: which database?)"]]);
       assert.match(lastNote(s).message, /status ok/, "the CLI's own status text is still what is shown");
       // A run is running, so the live widget started polling (case 7d): stop it with the session.
       await s.pi.handlers.get("session_shutdown")({}, s.ctx);
@@ -428,6 +428,7 @@ try {
     const long = "x".repeat(100);
     assert.match(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "question", question: long } }] }) ?? "", /x{80}\u2026\)$/, "the question is truncated");
     assert.equal(mod.fleetStatusLine({ runs: [{ run: "a\u001b-1", status: "blocked", blocker: { kind: "question", question: "line1\nline2\u001b[2J" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (line1 line2[2J)", "worker text is collapsed to one visible line");
+    assert.equal(mod.fleetStatusLine({ runs: [{ run: "a-1", status: "blocked", blocker: { kind: "external", waiting: "waiting_budget", question: "why?" } }] }), "autonomy: 1 run \u2014 1 blocked; blocked: a-1 (waiting on budget: why?)", "a budget-parked run says so, not just its question");
     ok("status with no run sets a one-line fleet footer, clears it when empty, and is untouched without a screen");
   }
 
@@ -440,7 +441,7 @@ try {
       runs: [
         { run: "todo-api-1", template: "implement", status: "running", step: 3, spentUsd: 1.5, budgetUsd: 10, updatedAt: ago(600) },
         { run: "fleet-dispatch-with-a-long-name-7", template: "dispatch", status: "recovering", step: 12, spentUsd: 23.456, budgetUsd: 100, updatedAt: ago(90) },
-        { run: "self-improve-2", template: "self-improve", status: "blocked", step: 1, spentUsd: null, budgetUsd: null, updatedAt: ago(7200) },
+        { run: "self-improve-2", template: "self-improve", status: "blocked", step: 1, spentUsd: null, budgetUsd: null, updatedAt: ago(7200), blocker: { kind: "external", waiting: "waiting_provider", question: "which database?" } },
         { run: "old-run-1", template: "implement", status: "succeeded", step: 9, spentUsd: 4, budgetUsd: 5, updatedAt: ago(9000) },
       ],
     };
@@ -456,11 +457,13 @@ try {
     const runs = mod.widgetRuns(report);
     const events = mod.widgetEvents(eventsReport);
     assert.equal(runs.length, 4, "every well-formed row is read");
+    assert.deepEqual(at(runs, 2, "the blocked run").blocker, { kind: "external", question: "which database?", waiting: "waiting_provider" }, "a blocked run's question and waiting reason are read, so the widget can say why it is blocked");
+    assert.equal(at(runs, 0, "a running run").blocker, null, "a run that records no blocker has none");
     assert.equal(events.length, 3, "an unknown event type is left out");
     assert.equal(at(events, 2, "the dispatch cycle").phase, "working on PG-07[2J", "a worker-written item is one visible line");
     for (const width of [80, 120]) {
       const lines = mod.renderAutonomyWidget(runs, events, now, width);
-      assert.equal(lines.length, 4, `${width} columns: a heading and the three runs that have not ended`);
+      assert.equal(lines.length, 5, `${width} columns: a heading, the three runs that have not ended and why the blocked one waits`);
       for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width} columns: no line is wider than the terminal (${line})`);
       assert.match(at(lines, 0, "heading"), /^autonomy: 2 active, 1 waiting/);
       assert.ok(!lines.some((l) => l.includes("old-run-1")), "an ended run is not listed");
@@ -470,14 +473,22 @@ try {
     assert.match(at(wide, 1, "first run"), /todo-api-1 +implement +cycle 3 +gate green +\$1\.50\/\$10\.00 +12s ago$/, "run, template, cycle, phase, spend/budget and last-event age");
     assert.match(at(wide, 2, "second run"), /cycle 14 +recovering +\$23\.46\/\$100\.00 +30s ago$/, "the newest cycle number from the event log");
     assert.match(at(wide, 3, "third run"), /self-improve-2 .*cycle 1 +blocked +\$- +2h ago$/, "a waiting run is listed after the active ones");
+    assert.equal(at(wide, 4, "the blocked line"), "  blocked: self-improve-2 (waiting on provider: which database?)", "the widget says what a blocked run waits on and the question to answer");
     for (const width of [1, 10, 40]) for (const line of mod.renderAutonomyWidget(runs, events, now, width)) assert.ok(visibleWidth(line) <= width, `${width} columns: narrow terminals are safe`);
-    const idle = runs.filter((r) => !mod.isActiveRun(r));
-    assert.deepEqual(mod.renderAutonomyWidget(idle, events, now, 120), [], "no active run: nothing to show");
+    const idle = runs.filter((r) => !mod.isActiveRun(r) && r.status !== "blocked");
+    assert.deepEqual(mod.renderAutonomyWidget(idle, events, now, 120), [], "no active or blocked run: nothing to show");
     // Which runs show the widget and which keep it refreshing (a run's step is a number from 0, never null).
-    const row = (status: string, step: number): AutonomyRun.WidgetRun => ({ run: `r-${status}-${step}`, template: "implement", status, step, spentUsd: 0, budgetUsd: 5, updatedMs: now });
+    const row = (status: string, step: number, blocker: AutonomyRun.WidgetBlocker | null = null): AutonomyRun.WidgetRun => ({ run: `r-${status}-${step}`, template: "implement", status, step, spentUsd: 0, budgetUsd: 5, blocker, updatedMs: now });
     const pausedEarly = row("paused", 0);
     const pausedMid = row("paused", 2);
-    assert.deepEqual(mod.renderAutonomyWidget([pausedEarly, row("blocked", 3)], [], now, 120), [], "a run paused before its first cycle, or blocked, does not show the widget");
+    assert.deepEqual(mod.renderAutonomyWidget([pausedEarly], [], now, 120), [], "a run paused before its first cycle does not show the widget");
+    // A blocked run is shown even when nothing is moving, with the question the owner has to answer.
+    const blockedOnly = mod.renderAutonomyWidget([row("blocked", 3, { kind: "question", question: "ship it?", waiting: "waiting_budget" })], [], now, 120);
+    assert.match(at(blockedOnly, 0, "heading"), /^autonomy: 0 active, 1 waiting/, "a blocked run alone is shown, counted as waiting, not active");
+    assert.equal(at(blockedOnly, 2, "the blocked line"), "  blocked: r-blocked-3 (waiting on budget: ship it?)", "and its question is shown");
+    const noQuestion = mod.renderAutonomyWidget([row("blocked", 3)], [], now, 120);
+    assert.match(at(noQuestion, 1, "the blocked run"), /r-blocked-3 +implement +cycle 3 +blocked +\$0\.00\/\$5\.00 +0s ago$/, "a blocked run that records no question is still listed");
+    assert.equal(noQuestion.length, 2, "with no invented reason line");
     assert.match(at(mod.renderAutonomyWidget([pausedMid], [], now, 120), 0, "heading"), /^autonomy: 1 active/, "a run paused part-way through shows it");
     for (const status of ["setup", "ready", "running", "recovering"]) {
       assert.ok(mod.isActiveRun(row(status, 0)), `${status} is shown`);
@@ -501,7 +512,7 @@ try {
       assert.equal(key, "autonomy");
       assert.ok(Array.isArray(content), "outside the terminal UI the widget is lines");
       const shown: unknown[] = content;
-      assert.equal(shown.length, 4);
+      assert.equal(shown.length, 5, "a heading, three runs and the blocked run's question");
       for (const l of shown) assert.ok(typeof l === "string" && visibleWidth(l) <= 80, "rendered at 80 columns");
       const empty = setEnv("FAKE_FLEET", "[]");
       try {

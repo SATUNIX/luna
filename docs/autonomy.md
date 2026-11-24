@@ -168,21 +168,26 @@ The `autonomy-run` extension, in the `long-horizon` profile, adds `/autonomy`:
 ```
 
 **Live run widget.** While a run is active (starting up in `setup` or `ready`, running,
-recovering, or paused after at least one cycle), pi shows a widget above the editor: a heading with the number of active and waiting runs,
-then one line per run that has not ended (active runs first, at most six, the rest counted) with
-its id, template, cycle, phase (from the newest host event: working, gate green or red, pushed, a
-failure code, or the run's status when it is not running), spend against budget and the age of its
-last event. Every line is cut to the terminal's width, so a narrow terminal never wraps it. The
+recovering, or paused after at least one cycle) or blocked, pi shows a widget above the editor: a
+heading with the number of active and waiting runs, then one line per run that has not ended (active
+runs first, at most six, the rest counted) with its id, template, cycle, phase (from the newest host
+event: working, gate green or red, pushed, a failure code, or the run's status when it is not
+running), spend against budget and the age of its last event. When a run is blocked, one more line
+says what it waits on and the question to answer, as the fleet footer does: `blocked: <run>
+(waiting on provider: <question>)`, or `(waiting on budget: <question>)` for a parked run. Every
+line is cut to the terminal's width, so a narrow terminal never wraps it. The
 widget is refreshed every 2 seconds through the CLI (`pi-autonomy status --json` and
 `pi-autonomy events --json --limit 200`), skipping a refresh while the previous one is still
 running, but only while some run can change on its own (`setup`, `ready`, `running` or
 `recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. A paused or blocked
 run changes only when the operator acts, so with only such runs the widget is drawn once and not
-refreshed. It hides itself when no run is active. It is checked at session start, after
+refreshed. It hides itself when no run is active and none is blocked. It is checked at session
+start, after
 `/autonomy start` starts a run in the background, after `/autonomy resume` and after
 `/autonomy status` with no run; `/autonomy watch` checks it now and `/autonomy watch off` hides it
 for the rest of the session. Pinned by `tests/autonomy-command-smoke.ts` (the renderer at 80 and
-120 columns and at narrow widths, which runs show and which keep it refreshing, showing a run
+120 columns and at narrow widths, which runs show and which keep it refreshing, a blocked run's
+question and waiting reason, showing a run
 still in `setup` after a background start, showing after resume, hiding and `watch off`).
 
 **Not covered:** the widget needs a screen and is not drawn in print or JSON mode; outside the
@@ -210,9 +215,10 @@ with `plan --authorise`. `cancel`, `promote`, `reconfigure` and `resume --approv
 
 `workflow_status` and `/workflows` list an autonomous run beside workflow and subagent runs,
 labelled `autonomy`. The list shows its contract title (else its template), status, spend and,
-when blocked, the question it waits on; `workflow_status {id}` shows the phase and step, dollars
-spent against the budget, in-progress and done tasks, the blocker and its options, the last error,
-the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
+when blocked, the question it waits on and, when the state records one, what it waits on
+(`waiting on budget` or `waiting on provider`); `workflow_status {id}` shows the phase and step,
+dollars spent against the budget, in-progress and done tasks, the blocker, its waiting reason and
+its options, the last error, the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
 `$XDG_STATE_HOME/pi-autonomy/<run>`, else `~/.local/state/pi-autonomy/<run>`), so set
 `PI_AUTONOMY_HOME` in pi's environment to see a non-default state home. This is a read-only view:
 starting, answering, resuming and cancelling a run stay with `/autonomy`
@@ -1266,9 +1272,10 @@ In pi, `/autonomy status <run>` shows that text and, for a run with generations,
 status line to `memento <run>: gen n/N, <status>; last rotation: time box` (or `dollar box`, with
 `, no notebook` when none was appended). The line is cleared by `/autonomy status` of a run without
 generations. `/autonomy status` with no run sets a one-line fleet summary instead: how many runs
-there are, how many are in each status, and the first blocked run with the question it waits on;
-the line is cleared when there are no runs or a run's status is unusable. It is not changed without
-a screen. It is updated only
+there are, how many are in each status, and the first blocked run with the question it waits on and,
+when recorded, what it waits on (`waiting on budget` or `waiting on provider`); the line is cleared
+when there are no runs or a run's status is unusable. It is not changed without a screen. It is
+updated only
 when you run that command, not while the run goes on (`tests/autonomy-command-smoke.ts`).
 
 **Not covered:** a question the worker asks during the grace period is not answered: the worker is

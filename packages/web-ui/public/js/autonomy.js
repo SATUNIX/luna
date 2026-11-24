@@ -42,6 +42,11 @@ export function formatAge(at, now = Date.now()) {
         return `${hours}h`;
     return `${Math.floor(hours / 24)}d`;
 }
+/** An age as a sentence fragment: "5m ago", or just "—" when the time is unknown. */
+export function ageText(at, now = Date.now()) {
+    const age = formatAge(at, now);
+    return age === "—" ? age : `${age} ago`;
+}
 /** A dollar figure, or "—" when the server had none (it sends null, never a guess). */
 function usd(value) {
     return typeof value === "number" && Number.isFinite(value) ? `$${value.toFixed(2)}` : "—";
@@ -51,11 +56,24 @@ function spend(run) {
         ? usd(run.spentUsd)
         : `${usd(run.spentUsd)} / ${usd(run.budgetUsd)}`;
 }
-/** The status cell: the run's status, then what it waits on or why it ended. */
-function statusText(run) {
+/** What a parked run waits on, in words the owner can act on; empty when it records none. */
+function waitingText(waiting) {
+    if (waiting === "waiting_budget")
+        return "waiting on budget";
+    if (waiting === "waiting_provider")
+        return "waiting on provider";
+    return "";
+}
+/** The status cell: the run's status, then what it waits on, how long, what choices it offers, or why it ended. */
+function statusText(run, now) {
     const status = displayText(run.status ?? "unknown");
-    if (isObject(run.blocker))
-        return `${status}: ${displayText(run.blocker.kind)}: ${displayText(run.blocker.question)}`;
+    if (isObject(run.blocker)) {
+        const blocker = `${displayText(run.blocker.kind)}: ${displayText(run.blocker.question)}`;
+        const waiting = waitingText(run.blocker.waiting);
+        const since = run.blocker.since ? ` · since ${ageText(run.blocker.since, now)}` : "";
+        const options = isArray(run.blocker.options) && run.blocker.options.length ? ` · choices: ${run.blocker.options.map((option) => displayText(option)).join(" | ")}` : "";
+        return `${status}: ${waiting ? `${waiting} (${blocker})` : blocker}${since}${options}`;
+    }
     if (isObject(run.outcome) && run.outcome.reason)
         return `${status}: ${displayText(run.outcome.reason)}`;
     return status;
@@ -83,7 +101,7 @@ export function renderAutonomy(target, data, now = Date.now()) {
     const notes = [
         `${data.runs.length}${data.runsTotal > data.runs.length ? ` of ${data.runsTotal}` : ""} run(s)`,
         `${data.events.length} recent event(s)`,
-        `read ${formatAge(data.at, now)} ago`,
+        `read ${ageText(data.at, now)}`,
     ];
     const left = [
         skipped.runs ? `${skipped.runs} unreadable run(s)` : "",
@@ -97,13 +115,14 @@ export function renderAutonomy(target, data, now = Date.now()) {
         target.append(section("Runs", el("p", { class: "muted", text: "No runs in the autonomy state home." })));
     }
     else {
-        target.append(section("Runs", table(["run", "template", "status", "step", "spend / budget", "last event"], data.runs.map((run) => [
-            displayText(run.run),
+        target.append(section("Runs", table(["run", "template", "status", "step", "doing", "spend / budget", "last event"], data.runs.map((run) => [
+            displayText(run.run) + (run.legacy ? " (legacy)" : ""),
             displayText(run.template ?? "—"),
-            statusText(run),
+            statusText(run, now),
             typeof run.step === "number" ? String(run.step) : "—",
+            typeof run.phase === "string" && run.phase ? displayText(run.phase) : "—",
             spend(run),
-            run.lastEventAt ? `${formatAge(run.lastEventAt, now)} ago` : "—",
+            run.lastEventAt ? ageText(run.lastEventAt, now) : "—",
         ]), "autonomy-runs")));
     }
     if (!data.events.length) {
@@ -112,11 +131,11 @@ export function renderAutonomy(target, data, now = Date.now()) {
     else {
         // Newest first: the log is in written order.
         const newest = [...data.events].reverse();
-        target.append(section("Recent events", table(["age", "run", "event", "detail"], newest.map((event) => [`${formatAge(event.at, now)} ago`, displayText(event.run), displayText(event.type), eventFields(event)]), "autonomy-events")));
+        target.append(section("Recent events", table(["age", "run", "event", "detail"], newest.map((event) => [ageText(event.at, now), displayText(event.run), displayText(event.type), eventFields(event)]), "autonomy-events")));
     }
     const status = data.status;
     if (status) {
-        const parts = [el("p", { class: "mono-sm muted", text: `generated ${formatAge(status.generatedAt, now)} ago` })];
+        const parts = [el("p", { class: "mono-sm muted", text: `generated ${ageText(status.generatedAt, now)}` })];
         const sources = isObject(status.spend) ? Object.entries(status.spend) : [];
         if (sources.length) {
             parts.push(table(["source", "today", "this month"], sources.map(([source, window]) => [displayText(source), usd(window.todayUsd), usd(window.monthUsd)]), "autonomy-spend"));

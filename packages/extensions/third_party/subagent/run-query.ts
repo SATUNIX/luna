@@ -52,6 +52,8 @@ export interface QueriedRun {
   error?: string | undefined;
   /** Autonomy runs: the question a blocked run waits on, shown in the list line. */
   blockerQuestion?: string | undefined;
+  /** Autonomy runs: a provider or budget refusal behind the blocker (lib/lifecycle.ts). */
+  blockerWaiting?: BlockedWaiting | undefined;
   /** Autonomy runs: dollars spent and the run's dollar budget, shown in the list line. */
   spendUsd?: number | undefined;
   budgetUsd?: number | undefined;
@@ -170,6 +172,16 @@ const AUTONOMY_STALE_MS = 120_000;
 // (`packages/autonomy/lib/lifecycle.ts`), so its run keeps no endedAt.
 const AUTONOMY_ENDED: ReadonlySet<string> = new Set(["succeeded", "failed", "cancelled"]);
 
+/** What a provider or budget refusal parks an autonomy run on (lib/lifecycle.ts). */
+type BlockedWaiting = "waiting_budget" | "waiting_provider";
+
+/** The waiting reason in one word the owner can act on: "budget", "provider", or the empty string. */
+function waitingWord(waiting: BlockedWaiting | undefined): string {
+  if (waiting === "waiting_budget") return "budget";
+  if (waiting === "waiting_provider") return "provider";
+  return "";
+}
+
 interface AutonomyTask {
   title: string;
   status: string;
@@ -178,6 +190,7 @@ interface AutonomyTask {
 interface AutonomyBlocker {
   kind: string;
   question: string;
+  waiting?: BlockedWaiting | undefined;
   options: string[];
 }
 
@@ -230,8 +243,10 @@ function autonomyStateOf(raw: unknown): AutonomyStateInfo | null {
   const usage = isRecord(raw.usage) ? raw.usage : {};
   const limits = isRecord(raw.limits) ? raw.limits : {};
   const budget = isRecord(limits.budget) ? limits.budget : {};
+  const rawWaiting = isRecord(raw.blocker) ? raw.blocker.waiting : undefined;
+  const waiting: BlockedWaiting | undefined = rawWaiting === "waiting_budget" || rawWaiting === "waiting_provider" ? rawWaiting : undefined;
   const blocker = isRecord(raw.blocker) && typeof raw.blocker.question === "string"
-    ? { kind: workerText(raw.blocker.kind), question: workerText(raw.blocker.question), options: stringList(raw.blocker.options).slice(0, WORKER_OPTIONS_MAX).map(workerText) }
+    ? { kind: workerText(raw.blocker.kind), question: workerText(raw.blocker.question), ...(waiting ? { waiting } : {}), options: stringList(raw.blocker.options).slice(0, WORKER_OPTIONS_MAX).map(workerText) }
     : null;
   const tasks = Array.isArray(raw.tasks)
     ? raw.tasks.flatMap((task): AutonomyTask[] => (isRecord(task) && typeof task.title === "string" ? [{ title: workerText(task.title), status: workerText(task.status) }] : []))
@@ -329,7 +344,7 @@ function autonomyRow(dir: string, id: string, state: AutonomyStateInfo): Queried
     agents: 0,
     outputTokens: 0,
     ...(state.lastError ? { error: state.lastError } : {}),
-    ...(state.blocker ? { blockerQuestion: state.blocker.question } : {}),
+    ...(state.blocker ? { blockerQuestion: state.blocker.question, ...(state.blocker.waiting ? { blockerWaiting: state.blocker.waiting } : {}) } : {}),
     spendUsd: state.usage.usd,
     budgetUsd: state.budget.totalUsd,
     dir,
@@ -461,7 +476,10 @@ export function formatRunLine(run: QueriedRun): string {
   if (duration) parts.push(duration);
   const error = run.error ? ` — ${run.error.slice(0, 120)}` : "";
   // A blocked autonomy run says what it waits on, so the owner can answer it from the list.
-  const blocker = run.format === "autonomy" && run.blockerQuestion ? ` — blocked: ${run.blockerQuestion.slice(0, 160)}` : "";
+  const waiting = run.format === "autonomy" ? waitingWord(run.blockerWaiting) : "";
+  const blocker = run.format === "autonomy" && run.blockerQuestion
+    ? ` — blocked: ${waiting ? `waiting on ${waiting}: ` : ""}${run.blockerQuestion.slice(0, 160)}`
+    : "";
   // Autonomy runs are budgeted in dollars; their spend belongs on their line only.
   const spend = run.format === "autonomy" && run.spendUsd !== undefined && run.budgetUsd !== undefined
     ? ` · $${run.spendUsd.toFixed(2)} of $${run.budgetUsd.toFixed(2)}`
@@ -515,6 +533,7 @@ function describeAutonomy(run: QueriedRun, id: string): string {
     `Spent $${state.usage.usd.toFixed(2)} of $${state.budget.totalUsd.toFixed(2)}, ${state.usage.steps}/${state.budget.maxSteps} steps, ${Math.round(state.usage.minutes)}/${state.budget.maxMinutes} min`,
   ];
   if (state.blocker) {
+    if (state.blocker.waiting) lines.push(`Waiting on: ${waitingWord(state.blocker.waiting)}`);
     lines.push(`Blocker (${state.blocker.kind || "blocked"}): ${state.blocker.question}`);
     if (state.blocker.options.length > 0) lines.push(`Options: ${state.blocker.options.join(" | ")}`);
   }

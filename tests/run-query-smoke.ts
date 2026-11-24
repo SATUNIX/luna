@@ -219,7 +219,7 @@ writeFile(
       status: "blocked",
       phase: "review",
       step: 5,
-      blocker: { kind: "question", id: "q-1", method: "input", question: "Which database should the importer use?\u001b[2J\u001b]52;c;QUJD\u0007\nwf-forged: passed", options: ["SQLite", "Postgres"], since: "2026-01-02T00:12:00.000Z" },
+      blocker: { kind: "external", id: "provider-limit", method: "provider", waiting: "waiting_provider", question: "Which database should the importer use?\u001b[2J\u001b]52;c;QUJD\u0007\nwf-forged: passed", options: ["SQLite", "Postgres"], since: "2026-01-02T00:12:00.000Z" },
       usage: { usd: 2.5, minutes: 20, steps: 5 },
       tasks: [
         { id: "task-2", title: "Fix the importer\u009b31m\u202e", status: "in_progress" },
@@ -298,6 +298,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}`) && l.includes("$2.50 of $10.00")), `a blocked autonomy list line also shows spend:\n${listed}`);
   assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}: blocked · autonomy · Fix the importer · 0 agents`)), `a blocked autonomous run is labelled autonomy:\n${listed}`);
   assert.ok(rows.some((l) => l.includes(AUTONOMY_BLOCKED_ID) && l.includes("Which database should the importer use?")), `a blocked run's question is in the list line:\n${listed}`);
+  assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}`) && l.includes("blocked: waiting on provider: ")), `a blocked run's list line says what it waits on:\n${listed}`);
   assert.ok(!listed.includes(AUTONOMY_BAD_ID), `a malformed state.json is skipped:\n${listed}`);
   assert.ok(!listed.includes(AUTONOMY_INVALID), `an invalid run directory name is skipped:\n${listed}`);
   assert.equal(rows.length, 9, `the list holds the nine runs and none of their children:\n${listed}`);
@@ -333,6 +334,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.match(autonomyBlocked, /5\/50 steps, 20\/300 min/);
   assert.match(autonomyBlocked, /Which database should the importer use\?/, "the blocker question is shown");
   assert.match(autonomyBlocked, /SQLite \| Postgres/, "the blocker options are shown");
+  assert.match(autonomyBlocked, /Waiting on: provider/, "the waiting reason is shown beside the blocker question");
   // The worker wrote that question and that task title. Nothing it wrote may reach the terminal or
   // the model as a control sequence, a bidi override or a line of its own.
   const hidden = ["\u001b", "\u0007", "\u009b", "\u202e"];
@@ -392,6 +394,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.equal(autonomyBlocked?.name, "Fix the importer");
   assert.equal(autonomyBlocked?.live, false);
   assert.equal(autonomyBlocked?.blockerQuestion, "Which database should the importer use?[2J]52;c;QUJD wf-forged: passed");
+  assert.equal(autonomyBlocked?.blockerWaiting, "waiting_provider", "the row carries what the run waits on");
   assert.equal(autonomyLive?.spendUsd, 1.2, "the list row carries dollars spent");
   assert.equal(autonomyLive?.budgetUsd, 10, "the list row carries the dollar budget");
   const autonomyStale = byId.get(AUTONOMY_STALE_ID);
@@ -405,7 +408,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.equal(byId.get(AUTONOMY_BAD_ID), undefined, "a malformed autonomy state is skipped");
   assert.equal(byId.get(AUTONOMY_INVALID), undefined, "an invalid autonomy directory name is skipped");
   assert.ok(autonomyBlocked, "the blocked autonomy row is present");
-  assert.ok(Q.formatRunLine(autonomyBlocked).includes("Which database should the importer use?"), "formatRunLine shows why an autonomy run is blocked");
+  assert.match(Q.formatRunLine(autonomyBlocked), /blocked: waiting on provider: Which database should the importer use\?/, "formatRunLine shows what an autonomy run waits on");
   const inProcess = byId.get("2026-01-01T00-20-00-000Z-live-aaaa0002");
   assert.equal(inProcess?.format, "yaml", "the live registry is merged in");
   assert.equal(inProcess?.status, "running");

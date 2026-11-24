@@ -182,7 +182,6 @@ widget is refreshed every 2 seconds through the CLI (`pi-autonomy status --json`
 running, while some run can change on its own (`setup`, `ready`, `running` or
 `recovering`), or for a minute after `/autonomy start` or `/autonomy resume`. With blocked
 runs and none moving it still refreshes, every 30 seconds, so an answer given outside this session (the shell CLI,
-runs it still refreshes, every 30 seconds, so an answer given outside this session (the shell CLI,
 the web console, another pi) clears the line at the next refresh; a paused run alone is shown but
 not refreshed. It hides itself when no run is active and none is blocked. It is checked at session
 start, after

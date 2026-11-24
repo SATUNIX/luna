@@ -17,8 +17,7 @@
 //     and `watch off` hides it; it shows a run still in `setup` after a background start and a
 //     run after `resume`; paused runs alone are not polled, a blocked-only fleet is polled slowly,
 //     and a run paused before its first cycle (step 0) does not show it; the only hooks are
-//     its first cycle (step 0) does not show it; the only hooks are session_start and
-//     session_shutdown;
+//     session_start and session_shutdown;
 //   - `inbox` lists cards (or waiting runs) and answers with a literal --value (any text, even one
 //     starting with `--`); bad ids spawn nothing;
 //   - against the REAL CLI, `templates` and `plan` work end to end (no container engine needed).

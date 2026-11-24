@@ -506,15 +506,62 @@ const MAX_TAIL_LINES = 1000;
 /** A tailed log line is cut here: the lines are JSON events whose partial results can be megabytes. */
 const MAX_TAIL_LINE_CHARS = 600;
 
-function describeSubagent(cwd: string, run: QueriedRun, tail: number): string {
+function lastAssistantText(event: unknown): string | undefined {
+  if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message) || event.message.role !== "assistant") return undefined;
+  const content = event.message.content;
+  const parts = typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
+  const text = parts.map((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : "")).join("\n");
+  return text.trim() ? text : undefined;
+}
+
+function lastToolName(event: unknown): string | undefined {
+  if (!isRecord(event) || (event.type !== "tool_execution_start" && event.type !== "tool_execution_end")) return undefined;
+  return typeof event.toolName === "string" && event.toolName.trim() ? event.toolName : undefined;
+}
+
+/** The newest assistant text and tool name in a child log, for a live run's one-glance status. */
+function subagentSummary(body: readonly string[]): { message?: string | undefined; tool?: string | undefined } {
+  let message: string | undefined;
+  let tool: string | undefined;
+  // Scan backwards and stop once both are found, so a long log is not parsed whole.
+  for (let i = body.length - 1; i >= 0 && (message === undefined || tool === undefined); i--) {
+    const line = body[i] ?? "";
+    const wantsMessage = message === undefined && line.includes('"message_end"');
+    const wantsTool = tool === undefined && (line.includes('"tool_execution_start"') || line.includes('"tool_execution_end"'));
+    if (!wantsMessage && !wantsTool) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (wantsMessage) message = lastAssistantText(event);
+    if (wantsTool) tool = lastToolName(event);
+  }
+  return { message, tool };
+}
+
+function describeSubagent(cwd: string, run: QueriedRun, tail: number | undefined): string {
   const logPath = path.join(subagentStateDir(cwd), `${run.id}.log`);
-  const lines = Math.max(1, Math.min(Number.isFinite(tail) ? Math.trunc(tail) : TAIL_LINES, MAX_TAIL_LINES));
+  const lines = Math.max(1, Math.min(tail !== undefined && Number.isFinite(tail) ? Math.trunc(tail) : TAIL_LINES, MAX_TAIL_LINES));
   const header = `Format: subagent · run ${run.id}\nsubagent ${run.name} · ${run.status} · started ${run.startedAt || "?"} · log: ${run.log || logPath}`;
   try {
     const body = fs.readFileSync(logPath, "utf8").split(/\r?\n/);
-    // The tail is JSON events that can hold whole partial results: bound each line, then the lot.
-    const tail = capLines(body.slice(-lines).join("\n"), MAX_TAIL_LINE_CHARS);
-    return `${header}\n\n\`\`\`\n${capText(tail, `in ${logPath}`)}\n\`\`\``;
+    // An explicit tail is the caller asking for the raw log, so that contract stays unchanged.
+    if (tail === undefined) {
+      const summary = subagentSummary(body);
+      if (summary.message !== undefined) {
+        // The child writes its own text: one visible line, bounded like a tailed log line.
+        const message = capText(capLines(oneVisibleLine(summary.message), MAX_TAIL_LINE_CHARS), `in ${logPath}`);
+        const out = [header, "", `Last message: ${message}`];
+        if (summary.tool !== undefined) out.push(`Last tool: ${oneVisibleLine(summary.tool).slice(0, MAX_TAIL_LINE_CHARS)}`);
+        return out.join("\n");
+      }
+    }
+    // An explicit tail, or no assistant message yet (a run that is still starting): the capped raw
+    // tail as before.
+    const rawTail = capLines(body.slice(-lines).join("\n"), MAX_TAIL_LINE_CHARS);
+    return `${header}\n\n\`\`\`\n${capText(rawTail, `in ${logPath}`)}\n\`\`\``;
   } catch {
     return `${header}\n\nNo log for run "${run.id}" under ${path.dirname(logPath)}.`;
   }
@@ -571,9 +618,9 @@ export function describeRun(cwd: string, id: string, opts: QueryOptions & { tail
   if (!run) {
     if (!isValidRunId(id)) return null;
     const child = collectRuns(subagentStateDir(cwd)).find((row) => row.id === id);
-    return child ? describeSubagent(cwd, subagentRow(child), opts.tail ?? TAIL_LINES) : null;
+    return child ? describeSubagent(cwd, subagentRow(child), opts.tail) : null;
   }
-  if (run.format === "subagent") return describeSubagent(cwd, run, opts.tail ?? TAIL_LINES);
+  if (run.format === "subagent") return describeSubagent(cwd, run, opts.tail);
   if (run.format === "script") return describeScript(run);
   if (run.format === "autonomy") return describeAutonomy(run, id);
   const state = loadState(cwd, id);

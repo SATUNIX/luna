@@ -210,9 +210,10 @@ with `plan --authorise`. `cancel`, `promote`, `reconfigure` and `resume --approv
 
 `workflow_status` and `/workflows` list an autonomous run beside workflow and subagent runs,
 labelled `autonomy`. The list shows its contract title (else its template), status, spend and,
-when blocked, the question it waits on; `workflow_status {id}` shows the phase and step, dollars
-spent against the budget, in-progress and done tasks, the blocker and its options, the last error,
-the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
+when blocked, the question it waits on and, when the state records one, what it waits on
+(`waiting on budget` or `waiting on provider`); `workflow_status {id}` shows the phase and step,
+dollars spent against the budget, in-progress and done tasks, the blocker, its waiting reason and
+its options, the last error, the run directory and `supervisor.log`. It reads `$PI_AUTONOMY_HOME/<run>` (else
 `$XDG_STATE_HOME/pi-autonomy/<run>`, else `~/.local/state/pi-autonomy/<run>`), so set
 `PI_AUTONOMY_HOME` in pi's environment to see a non-default state home. This is a read-only view:
 starting, answering, resuming and cancelling a run stay with `/autonomy`

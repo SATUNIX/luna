@@ -97,6 +97,27 @@ function isPrompts(value) {
 function isSkills(value) {
     return isRecord(value) && isArrayOf(value.skills, isKitEntry);
 }
+function isProfileSummary(value) {
+    return (isRecord(value) &&
+        typeof value.name === "string" &&
+        typeof value.description === "string" &&
+        (value.source === "shipped" || value.source === "user") &&
+        (value.base === undefined || typeof value.base === "string") &&
+        typeof value.extensions === "number");
+}
+function isProfiles(value) {
+    return isRecord(value) && isArrayOf(value.profiles, isProfileSummary);
+}
+function isPackageSummary(value) {
+    return (isRecord(value) &&
+        typeof value.source === "string" &&
+        (value.extensions === null || typeof value.extensions === "number") &&
+        (value.skills === null || typeof value.skills === "number") &&
+        (value.prompts === null || typeof value.prompts === "number"));
+}
+function isPackages(value) {
+    return isRecord(value) && isArrayOf(value.packages, isPackageSummary);
+}
 function isCwds(value) {
     return isRecord(value) && isArrayOf(value.cwds, isString);
 }
@@ -197,6 +218,8 @@ export const api = {
     models: () => request("GET", "/api/models", isModels),
     cwds: () => request("GET", "/api/cwds", isCwds),
     autonomy: () => request("GET", "/api/autonomy", isAutonomy),
+    profiles: () => request("GET", "/api/profiles", isProfiles),
+    packages: () => request("GET", "/api/packages", isPackages),
     agents: () => request("GET", "/api/agents", isAgents),
     agent: (name, source) => request("GET", agentPath(name, source), isAgent),
     createAgent: (payload) => request("POST", "/api/agents", isAgent, payload),

@@ -398,6 +398,63 @@ try {
     deleteAgent("one-line", "user");
   });
 
+  // The read-only profiles and packages view: GET answers the documented shape from the kit's
+  // profiles and this install's settings.json, and every other method is refused.
+  const profilesDir = path.join(agentDir, "pi-kit", "profiles");
+  fs.mkdirSync(profilesDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(profilesDir, "custom.json"),
+    JSON.stringify({ name: "custom", description: "a user profile", extends: "balanced", extensions: { add: ["x", "y"] } }),
+  );
+  fs.writeFileSync(
+    path.join(agentDir, "settings.json"),
+    JSON.stringify({ packages: [
+      "git:github.com/example/one",
+      { source: "git:github.com/example/two", skills: ["s"], prompts: ["p"] },
+      { source: "git:github.com/example/three", extensions: ["a", "b"] },
+    ] }),
+  );
+  const profilesRes = fakeRes();
+  await handleApi({ method: "GET", url: "/api/profiles", on() {} }, profilesRes, { pathname: "/api/profiles" });
+  check("GET /api/profiles answers shipped and user profiles with their source", () => {
+    assert.equal(profilesRes.statusCode, 200);
+    const { profiles } = JSON.parse(responseBody(profilesRes)) as {
+      profiles: Array<{ name: string; description: string; source: string; base?: string; extensions: number }>;
+    };
+    const shipped = profiles.find((p) => p.name === "balanced");
+    assert.ok(shipped, "a shipped profile is listed");
+    assert.equal(shipped?.source, "shipped");
+    assert.ok(typeof shipped?.description === "string" && shipped.description.length > 0);
+    const user = profiles.find((p) => p.name === "custom");
+    assert.deepEqual(user, { name: "custom", description: "a user profile", source: "user", base: "balanced", extensions: 2 });
+  });
+
+  const packagesRes = fakeRes();
+  await handleApi({ method: "GET", url: "/api/packages", on() {} }, packagesRes, { pathname: "/api/packages" });
+  check("GET /api/packages answers the registered packages with their filter counts", () => {
+    assert.equal(packagesRes.statusCode, 200);
+    const { packages } = JSON.parse(responseBody(packagesRes)) as {
+      packages: Array<{ source: string; extensions: number | null; skills: number | null; prompts: number | null }>;
+    };
+    assert.deepEqual(packages, [
+      { source: "git:github.com/example/one", extensions: null, skills: null, prompts: null },
+      { source: "git:github.com/example/two", extensions: null, skills: 1, prompts: 1 },
+      { source: "git:github.com/example/three", extensions: 2, skills: null, prompts: null }
+    ]);
+  });
+
+  const profileMutations: Array<[string, number | null]> = [];
+  const packageMutations: Array<[string, number | null]> = [];
+  for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
+    profileMutations.push([method, (await call(handleApi, method, "/api/profiles")).statusCode]);
+    packageMutations.push([method, (await call(handleApi, method, "/api/packages")).statusCode]);
+  }
+  check("the profiles and packages routes are read-only: every other method is 405", () => {
+    for (const refused of [profileMutations, packageMutations]) {
+      assert.deepEqual(refused, ["POST", "PUT", "DELETE", "PATCH"].map((m) => [m, 405]));
+    }
+  });
+
   await autonomyChecks(handleApi);
 } finally {
   fs.rmSync(homeDir, { recursive: true, force: true });

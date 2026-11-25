@@ -87,6 +87,11 @@ try {
     ["GET", "/api/auth"],
     // Read-only, but it shows what autonomous runs are doing: never part of the /api/health exemption.
     ["GET", "/api/autonomy"],
+    // Read-only, but reveals the installation's configuration: refused without a token too.
+    ["GET", "/api/profiles"],
+    ["POST", "/api/profiles"],
+    ["GET", "/api/packages"],
+    ["POST", "/api/packages"],
     ["POST", "/api/autonomy"],
   ] satisfies Array<[string, string]>;
 

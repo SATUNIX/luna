@@ -128,6 +128,35 @@ function isSkills(value: unknown): value is Wire.SkillsResponse {
 	return isRecord(value) && isArrayOf(value.skills, isKitEntry);
 }
 
+function isProfileSummary(value: unknown): value is Wire.ProfileSummary {
+	return (
+		isRecord(value) &&
+		typeof value.name === "string" &&
+		typeof value.description === "string" &&
+		(value.source === "shipped" || value.source === "user") &&
+		(value.base === undefined || typeof value.base === "string") &&
+		typeof value.extensions === "number"
+	);
+}
+
+function isProfiles(value: unknown): value is Wire.ProfilesResponse {
+	return isRecord(value) && isArrayOf(value.profiles, isProfileSummary);
+}
+
+function isPackageSummary(value: unknown): value is Wire.PackageSummary {
+	return (
+		isRecord(value) &&
+		typeof value.source === "string" &&
+		(value.extensions === null || typeof value.extensions === "number") &&
+		(value.skills === null || typeof value.skills === "number") &&
+		(value.prompts === null || typeof value.prompts === "number")
+	);
+}
+
+function isPackages(value: unknown): value is Wire.PackagesResponse {
+	return isRecord(value) && isArrayOf(value.packages, isPackageSummary);
+}
+
 function isCwds(value: unknown): value is Wire.CwdsResponse {
 	return isRecord(value) && isArrayOf(value.cwds, isString);
 }
@@ -268,6 +297,8 @@ export const api = {
 	models: (): Promise<Wire.ModelsResponse> => request("GET", "/api/models", isModels),
 	cwds: (): Promise<Wire.CwdsResponse> => request("GET", "/api/cwds", isCwds),
 	autonomy: (): Promise<Wire.AutonomyResponse> => request("GET", "/api/autonomy", isAutonomy),
+	profiles: (): Promise<Wire.ProfilesResponse> => request("GET", "/api/profiles", isProfiles),
+	packages: (): Promise<Wire.PackagesResponse> => request("GET", "/api/packages", isPackages),
 
 	agents: (): Promise<Wire.AgentsResponse> => request("GET", "/api/agents", isAgents),
 	agent: (name: string, source?: string | null): Promise<Wire.AgentResponse> =>

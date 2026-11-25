@@ -22,6 +22,12 @@ import {
 	type AgentRecord,
 } from "./agentstore.ts";
 import { configInfo, listPrompts, listSkills, type KitEntry } from "./configinfo.ts";
+import {
+	listPackages,
+	listProfiles,
+	type PackagesResponse,
+	type ProfilesResponse,
+} from "./profiles.ts";
 import { listModels } from "./models.ts";
 import { listCwds, listSessions } from "./sessions.ts";
 import {
@@ -456,6 +462,18 @@ export async function handleApi(
 			return sendJson(res, 200, { cwds: listCwds() } satisfies CwdsResponse), true;
 		}
 
+		// Read-only: which profiles and pi packages exist. Switching a profile or adding a package
+		// stays a deliberate operator command, so the console cannot change the agent's configuration.
+		if (section === "profiles" && parts.length === 2) {
+			if (method !== "GET")
+				return sendJson(res, 405, { error: "the profiles view is read-only" }, { Allow: "GET" }), true;
+			return sendJson(res, 200, { profiles: listProfiles() } satisfies ProfilesResponse), true;
+		}
+		if (section === "packages" && parts.length === 2) {
+			if (method !== "GET")
+				return sendJson(res, 405, { error: "the packages view is read-only" }, { Allow: "GET" }), true;
+			return sendJson(res, 200, { packages: listPackages() } satisfies PackagesResponse), true;
+		}
 		// Read-only: what the autonomy supervisors record under the state home. No run control.
 		if (section === "autonomy" && parts.length === 2) {
 			if (method !== "GET")

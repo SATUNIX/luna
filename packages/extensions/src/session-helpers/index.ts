@@ -875,11 +875,13 @@ interface ModelIdentity {
  * command line, the scoped-model list or settings (pi's `buildSessionOptions` in
  * `@earendil-works/pi-coding-agent/dist/main.js`), not from the model this process was started with. When the pane was
  * started without `--model`, a `/new` can therefore land on another model. Remember the first
- * model of this process and put it back when a `/new` session comes up on a different one.
+ * model and thinking level of this process and put them back when a `/new` session comes up on
+ * another model, or on the same model with a reset thinking level.
  * Module state survives the session replacement (the module is imported once per process); a
  * `/reload` that re-imports it starts a fresh baseline on the session it reloads.
  */
 let pinnedModel: ModelIdentity | undefined;
+let pinnedThinking: NonNullable<ExtensionContext["thinkingLevel"]> | undefined;
 
 const modelIdentity = (model: unknown): ModelIdentity | undefined => {
   if (!isRecord(model)) return undefined;
@@ -890,23 +892,38 @@ const modelIdentity = (model: unknown): ModelIdentity | undefined => {
   return provider === "unknown" && id === "unknown" ? undefined : { provider, id };
 };
 
-/** Restore the process's first model when a `/new` session starts on a different one. */
+/** Restore the process's first model and thinking level when `/new` starts on another one. */
 async function keepSessionModel(pi: ExtensionAPI, event: unknown, ctx: ExtensionContext): Promise<void> {
   try {
     const current = modelIdentity(ctx.model);
+    const currentThinking = ctx.thinkingLevel;
     const reason = isRecord(event) && typeof event.reason === "string" ? event.reason : "startup";
     if (!pinnedModel) {
       // Only a session that starts this process (or follows a reload of it) sets the pin. A
       // /new that arrives with none (module reloaded mid-process) is not guessed at.
-      if (reason !== "new" && current) pinnedModel = current;
+      if (reason !== "new" && current) {
+        pinnedModel = current;
+        pinnedThinking = currentThinking;
+      }
       return;
     }
     if (reason !== "new" || !current) return;
-    if (current.provider === pinnedModel.provider && current.id === pinnedModel.id) return;
-    const target = ctx.modelRegistry?.find?.(pinnedModel.provider, pinnedModel.id);
-    if (!target) return;
-    if (!(await pi.setModel(target))) return;
-    say(ctx, `Kept the model this session started with, ${pinnedModel.provider}/${pinnedModel.id}, across /new (pi had switched to ${current.provider}/${current.id}).`, "info");
+    let restoredModel = false;
+    if (current.provider !== pinnedModel.provider || current.id !== pinnedModel.id) {
+      const target = ctx.modelRegistry?.find?.(pinnedModel.provider, pinnedModel.id);
+      if (target && (await pi.setModel(target))) restoredModel = true;
+    }
+    // setModel recomputes thinking from model or settings defaults, and a fresh session can
+    // reset it even when it keeps the model. Restore the level the process started with too.
+    const restoredThinking = Boolean(pinnedThinking && currentThinking && pinnedThinking !== currentThinking);
+    if (restoredThinking && pinnedThinking) pi.setThinkingLevel(pinnedThinking);
+    if (!restoredModel && !restoredThinking) return;
+    if (restoredModel) {
+      const thinking = restoredThinking ? ` and thinking ${currentThinking}` : "";
+      say(ctx, `Kept the model this session started with, ${pinnedModel.provider}/${pinnedModel.id}, across /new (pi had switched to ${current.provider}/${current.id}${thinking}).`, "info");
+    } else {
+      say(ctx, `Kept the thinking level this session started with, ${pinnedThinking}, across /new (pi had reset it to ${currentThinking}).`, "info");
+    }
   } catch {
     // Keeping the model must never break session start.
   }

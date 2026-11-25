@@ -111,9 +111,9 @@ function isProfiles(value) {
 function isPackageSummary(value) {
     return (isRecord(value) &&
         typeof value.source === "string" &&
-        typeof value.extensions === "number" &&
-        typeof value.skills === "number" &&
-        typeof value.prompts === "number");
+        (value.extensions === null || typeof value.extensions === "number") &&
+        (value.skills === null || typeof value.skills === "number") &&
+        (value.prompts === null || typeof value.prompts === "number"));
 }
 function isPackages(value) {
     return isRecord(value) && isArrayOf(value.packages, isPackageSummary);

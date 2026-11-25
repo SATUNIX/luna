@@ -408,7 +408,11 @@ try {
   );
   fs.writeFileSync(
     path.join(agentDir, "settings.json"),
-    JSON.stringify({ packages: ["git:github.com/example/one", { source: "git:github.com/example/two", skills: ["s"], prompts: ["p"] }] }),
+    JSON.stringify({ packages: [
+      "git:github.com/example/one",
+      { source: "git:github.com/example/two", skills: ["s"], prompts: ["p"] },
+      { source: "git:github.com/example/three", extensions: ["a", "b"] },
+    ] }),
   );
   const profilesRes = fakeRes();
   await handleApi({ method: "GET", url: "/api/profiles", on() {} }, profilesRes, { pathname: "/api/profiles" });
@@ -430,11 +434,12 @@ try {
   check("GET /api/packages answers the registered packages with their filter counts", () => {
     assert.equal(packagesRes.statusCode, 200);
     const { packages } = JSON.parse(responseBody(packagesRes)) as {
-      packages: Array<{ source: string; extensions: number; skills: number; prompts: number }>;
+      packages: Array<{ source: string; extensions: number | null; skills: number | null; prompts: number | null }>;
     };
     assert.deepEqual(packages, [
-      { source: "git:github.com/example/one", extensions: 0, skills: 0, prompts: 0 },
-      { source: "git:github.com/example/two", extensions: 0, skills: 1, prompts: 1 },
+      { source: "git:github.com/example/one", extensions: null, skills: null, prompts: null },
+      { source: "git:github.com/example/two", extensions: null, skills: 1, prompts: 1 },
+      { source: "git:github.com/example/three", extensions: 2, skills: null, prompts: null }
     ]);
   });
 

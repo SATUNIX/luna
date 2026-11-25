@@ -113,9 +113,10 @@ export interface ProfilesResponse {
 /** GET /api/packages: the pi packages settings.json registers, read-only. */
 export interface PackageSummary {
 	readonly source: string;
-	readonly extensions: number;
-	readonly skills: number;
-	readonly prompts: number;
+	/** Filter list length; null means the entry has no filter, so every extension loads. */
+	readonly extensions: number | null;
+	readonly skills: number | null;
+	readonly prompts: number | null;
 }
 export interface PackagesResponse {
 	readonly packages: readonly PackageSummary[];

@@ -30,9 +30,10 @@ export interface ProfileSummary {
 /** One registered pi package as the view lists it (pi's settings.json `packages` entry). */
 export interface PackageSummary {
 	source: string;
-	extensions: number;
-	skills: number;
-	prompts: number;
+	/** Filter list length; null when the entry has no filter, so pi loads every extension. */
+	extensions: number | null;
+	skills: number | null;
+	prompts: number | null;
 }
 
 export interface ProfilesResponse { readonly profiles: ProfileSummary[] }
@@ -107,16 +108,16 @@ export function listPackages(): PackageSummary[] {
 	const packages: PackageSummary[] = [];
 	for (const entry of settings.packages ?? []) {
 		if (typeof entry === "string") {
-			packages.push({ source: entry, extensions: 0, skills: 0, prompts: 0 });
+			packages.push({ source: entry, extensions: null, skills: null, prompts: null });
 			continue;
 		}
 		const parsed = lenient(PackageEntrySchema).parse(entry);
 		if (!parsed?.source) continue;
 		packages.push({
 			source: parsed.source,
-			extensions: parsed.extensions?.length ?? 0,
-			skills: parsed.skills?.length ?? 0,
-			prompts: parsed.prompts?.length ?? 0,
+			extensions: parsed.extensions?.length ?? null,
+			skills: parsed.skills?.length ?? null,
+			prompts: parsed.prompts?.length ?? null,
 		});
 	}
 	return packages;

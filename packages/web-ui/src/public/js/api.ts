@@ -147,9 +147,9 @@ function isPackageSummary(value: unknown): value is Wire.PackageSummary {
 	return (
 		isRecord(value) &&
 		typeof value.source === "string" &&
-		typeof value.extensions === "number" &&
-		typeof value.skills === "number" &&
-		typeof value.prompts === "number"
+		(value.extensions === null || typeof value.extensions === "number") &&
+		(value.skills === null || typeof value.skills === "number") &&
+		(value.prompts === null || typeof value.prompts === "number")
 	);
 }
 

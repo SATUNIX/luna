@@ -1,7 +1,7 @@
 {
   "$schema": "../../../core/schema/extension.schema.json",
   "name": "session-helpers",
-  "summary": "Session-control helpers: /clear (new session, optional --handoff note), all-or-nothing /profile switching (snapshots every config file, verifies marker, extension list and firewall, rolls back byte-for-byte on any failure, /profile status prints the effective configuration; /profile create writes a user profile), /packages (your own pi packages: search and review here; add and remove only at a terminal, which pins version and sha512 with scripts off), /compaction status and toggles backed by the real effective compaction state (published on globalThis, warned once per session), and a lean-ctx binary preflight.",
+  "summary": "Session-control helpers: /clear (new session, optional --handoff note; keeps the model and thinking level the session started with across a pi /new), all-or-nothing /profile switching (snapshots every config file, verifies marker, extension list and firewall, rolls back byte-for-byte on any failure, /profile status prints the effective configuration; /profile create writes a user profile), /packages (your own pi packages: search and review here; add and remove only at a terminal, which pins version and sha512 with scripts off), /compaction status and toggles backed by the real effective compaction state (published on globalThis, warned once per session), and a lean-ctx binary preflight.",
   "category": "ui",
   "entry": "index.ts",
   "hooks": ["session_start", "model_select", "before_agent_start", "session_shutdown"],

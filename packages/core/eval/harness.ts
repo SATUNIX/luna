@@ -290,6 +290,7 @@ export interface FakePiApi {
   sendMessage: (message: SteerMessage, opts?: SteerOptions) => unknown;
   exec: (command: string, args: string[], execOptions?: ExecOptions) => Promise<FakeExecResult>;
   setModel: (model: SelectedModel) => Promise<boolean>;
+  setThinkingLevel: (level: string) => void;
 }
 
 /** A fake pi API and everything extensions registered or sent through it. */
@@ -302,6 +303,7 @@ export interface FakePi {
   shortcuts: Map<string, FakeShortcut>;
   steers: Steer[];
   modelSelections: SelectedModel[];
+  thinkingLevelSelections: string[];
 }
 
 export interface FakePiOptions {
@@ -347,6 +349,7 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
   const steers: Steer[] = [];
   const flags = new Map<string, boolean | string | undefined>();
   const modelSelections: SelectedModel[] = [];
+  const thinkingLevelSelections: string[] = [];
   return {
     api: {
       on: (name, handler) => handlers.set(name, handler),
@@ -378,6 +381,9 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
         modelSelections.push(model);
         return model?._setModelResult !== false;
       },
+      setThinkingLevel: (level) => {
+        thinkingLevelSelections.push(level);
+      },
     },
     handlers,
     flags,
@@ -386,6 +392,7 @@ export function fakePi(options: FakePiOptions = {}): FakePi {
     shortcuts,
     steers,
     modelSelections,
+    thinkingLevelSelections,
   };
 }
 

@@ -291,7 +291,7 @@ weakening set match `packages/kit/profiles/*.json` (`firewall.mode` is `auto`).
 ## Session commands
 
 `/clear` starts a new session after a confirm; `/clear --handoff` first appends the last asks (redacted for
-secrets, so the file still holds prompt text) and tools to `HANDOFF.md`. Without a UI it refuses, as there is nobody to confirm. `/status` prints the Doctor checks below as one line each, ending in the command
+secrets, so the file still holds prompt text) and tools to `HANDOFF.md`. Without a UI it refuses, as there is nobody to confirm. Because pi resolves a new session's model again (the `--model` flag, the scoped-model list, or settings), a `/new` or `/clear` on a pane started without `--model` can come up on a different model with thinking reset; the `session_start` handler pins the model and thinking level this process started with and restores them, so the session keeps them (F-14). `/status` prints the Doctor checks below as one line each, ending in the command
 that gives more detail (`tests/session-commands-smoke.ts`). Neither compacts: `/compact` shrinks the
 current context and keeps the thread.
 

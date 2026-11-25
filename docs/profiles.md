@@ -49,6 +49,8 @@ that removes `tool-firewall`, `secret-guard` or `protected-paths` stops the swit
 another extension every profile requires (`delegation-guard`, `effort`, `session-helpers`) is
 ignored with a warning (`tests/profile-safety-smoke.ts`).
 
+The `/menu` Profile ▸ Profiles & packages pages edit the same file one extension, skill or prompt at a time. They use the Overrides API, so a mandatory protection refuses to switch off and the next `/profile` switch applies the list in the usual transaction (`tests/control-center-smoke.ts`).
+
 Those three are the mandatory protections. Every shipped profile loads `tool-firewall` and
 `protected-paths`; `secret-guard` loads in `balanced` and `long-horizon`, and each other profile
 records why it goes without it in `packages/core/lib/protection-coverage.ts`. `npm run profile:check`

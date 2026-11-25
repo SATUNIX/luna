@@ -27,6 +27,7 @@
   ],
   "runtime": {
     "nodeBuiltins": [
+      "crypto",
       "fs",
       "os",
       "path",

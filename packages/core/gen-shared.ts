@@ -29,6 +29,7 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/autonomous-loop/shared/safe-fs.ts",
     "packages/extensions/src/branch-lab/shared/safe-fs.ts",
     "packages/extensions/src/conductor/shared/safe-fs.ts",
+    "packages/extensions/src/control-center/shared/safe-fs.ts",
     "packages/extensions/src/context-sieve/shared/safe-fs.ts",
     "packages/extensions/src/goal-core/shared/safe-fs.ts",
     "packages/extensions/src/guidelines/shared/safe-fs.ts",

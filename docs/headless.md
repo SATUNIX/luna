@@ -62,8 +62,9 @@ nothing would enforce it:
 - the installed kit entry in `settings.json` does not load `goal-core`, whatever left it out (a
   profile, a [user profile](profiles.md#your-own-profiles) on blank, an override or a hand edit).
 
-The install that counts is the project's when `.pi/.pi-kit.json` exists in the current directory,
-and otherwise the global one. A kit entry with no extension filter loads everything. The filter is
+The install that counts is the project's when `.pi/.pi-kit.json` exists in the current directory, the entry is
+not an `autoload: false` delta and pi's trust store (`trust.json`) records the project as trusted; otherwise the
+global install must load goal-core too. An empty `extensions` list loads nothing. A kit entry with no extension filter loads everything. The filter is
 read in pi's order (includes, `!` excludes, `+` force-includes, `-` force-excludes). A glob that might
 reach goal-core counts as not loading it, because `luna` cannot run pi's matcher
 (`tests/luna-cli-smoke.ts`).

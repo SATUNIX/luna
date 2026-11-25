@@ -247,9 +247,46 @@ async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
  */
 export function goalCoreProblem(cwd: string, agentDir: string): string | null {
   const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
-  const project = fs.existsSync(projectMarker);
-  const markerFile = project ? projectMarker : path.join(agentDir, ".pi-kit.json");
-  const settingsFile = project ? path.join(cwd, ".pi", "settings.json") : path.join(agentDir, "settings.json");
+  if (fs.existsSync(projectMarker)) {
+    const project = installProblem(projectMarker, path.join(cwd, ".pi", "settings.json"));
+    // pi uses a project entry as the whole set only when the project is trusted and the entry is not
+    // an `autoload: false` delta over the global one (package-manager.js dedupePackages and
+    // assertProjectTrustedForScope). Trust is read from pi's store; anything but an explicit yes
+    // (including a default or a prompt pi would answer at run time) leaves the global install in force too.
+    if (projectIsSoleAuthority(cwd, agentDir, projectMarker, path.join(cwd, ".pi", "settings.json"))) return project;
+    const global = installProblem(path.join(agentDir, ".pi-kit.json"), path.join(agentDir, "settings.json"));
+    return global;
+  }
+  return installProblem(path.join(agentDir, ".pi-kit.json"), path.join(agentDir, "settings.json"));
+}
+
+/** Whether pi would use the project's kit entry as the full set: explicitly trusted and not an autoload:false delta. */
+function projectIsSoleAuthority(cwd: string, agentDir: string, markerFile: string, settingsFile: string): boolean {
+  try {
+    const marker = readKitMarker(markerFile);
+    if (!marker?.kitSource) return false;
+    const settings = readSettings(settingsFile);
+    const at = findPackageEntry(settings, marker.kitSource, settingsFile);
+    const entry = at >= 0 ? settings.packages?.[at] : undefined;
+    if (typeof entry === "object" && entry.autoload === false) return false;
+  } catch { return false; }
+  let trust: unknown;
+  try { trust = parseJson(fs.readFileSync(path.join(agentDir, "trust.json"), "utf8")); } catch { return false; }
+  if (!isRecord(trust)) return false;
+  const seen = new Set<string>();
+  for (const start of [path.resolve(cwd), (() => { try { return fs.realpathSync(cwd); } catch { return path.resolve(cwd); } })()]) {
+    for (let dir = start; !seen.has(dir); dir = path.dirname(dir)) {
+      seen.add(dir);
+      const decision = trust[dir];
+      if (typeof decision === "boolean") return decision;
+      if (path.dirname(dir) === dir) break;
+    }
+  }
+  return false;
+}
+
+/** The problem with one install (marker plus the settings.json holding its kit entry), or null when it loads goal-core. */
+function installProblem(markerFile: string, settingsFile: string): string | null {
   const marker = readKitMarker(markerFile);
   if (!marker?.kitSource) return `no Luna install was found (${markerFile}), so nothing would enforce it`;
   let settings: ReturnType<typeof readSettings>;
@@ -276,7 +313,7 @@ export function goalCoreSelected(patterns: readonly string[]): boolean {
   const exact = (p: string) => /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p);
   const of = (prefix: string) => patterns.filter((p) => p.startsWith(prefix)).map((p) => norm(p.slice(1)));
   const includes = patterns.filter((p) => !/^[!+-]/.test(p)).map(norm);
-  let selected: boolean | "unknown" = includes.length === 0 ? true : includes.some(hits) ? true : includes.some(glob) ? "unknown" : false;
+  let selected: boolean | "unknown" = patterns.length === 0 ? false : includes.length === 0 ? true : includes.some(hits) ? true : includes.some(glob) ? "unknown" : false;
   const excludes = of("!");
   if (excludes.some(hits)) selected = false;
   else if (selected === true && excludes.some(glob)) selected = "unknown";

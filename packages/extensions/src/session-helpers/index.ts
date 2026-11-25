@@ -25,6 +25,7 @@ import { appendFileSafe } from "./shared/safe-fs.ts";
 import { redact } from "./shared/redact.ts";
 import { nodeRuntime } from "./shared/node-runtime.ts";
 import { RENAMED_EXTENSIONS, migrateStoredExtension, migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
+import { BLANK, createUserProfile, listUserProfiles, loadUserProfile, userProfilesDir } from "./shared/user-profile.ts";
 
 // Self-containment rule: import only node:* builtins and typebox peer.
 // No sibling imports. No toolchain-lib imports. See CONTRIBUTING.md.
@@ -214,9 +215,44 @@ interface ProfileInfo {
   description: string;
 }
 
+function shippedProfilesDir(kitRoot: string): string {
+  return resolveKitLayout(kitRoot)?.profilesDir ?? path.join(kitRoot, "profiles");
+}
+
+function shippedProfileNames(kitRoot: string): string[] {
+  try {
+    return fs.readdirSync(shippedProfilesDir(kitRoot)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A profile's definition: the shipped file, or the operator's user profile (<agent dir>/pi-kit/
+ * profiles/<name>.json) resolved against its base by shared/user-profile.ts, the same code the
+ * installer uses. `problems` when a user profile exists and is refused; null when there is neither.
+ */
+export function profileDefinition(kitRoot: string, name: string): { def: unknown; user: boolean } | { problems: string[] } | null {
+  const dir = shippedProfilesDir(kitRoot);
+  const shipped = shippedProfileNames(kitRoot);
+  if (shipped.includes(name)) return { def: readJsonFile(path.join(dir, `${name}.json`)), user: false };
+  const found = loadUserProfile(userProfilesDir(agentDir()), name, shipped, (base) => readJsonFile(path.join(dir, `${base}.json`)));
+  if (found === null) return null;
+  return found.ok ? { def: found.def, user: true } : { problems: found.problems };
+}
+
 export function listProfiles(kitRoot: string): ProfileInfo[] {
-  const dir = resolveKitLayout(kitRoot)?.profilesDir ?? path.join(kitRoot, "profiles");
-  return fs
+  const dir = shippedProfilesDir(kitRoot);
+  const shipped = shippedProfileNames(kitRoot);
+  const own = listUserProfiles(userProfilesDir(agentDir()))
+    .filter((name) => !shipped.includes(name))
+    .map((name) => {
+      const found = profileDefinition(kitRoot, name);
+      const text = found && "def" in found ? prop(found.def, "description") : undefined;
+      const description = found && "def" in found ? (typeof text === "string" ? text : "") : "refused: run /profile <name> to see why";
+      return { name, description: `(yours) ${description}` };
+    });
+  return [...fs
     .readdirSync(dir)
     .filter((f) => f.endsWith(".json"))
     .map((f) => {
@@ -230,7 +266,7 @@ export function listProfiles(kitRoot: string): ProfileInfo[] {
       }
       return { name, description };
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name)), ...own];
 }
 
 // --- actual loaded set vs profiles ------------------------------------------
@@ -410,8 +446,8 @@ export function hasOverridesFile(): boolean {
 
 // The in-package extensions a profile would load once overrides are applied.
 export function profileKitExtensions(kitRoot: string, profile: string): string[] {
-  const layout = resolveKitLayout(kitRoot);
-  const def = layout ? readJsonFile(path.join(layout.profilesDir, `${profile}.json`)) : null;
+  const found = profileDefinition(kitRoot, profile);
+  const def = found && "def" in found ? found.def : null;
   const o = readOverrides();
   const rawInclude = prop(def, "include");
   const include: string[] = Array.isArray(rawInclude) ? rawInclude.filter((n): n is string => typeof n === "string") : [];
@@ -695,7 +731,12 @@ interface SwitchRequest {
 }
 
 async function runSwitch(pi: ExtensionAPI, c: ExtensionContext, req: SwitchRequest): Promise<SwitchOutcome> {
-  const def = readJsonFile(path.join(req.layout.profilesDir, `${req.target}.json`));
+  const found = profileDefinition(req.kitRoot, req.target);
+  if (found === null || "problems" in found) {
+    const why = found === null ? "it no longer exists" : found.problems.join("; ");
+    return { ok: false, stage: "install", message: `profile: refusing to switch to "${req.target}": ${why}. Nothing was changed.`, warnings: [], rolledBack: false, rollbackErrors: [], backupDir: null };
+  }
+  const def = found.def;
   const fw = firewallExpectation(def);
   const rawSecurityLevel = prop(def, "securityLevel");
   const securityLevel = rawSecurityLevel === undefined ? (req.target === "engagement" ? "guarded" : "balanced") : rawSecurityLevel;
@@ -1064,13 +1105,55 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // /packages: the operator's own pi packages (packages/core/packages.ts, docs/packages.md). A slash
+  // command only, and no tool lets the model add or remove a package. Search, review and list run here;
+  // an add or a remove is only shown: packages.ts asks for it at a real terminal, outside pi.
+  pi.registerCommand("packages", {
+    description: "Your own pi packages, outside the kit's reviewed companions: `/packages search [words]`, `/packages review <name>[@version]`, `/packages add <name>[@version]` and `/packages remove <name>` (show the review and the terminal command that asks you, pins the exact version and integrity, installs with scripts off; nothing changes from here), `/packages list`.",
+    getArgumentCompletions: (prefix: string) => ["search", "review", "add", "remove", "list"].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v })),
+    handler: async (args, ctx) => {
+      const c = ctx;
+      const kitRoot = findKitRoot(c.cwd ?? process.cwd(), (message) => say(c, message, "warning"));
+      const script = kitRoot ? ["packages.ts", "packages.js"].map((n) => path.join(kitRoot, "packages", "core", n)).find((f) => fs.existsSync(f)) : undefined;
+      if (!kitRoot || !script) {
+        say(c, "packages: could not locate the kit's packages/core/packages.ts. Set PI_KIT_ROOT to the kit path, or reinstall it (docs/INSTALL.md)", "error");
+        return;
+      }
+      const run = (argv: string[]) => pi.exec(nodeBinary(), [script, ...argv], { cwd: kitRoot, timeout: 300_000 });
+      const words = args.trim().split(/\s+/).filter(Boolean);
+      const [verb = "search", ...rest] = words;
+      const show = (r: { stdout: string; stderr: string; code: number }) => {
+        const out = `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}`.trim();
+        say(c, `packages: ${out || "(no output)"}`, r.code === 0 ? "info" : "error");
+      };
+      if (verb === "search" || verb === "list" || (verb === "review" && rest.length === 1)) {
+        show(await run([verb, ...rest]));
+        return;
+      }
+      if ((verb !== "add" && verb !== "remove") || rest.length !== 1 || !rest[0]) {
+        say(c, "packages: usage: /packages search [words] | review <name>[@version] | add <name>[@version] | remove <name> | list. Nothing was changed.", "error");
+        return;
+      }
+      // An add or a remove is asked at a real terminal by packages.ts itself (a TTY prompt), which pi's
+      // TUI cannot give a child process: here it shows the review and the command to run, and changes nothing.
+      const command = `node ${script} ${verb} ${rest[0]}`;
+      if (verb === "add") {
+        const reviewed = await run(["review", rest[0]]);
+        if (reviewed.code !== 0) { show(reviewed); return; }
+        say(c, `packages: ${reviewed.stdout.trim().split("\n").filter((l) => !l.startsWith("To add exactly this")).join("\n")}\n\nTo add it, run this in your own terminal (outside pi); it asks you there, then /reload:\n  ${command}\nNothing was changed.`, "info");
+        return;
+      }
+      say(c, `packages: to remove ${rest[0]}, run this in your own terminal (outside pi); it asks you there:\n  ${command}\nNothing was changed.`, "info");
+    },
+  });
+
   pi.registerCommand("profile", {
     description:
-      "Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`. Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart.",
+      "Switch the Luna profile in place, all-or-nothing: `/profile` picker, `/profile <name>`, `/profile status` (effective configuration), `/profile list`, `/profile create <name> <base|blank>` (your own profile in pi-kit/profiles/). Rewrites the kit's settings entry (keeping overrides.json customisations), verifies the result, rolls back on any failure, then reloads - no restart.",
     getArgumentCompletions: (prefix: string) => {
       const kitRoot = findKitRoot();
       const names = kitRoot ? listProfiles(kitRoot).map((p) => p.name) : [];
-      return ["status", "list", ...names].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v }));
+      return ["status", "list", "create", ...names].filter((v) => v.startsWith(prefix.trim())).map((v) => ({ value: v, label: v }));
     },
     handler: async (args, ctx) => {
       const c = ctx;
@@ -1112,6 +1195,22 @@ export default function (pi: ExtensionAPI) {
 
       // Arguments are validated before anything can change: one word, or nothing.
       const words = requested.split(/\s+/).filter(Boolean);
+      // `/profile create <name> <base|blank>`: write a user profile; it changes nothing until switched to.
+      if (words[0] === "create") {
+        const [, name, base] = words;
+        const bases = shippedProfileNames(kitRoot);
+        if (words.length !== 3 || !name || !base) {
+          say(c, `profile: usage: /profile create <name> <${[...bases, BLANK].join("|")}>. Nothing was changed.`, "error");
+          return;
+        }
+        const made = createUserProfile(userProfilesDir(agentDir()), name, base, bases);
+        if (!made.ok) {
+          say(c, `profile: could not create "${name}": ${made.problem}. Nothing was changed.`, "error");
+          return;
+        }
+        say(c, `profile: created ${made.file} from ${base}. Edit its extensions.add and extensions.remove lists, then switch with /profile ${name}.`, "info");
+        return;
+      }
       if (words.length > 1) {
         say(c, `profile: expected one argument, got ${words.length}: "${requested}". Usage: /profile [status|list|<${profiles.map((p) => p.name).join("|")}>]. Nothing was changed.`, "error");
         return;
@@ -1157,7 +1256,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       // A switch that lowers the security level in force is a weakening (security-guard.ts).
-      const levelOf = (name: string | null | undefined) => (name ? prop(readJsonFile(path.join(layout.profilesDir, `${name}.json`)), "securityLevel") : undefined);
+      const levelOf = (name: string | null | undefined) => {
+        const found = name ? profileDefinition(kitRoot, name) : null;
+        return found && "def" in found ? prop(found.def, "securityLevel") : undefined;
+      };
       const lowering = securityLowering(securityFilePath(agentDir()), levelOf(current ?? marker.profile), levelOf(target));
       if (lowering) {
         const answer = await confirmLowering(c, target, lowering);

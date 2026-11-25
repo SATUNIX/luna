@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord, parseJson } from "./guard.ts";
-import { globalAgentDir } from "./settings.ts";
+import { findPackageEntry, globalAgentDir, readKitMarker, readSettings } from "./settings.ts";
 import { readOverrides } from "./profiles.ts";
 import { parseDuration } from "../shared/ceiling.ts";
 import { redact } from "../shared/redact.ts";
@@ -227,6 +227,8 @@ export interface RunOptions {
   spawnDeps?: PiSpawnDeps;
   /** Injected for tests; defaults to `spawn`. */
   spawn?: typeof spawn;
+  /** The directory whose project install (.pi/.pi-kit.json) counts; defaults to process.cwd(). */
+  cwd?: string;
 }
 
 async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
@@ -234,6 +236,90 @@ async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
   stream.setEncoding("utf8");
   for await (const chunk of stream) text += String(chunk);
   return text;
+}
+
+/**
+ * Whether the Luna install in force loads goal-core, the extension that enforces the ceiling, or why
+ * that cannot be shown. The install is the project's when `<cwd>/.pi/.pi-kit.json` exists, else the
+ * global one; its kit entry in settings.json is what pi loads, so a profile, an override, a user
+ * profile or a hand edit that drops goal-core all count. A kit entry with no extension filter loads
+ * everything. tests/luna-cli-smoke.ts pins it.
+ */
+export function goalCoreProblem(cwd: string, agentDir: string): string | null {
+  const projectMarker = path.join(cwd, ".pi", ".pi-kit.json");
+  if (fs.existsSync(projectMarker)) {
+    const project = installProblem(projectMarker, path.join(cwd, ".pi", "settings.json"));
+    // pi uses a project entry as the whole set only when the project is trusted and the entry is not
+    // an `autoload: false` delta over the global one (package-manager.js dedupePackages and
+    // assertProjectTrustedForScope). Trust is read from pi's store; anything but an explicit yes
+    // (including a default or a prompt pi would answer at run time) leaves the global install in force too.
+    if (projectIsSoleAuthority(cwd, agentDir, projectMarker, path.join(cwd, ".pi", "settings.json"))) return project;
+    const global = installProblem(path.join(agentDir, ".pi-kit.json"), path.join(agentDir, "settings.json"));
+    return global;
+  }
+  return installProblem(path.join(agentDir, ".pi-kit.json"), path.join(agentDir, "settings.json"));
+}
+
+/** Whether pi would use the project's kit entry as the full set: explicitly trusted and not an autoload:false delta. */
+function projectIsSoleAuthority(cwd: string, agentDir: string, markerFile: string, settingsFile: string): boolean {
+  try {
+    const marker = readKitMarker(markerFile);
+    if (!marker?.kitSource) return false;
+    const settings = readSettings(settingsFile);
+    const at = findPackageEntry(settings, marker.kitSource, settingsFile);
+    const entry = at >= 0 ? settings.packages?.[at] : undefined;
+    if (typeof entry === "object" && entry.autoload === false) return false;
+  } catch { return false; }
+  let trust: unknown;
+  try { trust = parseJson(fs.readFileSync(path.join(agentDir, "trust.json"), "utf8")); } catch { return false; }
+  if (!isRecord(trust)) return false;
+  const seen = new Set<string>();
+  for (const start of [path.resolve(cwd), (() => { try { return fs.realpathSync(cwd); } catch { return path.resolve(cwd); } })()]) {
+    for (let dir = start; !seen.has(dir); dir = path.dirname(dir)) {
+      seen.add(dir);
+      const decision = trust[dir];
+      if (typeof decision === "boolean") return decision;
+      if (path.dirname(dir) === dir) break;
+    }
+  }
+  return false;
+}
+
+/** The problem with one install (marker plus the settings.json holding its kit entry), or null when it loads goal-core. */
+function installProblem(markerFile: string, settingsFile: string): string | null {
+  const marker = readKitMarker(markerFile);
+  if (!marker?.kitSource) return `no Luna install was found (${markerFile}), so nothing would enforce it`;
+  let settings: ReturnType<typeof readSettings>;
+  try { settings = readSettings(settingsFile); } catch { return `${settingsFile} cannot be read, so it cannot be shown that goal-core, which enforces it, is loaded`; }
+  const at = findPackageEntry(settings, marker.kitSource, settingsFile);
+  const entry = at >= 0 ? settings.packages?.[at] : undefined;
+  if (entry === undefined) return `${settingsFile} has no Luna package entry, so goal-core, which enforces it, is not loaded`;
+  if (typeof entry === "string" || entry.extensions === undefined) return null;
+  const loaded = goalCoreSelected(entry.extensions);
+  return loaded ? null : `the installed profile does not load goal-core, which enforces it (${settingsFile}); switch to a profile that loads it or drop the limits`;
+}
+
+/**
+ * Whether pi's filter (package-manager.js applyPatterns: plain includes, then `!` excludes, then `+`
+ * exact force-includes, then `-` exact force-excludes) leaves goal-core's entry file loaded. A pattern
+ * with a glob character that could reach it cannot be decided without pi's matcher, so it counts
+ * against: the answer is true only when goal-core is provably in the resolved set.
+ */
+export function goalCoreSelected(patterns: readonly string[]): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+  const glob = (p: string) => /[*?[\]{}]/.test(p);
+  // A plain or `!` pattern also matches by base name (minimatch(name, pattern) in pi).
+  const hits = (p: string) => /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p) || /^index\.(?:ts|js)$/.test(p);
+  const exact = (p: string) => /(?:^|\/)goal-core\/index\.(?:ts|js)$/.test(p);
+  const of = (prefix: string) => patterns.filter((p) => p.startsWith(prefix)).map((p) => norm(p.slice(1)));
+  const includes = patterns.filter((p) => !/^[!+-]/.test(p)).map(norm);
+  let selected: boolean | "unknown" = patterns.length === 0 ? false : includes.length === 0 ? true : includes.some(hits) ? true : includes.some(glob) ? "unknown" : false;
+  const excludes = of("!");
+  if (excludes.some(hits)) selected = false;
+  else if (selected === true && excludes.some(glob)) selected = "unknown";
+  if (of("+").some(exact)) selected = true;
+  if (of("-").some(exact)) selected = false;
+  return selected === true;
 }
 
 /** Run `luna exec`. Resolves to the process exit code. */
@@ -246,9 +332,18 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
     err.write(`luna exec: ${plan}\n${EXEC_USAGE}\n`);
     return 2;
   }
-  const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"));
-  if (ceilingRequested && ceilingGuardDisabled()) {
-    err.write("luna exec: a ceiling was requested but goal-core, which enforces it, is switched off (overrides.json or the installed extension list); re-enable it or drop the limits\n");
+  // A ceiling from the flags or already in the environment (PI_KIT_CEILING_* set by the caller):
+  // goal-core enforces both, so both need it loaded.
+  const inherited = options.env ?? process.env;
+  const ceilingRequested = Object.keys(plan.env).some((k) => k.startsWith("PI_KIT_CEILING_"))
+    || Object.keys(inherited).some((k) => k.startsWith("PI_KIT_CEILING_") && (inherited[k] ?? "").trim() !== "");
+  if (ceilingRequested && readOverrides(path.join(globalAgentDir(), "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) {
+    err.write("luna exec: a ceiling was requested but overrides.json switches off goal-core, which enforces it; remove it from extensions.remove or drop the limits\n");
+    return 2;
+  }
+  const unenforced = ceilingRequested ? goalCoreProblem(options.cwd ?? process.cwd(), globalAgentDir()) : null;
+  if (unenforced) {
+    err.write(`luna exec: a ceiling was requested but ${unenforced}\n`);
     return 2;
   }
   const args = [...plan.piArgs];
@@ -273,19 +368,6 @@ export async function runExec(argv: readonly string[], options: RunOptions = {})
   if (reader.answer) out.write(reader.answer.endsWith("\n") ? reader.answer : `${reader.answer}\n`);
   if (code === 0 && reader.failed) { err.write("luna exec: the run ended with an error before an answer\n"); return 1; }
   return code;
-}
-
-/**
- * True when the global install does not load goal-core: overrides.json removes it, or the install
- * marker lists the extensions it selected and goal-core is not among them (an --only/custom install).
- * An absent or stale marker is unknown, not a refusal; pendingDisables still handles overrides.
- */
-export function ceilingGuardDisabled(agentDir: string = globalAgentDir()): boolean {
-  if (readOverrides(path.join(agentDir, "pi-kit", "overrides.json")).extensions.remove.includes("goal-core")) return true;
-  let marker: unknown;
-  try { marker = parseJson(fs.readFileSync(path.join(agentDir, ".pi-kit.json"), "utf8")); } catch { return false; }
-  if (!isRecord(marker) || marker.scope === "project" || !Array.isArray(marker.extensions)) return false;
-  return !marker.extensions.includes("goal-core");
 }
 
 /** Extension names in overrides.json `extensions.remove` that the install marker still lists as loaded. */

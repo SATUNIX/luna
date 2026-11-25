@@ -10,6 +10,56 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
 
 ### Added
 
+- **User profiles: review findings closed (DE-119, AUTHORITY).**
+  - `install.ts --profile` and `loadProfileDef` take a name only, so `--profile ../../x` no longer
+    loads any JSON file as a shipped profile.
+  - `luna exec` refuses a ceiling when the installed kit entry does not load goal-core. Before, a blank
+    profile or a removed goal-core silently voided `--max-turns`, `--max-cost` and `--timeout`.
+  - User profiles are read with O_NOFOLLOW: no linked directory, owner and mode checks, one link, a
+    64 KiB cap.
+  - Add, remove and exclude lists take plain names only.
+  - A stub or experimental add is refused at switch time.
+
+  - Round 2:
+    - The goal-core check reads the kit entry in pi's filter order, so a later `-` or `!` exclusion
+      wins and a glob that may reach goal-core counts against it.
+    - A `PI_KIT_CEILING_*` variable already in the environment needs goal-core too.
+    - A FIFO profile file is refused without being opened (O_NONBLOCK as well).
+    - The `pi-kit/` parent check has its own row.
+
+  Verification: `tests/user-profiles-smoke.ts`, `tests/luna-cli-smoke.ts`; 23 guards proven by revert.
+- **`/packages`: search, review, add and remove your own pi packages with a pin ledger (V5-06,
+  AUTHORITY).** Finding: the only way to add a pi package outside Luna's companions was
+  `pi install` by hand, with no record, no pin and lifecycle scripts on. Fix:
+  `packages/core/lib/user-packages.ts`, `packages/core/packages.ts` and the `/packages` command
+  (session-helpers):
+  - search and review only read the registry;
+  - an add shows install scripts, dependencies, maintainers and age, asks at an interactive root
+    terminal, and pins the exact version and sha512 into `pi-kit/user-packages.json`
+    (`review: user-accepted`);
+  - it refuses a changed pin, a tampered tarball, another origin, a Luna companion or an existing
+    entry before pi runs, then installs at user scope with scripts off and verifies npm's recorded
+    integrity;
+  - `remove` removes only what the ledger recorded.
+
+  No model tool. Add and remove run only in the operator's own terminal: `packages.ts` asks for a
+  typed `yes` and refuses without a TTY, so `--accept`-style flags from a model's shell cannot add a
+  package. `/packages` in pi only searches, reviews and shows the command. npm gets the reviewed
+  registry explicitly. Dependencies are stated as unpinned. A kit companion is never removed, even
+  with a ledger entry. Verification: `tests/user-packages-smoke.ts` (`smoke:user-packages`, in
+  `test:security`), against a local fixture registry.
+
+- **User profiles: your own profile from a shipped base or blank (V5-05, AUTHORITY).** Finding:
+  the only way to change what a profile loads was overrides.json, which applies to every profile.
+  There was no way to keep a named profile of your own. Fix: `<agent dir>/pi-kit/profiles/<name>.json`
+  with `extends` (a shipped profile or `blank`) and add/remove lists, read by
+  `packages/core/shared/user-profile.ts` for both the installer and `/profile`. `/profile create
+  <name> <base|blank>` writes one; `/profile <name>` switches through the existing transaction with
+  rollback. A user profile inherits its base's firewall, security level and settings and cannot set
+  them. One that removes a mandatory protection or a required extension is refused whole, by the
+  installer, by `/profile` and by `profile-check --user`. Verification: `tests/user-profiles-smoke.ts`
+  (`smoke:user-profiles`, in `test:security`).
+
 - **An agent mailbox library (V5-16).** Finding: agents on the machine had no way to message each
   other; the agent-state files report status only. Fix: `packages/core/shared/agent-mailbox.ts`, one
   inbox per agent id beside the agent-state files. The sender and the reader must be the process

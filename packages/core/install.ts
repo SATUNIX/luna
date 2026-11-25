@@ -47,7 +47,9 @@ import { checkInstalledIntegrity, companionInstallEnv, companionPinProblems, piN
 import { applyCompanionFilters, mergePackageBlock, ensureQuietStartup, removeOtherKitEntries, leanCtxBinaryAvailable, globalSettingsPath, globalAgentDir, readSettings, findPackageEntry, writeSettingsAtomic, isKitNpmSource, isKitGitSource, packageEntrySource, readKitMarker, type KitMarker, type PackageFilters } from "./lib/settings.ts";
 import { readDistribution, readRequiredProfileExtensions, isChannel, parseGitSource, gitSourceFor, channelOfGitSource, releaseTags, latestRelease, lsRemoteTags, isLegacyGitSource, isPreviousGitSource, DISTRIBUTION_PATH, type Distribution } from "./lib/distribution.ts";
 import { migrateStoredProfile, renamedProfileMessage } from "./shared/profile-names.ts";
-import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadProfileDef, listProfiles, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
+import { userProfileCoverageProblems } from "./lib/protection-coverage.ts";
+import { isProfileName } from "./shared/user-profile.ts";
+import { readOverrides, readOverridesChecked, reconcileOverrides, writeOverrides, isEmptyOverrides, applyExtensionOverrides, excludedSkills, excludedPrompts, skillFilterPatterns, promptFilterPatterns, captureDrift, overridesPath, writeFirewallConfig, checkFirewallConfig, firewallConfigPath, writeSecurityConfig, checkSecurityConfig, securityConfigPath, kitSkills, kitPrompts, snapshotFiles, restoreSnapshots, loadAnyProfile, listAllProfiles, userProfilesDir, globalGateDrift, applyProfileSettings, ownedSettingKeys, profileSettingsKeys, profileSettingsPath, readProfileSettingsRecord, writeProfileSettingsRecord, type Profile } from "./lib/profiles.ts";
 import { resolve as resolveName } from "./lib/resolve.ts";
 import { isRecord, parseJson } from "./lib/guard.ts";
 import { detectEnvironment, profileChoices, runGuide, snapshotBytes, streamIO, summarizeChanges } from "./lib/install-guide.ts";
@@ -524,10 +526,14 @@ function resolveCommand(name: string): string | null {
 }
 
 // --- Load profile from profiles/<name>.json ---
+// A shipped profile, else the operator's own user profile (<agent dir>/pi-kit/profiles/<name>.json),
+// refused whole when it drops a mandatory protection (lib/profiles.ts loadAnyProfile).
 function loadProfile(name: string): Profile {
-  const p = path.join(PROFILES_DIR, `${name}.json`);
-  if (!fs.existsSync(p)) throw new Error(`[install] ${renamedProfileMessage(name) ?? `Profile not found: ${p}`}`);
-  return loadProfileDef(name, PROFILES_DIR);
+  if (!isProfileName(name)) throw new Error(`[install] Profile not found: ${JSON.stringify(name)} is not a profile name (lower-case letters, digits and -)`);
+  const shipped = path.join(PROFILES_DIR, `${name}.json`);
+  const user = path.join(userProfilesDir(), `${name}.json`);
+  if (!fs.existsSync(shipped) && !fs.existsSync(user)) throw new Error(`[install] ${renamedProfileMessage(name) ?? `Profile not found: ${shipped}`}`);
+  return loadAnyProfile(name, userProfileCoverageProblems, requiredExtensions);
 }
 
 // --- Collect all extension names from in-repo + vendor ---
@@ -626,9 +632,14 @@ if (all) {
   } catch (error) {
     // Not-found is the user's typo, not a crash: a clean message, the valid names, and exit 2.
     // Any other failure (unreadable or invalid profile JSON) keeps its stack for a bug report.
+    // A refused user profile is the operator's file, not a kit bug: say why, change nothing.
+    if (errorMessage(error).startsWith("user profile \"")) {
+      console.error(`[install] FAIL: ${errorMessage(error)}`);
+      process.exit(1);
+    }
     if (!errorMessage(error).startsWith("[install] Profile not found:")) throw error;
     console.error(errorMessage(error));
-    console.error(`[install] Valid profiles: ${listProfiles(PROFILES_DIR).join(", ")} (run with --help for details).`);
+    console.error(`[install] Valid profiles: ${listAllProfiles().join(", ")} (run with --help for details).`);
     process.exit(2);
   }
   // Safety-critical config is validated before anything is written: an unknown firewall policy or

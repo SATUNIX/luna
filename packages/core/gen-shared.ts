@@ -131,6 +131,9 @@ export const SHARED_COPIES: Readonly<Record<string, readonly string[]>> = {
     "packages/extensions/src/tool-firewall/shared/profile-names.ts",
     "packages/extensions/third_party/custom-footer/shared/profile-names.ts",
   ],
+  "user-profile.ts": [
+    "packages/extensions/src/session-helpers/shared/user-profile.ts",
+  ],
   "say.ts": [
     "packages/extensions/src/control-center/shared/say.ts",
     "packages/extensions/src/session-helpers/shared/say.ts",

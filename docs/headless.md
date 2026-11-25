@@ -53,9 +53,21 @@ header and followed by session events such as `agent_start`, `message_end`, `too
 `docs/json.md`; Luna does not add or rename fields. The final answer is the `message` of the last
 `message_end` whose `role` is `assistant`.
 
-`luna exec` applies the `overrides.json` disable list as `luna` does, and exits 2 when a ceiling is requested but
-`goal-core`, the extension that enforces it, is not loaded: it is removed in `overrides.json`, or the
-install marker's extension list (an `--only`/custom install) does not include it.
+`luna exec` applies the `overrides.json` disable list as `luna` does. It exits 2 before pi starts when
+a ceiling is requested, by a flag or by a `PI_KIT_CEILING_*` variable already in its environment, but
+nothing would enforce it:
+
+- the list switches off `goal-core`, the extension that enforces the ceiling;
+- no Luna install is found;
+- the installed kit entry in `settings.json` does not load `goal-core`, whatever left it out (a
+  profile, a [user profile](profiles.md#your-own-profiles) on blank, an override or a hand edit).
+
+The install that counts is the project's when `.pi/.pi-kit.json` exists in the current directory, the entry is
+not an `autoload: false` delta and pi's trust store (`trust.json`) records the project as trusted; otherwise the
+global install must load goal-core too. An empty `extensions` list loads nothing. A kit entry with no extension filter loads everything. The filter is
+read in pi's order (includes, `!` excludes, `+` force-includes, `-` force-excludes). A glob that might
+reach goal-core counts as not loading it, because `luna` cannot run pi's matcher
+(`tests/luna-cli-smoke.ts`).
 
 ### Not covered
 

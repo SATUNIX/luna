@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { ROOT, isolateKitEnv } from "../packages/core/eval/harness.ts";
 import { array, isRecord, object, parseJsonAs, record as recordOf, string } from "../packages/core/lib/guard.ts";
-import { pendingDisables, planExec } from "../packages/core/lib/headless.ts";
+import { goalCoreSelected, pendingDisables, planExec } from "../packages/core/lib/headless.ts";
 import { piSpawnPlan } from "../packages/core/lib/pi-cli.ts";
 
 isolateKitEnv();
@@ -42,8 +42,8 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   const agent = path.join(tmp, "agent");
   fs.mkdirSync(agent);
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, PI_CODING_AGENT_DIR: agent };
-  const luna = (args: string[], extra: NodeJS.ProcessEnv = {}, input?: string) =>
-    spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "luna.ts"), ...args], { env: { ...env, ...extra }, encoding: "utf8", ...(input !== undefined ? { input } : {}) });
+  const luna = (args: string[], extra: NodeJS.ProcessEnv = {}, input?: string, cwd?: string) =>
+    spawnSync(process.execPath, [path.join(ROOT, "packages", "core", "luna.ts"), ...args], { env: { ...env, ...extra }, encoding: "utf8", ...(input !== undefined ? { input } : {}), ...(cwd !== undefined ? { cwd } : {}) });
   const Recorded = object({ args: array(string()), env: recordOf(string()) });
   const recorded = () => parseJsonAs(Recorded, fs.readFileSync(record, "utf8"));
 
@@ -52,6 +52,76 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(bare.status, 0);
   for (const flag of ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes"]) assert.ok(recorded().args.includes(flag), `--bare passes ${flag}`);
   assert.deepEqual(recorded().args.slice(-2), ["--model", "x"]);
+
+  // A ceiling needs goal-core loaded by the install in force (lib/headless.ts goalCoreProblem): with no
+  // install, or a kit entry that does not load it (a blank user profile, a remove, a hand edit), the
+  // limits are refused before pi starts; an unfiltered kit entry loads everything.
+  const kit = { source: ROOT, extensions: ["packages/extensions/src/tool-firewall/index.ts", "packages/extensions/src/goal-core/index.ts"] };
+  const install = (entry: unknown, dir = agent) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, ".pi-kit.json"), JSON.stringify({ kitSource: ROOT, profile: "mine", scope: "global", mode: "local" }));
+    fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ packages: [entry] }));
+  };
+  const noInstall = luna(["exec", "--max-turns", "3", "p"]);
+  assert.equal(noInstall.status, 2);
+  assert.match(noInstall.stderr, /a ceiling was requested but no Luna install was found/);
+  install({ ...kit, extensions: ["packages/extensions/src/tool-firewall/index.ts"] });
+  const noGoalCore = luna(["exec", "--max-cost", "1", "p"]);
+  assert.equal(noGoalCore.status, 2, "a profile without goal-core voids no limit silently");
+  assert.match(noGoalCore.stderr, /does not load goal-core, which enforces it/);
+  install({ ...kit, extensions: ["!packages/extensions/src/goal-core/index.ts"] });
+  assert.equal(luna(["exec", "--timeout", "1m", "p"]).status, 2, "an exclusion pattern is not a load");
+  const GC = "packages/extensions/src/goal-core/index.ts";
+  install({ ...kit, extensions: [GC, `-${GC}`] });
+  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 2, "a later force-exclude wins over the include, as in pi");
+  install({ ...kit, extensions: [GC, "!**/goal-core/**"] });
+  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 2, "a glob exclusion that may reach it counts against");
+  install(kit);
+  const envCeiling = luna(["exec", "p"], { PI_KIT_CEILING_TURNS: "5" });
+  assert.equal(envCeiling.status, 0, envCeiling.stderr);
+  install({ ...kit, extensions: ["packages/extensions/src/tool-firewall/index.ts"] });
+  const envUnenforced = luna(["exec", "p"], { PI_KIT_CEILING_TURNS: "5" });
+  assert.equal(envUnenforced.status, 2, "a ceiling set in the environment needs goal-core too");
+  assert.match(envUnenforced.stderr, /does not load goal-core/);
+  assert.equal(luna(["exec", "p"], { PI_KIT_CEILING_TURNS: "" }).status, 0, "an empty variable is no ceiling");
+  // pi's filter order: includes, then ! excludes, then + exact force-includes, then - exact force-excludes.
+  assert.equal(goalCoreSelected([GC]), true);
+  assert.equal(goalCoreSelected([]), false, "an empty list loads nothing, as in pi (applyPackageFilter)");
+  assert.equal(goalCoreSelected(["!other/index.ts"]), true);
+  assert.equal(goalCoreSelected([`./${GC}`]), true);
+  assert.equal(goalCoreSelected(["packages/extensions/src/*/index.ts"]), false, "an include glob cannot be proved");
+  assert.equal(goalCoreSelected([GC, "!packages/extensions/src/goal-*/index.ts"]), false);
+  assert.equal(goalCoreSelected([GC, "!index.ts"]), false, "a ! pattern matches by base name too");
+  assert.equal(goalCoreSelected([GC, `!${GC}`, `+${GC}`]), true, "a force-include overrides an exclusion");
+  assert.equal(goalCoreSelected([`+${GC}`, `-${GC}`]), false, "a force-exclude overrides everything");
+  install({ ...kit, extensions: [] });
+  const emptyList = luna(["exec", "--max-turns", "3", "p"]);
+  assert.equal(emptyList.status, 2, "an empty extensions list loads nothing, so nothing enforces the limit");
+  assert.match(emptyList.stderr, /does not load goal-core/);
+  // A project install is the whole set only when pi trusts the project and the entry is not an
+  // autoload:false delta; otherwise the global install must load goal-core too.
+  const proj = path.join(tmp, "proj");
+  const noGC = { ...kit, extensions: ["packages/extensions/src/tool-firewall/index.ts"] };
+  install(noGC);
+  install(kit, path.join(proj, ".pi"));
+  const trustFile = path.join(agent, "trust.json");
+  fs.writeFileSync(trustFile, JSON.stringify({ [fs.realpathSync(proj)]: true }));
+  assert.equal(luna(["exec", "--max-turns", "3", "p"], {}, undefined, proj).status, 0, "a trusted project install with goal-core wins over the global one");
+  install({ ...kit, autoload: false }, path.join(proj, ".pi"));
+  const delta = luna(["exec", "--max-turns", "3", "p"], {}, undefined, proj);
+  assert.equal(delta.status, 2, "an autoload:false project entry is a delta; the global install without goal-core is in force");
+  assert.match(delta.stderr, /does not load goal-core/);
+  install(kit, path.join(proj, ".pi"));
+  fs.writeFileSync(trustFile, JSON.stringify({ [fs.realpathSync(proj)]: false }));
+  assert.equal(luna(["exec", "--max-turns", "3", "p"], {}, undefined, proj).status, 2, "an untrusted project's install is not loaded; the global one is");
+  fs.rmSync(trustFile);
+  assert.equal(luna(["exec", "--max-turns", "3", "p"], {}, undefined, proj).status, 2, "no trust record: not proven trusted, the global install counts");
+  fs.rmSync(path.join(agent, "trust.json"), { force: true });
+  fs.rmSync(proj, { recursive: true });
+  install(ROOT);
+  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 0, "an unfiltered kit entry loads goal-core");
+  assert.equal(luna(["exec", "p"]).status, 0, "no limits, no check");
+  install(kit);
 
   // exec: the final answer is the only thing on stdout; progress is on stderr.
   const run = luna(["exec", "--ephemeral", "--max-turns", "5", "--max-cost", "1.5", "--timeout", "2m", "do it"]);
@@ -143,13 +213,6 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(refused.status, 2);
   assert.match(refused.stderr, /goal-core/);
   fs.rmSync(path.join(agent, "pi-kit"), { recursive: true });
-  // An --only/custom install whose marker does not list goal-core loads no ceiling guard.
-  fs.writeFileSync(path.join(agent, ".pi-kit.json"), JSON.stringify({ profile: "custom", scope: "global", extensions: ["effort"] }));
-  const unguarded = luna(["exec", "--max-turns", "3", "p"]);
-  assert.equal(unguarded.status, 2, "a ceiling without a loaded goal-core is refused");
-  assert.match(unguarded.stderr, /goal-core/);
-  fs.writeFileSync(path.join(agent, ".pi-kit.json"), JSON.stringify({ profile: "balanced", scope: "global", extensions: ["goal-core", "effort"] }));
-  assert.equal(luna(["exec", "--max-turns", "3", "p"]).status, 0, "a marker that loads goal-core keeps the ceiling usable");
   fs.rmSync(path.join(agent, ".pi-kit.json"));
 
   for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], [], ["--"], ["--", "a", "b"], ["p", "--", "q"]]) {

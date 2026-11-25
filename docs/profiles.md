@@ -55,6 +55,64 @@ records why it goes without it in `packages/core/lib/protection-coverage.ts`. `n
 fails a profile that drops a mandatory protection without a recorded exemption
 (`tests/profile-protections-smoke.ts`).
 
+## Your own profiles
+
+A user profile is your own profile, built from one of the shipped profiles or from blank. It lives in
+`~/.pi/agent/pi-kit/profiles/<name>.json`:
+
+```text
+/profile create mine balanced     write mine.json from balanced (or blank); nothing changes yet
+/profile mine                     switch to it, all-or-nothing, like any other profile
+```
+
+```json
+{
+  "name": "mine",
+  "extends": "balanced",
+  "extensions": { "add": ["todo"], "remove": ["notify"] },
+  "skills": { "exclude": ["patch-hygiene"] },
+  "prompts": { "exclude": [] }
+}
+```
+
+- `extends` names a shipped profile or `blank`. Blank loads only the extensions every install needs
+  plus the three mandatory protections: `tool-firewall`, `protected-paths`, `secret-guard`,
+  `delegation-guard`, `effort` and `session-helpers`.
+- The profile inherits its base's firewall policy and mode, security level and `settings` block, and
+  cannot set them, so it never runs with a weaker gate than its base. Blank takes the defaults
+  (firewall `coding`/`manual`, security `balanced`).
+- `skills.exclude` and `prompts.exclude` add to the base's exclusions. On a base with an `only` list
+  (`lite`) they take the name off that list.
+- A profile whose `remove` names a mandatory protection or a required extension is refused whole by
+  the installer, by `/profile` (before the installer runs) and by
+  `node packages/core/profile-check.ts --user <file>`. So is a profile with an unknown field, a name
+  other than its file's, a shipped profile's name, or an unknown base. A refused profile is never
+  applied without the offending part.
+- Names are names, never paths: the profile name (also for `install.ts --profile`), and every name in
+  the add, remove and exclude lists.
+- An added extension that is a stub or experimental is refused unless the base is an experimental
+  profile, at switch time as well as by `profile-check`.
+- A user profile is read without following links. Both `profiles/` and `pi-kit/` must be real
+  directories you own that neither your group nor anyone else can write. The file must be a regular
+  file you own, writable by you alone, with one link, and at most 64 KiB. Anything else (a FIFO
+  included, which is never opened) is refused with the reason. With a umask of 002, `pi-kit/` or a
+  hand-made profile file can come out group-writable and is refused: `chmod 700` the directory and
+  `chmod 600` the file.
+- A blank profile, or one that removes `goal-core`, has no ceiling: `luna exec` refuses its
+  `--max-turns`, `--max-cost` and `--timeout` instead of ignoring them ([Headless](headless.md)).
+- `/profile create` never overwrites a file, and writes it 0600 in a 0700 directory.
+- `/update` re-applies a user profile by name. If you delete the file, the next switch or update
+  stops with "Profile not found".
+
+`tests/user-profiles-smoke.ts` pins each rule. It creates a profile from each base and from blank,
+switches to each through the real installer, and rolls back a failed switch byte for byte. It also
+checks each refusal: a profile that removes any of the three protections, a path given as
+`--profile`, an experimental add, a base with no coverage for a protection, and a linked, shared,
+hard-linked or oversized file. `/profile` is an operator command the model cannot call. The
+tool firewall rates an agent's write anywhere under `pi-kit/` as a high-tier security-control write,
+this directory included, but no test pins that rating for user profiles specifically. Not covered: a
+process running as you can still edit the files directly.
+
 ## The lite profile
 
 `lite` is for small local coding models. It loads:

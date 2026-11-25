@@ -32,8 +32,12 @@
  * A live `pi install` + real-model run remains deliberately out of scope (the kit is
  * hardened offline by design); CI runs this across every profile as the matrix.
  *
+ * A user profile (shared/user-profile.ts) is checked the same way once resolved against its base;
+ * one that cannot be parsed or drops a mandatory protection fails (tests/user-profiles-smoke.ts).
+ *
  * Usage:
  *   node packages/core/profile-check.ts --profile <name>
+ *   node packages/core/profile-check.ts --user <path to pi-kit/profiles/name.json>
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -43,7 +47,9 @@ import { resolveProfile } from "./lib/resolve.ts";
 import { mergePackageBlock, readSettings } from "./lib/settings.ts";
 import { loadExtension, fakePi } from "./eval/harness.ts";
 import { requiredProfileExtensions } from "./distribution-contract.ts";
-import { protectionCoverageProblems } from "./lib/protection-coverage.ts";
+import { protectionCoverageProblems, userProfileCoverageProblems } from "./lib/protection-coverage.ts";
+import { listProfiles } from "./lib/profiles.ts";
+import { isProfileName, loadUserProfile } from "./shared/user-profile.ts";
 import { WORKSPACE_ROOT, PROFILES_DIR, FIRST_PARTY_DIR, THIRD_PARTY_DIR, extensionRelPath } from "./lib/paths.ts";
 
 type ResolvedExtension = ReturnType<typeof resolveProfile>[number];
@@ -52,6 +58,7 @@ const ROOT = WORKSPACE_ROOT;
 const args = process.argv.slice(2);
 const get = (flag: string): string | null | undefined => (args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : null);
 const profileName = get("--profile");
+const userFile = get("--user");
 
 let errors = 0;
 const fail = (m: string): void => {
@@ -102,11 +109,11 @@ function checkStubsAndOrdering(includes: readonly string[], label: string, isExp
 const REQUIRED_EVERYWHERE = requiredProfileExtensions();
 const FIREWALL_POLICIES = ["coding", "engagement"];
 const FIREWALL_MODES = ["auto", "manual"];
-function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readonly string[], label: string, name: string): void {
+function checkSafetyAndCompaction(def: Record<string, unknown>, includes: readonly string[], label: string, coverage: readonly string[]): void {
   for (const required of REQUIRED_EVERYWHERE) {
     if (!includes.includes(required)) fail(`${label}: '${required}' is missing (every profile must carry it)`);
   }
-  for (const problem of protectionCoverageProblems(name, includes)) fail(`${label}: ${problem}`);
+  for (const problem of coverage) fail(`${label}: ${problem}`);
   if (!["balanced", "guarded", "strict"].includes(String(def.securityLevel))) fail(`${label}: unknown or missing securityLevel ${JSON.stringify(def.securityLevel)}`);
   const fw = def.firewall;
   if (fw !== undefined) {
@@ -203,6 +210,10 @@ async function checkLoad(resolved: ResolvedExtension[], label: string): Promise<
 
 async function checkProfile(name: string): Promise<void> {
   console.log(`[profile-check] profile: ${name}`);
+  if (!isProfileName(name)) {
+    fail(`${JSON.stringify(name)} is not a profile name`);
+    return;
+  }
   const p = path.join(PROFILES_DIR, `${name}.json`);
   if (!fs.existsSync(p)) {
     fail(`profile ${name} not found`);
@@ -224,16 +235,39 @@ async function checkProfile(name: string): Promise<void> {
     return;
   }
   checkStubsAndOrdering(includes, `profile ${name}`, !!def.experimental);
-  checkSafetyAndCompaction(def, includes, `profile ${name}`, name);
+  checkSafetyAndCompaction(def, includes, `profile ${name}`, protectionCoverageProblems(name, includes));
   const resolved = checkInstallNarrowing(includes, `profile ${name}`);
   if (resolved) await checkLoad(resolved, `profile ${name}`);
+}
+
+async function checkUserProfile(file: string): Promise<void> {
+  const name = path.basename(file).replace(/\.json$/, "");
+  console.log(`[profile-check] user profile: ${file}`);
+  const found = loadUserProfile(path.dirname(path.resolve(file)), name, listProfiles(PROFILES_DIR), (base) => parseJson(fs.readFileSync(path.join(PROFILES_DIR, `${base}.json`), "utf8")), requiredProfileExtensions());
+  if (found === null) {
+    fail(`${file} is not a user profile (a file named <name>.json, lower-case letters, digits and -)`);
+    return;
+  }
+  if (!found.ok) {
+    for (const problem of found.problems) fail(problem);
+    return;
+  }
+  const rawInclude = found.def.include;
+  const includes = Array.isArray(rawInclude) ? rawInclude.filter((n): n is string => typeof n === "string") : [];
+  const label = `user profile ${name} (extends ${found.profile.extends})`;
+  checkStubsAndOrdering(includes, label, !!found.def.experimental);
+  checkSafetyAndCompaction(found.def, includes, label, userProfileCoverageProblems(found.profile.extends, includes));
+  const resolved = checkInstallNarrowing(includes, label);
+  if (resolved) await checkLoad(resolved, label);
 }
 
 async function main(): Promise<void> {
   if (profileName) {
     await checkProfile(profileName);
+  } else if (userFile) {
+    await checkUserProfile(userFile);
   } else {
-    fail("specify --profile <name>");
+    fail("specify --profile <name> or --user <file>");
   }
 }
 

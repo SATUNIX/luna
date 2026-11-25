@@ -10,13 +10,13 @@
  * Self-containment rule: imports of `./controls.ts` and `./values.ts` stay inside the extension.
  */
 import type { ControlGroup, ControlRisk, KitControl } from "./controls.ts";
-import { autoDefaultProfiles } from "./profile-defs.ts";
+import { autoDefaultProfiles, MANDATORY_PROTECTIONS, overrideIsOn, overrideItems, type OverrideKind } from "./profile-defs.ts";
 import type { HubValues } from "./values.ts";
 
 export type RowKind = "value" | "action" | "page";
 
 /** Rows the hub renders itself rather than dispatching a typed command. */
-export type RowSpecial = "thinking" | "security" | "doctor" | "all-commands" | "help";
+export type RowSpecial = "thinking" | "security" | "doctor" | "all-commands" | "help" | "override";
 
 export interface HubPage {
   id: string;
@@ -39,6 +39,9 @@ export interface RowDef {
   /** For a page row, the page it opens. */
   targetPage?: string;
   special?: RowSpecial;
+  /** An override toggle: the list it edits and the item it flips. */
+  overrideKind?: OverrideKind;
+  overrideName?: string;
   /** For a built-in picker pi cannot open from code: text to pre-fill in the editor. */
   prefill?: string;
   description?: string;
@@ -62,6 +65,9 @@ export interface HubRow {
   kind: RowKind;
   targetPage?: string | undefined;
   special?: RowSpecial | undefined;
+  /** An override toggle: the list it edits and the item it flips. */
+  overrideKind?: OverrideKind | undefined;
+  overrideName?: string | undefined;
   prefill?: string | undefined;
   /** A command an informational row names for the operator; it is printed, never dispatched. */
   command?: string | undefined;
@@ -81,7 +87,10 @@ export interface HubModel {
 
 export const PAGES: HubPage[] = [
   { id: "main", title: "Control centre", parent: null },
-  { id: "profiles", title: "Profile", parent: "main" },
+  { id: "profiles", title: "Profiles & packages", parent: "main" },
+  { id: "profiles.extensions", title: "Extensions: on/off", parent: "profiles" },
+  { id: "profiles.skills", title: "Skills: on/off", parent: "profiles" },
+  { id: "profiles.prompts", title: "Prompt packages: on/off", parent: "profiles" },
   { id: "security", title: "Security", parent: "main" },
   { id: "autonomy", title: "Autonomy", parent: "main" },
   { id: "work", title: "Work", parent: "main" },
@@ -138,6 +147,9 @@ export const ROWS: RowDef[] = [
   profileRow("long-horizon", "long-horizon (auto approvals)"),
   profileRow("self-improving", "self-improving (auto approvals)"),
   profileRow("engagement", "engagement"),
+  { id: "profile.toggle.extensions", label: "Extensions: on/off", page: "profiles", kind: "page", targetPage: "profiles.extensions", description: "Turn one extension off or on for every profile; the next /profile switch applies it" },
+  { id: "profile.toggle.skills", label: "Skills: on/off", page: "profiles", kind: "page", targetPage: "profiles.skills", description: "Turn one skill off or on for every profile; the next /profile switch applies it" },
+  { id: "profile.toggle.prompts", label: "Prompt packages: on/off", page: "profiles", kind: "page", targetPage: "profiles.prompts", description: "Turn one prompt template off or on for every profile; the next /profile switch applies it" },
 
   // --- security: one control (level), with the approval mode inside it ---
   { id: "security.level", label: "Security level", page: "security", kind: "action", legacy: "/security", valueKey: "security", unavailableReason: "the tool-firewall extension is not loaded" },
@@ -286,6 +298,8 @@ function rowFromDef(def: RowDef, values: HubValues, commands: Set<string>): HubR
     targetPage: def.targetPage,
     special: def.special,
     prefill: def.prefill,
+    overrideKind: def.overrideKind,
+    overrideName: def.overrideName,
     risk: def.risk,
     asksItself: def.asksItself,
     changesSession: def.changesSession,
@@ -332,6 +346,8 @@ function rowFromControl(control: KitControl, commands: Set<string>): HubRow {
     targetPage: undefined,
     special: undefined,
     prefill: undefined,
+    overrideKind: undefined,
+    overrideName: undefined,
     risk: control.risk,
     changesSession: control.changesSession,
     available,
@@ -368,6 +384,25 @@ export function buildModel(input: BuildModelInput): HubModel {
   for (const [id, control] of controlsById) {
     if (used.has(id)) continue;
     rows.push(rowFromControl(control, commands));
+  }
+  for (const kind of ["extensions", "skills", "prompts"] as const) {
+    for (const name of overrideItems(kind)) {
+      const on = overrideIsOn(kind, name);
+      const mandatory = kind === "extensions" && MANDATORY_PROTECTIONS.includes(name);
+      rows.push({
+        id: `override.${kind}.${name}`,
+        page: `profiles.${kind}`,
+        label: `${on ? "[on] " : "[off] "}${name}`,
+        description: mandatory
+          ? "Mandatory protection: it can be switched on, never off"
+          : `${on ? "Turn it off" : "Turn it on"}; the next /profile switch applies the override`,
+        kind: "action",
+        special: "override",
+        overrideKind: kind,
+        overrideName: name,
+        available: true,
+      });
+    }
   }
   return { pages: PAGES, rows };
 }

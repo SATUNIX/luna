@@ -122,6 +122,7 @@ at any time.
 | Page | Holds | Typed equivalents |
 | --- | --- | --- |
 | Main | Profile, Effort, Thinking, Security, then Autonomy, Work, Session, Connect, System and Settings | `/profile`, `/effort`, `/thinking`, `/security` |
+| Profile / Profiles & packages | A profile switch, then Extensions, Skills and Prompt packages toggle pages | `/profile`, `/packages` (add/remove is terminal-only) |
 | Security | Security level, approval mode, approval mode to auto, details | `/security`, `/auto`, `/security status` |
 | Autonomy | Remembered approvals, loop, auto-boost, container runs | `/firewall`, `/loop`, `/boost`, `/autonomy` |
 | Work | Goal, todos, verify, delegation, recovery, memory, engagement, lab | `/goal`, `/todos`, `/verify`, `/orchestrate*`, `/workflows`, `/boost`, `/remember`, `/memory`, `/engagement`, `/improve`, `/review` |
@@ -131,6 +132,8 @@ at any time.
 | Settings | pi settings, command menu, hub key, pinned commands, hidden commands, display | `/settings` |
 | All commands | Every command once, pi's built-ins first and then `pi.getCommands()` entries not already listed, grouped by source; Enter pre-fills the command name and a space in the editor | built-in pickers pi cannot open from code |
 | Doctor | Read-only health checks (see below) | the command on each line |
+
+The Profile page opens Profiles & packages: the shipped profiles, then three toggle pages for extensions, skills and prompt packages. The Extensions page lists every extension the kit ships, including the opt-in ones no shipped profile enables (`auto-commit-on-exit`, `mcp-router`, `memory-local`, `schedule`); one of those starts off and the first toggle pins it on. A toggle writes the shared `<agent dir>/pi-kit/overrides.json` through the same Overrides API the installer and `/packages` use; the next `/profile` switch applies it in the existing transaction. A mandatory protection (`tool-firewall`, `secret-guard`, `protected-paths`) can be switched on but never off, and the refusal writes nothing. `tests/control-center-smoke.ts` toggles one of each off and back on, switches profile after each phase, and checks the override file, the active marker and the settings entry the switch wrote (extension list and skill/prompt filters); it also turns an opt-in extension on from the page.
 
 ```mermaid
 flowchart TD

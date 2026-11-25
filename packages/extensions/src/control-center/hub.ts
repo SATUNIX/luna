@@ -28,6 +28,7 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { legacyCommandName, findRow, pageRows, parentPage, type HubModel, type HubRow } from "./model.ts";
+import { toggleOverride } from "./profile-defs.ts";
 import { doctorLines, type DoctorLine } from "./doctor.ts";
 import { withInputHold } from "./shared/input-owner.ts";
 import { HIDDEN_CHARS } from "./shared/visible-text.ts";
@@ -119,6 +120,11 @@ export async function dispatchRow(row: HubRow, deps: HubDeps, value?: string): P
   if (row.special === "thinking") {
     if (value && deps.setThinkingLevel) deps.setThinkingLevel(value);
     return { ok: true };
+  }
+  if (row.special === "override") {
+    if (!row.overrideKind || !row.overrideName) return { ok: false, note: "this toggle has no target" };
+    const result = toggleOverride(row.overrideKind, row.overrideName);
+    return result.ok ? { ok: true, note: result.message } : { ok: false, note: result.message };
   }
   if (row.prefill) {
     deps.prefill(row.prefill);

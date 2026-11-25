@@ -14,6 +14,7 @@
  *   - Doctor: marker/settings drift and the pi version against the kit's pin and floor;
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,11 +27,13 @@ import type * as ControlsModule from "../packages/extensions/src/control-center/
 import type * as ModelModule from "../packages/extensions/src/control-center/model.ts";
 import type * as ValuesModule from "../packages/extensions/src/control-center/values.ts";
 import type * as DoctorModule from "../packages/extensions/src/control-center/doctor.ts";
-import { headerLine, openHub, rowsForPage, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
+import { dispatchRow, headerLine, openHub, rowsForPage, type HubDeps, type PageChoice } from "../packages/extensions/src/control-center/hub.ts";
 import type { HubRow } from "../packages/extensions/src/control-center/model.ts";
 import type { HubValues } from "../packages/extensions/src/control-center/values.ts";
 import { PI_BUILTIN_SLASH_COMMANDS as CORE_BUILTINS } from "../packages/core/lib/pi-builtins.ts";
 import { isRecord, parseJson } from "../packages/core/lib/guard.ts";
+import { listProfiles, overridesPath, readOverrides } from "../packages/core/lib/profiles.ts";
+import { createUserProfile } from "../packages/core/shared/user-profile.ts";
 import { PROFILES_DIR } from "../packages/core/lib/paths.ts";
 import { HIDDEN_CHARS, isHiddenChar, oneVisibleLine, stripHiddenChars } from "../packages/core/shared/visible-text.ts";
 
@@ -862,7 +865,7 @@ tests.push([
     assert.ok(modes.size > 0, "packages/kit/profiles has profile files");
     const autoProfiles = [...modes].filter(([, mode]) => mode === "auto").map(([name]) => name).sort();
     assert.deepEqual([...modelMod.AUTO_DEFAULT_PROFILES].sort(), autoProfiles, "AUTO_DEFAULT_PROFILES is exactly the profiles whose firewall.mode is auto");
-    const rows = modelMod.ROWS.filter((row) => row.page === "profiles");
+    const rows = modelMod.ROWS.filter((row) => row.page === "profiles" && row.id.startsWith("profile.") && row.kind === "action");
     assert.deepEqual(rows.map((row) => row.id.replace(/^profile\./, "")).sort(), [...modes.keys()], "one hub row per shipped profile, and no other");
     for (const row of rows) {
       const auto = modes.get(row.id.replace(/^profile\./, "")) === "auto";
@@ -1174,6 +1177,150 @@ tests.push([
       assert.equal(values.readMarker(path.join(ws, "elsewhere")).profile, "global");
     } finally {
       restore();
+      rmWorkspace(ws);
+    }
+  },
+]);
+
+tests.push([
+  "the Extensions page lists opt-in extensions no shipped profile enables",
+  async () => {
+    const modelMod = await loadModelModule();
+    const ws = tmpWorkspace("pi-kit-optin-");
+    const restoreAgent = setEnv("PI_CODING_AGENT_DIR", ws);
+    const restoreHome = setEnv("HOME", ws);
+    try {
+      fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true, mode: 0o700 });
+      const model = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+      for (const name of ["auto-commit-on-exit", "mcp-router", "memory-local", "schedule"]) {
+        const row = modelMod.findRow(model, `override.extensions.${name}`);
+        assert.ok(row, `${name} has a toggle row even though no profile enables it`);
+        assert.equal(row.overrideKind, "extensions");
+      }
+      const row = modelMod.findRow(model, "override.extensions.auto-commit-on-exit");
+      assert.ok(row);
+      const result = await dispatchRow(row, makeDeps({ model, commands: [] }));
+      assert.ok(result.ok, `auto-commit-on-exit: ${result.note ?? "toggle failed"}`);
+      const lists = parseJson(fs.readFileSync(path.join(ws, "pi-kit", "overrides.json"), "utf8"));
+      const add = isRecord(lists) && isRecord(lists.extensions) && Array.isArray(lists.extensions.add) ? lists.extensions.add : [];
+      assert.ok(add.includes("auto-commit-on-exit"), "turning an opt-in extension on pins it in extensions.add");
+      const after = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+      assert.match(modelMod.findRow(after, "override.extensions.auto-commit-on-exit")?.label ?? "", /^\[on\] /);
+    } finally {
+      restoreHome();
+      restoreAgent();
+      rmWorkspace(ws);
+    }
+  },
+]);
+
+tests.push([
+  "Profiles & packages toggles an extension, a skill and a prompt, then the switch applies them",
+  async () => {
+    const modelMod = await loadModelModule();
+    const ws = tmpWorkspace("pi-kit-toggle-");
+    const restoreAgent = setEnv("PI_CODING_AGENT_DIR", ws);
+    const restoreHome = setEnv("HOME", ws);
+    try {
+      const bin = path.join(ws, "bin");
+      fs.mkdirSync(bin);
+      fs.writeFileSync(path.join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      fs.writeFileSync(path.join(ws, "settings.json"), JSON.stringify({ packages: [ROOT] }, null, 2));
+      const kit = path.join(ws, "pi-kit");
+      fs.mkdirSync(kit, { recursive: true, mode: 0o700 });
+      const made = createUserProfile(path.join(kit, "profiles"), "mine", "balanced", listProfiles(PROFILES_DIR));
+      assert.ok(made.ok, `create mine: ${made.ok ? "" : made.problem}`);
+
+      const switcher = () => spawnSync(
+        process.execPath,
+        [path.join(ROOT, "packages", "core", "install.ts"), "--profile", "mine", "--yes", "--settings-only", "--mode", "local", "--no-externals"],
+        {
+          cwd: ws,
+          encoding: "utf8",
+          env: { ...process.env, HOME: ws, PI_CODING_AGENT_DIR: ws, PI_LEAN_CTX_BIN: path.join(ws, "no-lean-ctx"), PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+      const switchToMine = (): void => {
+        const run = switcher();
+        assert.equal(run.status, 0, `switch: ${run.stderr || run.stdout}`);
+        const marker = parseJson(fs.readFileSync(path.join(ws, ".pi-kit.json"), "utf8"));
+        assert.ok(isRecord(marker) && marker.profile === "mine", "the switch transaction marks mine active");
+      };
+      const toggle = async (kind: "extensions" | "skills" | "prompts", name: string): Promise<void> => {
+        const model = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+        const row = modelMod.findRow(model, `override.${kind}.${name}`);
+        assert.ok(row, `${kind}/${name} has a toggle row`);
+        assert.equal(row.special, "override");
+        const result = await dispatchRow(row, makeDeps({ model, commands: [] }));
+        assert.ok(result.ok, `${kind}/${name}: ${result.note ?? "toggle failed"}`);
+      };
+
+      const activeProfile = (): void => {
+        const marker = parseJson(fs.readFileSync(path.join(ws, ".pi-kit.json"), "utf8"));
+        assert.ok(isRecord(marker) && marker.profile === "mine", "the switch transaction marks mine active");
+      };
+      // The settings entry the switch wrote, read the way pi resolves it: the extension list plus the
+      // skill/prompt filter patterns the profile (and the overrides applied on top) produced.
+      const kitEntry = (): Record<string, unknown> => {
+        const settings = parseJson(fs.readFileSync(path.join(ws, "settings.json"), "utf8"));
+        const raw = isRecord(settings) ? settings.packages : undefined;
+        const packages: unknown[] = Array.isArray(raw) ? raw.map((p: unknown): unknown => p) : [];
+        const entry = packages.find((p) => (typeof p === "string" ? p : isRecord(p) && typeof p.source === "string" ? p.source : "") === ROOT);
+        assert.ok(isRecord(entry), "the kit package entry is registered in settings.json");
+        return entry;
+      };
+      const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+
+      switchToMine();
+      activeProfile();
+      await toggle("extensions", "notify");
+      activeProfile();
+      await toggle("skills", "patch-hygiene");
+      activeProfile();
+      await toggle("prompts", "code-plan");
+      activeProfile();
+      const off = readOverrides(overridesPath());
+      assert.ok(off.extensions.remove.includes("notify"), "the extension is removed in overrides.json");
+      assert.ok(off.skills.exclude.includes("patch-hygiene"), "the skill is excluded in overrides.json");
+      assert.ok(off.prompts.exclude.includes("code-plan"), "the prompt is excluded in overrides.json");
+      switchToMine();
+      const offEntry = kitEntry();
+      assert.ok(!strings(offEntry.extensions).includes("packages/extensions/third_party/notify/index.ts"), "the switch drops the removed extension from the settings entry");
+      assert.ok(strings(offEntry.skills).includes("!packages/kit/skills/patch-hygiene/SKILL.md"), "the switch filters the excluded skill");
+      assert.ok(strings(offEntry.prompts).includes("!packages/kit/prompts/code-plan.md"), "the switch filters the excluded prompt");
+
+      await toggle("extensions", "notify");
+      activeProfile();
+      await toggle("skills", "patch-hygiene");
+      activeProfile();
+      await toggle("prompts", "code-plan");
+      activeProfile();
+      const on = readOverrides(overridesPath());
+      assert.ok(!on.extensions.remove.includes("notify"), "the extension toggle clears its removal");
+      assert.ok(on.extensions.add.includes("notify"), "the extension toggle pins itself back on");
+      assert.ok(!on.skills.exclude.includes("patch-hygiene"), "the skill toggle clears its exclusion");
+      assert.ok(on.skills.include.includes("patch-hygiene"), "the skill toggle pins itself back on");
+      assert.ok(!on.prompts.exclude.includes("code-plan"), "the prompt toggle clears its exclusion");
+      assert.ok(on.prompts.include.includes("code-plan"), "the prompt toggle pins itself back on");
+      switchToMine();
+      const onEntry = kitEntry();
+      assert.ok(strings(onEntry.extensions).includes("packages/extensions/third_party/notify/index.ts"), "the switch loads the extension switched back on");
+      assert.ok(!strings(onEntry.skills).includes("!packages/kit/skills/patch-hygiene/SKILL.md"), "the switch un-filters the skill switched back on");
+      assert.ok(!strings(onEntry.prompts).includes("!packages/kit/prompts/code-plan.md"), "the switch un-filters the prompt switched back on");
+
+      const before = fs.readFileSync(overridesPath(), "utf8");
+      const model = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+      for (const protection of ["tool-firewall", "secret-guard", "protected-paths"]) {
+        const mandatory = modelMod.findRow(model, `override.extensions.${protection}`);
+        assert.ok(mandatory, `${protection} has a toggle row`);
+        const refused = await dispatchRow(mandatory, makeDeps({ model, commands: [] }));
+        assert.ok(!refused.ok, `${protection} cannot be switched off`);
+        assert.match(refused.note ?? "", /mandatory protection/, `the refusal names the protection rule for ${protection}`);
+        assert.equal(fs.readFileSync(overridesPath(), "utf8"), before, `the refusal of ${protection} writes nothing`);
+      }
+    } finally {
+      restoreHome();
+      restoreAgent();
       rmWorkspace(ws);
     }
   },

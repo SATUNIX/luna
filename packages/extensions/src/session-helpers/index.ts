@@ -864,8 +864,57 @@ async function applyDefaultProfile(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   }
 }
 
+/** A model as the identity `/new` must keep: provider and id, nothing else. */
+interface ModelIdentity {
+  provider: string;
+  id: string;
+}
+
+/**
+ * F-14: `/new` replaces the session, and pi resolves the new session's model again from the
+ * command line, the scoped-model list or settings (pi's `buildSessionOptions` in
+ * `@earendil-works/pi-coding-agent/dist/main.js`), not from the model this process was started with. When the pane was
+ * started without `--model`, a `/new` can therefore land on another model. Remember the first
+ * model of this process and put it back when a `/new` session comes up on a different one.
+ * Module state survives the session replacement (the module is imported once per process); a
+ * `/reload` that re-imports it starts a fresh baseline on the session it reloads.
+ */
+let pinnedModel: ModelIdentity | undefined;
+
+const modelIdentity = (model: unknown): ModelIdentity | undefined => {
+  if (!isRecord(model)) return undefined;
+  const provider = model.provider;
+  const id = model.id;
+  // pi reports an unresolved model as the "unknown" placeholder: never pin that.
+  if (typeof provider !== "string" || typeof id !== "string" || !provider || !id) return undefined;
+  return provider === "unknown" && id === "unknown" ? undefined : { provider, id };
+};
+
+/** Restore the process's first model when a `/new` session starts on a different one. */
+async function keepSessionModel(pi: ExtensionAPI, event: unknown, ctx: ExtensionContext): Promise<void> {
+  try {
+    const current = modelIdentity(ctx.model);
+    const reason = isRecord(event) && typeof event.reason === "string" ? event.reason : "startup";
+    if (!pinnedModel) {
+      // Only a session that starts this process (or follows a reload of it) sets the pin. A
+      // /new that arrives with none (module reloaded mid-process) is not guessed at.
+      if (reason !== "new" && current) pinnedModel = current;
+      return;
+    }
+    if (reason !== "new" || !current) return;
+    if (current.provider === pinnedModel.provider && current.id === pinnedModel.id) return;
+    const target = ctx.modelRegistry?.find?.(pinnedModel.provider, pinnedModel.id);
+    if (!target) return;
+    if (!(await pi.setModel(target))) return;
+    say(ctx, `Kept the model this session started with, ${pinnedModel.provider}/${pinnedModel.id}, across /new (pi had switched to ${current.provider}/${current.id}).`, "info");
+  } catch {
+    // Keeping the model must never break session start.
+  }
+}
+
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_start", async (event: unknown, ctx: ExtensionContext) => {
+    await keepSessionModel(pi, event, ctx);
     // First and independent of everything below: publish the effective compaction state for the
     // footer and warn once if compaction is off or cannot work. Must never break session start.
     refreshCompaction(pi, ctx);

@@ -67,7 +67,8 @@
     as pi-tui's `visibleWidth` counts emoji presentation sequences; clusters that are only
     zero-width stay at 0.
   - A tab measures three columns (`codePointWidth`), matching pi-tui's `graphemeWidth`.
-  - Nothing in the test suite pins this.
+  - Pinned by `tests/status-bar-smoke.ts`, which sweeps the footer at widths 20 to 120 and asserts
+    `visibleWidth` fits, and keeps wide and emoji text in the Unicode bar.
 - 2026-11-18 ASCII status chips.
   - `width.ts` adds `foldAscii(text, names)`, which replaces each grapheme cluster outside printable
     ASCII with its name, or `?`, and keeps ANSI sequences.
@@ -80,3 +81,22 @@
     (`tests/status-bar-smoke.ts`, `asciiBarPrintsOnlyAscii`).
   - `commandArgs` takes the command argument as the string pi 1.4.0 and newer pass; the word-array
     form older pi passed is no longer accepted (`tests/cat-status-smoke.ts`, `tests/status-bar-smoke.ts`).
+- 2026-11-19 repository text is filtered to one visible line.
+  - The todo item text (`widgets.ts`), the branch, the project/cwd text and the session name
+    (`render.ts`, in the bar and in `/footer status`) are repository-controlled and were printed as
+    written, so an OSC 52 clipboard write, `ESC[2J`, a C1 CSI or a bidi override in `TODO.md` or
+    `.git/HEAD` reached the terminal. Each now passes through `oneVisibleLine` from
+    `shared/visible-text.ts` (a generated copy of `packages/core/shared/visible-text.ts`) before
+    layout and width fitting; the theme's colour sequences are added afterwards. Fitting, priority
+    and other extensions' status text are unchanged.
+  - Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
+- 2026-11-24 narrow terminals keep a lone critical right-side chip.
+  - `fitLine`'s final truncation only kept the right side when it had at least 12 columns of left
+    context, and merged criticals only when there were two or more. A single priority-0 chip on
+    the right (a blocked orchestrator, a failing status chip) was therefore dropped at about 37
+    columns or less, against the module's never-drop-a-warning contract. With a critical segment on
+    the right the left context is now cut to make room; when the warning alone is wider than the
+    line the warning itself is cut rather than replaced by context. Lines without a critical
+    right-side segment are unchanged.
+  - Pinned by `tests/status-bar-smoke.ts` (`singleCriticalRightChipSurvivesNarrowWidths`, widths
+    20 to 40).

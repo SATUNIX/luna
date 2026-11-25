@@ -77,6 +77,8 @@ const SCRIPT_CHILD_ID = "2026-01-01T00-00-02-500Z-scout-beef02";
 const YAML_CHILD_LOG = path.join(subagentDir, `${YAML_CHILD_ID}.log`);
 const SCRIPT_CHILD_LOG = path.join(subagentDir, `${SCRIPT_CHILD_ID}.log`);
 const SUBAGENT_LOG = path.join(subagentDir, `${SUBAGENT_ID}.log`);
+const SUMMARY_ID = "2026-01-01T00-07-00-000Z-scout-summary1";
+const SUMMARY_LOG = path.join(subagentDir, `${SUMMARY_ID}.log`);
 // Autonomous container runs: a live one with a fresh supervisor lock, a blocked one, and a
 // directory that must be skipped because its state.json is malformed.
 const autonomyHome = path.join(ws, "autonomy-home");
@@ -185,12 +187,25 @@ writeFile(
   SUBAGENT_LOG,
   `# subagent run ${SUBAGENT_ID}\n# agent=scout depth=1\n# task=scan the tree\n# end status=end\n`,
 );
+writeFile(
+  SUMMARY_LOG,
+  [
+    `# subagent run ${SUMMARY_ID}`,
+    "# agent=scout depth=1",
+    "# task=summarize the tree",
+    JSON.stringify({ type: "tool_execution_start", toolName: "read", args: { path: "a.ts" } }),
+    JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `scan done\n${"x".repeat(2_000)}` }] } }),
+    JSON.stringify({ type: "tool_execution_start", toolName: "bash", args: { command: "ls" } }),
+  ].join("\n") + "\n",
+);
 writeFile(YAML_CHILD_LOG, `# subagent run ${YAML_CHILD_ID}\n# agent=scout depth=1\n# task=step scan\n# end status=end\n`);
 writeFile(SCRIPT_CHILD_LOG, `# subagent run ${SCRIPT_CHILD_ID}\n# agent=scout depth=1\n# task=step a\n# end status=end\n`);
 const registryRows = [
   { ts: "2026-01-01T00:05:00.000Z", id: SUBAGENT_ID, event: "start", agent: "scout", depth: 1, log: SUBAGENT_LOG, task: "scan the tree" },
   { ts: "2026-01-01T00:05:01.000Z", id: SUBAGENT_ID, event: "spawn", pid: 2147483646, agent: "scout", log: SUBAGENT_LOG },
   { ts: "2026-01-01T00:05:03.000Z", id: SUBAGENT_ID, event: "end", status: "end", agent: "scout", turns: 2, cost: 0.0004 },
+  { ts: "2026-01-01T00:07:00.000Z", id: SUMMARY_ID, event: "start", agent: "scout", depth: 1, log: SUMMARY_LOG, task: "summarize the tree" },
+  { ts: "2026-01-01T00:07:03.000Z", id: SUMMARY_ID, event: "end", status: "end", agent: "scout", turns: 2, cost: 0.0005 },
   // The children of the two workflow runs above: each has its own id, which its run recorded, so
   // the row belongs to that run and is not a background subagent.
   { ts: "2026-01-01T00:00:02.000Z", id: YAML_CHILD_ID, event: "start", agent: "scout", depth: 1, log: YAML_CHILD_LOG, task: "step scan" },
@@ -219,7 +234,7 @@ writeFile(
       status: "blocked",
       phase: "review",
       step: 5,
-      blocker: { kind: "question", id: "q-1", method: "input", question: "Which database should the importer use?\u001b[2J\u001b]52;c;QUJD\u0007\nwf-forged: passed", options: ["SQLite", "Postgres"], since: "2026-01-02T00:12:00.000Z" },
+      blocker: { kind: "external", id: "provider-limit", method: "provider", waiting: "waiting_provider", question: "Which database should the importer use?\u001b[2J\u001b]52;c;QUJD\u0007\nwf-forged: passed", options: ["SQLite", "Postgres"], since: "2026-01-02T00:12:00.000Z" },
       usage: { usd: 2.5, minutes: 20, steps: 5 },
       tasks: [
         { id: "task-2", title: "Fix the importer\u009b31m\u202e", status: "in_progress" },
@@ -298,9 +313,10 @@ const lines = (text: string): string[] => text.split("\n");
   assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}`) && l.includes("$2.50 of $10.00")), `a blocked autonomy list line also shows spend:\n${listed}`);
   assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}: blocked · autonomy · Fix the importer · 0 agents`)), `a blocked autonomous run is labelled autonomy:\n${listed}`);
   assert.ok(rows.some((l) => l.includes(AUTONOMY_BLOCKED_ID) && l.includes("Which database should the importer use?")), `a blocked run's question is in the list line:\n${listed}`);
+  assert.ok(rows.some((l) => l.startsWith(`- ${AUTONOMY_BLOCKED_ID}`) && l.includes("blocked: waiting on provider: ")), `a blocked run's list line says what it waits on:\n${listed}`);
   assert.ok(!listed.includes(AUTONOMY_BAD_ID), `a malformed state.json is skipped:\n${listed}`);
   assert.ok(!listed.includes(AUTONOMY_INVALID), `an invalid run directory name is skipped:\n${listed}`);
-  assert.equal(rows.length, 9, `the list holds the nine runs and none of their children:\n${listed}`);
+  assert.equal(rows.length, 10, `the list holds the ten runs and none of their children:\n${listed}`);
   ok("workflow_status lists run.json, state.json, runs.jsonl and autonomy rows, labelled by format");
 
   const script = textOf(await status({ id: SCRIPT_ID }));
@@ -315,6 +331,15 @@ const lines = (text: string): string[] => text.split("\n");
   assert.match(subagent, /Format: subagent/);
   assert.match(subagent, /scout/);
   assert.match(subagent, /# end status=end/, "a subagent run shows its log tail");
+  const summary = textOf(await status({ id: SUMMARY_ID }));
+  assert.match(summary, /Last message: scan done x{100}/, "a log with a message line shows the last assistant text");
+  assert.match(summary, /Last tool: bash/, "a log with a message line shows the last tool name");
+  assert.ok(!summary.includes('"type":"message_end"'), `a log with a message line is summarised, not dumped raw:\n${summary.slice(0, 300)}`);
+  assert.ok(summary.length < 3_000, `a summarised message stays inside the existing caps (got ${summary.length} characters)`);
+  assert.match(summary, /more characters\]/, "a long message is cut and says so");
+  const summaryTail = textOf(await status({ id: SUMMARY_ID, tail: 5 }));
+  assert.match(summaryTail, /"type":"message_end"/, "an explicit tail still returns the raw log, not the summary");
+  assert.ok(!summaryTail.includes("Last message:"), "an explicit tail is the caller asking for the raw log");
   // A log full of huge JSON events (one was 1.79M characters in a real run) must not reach the model whole.
   fs.appendFileSync(SUBAGENT_LOG, `${JSON.stringify({ partialResult: "x".repeat(2_000_000) })}\n`.repeat(30));
   const huge = textOf(await status({ id: SUBAGENT_ID, tail: 1000 }));
@@ -333,6 +358,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.match(autonomyBlocked, /5\/50 steps, 20\/300 min/);
   assert.match(autonomyBlocked, /Which database should the importer use\?/, "the blocker question is shown");
   assert.match(autonomyBlocked, /SQLite \| Postgres/, "the blocker options are shown");
+  assert.match(autonomyBlocked, /Waiting on: provider/, "the waiting reason is shown beside the blocker question");
   // The worker wrote that question and that task title. Nothing it wrote may reach the terminal or
   // the model as a control sequence, a bidi override or a line of its own.
   const hidden = ["\u001b", "\u0007", "\u009b", "\u202e"];
@@ -392,6 +418,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.equal(autonomyBlocked?.name, "Fix the importer");
   assert.equal(autonomyBlocked?.live, false);
   assert.equal(autonomyBlocked?.blockerQuestion, "Which database should the importer use?[2J]52;c;QUJD wf-forged: passed");
+  assert.equal(autonomyBlocked?.blockerWaiting, "waiting_provider", "the row carries what the run waits on");
   assert.equal(autonomyLive?.spendUsd, 1.2, "the list row carries dollars spent");
   assert.equal(autonomyLive?.budgetUsd, 10, "the list row carries the dollar budget");
   const autonomyStale = byId.get(AUTONOMY_STALE_ID);
@@ -405,7 +432,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.equal(byId.get(AUTONOMY_BAD_ID), undefined, "a malformed autonomy state is skipped");
   assert.equal(byId.get(AUTONOMY_INVALID), undefined, "an invalid autonomy directory name is skipped");
   assert.ok(autonomyBlocked, "the blocked autonomy row is present");
-  assert.ok(Q.formatRunLine(autonomyBlocked).includes("Which database should the importer use?"), "formatRunLine shows why an autonomy run is blocked");
+  assert.match(Q.formatRunLine(autonomyBlocked), /blocked: waiting on provider: Which database should the importer use\?/, "formatRunLine shows what an autonomy run waits on");
   const inProcess = byId.get("2026-01-01T00-20-00-000Z-live-aaaa0002");
   assert.equal(inProcess?.format, "yaml", "the live registry is merged in");
   assert.equal(inProcess?.status, "running");
@@ -413,7 +440,7 @@ const lines = (text: string): string[] => text.split("\n");
   assert.equal(found.filter((r) => r.id === SCRIPT_ID).length, 1, "the script run is listed once");
   assert.equal(byId.get(YAML_CHILD_ID), undefined, "a YAML step's child row belongs to that run, not to a subagent run");
   assert.equal(byId.get(SCRIPT_CHILD_ID), undefined, "a script call's child row belongs to that run, not to a subagent run");
-  assert.equal(found.length, 10, "ten runs: the script, the YAML, the background subagent, the live one and the six autonomy runs");
+  assert.equal(found.length, 11, "eleven runs: the script, the YAML, the two background subagents, the live one and the six autonomy runs");
   assert.ok(found.every((r) => r.format === "script" || r.format === "yaml" || r.format === "subagent" || r.format === "autonomy"));
   const only = Q.findRun(ws, SUBAGENT_ID, { registry: I.runRegistry });
   assert.equal(only?.id, SUBAGENT_ID);
@@ -455,6 +482,23 @@ const lines = (text: string): string[] => text.split("\n");
     assert.ok((seen.at(-1) ?? "").startsWith(`Format: ${format} · run ${id}`), `status ${id} describes the ${format} run:\n${seen.at(-1) ?? ""}`);
   }
   // `panel` still reaches the live view, now through the one command.
+  const controlCompletions = async (prefix: string): Promise<Array<{ label: string }>> => {
+    const items = await (workflows.getArgumentCompletions?.(prefix) ?? []);
+    return items ?? [];
+  };
+  const stopIds = (await controlCompletions("stop ")).map((c) => c.label);
+  assert.ok(!stopIds.includes(AUTONOMY_LIVE_ID) && !stopIds.includes(AUTONOMY_BLOCKED_ID), `stop completion must not offer an autonomous run id it cannot control:\n${stopIds.join(", ")}`);
+  // The controllable set is every non-autonomy format, and a workflow run is the `yaml` format.
+  // Only live runs complete for a control verb, so the in-process yaml run started above must
+  // appear: this is what proves workflow runs are still offered after the autonomy filter.
+  assert.ok(stopIds.includes("2026-01-01T00-20-00-000Z-live-aaaa0002"), `stop completion still offers the live workflow (yaml) run:\n${stopIds.join(", ")}`);
+  assert.ok(!stopIds.includes(YAML_ID), "stop completion offers live runs only, not a finished workflow run");
+  const statusIds = (await controlCompletions("status ")).map((c) => c.label);
+  assert.ok(statusIds.includes(AUTONOMY_LIVE_ID) && statusIds.includes(AUTONOMY_BLOCKED_ID), `status completion reads every format, autonomy included:\n${statusIds.join(", ")}`);
+  for (const verb of ["pause", "skip", "resume"]) {
+    const labels = (await controlCompletions(`${verb} `)).map((c) => c.label);
+    assert.ok(labels.every((id) => id !== AUTONOMY_LIVE_ID && id !== AUTONOMY_BLOCKED_ID), `${verb} completion must not offer an autonomous run id:\n${labels.join(", ")}`);
+  }
   await workflows.handler("panel", cmdCtx);
   assert.match(notes.at(-1) ?? "", /^Workflows \(/);
   ok("/workflows lists past runs, status <id> describes a run of every format, and panel opens the live view");
@@ -503,10 +547,18 @@ const agents: AgentConfig[] = [{ name: "scout", description: "fixture", tools: [
 
 {
   // A recorded orphan: a live process whose registry row outlived its parent. `cli.js` in the
-  // command line is what stopRecordedRun's PID-reuse guard asks for on Linux.
+  // command line is what stopRecordedRun's PID-reuse guard asks for on Linux, so wait until the
+  // child has exec'd that script: spawn() returns at fork, and stopping before exec makes the
+  // guard see this test's own command line and skip the orphan (the check then flakes under load).
   const cli = path.join(ws, "orphan", "cli.js");
-  writeFile(cli, "setTimeout(() => {}, 60000);\n");
+  const ready = path.join(ws, "orphan", "ready");
+  writeFile(cli, `require("node:fs").writeFileSync(${JSON.stringify(ready)}, "ready");\nsetTimeout(() => {}, 60000);\n`);
   const orphan = spawn(process.execPath, [cli], { stdio: "ignore" });
+  const deadline = Date.now() + 5000;
+  while (!fs.existsSync(ready)) {
+    assert.ok(orphan.exitCode === null && Date.now() < deadline, "the orphan fixture starts its cli.js before it is stopped");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   process.once("exit", () => orphan.kill()); // a failing case must not leave the fixture running
   const exited = new Promise<string>((resolve) => orphan.once("exit", (code, signal) => resolve(signal ?? String(code))));
   writeFile(

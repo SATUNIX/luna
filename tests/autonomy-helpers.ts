@@ -5,6 +5,7 @@
 // focused, standard, thorough, exhaustive; default standard; aliases E1..E5 and 1..5), so the
 // autonomy suite does not depend on which branch of the core package it is checked out with.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -144,6 +145,23 @@ export function tempDir(prefix = "autonomy-test-"): string {
 }
 
 export const rm = (dir: string): void => fs.rmSync(dir, { recursive: true, force: true });
+
+/**
+ * Makes `dir` a bare repository whose `pre-receive` hook is `script`, a test's stand-in for a remote that refuses pushes.
+ * The repository's own config points `core.hooksPath` at its hooks directory: the Luna gate (packages/autonomy/image/gate.sh)
+ * sets a global `core.hooksPath=/dev/null`, and without the local setting the hook would silently not run there.
+ */
+export function hookedBareRemote(dir: string, script: string): void {
+  const git = (args: readonly string[]): void => {
+    const r = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+    assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
+  };
+  git(["init", "--quiet", "--bare"]);
+  const hooks = path.join(dir, "hooks");
+  git(["config", "core.hooksPath", hooks]);
+  fs.writeFileSync(path.join(hooks, "pre-receive"), script, { mode: 0o755 });
+  fs.chmodSync(path.join(hooks, "pre-receive"), 0o755);
+}
 
 /**
  * The bind-mount sources in a container's argument list that expose the operator's home: the directory itself, a parent of it, or one

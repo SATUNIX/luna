@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { assert, makeChecker, type RawContract } from "./autonomy-helpers.ts";
+import { assert, hookedBareRemote, makeChecker, type RawContract } from "./autonomy-helpers.ts";
 import { cleanup, harness, runOnce, scratch, NODE_EXIT, type ManagerFn, type ScriptContext } from "./autonomy-harness.ts";
 import { classifyFailure, failingNames, preflight } from "../packages/autonomy/lib/preflight.ts";
 import { openBacklogRows, queueWork } from "../packages/autonomy/lib/queue.ts";
@@ -220,12 +220,9 @@ await check("an idle stewarded run retries a publication that failed after its l
   reviews.length = 0;
   const src = sourceRepo();
   const bare = scratch();
-  assert.equal(git(bare, ["init", "--quiet", "--bare"]).status, 0);
   // The remote takes the run's seed, refuses the next push (the merged cycle), and takes pushes again once
   // the idle run's sleep has dropped an `allow` file: a transient publication failure.
-  const hook = path.join(bare, "hooks", "pre-receive");
-  fs.writeFileSync(hook, `#!/bin/sh\n[ -e "${bare}/allow" ] && exit 0\n[ -e "${bare}/seeded" ] && { echo "transient refusal" >&2; exit 1; }\ntouch "${bare}/seeded"\nexit 0\n`);
-  fs.chmodSync(hook, 0o755);
+  hookedBareRemote(bare, `#!/bin/sh\n[ -e "${bare}/allow" ] && exit 0\n[ -e "${bare}/seeded" ] && { echo "transient refusal" >&2; exit 1; }\ntouch "${bare}/seeded"\nexit 0\n`);
   const h = harness(raw(src, { promotion: { policy: "push", destinations: [{ kind: "git-remote", url: "https://git.example.org/team/repo.git", branch: "pi-autonomy/integration", tags: false }], requiresOperatorApproval: false } }), {
     manager,
     cfgOverride: { integrationRemote: bare, gitRemote: bare },

@@ -35,6 +35,16 @@ headless session cannot answer an approval card: a tool call that would ask is d
 `/away`-style ceiling is the only budget. `exec` sets `PI_KIT_AUTO_PROFILE=0` so a script never
 rewrites settings. See [Autonomy gate](autonomy-gate.md) for how headless sessions are gated.
 
+A model can end a session that used tools with an empty final message. When that happens and the
+run did not fail, `exec` prints one status line from the last tool result instead of nothing: an
+autonomy start (the CLI's human line or its `--json` record, including `up --json` without a
+`started` field) becomes `Run <id> started; state: <state>.`, anything else becomes
+`Tool <name> finished: <first line>` (or `failed:` for an error). The tool text is raw tool
+output, so the status line passes through the kit's redaction table first ([Redaction](security.md)):
+a first line holding a key prints the key name and `[REDACTED]`, never the value. A session with no
+tool calls still prints nothing for an empty answer. `tests/luna-cli-smoke.ts` pins these shapes,
+including a secret taken from the redaction corpus.
+
 ### The `--json` event stream
 
 `--json` is pi's JSON mode: one JSON object per line (strict LF framing), starting with a `session`

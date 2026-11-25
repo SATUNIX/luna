@@ -757,6 +757,7 @@ function classifySegment(c: Ctx): void {
   if (seg.dynamicName) {
     if (seg.decoderInName) add(c, "high", "obfuscated_exec", "decoded_command", "runs a command decoded at runtime", "decoded-exec");
     else add(c, "medium", "opaque", "dynamic_command", `command name is computed at runtime (${seg.words[0]?.raw ?? argv[0]})`, "dynamic-exec");
+    if (c.env.autonomyRule !== false) autonomyBroad(c);
     return;
   }
   if (seg.evalOf) add(c, "medium", "opaque", "eval_dynamic", "eval of runtime-built text", "eval");
@@ -795,23 +796,7 @@ function classifySegment(c: Ctx): void {
   // understood: `pi-autonomy <command>` or the workspace's autonomy/cli script run as the program or as a plain
   // interpreter's first operand. Anything else falls through to the interpreter, stdin, inline-code and package
   // rules, so the rule never rates a command lower than it would be without it.
-  if (c.env.autonomyRule !== false) {
-    const isCandidate = (a: string): boolean => {
-      if (a.includes("pi-autonomy") || /autonomy\/cli\.(?:ts|mjs)/.test(a)) return true;
-      if (!/(?:^|\/)cli\.(?:ts|mjs)$/.test(a)) return false;
-      return /\/autonomy\/cli\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${seg.cwd ?? c.env.cwd}/${a}`));
-    };
-    const launchContext = INTERPRETERS.has(exe) || AUTONOMY_RUNNERS.has(exe);
-    const raws = seg.words.map((w) => w.raw);
-    let found = false;
-    argv.forEach((a, k) => {
-      if (k > 0 && !launchContext) return;
-      if (!isCandidate(a) && !isCandidate(raws[k] ?? "")) return;
-      found = true;
-      autonomyFindings(c, argv.slice(k + 1));
-    });
-    if (found && narrowAutonomyLaunch(c)) return;
-  }
+  if (c.env.autonomyRule !== false && autonomyBroad(c) && narrowAutonomyLaunch(c)) return;
 
   // Agent CLIs are recognised by identity (name, script path or package), not by the name typed.
   const agent = agentIdentity(seg);
@@ -993,6 +978,13 @@ const AUTONOMY_READ_OPTS = new Set(["--config", "--file", "--ntfy-token-file", "
 const AUTONOMY_WRITE_OPTS = new Set(["--out", "--alert-state"]);
 // Programs that run a package's CLI named in their arguments: an autonomy word after one is a launch.
 const AUTONOMY_RUNNERS = new Set(["npx", "npm", "pnpm", "pnpx", "yarn", "bunx", "bun", "deno"]);
+// Programs that run a command or script named in their operands: node-family interpreter aliases, version
+// managers (fnm exec, volta run, nodenv/pyenv/rbenv exec, rustup run, corepack <pm>), coverage tools (c8, nyc),
+// watchers and process supervisors. The parser does not peel these, so the CLI is never the program through
+// one and the narrow match refuses it: only the broad matcher's findings apply.
+const AUTONOMY_LAUNCHERS = /^(?:node[\w.-]*|nodejs|iojs|ts-node[\w-]*|esno|esr|vite-node|babel-node|sucrase-node|jiti|nvm|n|asdf|mise|fnm|volta|nodenv|pyenv|rbenv|rustup|corepack|c8|nyc|nodemon|pm2|forever|proto|wait-on|cross-env|dotenvx|entr|hyperfine|concurrently)$/;
+// Inline code that names the autonomy CLI or its library: what it calls cannot be read, so it fails closed.
+const AUTONOMY_INLINE = /pi-autonomy|autonomy\/(?:cli|supervisor|relay)\b|autonomy\/lib\//;
 // Every option the CLI's argument parser accepts (packages/autonomy/cli.ts); anything else is not understood.
 const AUTONOMY_OPTIONS = new Set(["alert-state", "answer", "approve", "attended", "authorise", "authorize", "backlog", "budget-usd", "by", "check", "check-minutes", "config", "credential",
   "deny", "detach", "digest", "digest-hour", "effort", "effort-cap", "egress", "engine", "engineers", "file", "force", "gh-repo", "goal", "hard-restarts", "health", "help", "image",
@@ -1041,13 +1033,210 @@ function trustedAutonomyScript(c: Ctx, word: string): boolean {
   return cls === "workspace" || cls === "workspace_root" || cls === "workspace_derived";
 }
 
+// Could the unexpanded glob `pat` (*, ?, [...]) match the literal `name`? Matched by hand, so no pattern is
+// compiled from command text (docs/security-standard.md). A bracket expression it cannot evaluate (one holding
+// [:class:], [.x.] or [=e=], or a reversed range) fails closed and matches; an unclosed `[` is literal, as in bash.
+function globCouldMatch(pat: string, name: string): boolean {
+  const STAR = null;
+  const toks: (((ch: string) => boolean) | null)[] = [];
+  for (let i = 0; i < pat.length; i++) {
+    const ch = pat[i] ?? "";
+    if (ch === "*") { toks.push(STAR); continue; }
+    if (ch === "?") { toks.push(() => true); continue; }
+    if (ch === "\\" && i + 1 < pat.length) { const lit = pat[++i]; toks.push((x) => x === lit); continue; }
+    if (ch === "[") {
+      let j = i + 1;
+      const negate = pat[j] === "!" || pat[j] === "^";
+      if (negate) j++;
+      const start = j;
+      if (pat[j] === "]") j++;
+      const end = pat.indexOf("]", j);
+      if (end >= 0) {
+        const body = pat.slice(start, end);
+        if (/\[[:.=]/.test(body)) return true;
+        const ranges: [string, string][] = [];
+        for (let k = 0; k < body.length; k++) {
+          const lo = body[k] ?? "";
+          const hi = body[k + 2];
+          if (body[k + 1] === "-" && hi !== undefined) {
+            if (hi < lo) return true;
+            ranges.push([lo, hi]);
+            k += 2;
+          } else ranges.push([lo, lo]);
+        }
+        toks.push((x) => ranges.some(([lo, hi]) => x >= lo && x <= hi) !== negate);
+        i = end;
+        continue;
+      }
+    }
+    toks.push((x) => x === ch);
+  }
+  // reach[k]: the first k tokens can match the part of the name read so far; a `*` may also match nothing.
+  const close = (reach: boolean[]): boolean[] => {
+    toks.forEach((t, k) => { if (reach[k] && t === STAR) reach[k + 1] = true; });
+    return reach;
+  };
+  let reach = close(toks.map((_, k) => k === 0).concat(toks.length === 0));
+  for (const x of name) {
+    const next: boolean[] = new Array<boolean>(toks.length + 1).fill(false);
+    toks.forEach((t, k) => {
+      if (!reach[k]) return;
+      if (t === STAR) next[k] = true;
+      else if (t(x)) next[k + 1] = true;
+    });
+    reach = close(next);
+  }
+  return reach[toks.length] === true;
+}
+
+// A glob that could expand to the CLI: `pi-auto*` (alone, or as a path's last component holding a literal), or a path whose last two
+// components could match autonomy/cli.ts|mjs or the legacy autonomy/supervisor.ts|mjs.
+function globCouldName(c: Ctx, word: string): boolean {
+  if (!/[*?[]/.test(word)) return false;
+  const full = normalize(word.startsWith("/") ? word : `${c.seg.cwd ?? c.env.cwd}/${word}`).split("/");
+  const test = (g: string | undefined, s: string) => g !== undefined && globCouldMatch(g, s);
+  const script = ["cli.ts", "cli.mjs", "supervisor.ts", "supervisor.mjs"].some((s) => test(full.at(-1), s));
+  // Behind a path, a last component made only of wildcards (`src/*`) is an ordinary file list, not the bin by name.
+  const bin = /[A-Za-z0-9]/.test(full.at(-1) ?? "") && test(full.at(-1), "pi-autonomy");
+  return test(word, "pi-autonomy") || bin || (script && (test(full.at(-2), "autonomy") || full.slice(0, -1).some((p) => p.includes("**"))));
+}
+
+// The shell splits unquoted words on its default IFS (space, tab, newline) only: \r, \v, \f and Unicode spaces are
+// part of a word, so `status\rpi-autonomy` is one (unknown) command, not two.
+const ifsWords = (s: string) => s.split(/[ \t\n]+/).filter(Boolean);
+// Drop shell operator characters (&&, ||, ;, |, &) stuck to the end of a token, without a regex (no backtracking).
+const trimOperators = (t: string) => { let e = t.length; while (e > 0 && (t[e - 1] === "&" || t[e - 1] === "|" || t[e - 1] === ";")) e--; return t.slice(0, e); };
+// The separators other languages split on besides \s (U+001C-U+001F, U+0085), read as spaces.
+const anySpace = (s: string) => Array.from(s, (ch) => { const n = ch.codePointAt(0) ?? 0; return (n >= 0x1c && n <= 0x1f) || n === 0x85 ? " " : ch; }).join("");
+
+// Installed system programs: /usr/bin, /bin, /usr/local/bin, /sbin, /opt, /nix and mise's install directory,
+// tested on the normalised path so a `..` that leaves the directory is not exempt.
+function systemPath(c: Ctx, p: string): boolean {
+  const cwd = c.seg.cwd ?? c.env.cwd;
+  if (!p.startsWith("/") && !cwd?.startsWith("/")) return false;
+  const abs = normalize(p.startsWith("/") ? p : `${cwd ?? ""}/${p}`);
+  return /^\/(?:usr\/)?(?:local\/)?s?bin\//.test(abs) || /^\/opt\/|^\/nix\/|^\/home\/[^/]+\/\.local\/share\/mise\//.test(abs);
+}
+
+// Inline code that is one bare word (`node -c packages/autonomy/cli.ts` is node's syntax check) calls nothing.
+const bareWord = (code: string) => /^[\w./@:+-]+$/.test(code);
+
+// The broad matcher: any word that could be the CLI, run as the program or by an interpreter or package runner,
+// named literally, through a variable this command set, or by a glob. It only ever adds findings.
+function autonomyBroad(c: Ctx): boolean {
+  const { seg } = c;
+  const argv = seg.argv;
+  const viaVar = (raw: string) => raw.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (m, n: string) => seg.vars[n] ?? m);
+  // supervisor.ts is the CLI's legacy entry point: it passes every command to the CLI (`boundary` gains --probe).
+  const named = (a: string): boolean => {
+    if (a.includes("pi-autonomy") || /autonomy\/(?:cli|supervisor)\.(?:ts|mjs)/.test(a) || globCouldName(c, a)) return true;
+    if (!/(?:^|\/)(?:cli|supervisor)\.(?:ts|mjs)$/.test(a)) return false;
+    return /\/autonomy\/(?:cli|supervisor)\.(?:ts|mjs)$/.test(normalize(a.startsWith("/") ? a : `${seg.cwd ?? c.env.cwd}/${a}`));
+  };
+  // A short option with its value attached (`-xpi-auto*`, `-r./packages/autonomy/cli.ts`) is read by its value, as
+  // `-x=` is: every split after the option letters is tried, and only a value holding a letter or digit counts, so
+  // an option made of wildcards (`-x*`) is not read as a glob naming the CLI.
+  const isCandidate = (a: string): boolean => {
+    if (named(a)) return true;
+    const letters = /^-([A-Za-z]+)/.exec(a)?.[1] ?? "";
+    for (let i = 1; i <= letters.length; i++) {
+      const value = a.slice(1 + i);
+      if (/[A-Za-z0-9]/.test(value) && named(value)) return true;
+    }
+    return false;
+  };
+  const raws = seg.words.map((w) => w.raw);
+  const exe = basenameOf(viaVar(raws[0] ?? c.exe).replace(/^["']|["']$/g, ""));
+  const known = (e: string) => INTERPRETERS.has(e) || AUTONOMY_RUNNERS.has(e) || AUTONOMY_LAUNCHERS.test(e);
+  const launches = (e: string) => known(e) || !(own(HANDLERS, e) !== undefined || READ_ONLY.has(e) || DEV_TOOLS.has(e) || BENIGN_EXEC.has(e));
+  // A program given by path (`./eslint`, `scripts/git`, `node_modules/.bin/tsc`) is whatever that file is, not the
+  // tool its name suggests: its rule is not consulted. Installed system programs (/usr/bin, /opt, /nix) are the tool,
+  // judged on the path as resolved (`/usr/bin/../../tmp/eslint` is /tmp/eslint).
+  const program = viaVar(raws[0] ?? "").replace(/["']/g, "");
+  const byPath = [argv[0] ?? "", program].some((p) => p.includes("/") && !systemPath(c, p));
+  // PATH set on the command or earlier in the line (`PATH=.:$PATH eslint …`) changes which file a bare name runs,
+  // unless every entry is a system directory or the inherited $PATH.
+  const pathSet = [...seg.assigns.filter((a) => /^PATH(?:\[[^\]]*\])?\+?=/.test(a)).map((a) => (/^PATH\+=/.test(a) ? `$PATH:` : "") + a.slice(a.indexOf("=") + 1)),
+    ...Object.keys(seg.vars).filter((k) => /^PATH(?:\[|$)/.test(k)).map((k) => seg.vars[k] ?? "")];
+  const pathMoved = pathSet.some((v) => v.split(":").some((d) => !/^\$\{?PATH\}?$/.test(d) && !systemPath(c, `${d}/x`)));
+  // A shell function defined on the line runs its own body; a sourced file with operands reads them as $1, $2, ….
+  const sourced = (c.exe === "source" || c.exe === ".") && argv.length > 2;
+  const launchContext = byPath || pathMoved || seg.fnCall === true || sourced || launches(exe) || launches(c.exe);
+  // Only a program with no rule makes this a launch context: what it does with its operands is unknown.
+  const unknownOnly = !known(exe) && !known(c.exe);
+  let found = false;
+  argv.forEach((a, k) => {
+    const prev = argv[k - 1] ?? "";
+    // Inline code is the word after -e/-p/-c/--eval/--print, or the value of their = form (`node --eval="..."`).
+    const joined = /^-(?:[a-zA-Z]*[epc]|-eval|-print)=/.exec(a);
+    const code = joined ? a.slice(joined[0].length) : a;
+    const inline = /awk$/.test(c.exe) ? /\bsystem\s*\(|\|/.test(a) : launchContext && (joined !== null || /^-(?:[a-zA-Z]*[epc]|-eval|-print)$/.test(prev)) && !bareWord(code);
+    if (k > 0 && inline && AUTONOMY_INLINE.test(code)) {
+      add(c, "high", "security_control", "autonomy_control", `${c.exe} runs code that names the autonomy CLI`, `${c.exe} inline autonomy`);
+      found = true;
+      return;
+    }
+    if (k > 0 && !launchContext) return;
+    const raw = raws[k] ?? "";
+    // Fail closed: the word itself, or what a variable this line set expands to, read as a command. An option=value
+    // word under any option name is read by its value (`--exec="pi-autonomy promote"`, `-c=...`, `--setup=...`,
+    // `--node-options=--require=...`), as its space form would be, since what a program does with an option's value
+    // is not known. A word holding a whole command (`pm2 start "eslint . ; pi-autonomy promote"`, `c='pi-autonomy
+    // promote'; $c`) carries the CLI's command in the same word, whatever comes before it in the word.
+    // The word is split as the shell splits it (space, tab, newline) and, since the program that receives it may
+    // split it otherwise, on any whitespace too (\r, \v, \f, Unicode spaces): each split is a reading.
+    const splits = [ifsWords, (t: string) => anySpace(t).split(/\s+/).filter(Boolean)];
+    const strip = (t: string) => t.replace(/^-[^=\s]*=/, "");
+    // The word, or the program its value or command would run (its first token: `--exec=pi-auto* promote`).
+    const text = [a, viaVar(raw).replace(/["']/g, ""), raw].find((t) => isCandidate(t) || splits.some((split) => isCandidate(split(strip(t))[0] ?? "")));
+    if (text === undefined) return;
+    const rest = argv.slice(k + 1);
+    // `./ssh pi-autonomy promote`: the parser read the file as ssh and its operands as a remote command, which this
+    // segment no longer holds, so they are rated as unseen.
+    const unseen = seg.unknownArgs || (seg.ssh !== undefined && byPath && seg.interactiveShell !== true);
+    const seen = new Set<string>();
+    for (const split of splits) {
+      const toks = split(strip(text));
+      const at = toks.findIndex((t) => isCandidate(t));
+      // Each reading of the launch is rated and the worst stands: the word's tokens after the CLI with the operands
+      // that follow the word; every command in the word that names the CLI (split on &&, ||, ;, |, & and newlines:
+      // `--exec="pi-autonomy status; pi-autonomy promote"`); and, when the CLI sits inside the word, the operands
+      // after it alone (`--exec="pi-autonomy status" promote`), since what the launcher does with them is not known.
+      // A shell operator stuck to a token (`status;`) ends that token, as the shell reads it.
+      const readings: string[][] = [at >= 0 ? [...toks.slice(at + 1).map(trimOperators).filter(Boolean), ...rest] : rest];
+      if (at >= 0) {
+        const parts = strip(text).split(/&&|\|\||[;|&\n]/);
+        parts.forEach((part, i) => {
+          const pt = split(part);
+          const pa = pt.findIndex((t) => isCandidate(t));
+          if (pa >= 0) readings.push([...pt.slice(pa + 1), ...(i === parts.length - 1 ? rest : [])]);
+        });
+        if (toks.length > at + 1 && rest.some((x) => !x.startsWith("-"))) readings.push(rest);
+      }
+      const legacy = /supervisor/.test(toks[at] ?? text) || /[*?[]/.test(toks[at] ?? text);
+      for (let args of readings) {
+        if (legacy && args.find((x) => !x.startsWith("-")) === "boundary") args = [...args, "--probe"];
+        // After a program with no rule, an operand followed only by options the CLI does not accept is that program's
+        // input (`somecustomtool packages/autonomy/cli.ts --lint`), not a launch.
+        if (unknownOnly && k > 0 && args.every((x) => x.startsWith("-")) && args.some((x) => !AUTONOMY_OPTIONS.has(x.replace(/=.*$/, "")) && x !== "-h")) continue;
+        if (seen.has(args.join("\0"))) continue;
+        seen.add(args.join("\0"));
+        found = true;
+        autonomyFindings(c, args, unseen);
+      }
+    }
+  });
+  return found;
+}
+
 // What any launch of the autonomy CLI adds, however it was reached (the broad matcher): its file options, and
 // a high finding for a control or unknown command or a medium one for a network or export command.
-function autonomyFindings(c: Ctx, args: string[]): void {
+function autonomyFindings(c: Ctx, args: string[], unseen = c.seg.unknownArgs): void {
   const sub = args.find((a) => !a.startsWith("-"));
   const authorising = args.some((a) => a === "--authorise" || a === "--authorize");
   autonomyFileOptions(c, args);
-  const verb = autonomyVerb(args);
+  // xargs/parallel append arguments that cannot be seen: rate the command as if they were its worst options.
+  const verb = autonomyVerb(unseen ? [...args, "--authorise", "--answer", "--setup", "--probe"] : args);
   if (verb === "control") {
     const named = sub ?? args.join(" ");
     add(c, "high", "security_control", "autonomy_control", `pi-autonomy ${named}${authorising ? " --authorise" : ""} authorises, starts, steers, answers or changes an autonomous run: only the operator does that`, `autonomy ${named}${authorising ? " authorise" : ""}`);
@@ -1060,11 +1249,15 @@ function narrowAutonomyLaunch(c: Ctx): boolean {
   const { seg, exe } = c;
   const argv = seg.argv;
   if (seg.words.some((w) => w.dynamic || w.subs.length > 0 || w.procSub) || seg.pipeIn || seg.stdinBody !== undefined) return false;
+  // Environment that changes which program runs or what it loads, set on the command or earlier in the line;
+  // arguments xargs/parallel append; a shell function of the same name.
+  if (seg.assigns.length || seg.fnCall || seg.via.some((v) => !/^(?:exec|nohup|setsid|stdbuf|watch|env -S|script -c|entr -s|(?:ba|z|da|k)?sh -c)$/.test(v)) || Object.keys(seg.vars).length > 0) return false;
   let args: string[];
   if (argv[0] === "pi-autonomy" && seg.words[0]?.raw === "pi-autonomy") args = argv.slice(1);
   else if (trustedAutonomyScript(c, argv[0] ?? "")) args = argv.slice(1);
-  else if (["node", "nodejs", "tsx", "bun"].includes(exe) && trustedAutonomyScript(c, argv[1] ?? "")) args = argv.slice(2);
+  else if (["node", "tsx", "bun"].includes(exe) && trustedAutonomyScript(c, argv[1] ?? "")) args = argv.slice(2);
   else return false;
+  if (!args.length) return false;
   const understood = args.every((a, i) => !a.startsWith("-") || AUTONOMY_OPTIONS.has(a.replace(/=.*$/, "")) || a === "-h"
     || (i > 0 && AUTONOMY_OPTIONS.has(args[i - 1] ?? "") && !a.startsWith("--")));
   if (!understood) return false;
@@ -1074,6 +1267,7 @@ function narrowAutonomyLaunch(c: Ctx): boolean {
 
 function inlineCode(c: Ctx, code: string): void {
   const { exe } = c;
+  if (c.env.autonomyRule !== false && AUTONOMY_INLINE.test(code) && !bareWord(code)) add(c, "high", "security_control", "autonomy_control", `${exe} inline code names the autonomy CLI, which authorises, starts and changes autonomous runs: only the operator does that`, `${exe} inline autonomy`);
   // Inline code that names one of this kit's safety settings is how a launch is forged from an interpreter
   // (`python -c "os.environ['PI_KIT_UNATTENDED']=..."`): the same override as an env prefix or `export`.
   const safetyName = /PI_KIT_(?:FIREWALL|AUTO_MODE|PROTECTED|WRITE_ALLOWLIST|INTERNAL_CHILD|HUMAN_CONSOLE|CAPTURE|UNATTENDED)\w*/.exec(code);

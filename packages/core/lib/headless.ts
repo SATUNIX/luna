@@ -16,6 +16,7 @@ import { isRecord, parseJson } from "./guard.ts";
 import { findPackageEntry, globalAgentDir, readKitMarker, readSettings } from "./settings.ts";
 import { readOverrides } from "./profiles.ts";
 import { parseDuration } from "../shared/ceiling.ts";
+import { redact } from "../shared/redact.ts";
 import { piSpawnPlan, type PiSpawnDeps } from "./pi-cli.ts";
 
 /** pi's flags for a session with no Luna: no extension discovery (so no companions either), skills, prompt templates or themes. */
@@ -53,6 +54,8 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
   const env: Record<string, string> = {};
   let json = false;
   let prompt: string | undefined;
+  // After `--` the one remaining word is the prompt, read literally (even one that looks like an option, or "-").
+  let literal = false;
   const value = (i: number): string | undefined => {
     const v = argv[i + 1];
     return v === undefined || (v.startsWith("--") && v.length > 2) ? undefined : v;
@@ -81,6 +84,12 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
         }
         break;
       }
+      case "--":
+        if (prompt !== undefined || i + 2 !== argv.length) return "give exactly one prompt after --";
+        prompt = argv[i + 1] ?? "";
+        literal = true;
+        i = argv.length;
+        break;
       case "--help": case "-h": return "help";
       default:
         if (arg.startsWith("--") && arg.length > 2) return `unknown option ${arg}`;
@@ -91,7 +100,7 @@ export function planExec(argv: readonly string[]): ExecPlan | string {
   if (prompt === undefined) return "no prompt given";
   // A headless run is a script: never ask for a login or a reload, and keep startup network work off.
   env.PI_KIT_AUTO_PROFILE = "0";
-  const stdinPrompt = prompt === "-";
+  const stdinPrompt = !literal && prompt === "-";
   if (!stdinPrompt) piArgs.push("--", prompt);
   return { piArgs, env, json, stdinPrompt };
 }
@@ -106,11 +115,65 @@ function assistantText(message: unknown): { text: string; failed: boolean } | nu
   return { text, failed: message.stopReason === "error" || message.stopReason === "aborted" };
 }
 
+/** The text a tool execution result carries, when it carries any. */
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (!isRecord(result)) return "";
+  const content = result.content;
+  if (typeof content === "string") return content;
+  return Array.isArray(content)
+    ? content.flatMap((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [])).join("")
+    : "";
+}
+
+/** The first non-empty line of a tool result, clipped so a status line stays one line. */
+function firstLine(text: string): string {
+  const line = text.split(/\r?\n/).map((part) => part.trim()).find((part) => part.length > 0) ?? "";
+  return line.length > 200 ? `${line.slice(0, 197)}...` : line;
+}
+
+/**
+ * A run launched by a tool (the autonomy CLI): name it and the state it reports, rather than a
+ * bare command outcome. Accepts the CLI's human line and its `--json` record. `up --json` returns
+ * `{runId, pid, status, ...}` with no `started` field, while `start --json` adds `started: true`;
+ * a bare `{run, status}` (status/query output) is not a start and stays a tool outcome.
+ */
+function autonomyStart(text: string): string | null {
+  const started = /\brun\s+([^\s;,(]+)\s+started\b[^\n]*?\b(?:status|state)\s*[:=]?\s*([A-Za-z][\w-]*)/i.exec(text);
+  if (started !== null) return `Run ${started[1]} started; state: ${started[2]}.`;
+  for (const raw of text.split(/\r?\n/)) {
+    let record: unknown;
+    try { record = parseJson(raw.trim()); } catch { continue; }
+    if (!isRecord(record)) continue;
+    const up = typeof record.runId === "string" && typeof record.status === "string";
+    const start = record.started === true && typeof record.run === "string" && typeof record.status === "string";
+    if (up || start) return `Run ${String(record.runId ?? record.run)} started; state: ${String(record.status)}.`;
+  }
+  return null;
+}
+
+/** The status line printed when tools ran but the model's final message carried no text. */
+/**
+ * The status line printed when tools ran but the model's final message carried no text. The tool
+ * text is raw tool output, so the whole synthesised line goes through the one redaction table: a
+ * bash result whose first line holds a key must not echo it to stdout (DE-124).
+ */
+function toolStatus(last: { name: string; text: string; failed: boolean } | null, startedName: string | null): string {
+  if (last === null) return redact(`Tool ${startedName ?? "unknown"} did not finish before the session ended.`);
+  const run = autonomyStart(last.text);
+  if (run !== null) return redact(run);
+  const detail = firstLine(last.text) || (last.failed ? "no error text" : "no output");
+  return redact(`Tool ${last.name} ${last.failed ? "failed" : "finished"}: ${detail}`);
+}
+
 /** Reads pi's JSON event stream: progress lines for stderr and the final answer. */
 export class EventReader {
   answer = "";
   failed = false;
   private rest = "";
+  private sawTool = false;
+  private startedTool: string | null = null;
+  private lastTool: { name: string; text: string; failed: boolean } | null = null;
   private readonly progress: (line: string) => void;
   constructor(progress: (line: string) => void) {
     this.progress = progress;
@@ -128,6 +191,9 @@ export class EventReader {
   end(): void {
     if (this.rest.trim()) this.line(this.rest);
     this.rest = "";
+    // A model can end a tool-using session with an empty message. Printing nothing made success
+    // indistinguishable from silence, so report the last tool outcome instead (PG-41).
+    if (!this.failed && this.answer.trim() === "" && this.sawTool) this.answer = toolStatus(this.lastTool, this.startedTool);
   }
 
   private line(raw: string): void {
@@ -135,8 +201,14 @@ export class EventReader {
     let event: unknown;
     try { event = parseJson(raw); } catch { return; }
     if (!isRecord(event)) return;
-    if (event.type === "tool_execution_start" && typeof event.toolName === "string") this.progress(`luna: tool ${event.toolName}`);
-    else if (event.type === "turn_end") this.progress("luna: turn finished");
+    if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+      this.sawTool = true;
+      this.startedTool = event.toolName;
+      this.progress(`luna: tool ${event.toolName}`);
+    } else if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
+      this.sawTool = true;
+      this.lastTool = { name: event.toolName, text: toolResultText(event.result), failed: event.isError === true };
+    } else if (event.type === "turn_end") this.progress("luna: turn finished");
     else if (event.type === "message_end") {
       const a = assistantText(event.message);
       if (a !== null) { this.answer = a.text; this.failed = a.failed; }

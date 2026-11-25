@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { loadExtension, fakePi, setEnv, tmpWorkspace, rmWorkspace } from "../packages/core/eval/harness.ts";
 
@@ -19,6 +20,43 @@ interface ApiStatus {
 }
 
 const wait = (ms = 50): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Take the port the OS assigns rather than drawing one from a fixed range: a random draw can
+// collide with a port another process already holds, and the server then exits while starting.
+// Bind port 0, read the assigned port, and release it for the server to use.
+function freePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      if (address === null || typeof address === "string") {
+        probe.close();
+        reject(new Error("the port probe did not get a TCP address"));
+        return;
+      }
+      const { port } = address;
+      probe.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+// A spawned child's /proc/<pid>/cmdline still shows the forked parent's argv until its exec
+// completes. /console identifies the console by the server script in the command line, so a pid
+// written before the exec makes start see an unrelated process and launch a second server.
+// Wait until the command line names the script before writing the pid file.
+async function waitForCmdline(pid: number, script: string): Promise<void> {
+  const file = `/proc/${pid}/cmdline`;
+  for (let i = 0; i < 200; i++) {
+    try {
+      if (fs.readFileSync(file, "utf8").split("\0").includes(script)) return;
+    } catch {
+      /* the child has not started its new command line yet */
+    }
+    await wait(10);
+  }
+  throw new Error(`child ${pid} did not exec ${script}`);
+}
 
 function alive(pid: number | undefined): boolean {
   if (pid === undefined) return false; // process.kill(undefined) throws, i.e. not alive
@@ -88,7 +126,7 @@ async function run(): Promise<void> {
     if (entry.isDirectory()) fs.symlinkSync(from, to, "junction");
     else fs.copyFileSync(from, to);
   }
-  const port = 18000 + Math.floor(Math.random() * 2000);
+  const port = await freePort();
   const restore = [
     setEnv("PI_KIT_WEBUI_ROOT", webUiRoot),
     // The server's own scratch directory (temporary agent prompts) follows the same root.
@@ -266,8 +304,11 @@ async function run(): Promise<void> {
     // that holds the pid file but does not answer /api/health must be reported by start
     // (not duplicated) and killed by stop.
     if (fs.existsSync(`/proc/${process.pid}/cmdline`)) {
-      const hung = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", path.join(webUiRoot, "server", "server.ts")], { stdio: "ignore" });
+      const serverScript = path.join(webUiRoot, "server", "server.ts");
+      const hung = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", serverScript], { stdio: "ignore" });
       inert.push(hung);
+      assert.ok(hung.pid, "the hung child must have a pid");
+      await waitForCmdline(hung.pid, serverScript);
       writePid(hung.pid);
       await consoleCmd.handler("start", ctx);
       assert.match(lastNotification().message, /is running but .* does not respond/, "start must report a hung console");

@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentsView, CompactionView, Cost, EffortView, FirewallView, SecurityView, UnattendedView, UsageTotals } from "./data.ts";
 import { displayWidth, foldAscii, padDisplay, truncateDisplay } from "./width.ts";
+import { oneVisibleLine } from "./shared/visible-text.ts";
 
 // Method syntax so pi's own Theme (whose fg takes its ThemeColor union) is accepted as is.
 export type Theme = { fg(color: string, text: string): string; bold(text: string): string; name?: string | undefined };
@@ -229,11 +230,17 @@ export function fitLine(left: Seg[], right: Seg[], width: number, sep: string, e
     }
   }
   dropWhere(1);
-  // 4. truncate what is left
+  // 4. truncate what is left. A critical segment on the right (a failing status chip) is never
+  //    dropped for the left context: the left side is cut to make room, and when the warning alone
+  //    is wider than the line the warning itself is cut rather than replaced by the context.
   const { lw, rw, total } = size();
   if (total > width) {
+    const criticalRight = r.some((s) => s.prio === 0);
     const leftRoom = width - (rw ? rw + 2 : 0);
-    if (rw && leftRoom >= 12) return `${truncateDisplay(join(l, sep), leftRoom, ellipsis)}  ${join(r, sep)}`;
+    if (rw && (leftRoom >= 12 || criticalRight)) {
+      if (leftRoom >= 0) return `${truncateDisplay(join(l, sep), leftRoom, ellipsis)}  ${join(r, sep)}`;
+      return truncateDisplay(join(r, sep), width, ellipsis);
+    }
     return truncateDisplay(join(l, sep), width, ellipsis);
   }
   if (!rw) return join(l, sep);
@@ -319,7 +326,9 @@ function chipSegments({ state, theme, mode, glyphs }: Ctx): Seg[] {
 }
 
 function branchSegment({ state, theme }: Ctx): Seg | null {
-  return state.branch ? { id: "branch", prio: 4, text: theme.fg("muted", "on ") + theme.fg("mdLink", state.branch) } : null;
+  // .git/HEAD is repository-controlled: one line of visible text, never a raw escape sequence.
+  const branch = state.branch ? oneVisibleLine(state.branch) : "";
+  return branch ? { id: "branch", prio: 4, text: theme.fg("muted", "on ") + theme.fg("mdLink", branch) } : null;
 }
 
 function tokenSegments({ state, theme, glyphs }: Ctx): Seg[] {
@@ -343,7 +352,8 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   const glyphs = footerGlyphs(theme, state.ascii);
   const ctx: Ctx = { state, theme, glyphs, mode, width };
   const sep = theme.fg("borderMuted", glyphs.separator);
-  const project = path.basename(state.cwd) || state.cwd;
+  const cwd = oneVisibleLine(state.cwd);
+  const project = path.basename(cwd) || cwd;
   const projectSeg: Seg = { id: "project", prio: 1, text: `${theme.fg("accent", glyphs.marker)} ${theme.bold(theme.fg("text", project))}` };
   const warnings = warningSegments(ctx);
   const effortShort = effortSegment(ctx, false);
@@ -365,7 +375,8 @@ export function renderFooter(state: FooterState, theme: Theme, width: number, mo
   const think = state.thinking && state.thinking !== "off" ? { id: "think", prio: 4, text: theme.fg(thinkingColor(state.thinking), `think ${state.thinking}`) } : null;
   const profile = state.profile ? { id: "profile", prio: 4, text: `${theme.fg("dim", "profile ")}${theme.fg("text", state.profile)}` } : null;
   const branch = branchSegment(ctx);
-  const line1Left: Seg[] = [projectSeg, ...(branch ? [branch] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(state.cwd, os.homedir(), glyphs.ellipsis)) }, ...(state.sessionName ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${state.sessionName}`) }] : [])];
+  const session = state.sessionName ? oneVisibleLine(state.sessionName) : "";
+  const line1Left: Seg[] = [projectSeg, ...(branch ? [branch] : []), { id: "path", prio: 6, text: theme.fg("dim", shortCwd(cwd, os.homedir(), glyphs.ellipsis)) }, ...(session ? [{ id: "session", prio: 6, text: theme.fg("muted", `${glyphs.ascii ? "session " : "• "}${session}`) }] : [])];
   // keep the path after the branch in reading order, but as the first thing to go
   const line1Right: Seg[] = [...(state.provider ? [{ id: "provider", prio: 6, text: theme.fg("dim", state.provider) }] : []), ...(modelSeg ? [modelSeg] : [{ id: "model", prio: 1, text: theme.fg("dim", "no model") }]), ...(think ? [think] : []), ...(profile ? [profile] : []), ...(effortFull ? [effortFull] : []), ...(security ? [security] : [])];
   const lines = [fitLine(line1Left, line1Right, width, sep, glyphs.ellipsis)];
@@ -401,7 +412,7 @@ function finish(lines: string[], glyphs: Glyphs, width: number): string[] {
 export function renderDetail(state: FooterState, mode: string): string[] {
   const rows: string[] = [];
   rows.push(`Status bar: ${mode}`);
-  rows.push(`  location    ${state.cwd}${state.branch ? ` (git ${state.branch})` : ""}`);
+  rows.push(`  location    ${oneVisibleLine(state.cwd)}${state.branch ? ` (git ${oneVisibleLine(state.branch)})` : ""}`);
   rows.push(`  model       ${state.provider ? `${state.provider} ` : ""}${state.model ?? "none"}${state.thinking && state.thinking !== "off" ? `, thinking ${state.thinking}` : ""}`);
   if (state.profile) rows.push(`  profile     ${state.profile}`);
   if (state.security) rows.push(`  security    ${state.security.effective} (requested ${state.security.requested})${state.security.warning ? "; warning: /security status" : ""}`);

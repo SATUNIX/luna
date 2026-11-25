@@ -121,8 +121,8 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   crontab line where `systemctl --user` is unavailable (`hourly`, `daily HH:MM`, `weekly <day>
   HH:MM`, `every Nm`, `every Nh`). The spec lives in `<state>/luna/schedules/<name>.json` (0600) and
   the timer or crontab line only runs `luna schedule run-now <name>`, so no prompt is ever quoted
-  into a unit file or shell line. Creating a schedule is operator-confirmed: the CLI asks on a
-  terminal or takes `--yes` and otherwise refuses; `/schedule add` (a new `experimental` extension
+  into a unit file or shell line. To create a schedule the CLI asks on a terminal or takes `--yes`
+  and otherwise refuses (so an agent that may run it with `--yes` can create one); `/schedule add` (a new `experimental` extension
   in no profile) asks through pi's confirm dialog and refuses without a UI. Not yet covered: the
   tool firewall does not classify schedule, unit-file or crontab writes as high (V5-15, guard).
   This reverses the roadmap's "scheduled runs: not planned". Documented in `docs/schedule.md`;
@@ -472,7 +472,100 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   `tests/lazy-improve-tools-smoke.ts` covers the inactive registration, both wake paths and a pi
   without tool control.
 
+### Removed
+
+- **The web console no longer surfaces the retired pi-lens companion (V5-03).** Finding: pi-lens is
+  under `retired` in `packages/core/sources.json`, but the console still read `~/.pi-lens`, served
+  `GET /api/sessions/:id/lens`, rendered a Lens inspector tab and a pi-lens Config card, and the
+  control centre still listed a `lens.health` action. Fix: removed `server/lens.ts` and the lens
+  route, config fields, wire types, client API, panel, tab and control-centre row, with the web-ui
+  smokes and harness updated. The route now answers 404 and `tests/web-ui-rpc-smoke.ts` asserts it;
+  `scripts/ui-smoke.ts` no longer renders the removed panel. `docs/control-center.md` no longer
+  reports a pi-lens startup figure.
+
 ### Fixed
+
+- **`/workflows` control completions no longer offer autonomous run ids.** Finding: after the run
+  list gained autonomous container rows, tab completion for `pause`, `skip`, `resume` and `stop`
+  offered their ids too, but those verbs act only on in-process and recorded subagent runs, so
+  choosing one answered "No live run" or "No run". `status` and `panel` still complete every
+  format, including autonomy, because they read it. Verified by `tests/run-query-smoke.ts`; see
+  `docs/workflows.md`.
+
+- **AUTHORITY: `luna schedule` review fixes (DE-118).** Two independent reviews of V5-14 found it not
+  safe as documented. The spec is no longer trusted at run time: `add` resolves the absolute `pi`,
+  node and luna paths, the directory, kind, prompt or config and caps into the spec and pins its
+  SHA-256 in the unit file or crontab line (`run-now <name> --digest <sha256>`); `run-now` refuses a
+  spec that no longer matches, and pi is started by the pinned absolute path, never through a `PATH`
+  the spec supplies. A prompt job always carries `--max-turns`, `--max-cost` and `--timeout`, with
+  defaults (50, $2, 30m) and maxima (500, $50, 12h) checked at add and at run; the systemd service is
+  stopped after the timeout (`TimeoutStartSec`, `RuntimeMaxSec`); two runs of one schedule never
+  overlap, through a lock the kernel releases when its holder exits (an abstract socket on Linux), so a
+  killed run leaves no stale lock; `/schedule run-now` starts the job detached instead of under a
+  120-second command timeout. Only the normalised `--at` reaches the timer, and every path in a unit or
+  crontab line (the state directory included) is limited to letters and digits of any script, space
+  and `_./@+-`, so a non-ASCII home works and a newline, `%`, quote or `$` is refused. The prompt is
+  passed after `--` (`luna exec` gained `--` end of options). A job runs with `LUNA_SCHEDULE_JOB`, under
+  which the CLI and `/schedule` refuse to change schedules: a guard against accident, not enforcement;
+  the enforcement against a job scheduling a job is the firewall rule (V5-15) plus the headless refusal
+  of ask-rated actions. `docs/schedule.md` says what confirms a schedule and what is not covered.
+  Verified by `tests/luna-cli-smoke.ts` (`tests/schedule-checks.ts`).
+- **Trimming shell operators stuck to a token no longer backtracks (DE-116 follow-up).** CodeQL `js/redos`
+  flagged `/(?:&&|\|\||[;|&])+$/` in the autonomy CLI rule: a token ending in a long `&&` run took exponential
+  time. It is now a plain loop over the trailing characters; a 40,000-character `&&` chain classifies at once and
+  still rates high (`tests/firewall-shell-smoke.ts`).
+
+- **The autonomy CLI rule no longer trusts launches it cannot vouch for (DE-116).** Finding: the narrow
+  matcher rated a reading command routine (low) where the ordinary rules give medium for
+  `PATH=/tmp/x pi-autonomy status`, `export PATH=/tmp/x; pi-autonomy status`, a shell function named
+  `pi-autonomy`, `pnpm exec`, `find -exec`, `xargs` and `parallel` launches, a bare `pi-autonomy` and
+  `nodejs packages/autonomy/cli.ts status`; and control commands were missed when the CLI was named through a
+  variable (`c=pi-autonomy; $c promote`), a computed name, a glob (`node packages/auto*/cli.ts promote`), a
+  launcher (`nvm exec`, `nodemon`, `pm2`, `cross-env`, `fnm exec`, `corepack pnpm exec`, `rustup run`, `c8`),
+  `xargs` with the command on its input, or inline code (`node -pe`, `npx tsx -e`, a heredoc, an awk program).
+  Cause: the narrow matcher did not check the command's environment, functions, wrappers or argument count,
+  and the broad matcher only looked at literal words after a fixed list of interpreters and runners. Fix
+  (`classify.ts` only): the narrow matcher refuses a launch with an assignment, any variable set in the line, a
+  shell function, a wrapper outside `exec`/`nohup`/`setsid`/`stdbuf`/`watch`/`env -S`/`script -c`/`entr -s`/`sh
+  -c`, no command, or `nodejs`; the broad matcher also runs for computed names, resolves variables the line
+  set, matches globs with a hand-written matcher (no pattern compiled from command text; a bracket class it
+  cannot evaluate matches), treats node-family aliases, version managers, coverage tools, supervisors and
+  programs with no rule as launchers, rates `xargs`/`parallel` launches as their worst options, and makes inline
+  code naming the CLI high. The broad matcher also recognises the legacy entry point
+  `packages/autonomy/supervisor.ts`, a word holding a whole command (`pm2 start "pi-autonomy promote"`,
+  `c='pi-autonomy promote'; $c`, `npm exec --call`) and a bin-name glob behind a path (`./pi-auto* promote`).
+  An option=value word under any option name is read by its value as a command, as its space form is
+  (`nodemon --exec="pi-autonomy promote"`, `npx -c='pi-autonomy promote'`, `hyperfine --setup="pi-autonomy
+  promote" true`, `mise exec --command="..."`), and the `=` form of an inline-code option (`node --eval="..."`)
+  is inline code. A program given by a path outside the system directories (`./eslint`, `scripts/git`,
+  `node_modules/.bin/tsc`, `env ./eslint`, `./docker`, `./ssh`) is a launcher whatever its name, since the file
+  may be a trampoline; every command in a word that names the CLI is rated (`--exec="pi-autonomy status;
+  pi-autonomy promote"`), and so are the operands after a word holding the CLI's command (`--exec="pi-autonomy
+  status" promote`), the worst reading standing; and a short option with its value attached is read by its
+  value (`-xpi-auto*`, `-r./packages/autonomy/cli.ts`). It no longer rates as a launch an awk program that only matches text, one-word inline code
+  (`node -c <cli>`, a syntax check), or an unknown program's operand followed only by options the CLI does not
+  accept. Fail closed, so these false positives are high (listed in the README): a static tool's operand
+  (`npx eslint packages/autonomy/cli.ts --fix`), an option word naming the CLI (`node --test
+  --test-name-pattern="pi-autonomy promote" tests/`) and a quoted word naming it with more after it (`--notes
+  "pi-autonomy (promote)"`), a path-qualified program with the CLI's name and another word after it
+  (`./tools/grep pi-autonomy README.md`), an operand after a word holding a reading command (`nodemon --exec
+  "pi-autonomy status" --watch src`) and a short attached glob (`mytool -lp* foo`). A program
+  path is judged once normalised (`/usr/bin/../../tmp/eslint` is not a system program); `PATH` set on the line
+  to anything but system directories and `$PATH` (`PATH=.:$PATH eslint pi-autonomy promote`), a call to a
+  function defined on the line, and `source`/`.` with operands after the file make any program a launcher; and
+  a word is split on the shell's IFS (space, tab, newline) as well as on any whitespace (including U+0085 and
+  the `\x1c`-`\x1f` separators other languages split on), the worst reading
+  standing (`mytool "pi-autonomy status\rpi-autonomy promote"` is high). Not covered (listed in the
+  tool-firewall README): `PATH` set by `typeset` or `readonly` (the shared shell parser does not record it;
+  core item DE-117), names absent from the
+  text, commands other than the CLI through `fnm exec`, `volta run`, `corepack <pm>` and similar launchers,
+  which the parser does not peel yet, `sh -c` positional parameters, a `cd` to a glob, runner directory
+  options, `screen`, and programs with their own rule whose options or operands run a command (`git rebase
+  --exec`, `git bisect run`, `mocha --require`, `jest --setupFiles`, `npm run x --script-shell=`, `vim -c`,
+  `emacs --eval`, `docker exec`, `make CMD=`, `turbo`/`nx`/`lerna` `exec` and `run`), and `PATH` or functions
+  changed outside the line (`hash -p`, `alias`, an earlier tool call). Verification: `tests/firewall-shell-smoke.ts` (the never-lower
+  property over about 2,800 cases, and one named row per guard that fails when that guard alone is
+  reverted).
 
 - **A workflow step that misses a declared output says where it wrote instead (F-03).** Finding:
   two runs failed on the output contract after doing the work under another name (`board-report.md`
@@ -1299,6 +1392,14 @@ Versions before `0.2.1-beta.0` were internal; their numbers do not correspond to
   GHSA-h7mg-cq63-vhpq, GHSA-4m76-xfj5-7975; fixed in 4.13.16), both transitive. Both lockfiles now
   resolve `@hono/node-server` 2.1.8 and `hono` 4.13.18 within the existing ranges; no direct dependency
   changed. The `osv-scanner` CI job pins this.
+- **The status bar and the todo checklist no longer print repository-controlled text as written.**
+  A `TODO.md` item and a branch from `.git/HEAD` reached the terminal verbatim, so an OSC 52
+  sequence, `ESC[2J`, a C1 CSI or a bidi override in either was executed by the terminal. The todo
+  item text, branch, project/cwd text and session name now pass through the kit's `oneVisibleLine`
+  (`third_party/custom-footer/shared/visible-text.ts`, a `gen-shared` copy of
+  `packages/core/shared/visible-text.ts`) before layout and width fitting, in both the bar and
+  `/footer status`; the theme's own SGR colour sequences are added afterwards and are unchanged.
+  Pinned by `tests/status-bar-smoke.ts` (`hidesControlCharactersInRepositoryText`).
 
 - **The workflow panel falls back to the list when the open run is pruned.** `wf-panel.ts` decided
   the run view from `view` alone, so `RunRegistry.prune()` could drop an open run and leave

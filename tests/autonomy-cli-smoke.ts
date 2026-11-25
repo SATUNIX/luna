@@ -547,6 +547,11 @@ await check("blocked: the question is recorded and shown; resume needs --answer;
   fs.mkdirSync(path.join(badHome, "mixed-run-1"), { recursive: true });
   fs.writeFileSync(path.join(badHome, "mixed-run-1", "state.json"), JSON.stringify({ run: "mixed-run-1", status: "blocked", updatedAt: "y", blocker: { kind: "question", question: "why?\nnow\u001b[2J" } }));
   assert.deepEqual(listRuns(badHome).find((r) => r.run === "mixed-run-1")?.blocker, { kind: "question", question: "why? now[2J" }, "a worker-written question is collapsed to one line");
+  // A state that records no time at all (neither updatedAt nor startedAt) has no place at the top:
+  // compared as text, "null" sorted above every dated run, ahead of the run that is actually moving.
+  fs.mkdirSync(path.join(badHome, "notime-run-1"), { recursive: true });
+  fs.writeFileSync(path.join(badHome, "notime-run-1", "state.json"), JSON.stringify({ run: "notime-run-1", status: "running" }));
+  assert.deepEqual(listRuns(badHome).map((r) => r.run), ["bad-run-1", "mixed-run-1", "notime-run-1"], "a run with no time sorts last, and runs with an unparseable time keep the dated ones above it")
   const noAnswer = await w.run("resume", "--run", "todo-api-1", "--json");
   assert.equal(noAnswer.code, 3);
   assert.match(noAnswer.json().error, /--answer/);

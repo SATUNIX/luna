@@ -107,7 +107,7 @@ flowchart LR
     SM["saveMemory: redact, slugify, dedupe, atomic write under withLock"]
     FG["memory_forget: move to .trash"]
     PG["writeIndexPages: MEMORY.md and Projects/p/p.md"]
-    ID[("index.json in .pi-index: mtimeMs, meta, tf, len, tokens, titleTokens")]
+    ID[("index.json in .pi-index: stemmer version, mtimeMs, meta, tf, len, tokens, titleTokens")]
     RF[("Projects/p/Recaps/YYYY-MM-DD.md")]
     MO[("Memory/slug.md or Projects/p/Memory/slug.md")]
     QS["memory_search and /memory search: loadIndex plus BM25, no floor"]

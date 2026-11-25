@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Offline checks for memory-vault (no model, no network: the recap model is a stub).
+// Offline checks for memory-vault (no model: the recap model is a stub, and the headless check
+// talks only to a local fake provider).
 //   1. save creates a note; the same or a near-duplicate memory updates it instead of copying.
 //   2. recall is scoped: this project + global, never another project's memories.
 //   3. relevance gating: stopword-only prompts and single shared words inject nothing.
@@ -25,12 +26,17 @@
 //      is found by a singular query and vice versa.
 //  17. a throw during first-prompt recall does not consume the first-prompt flag: the
 //      earlier-session recap is still offered on the next turn.
+//  18. a headless `pi -p --mode json` session recalls a seeded recap as background history,
+//      materializes .pi-index/index.json, and answers a greeting without resuming its Next
+//      work; a root with no .pi-project.json still recalls from the fallback project folder,
+//      and a recorded path alias resolves to the canonical root.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { evalCacheDir, loadModule, fakePi, startRun, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv } from "../packages/core/eval/harness.ts";
+import { evalCacheDir, loadModule, fakePi, startRun, tmpWorkspace, rmWorkspace, setEnv, isolateKitEnv, ROOT } from "../packages/core/eval/harness.ts";
 import type * as Vault from "../packages/extensions/src/memory-vault/vault.ts";
 import type * as Search from "../packages/extensions/src/memory-vault/search.ts";
 import type { MemoryVaultDeps } from "../packages/extensions/src/memory-vault/index.ts";
@@ -42,6 +48,88 @@ type Recall = BeforeAgentStartEventResult & { message: { display: boolean; conte
 
 // The on-disk search index (.pi-index/index.json), as far as the rebuild check reads it.
 const IndexFile = object({ notes: record(object({ meta: object({ tags: optional(unknownValue()) }) })) });
+
+const PI = process.platform === "win32" ? "pi.cmd" : "pi";
+
+interface HeadlessProvider {
+  port: number;
+  requests: string[];
+  close: () => Promise<void>;
+}
+
+/** A local OpenAI-compatible provider: records each request body and answers "hello". */
+async function headlessProvider(): Promise<HeadlessProvider> {
+  const requests: string[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString();
+      if (req.method === "GET") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [{ id: "fake", name: "Fake", context_length: 32000, top_provider: { max_completion_tokens: 4096 }, pricing: { prompt: "0", completion: "0" }, supported_parameters: [] }] }));
+        return;
+      }
+      requests.push(body);
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      const send = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+      send({ id: "headless-1", object: "chat.completion.chunk", created: 1, model: "fake", choices: [{ index: 0, delta: { role: "assistant", content: "hello" }, finish_reason: null }] });
+      send({ id: "headless-1", object: "chat.completion.chunk", created: 1, model: "fake", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("the headless provider did not bind a TCP port");
+  return { port: address.port, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+}
+
+/** Spawn the real pi in print/JSON mode with only memory-vault loaded. */
+function runHeadless(provider: HeadlessProvider, agentDir: string, cwd: string, env: NodeJS.ProcessEnv, prompt: string): Promise<{ stdout: string; stderr: string }> {
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { headless: { baseUrl: `http://127.0.0.1:${provider.port}/v1`, api: "openai-completions", apiKey: "offline-test", models: [{ id: "fake" }] } } }));
+  const args = ["-p", "--mode", "json", "--no-session", "--no-extensions", "--no-context-files", "--no-tools", "-e", path.join(ROOT, "packages", "extensions", "src", "memory-vault", "index.ts"), "--model", "headless/fake", prompt];
+  return new Promise((resolve, reject) => {
+    const child = spawn(PI, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`the headless pi session did not finish within 60s\n${stderr.slice(-800)}`));
+    }, 60_000);
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on("error", (error) => { clearTimeout(timer); reject(error); });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`the headless pi session exited ${String(code)}\n${stderr.slice(-800)}`));
+      else resolve({ stdout, stderr });
+    });
+  });
+}
+
+/** The final assistant text in a JSON-mode event stream. */
+function headlessAnswer(stdout: string): string {
+  let answer = "";
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event: unknown;
+    try {
+      event = parseJson(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message) || event.message.role !== "assistant") continue;
+    const content = event.message.content;
+    if (typeof content === "string") answer = content;
+    else if (Array.isArray(content)) answer = content.map((block) => (isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "")).join("");
+  }
+  return answer;
+}
 
 /** The memory-vault extension as the test drives it: createMemoryVault is called with the fake pi API. */
 interface MemoryVaultExtension {
@@ -541,6 +629,28 @@ try {
     ok("the stemmer makes singular and plural forms meet in search");
   }
 
+  // 16b. The persisted index records the stemmer generation that produced its tokens. An index
+  //      written by an older stemmer must be re-tokenised even though the note's mtime did not
+  //      change, or a note whose current stems match the query stays invisible until edited.
+  {
+    const versionRoot = path.join(ws, "vault-stemmer-version");
+    const saved = vault.saveMemory(versionRoot, { title: "Config files layout", body: "Config files live under the etc directory.", project: "stem" });
+    const indexFile = path.join(versionRoot, ".pi-index", "index.json");
+    const index = parseJson(fs.readFileSync(indexFile, "utf8"));
+    assert.ok(isRecord(index) && isRecord(index.notes), "the index has a notes map");
+    const entry = index.notes[saved.rel];
+    assert.ok(isRecord(entry), "the saved note is indexed");
+    index.stemmer = 0;
+    index.notes[saved.rel] = { ...entry, tf: { staleword: 1 }, tokens: ["staleword"], titleTokens: ["staleword"] };
+    fs.writeFileSync(indexFile, JSON.stringify(index));
+    const hits = vault.searchMemories(versionRoot, "config file", { project: "stem" });
+    assert.ok(hits.some((h) => h.rel === saved.rel), "a note indexed by an older stemmer is re-tokenised and found");
+    const rebuilt = parseJson(fs.readFileSync(indexFile, "utf8"));
+    assert.ok(isRecord(rebuilt));
+    assert.equal(rebuilt.stemmer, search.STEMMER_VERSION, "the rebuilt index records the current stemmer generation");
+    ok("an index from an older stemmer is rebuilt instead of trusted by mtime");
+  }
+
   // 17. A throw during first-prompt recall must not consume the first-prompt flag. The handler
   //     accepts `event.prompt` without a type guard and passes it to searchMemories; a non-string
   //     prompt makes tokenize throw after the flag used to be cleared, and the catch returns
@@ -568,6 +678,60 @@ try {
       restoreThrow();
     }
     ok("a throw during first-prompt recall does not consume the first-prompt flag");
+  }
+
+  // 18. The real headless path: `pi -p --mode json` with a seeded recap. The model receives the
+  //     recap as background history (its Next step is relabelled, not a resume instruction), the
+  //     first recall materializes .pi-index/index.json even when no memory note exists, and the
+  //     answer to "hello" is just the greeting. The fallback folder and a recorded path alias
+  //     must resolve to the same history.
+  {
+    const provider = await headlessProvider();
+    try {
+      const base = path.join(ws, "headless");
+      const seed = (label: string, key: string, owner: string | null, canonical = false) => {
+        const proj = path.join(base, label);
+        const vaultRoot = path.join(base, `vault-${label}`);
+        fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
+        const dir = path.join(vaultRoot, "Projects", key);
+        fs.mkdirSync(path.join(dir, "Recaps"), { recursive: true });
+        if (canonical || owner !== null) {
+          const ownerPath = canonical ? fs.realpathSync(proj) : owner;
+          fs.writeFileSync(path.join(dir, ".pi-project.json"), `${JSON.stringify({ path: ownerPath })}\n`);
+        }
+        fs.writeFileSync(path.join(dir, "Recaps", "2026-11-11.md"), `---\ntype: recap-log\nproject: ${key}\ndate: 2026-11-11\ntags: [recap]\n---\n# ${key} — 2026-11-11\n\nPart of [[Projects/${key}/${key}|${key}]].\n\n## 10:00 — Seeded headless recap\n\n**Did:** Fixed the seeded thing.\n\n**Next:** resume the seeded Next work.\n`);
+        return { proj, vaultRoot };
+      };
+      const headless = async (label: string, key: string, owner: string | null, canonical = false) => {
+        const { proj, vaultRoot } = seed(label, key, owner, canonical);
+        const agentDir = path.join(base, `agent-${label}`);
+        const home = path.join(base, `home-${label}`);
+        const env = { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: agentDir, PI_KIT_VAULT: vaultRoot, PI_KIT_RECAPS: "off" };
+        provider.requests.length = 0;
+        const result = await runHeadless(provider, agentDir, proj, env, "hello");
+        const body = provider.requests.join("\n");
+        return { result, body, vaultRoot };
+      };
+      const injectionOk = (body: string): boolean => body.includes("Seeded headless recap") && body.includes("Was open then") && body.includes("background from earlier sessions") && !body.includes("**Next:**");
+
+      const owner = await headless("owner", vault.projectName(path.join(base, "owner")), null, true);
+      assert.ok(injectionOk(owner.body), "a -p --mode json session injects the seeded recap as background history");
+      assert.ok(fs.existsSync(path.join(owner.vaultRoot, ".pi-index", "index.json")), "the first headless recall writes .pi-index/index.json");
+      assert.equal(headlessAnswer(owner.result.stdout), "hello", "the greeting is answered without resuming the recap's Next work");
+
+      const fallbackProject = path.join(base, "fallback");
+      const fallback = await headless("fallback", vault.projectName(fallbackProject), null);
+      assert.ok(injectionOk(fallback.body), "a root without .pi-project.json still injects from the fallback project folder");
+
+      const aliasProject = path.join(base, "alias");
+      const alias = path.join(base, "alias-path");
+      fs.symlinkSync(aliasProject, alias);
+      const aliased = await headless("alias", "alias-folder", alias);
+      assert.ok(injectionOk(aliased.body), "a .pi-project.json that records a path alias resolves to the canonical root's recaps");
+      ok("headless print/json recall injects seeded history, writes the index, and answers a greeting without resuming Next work");
+    } finally {
+      await provider.close();
+    }
   }
 
   console.log(`[memory-vault-smoke] all ${checks} checks passed`);

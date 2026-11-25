@@ -31,13 +31,14 @@ try {
     { type: "tool_execution_start", toolName: "read", args: {} },
     { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "the answer" }] } },
   ];
-  fs.writeFileSync(path.join(bin, "pi"), `#!/usr/bin/env node
+  const fakePi = (stream: unknown[]) => fs.writeFileSync(path.join(bin, "pi"), `#!/usr/bin/env node
 const fs = require("node:fs");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("PI_KIT_CEILING") || k === "PI_KIT_AUTO_PROFILE"));
 fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(2), env }));
-for (const e of ${JSON.stringify(events)}) console.log(JSON.stringify(e));
+for (const e of ${JSON.stringify(stream)}) console.log(JSON.stringify(e));
 process.exit(Number(process.env.FAKE_PI_EXIT || 0));
 `, { mode: 0o755 });
+  fakePi(events);
   const agent = path.join(tmp, "agent");
   fs.mkdirSync(agent);
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, PI_CODING_AGENT_DIR: agent };
@@ -116,6 +117,70 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   // A parked run (pi exits 13) keeps its code.
   assert.equal(luna(["exec", "go"], { FAKE_PI_EXIT: "13" }).status, 13);
 
+  // A tool-using session whose final message is empty prints the last tool outcome, not silence (PG-41).
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "hello from tool\nsecond line" }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const emptyAfterTool = luna(["exec", "go"]);
+  assert.equal(emptyAfterTool.status, 0);
+  assert.equal(emptyAfterTool.stdout, "Tool bash finished: hello from tool\n");
+
+  // The tool text is raw tool output, so the fallback line must not echo a secret it holds (DE-124).
+  // The text comes from the shared redaction corpus, so no committed line holds a whole token shape.
+  const corpus = parseJsonAs(
+    object({ entries: array(object({ id: string(), text: array(string()), secret: array(string()) })) }),
+    fs.readFileSync(path.join(ROOT, "tests", "fixtures", "secret-corpus.json"), "utf8"),
+  );
+  const secretEntry = corpus.entries.find((entry) => entry.id === "env-db-password");
+  assert.ok(secretEntry !== undefined, "the redaction corpus fixture env-db-password exists");
+  const secretText = secretEntry.text.join("");
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: `${secretText}\ncurl: (22) the requested URL returned error` }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const secretAfterTool = luna(["exec", "go"]);
+  assert.equal(secretAfterTool.status, 0);
+  assert.ok(!secretAfterTool.stdout.includes(secretEntry.secret.join("")), "the status line does not echo the tool's secret");
+  assert.equal(secretAfterTool.stdout, `Tool bash finished: ${secretText.replace(secretEntry.secret.join(""), "[REDACTED]")}\n`);
+
+  // The t5 shape: a tool starts an autonomy run, then the model answers with no text. Name the run and its state.
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "run todo-api-1 started (supervisor pid 123, status running); follow it with: pi-autonomy status --run todo-api-1" }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const startedRun = luna(["exec", "go"]);
+  assert.equal(startedRun.status, 0);
+  assert.equal(startedRun.stdout, "Run todo-api-1 started; state: running.\n");
+
+  // `pi-autonomy up --json` returns {runId, pid, status, ...} without a `started` field, and the
+  // status line must still name the run. This is the shape the owner-bench t5 run produced.
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "tool_execution_start", toolName: "bash", args: {} },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", isError: false, result: { content: [{ type: "text", text: JSON.stringify({ runId: "todo-api-1", pid: 123, status: "running", digest: "abc", root: "/tmp/run", log: "/tmp/run/supervisor.log" }) }] } },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const startedRunJson = luna(["exec", "go"]);
+  assert.equal(startedRunJson.status, 0);
+  assert.equal(startedRunJson.stdout, "Run todo-api-1 started; state: running.\n");
+
+  // An empty answer with no tool calls keeps today's behaviour: stdout stays empty.
+  fakePi([
+    { type: "session", id: "x" },
+    { type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } },
+  ]);
+  const emptyNoTool = luna(["exec", "go"]);
+  assert.equal(emptyNoTool.status, 0);
+  assert.equal(emptyNoTool.stdout, "");
+  fakePi(events);
+
   // A bad limit is refused, never read as no limit.
   // A ceiling is refused when overrides.json switches off the extension that enforces it.
   fs.mkdirSync(path.join(agent, "pi-kit"), { recursive: true });
@@ -124,9 +189,18 @@ process.exit(Number(process.env.FAKE_PI_EXIT || 0));
   assert.equal(refused.status, 2);
   assert.match(refused.stderr, /goal-core/);
   fs.rmSync(path.join(agent, "pi-kit"), { recursive: true });
+  fs.rmSync(path.join(agent, ".pi-kit.json"));
 
-  for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], []]) {
+  for (const bad of [["--max-turns", "0", "p"], ["--max-cost", "abc", "p"], ["--timeout", "soon", "p"], ["--wat", "p"], [], ["--"], ["--", "a", "b"], ["p", "--", "q"]]) {
     assert.equal(typeof planExec(bad), "string", `refused: ${bad.join(" ")}`);
+  }
+  // After --, the prompt is literal: an option-shaped prompt and "-" are prompts, not flags or stdin (DE-118).
+  for (const literal of ["--help", "-", "--max-turns 3"]) {
+    const plan = planExec(["--max-turns", "2", "--", literal]);
+    assert.ok(typeof plan === "object", `-- ${literal}: ${typeof plan === "string" ? plan : ""}`);
+    assert.equal(plan.stdinPrompt, false);
+    assert.deepEqual(plan.piArgs.slice(-2), ["--", literal]);
+    assert.equal(plan.env.PI_KIT_CEILING_TURNS, "2");
   }
 
   // Windows: pi is an npm .cmd shim that Node cannot start without a shell, and a shell splits the prompt.

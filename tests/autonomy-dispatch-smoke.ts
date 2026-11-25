@@ -70,9 +70,9 @@ const itemOf = (board: StewardBoard, id: string): StewardBoard["items"][number] 
 const claimJson = (text: string): ClaimJson => JSON.parse(text) as ClaimJson;
 
 /** Run the real CLI script as a child process with a temporary autonomy home. */
-function runCli(home: string, args: readonly string[]): Promise<ChildResult> {
+function runCli(home: string, args: readonly string[], extraEnv: NodeJS.ProcessEnv = {}, nodeArgs: readonly string[] = []): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, PI_AUTONOMY_HOME: home }, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [...nodeArgs, CLI, ...args], { env: { ...process.env, PI_AUTONOMY_HOME: home, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = ""; let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
@@ -114,6 +114,38 @@ function claimAfterBarrier(home: string, barrier: string, args: readonly string[
 }
 
 const settled = (promise: Promise<unknown>, ms: number): Promise<boolean> => Promise.race([promise.then(() => true, () => true), sleep(ms).then(() => false)]);
+
+/** Child preload: write a file the first time the CLI opens `board.lock`, so a lock wait is observed, not raced. */
+const LOCK_SIGNAL = `data:text/javascript,${encodeURIComponent(`
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const target = process.env.BOARD_LOCK_SIGNAL;
+const open = fs.openSync;
+fs.openSync = (...args) => {
+  if (typeof args[0] === "string" && args[0].endsWith("/board.lock") && target) { try { fs.writeFileSync(target, "reached\\n"); } catch {} }
+  return open(...args);
+};
+syncBuiltinESMExports();
+`)}`;
+
+/** Wait for an observation file, bounded, so a child that never reached the lock fails the test. */
+const waitForFile = (file: string, ms: number): Promise<boolean> => Promise.race([
+  (async () => { while (!fs.existsSync(file)) await sleep(10); return true; })(),
+  sleep(ms).then(() => false),
+]);
+
+/** Observe the next open of `control/board.lock` in this process; restores fs.openSync on stop. */
+function watchBoardLock(control: string): { reached: Promise<void>; stop: () => void } {
+  const file = path.join(control, "board.lock");
+  const original = fs.openSync;
+  let signal: () => void = () => {};
+  const reached = new Promise<void>((resolve) => { signal = resolve; });
+  fs.openSync = (...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) === file) signal();
+    return original(...args);
+  };
+  return { reached, stop: () => { fs.openSync = original; } };
+}
 
 const EXTENDED = {
   id: "V-01",
@@ -280,7 +312,9 @@ await check("board --file rejects invalid claim metadata and both writes wait fo
   const lock = createRunLock({ file: lockFile });
   assert.equal(lock.acquire().acquired, true);
   writeBoard(path.dirname(source), { items: [{ id: "V-02", title: "Uploaded", priority: "P0" }] });
-  const upload = runCli(home, ["board", "--run", "lock-run", "--file", source, "--json"]);
+  const uploadSignal = path.join(scratch(), "upload-lock-signal");
+  const upload = runCli(home, ["board", "--run", "lock-run", "--file", source, "--json"], { BOARD_LOCK_SIGNAL: uploadSignal }, ["--import", LOCK_SIGNAL]);
+  assert.equal(await waitForFile(uploadSignal, 2000), true, "board --file reached the board lock");
   assert.equal(await settled(upload, 300), false, "board --file waits for the board lock");
   assert.equal(readBoard(control).items[0]?.title, EXTENDED.title, "nothing is written while the lock is held");
   lock.release();
@@ -289,7 +323,9 @@ await check("board --file rejects invalid claim metadata and both writes wait fo
 
   const claimLock = createRunLock({ file: lockFile });
   assert.equal(claimLock.acquire().acquired, true);
-  const claim = runCli(home, ["board", "claim", "V-02", "--run", "lock-run", "--by", "alice", "--json"]);
+  const claimSignal = path.join(scratch(), "claim-lock-signal");
+  const claim = runCli(home, ["board", "claim", "V-02", "--run", "lock-run", "--by", "alice", "--json"], { BOARD_LOCK_SIGNAL: claimSignal }, ["--import", LOCK_SIGNAL]);
+  assert.equal(await waitForFile(claimSignal, 2000), true, "claim reached the board lock");
   assert.equal(await settled(claim, 300), false, "claim waits for the board lock");
   assert.equal(itemOf(readBoard(control), "V-02").assignee, undefined);
   claimLock.release();
@@ -424,8 +460,12 @@ await check("a cycle's claim: the top ready item of its stream in one locked wri
   // The claim waits for the board lock like `board claim` does.
   const lock = createRunLock({ file: path.join(control, "board.lock") });
   assert.equal(lock.acquire().acquired, true);
+  const watch = watchBoardLock(control);
   const pending = claimForCycle(control, { options: OPTIONS, engineers: ["alice"], attempts: undefined, at: "2026-10-02T00:00:00.000Z" });
-  assert.equal(await settled(pending, 300), false, "the claim waits for control/board.lock");
+  try {
+    assert.equal(await Promise.race([watch.reached.then(() => true), sleep(2000).then(() => false)]), true, "the claim reached control/board.lock");
+    assert.equal(await settled(pending, 300), false, "the claim waits for control/board.lock");
+  } finally { watch.stop(); }
   assert.equal(itemOf(readBoard(control), "V-03").assignee, undefined, "nothing is written while the lock is held");
   lock.release();
   const first = await pending;

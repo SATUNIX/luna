@@ -78,14 +78,8 @@ export interface ConfigResponse {
 	readonly paths: {
 		readonly agentDirs: readonly string[];
 		readonly kitRoot: string;
-		readonly lensDir: string | null;
 	};
 	readonly models: readonly ProviderInfo[];
-	readonly lens: {
-		readonly present: boolean;
-		readonly sessionCount: number;
-		readonly turn: { readonly files: number; readonly cycles?: number } | null;
-	};
 }
 
 /** A prompt template or a skill shipped in the kit. */
@@ -248,27 +242,6 @@ export interface TodosResponse {
 	readonly todos: readonly TodoItem[];
 }
 
-export interface LensFile {
-	readonly filePath: string | null;
-	readonly blocking: number;
-	readonly errors: number;
-	readonly warnings: number;
-}
-
-export interface SessionLens {
-	readonly available: boolean;
-	/** An ISO date string, or null when nothing was captured. */
-	readonly savedAt: string | null;
-	readonly files: readonly LensFile[];
-	readonly totals: { readonly blocking: number; readonly errors: number; readonly warnings: number };
-	readonly cache: { readonly qualityWarnings: number; readonly findings: number };
-}
-
-/** GET /api/sessions/:id/lens. */
-export interface LensResponse {
-	readonly lens: SessionLens;
-}
-
 // Acknowledgements of session actions. The client reads nothing from them, so every field is
 // optional: they are narrowed to "a JSON object" and no further.
 /** POST /api/sessions/:id/prompt. */
@@ -314,8 +287,19 @@ export interface AutonomyRun {
 	readonly spentUsd: number | null;
 	readonly budgetUsd: number | null;
 	readonly step: number | null;
-	readonly blocker: { readonly kind: string; readonly question: string } | null;
+	/** What the supervisor says the run is doing now (`state.phase`), or null when it records none. */
+	readonly phase: string | null;
+	/** `waiting` is what a parked run waits on; `since` when it parked; `options` are the answers it offers. */
+	readonly blocker: {
+		readonly kind: string;
+		readonly question: string;
+		readonly waiting?: "waiting_budget" | "waiting_provider";
+		readonly since?: string;
+		readonly options?: readonly string[];
+	} | null;
 	readonly lastEventAt: string | null;
+	/** Written by the previous (v0) supervisor: listed, but it cannot be driven. */
+	readonly legacy?: true;
 }
 
 export type AutonomyEventField = string | number | boolean | null | readonly string[];

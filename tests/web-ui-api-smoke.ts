@@ -142,11 +142,11 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
     });
 
     writeState("r-good", {
-      schemaVersion: STATE_SCHEMA_VERSION, run: "r-good", template: "implement", status: "blocked", step: 3,
+      schemaVersion: STATE_SCHEMA_VERSION, run: "r-good", template: "implement", status: "blocked", step: 3, phase: "gate",
       updatedAt: at(30), usage: { usd: 1.5 }, limits: { budget: { totalUsd: 10 } }, outcome: null,
-      blocker: { kind: "question", question: "first\nsecond‮<img src=x onerror=alert(1)>", waiting: "waiting_provider" },
+      blocker: { kind: "question", question: "first\nsecond‮<img src=x onerror=alert(1)>", waiting: "waiting_provider", since: at(20), options: ["SQLite", "Postgres"] },
     });
-    writeState("r-legacy", { status: "succeeded", updatedAt: at(1), outcome: { status: "succeeded", reason: "done" } });
+    writeState("r-legacy", { status: "succeeded", updatedAt: at(1), phase: 7, outcome: { status: "succeeded", reason: "done" } });
     writeState("r-bad", "{not json");
     writeState("r-array", "[1]");
     fs.mkdirSync(path.join(home, "no-state"));
@@ -163,10 +163,12 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
       assert.deepEqual(full.runs.map((r) => r.run), ["r-good", "r-legacy"]);
       assert.equal(full.runsTotal, 2);
       assert.deepEqual(
-        [good?.template, good?.status, good?.step, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.lastEventAt],
-        ["implement", "blocked", 3, 1.5, 10, "question", at(29)],
+        [good?.template, good?.status, good?.step, good?.phase, good?.spentUsd, good?.budgetUsd, good?.blocker?.kind, good?.blocker?.waiting, good?.blocker?.since, good?.blocker?.options, good?.lastEventAt],
+        ["implement", "blocked", 3, "gate", 1.5, 10, "question", "waiting_provider", at(20), ["SQLite", "Postgres"], at(29)],
       );
       assert.equal(legacy?.legacy, true);
+      // The phase is what the supervisor records: a missing or non-string one is null, never a guess.
+      assert.equal(legacy?.phase, null);
       assert.deepEqual(legacy?.outcome, { status: "succeeded", reason: "done" });
       assert.equal(legacy?.lastEventAt, null);
     });
@@ -193,6 +195,16 @@ async function autonomyChecks(api: typeof handleApi): Promise<void> {
       assert.equal(badStatus.status, null);
       assert.equal(badStatus.skipped.status, 1);
       assert.equal(badStatus.runs.length, 2, "the rest of the answer is unaffected");
+    });
+
+    // A state that records neither updatedAt nor startedAt has no time. Compared as text, its
+    // "null" sorted above every dated run, so the one run that cannot say when it last moved was
+    // the first row of "what is running".
+    writeState("r-notime", { schemaVersion: STATE_SCHEMA_VERSION, run: "r-notime", status: "running", step: 0 });
+    const ordered = await view();
+    check("a run whose state records no time sorts last, not above the dated runs", () => {
+      assert.deepEqual(ordered.runs.map((r) => r.run), ["r-good", "r-legacy", "r-notime"]);
+      assert.equal(ordered.runs.at(-1)?.updatedAt, null);
     });
 
     // Worker text quoting a secret: the route redacts it as the status file and alerts do. The

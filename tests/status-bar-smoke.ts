@@ -467,6 +467,41 @@ const tests = {
     }
   },
 
+  singleCriticalRightChipSurvivesNarrowWidths() {
+    // DE-123: a lone priority-0 chip on the right (a blocked orchestrator) must survive a narrow
+    // terminal; only the left context gives up columns. The chip is wider than 20 columns, so below
+    // that width the chip itself is cut, never replaced by the context.
+    const state: FooterState = {
+      cwd: "/work/project",
+      totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
+      partial: false, cost: { kind: "unknown" }, context: { percent: 66, tokens: 660, contextWindow: 1000 },
+      statuses: [{ key: "orchestrator", text: "blocked: verify", ageMs: 0 }], todos: [], now: 0,
+    };
+    for (let width = 20; width <= 40; width++) {
+      const lines = renderMod.renderFooter(state, plain, width, "default");
+      for (const line of lines) assert.ok(renderMod.visibleWidth(line) <= width, `width ${width} fits: ${JSON.stringify(strip(line))}`);
+      const line2 = strip(lines[1] ?? "");
+      // The warning owns the line: it is shown in full once it fits (30 columns here), and as the
+      // longest prefix the line allows below that. The left context is what gives way, and it
+      // never appears while the warning is still cut.
+      if (width >= 30) {
+        assert.match(line2, /orchestrator blocked: verify/, `width ${width} shows the whole critical chip: ${JSON.stringify(line2)}`);
+      } else {
+        assert.match(line2, /^ *orchestrator block/, `width ${width} keeps the longest warning prefix: ${JSON.stringify(line2)}`);
+        assert.doesNotMatch(line2, /ctx/, `width ${width} drops the context before the warning: ${JSON.stringify(line2)}`);
+      }
+    }
+    // The narrowest line keeps the warning's leading words rather than the context.
+    const line20 = strip(renderMod.renderFooter(state, plain, 20, "default")[1] ?? "");
+    assert.equal(line20, "orchestrator blocke\u2026", "20 columns cut the warning, not the context");
+    // Wider narrow lines keep the left context too: only its tail is cut.
+    const line37 = strip(renderMod.renderFooter(state, plain, 37, "default")[1] ?? "");
+    assert.match(line37, /ctx .*66%/, "the left context survives where it fits");
+    // Without a critical chip the existing narrowing is unchanged: the context keeps the line.
+    const calm: FooterState = { ...state, statuses: [] };
+    const calm20 = strip(renderMod.renderFooter(calm, plain, 20, "default")[1] ?? "");
+    assert.match(calm20, /ctx .*66%/, "without a warning the context keeps the line");
+  },
   branchProfileAndPathHelpersAvoidSubprocesses() {
     const ws = tmpWorkspace("pi-kit-footer-git-");
     try {
@@ -535,6 +570,47 @@ const tests = {
       assert.match(out, /#99 not found/);
     } finally {
       restore();
+      rmWorkspace(ws);
+    }
+  },
+
+  hidesControlCharactersInRepositoryText() {
+    // UX-SEC-1: the todo text and the branch are repository-controlled, so an escape sequence must
+    // not reach the terminal. The visible text survives the filter.
+    const ws = tmpWorkspace("pi-kit-footer-ctrl-");
+    const osc = "\x1b]52;c;eA==\x07";
+    const hostile = `visible ${osc}text\u009b2J\u202eend`;
+    fs.writeFileSync(path.join(ws, "TODO.md"), `# TODO\n\n- [ ] #1: ${hostile}\n`);
+    fs.mkdirSync(path.join(ws, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(ws, ".git", "HEAD"), `ref: refs/heads/br${osc}\u009b2J\u202eanch\n`);
+    const colour: Theme = { fg: (c, s) => `\x1b[3${c.length % 8}m${s}\x1b[0m`, bold: (s) => `\x1b[1m${s}\x1b[0m` };
+    // SGR colour (CSI ... m) is the only control sequence allowed through: the theme adds it.
+    const ESC = String.fromCharCode(27);
+    const withoutSgr = (s: string): string => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+    try {
+      const todos = footer.readTodoItems(ws);
+      assert.equal(todos.length, 1, "the legacy TODO.md is read");
+      const branch = dataMod.readBranch(ws);
+      assert.ok(branch, "the hostile branch is read from .git/HEAD");
+      const state: FooterState = {
+        cwd: ws, branch, sessionName: `s${osc}\u202eession`, model: "test-model",
+        totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }, partial: false, cost: { kind: "unknown" },
+        statuses: [], todos, now: 0, running: true,
+      };
+      const outputs: Array<[string, string]> = [
+        ["todo widget", footer.renderTodoWidget(todos, colour).join("\n")],
+        ["footer", footer.renderFooter(state, colour, 200, "default").join("\n")],
+      ];
+      for (const [label, out] of outputs) {
+        const plainText = withoutSgr(out);
+        for (const line of plainText.split("\n")) assert.ok(!/[\p{Cc}\p{Cf}]/u.test(line), `${label}: no control or format code point survives: ${JSON.stringify(line)}`);
+      }
+      const widget = withoutSgr(outputs[0]?.[1] ?? "");
+      assert.match(widget, /visible/, "the visible text before the escape survives");
+      assert.match(widget, /end/, "the visible text after the escape survives");
+      const bar = withoutSgr(outputs[1]?.[1] ?? "");
+      assert.match(bar, /anch/, "the visible branch text survives");
+    } finally {
       rmWorkspace(ws);
     }
   },

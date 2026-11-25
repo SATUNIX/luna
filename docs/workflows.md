@@ -29,6 +29,11 @@ review, reproduce → fix → verify, or fan out → synthesise. For a one-off d
 | `workflow_status` tool | The agent inspects runs of every format, including autonomous container runs; a live run shows `(active)` or `(active, paused)` |
 | `workflow_control` tool | The agent controls a live run: `{runId, action}` with `pause`, `resume`, `stop` or `skip` |
 
+Tab completion for `status` and `panel` offers runs of every format, autonomous container runs
+included. `pause`, `skip`, `resume` and `stop` offer only workflow, script and subagent runs: an
+autonomous run is read-only here and its id would answer "No live run" or "No run".
+`tests/run-query-smoke.ts` pins both lists.
+
 `workflow_status` and `workflow_control` are registered inactive and become callable once a run
 starts (a `workflow_run` or `workflow` call, a background `subagent`, a run started with a
 command, or a live or blocked autonomous run found when a prompt is sent), so
@@ -377,7 +382,9 @@ input, and that a run's files are redacted and have the right modes.
 
 Each step is an ordinary subagent run, so it also has a log under `.pi/subagent/`
 (`/workflows`, `workflow_status {id: <run>}`). Such a step is not listed as a run of its own, but
-its id still shows its log and `workflow_control` can stop it. The step's run ids are recorded in
+its id still shows its last assistant message and tool (or its capped log tail when it has no
+message yet, or when the caller passes an explicit `tail`), and `workflow_control` can stop it.
+The step's run ids are recorded in
 `state.json`. A corrupt or wrong-shape `state.json` is ignored and not listed by
 `/workflows status`, rather than crashing the status listing. The persisted state must
 also carry a non-negative integer `cursor` and a finite `executions` count, or it is

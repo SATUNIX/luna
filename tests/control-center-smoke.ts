@@ -1183,6 +1183,38 @@ tests.push([
 ]);
 
 tests.push([
+  "the Extensions page lists opt-in extensions no shipped profile enables",
+  async () => {
+    const modelMod = await loadModelModule();
+    const ws = tmpWorkspace("pi-kit-optin-");
+    const restoreAgent = setEnv("PI_CODING_AGENT_DIR", ws);
+    const restoreHome = setEnv("HOME", ws);
+    try {
+      fs.mkdirSync(path.join(ws, "pi-kit"), { recursive: true, mode: 0o700 });
+      const model = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+      for (const name of ["auto-commit-on-exit", "mcp-router", "memory-local", "schedule"]) {
+        const row = modelMod.findRow(model, `override.extensions.${name}`);
+        assert.ok(row, `${name} has a toggle row even though no profile enables it`);
+        assert.equal(row.overrideKind, "extensions");
+      }
+      const row = modelMod.findRow(model, "override.extensions.auto-commit-on-exit");
+      assert.ok(row);
+      const result = await dispatchRow(row, makeDeps({ model, commands: [] }));
+      assert.ok(result.ok, `auto-commit-on-exit: ${result.note ?? "toggle failed"}`);
+      const lists = parseJson(fs.readFileSync(path.join(ws, "pi-kit", "overrides.json"), "utf8"));
+      const add = isRecord(lists) && isRecord(lists.extensions) && Array.isArray(lists.extensions.add) ? lists.extensions.add : [];
+      assert.ok(add.includes("auto-commit-on-exit"), "turning an opt-in extension on pins it in extensions.add");
+      const after = modelMod.buildModel({ values: { securityMissing: true }, commands: [], controls: [] });
+      assert.match(modelMod.findRow(after, "override.extensions.auto-commit-on-exit")?.label ?? "", /^\[on\] /);
+    } finally {
+      restoreHome();
+      restoreAgent();
+      rmWorkspace(ws);
+    }
+  },
+]);
+
+tests.push([
   "Profiles & packages toggles an extension, a skill and a prompt, then the switch applies them",
   async () => {
     const modelMod = await loadModelModule();

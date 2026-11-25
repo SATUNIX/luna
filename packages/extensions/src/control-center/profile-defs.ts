@@ -19,6 +19,7 @@ function agentDir(): string {
 }
 
 let cached: ReadonlyMap<string, Record<string, unknown>> | undefined;
+let cachedExtensions: string[] | undefined;
 
 /** Profile name -> its parsed JSON object. An unreadable or malformed file is left out. */
 export function shippedProfileDefs(): ReadonlyMap<string, Record<string, unknown>> {
@@ -109,7 +110,25 @@ export function writeOverrideLists(lists: OverrideLists): void {
   writeFileSafe(file, `${JSON.stringify(lists, null, 2)}\n`, { mode: 0o600 });
 }
 
-/** The items each toggle page lists: every name a shipped profile names, plus any live override. */
+/** Every extension the kit ships (a directory with extension.json), sorted; `_`-prefixed templates are skipped. */
+export function shippedExtensionNames(): string[] {
+  if (cachedExtensions) return cachedExtensions;
+  const names = new Set<string>();
+  for (const base of ["../../../extensions/src/", "../../../extensions/third_party/"]) {
+    try {
+      for (const entry of fs.readdirSync(fileURLToPath(new URL(base, import.meta.url)), { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
+        if (fs.existsSync(fileURLToPath(new URL(`${base}${entry.name}/extension.json`, import.meta.url)))) names.add(entry.name);
+      }
+    } catch {
+      /* no extensions directory: only the profiles and overrides are listed */
+    }
+  }
+  cachedExtensions = [...names].sort();
+  return cachedExtensions;
+}
+
+/** The items each toggle page lists: every shipped extension, every shipped skill/prompt, plus any live override. */
 export function overrideItems(kind: OverrideKind, lists: OverrideLists = readOverrideLists()): string[] {
   const names = new Set<string>();
   if (kind === "extensions") {
@@ -117,6 +136,7 @@ export function overrideItems(kind: OverrideKind, lists: OverrideLists = readOve
       const include = def.include;
       if (Array.isArray(include)) for (const name of include) if (typeof name === "string") names.add(name);
     }
+    for (const name of shippedExtensionNames()) names.add(name);
     for (const name of [...lists.extensions.add, ...lists.extensions.remove]) names.add(name);
   } else if (kind === "skills") {
     try {
@@ -142,7 +162,12 @@ export function overrideItems(kind: OverrideKind, lists: OverrideLists = readOve
 
 /** Whether an item is currently on under these overrides. */
 export function overrideIsOn(kind: OverrideKind, name: string, lists: OverrideLists = readOverrideLists()): boolean {
-  if (kind === "extensions") return !lists.extensions.remove.includes(name);
+  if (kind === "extensions") {
+    // A name a shipped profile includes is on unless an override removes it. An opt-in extension
+    // (auto-commit-on-exit, mcp-router, memory-local, schedule) is off until `add` pins it on.
+    const inProfile = [...shippedProfileDefs().values()].some((def) => Array.isArray(def.include) && def.include.includes(name));
+    return lists.extensions.add.includes(name) || (inProfile && !lists.extensions.remove.includes(name));
+  }
   const list = kind === "skills" ? lists.skills : lists.prompts;
   return !list.exclude.includes(name) || list.include.includes(name);
 }

@@ -12,6 +12,12 @@ import type { AutonomyEvent, AutonomyResponse, AutonomyRun, AutonomyStatus } fro
 import type { ConfigInfo, KitEntry } from "./configinfo.ts";
 import type { ModelList, ProviderInfo } from "./models.ts";
 import type {
+	PackagesResponse,
+	PackageSummary,
+	ProfilesResponse,
+	ProfileSummary,
+} from "./profiles.ts";
+import type {
 	AbortResponse,
 	AgentResponse,
 	AgentsResponse,
@@ -77,6 +83,10 @@ export type Checks = [
 	Assert<Fits<StopResponse, Wire.StopResponse>>,
 	Assert<Fits<ModelResponse, Wire.ModelResponse>>,
 	Assert<Fits<ThinkingResponse, Wire.ThinkingResponse>>,
+	Assert<Fits<ProfileSummary, Wire.ProfileSummary>>,
+	Assert<Fits<PackageSummary, Wire.PackageSummary>>,
+	Assert<Fits<ProfilesResponse, Wire.ProfilesResponse>>,
+	Assert<Fits<PackagesResponse, Wire.PackagesResponse>>,
 	Assert<Fits<ForkResponse, Wire.ForkResponse>>,
 	Assert<Fits<ResetResponse, Wire.ResetResponse>>,
 	Assert<Fits<AutonomyRun, Wire.AutonomyRun>>,

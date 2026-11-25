@@ -212,6 +212,8 @@ Cross-origin requests and requests with a foreign `Host` are refused.
 | GET | `/api/models` | providers, models, default |
 | GET | `/api/cwds` | candidate working directories |
 | GET | `/api/autonomy` | autonomous runs, recent host events and the status file (read-only; other methods 405) |
+| GET | `/api/profiles` | shipped and user profiles (read-only; other methods 405) |
+| GET | `/api/packages` | pi packages `settings.json` registers (read-only; other methods 405) |
 | GET | `/api/sessions` | disk sessions merged with live children (`status`: running/idle/external) |
 | POST | `/api/sessions` | spawn a session (`cwd`, `agent`, `provider`, `model`, `thinking`) |
 | GET | `/api/sessions/:id` | one session summary |

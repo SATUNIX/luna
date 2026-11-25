@@ -98,6 +98,29 @@ export interface SkillsResponse {
 	readonly skills: readonly KitEntry[];
 }
 
+/** GET /api/profiles: the shipped and user profiles, read-only. */
+export interface ProfileSummary {
+	readonly name: string;
+	readonly description: string;
+	readonly source: "shipped" | "user";
+	readonly base?: string;
+	readonly extensions: number;
+}
+export interface ProfilesResponse {
+	readonly profiles: readonly ProfileSummary[];
+}
+
+/** GET /api/packages: the pi packages settings.json registers, read-only. */
+export interface PackageSummary {
+	readonly source: string;
+	readonly extensions: number;
+	readonly skills: number;
+	readonly prompts: number;
+}
+export interface PackagesResponse {
+	readonly packages: readonly PackageSummary[];
+}
+
 /** GET /api/cwds. */
 export interface CwdsResponse {
 	readonly cwds: readonly string[];

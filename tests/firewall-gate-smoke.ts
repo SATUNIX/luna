@@ -591,7 +591,10 @@ try {
       const small = unit.repeat(Math.ceil((50 * 1024) / unit.length));
       const large = unit.repeat(Math.ceil((200 * 1024) / unit.length));
       assertSubQuadratic(`redact, ${JSON.stringify(unit)}`, redact, small, large);
-      assertCpuWithin(`redact on 200 KB of ${JSON.stringify(unit)}`, 200, () => redact(large));
+      // Best-of-five CPU samples: under the gate's parallel check batch a memory-pressure GC
+      // on the measured thread can inflate one sample, and the minimum discards it. The 200 ms
+      // budget itself is unchanged.
+      assertCpuWithin(`redact on 200 KB of ${JSON.stringify(unit)}`, 200, () => redact(large), 5);
     }
     ok("redact covers PREFIX_TOKEN=value, mysql -p<pw> and curl -u user:pw, in linear time");
     // The CPU-time guard must still have teeth. On a busy host CPU time ignores descheduled

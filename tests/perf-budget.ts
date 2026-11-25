@@ -7,11 +7,14 @@
  * input, not the absolute milliseconds. `assertSubQuadratic` warms up, measures the best of N
  * runs at 1x and 4x input, and fails only when the 4x run exceeds `max(1x, 2 ms) * maxRatio`.
  * The 2 ms floor keeps a very fast 1x measurement from turning timer noise into a false failure.
- * The clock is injectable for deterministic regression tests; it defaults to the real
- * `performance.now()`.
+ * The clock is injectable for deterministic regression tests; it defaults to CPU time
+ * (`cpuMs`, the main thread's user + system time). Wall clock counts the time the process is
+ * descheduled, so under the gate's parallel `check-all --jobs` a correct linear redactor reads
+ * as super-linear when a sibling check saturates the machine; CPU time measures the work the
+ * code did, so the same ratio guard stays meaningful and does not fail on host load.
  */
 import assert from "node:assert/strict";
-import { performance } from "node:perf_hooks";
+import { cpuMs } from "./timing.ts";
 
 export function assertSubQuadratic(
   label: string,
@@ -22,7 +25,7 @@ export function assertSubQuadratic(
 ): void {
   const maxRatio = opts?.maxRatio ?? 10;
   const runs = opts?.runs ?? 3;
-  const clock = opts?.clock ?? (() => performance.now());
+  const clock = opts?.clock ?? cpuMs;
   const bestOf = (text: string): number => {
     let best = Number.POSITIVE_INFINITY;
     for (let i = 0; i < runs; i++) {

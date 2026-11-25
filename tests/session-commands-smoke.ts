@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fakePi, type FakePiApi, isolateKitEnv, loadModule, rmWorkspace, tmpWorkspace } from "../packages/core/eval/harness.ts";
+import { fakeModelRegistry, fakePi, type FakePiApi, isolateKitEnv, loadModule, rmWorkspace, tmpWorkspace } from "../packages/core/eval/harness.ts";
 import type * as ControlModule from "../packages/extensions/src/control-center/index.ts";
 import type * as SessionHelpersModule from "../packages/extensions/src/session-helpers/index.ts";
 
@@ -98,6 +98,42 @@ try {
   await hub.commands.get("status").handler("", ctx);
   const lines = (notes[0]?.message ?? "").split("\n");
   assert.ok(lines.length >= 3, "status reports several checks");
+
+  // F-14: a /new session keeps the model and thinking level this process was started with. pi
+  // resolves a new session's model again (--model, the scoped list, settings), so a pane that
+  // started on the configured DeepSeek model can come back on another one with thinking reset.
+  // The session_start handler pins the first model and thinking level and restores them on /new.
+  {
+    const deepseek = { provider: "openrouter", id: "deepseek/deepseek-v4.1-flash-1017" };
+    const sonnet = { provider: "anthropic", id: "claude-sonnet-5.5" };
+    const registry = fakeModelRegistry([deepseek, sonnet]);
+    const start = pi.handlers.get("session_start");
+    let notice = "";
+    const at = (model: { provider: string; id: string }, thinkingLevel: string): unknown => ({
+      hasUI: false,
+      cwd: ws,
+      model,
+      thinkingLevel,
+      modelRegistry: registry,
+      ui: { notify: (message: string) => { notice = message; } },
+    });
+    await start({ type: "session_start", reason: "startup" }, at(deepseek, "high"));
+    await start({ type: "session_start", reason: "new" }, at(sonnet, "medium"));
+    assert.equal(pi.modelSelections.at(-1)?.id, deepseek.id, "/new restores the model the process started with");
+    assert.equal(pi.thinkingLevelSelections.at(-1), "high", "/new restores the thinking level the process started with");
+    assert.match(notice, /Kept the model this session started with/);
+    // A /new that already runs the pinned model still restores a reset thinking level.
+    const selections = pi.modelSelections.length;
+    const thinkingSelections = pi.thinkingLevelSelections.length;
+    await start({ type: "session_start", reason: "new" }, at(deepseek, "medium"));
+    assert.equal(pi.modelSelections.length, selections, "an unchanged /new does not call setModel");
+    assert.equal(pi.thinkingLevelSelections.length, thinkingSelections + 1, "an unchanged /new restores thinking");
+    assert.match(notice, /Kept the thinking level this session started with, high/);
+    // A /new already on the pinned model and thinking level changes nothing.
+    await start({ type: "session_start", reason: "new" }, at(deepseek, "high"));
+    assert.equal(pi.modelSelections.length, selections, "an unchanged /new does not call setModel");
+    assert.equal(pi.thinkingLevelSelections.length, thinkingSelections + 1, "an unchanged /new does not call setThinkingLevel");
+  }
 
   console.log("[session-commands-smoke] all checks passed");
 } finally {

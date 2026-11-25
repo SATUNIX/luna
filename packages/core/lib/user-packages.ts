@@ -170,7 +170,7 @@ export interface PackageReview {
 export async function reviewPackage(name: string, version: string | undefined, registry: URL, fetcher: Fetcher = cappedFetcher(METADATA_MAX_BYTES), now = new Date()): Promise<PackageReview> {
   if (!isPackageName(name)) throw new Error(`${JSON.stringify(name)} is not an npm package name`);
   if (version !== undefined && !isExactVersion(version)) throw new Error(`${JSON.stringify(version)} is not an exact version`);
-  const doc = await getJson(fetcher, new URL(name.replace("/", "%2f"), registry));
+  const doc = await getJson(fetcher, new URL(name.replaceAll("/", "%2f"), registry));
   if (!isRecord(doc)) throw new Error(`the registry's metadata for ${name} is not an object`);
   const tags = isRecord(doc["dist-tags"]) ? doc["dist-tags"] : {};
   const chosen = version ?? (typeof tags.latest === "string" ? tags.latest : undefined);

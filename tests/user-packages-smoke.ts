@@ -113,6 +113,9 @@ try {
   state.big = true;
   await assert.rejects(reviewPackage("pi-demo", undefined, registryUrl(), cappedFetcher(1000)), /limit is 1000|over the 1000-byte limit/, "a response over the cap is an error, never truncated data");
   state.big = false;
+  for (const bad of ["@scope/a/b", "@scope//b", "a/b", "@scope/a%2fb"]) {
+    await assert.rejects(reviewPackage(bad, undefined, registryUrl(), cappedFetcher(1000)), /is not an npm package name/, `${bad}: more than one slash-like segment is refused before any request`);
+  }
   console.log("  OK: https or loopback http only, no credentials in the URL, capped bodies");
 
   // --- search and review (read-only) ----------------------------------------------------------------

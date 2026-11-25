@@ -218,5 +218,16 @@ check("5. the sub-quadratic guard passes linear probes and rejects a quadratic o
   );
 });
 
+check("5b. the default sub-quadratic clock is CPU time, so host load cannot fake growth", () => {
+  // Regression for the gate flake: the helper used `performance.now()`, so a sibling check
+  // descheduling this probe made a linear redactor read as quadratic. A probe that waits off-CPU
+  // for longer on the larger input does no more work; measured in CPU time it is flat, while a
+  // wall clock would see the 100x sleep and call it quadratic. Keep the default clock CPU-based.
+  const waitOffCpu = (text: string): void => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, text.length);
+  };
+  assertSubQuadratic("off-CPU wait", waitOffCpu, "a", "a".repeat(100));
+});
+
 restoreEnv();
 console.log(`\n[redaction-corpus-smoke] all ${checks} checks passed`);

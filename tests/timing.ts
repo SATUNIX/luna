@@ -60,12 +60,14 @@ export function bestCpuMs(attempts: number, fn: () => void): number {
 }
 
 /**
- * Asserts that `fn` completes in less than `budgetMs` of CPU time (best of three runs) and
- * returns the measured best. The failure message keeps the smoke's original label and the
- * original budget; callers must not raise a budget to make a slow host pass.
+ * Asserts that `fn` completes in less than `budgetMs` of CPU time (best of `attempts` runs,
+ * default three) and returns the measured best. The failure message keeps the smoke's original
+ * label and the original budget; callers must not raise a budget to make a slow host pass.
+ * A guard that shares the machine with other checks may ask for more repeats: a memory-pressure
+ * GC on the measured thread is discarded by the minimum, without touching the budget.
  */
-export function assertCpuWithin(label: string, budgetMs: number, fn: () => void): number {
-  const ms = bestCpuMs(3, fn);
+export function assertCpuWithin(label: string, budgetMs: number, fn: () => void, attempts = 3): number {
+  const ms = bestCpuMs(attempts, fn);
   assert.ok(ms < budgetMs, `${label} took ${Math.round(ms)} ms of CPU (budget ${budgetMs} ms)`);
   return ms;
 }
